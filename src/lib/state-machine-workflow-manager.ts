@@ -2315,7 +2315,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     // Add structured JSON output requirement for attacker/judge roles
     if (step.role === 'attacker' || step.role === 'judge') {
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <openspec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论`);
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <openspec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进 <step-conclusion> 的“后续建议”或“附加观察”，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     // Add workspace skills (index summary + absolute path for AI to read details)

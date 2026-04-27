@@ -4747,7 +4747,9 @@ export default function WorkbenchPage() {
                                   {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                                 </div>
                               )}
-                              <div className="text-sm">{parsed.content}</div>
+                              <div className="text-sm">
+                                <Markdown>{prepareChunkForDisplay(parsed.content)}</Markdown>
+                              </div>
                             </div>
                           </div>
                         );
@@ -4970,7 +4972,9 @@ export default function WorkbenchPage() {
                   <div>判定: <span className="font-medium">{humanApprovalData.result?.verdict || 'N/A'}</span></div>
                   <div>问题数: <span className="font-medium">{humanApprovalData.result?.issues?.length || 0}</span></div>
                   {humanApprovalData.result?.summary && (
-                    <div className="mt-2 text-xs">{humanApprovalData.result.summary}</div>
+                    <div className="mt-2 text-xs leading-6">
+                      <Markdown>{prepareChunkForDisplay(humanApprovalData.result.summary)}</Markdown>
+                    </div>
                   )}
                 </div>
               </div>
@@ -4985,8 +4989,8 @@ export default function WorkbenchPage() {
                         <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground py-1">
                           步骤 {idx + 1} 输出 ({output.length > 200 ? `${Math.ceil(output.length / 1024)}KB` : `${output.length} 字符`})
                         </summary>
-                        <div className="mt-1 p-3 bg-muted/20 rounded border text-xs font-mono whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-                          {output}
+                        <div className="mt-1 p-3 bg-muted/20 rounded border text-xs max-h-[300px] overflow-y-auto">
+                          <Markdown>{prepareChunkForDisplay(output)}</Markdown>
                         </div>
                       </details>
                     ))}
@@ -5023,8 +5027,8 @@ export default function WorkbenchPage() {
                   <div className="text-sm font-medium text-amber-700 dark:text-amber-300 mb-2">
                     指挥官意见
                   </div>
-                  <div className="text-sm whitespace-pre-wrap leading-6">
-                    {humanApprovalData.supervisorAdvice}
+                  <div className="text-sm leading-6">
+                    <Markdown>{prepareChunkForDisplay(humanApprovalData.supervisorAdvice)}</Markdown>
                   </div>
                 </div>
               )}

@@ -2046,6 +2046,11 @@ export class WorkflowManager extends EventEmitter {
       prompt += `- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n`;
       prompt += `- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n`;
       prompt += `- \`summary\`: 一句话总结你的评估结论\n\n`;
+      prompt += `## 裁决边界约束\n`;
+      prompt += `- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n`;
+      prompt += `- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n`;
+      prompt += `- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n`;
+      prompt += `- 这类非阻塞问题只能放进补充建议，不要写成正式阻塞项。\n\n`;
     }
 
     // Inject human iteration feedback as check items
