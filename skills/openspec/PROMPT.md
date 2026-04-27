@@ -12,14 +12,17 @@
 - `spec.md` 只写行为契约和场景，不写实现细节
 - `proposal.md` 写意图和范围，`design.md` 写技术方案，`tasks.md` 写实施清单
 - `proposal/design/tasks/spec` 都要足够细，能直接支撑实现和人工审查
+- 只要本次输出创建、修改或落盘了正式 OpenSpec 制品，最终结果就必须通过 `node skills/openspec/scripts/validate-openspec.mjs <openspec-root>`；未通过校验视为结果不合格
 - 禁止空泛表述：不要写“优化体验”“完善能力”“支持功能”“完成对接”“处理细节”这类无对象、无条件、无结果的句子；每条都必须落到具体对象、入口、状态、数据或约束
 - 先定义术语，再展开需求；当领域内存在多个专有名词、角色、模块或数据对象时，必须先写术语表
 - 需求优先采用固定 DSL：`Requirement / 目标用户与诉求 / 验收标准`
 - 每条需求都必须可编号、可引用、可验证，不能写成自由散文
 - `验收标准` 优先使用半结构化句式：`当 <条件> 时，系统应 <行为/结果>`
 - `design.md` 必须包含流程图或 Mermaid 图，以及贴近真实业务规则的伪代码 / 结构化算法
+- `design.md` 不能只有概念说明；至少要同时给出执行链路图和能落到真实分支判断的伪代码
 - `design.md` 还应包含架构分层、核心组件、关键数据模型、接口/契约、关键决策、假设与待确认项
 - `design.md` 不接受“组件 A 负责处理请求、组件 B 负责渲染页面”这类无信息密度描述；必须点名真实入口、真实状态来源、真实副作用、真实失败路径
+- `design.md` 中的图不能只是装饰。图里至少要体现入口、核心处理节点、状态/数据更新、对外结果或持久化副作用
 - `tasks.md` 必须按阶段细拆任务，并写清楚目标、依赖、产物、验证方式和完成标准
 - `tasks.md` 必须尽量回链需求编号，并显式区分实现、验证、迁移、文档等任务类型
 - `tasks.md` 中每个任务都必须是“一个人拿到就能直接开做”的粒度；禁止出现“完善设计”“补齐逻辑”“联调验证”“实现全部前端/后端”这种打包任务
@@ -35,6 +38,7 @@
 **质量门槛：**
 - `requirements/design/tasks` 必须形成追踪链：需求编号 -> 设计决策/组件 -> 任务编号 -> 验证
 - `design.md` 中的关键结论必须能追溯到已知事实、用户输入或显式假设
+- `design.md` 缺少 Mermaid 图、架构/数据流图、伪代码、关键数据模型、接口契约任一关键骨架时，都视为未达标
 - `tasks.md` 不得执行 `requirements/spec` 未承诺的内容
 - `proposal.md` 必须能回答“为什么现在要做、影响谁、影响哪些入口、不做什么”
 - `design.md` 必须能回答“当前怎么运行、要改哪几层、数据和状态怎么流动、失败时怎么处理”
@@ -61,7 +65,7 @@
 8. change 稳定后再合并回主规范
 
 **校验：**
-仅在当前任务明确要求创建、更新或校验 OpenSpec 文件时使用该脚本。workflow 草案生成阶段不要自行校验 workflow/YAML，不要调用 `validateWorkflowDraft`、`config.validate` 或类似本地校验脚本；平台会在 AI 输出 workflow_draft 后自动解析和校验。
+仅在当前任务明确要求创建、更新或校验 OpenSpec 文件时使用该脚本。只要本次任务产出了或修改了正式 OpenSpec 制品，就必须通过该校验。workflow 草案生成阶段不要自行校验 workflow/YAML，不要调用 `validateWorkflowDraft`、`config.validate` 或类似本地校验脚本；平台会在 AI 输出 workflow_draft 后自动解析和校验。
 ```bash
 node skills/openspec/scripts/validate-openspec.mjs <openspec-root>
 ```

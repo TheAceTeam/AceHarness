@@ -46,6 +46,37 @@ function requirePattern(content, pattern, file, message) {
   }
 }
 
+function extractTaskEntries(content) {
+  const lines = content.split(/\r?\n/);
+  const tasks = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = lines[i].match(/^-\s\[( |x)\]\s(\d+\.\d+)\s+(.+)$/);
+    if (!match) continue;
+
+    const details = [];
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const line = lines[j];
+      if (/^##\s+/.test(line) || /^-\s\[( |x)\]\s/.test(line)) break;
+      if (/^\s{2,}-\s+/.test(line) || /^\s{2,}\S/.test(line)) {
+        details.push(line.trim());
+      }
+    }
+
+    tasks.push({
+      id: match[2],
+      title: match[3].trim(),
+      details,
+    });
+  }
+
+  return tasks;
+}
+
+function countTasksContaining(tasks, matcher) {
+  return tasks.filter((task) => matcher(task)).length;
+}
+
 function validateMainSpec(file) {
   if (!isFile(file)) {
     fail(`${file}: 缺少 spec.md`);
@@ -92,10 +123,37 @@ function validateDesign(file) {
   }
   const content = read(file);
   requirePattern(content, /^# Design: .+/m, file, '必须以 `# Design: <change-id>` 开头');
+  requirePattern(content, /^## Overview$/m, file, '缺少 `## Overview`');
   requirePattern(content, /^## Technical Approach$/m, file, '缺少 `## Technical Approach`');
+  requirePattern(content, /^## Architecture$/m, file, '缺少 `## Architecture`');
+  requirePattern(content, /^## Data Flow$/m, file, '缺少 `## Data Flow`');
+  requirePattern(content, /^## Core Logic Pseudocode$/m, file, '缺少 `## Core Logic Pseudocode`');
+  requirePattern(content, /^## Data Models$/m, file, '缺少 `## Data Models`');
+  requirePattern(content, /^## Interfaces And Contracts$/m, file, '缺少 `## Interfaces And Contracts`');
+  requirePattern(content, /^## Assumptions And Unknowns$/m, file, '缺少 `## Assumptions And Unknowns`');
   requirePattern(content, /^## Key Decisions$/m, file, '缺少 `## Key Decisions`');
   requirePattern(content, /^## Affected Areas$/m, file, '缺少 `## Affected Areas`');
   requirePattern(content, /^## Risks And Tradeoffs$/m, file, '缺少 `## Risks And Tradeoffs`');
+
+  const mermaidBlocks = content.match(/```mermaid[\s\S]*?```/g) || [];
+  if (mermaidBlocks.length < 2) {
+    fail(`${file}: 至少需要 2 个 Mermaid 图块，用于表达架构/执行链路和数据流`);
+  }
+
+  const pseudocodeBlock = content.match(/## Core Logic Pseudocode[\s\S]*?```(?:text|pseudo|plaintext)?[\s\S]*?```/m);
+  if (!pseudocodeBlock) {
+    fail(`${file}: ` + '必须在 `## Core Logic Pseudocode` 下提供伪代码代码块');
+  }
+
+  const placeholderPattern = /<[^>\n]+>/;
+  if (placeholderPattern.test(content)) {
+    fail(`${file}: 仍包含未替换的模板占位符，请补成真实节点、组件、字段或规则`);
+  }
+
+  const decisionCount = (content.match(/^### Decision: .+/gm) || []).length;
+  if (decisionCount < 3) {
+    fail(`${file}: 关键决策不足，至少需要 3 条 \`### Decision:\` 条目`);
+  }
 }
 
 function validateTasks(file) {
@@ -107,6 +165,45 @@ function validateTasks(file) {
   requirePattern(content, /^# Tasks$/m, file, '必须以 `# Tasks` 开头');
   requirePattern(content, /^## \d+\.\s.+/m, file, '至少需要一个二级任务分组标题，如 `## 1. ...`');
   requirePattern(content, /^- \[( |x)\] \d+\.\d+\s.+/m, file, '至少需要一个复选框任务，如 `- [ ] 1.1 ...`');
+
+  const tasks = extractTaskEntries(content);
+  if (tasks.length < 3) {
+    fail(`${file}: 任务数量过少，至少需要 3 个复选框任务，不能只有零散条目`);
+  }
+
+  const emptyDetailTasks = tasks.filter((task) => task.details.length === 0);
+  if (emptyDetailTasks.length > 0) {
+    fail(`${file}: 以下任务缺少展开说明，不能只写标题：${emptyDetailTasks.map((task) => task.id).join(', ')}`);
+  }
+
+  const tooThinTasks = tasks.filter((task) => task.details.length < 2);
+  if (tooThinTasks.length > 0) {
+    fail(`${file}: 以下任务说明过短，至少补充 2 行以上细节：${tooThinTasks.map((task) => task.id).join(', ')}`);
+  }
+
+  const placeholderPattern = /<[^>\n]+>/;
+  const placeholderTasks = tasks.filter((task) =>
+    placeholderPattern.test(task.title) || task.details.some((detail) => placeholderPattern.test(detail))
+  );
+  if (placeholderTasks.length > 0) {
+    fail(`${file}: 以下任务仍包含未替换的模板占位符：${placeholderTasks.map((task) => task.id).join(', ')}`);
+  }
+
+  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^(验证方式|验收方式)：/.test(detail))) === 0) {
+    fail(`${file}: 至少需要一个任务明确写出“验证方式”或“验收方式”`);
+  }
+
+  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^完成标准：/.test(detail))) === 0) {
+    fail(`${file}: 至少需要一个任务明确写出“完成标准”`);
+  }
+
+  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^具体改动对象：/.test(detail))) === 0) {
+    fail(`${file}: 至少需要一个任务明确写出“具体改动对象”，避免任务只有抽象描述`);
+  }
+
+  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^交付产物：/.test(detail))) === 0) {
+    fail(`${file}: 至少需要一个任务明确写出“交付产物”`);
+  }
 }
 
 function validateChange(changeDir, specsRoot) {
