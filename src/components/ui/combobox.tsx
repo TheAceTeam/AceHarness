@@ -51,7 +51,7 @@ const ComboboxInput = React.forwardRef<
     <ComboboxPrimitive.Input
       ref={ref}
       className={cn(
-        'peer flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground min-w-0',
+        'peer flex-1 bg-transparent py-2 text-inherit outline-none placeholder:text-muted-foreground min-w-0',
         leading ? 'pl-2' : 'px-3',
         displayValue ? 'text-transparent focus:text-foreground' : 'px-3'
       )}
@@ -60,7 +60,7 @@ const ComboboxInput = React.forwardRef<
     {displayValue ? (
       <div
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-8 flex items-center text-sm text-foreground peer-focus:hidden',
+          'pointer-events-none absolute inset-y-0 right-8 flex items-center text-inherit text-foreground peer-focus:hidden',
           leading ? 'left-8 pl-2' : 'left-0 px-3'
         )}
       >

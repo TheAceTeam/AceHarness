@@ -365,7 +365,6 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     const parsed = this.parseToolXmlOutput(output);
     if (parsed) return parsed;
     const lines = output.split('\n');
-    if (lines.length <= 15) return `\n${fenced(output)}\n`;
     return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(output)}\n\n</details>\n`;
   }
 
@@ -383,8 +382,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       const ct = match[2].trim();
       const ext = fp.split('.').pop() || '';
       const lines = ct.split('\n');
-      if (lines.length <= 15) blocks.push(`\n${fenced(ct, ext)}\n`);
-      else blocks.push(`\n<details><summary>📄 ${fp} (${lines.length} 行)</summary>\n\n${fenced(ct, ext)}\n\n</details>\n`);
+      blocks.push(`\n<details><summary>📄 ${fp} (${lines.length} 行)</summary>\n\n${fenced(ct, ext)}\n\n</details>\n`);
     }
     if (blocks.length > 0) return blocks.join('');
     return null;

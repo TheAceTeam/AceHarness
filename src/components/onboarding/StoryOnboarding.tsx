@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import ConfirmDialog from '@/components/ConfirmDialog';
-import { useConfirmDialog } from '@/hooks/useConfirmDialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 type UserRole = 'admin' | 'user';
 type ModuleKey =
@@ -671,7 +670,6 @@ export function StoryOnboarding({
   onPersist,
   onClose,
 }: StoryOnboardingProps) {
-  const { confirm, dialogProps } = useConfirmDialog();
   const router = useRouter();
   const [phase, setPhase] = useState<OnboardingProgressPayload['phase']>('intro');
   const [navDir, setNavDir] = useState<1 | -1>(1);
@@ -695,6 +693,7 @@ export function StoryOnboarding({
   const [adminRows, setAdminRows] = useState<AdminProgressRow[]>([]);
   const [adminReportLoading, setAdminReportLoading] = useState(false);
   const [adminReportError, setAdminReportError] = useState<string | null>(null);
+  const [skipPopoverOpen, setSkipPopoverOpen] = useState(false);
 
   const visibleModules = useMemo(() => MODULES.filter((m) => !m.adminOnly || role === 'admin'), [role]);
   const safeSelectedModule = visibleModules.some((m) => m.key === selectedModule)
@@ -805,15 +804,7 @@ export function StoryOnboarding({
     setModuleStepIndex(0);
     goPhase('module', 1);
   };
-  const handleSkip = useCallback(async () => {
-    const neverShowAgain = await confirm({
-      title: '跳过引导',
-      description: '是否下次不再自动弹出新手引导？',
-      confirmLabel: '不再弹出',
-      cancelLabel: '本次关闭',
-      variant: 'default',
-    });
-
+  const handleSkip = useCallback(async (neverShowAgain: boolean) => {
     if (neverShowAgain) {
       if (onPersist) {
         await onPersist(buildProgressPayload(true), { markCompleted: true });
@@ -823,7 +814,7 @@ export function StoryOnboarding({
     }
 
     onClose(false);
-  }, [confirm, onPersist, buildProgressPayload, onClose]);
+  }, [onPersist, buildProgressPayload, onClose]);
   const pageMotion = {
     initial: (dir: 1 | -1) => ({ opacity: 0, x: dir > 0 ? 36 : -36, scale: 0.985 }),
     animate: { opacity: 1, x: 0, scale: 1 },
@@ -847,7 +838,40 @@ export function StoryOnboarding({
             <Button variant="ghost" size="sm" onClick={() => setMaximized((v) => !v)} title={maximized ? '缩小' : '放大'}>
               <span className="material-symbols-outlined text-base">{maximized ? 'close_fullscreen' : 'open_in_full'}</span>
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => { void handleSkip(); }}>跳过</Button>
+            <Popover open={skipPopoverOpen} onOpenChange={setSkipPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm">跳过</Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-72 space-y-3">
+                <div>
+                  <div className="text-sm font-medium">跳过引导</div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    这次只是关闭，还是以后不再自动弹出？
+                  </p>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setSkipPopoverOpen(false);
+                      void handleSkip(false);
+                    }}
+                  >
+                    本次关闭
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setSkipPopoverOpen(false);
+                      void handleSkip(true);
+                    }}
+                  >
+                    不再弹出
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
@@ -1195,7 +1219,6 @@ export function StoryOnboarding({
           </div>
         </div>
       </div>
-      {dialogProps && <ConfirmDialog {...dialogProps} />}
     </div>
   );
 }

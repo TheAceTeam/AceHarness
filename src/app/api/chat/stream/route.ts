@@ -16,6 +16,9 @@ import {
 } from '@/lib/chat-stream-state';
 import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
+import { loadChatSession } from '@/lib/chat-persistence';
+import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/openspec-store';
+import { workflowRegistry } from '@/lib/workflow-registry';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { EventEmitter } from 'events';
@@ -44,9 +47,11 @@ async function loadChatHistory(frontendSessionId: string): Promise<string> {
     for (const msg of messages) {
       if (!msg.content) continue;
       const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
-      // Truncate long messages, remove action/card code blocks to save tokens
+      // Truncate long messages, remove action/result card blocks to save tokens
       let text = msg.content
+        .replace(/<result>\s*```(?:card|json)\s*\n[\s\S]*?```\s*<\/result>/g, '[result block]')
         .replace(/```(?:action|card)\s*\n[\s\S]*?```/g, '[action/card block]')
+        .replace(/<\/?result>/g, '')
         .trim();
       if (text.length > 500) text = text.slice(0, 500) + '...';
       history += `${role}: ${text}\n\n`;
@@ -54,6 +59,68 @@ async function loadChatHistory(frontendSessionId: string): Promise<string> {
     }
     if (!history) return '';
     return `\n\n## 之前的对话记录（会话已过期重建，以下是历史上下文）\n${history.slice(0, MAX_HISTORY_CHARS)}`;
+  } catch {
+    return '';
+  }
+}
+
+async function buildBoundSessionContext(frontendSessionId?: string): Promise<string> {
+  if (!frontendSessionId) return '';
+
+  try {
+    const session = await loadChatSession(frontendSessionId);
+    if (!session) return '';
+
+    const sections: string[] = [];
+
+    if (session.creationSession) {
+      const creationRecord = await loadCreationSession(session.creationSession.creationSessionId);
+      const openSpec = creationRecord?.openSpec;
+      const latestRevision = openSpec?.revisions?.at(-1);
+
+      sections.push([
+        '### 创建态绑定',
+        `- 工作流: ${session.creationSession.workflowName}`,
+        `- 配置文件: ${session.creationSession.filename}`,
+        `- 创建状态: ${session.creationSession.status}`,
+        `- OpenSpec ID: ${session.creationSession.openSpecId}`,
+        openSpec ? `- OpenSpec 版本: v${openSpec.version}` : '',
+        openSpec?.status ? `- OpenSpec 状态: ${openSpec.status}` : '',
+        openSpec?.summary ? `- OpenSpec 摘要: ${openSpec.summary}` : '',
+        openSpec?.progress?.summary ? `- OpenSpec 进度: ${openSpec.progress.summary}` : '',
+        latestRevision?.summary ? `- 最近修订: ${latestRevision.summary}` : '',
+      ].filter(Boolean).join('\n'));
+    }
+
+    if (session.workflowBinding) {
+      const manager = await workflowRegistry.getManager(session.workflowBinding.configFile);
+      const status = manager.getStatus();
+      const creationRecord = await loadLatestCreationSessionByFilename(session.workflowBinding.configFile);
+      const openSpec = creationRecord?.openSpec;
+      const latestRevision = openSpec?.revisions?.at(-1);
+
+      sections.push([
+        '### 运行态绑定',
+        `- 配置文件: ${session.workflowBinding.configFile}`,
+        `- Run ID: ${session.workflowBinding.runId}`,
+        `- 当前 Supervisor: ${session.workflowBinding.supervisorAgent || 'default-supervisor'}`,
+        session.workflowBinding.supervisorSessionId ? `- Supervisor Session: ${session.workflowBinding.supervisorSessionId}` : '',
+        status?.status ? `- 运行状态: ${status.status}` : '',
+        status?.currentPhase ? `- 当前阶段: ${status.currentPhase}` : '',
+        status?.currentStep ? `- 当前步骤: ${status.currentStep}` : '',
+        openSpec ? `- 运行关联 OpenSpec: v${openSpec.version} / ${openSpec.status}` : '',
+        openSpec?.progress?.summary ? `- OpenSpec 执行进度: ${openSpec.progress.summary}` : '',
+        latestRevision?.summary ? `- OpenSpec 最近修订: ${latestRevision.summary}` : '',
+      ].filter(Boolean).join('\n'));
+    }
+
+    if (sections.length === 0) return '';
+
+    return [
+      '## 当前会话绑定上下文',
+      '以下信息来自当前首页会话已绑定的创建态或运行态上下文。用户未明确切换对象时，默认优先基于这些绑定对象回答，不要反复追问“是哪个 workflow / supervisor”。',
+      ...sections,
+    ].join('\n\n');
   } catch {
     return '';
   }
@@ -71,7 +138,16 @@ engineStreamEvents.setMaxListeners(200);
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, model, engine: perChatEngine, sessionId, frontendSessionId, mode, workingDirectory } = await request.json();
+    const {
+      message,
+      model,
+      engine: perChatEngine,
+      sessionId,
+      frontendSessionId,
+      mode,
+      workingDirectory,
+      extraSystemPrompt,
+    } = await request.json();
     if (!message?.trim()) {
       return NextResponse.json({ error: '消息不能为空' }, { status: 400 });
     }
@@ -120,7 +196,8 @@ export async function POST(request: NextRequest) {
       `AI 运行目录(实际 cwd): ${engineRuntimeDirectory}`,
       '执行文件读写/命令时，请优先基于“当前工作目录(用户语义目录)”使用绝对路径。',
     ].join('\n');
-    systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}`.trim();
+    const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
+    systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${typeof extraSystemPrompt === 'string' && extraSystemPrompt.trim() ? `\n\n${extraSystemPrompt.trim()}` : ''}`.trim();
     const configuredEngine = perChatEngine || await getConfiguredEngine();
     const engine = await getOrCreateEngine(configuredEngine, frontendSessionId);
 

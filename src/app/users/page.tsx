@@ -254,7 +254,6 @@ function UsersContent() {
               workspaceRoot="/"
               value={form.personalDir}
               onChange={(path) => setForm((f) => ({ ...f, personalDir: path }))}
-              className="h-64"
             />
             <div>
               <label className="text-sm mb-2 block">选择头像：</label>

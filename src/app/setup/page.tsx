@@ -399,7 +399,6 @@ export default function SetupPage() {
                     workspaceRoot="/"
                     value={personalDir}
                     onChange={setPersonalDir}
-                    className="h-64"
                   />
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">工作流执行时的隔离目录</p>

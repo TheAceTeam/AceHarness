@@ -554,7 +554,7 @@ AI 在这个流程中自主完成了三层代码的一致性开发：Gap 分析�
 - 3 个 API 完成全栈开发（`lstatSync`、`mkdtempSync`、`getxattrSync`），C++ FFI 编译通过
 - 注入 5 套专属 Skills，每个 Agent 携带仓颉/鸿蒙领域知识
 - 产出 **11 份结构化文档**，涵盖 Gap 分析、架构设计、编码实现、编译验证、红军审查、评审裁决、最终审查、API 文档、产出汇总
-- 全部产出写入 `.ace-outputs/{runId}/` 目录，全链路可追溯
+- 全部产出写入运行记录的 `runs/{runId}/outputs/` 目录，全链路可追溯
 
 ---
 

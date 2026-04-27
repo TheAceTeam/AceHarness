@@ -42,6 +42,38 @@ interface ConfigResponse {
   agents: any[];
 }
 
+interface WorkflowCreationRecommendationsResponse {
+  recommendations: {
+    experiences: Array<{
+      runId: string;
+      workflowName?: string;
+      configFile: string;
+      summary: string;
+      experience: string[];
+      nextFocus: string[];
+    }>;
+    referenceWorkflow: null | {
+      filename: string;
+      name?: string;
+      description?: string;
+      mode: 'phase-based' | 'state-machine';
+      agents: string[];
+      supervisorAgent?: string;
+      source?: 'manual' | 'recommended-experience';
+      autoApply?: boolean;
+    };
+    recommendedAgents: string[];
+    recommendedSupervisorAgent?: string;
+    relationshipHints: Array<{
+      agent: string;
+      counterpart: string;
+      synergyScore: number;
+      strengths: string[];
+      lastConfigFile?: string;
+    }>;
+  };
+}
+
 interface ApiResponse {
   success: boolean;
   message: string;
@@ -91,18 +123,238 @@ interface WorkflowStatusResponse {
     round: number;
     timestamp: string;
   }>;
-  pendingSdkPlanQuestion?: {
-    questions: unknown[];
-    fromAgent: string;
-    stateName: string;
-    stepName: string;
+  creationSession?: {
+    id: string;
+    workflowName: string;
+    filename: string;
+    status: string;
+    updatedAt: number;
+  };
+  openSpecSummary?: {
+    id: string;
+    version: number;
+    status: string;
+    source?: 'run' | 'creation';
+    summary?: string;
+    phaseCount: number;
+    taskCount?: number;
+    assignmentCount: number;
+    checkpointCount: number;
+    revisionCount: number;
+    progress?: {
+      overallStatus?: string;
+      completedPhaseIds?: string[];
+      activePhaseId?: string;
+      summary?: string;
+    };
+    latestRevision?: {
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    } | null;
+  };
+  openSpecDetails?: {
+    phases: Array<{
+      id: string;
+      title: string;
+      objective?: string;
+      ownerAgents: string[];
+      status: string;
+    }>;
+    tasks?: Array<{
+      id: string;
+      title: string;
+      detail?: string;
+      status: string;
+      phaseId?: string;
+      ownerAgents: string[];
+      updatedAt?: string;
+      updatedBy?: string;
+      validation?: string;
+    }>;
+    assignments: Array<{
+      agent: string;
+      responsibility: string;
+      phaseIds: string[];
+    }>;
+    checkpoints: Array<{
+      id: string;
+      title: string;
+      phaseId?: string;
+      status: string;
+    }>;
+    revisions: Array<{
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    }>;
+    artifacts?: {
+      proposal?: string;
+      design?: string;
+      tasks?: string;
+      deltaSpec?: string;
+    };
+  };
+  sourceOfTruth?: {
+    mode: 'phase-based' | 'state-machine' | 'unknown';
+    yamlSourceOfTruth: string[];
+    derivedIntoOpenSpec: string[];
+    runtimeOpenSpecSourceOfTruth: string[];
+    counts: {
+      yamlPhases: number;
+      yamlStates: number;
+      yamlSteps: number;
+      yamlCheckpoints: number;
+      openSpecPhases: number;
+      openSpecTasks?: number;
+      openSpecAssignments: number;
+      openSpecCheckpoints: number;
+    };
   } | null;
-  pendingPlanReview?: {
-    planContent: string;
-    stepKey: string;
-    agent: string;
+  latestSupervisorReview?: {
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null;
+  rehearsal?: {
+    enabled: boolean;
+    summary: string;
+    recommendedNextSteps: string[];
+  } | null;
+  qualityChecks?: Array<{
+    id: string;
     stateName: string;
     stepName: string;
+    agent: string;
+    category: 'lint' | 'compile' | 'test' | 'custom';
+    status: 'passed' | 'failed' | 'warning';
+    summary: string;
+    createdAt: string;
+    commands: Array<{
+      command: string;
+      exitCode: number | null;
+      status: 'passed' | 'failed' | 'warning';
+      stdout?: string;
+      stderr?: string;
+      errorText?: string | null;
+    }>;
+  }>;
+  finalReview?: {
+    runId: string;
+    configFile: string;
+    supervisorAgent: string;
+    status: 'completed' | 'failed' | 'stopped';
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    scoreCards: Array<{
+      agent: string;
+      score: number;
+      strengths: string[];
+      weaknesses: string[];
+    }>;
+    generatedAt: string;
+  } | null;
+  memoryLayers?: {
+    schema?: {
+      scopes: string[];
+      rules: string[];
+    };
+    runtime: {
+      openSpecSummary?: {
+        id: string;
+        version: number;
+        summary?: string;
+        progressSummary?: string;
+      } | null;
+      qualityChecks: Array<{
+        id: string;
+        stateName: string;
+        stepName: string;
+        agent: string;
+        category: 'lint' | 'compile' | 'test' | 'custom';
+        status: 'passed' | 'failed' | 'warning';
+        summary: string;
+        createdAt: string;
+      }>;
+    };
+    review: {
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    } | null;
+    history: Array<{
+      runId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    }>;
+    role?: {
+      agent: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    project?: {
+      key: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    workflow?: {
+      key: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    chat?: {
+      sessionId: string | null;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    recalledExperiences?: Array<{
+      runId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    }>;
   } | null;
 }
 
@@ -192,6 +444,37 @@ export const configApi = {
     return response.json();
   },
 
+  async validateConfig(input: { config?: any; filename?: string }): Promise<{ validation: any }> {
+    const response = await authFetch(`${API_BASE}/configs/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.message || data?.error || '校验配置失败');
+    }
+    return data;
+  },
+
+  async getCreationRecommendations(input: {
+    workflowName?: string;
+    requirements?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+  }): Promise<WorkflowCreationRecommendationsResponse> {
+    const response = await authFetch(`${API_BASE}/configs/recommendations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '获取工作流编排推荐失败');
+    }
+    return data;
+  },
+
   async saveConfig(filename: string, config: any): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}`, {
       method: 'POST',
@@ -272,6 +555,120 @@ export const agentApi = {
     });
     if (!response.ok) throw new Error('批量替换模型失败');
     return response.json();
+  },
+
+  async draftAgent(input: {
+    displayName: string;
+    team?: string;
+    mission: string;
+    style?: string;
+    specialties?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+    engine?: string;
+    model?: string;
+  }): Promise<{
+    draft: any;
+    raw: string;
+    validation?: {
+      ok: boolean;
+      issues: Array<{
+        path: string[];
+        message: string;
+        severity: 'error' | 'warning';
+        code?: string;
+      }>;
+    };
+    experienceHints?: any[];
+    recommendations?: {
+      experiences: Array<{
+        runId: string;
+        workflowName?: string;
+        configFile: string;
+        summary: string;
+      }>;
+      referenceWorkflow: null | {
+        filename: string;
+        name?: string;
+        description?: string;
+        projectRoot?: string;
+        agents: string[];
+        phases: string[];
+        states: string[];
+      };
+      relationshipHints: Array<{
+        agent: string;
+        counterpart: string;
+        synergyScore: number;
+        strengths: string[];
+      }>;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/ai-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || '生成 Agent 草案失败');
+    }
+    return response.json();
+  },
+
+  async generateAvatar(input: {
+    displayName: string;
+    team?: string;
+    mission?: string;
+    style?: string;
+    variant?: string;
+  }): Promise<{ avatar: any; previewUrl: string }> {
+    const response = await authFetch(`${API_BASE}/agents/generate-avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || '生成 Agent 头像失败');
+    }
+    return response.json();
+  },
+
+  async chat(name: string, input: {
+    message: string;
+    mode?: 'standalone-chat' | 'workflow-chat';
+    sessionId?: string | null;
+    workingDirectory?: string;
+    workflowContext?: Record<string, any>;
+  }): Promise<{
+    ok: boolean;
+    output: string;
+    sessionId?: string | null;
+    mode: 'standalone-chat' | 'workflow-chat';
+    agent: string;
+    engine?: string;
+    model?: string;
+    isError?: boolean;
+    error?: string | null;
+    openSpecRevision?: {
+      applied: boolean;
+      summary: string;
+      affectedArtifacts: string[];
+      impact: string[];
+      target: 'creation' | 'run' | 'both';
+    } | null;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || 'Agent 对话失败');
+    }
+    return data;
   },
 };
 
@@ -384,11 +781,81 @@ export const runsApi = {
 };
 
 export const workflowApi = {
-  async start(configFile: string): Promise<ApiResponse> {
-    const response = await authFetch(`${API_BASE}/workflow/start`, {
+  async preflight(configFile: string): Promise<{
+    ok: boolean;
+    cwd: string;
+    checks: Array<{
+      id: string;
+      stateName: string;
+      stepName: string;
+      agent: string;
+      category: 'lint' | 'compile' | 'test' | 'custom';
+      status: 'passed' | 'failed' | 'warning';
+      origin?: 'workflow' | 'inferred';
+      summary: string;
+      createdAt: string;
+      commands: Array<{
+        command: string;
+        exitCode: number | null;
+        status: 'passed' | 'failed' | 'warning';
+        stdout?: string;
+        stderr?: string;
+        errorText?: string | null;
+      }>;
+    }>;
+    failedCount: number;
+    warningCount: number;
+    policy: {
+      blockOnFailure: boolean;
+      allowOnWarning: boolean;
+      inferredCommandCount: number;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/preflight`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ configFile }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '执行启动前检查失败');
+    }
+    return data;
+  },
+
+  async start(configFile: string, frontendSessionId?: string, options?: {
+    skipPreflight?: boolean;
+    rehearsal?: boolean;
+    preflightChecks?: Array<{
+      id: string;
+      stateName: string;
+      stepName: string;
+      agent: string;
+      category: 'lint' | 'compile' | 'test' | 'custom';
+      status: 'passed' | 'failed' | 'warning';
+      origin?: 'workflow' | 'inferred';
+      summary: string;
+      createdAt: string;
+      commands: Array<{
+        command: string;
+        exitCode: number | null;
+        status: 'passed' | 'failed' | 'warning';
+        stdout?: string;
+        stderr?: string;
+        errorText?: string | null;
+      }>;
+    }>;
+  }): Promise<ApiResponse> {
+    const response = await authFetch(`${API_BASE}/workflow/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        configFile,
+        frontendSessionId,
+        skipPreflight: options?.skipPreflight || false,
+        rehearsal: options?.rehearsal || false,
+        preflightChecks: options?.preflightChecks,
+      }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));

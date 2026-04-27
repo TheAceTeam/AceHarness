@@ -6,10 +6,15 @@
  */
 
 import { EventEmitter } from 'events';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { extname, join } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import { commandExists } from '../command-exists';
 import { fenced } from '../markdown-utils';
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
+  private static readonly MAX_INLINE_FILE_BYTES = 64 * 1024;
+  private static readonly MAX_INLINE_FILE_LINES = 400;
   private currentThread: any = null;
   private codexInstance: any = null;
   private _abortController: AbortController | null = null;
@@ -33,24 +38,45 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     try {
       await import('@openai/codex-sdk');
     } catch { return false; }
-    // Also verify we can locate the codex binary
-    return this.findCodexPath() !== null;
+    return commandExists('codex', this.getCodexSearchPaths());
   }
 
-  /** Locate the codex CLI binary — check PATH first, then common locations. */
+  private getCodexSearchPaths(): string[] {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const candidates = process.platform === 'win32'
+      ? [
+          home ? join(home, 'AppData', 'Roaming', 'npm') : '',
+          home ? join(home, '.local', 'bin') : '',
+        ]
+      : [
+          home ? join(home, '.local', 'bin') : '',
+          '/usr/local/bin',
+          '/usr/bin',
+        ];
+    return candidates.filter(Boolean);
+  }
+
+  /** Locate the codex CLI binary — cross-platform PATH + common install locations. */
   private findCodexPath(): string | null {
-    try {
-      const { execSync } = require('child_process');
-      return execSync('command -v codex', { encoding: 'utf-8', shell: '/bin/bash' }).trim();
-    } catch {}
-    const fs = require('fs');
-    const commonPaths = [
-      (process.env.HOME || '') + '/.local/bin/codex',
-      '/usr/local/bin/codex',
-      '/usr/bin/codex',
-    ];
-    for (const p of commonPaths) {
-      try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+    const pathValue = process.env.PATH || '';
+    const pathDirs = pathValue
+      .split(process.platform === 'win32' ? ';' : ':')
+      .filter(Boolean);
+    const pathext = process.platform === 'win32'
+      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
+        .split(';')
+        .map((ext) => ext.trim())
+        .filter(Boolean)
+      : [''];
+    const names = process.platform === 'win32'
+      ? ['codex', ...pathext.map((ext) => `codex${ext}`)]
+      : ['codex'];
+
+    for (const dir of [...this.getCodexSearchPaths(), ...pathDirs]) {
+      for (const name of names) {
+        const fullPath = join(dir, name);
+        if (existsSync(fullPath)) return fullPath;
+      }
     }
     return null;
   }
@@ -69,14 +95,10 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
     const cmdLines = cmd.split('\n');
-    let content = `\n\n**🔧 bash**\n`;
-    if (cmdLines.length <= 1 && cmd.length <= 120) {
-      content += `\n💻 执行命令: \`${cmd}\`\n`;
-    } else {
-      content += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-      content += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
-    }
-    return content;
+    const summary = cmdLines.length <= 1
+      ? '💻 执行命令'
+      : `💻 执行命令 (${cmdLines.length} 行)`;
+    return `\n\n**🔧 bash**\n\n<details><summary>${summary}</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
   }
 
   private formatCommandResult(output: string, exitCode?: number): string {
@@ -86,16 +108,122 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     }
     if (!resultText) return '';
     const lines = resultText.split('\n');
-    if (lines.length <= 15) {
-      return `\n${fenced(resultText)}\n`;
-    }
     return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(resultText)}\n\n</details>\n`;
   }
 
+  private getStringField(source: any, keys: string[]): string {
+    for (const key of keys) {
+      if (typeof source?.[key] === 'string' && source[key].length > 0) {
+        return source[key];
+      }
+    }
+    return '';
+  }
+
+  private buildUnifiedDiff(oldText: string, newText: string): string {
+    const removed = oldText
+      ? oldText.split('\n').map((line) => `- ${line}`).join('\n') + '\n'
+      : '';
+    const added = newText
+      ? newText.split('\n').map((line) => `+ ${line}`).join('\n') + '\n'
+      : '';
+    return `${removed}${added}`.trimEnd();
+  }
+
+  private inferFenceLanguage(path: string): string {
+    const ext = extname(path).toLowerCase();
+    const map: Record<string, string> = {
+      '.ts': 'ts',
+      '.tsx': 'tsx',
+      '.js': 'js',
+      '.jsx': 'jsx',
+      '.json': 'json',
+      '.md': 'md',
+      '.yaml': 'yaml',
+      '.yml': 'yaml',
+      '.css': 'css',
+      '.html': 'html',
+      '.sh': 'bash',
+      '.bash': 'bash',
+      '.zsh': 'bash',
+      '.cj': 'text',
+      '.c': 'c',
+      '.cc': 'cpp',
+      '.cpp': 'cpp',
+      '.h': 'c',
+      '.hpp': 'cpp',
+      '.py': 'python',
+      '.toml': 'toml',
+      '.xml': 'xml',
+    };
+    return map[ext] || 'text';
+  }
+
+  private readAddedFilePreview(path: string): string {
+    try {
+      if (!existsSync(path)) return '';
+      const stats = statSync(path);
+      if (!stats.isFile()) return '';
+      if (stats.size > CodexEngineWrapper.MAX_INLINE_FILE_BYTES) {
+        return '\n<details><summary>查看文件内容</summary>\n\n文件过大，已跳过内联预览。\n\n</details>\n';
+      }
+      const content = readFileSync(path, 'utf-8');
+      if (content.includes('\u0000')) {
+        return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
+      }
+      const lines = content.split('\n');
+      const truncated = lines.length > CodexEngineWrapper.MAX_INLINE_FILE_LINES;
+      const preview = truncated
+        ? `${lines.slice(0, CodexEngineWrapper.MAX_INLINE_FILE_LINES).join('\n')}\n\n... (已截断)`
+        : content;
+      return `\n<details><summary>查看文件内容</summary>\n\n${fenced(preview, this.inferFenceLanguage(path))}\n\n</details>\n`;
+    } catch {
+      return '';
+    }
+  }
+
+  private formatSingleFileChange(change: any): string {
+    const path = this.getStringField(change, ['path', 'filePath', 'file_path']) || '(未知路径)';
+    const kind = this.getStringField(change, ['kind', 'type', 'action']) || 'update';
+    const oldText = this.getStringField(change, ['oldText', 'old_text', 'oldString', 'old_string', 'before']);
+    const newText = this.getStringField(change, ['newText', 'new_text', 'newString', 'new_string', 'after']);
+
+    if (newText && !oldText) {
+      const lines = newText.split('\n').length;
+      let out = `\n📝 写入文件: \`${path}\` (${lines} 行)\n`;
+      out += `\n<details><summary>查看变更</summary>\n\n${fenced(this.buildUnifiedDiff('', newText), 'diff')}\n\n</details>\n`;
+      return out;
+    }
+
+    if (oldText || newText) {
+      const oldLines = oldText ? oldText.split('\n').length : 0;
+      const newLines = newText ? newText.split('\n').length : 0;
+      const added = Math.max(0, newLines - oldLines);
+      const removed = Math.max(0, oldLines - newLines);
+      let stats = `${Math.min(oldLines, newLines)} 行修改`;
+      if (added > 0) stats += `, +${added} 行`;
+      if (removed > 0) stats += `, -${removed} 行`;
+      let out = `\n✏️ 编辑文件: \`${path}\` (${stats})\n`;
+      out += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(this.buildUnifiedDiff(oldText, newText), 'diff')}\n\n</details>\n`;
+      return out;
+    }
+
+    if (kind === 'add') {
+      let out = `\n📝 文件变更: \`${path}\` (${kind})\n`;
+      out += this.readAddedFilePreview(path);
+      return out;
+    }
+
+    return `\n📝 文件变更: \`${path}\` (${kind})\n`;
+  }
+
   private formatFileChanges(changes: any[]): string {
-    const summary = (changes || []).map((c: any) => `  ${c.kind}: ${c.path}`).join('\n');
-    if (!summary) return '';
-    return `\n\n**📝 文件变更**\n\n${fenced(summary)}\n`;
+    if (!Array.isArray(changes) || changes.length === 0) return '';
+    const parts = changes
+      .map((change) => this.formatSingleFileChange(change))
+      .filter(Boolean);
+    if (parts.length === 0) return '';
+    return `\n\n**📝 文件变更**\n${parts.join('')}`;
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {

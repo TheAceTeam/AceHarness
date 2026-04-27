@@ -7,6 +7,7 @@ import { mkdir, writeFile, readFile, readdir, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { getWorkspaceDataFile } from '@/lib/app-paths';
+import type { SessionWorkbenchState } from '@/lib/home-sidebar-state';
 
 const CHAT_DIR = getWorkspaceDataFile('chat-sessions');
 
@@ -31,11 +32,44 @@ export interface PersistedMessage {
   timestamp: number;
 }
 
+export interface WorkflowRunBinding {
+  configFile: string;
+  runId: string;
+  supervisorAgent?: string;
+  supervisorSessionId?: string | null;
+  attachedAgentSessions?: Record<string, string>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowCreationBinding {
+  creationSessionId: string;
+  filename: string;
+  workflowName: string;
+  status: 'draft' | 'confirmed' | 'config-generated' | 'run-bound' | 'archived';
+  openSpecId: string;
+  updatedAt: number;
+  createdAt: number;
+}
+
+export interface AgentChatBinding {
+  agentName: string;
+  team?: 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+  roleType?: 'normal' | 'supervisor';
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface PersistedChatSession {
   id: string;
   title: string;
   model: string;
+  engine?: string;
   backendSessionId?: string;
+  workflowBinding?: WorkflowRunBinding;
+  creationSession?: WorkflowCreationBinding;
+  agentBinding?: AgentChatBinding;
+  sessionWorkbenchState?: SessionWorkbenchState;
   createdAt: number;
   updatedAt: number;
   messages: PersistedMessage[];
@@ -47,10 +81,15 @@ export interface ChatSessionSummary {
   id: string;
   title: string;
   model: string;
+  engine?: string;
   createdAt: number;
   updatedAt: number;
   messageCount: number;
   lastMessage?: string;
+  creationSession?: WorkflowCreationBinding;
+  workflowBinding?: WorkflowRunBinding;
+  agentBinding?: AgentChatBinding;
+  sessionWorkbenchState?: SessionWorkbenchState;
   createdBy?: string;
   visibility?: 'public' | 'private';
 }
@@ -125,10 +164,15 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
         id: session.id,
         title: session.title,
         model: session.model,
+        engine: session.engine,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.messages?.length || 0,
         lastMessage: lastMsg?.content?.slice(0, 100),
+        creationSession: session.creationSession,
+        workflowBinding: session.workflowBinding,
+        agentBinding: session.agentBinding,
+        sessionWorkbenchState: session.sessionWorkbenchState,
         createdBy: session.createdBy,
         visibility: session.visibility,
       });
@@ -156,4 +200,90 @@ export async function deleteAllChatSessions(): Promise<number> {
     await unlink(resolve(CHAT_DIR, file));
   }
   return jsonFiles.length;
+}
+
+export async function updateChatSessionWorkflowBinding(
+  sessionId: string,
+  patch: Omit<WorkflowRunBinding, 'createdAt' | 'updatedAt'> & { updatedAt?: number }
+): Promise<void> {
+  const session = await loadChatSession(sessionId);
+  if (!session) return;
+
+  const now = patch.updatedAt ?? Date.now();
+  const existing = session.workflowBinding;
+  session.workflowBinding = {
+    ...existing,
+    ...patch,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  session.updatedAt = now;
+  await saveChatSession(session);
+}
+
+export async function updateChatSessionCreationBinding(
+  sessionId: string,
+  patch: Partial<Omit<WorkflowCreationBinding, 'createdAt' | 'updatedAt'>> & { updatedAt?: number }
+): Promise<void> {
+  const session = await loadChatSession(sessionId);
+  if (!session) return;
+
+  const now = patch.updatedAt ?? Date.now();
+  const existing = session.creationSession;
+  if (!existing && (!patch.creationSessionId || !patch.filename || !patch.workflowName || !patch.status || !patch.openSpecId)) {
+    return;
+  }
+  session.creationSession = {
+    ...existing,
+    ...patch,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  } as WorkflowCreationBinding;
+  session.updatedAt = now;
+  await saveChatSession(session);
+}
+
+export async function updateChatSessionAgentBinding(
+  sessionId: string,
+  patch: Partial<Omit<AgentChatBinding, 'createdAt' | 'updatedAt'>> & { updatedAt?: number } | null
+): Promise<void> {
+  const session = await loadChatSession(sessionId);
+  if (!session) return;
+
+  if (!patch) {
+    delete session.agentBinding;
+    session.updatedAt = Date.now();
+    await saveChatSession(session);
+    return;
+  }
+
+  const now = patch.updatedAt ?? Date.now();
+  const existing = session.agentBinding;
+  if (!existing && !patch.agentName) {
+    return;
+  }
+
+  session.agentBinding = {
+    ...existing,
+    ...patch,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  } as AgentChatBinding;
+  session.updatedAt = now;
+  await saveChatSession(session);
+}
+
+export async function updateChatSessionWorkbenchState(
+  sessionId: string,
+  patch: SessionWorkbenchState
+): Promise<void> {
+  const session = await loadChatSession(sessionId);
+  if (!session) return;
+
+  session.sessionWorkbenchState = {
+    ...(session.sessionWorkbenchState || {}),
+    ...patch,
+  };
+  session.updatedAt = Date.now();
+  await saveChatSession(session);
 }

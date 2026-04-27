@@ -97,14 +97,20 @@ export async function discoverSkills(): Promise<SkillInfo[]> {
 
 export async function loadChatSettings(): Promise<ChatSettings> {
   const discovered = await discoverSkills();
+  const discoveredNames = new Set(discovered.map((skill) => skill.name));
   const defaults: Record<string, boolean> = {};
-  const DEFAULT_ENABLED = ['power-gitcode', 'aceharness-chat-card', 'aceharness-workflow-creator'];
+  const DEFAULT_ENABLED = ['aceharness-chat-card'];
   for (const s of discovered) defaults[s.name] = DEFAULT_ENABLED.includes(s.name);
 
   try {
     const content = await readFile(SETTINGS_PATH, 'utf-8');
     const parsed = parse(content);
-    return { skills: { ...defaults, ...parsed?.skills }, workingDirectory: parsed?.workingDirectory };
+    const persistedSkills: Record<string, boolean> = Object.fromEntries(
+      Object.entries(parsed?.skills || {}).filter(
+        ([name, enabled]) => discoveredNames.has(name) && typeof enabled === 'boolean'
+      )
+    ) as Record<string, boolean>;
+    return { skills: { ...defaults, ...persistedSkills }, workingDirectory: parsed?.workingDirectory };
   } catch {
     return { skills: defaults };
   }

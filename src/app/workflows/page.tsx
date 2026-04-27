@@ -13,7 +13,6 @@ import { LanguageToggle } from '@/components/language-toggle';
 import { useTranslations } from '@/hooks/useTranslations';
 import { Search, Plus, LogIn, Edit, Copy, Trash2, ArrowLeft, FileText, History } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
-import CopyConfigModal from '@/components/CopyConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -40,7 +39,7 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewModal, setShowNewModal] = useState(false);
-  const [copyingFilename, setCopyingFilename] = useState<string | null>(null);
+  const [referenceWorkflow, setReferenceWorkflow] = useState<string>('');
 
   useDocumentTitle('工作流管理');
 
@@ -79,16 +78,6 @@ export default function WorkflowsPage() {
         toast('error', '无法删除工作流');
       }
     }
-  };
-
-  const handleCopy = async (filename: string) => {
-    setCopyingFilename(filename);
-  };
-
-  const handleCopySuccess = (newFilename: string) => {
-    setCopyingFilename(null);
-    loadWorkflows();
-    toast('success', `工作流已复制为 "${newFilename}"`);
   };
 
   const filteredWorkflows = workflows.filter(wf =>
@@ -223,7 +212,11 @@ export default function WorkflowsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleCopy(workflow.filename)}
+                    onClick={() => {
+                      setReferenceWorkflow(workflow.filename);
+                      setShowNewModal(true);
+                    }}
+                    title="基于该工作流创建新的工作流"
                   >
                     <Copy className="w-3 h-3" />
                   </Button>
@@ -244,9 +237,14 @@ export default function WorkflowsPage() {
       {showNewModal && (
         <NewConfigModal
           isOpen={showNewModal}
-          onClose={() => setShowNewModal(false)}
+          onClose={() => {
+            setShowNewModal(false);
+            setReferenceWorkflow('');
+          }}
+          initialReferenceWorkflow={referenceWorkflow || undefined}
           onSuccess={(filename) => {
             setShowNewModal(false);
+            setReferenceWorkflow('');
             loadWorkflows();
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }}
@@ -254,15 +252,6 @@ export default function WorkflowsPage() {
       )}
 
       {dialogProps && <ConfirmDialog {...dialogProps} />}
-
-      {copyingFilename && (
-        <CopyConfigModal
-          isOpen={!!copyingFilename}
-          sourceFilename={copyingFilename}
-          onClose={() => setCopyingFilename(null)}
-          onSuccess={handleCopySuccess}
-        />
-      )}
     </div>
   );
 }

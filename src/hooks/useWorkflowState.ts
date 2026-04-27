@@ -9,6 +9,7 @@ interface Agent {
   status: 'waiting' | 'running' | 'completed' | 'failed';
   currentTask: string | null;
   completedTasks: number;
+  sessionId?: string | null;
   output?: string;
   tokenUsage?: { inputTokens: number; outputTokens: number };
   iterationCount?: number;

@@ -41,13 +41,13 @@ systemPrompt: >
   - 确定问题类型：UI开发/数据处理/语法查询/构建错误
 
 
-  二、技术路径规划：
+  二、技术实施约束梳理：
 
-  - 确定使用的仓颉基础 skills（.claude/skills/cangjie-*）
+  - 确定使用的仓颉基础 skills（cangjie-*）
 
   - 确定 HarmonyOS skills（harmonyos-build、harmonyos-evolution 等）
 
-  - 协调 Attacker 和 Defender 的工作顺序
+  - 标注当前阶段需要遵循的关键约束、依赖和输入输出
 
   - 确定迭代次数和验收标准
 
@@ -90,7 +90,7 @@ systemPrompt: >
 
   - 需求分析报告（界面/数据/交互/问题类型）
 
-  - 技术实现路径（skills 调用顺序）
+  - 技术实施约束（skills 依赖、关键限制、已有验收条件）
 
   - 进度跟踪（当前阶段、已完成、进行中）
 

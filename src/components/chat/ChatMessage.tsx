@@ -9,6 +9,7 @@ import { getEngineDisplayName } from '@/lib/engine-metadata';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
+const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
 
 async function loadModelLabels(): Promise<Map<string, string>> {
   if (modelLabelCache) return modelLabelCache;
@@ -197,6 +198,12 @@ export function RobotLogo({ size = 32, className = '' }: { size?: number; classN
 
 export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook }: ChatMessageProps) {
   const [modelLabel, setModelLabel] = useState(message.model || '');
+  const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
+  const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
+  const actionTagClassName = isWorkflowActionTag
+    ? 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300'
+    : 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300';
+  const actionTagIcon = isWorkflowActionTag ? 'account_tree' : 'smart_toy';
 
   useEffect(() => {
     let cancelled = false;
@@ -220,6 +227,23 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   }, [message.model]);
 
   if (message.role === 'user') {
+    if (isActionTagMessage) {
+      return (
+        <div className="group mb-4 flex justify-center">
+          <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs ${actionTagClassName}`}>
+            <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
+            <span className="whitespace-normal break-all">{message.content}</span>
+          </div>
+          <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+            {onDelete && (
+              <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="group flex justify-end mb-4 items-start gap-1">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">

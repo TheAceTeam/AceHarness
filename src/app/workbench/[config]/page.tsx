@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ClipLoader } from 'react-spinners';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi } from '@/lib/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, type NotebookScope } from '@/lib/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
@@ -14,10 +14,12 @@ import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import DesignPanel from '@/components/DesignPanel';
 import AgentPanel from '@/components/AgentPanel';
 import AgentConfigPanel from '@/components/AgentConfigPanel';
+import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import EditNodeModal from '@/components/EditNodeModal';
 import ProcessPanel from '@/components/ProcessPanel';
 import DocumentsPanel from '@/components/DocumentsPanel';
 import SchedulesPanel from '@/components/SchedulesPanel';
+import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
 import ResizablePanels from '@/components/ResizablePanels';
 import { Button } from '@/components/ui/button';
@@ -35,17 +37,29 @@ import { ButtonGroup } from '@/components/ui/button-group';
 import { Switch } from '@/components/ui/switch';
 import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useAttentionSignal } from '@/hooks/useAttentionSignal';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import { resolveAgentSelection } from '@/lib/agent-engine-selection';
+import {
+  buildWorkflowConversationDirectory,
+  getConversationSessionStatusLabel,
+  listSessionsForAgent,
+  listSessionsForWorkflow,
+  resolveAgentConversationSession,
+  type ChatSessionSummaryLike,
+} from '@/lib/agent-conversations';
 import { getEngineMeta } from '@/lib/engine-metadata';
+import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent-draft';
 import styles from './page.module.css';
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
@@ -54,6 +68,123 @@ const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 function isAbsoluteProjectPath(path: string) {
   return path.startsWith('/') || WINDOWS_DRIVE_ABSOLUTE_PATH.test(path) || UNC_ABSOLUTE_PATH.test(path);
 }
+
+type QualityCheckRecord = {
+  id: string;
+  stateName: string;
+  stepName: string;
+  agent: string;
+  category: 'lint' | 'compile' | 'test' | 'custom';
+  status: 'passed' | 'failed' | 'warning';
+  origin?: 'workflow' | 'inferred';
+  summary: string;
+  createdAt: string;
+  commands: Array<{
+    command: string;
+    exitCode: number | null;
+    status: 'passed' | 'failed' | 'warning';
+    stdout?: string;
+    stderr?: string;
+    errorText?: string | null;
+  }>;
+};
+
+type WorkflowMemoryLayers = {
+  schema?: {
+    scopes: string[];
+    rules: string[];
+  };
+  runtime: {
+    openSpecSummary?: {
+      id: string;
+      version: number;
+      summary?: string;
+      progressSummary?: string;
+    } | null;
+    qualityChecks: Array<{
+      id: string;
+      stateName: string;
+      stepName: string;
+      agent: string;
+      category: 'lint' | 'compile' | 'test' | 'custom';
+      status: 'passed' | 'failed' | 'warning';
+      summary: string;
+      createdAt: string;
+    }>;
+  };
+  review: {
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    generatedAt: string;
+  } | null;
+  history: Array<{
+    runId: string;
+    status: 'completed' | 'failed' | 'stopped';
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    generatedAt: string;
+  }>;
+  role?: {
+    agent: string;
+    memories: Array<{
+      id: string;
+      title: string;
+      kind: string;
+      content: string;
+      source: string;
+      createdAt: string;
+      tags: string[];
+    }>;
+  };
+  project?: {
+    key: string;
+    memories: Array<{
+      id: string;
+      title: string;
+      kind: string;
+      content: string;
+      source: string;
+      createdAt: string;
+      tags: string[];
+    }>;
+  };
+  workflow?: {
+    key: string;
+    memories: Array<{
+      id: string;
+      title: string;
+      kind: string;
+      content: string;
+      source: string;
+      createdAt: string;
+      tags: string[];
+    }>;
+  };
+  chat?: {
+    sessionId: string | null;
+    memories: Array<{
+      id: string;
+      title: string;
+      kind: string;
+      content: string;
+      source: string;
+      createdAt: string;
+      tags: string[];
+    }>;
+  };
+  recalledExperiences?: Array<{
+    runId: string;
+    status: 'completed' | 'failed' | 'stopped';
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    generatedAt: string;
+  }>;
+};
+
+type OpenSpecArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
 
 export default function WorkbenchPage() {
   const params = useParams();
@@ -91,12 +222,15 @@ export default function WorkbenchPage() {
   const [historyRuns, setHistoryRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
+  const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [viewingHistoryRun, setViewingHistoryRun] = useState(false);
   const [pendingCheckpointPhase, setPendingCheckpointPhase] = useState<string | null>(null);
   const [fullStepOutput, setFullStepOutput] = useState<string | null>(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
   const [markdownModal, setMarkdownModal] = useState<{ title: string; chunks: string[] } | null>(null);
+  const [openSpecModalOpen, setOpenSpecModalOpen] = useState(false);
+  const [openSpecModalFullscreen, setOpenSpecModalFullscreen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
@@ -110,6 +244,7 @@ export default function WorkbenchPage() {
     nextState: string;
     result: any;
     availableStates: string[];
+    supervisorAdvice?: string;
   } | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
@@ -119,14 +254,16 @@ export default function WorkbenchPage() {
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
   const [starting, setStarting] = useState(false);
+  const [rehearsalMode, setRehearsalMode] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
+  const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
+  const [runtimeAgentDraft, setRuntimeAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
   const [showDesignRequirements, setShowDesignRequirements] = useState(true);
   const [showRunRequirements, setShowRunRequirements] = useState(true);
   const [showAllSkills, setShowAllSkills] = useState(false);
   const [iterationFeedback, setIterationFeedback] = useState('');
-  const [pendingPlanQuestion, setPendingPlanQuestion] = useState<{ question: string; fromAgent: string; round: number } | null>(null);
   const [supervisorFlow, setSupervisorFlow] = useState<{
     type: 'question' | 'decision';
     from: string;
@@ -135,6 +272,7 @@ export default function WorkbenchPage() {
     method?: string;
     round: number;
     timestamp: string;
+    stateName?: string;
   }[]>([]);
   const [agentFlow, setAgentFlow] = useState<{
     id: string;
@@ -147,7 +285,6 @@ export default function WorkbenchPage() {
     round: number;
     timestamp: string;
   }[]>([]);
-  const [currentPlanRound, setCurrentPlanRound] = useState<number>(0);
   const [persistedStepLogs, setPersistedStepLogs] = useState<Array<{
     id: string;
     stepName: string;
@@ -160,45 +297,140 @@ export default function WorkbenchPage() {
     timestamp: string;
   }>>([]);
   const [runStatusReason, setRunStatusReason] = useState<string | null>(null);
-  const [planAnswer, setPlanAnswer] = useState('');
-  const [sendingPlanAnswer, setSendingPlanAnswer] = useState(false);
-  /** Claude Agent SDK AskUserQuestion */
-  const [pendingSdkPlanQuestion, setPendingSdkPlanQuestion] = useState<{
-    questions: Array<{
-      question: string;
-      header?: string;
-      options: Array<{ label: string; description?: string; preview?: string }>;
-      multiSelect?: boolean;
+  const [creationSessionSummary, setCreationSessionSummary] = useState<{
+    id: string;
+    workflowName: string;
+    filename: string;
+    status: string;
+    updatedAt: number;
+  } | null>(null);
+  const [openSpecSummary, setOpenSpecSummary] = useState<{
+    id: string;
+    version: number;
+    status: string;
+    source?: 'run' | 'creation';
+    summary?: string;
+    phaseCount: number;
+    taskCount?: number;
+    assignmentCount: number;
+    checkpointCount: number;
+    progress?: {
+      overallStatus?: string;
+      completedPhaseIds?: string[];
+      activePhaseId?: string;
+      summary?: string;
+    };
+    latestRevision?: {
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    } | null;
+  } | null>(null);
+  const [latestSupervisorReview, setLatestSupervisorReview] = useState<{
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null>(null);
+  const [rehearsalInfo, setRehearsalInfo] = useState<{
+    enabled: boolean;
+    summary: string;
+    recommendedNextSteps: string[];
+  } | null>(null);
+  const [rehearsalResultDialogOpen, setRehearsalResultDialogOpen] = useState(false);
+  const [openSpecDetails, setOpenSpecDetails] = useState<{
+    phases: Array<{
+      id: string;
+      title: string;
+      objective?: string;
+      ownerAgents: string[];
+      status: string;
     }>;
-    fromAgent: string;
-    stateName: string;
-    stepName: string;
+    tasks?: Array<{
+      id: string;
+      title: string;
+      detail?: string;
+      status: string;
+      phaseId?: string;
+      ownerAgents: string[];
+      updatedAt?: string;
+      updatedBy?: string;
+      validation?: string;
+    }>;
+    assignments: Array<{
+      agent: string;
+      responsibility: string;
+      phaseIds: string[];
+    }>;
+    checkpoints: Array<{
+      id: string;
+      title: string;
+      phaseId?: string;
+      status: string;
+    }>;
+    revisions: Array<{
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    }>;
+    artifacts?: {
+      proposal?: string;
+      design?: string;
+      tasks?: string;
+      deltaSpec?: string;
+    };
   } | null>(null);
-  const [sdkPlanSingle, setSdkPlanSingle] = useState<Record<string, string>>({});
-  const [sdkPlanMulti, setSdkPlanMulti] = useState<Record<string, string[]>>({});
-  const [sdkPlanOther, setSdkPlanOther] = useState<Record<string, string>>({});
-  const [sendingSdkPlanAnswer, setSendingSdkPlanAnswer] = useState(false);
-  /** SDK Plan Review（审批弹窗） */
-  const [pendingPlanReview, setPendingPlanReview] = useState<{
-    planContent: string;
-    stepKey: string;
-    agent: string;
-    stateName: string;
-    stepName: string;
+  const [openSpecSourceOfTruth, setOpenSpecSourceOfTruth] = useState<{
+    mode: 'phase-based' | 'state-machine' | 'unknown';
+    yamlSourceOfTruth: string[];
+    derivedIntoOpenSpec: string[];
+    runtimeOpenSpecSourceOfTruth: string[];
+    counts: {
+      yamlPhases: number;
+      yamlStates: number;
+      yamlSteps: number;
+      yamlCheckpoints: number;
+      openSpecPhases: number;
+      openSpecTasks?: number;
+      openSpecAssignments: number;
+      openSpecCheckpoints: number;
+    };
   } | null>(null);
-  const [planReviewMode, setPlanReviewMode] = useState<'view' | 'edit' | 'reject'>('view');
-  const [planReviewEditContent, setPlanReviewEditContent] = useState('');
-  const [planReviewFeedback, setPlanReviewFeedback] = useState('');
-  const [sendingPlanReview, setSendingPlanReview] = useState(false);
-  /** SDK Plan 子任务 / 工具执行遥测（横幅） */
-  const [sdkPlanSubtaskBanner, setSdkPlanSubtaskBanner] = useState<{
-    phase: string;
-    taskId: string;
-    title: string;
-    subtitle?: string;
-    elapsedSec: number;
-    terminal?: string;
+  const [finalReview, setFinalReview] = useState<{
+    runId: string;
+    configFile: string;
+    supervisorAgent: string;
+    status: 'completed' | 'failed' | 'stopped';
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    scoreCards: Array<{
+      agent: string;
+      score: number;
+      strengths: string[];
+      weaknesses: string[];
+    }>;
+    generatedAt: string;
   } | null>(null);
+  const [qualityChecks, setQualityChecks] = useState<QualityCheckRecord[]>([]);
+  const [preflightChecks, setPreflightChecks] = useState<QualityCheckRecord[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
+  const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
+  const [agentChatSessions, setAgentChatSessions] = useState<Record<string, string | null>>({});
+  const [agentChatLoading, setAgentChatLoading] = useState<Record<string, boolean>>({});
+  const [agentChatMessages, setAgentChatMessages] = useState<Record<string, Array<{
+    id: string;
+    role: 'user' | 'assistant' | 'error';
+    content: string;
+    mode: 'workflow-chat';
+    timestamp: number;
+  }>>>({});
   const liveStreamFeedbackRef = useRef<HTMLInputElement>(null);
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
@@ -214,8 +446,13 @@ export default function WorkbenchPage() {
   const [editingContextValue, setEditingContextValue] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
-  const [designTab, setDesignTab] = useState<'workflow' | 'config'>('workflow');
+  const [designTab, setDesignTab] = useState<'workflow' | 'openspec' | 'config'>('workflow');
+  const [openSpecArtifactTab, setOpenSpecArtifactTab] = useState<OpenSpecArtifactKey>('proposal');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
+  const [openSpecSaveDialogOpen, setOpenSpecSaveDialogOpen] = useState(false);
+  const [openSpecSaveScope, setOpenSpecSaveScope] = useState<NotebookScope>('personal');
+  const [openSpecSaveDirectory, setOpenSpecSaveDirectory] = useState('');
+  const [savingOpenSpecArtifact, setSavingOpenSpecArtifact] = useState(false);
   const liveStreamRef = useRef<EventSource | ReturnType<typeof setInterval> | null>(null);
   const liveStreamLenRef = useRef(0);
   const liveStreamRawRef = useRef('');
@@ -262,6 +499,386 @@ export default function WorkbenchPage() {
     return projectRoot;
   }, [projectRoot]);
 
+  useEffect(() => {
+    setRuntimeAgentDraft((prev) => ({
+      ...prev,
+      workingDirectory: resolvedProjectRoot || prev.workingDirectory || '',
+    }));
+  }, [resolvedProjectRoot]);
+
+  const activeOpenSpecPhase = useMemo(() => {
+    if (!openSpecDetails?.phases?.length) return null;
+    return openSpecDetails.phases.find((phase) => phase.id === openSpecSummary?.progress?.activePhaseId)
+      || openSpecDetails.phases.find((phase) => phase.title === currentPhase)
+      || null;
+  }, [currentPhase, openSpecDetails, openSpecSummary?.progress?.activePhaseId]);
+
+  const openSpecArtifactEntries = useMemo<Array<{
+    key: OpenSpecArtifactKey;
+    label: string;
+    title: string;
+    content: string;
+  }>>(() => {
+    const artifacts = openSpecDetails?.artifacts || {};
+    return [
+      {
+        key: 'proposal',
+        label: 'proposal.md',
+        title: '提案',
+        content: artifacts.proposal || '',
+      },
+      {
+        key: 'design',
+        label: 'design.md',
+        title: '设计',
+        content: artifacts.design || '',
+      },
+      {
+        key: 'tasks',
+        label: 'tasks.md',
+        title: '任务',
+        content: artifacts.tasks || '',
+      },
+      {
+        key: 'deltaSpec',
+        label: 'specs/.../spec.md',
+        title: '增量规范',
+        content: artifacts.deltaSpec || '',
+      },
+    ];
+  }, [openSpecDetails?.artifacts]);
+
+  const activeOpenSpecArtifact = useMemo(
+    () => openSpecArtifactEntries.find((entry) => entry.key === openSpecArtifactTab) || openSpecArtifactEntries[0],
+    [openSpecArtifactEntries, openSpecArtifactTab]
+  );
+  const sanitizeNotebookName = useCallback((name: string) => {
+    return name
+      .trim()
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  }, []);
+  const triggerDownload = useCallback((content: string, filename: string) => {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+  const openOpenSpecSaveDialog = useCallback((artifactKey: OpenSpecArtifactKey) => {
+    setOpenSpecArtifactTab(artifactKey);
+    setOpenSpecSaveScope('personal');
+    setOpenSpecSaveDirectory('');
+    setOpenSpecSaveDialogOpen(true);
+  }, []);
+  const saveOpenSpecArtifactToNotebook = useCallback(async () => {
+    if (!activeOpenSpecArtifact?.content?.trim()) return;
+    setSavingOpenSpecArtifact(true);
+    try {
+      const ts = new Date();
+      const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}-${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`;
+      const base = sanitizeNotebookName(activeOpenSpecArtifact.label.replace(/\.md$/i, '') || activeOpenSpecArtifact.key);
+      const fileName = `${base}-${stamp}.cj.md`;
+      const normalizedDir = (openSpecSaveDirectory || '').replace(/^\/+|\/+$/g, '');
+      const notebookPath = normalizedDir ? `${normalizedDir}/${fileName}` : fileName;
+      await workspaceApi.manageNotebook('create-file', { path: notebookPath }, { scope: openSpecSaveScope });
+      await workspaceApi.saveNotebookFile(notebookPath, activeOpenSpecArtifact.content, { scope: openSpecSaveScope });
+      toast('success', `已保存到 Notebook：${notebookPath}`);
+      setOpenSpecSaveDialogOpen(false);
+    } catch (error: any) {
+      toast('error', error?.message || '保存到 Notebook 失败');
+    } finally {
+      setSavingOpenSpecArtifact(false);
+    }
+  }, [activeOpenSpecArtifact, openSpecSaveDirectory, openSpecSaveScope, sanitizeNotebookName, toast]);
+
+  const checkpointDeviationNotes = useMemo(() => {
+    if (!humanApprovalData || !openSpecDetails?.phases?.length) return [];
+    const notes: string[] = [];
+    const reviewPhase = openSpecDetails.phases.find((phase) => phase.title === humanApprovalData.currentState);
+
+    if (!reviewPhase) {
+      notes.push(`运行态 OpenSpec 中未找到与当前人工审查状态「${humanApprovalData.currentState}」对应的阶段定义。`);
+      return notes;
+    }
+
+    if (activeOpenSpecPhase && activeOpenSpecPhase.title !== humanApprovalData.currentState) {
+      notes.push(`OpenSpec 当前活跃阶段是「${activeOpenSpecPhase.title}」，与待审状态「${humanApprovalData.currentState}」不一致。`);
+    }
+
+    if (reviewPhase.status === 'blocked' && humanApprovalData.result?.verdict !== 'fail') {
+      notes.push(`OpenSpec 已将该阶段标记为 blocked，但本次判定为 ${humanApprovalData.result?.verdict || '未知'}，需要确认是否继续阻塞。`);
+    }
+
+    if (humanApprovalData.nextState === humanApprovalData.currentState && reviewPhase.status === 'completed') {
+      notes.push(`OpenSpec 已将该阶段标记为 completed，但 AI 仍建议继续留在当前状态。`);
+    }
+
+    if (humanApprovalData.nextState !== humanApprovalData.currentState && reviewPhase.status === 'in-progress') {
+      notes.push(`OpenSpec 当前仍显示该阶段 in-progress，但 AI 建议流转到「${humanApprovalData.nextState}」。`);
+    }
+
+    if (notes.length === 0) {
+      notes.push('当前人工审查结论与运行态 OpenSpec 记录基本一致。');
+    }
+
+    return notes;
+  }, [activeOpenSpecPhase, humanApprovalData, openSpecDetails]);
+
+  const executionTrace = useMemo(() => ({
+    designTitle: creationSessionSummary?.workflowName || openSpecSummary?.id || workflowConfig?.workflow?.name || configFile,
+    designStatus: creationSessionSummary?.status || openSpecSummary?.status || null,
+    designSummary: openSpecSummary?.summary || workflowConfig?.workflow?.description || requirements || null,
+    activePhaseTitle: activeOpenSpecPhase?.title || currentPhase || null,
+    activePhaseStatus: activeOpenSpecPhase?.status || openSpecSummary?.progress?.overallStatus || workflowStatus || null,
+    activeStepName: currentStep || null,
+    latestSupervisorReview: supervisorFlow.length > 0 ? {
+      type: supervisorFlow.at(-1)?.type || null,
+      stateName: supervisorFlow.at(-1)?.stateName || supervisorFlow.at(-1)?.to || null,
+      content: supervisorFlow.at(-1)?.question || null,
+    } : latestSupervisorReview ? {
+      type: latestSupervisorReview.type,
+      stateName: latestSupervisorReview.stateName,
+      content: latestSupervisorReview.content,
+    } : null,
+    latestRevision: openSpecSummary?.latestRevision
+      ? {
+        version: openSpecSummary.latestRevision.version,
+        summary: openSpecSummary.latestRevision.summary,
+        createdBy: openSpecSummary.latestRevision.createdBy,
+      }
+      : null,
+    finalReview: finalReview
+      ? {
+        status: finalReview.status,
+        summary: finalReview.summary,
+      }
+      : null,
+  }), [
+    activeOpenSpecPhase,
+    configFile,
+    creationSessionSummary,
+    currentPhase,
+    currentStep,
+    finalReview,
+    latestSupervisorReview,
+    openSpecSummary,
+    requirements,
+    supervisorFlow,
+    workflowConfig?.workflow?.description,
+    workflowConfig?.workflow?.name,
+    workflowStatus,
+  ]);
+
+  const designExecutionComparison = useMemo(() => {
+    const checkpointForActivePhase = activeOpenSpecPhase
+      ? openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)
+      : null;
+
+    return {
+      designInput: {
+        workflowName: creationSessionSummary?.workflowName || workflowConfig?.workflow?.name || configFile,
+        creationStatus: creationSessionSummary?.status || openSpecSummary?.status || 'unknown',
+        baselineSummary: openSpecSummary?.summary || requirements || workflowConfig?.workflow?.description || '暂无设计摘要',
+        phaseCount: openSpecSummary?.phaseCount || openSpecDetails?.phases?.length || 0,
+      },
+      runtime: {
+        workflowStatus: workflowStatus || 'idle',
+        activePhaseTitle: activeOpenSpecPhase?.title || currentPhase || '未进入阶段',
+        activePhaseStatus: activeOpenSpecPhase?.status || openSpecSummary?.progress?.overallStatus || 'pending',
+        activeStepName: currentStep || '未进入步骤',
+        checkpointTitle: checkpointForActivePhase?.title || null,
+        checkpointStatus: checkpointForActivePhase?.status || null,
+      },
+      latestRevision: openSpecSummary?.latestRevision || openSpecDetails?.revisions?.at(-1) || null,
+    };
+  }, [
+    activeOpenSpecPhase,
+    configFile,
+    creationSessionSummary?.status,
+    creationSessionSummary?.workflowName,
+    currentPhase,
+    currentStep,
+    openSpecDetails?.checkpoints,
+    openSpecDetails?.phases?.length,
+    openSpecDetails?.revisions,
+    openSpecSummary,
+    requirements,
+    workflowConfig?.workflow?.description,
+    workflowConfig?.workflow?.name,
+    workflowStatus,
+  ]);
+
+  const configuredWorkflowAgents = useMemo(() => {
+    const workflow = workflowConfig?.workflow;
+    const names: string[] = [];
+    const seen = new Set<string>();
+    const addName = (name?: string | null) => {
+      const trimmed = name?.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      names.push(trimmed);
+    };
+
+    const supervisorFromWorkflow = workflow?.supervisor?.agent;
+    const supervisorFromRoles = agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
+    addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
+
+    const nodes = workflow?.mode === 'state-machine'
+      ? (workflow.states || [])
+      : (workflow?.phases || []);
+    for (const node of nodes) {
+      addName(node?.agent);
+      for (const step of node?.steps || []) {
+        addName(step?.agent);
+      }
+    }
+
+    return names.map((name) => {
+      const roleConfig = agentConfigs.find((role: any) => role.name === name);
+      const selection = roleConfig
+        ? resolveAgentSelection(roleConfig, { engine: globalEngine, defaultModel: globalDefaultModel }, engine)
+        : null;
+      return {
+        name,
+        team: roleConfig?.team || (name === (supervisorFromWorkflow || supervisorFromRoles) ? 'black-gold' : 'blue'),
+        model: selection?.effectiveModel || '',
+        status: 'waiting' as const,
+        currentTask: null,
+        completedTasks: 0,
+        sessionId: null,
+      };
+    });
+  }, [agentConfigs, engine, globalDefaultModel, globalEngine, workflowConfig?.workflow]);
+
+  const displayWorkflowAgents = useMemo(() => {
+    const runtimeByName = new Map(agents.map((agent) => [agent.name, agent]));
+    const configuredNames = new Set(configuredWorkflowAgents.map((agent) => agent.name));
+    const configuredWithRuntime = configuredWorkflowAgents.map((agent) => runtimeByName.get(agent.name) || agent);
+    const runtimeRemainder = agents.filter((agent) => !configuredNames.has(agent.name));
+    return [...configuredWithRuntime, ...runtimeRemainder];
+  }, [agents, configuredWorkflowAgents]);
+
+  const appendAgentChatMessage = useCallback((agentName: string, message: {
+    id: string;
+    role: 'user' | 'assistant' | 'error';
+    content: string;
+    mode: 'workflow-chat';
+    timestamp: number;
+  }) => {
+    setAgentChatMessages((prev) => ({
+      ...prev,
+      [agentName]: [...(prev[agentName] || []), message],
+    }));
+  }, []);
+
+  const handleAgentChat = useCallback(async (input: { message: string; mode: 'workflow-chat' }) => {
+    if (!selectedAgent?.name) return;
+
+    const agentName = selectedAgent.name;
+    const timestamp = Date.now();
+    appendAgentChatMessage(agentName, {
+      id: `${timestamp}-user`,
+      role: 'user',
+      content: input.message,
+      mode: 'workflow-chat',
+      timestamp,
+    });
+    setAgentChatLoading((prev) => ({ ...prev, [agentName]: true }));
+
+    try {
+      const result = await agentApi.chat(agentName, {
+        message: input.message,
+        mode: 'workflow-chat',
+        sessionId: resolveAgentConversationSession({
+          mode: 'workflow-chat',
+          agentName,
+          runtimeSessionId: agentChatSessions[agentName] || null,
+          workflowBinding: {
+            configFile,
+            runId: runId || selectedRun?.id || 'pending',
+            supervisorAgent: finalReview?.supervisorAgent || workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name || 'default-supervisor',
+            supervisorSessionId: displayWorkflowAgents.find((agent) => agent.name === (finalReview?.supervisorAgent || workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((role: any) => role?.roleType === 'supervisor')?.name || 'default-supervisor'))?.sessionId || null,
+            attachedAgentSessions: Object.fromEntries(displayWorkflowAgents.map((agent) => [agent.name, agent.sessionId || ''])),
+            createdAt: 0,
+            updatedAt: 0,
+          },
+          agentSessionId: selectedAgent.sessionId || null,
+        }).sessionId,
+        workingDirectory: state.workingDirectory || resolvedProjectRoot || undefined,
+        workflowContext: {
+          workflowName: workflowConfig?.workflow?.name,
+          configFile,
+          runId,
+          status: workflowStatus || null,
+          currentPhase,
+          currentStep,
+          selectedStepName: selectedStep?.name || null,
+          requirements,
+          openSpecSummary,
+          openSpecDetails,
+          latestSupervisorReview: {
+            content: supervisorFlow.at(-1)?.question || null,
+            type: supervisorFlow.at(-1)?.type || null,
+            stateName: supervisorFlow.at(-1)?.stateName || null,
+          },
+        },
+      });
+
+      setAgentChatSessions((prev) => ({
+        ...prev,
+        [agentName]: result.sessionId || prev[agentName] || selectedAgent.sessionId || null,
+      }));
+      appendAgentChatMessage(agentName, {
+        id: `${Date.now()}-assistant`,
+        role: result.isError ? 'error' : 'assistant',
+        content: result.openSpecRevision?.applied
+          ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 OpenSpec：${result.openSpecRevision.summary}`
+          : (result.output || result.error || '无输出'),
+        mode: 'workflow-chat',
+        timestamp: Date.now(),
+      });
+      if (result.openSpecRevision?.applied) {
+        await fetchCurrentStatus();
+      }
+    } catch (error: any) {
+      appendAgentChatMessage(agentName, {
+        id: `${Date.now()}-error`,
+        role: 'error',
+        content: error?.message || 'Agent 对话失败',
+        mode: 'workflow-chat',
+        timestamp: Date.now(),
+      });
+    } finally {
+      setAgentChatLoading((prev) => ({ ...prev, [agentName]: false }));
+    }
+  }, [
+    agentChatSessions,
+    appendAgentChatMessage,
+    configFile,
+    currentPhase,
+    currentStep,
+    openSpecSummary,
+    requirements,
+    resolvedProjectRoot,
+    runId,
+    selectedRun?.id,
+    selectedAgent,
+    selectedStep,
+    state.workingDirectory,
+    supervisorFlow,
+    finalReview?.supervisorAgent,
+    displayWorkflowAgents,
+    agentConfigs,
+    workflowConfig,
+    workflowConfig?.workflow?.name,
+    workflowStatus,
+  ]);
+
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
   const canStartWorkflow = isRunMode && !starting && !isRunning;
   const preparingProgress = useMemo(() => {
@@ -299,13 +916,158 @@ export default function WorkbenchPage() {
   const workflowTitle = useMemo(() => {
     if (humanApprovalData) return `待人工审查 · ${workflowBaseTitle}`;
     if (viewingHistoryRun) return `查看运行 · ${workflowBaseTitle}`;
+    if (rehearsalInfo?.enabled) return `演练模式 · ${workflowBaseTitle}`;
     if (workflowStatus === 'running') return `运行中 · ${workflowBaseTitle}`;
     if (workflowStatus === 'preparing') return `准备中 · ${workflowBaseTitle}`;
     if (workflowStatus === 'completed') return `已完成 · ${workflowBaseTitle}`;
     if (workflowStatus === 'failed' || workflowStatus === 'crashed') return `运行失败 · ${workflowBaseTitle}`;
     if (workflowStatus === 'stopped') return `已停止 · ${workflowBaseTitle}`;
     return `${workflowBaseTitle} · Workflow`;
-  }, [humanApprovalData, viewingHistoryRun, workflowStatus, workflowBaseTitle]);
+  }, [humanApprovalData, viewingHistoryRun, rehearsalInfo?.enabled, workflowStatus, workflowBaseTitle]);
+  const workflowDirectory = useMemo(() => {
+    const supervisorFromConfig = workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
+    const supervisorAgent = finalReview?.supervisorAgent || supervisorFromConfig || 'default-supervisor';
+    const attachedAgentSessions = Object.fromEntries(
+      displayWorkflowAgents
+        .filter((agent) => agent?.name)
+        .map((agent) => [agent.name, agent.sessionId || ''])
+    );
+
+    return buildWorkflowConversationDirectory({
+      configFile,
+      runId: runId || selectedRun?.id || 'pending',
+      supervisorAgent,
+      supervisorSessionId: attachedAgentSessions[supervisorAgent] || null,
+      attachedAgentSessions,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+  }, [agentConfigs, configFile, displayWorkflowAgents, finalReview?.supervisorAgent, runId, selectedRun?.id, workflowConfig?.workflow?.supervisor?.agent]);
+  const orderedWorkflowAgents = useMemo(() => {
+    const agentMap = new Map(displayWorkflowAgents.map((agent) => [agent.name, agent]));
+    const ordered = workflowDirectory
+      .map((entry) => agentMap.get(entry.label))
+      .filter((agent): agent is (typeof displayWorkflowAgents)[number] => Boolean(agent));
+    const remainder = displayWorkflowAgents.filter((agent) => !workflowDirectory.some((entry) => entry.label === agent.name));
+    return [...ordered, ...remainder];
+  }, [displayWorkflowAgents, workflowDirectory]);
+
+  useEffect(() => {
+    if (orderedWorkflowAgents.length === 0) return;
+    if (selectedAgent && orderedWorkflowAgents.some((agent) => agent.name === selectedAgent.name)) return;
+    dispatch({ type: 'SET_SELECTED_AGENT', payload: orderedWorkflowAgents[0] });
+  }, [orderedWorkflowAgents, selectedAgent, dispatch]);
+
+  const workflowRelatedSessions = useMemo(
+    () => listSessionsForWorkflow(chatSessions, configFile),
+    [chatSessions, configFile]
+  );
+  const displayQualityChecks = useMemo(() => {
+    const merged = [...preflightChecks, ...qualityChecks];
+    const seen = new Set<string>();
+    return merged.filter((check) => {
+      if (seen.has(check.id)) return false;
+      seen.add(check.id);
+      return true;
+    });
+  }, [preflightChecks, qualityChecks]);
+  const formatQualityCheckScope = useCallback((check: QualityCheckRecord) => {
+    if (check.stateName === '__preflight__' && check.stepName === '__preflight__') {
+      return '启动前检查';
+    }
+    if (check.stateName === check.stepName) {
+      return check.stateName;
+    }
+    return `${check.stateName} / ${check.stepName}`;
+  }, []);
+  const formatQualityCheckCategory = useCallback((category: QualityCheckRecord['category']) => {
+    if (category === 'compile') return '编译检查';
+    if (category === 'test') return '测试检查';
+    if (category === 'lint') return '规范检查';
+    return '自定义检查';
+  }, []);
+  const formatQualityCheckStatus = useCallback((status: QualityCheckRecord['status']) => {
+    if (status === 'passed') return '通过';
+    if (status === 'failed') return '失败';
+    return '警告';
+  }, []);
+  const formatQualityCheckAgent = useCallback((agent: string) => {
+    if (agent === 'system') return '系统';
+    return agent;
+  }, []);
+  const formatOpenSpecTaskStatus = useCallback((status: string) => {
+    if (status === 'completed') return '已完成';
+    if (status === 'in-progress') return '进行中';
+    if (status === 'blocked') return '阻塞';
+    return '未开始';
+  }, []);
+  const getOpenSpecTaskPhaseTitle = useCallback((task: { phaseId?: string }) => {
+    if (!task.phaseId) return '';
+    return openSpecDetails?.phases?.find((phase) => phase.id === task.phaseId)?.title || '';
+  }, [openSpecDetails?.phases]);
+  const describeQualityCheck = useCallback((check: QualityCheckRecord) => {
+    const command = check.commands?.[0]?.command?.trim() || '';
+    if (!command) return check.summary;
+
+    if (/mkdir\s+-p\s+/.test(command)) {
+      const pathMatch = command.match(/mkdir\s+-p\s+(.+)$/);
+      const target = pathMatch?.[1] || '';
+      if (/\/samples\b/.test(target)) return '检查样例输出目录是否可以创建';
+      if (/\/outputs\b/.test(target)) return '检查结果输出目录是否可以创建';
+      if (/\/source-paths\b/.test(target)) return '检查源码路径输出目录是否可以创建';
+      return '检查运行所需目录是否可以创建';
+    }
+
+    if (/cjc\s+--version|\/bin\/cjc\s+--version/.test(command)) {
+      return '检查 cjc 编译器是否可用，并读取版本信息';
+    }
+
+    if (/cjpm\s+build/.test(command)) return '检查 cjpm build 是否可以执行';
+    if (/cjpm\s+test/.test(command)) return '检查 cjpm test 是否可以执行';
+    if (/npm\s+run\s+lint|eslint|cjlint/.test(command)) return '检查代码规范命令是否可以执行';
+    if (/npm\s+run\s+typecheck|tsc\s+--noEmit/.test(command)) return '检查类型检查是否可以执行';
+    if (/npm\s+run\s+build|\bbuild\b|compile/.test(command)) return '检查构建命令是否可以执行';
+    if (/npm\s+run\s+test|pytest|jest|vitest/.test(command)) return '检查测试命令是否可以执行';
+
+    return '检查配置中的预检查命令是否可以执行';
+  }, []);
+  const rehearsalCheckStats = useMemo(() => {
+    const checks = preflightChecks.length > 0
+      ? preflightChecks
+      : displayQualityChecks.filter((check) => check.stateName === '__preflight__');
+    return {
+      total: checks.length,
+      passed: checks.filter((check) => check.status === 'passed').length,
+      warning: checks.filter((check) => check.status === 'warning').length,
+      failed: checks.filter((check) => check.status === 'failed').length,
+    };
+  }, [displayQualityChecks, preflightChecks]);
+  const overviewTasks = useMemo(() => {
+    const tasks = openSpecDetails?.tasks || [];
+    const priority = (status: string) => {
+      if (status === 'in-progress') return 0;
+      if (status === 'blocked') return 1;
+      if (status === 'pending') return 2;
+      if (status === 'completed') return 3;
+      return 4;
+    };
+    return [...tasks]
+      .sort((a, b) => priority(a.status) - priority(b.status))
+      .slice(0, 8);
+  }, [openSpecDetails?.tasks]);
+  const focusTaskOnDiagram = useCallback((task: { phaseId?: string }) => {
+    const phaseTitle = getOpenSpecTaskPhaseTitle(task);
+    if (!phaseTitle) return;
+    setFocusedState(phaseTitle);
+    setExecutionViewTabOverride('diagram');
+  }, [getOpenSpecTaskPhaseTitle]);
+  const openAgentFromTask = useCallback((agentName: string) => {
+    const matchedAgent = orderedWorkflowAgents.find((agent) => agent.name === agentName)
+      || agents.find((agent) => agent.name === agentName);
+    if (!matchedAgent) return;
+    dispatch({ type: 'SET_SELECTED_AGENT', payload: matchedAgent as any });
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'agents' });
+  }, [agents, dispatch, orderedWorkflowAgents]);
   const attentionSignal = useAttentionSignal({
     active: Boolean(humanApprovalData),
     title: `待人工审查 · ${workflowBaseTitle}`,
@@ -316,6 +1078,20 @@ export default function WorkbenchPage() {
   });
 
   useDocumentTitle(attentionSignal.active ? attentionSignal.title || null : workflowTitle);
+
+  const loadChatSessions = useCallback(async () => {
+    try {
+      const response = await fetch('/api/chat/sessions');
+      const data = await response.json();
+      setChatSessions(data.sessions || []);
+    } catch {
+      setChatSessions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadChatSessions();
+  }, [loadChatSessions]);
 
   const totalSteps = workflowConfig?.workflow?.mode === 'state-machine'
     ? (workflowConfig?.workflow?.states?.reduce(
@@ -349,6 +1125,16 @@ export default function WorkbenchPage() {
       if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
+      if (status.agents?.length) {
+        setAgentChatSessions((prev) => ({
+          ...Object.fromEntries(
+            status.agents
+              .filter((agent: any) => agent?.name)
+              .map((agent: any) => [agent.name, agent.sessionId || null])
+          ),
+          ...prev,
+        }));
+      }
       if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
 
@@ -367,51 +1153,18 @@ export default function WorkbenchPage() {
       if ((status as any).supervisorFlow) {
         setSupervisorFlow((status as any).supervisorFlow);
       }
+      setLatestSupervisorReview((status as any).latestSupervisorReview || null);
+      setRehearsalInfo((status as any).rehearsal || null);
       if ((status as any).agentFlow) {
         setAgentFlow((status as any).agentFlow);
       }
-
-      if (status.pendingSdkPlanQuestion) {
-        setPendingSdkPlanQuestion(status.pendingSdkPlanQuestion as any);
-      } else {
-        setPendingSdkPlanQuestion(null);
-      }
-
-      if (status.pendingPlanReview) {
-        setPendingPlanReview(status.pendingPlanReview as any);
-        setPlanReviewMode('view');
-        setPlanReviewEditContent((status.pendingPlanReview as any).planContent || '');
-        setPlanReviewFeedback('');
-      } else {
-        setPendingPlanReview(null);
-      }
-
-      const pst = (status as { pendingSdkPlanSubtask?: unknown }).pendingSdkPlanSubtask as
-        | {
-            phase: string;
-            taskId: string;
-            description: string;
-            elapsedSec: number;
-            detail?: string;
-            toolName?: string;
-            terminalStatus?: string;
-            summary?: string;
-          }
-        | undefined;
-      if (pst && pst.phase) {
-        const tid = pst.taskId || '';
-        const shortId = tid.length <= 10 ? tid : `${tid.slice(0, 8)}…`;
-        setSdkPlanSubtaskBanner({
-          phase: pst.phase,
-          taskId: tid,
-          title: pst.phase === 'tool' ? `工具：${pst.toolName || '?'}` : `子任务 #${shortId}`,
-          subtitle: [pst.description, pst.detail].filter(Boolean).join(' · ') || undefined,
-          elapsedSec: pst.elapsedSec ?? 0,
-          terminal: pst.terminalStatus,
-        });
-      } else {
-        setSdkPlanSubtaskBanner(null);
-      }
+      setCreationSessionSummary((status as any).creationSession || null);
+      setOpenSpecSummary((status as any).openSpecSummary || null);
+      setOpenSpecDetails((status as any).openSpecDetails || null);
+      setOpenSpecSourceOfTruth((status as any).sourceOfTruth || null);
+      setFinalReview((status as any).finalReview || null);
+      setQualityChecks((status as any).qualityChecks || []);
+      setMemoryLayers((status as any).memoryLayers || null);
 
       {
         if (Array.isArray(status.stepLogs)) {
@@ -650,6 +1403,19 @@ export default function WorkbenchPage() {
       if (detail.stateHistory) {
         setSmStateHistory(detail.stateHistory);
       }
+      setFinalReview(detail.finalReview || null);
+      setQualityChecks((detail as any).qualityChecks || []);
+      setMemoryLayers((detail as any).memoryLayers || null);
+      if (detail.agents?.length) {
+        setAgentChatSessions((prev) => ({
+          ...Object.fromEntries(
+            detail.agents
+              .filter((agent: any) => agent?.name)
+              .map((agent: any) => [agent.name, agent.sessionId || null])
+          ),
+          ...prev,
+        }));
+      }
       if (detail.issueTracker) {
         setSmIssueTracker(detail.issueTracker);
       }
@@ -710,6 +1476,7 @@ export default function WorkbenchPage() {
             stepOutputs: [],
           },
           availableStates: restoredAvailableStates,
+          supervisorAdvice: detail.pendingCheckpoint?.supervisorAdvice,
         });
       } else {
         setHumanApprovalData(null);
@@ -767,6 +1534,8 @@ export default function WorkbenchPage() {
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
+        if (event.data.openSpecSummary) setOpenSpecSummary(event.data.openSpecSummary);
+        if (event.data.openSpecDetails) setOpenSpecDetails(event.data.openSpecDetails);
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
         break;
@@ -775,7 +1544,6 @@ export default function WorkbenchPage() {
         addLog('system', 'info', `📍 ${event.data.message}`);
         break;
       case 'step':
-        setSdkPlanSubtaskBanner(null);
         dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.step });
         if (event.data.id) {
           dispatch({ type: 'MAP_STEP_ID', payload: { stepName: event.data.step, stepId: event.data.id } });
@@ -783,7 +1551,6 @@ export default function WorkbenchPage() {
         addLog(event.data.agent, 'info', `开始执行: ${event.data.step}`);
         break;
       case 'result': {
-        setSdkPlanSubtaskBanner(null);
         const resultKey = event.data.id || event.data.step;
         if (event.data.error) {
           addLog(event.data.agent, 'error', event.data.output);
@@ -853,6 +1620,7 @@ export default function WorkbenchPage() {
           nextState: event.data.nextState,
           result: event.data.result,
           availableStates: event.data.availableStates || [],
+          supervisorAdvice: event.data.supervisorAdvice,
         });
         break;
       case 'force-transition':
@@ -904,27 +1672,6 @@ export default function WorkbenchPage() {
         }
         addLog('system', 'info', `上下文已更新: ${event.data.scope === 'global' ? '全局' : event.data.phase}`);
         break;
-      case 'plan-question':
-        setPendingPlanQuestion({
-          question: event.data.question,
-          fromAgent: event.data.fromAgent,
-          round: event.data.round
-        });
-        setSupervisorFlow(prev => [...prev, {
-          type: 'question',
-          from: event.data.fromAgent,
-          to: 'user',
-          question: event.data.question,
-          round: event.data.round,
-          timestamp: new Date().toISOString(),
-          stateName: currentPhase,
-        }]);
-        addLog('system', 'warning', `❓ 需要用户回答: ${event.data.question}`);
-        break;
-      case 'plan-round':
-        setCurrentPlanRound(event.data.round);
-        addLog('system', 'info', `🔄 Plan 循环第 ${event.data.round + 1} 轮 - 收集 ${event.data.infoRequests?.length || 0} 个请求`);
-        break;
       case 'route-decision':
         setSupervisorFlow(prev => [...prev, {
           type: 'decision',
@@ -940,59 +1687,6 @@ export default function WorkbenchPage() {
         break;
       case 'agent-flow':
         setAgentFlow(event.data.agentFlow || []);
-        break;
-      case 'sdk-plan-subtask': {
-        if (event.data.configFile && event.data.configFile !== configFile) break;
-        const d = event.data;
-        if (!d.phase) break;
-        const tid = String(d.taskId || '');
-        const shortId = tid.length <= 10 ? tid : `${tid.slice(0, 8)}…`;
-        const subtitleParts = [d.description, d.detail].filter(Boolean);
-        setSdkPlanSubtaskBanner({
-          phase: d.phase,
-          taskId: tid,
-          title: d.phase === 'tool' ? `工具：${d.toolName || '?'}` : `子任务 #${shortId || '?'}`,
-          subtitle: subtitleParts.length ? subtitleParts.join(' · ') : undefined,
-          elapsedSec: typeof d.elapsedSec === 'number' ? d.elapsedSec : 0,
-          terminal: d.terminalStatus,
-        });
-        break;
-      }
-      case 'sdk-plan-question':
-        setPendingSdkPlanQuestion({
-          questions: Array.isArray(event.data.questions) ? event.data.questions : [],
-          fromAgent: event.data.fromAgent || '',
-          stateName: event.data.stateName || '',
-          stepName: event.data.stepName || '',
-        });
-        setSdkPlanSingle({});
-        setSdkPlanMulti({});
-        setSdkPlanOther({});
-        addLog(
-          'system',
-          'warning',
-          `SDK Plan 需要确认: ${event.data.questions?.[0]?.question?.slice(0, 80) || '(结构化问题)'}`
-        );
-        break;
-      case 'sdk-plan-captured':
-        addLog(
-          'system',
-          'success',
-          `Plan 已捕获 (${event.data.via || '?'}): ${event.data.length ?? 0} 字符`
-        );
-        break;
-      case 'sdk-plan-review':
-        setPendingPlanReview({
-          planContent: event.data.planContent || '',
-          stepKey: event.data.stepKey || '',
-          agent: event.data.agent || '',
-          stateName: event.data.stateName || '',
-          stepName: event.data.stepName || '',
-        });
-        setPlanReviewMode('view');
-        setPlanReviewEditContent(event.data.planContent || '');
-        setPlanReviewFeedback('');
-        addLog('system', 'warning', `Plan 待审批: ${event.data.stepKey || ''}`);
         break;
     }
   }, [selectedAgent, addLog, currentPhase]);
@@ -1040,7 +1734,8 @@ export default function WorkbenchPage() {
     setEditingName(false);
   };
 
-  const startWorkflow = async () => {
+  const startWorkflow = async (mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real')) => {
+    const isRehearsalStart = mode === 'rehearsal';
     const normalizedProjectRoot = (projectRoot || '').trim();
     if (!normalizedProjectRoot) {
       toast('error', '项目根目录不能为空');
@@ -1055,6 +1750,37 @@ export default function WorkbenchPage() {
 
     setStarting(true);
     try {
+      if (!isRehearsalStart) {
+        setRehearsalResultDialogOpen(false);
+      }
+      const preflight = await workflowApi.preflight(configFile);
+      setPreflightChecks(preflight.checks || []);
+      if (!preflight.ok) {
+        dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
+        addLog('system', 'error', `启动前检查未通过: ${preflight.failedCount} 项失败`);
+        toast('error', `启动前检查未通过：${preflight.failedCount} 项失败`);
+        return;
+      }
+      if (preflight.warningCount > 0) {
+        const warningDescription = (preflight.checks || [])
+          .filter((check) => check.status === 'warning')
+          .slice(0, 3)
+          .map((check) => `${check.summary}${check.commands[0]?.command ? `\n${check.commands[0].command}` : ''}`)
+          .join('\n\n');
+        const confirmed = await confirm({
+          title: '启动前检查存在警告',
+          description: warningDescription || '启动前检查存在警告，确认后将继续启动。',
+          confirmLabel: '继续启动',
+          cancelLabel: '取消',
+          variant: 'default',
+        });
+        if (!confirmed) {
+          addLog('system', 'warning', '已取消启动，等待处理 preflight 警告');
+          toast('warning', '已取消启动，可先处理 preflight 警告');
+          return;
+        }
+        addLog('system', 'warning', `启动前检查存在 ${preflight.warningCount} 项警告，已人工确认后继续执行`);
+      }
       setViewingHistoryRun(false);
       dispatch({ type: 'RESET_RUN' });
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
@@ -1065,15 +1791,17 @@ export default function WorkbenchPage() {
       setSmTransitionCount(0);
       setSupervisorFlow([]);
       setAgentFlow([]);
-      setCurrentPlanRound(0);
-      setPendingSdkPlanQuestion(null);
-      setSdkPlanSubtaskBanner(null);
-      setSdkPlanSingle({});
-      setSdkPlanMulti({});
-      setSdkPlanOther({});
-      addLog('system', 'info', '正在启动工作流...');
-      await workflowApi.start(configFile);
-      addLog('system', 'success', '工作流启动成功，等待执行...');
+      addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
+      const startResult = await workflowApi.start(configFile, undefined, {
+        skipPreflight: true,
+        rehearsal: isRehearsalStart,
+        preflightChecks: preflight.checks || [],
+      });
+      if (isRehearsalStart && (startResult as any).rehearsal) {
+        setRehearsalInfo((startResult as any).rehearsal);
+        setRehearsalResultDialogOpen(true);
+      }
+      addLog('system', 'success', isRehearsalStart ? '演练模式执行完成' : '工作流启动成功，等待执行...');
       // Fetch status shortly after start to catch initial state
       setTimeout(fetchCurrentStatus, 500);
     } catch (error: any) {
@@ -1548,6 +2276,18 @@ export default function WorkbenchPage() {
       result = result.substring(0, group[0].start) + merged + result.substring(group[group.length - 1].end);
     }
     return result;
+  };
+
+  const sanitizeProtocolBlocksForDisplay = (text: string): string => {
+    if (!text) return text;
+    return text
+      .replace(/<openspec-tasks>[\s\S]*?<\/openspec-tasks>/gi, '')
+      .replace(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/gi, '$1')
+      .trim();
+  };
+
+  const prepareChunkForDisplay = (text: string): string => {
+    return sanitizeProtocolBlocksForDisplay(mergeSubtaskDetails(text));
   };
 
   // Parse chunk with optional timestamp
@@ -2147,6 +2887,536 @@ export default function WorkbenchPage() {
     return null;
   };
 
+  const renderRuntimeInsightPanels = () => {
+    const hasOpenSpecTasks = Boolean(openSpecSummary && openSpecDetails?.tasks?.length);
+    const hasQualityChecks = displayQualityChecks.length > 0;
+    const hasMemoryLayers = Boolean(memoryLayers);
+    if (!hasOpenSpecTasks && !hasQualityChecks && !hasMemoryLayers) return null;
+
+    return (
+      <div className="mt-4 space-y-3">
+        {hasOpenSpecTasks ? (
+          <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>task_alt</span>
+                <div>
+                  <div className="text-sm font-semibold">当前 tasks.md 进度</div>
+                  <div className="text-xs text-muted-foreground">
+                    当前 run 派生出的 tasks.md 实时投影，带任务状态和 Agent 排布。
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px]">
+                  {openSpecDetails?.tasks?.filter((task) => task.status === 'completed').length || 0}/{openSpecDetails?.tasks?.length || 0}
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    setOpenSpecArtifactTab('tasks');
+                    setOpenSpecModalOpen(true);
+                  }}
+                >
+                  <span className="material-symbols-outlined text-sm mr-1">article</span>
+                  查看当前 tasks.md
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {overviewTasks.map((task) => (
+                <div
+                  key={task.id}
+                  className={`rounded-xl border p-3 transition-colors ${
+                    task.status === 'completed'
+                      ? 'border-emerald-500/30 bg-emerald-500/8'
+                      : task.status === 'in-progress'
+                        ? 'border-blue-500/40 bg-blue-500/10 shadow-[0_0_0_1px_rgba(59,130,246,0.12)]'
+                        : task.status === 'blocked'
+                          ? 'border-red-500/30 bg-red-500/8'
+                          : 'bg-muted/20'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        {task.status === 'in-progress' ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+                            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                            进行中
+                          </span>
+                        ) : null}
+                        <div className={`text-sm font-medium leading-6 ${
+                          task.status === 'completed'
+                            ? 'text-emerald-700 dark:text-emerald-400'
+                            : task.status === 'in-progress'
+                              ? 'text-blue-700 dark:text-blue-300'
+                              : 'text-foreground'
+                        }`}>{task.title}</div>
+                      </div>
+                      {task.detail ? (
+                        <div className="mt-1 text-[11px] leading-5 text-muted-foreground line-clamp-2">{task.detail}</div>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">负责 Agent：</span>
+                        {(task.ownerAgents || []).map((agent) => (
+                          <button
+                            key={`${task.id}-${agent}`}
+                            type="button"
+                            className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] text-foreground transition-colors hover:bg-background"
+                            onClick={() => openAgentFromTask(agent)}
+                            title={`查看 ${agent}`}
+                          >
+                            {agent}
+                          </button>
+                        ))}
+                        {task.validation ? (
+                          <span className="text-[10px] text-muted-foreground">验证：{task.validation}</span>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {getOpenSpecTaskPhaseTitle(task) ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() => focusTaskOnDiagram(task)}
+                          >
+                            <span className="material-symbols-outlined mr-1" style={{ fontSize: 12 }}>my_location</span>
+                            定位状态图
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <Badge
+                      className={`shrink-0 ${
+                        task.status === 'completed'
+                          ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                          : task.status === 'in-progress'
+                            ? 'bg-blue-500/15 text-blue-600 border border-blue-500/30'
+                            : task.status === 'blocked'
+                              ? 'bg-red-500/15 text-red-600 border border-red-500/30'
+                              : 'bg-muted text-muted-foreground border border-border'
+                      }`}
+                    >
+                      {formatOpenSpecTaskStatus(task.status)}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="grid gap-3 xl:grid-cols-2">
+        {hasQualityChecks ? (
+          <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>verified</span>
+                <div className="text-sm font-semibold">质量门禁</div>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      aria-label="查看质量门禁说明"
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>help</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-80 space-y-2 text-xs leading-5">
+                    <div className="font-medium text-foreground">这一块是做什么的</div>
+                    <div className="text-muted-foreground">
+                      这里汇总工作流里的检查项结果，比如启动前检查、编译、测试、lint 和自定义校验。
+                    </div>
+                    <div className="text-muted-foreground">
+                      它的作用是告诉你：系统按什么命令检查过、检查是否通过、失败或告警出现在哪一步。
+                    </div>
+                    <div className="text-muted-foreground">
+                      像“启动前检查”这一类记录，来源于 workflow 配置里的 preflight / 检查命令；如果页面里显示的是“[配置] ...”，表示这条命令来自当前 workflow 配置本身。
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+              <Badge variant="outline" className="text-[10px]">{displayQualityChecks.length} 条</Badge>
+            </div>
+            <div className="space-y-2">
+              {displayQualityChecks.slice(-4).reverse().map((check) => (
+                <div key={check.id} className="rounded-xl border bg-muted/20 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-xs font-medium text-foreground">
+                      {formatQualityCheckScope(check)}
+                    </div>
+                    <Badge variant={check.status === 'failed' ? 'destructive' : 'secondary'} className="shrink-0 text-[10px]">
+                      {formatQualityCheckCategory(check.category)} · {formatQualityCheckStatus(check.status)}
+                    </Badge>
+                  </div>
+                  <div className="text-[11px] leading-5 text-muted-foreground">{check.summary}</div>
+                  <div className="text-[10px] text-muted-foreground/80">
+                    {formatQualityCheckAgent(check.agent)} · {new Date(check.createdAt).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {memoryLayers ? (
+          <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>memory</span>
+                <div className="text-sm font-semibold">记忆分层</div>
+              </div>
+              <Badge variant="outline" className="text-[10px]">
+                {memoryLayers.schema?.scopes?.join(' / ') || 'runtime / review / history'}
+              </Badge>
+            </div>
+            {memoryLayers.review ? (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-1">
+                <div className="text-[11px] font-medium text-foreground">复盘记忆</div>
+                <div className="text-[11px] leading-5 text-muted-foreground">{memoryLayers.review.summary}</div>
+              </div>
+            ) : null}
+            {memoryLayers.role?.memories?.length ? (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">角色长期记忆 · {memoryLayers.role.agent}</div>
+                {memoryLayers.role.memories.slice(0, 2).map((item) => (
+                  <div key={item.id} className="space-y-1">
+                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
+                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {memoryLayers.project?.memories?.length ? (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">项目级共享记忆</div>
+                {memoryLayers.project.memories.slice(0, 2).map((item) => (
+                  <div key={item.id} className="space-y-1">
+                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
+                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {memoryLayers.workflow?.memories?.length ? (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">Workflow 记忆</div>
+                {memoryLayers.workflow.memories.slice(0, 2).map((item) => (
+                  <div key={item.id} className="space-y-1">
+                    <div className="text-[11px] font-medium text-foreground">{item.title}</div>
+                    <div className="text-[11px] leading-5 text-muted-foreground">{item.content}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {(memoryLayers.history?.length || memoryLayers.recalledExperiences?.length) ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {memoryLayers.history?.length ? (
+                  <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                    <div className="text-[11px] font-medium text-foreground">长期经验</div>
+                    {memoryLayers.history.slice(0, 2).map((item) => (
+                      <div key={item.runId} className="text-[11px] leading-5 text-muted-foreground">
+                        {item.runId} · {item.status}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {memoryLayers.recalledExperiences?.length ? (
+                  <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                    <div className="text-[11px] font-medium text-foreground">本次召回经验</div>
+                    {memoryLayers.recalledExperiences.slice(0, 2).map((item) => (
+                      <div key={`recalled-${item.runId}`} className="text-[11px] leading-5 text-muted-foreground">
+                        {item.runId} · {item.status}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  const renderOpenSpecPanel = (options?: { className?: string }) => {
+    const completedTaskCount = openSpecDetails?.tasks?.filter((task) => task.status === 'completed').length || 0;
+    const totalTaskCount = openSpecDetails?.tasks?.length || 0;
+
+    return (
+      <div className={options?.className || 'space-y-4'}>
+        <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
+                <h3 className="text-base font-semibold">OpenSpec 草案</h3>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                查看创建期确认的 proposal、design、tasks 和增量 spec；运行后这里会展示当前 run 的快照与进度投影。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {openSpecSummary ? (
+                <>
+                  <Badge variant="outline" className="text-[10px]">v{openSpecSummary.version}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{openSpecSummary.status}</Badge>
+                  {openSpecSummary.source ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {openSpecSummary.source === 'run' ? 'Run Snapshot' : 'Creation Baseline'}
+                    </Badge>
+                  ) : null}
+                </>
+              ) : (
+                <Badge variant="outline" className="text-[10px]">未绑定</Badge>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={!openSpecSummary}
+                onClick={() => setOpenSpecModalOpen(true)}
+                title="弹出 OpenSpec 文件管理器"
+              >
+                <span className="material-symbols-outlined text-sm">open_in_new</span>
+              </Button>
+            </div>
+          </div>
+
+          {openSpecSummary ? (
+            <div className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">任务</div>
+                  <div className="mt-1 text-lg font-semibold">{completedTaskCount}/{totalTaskCount || openSpecSummary.taskCount || 0}</div>
+                </div>
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">制品</div>
+                  <div className="mt-1 text-lg font-semibold">
+                    {openSpecArtifactEntries.filter((entry) => entry.content.trim()).length}/{openSpecArtifactEntries.length}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">修订</div>
+                  <div className="mt-1 text-lg font-semibold">{openSpecDetails?.revisions?.length || 0}</div>
+                </div>
+              </div>
+              {openSpecSummary.summary ? (
+                <div className="rounded-xl border bg-muted/20 p-3 text-sm leading-6 text-muted-foreground">
+                  {openSpecSummary.summary}
+                </div>
+              ) : null}
+              {openSpecSummary.progress?.summary ? (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">
+                  当前进度：{openSpecSummary.progress.summary}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+              当前工作流没有绑定创建期 OpenSpec。通过首页 AI 创建工作流并确认 OpenSpec 后，这里会显示完整草案。
+            </div>
+          )}
+        </div>
+
+        {openSpecSummary && (
+          <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">制品列表</div>
+                <div className="text-xs text-muted-foreground">在弹窗中查看完整内容。</div>
+              </div>
+              <Badge variant="outline" className="text-[10px]">
+                {openSpecArtifactEntries.filter((entry) => entry.content.trim()).length}/{openSpecArtifactEntries.length}
+              </Badge>
+            </div>
+            <div className="space-y-2">
+              {openSpecArtifactEntries.map((entry) => (
+                <button
+                  key={entry.key}
+                  type="button"
+                  className={`w-full rounded-xl border px-3 py-2 text-left transition-colors ${
+                    activeOpenSpecArtifact.key === entry.key
+                      ? 'border-primary bg-primary/10'
+                      : 'bg-background/60 hover:bg-background'
+                  }`}
+                  onClick={() => {
+                    setOpenSpecArtifactTab(entry.key);
+                    setOpenSpecModalOpen(true);
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-foreground">{entry.label}</div>
+                      <div className="mt-0.5 text-[11px] text-muted-foreground">{entry.title}</div>
+                    </div>
+                    <Badge variant="outline" className="shrink-0 text-[10px]">
+                      {entry.content.trim() ? 'available' : 'empty'}
+                    </Badge>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {openSpecDetails?.revisions?.length ? (
+          <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
+            <div className="text-sm font-semibold">修订记录</div>
+            <div className="space-y-2">
+              {[...openSpecDetails.revisions].reverse().map((revision) => (
+                <div key={revision.id} className="rounded-xl border bg-muted/10 p-3 text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-foreground">v{revision.version}</span>
+                    <span>{new Date(revision.createdAt).toLocaleString()}</span>
+                  </div>
+                  <div className="mt-1 leading-5">{revision.summary}</div>
+                  {revision.createdBy ? (
+                    <div className="mt-1 text-[10px]">修订者：{revision.createdBy}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  const renderOpenSpecExplorer = () => (
+    <>
+      <div className="border-b border-border px-3 py-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
+                <div className="truncate text-sm font-semibold">OpenSpec 文件管理器</div>
+            </div>
+            <div className="mt-0.5 truncate text-xs text-muted-foreground">
+              {openSpecSummary?.id || workflowConfig?.workflow?.name || configFile}
+            </div>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => triggerDownload(activeOpenSpecArtifact.content, activeOpenSpecArtifact.label)}
+                disabled={!activeOpenSpecArtifact.content.trim()}
+                title="下载当前文档"
+              >
+                <span className="material-symbols-outlined text-sm">download</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => openOpenSpecSaveDialog(activeOpenSpecArtifact.key)}
+                disabled={!activeOpenSpecArtifact.content.trim()}
+                title="保存到 Notebook"
+              >
+                <span className="material-symbols-outlined text-sm">note_add</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setOpenSpecModalFullscreen((value) => !value)}
+              title={openSpecModalFullscreen ? '退出全屏' : '全屏'}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {openSpecModalFullscreen ? 'fullscreen_exit' : 'fullscreen'}
+              </span>
+            </Button>
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-1 overflow-hidden">
+        <aside className="w-64 shrink-0 overflow-y-auto border-r border-border bg-muted/20">
+          <div className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+            制品列表
+          </div>
+          <div className="space-y-1 p-2">
+            {openSpecArtifactEntries.map((entry) => {
+              const active = activeOpenSpecArtifact.key === entry.key;
+              return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                    active
+                      ? 'border-primary bg-primary/10 text-foreground'
+                      : 'border-transparent hover:border-border hover:bg-background'
+                  }`}
+                  onClick={() => setOpenSpecArtifactTab(entry.key)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium">{entry.label}</span>
+                    <Badge variant="outline" className="shrink-0 text-[9px]">
+                      {entry.content.trim() ? 'ready' : 'empty'}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">{entry.title}</div>
+                </button>
+              );
+            })}
+          </div>
+          {openSpecDetails?.revisions?.length ? (
+            <div className="border-t border-border p-3">
+              <div className="text-xs font-medium text-muted-foreground">最近修订</div>
+              <div className="mt-2 space-y-2">
+                {[...openSpecDetails.revisions].reverse().slice(0, 3).map((revision) => (
+                  <div key={revision.id} className="rounded-lg border bg-background/70 p-2 text-[11px] text-muted-foreground">
+                    <div className="font-medium text-foreground">v{revision.version}</div>
+                    <div className="mt-1 line-clamp-2">{revision.summary}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </aside>
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{activeOpenSpecArtifact.title}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{activeOpenSpecArtifact.label}</div>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {openSpecSummary ? (
+                <>
+                  <Badge variant="outline" className="text-[10px]">v{openSpecSummary.version}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{openSpecSummary.status}</Badge>
+                </>
+              ) : null}
+              <Badge variant="outline" className="text-[10px]">
+                {activeOpenSpecArtifact.content.trim() ? 'available' : 'empty'}
+              </Badge>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-5">
+            {activeOpenSpecArtifact.content.trim() ? (
+              <div className={`${styles.markdownContent} max-w-none`}>
+                <Markdown>{activeOpenSpecArtifact.content}</Markdown>
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
+                这份 OpenSpec 制品还没有内容。
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+    </>
+  );
+
   if (pageLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
@@ -2222,10 +3492,32 @@ export default function WorkbenchPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {isRunMode && (<>
+            <div className={`hidden md:flex items-center gap-2 rounded-md border px-2 py-1 transition-colors ${
+              rehearsalMode ? 'bg-background/40' : 'bg-amber-500/10 border-amber-500/30'
+            }`}>
+              <Switch checked={rehearsalMode} onCheckedChange={setRehearsalMode} />
+              <span className="text-xs text-muted-foreground">演练模式</span>
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center text-muted-foreground hover:text-foreground"
+                      aria-label="查看演练模式说明"
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>help</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs text-xs leading-5">
+                    演练模式会按真实流程做一次预演，生成阶段建议、风险和下一步，但不会进入正式执行链路，适合先检查流程设计是否合理。
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <Button
               size="sm"
               className={`h-7 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`}
-              onClick={startWorkflow}
+              onClick={() => void startWorkflow()}
               disabled={starting || isRunning}
             >
               {starting ? (
@@ -2233,7 +3525,7 @@ export default function WorkbenchPage() {
               ) : (
                 <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>play_arrow</span>
               )}
-              <span className="hidden sm:inline">{starting ? '启动中...' : '启动工作流'}</span>
+              <span className="hidden sm:inline">{starting ? '启动中...' : rehearsalMode ? '开始演练' : '启动工作流'}</span>
               <span className="sm:hidden">{starting ? '...' : '启动'}</span>
             </Button>
             <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={requestStopWorkflow} disabled={!isRunning && workflowStatus !== 'running'}>
@@ -2320,6 +3612,70 @@ export default function WorkbenchPage() {
                         </div>
                       </div>
                     )}
+                    {finalReview && (
+                      <div className="rounded-xl border bg-background/60 p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="text-xs font-medium text-muted-foreground">战后结算</Label>
+                          <Badge variant="outline" className="text-[10px]">
+                            {finalReview.supervisorAgent}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <div>结算状态：{finalReview.status}</div>
+                          <div>生成时间：{new Date(finalReview.generatedAt).toLocaleString()}</div>
+                        </div>
+                        <div className="rounded-lg border bg-muted/30 p-3">
+                          <div className="text-[11px] font-medium text-foreground">总评</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">{finalReview.summary}</div>
+                        </div>
+                        {finalReview.scoreCards?.length ? (
+                          <div className="space-y-2">
+                            <div className="text-[11px] font-medium text-foreground">Agent 评分</div>
+                            <div className="space-y-2">
+                              {finalReview.scoreCards.map((card) => (
+                                <div key={card.agent} className="rounded-lg border p-2 space-y-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="text-xs font-medium text-foreground">{card.agent}</div>
+                                    <Badge variant="secondary" className="text-[10px]">{card.score}/100</Badge>
+                                  </div>
+                                  <Progress value={Math.max(0, Math.min(100, card.score))} className="h-1.5" />
+                                  {card.strengths?.length ? (
+                                    <div className="text-[11px] text-muted-foreground">优点：{card.strengths.join(' / ')}</div>
+                                  ) : null}
+                                  {card.weaknesses?.length ? (
+                                    <div className="text-[11px] text-muted-foreground">短板：{card.weaknesses.join(' / ')}</div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {finalReview.nextFocus?.length ? (
+                          <div className="space-y-2">
+                            <div className="text-[11px] font-medium text-foreground">下一步重点</div>
+                            <div className="space-y-1">
+                              {finalReview.nextFocus.map((item, index) => (
+                                <div key={`${item}-${index}`} className="text-[11px] leading-5 text-muted-foreground">
+                                  {index + 1}. {item}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {finalReview.experience?.length ? (
+                          <div className="space-y-2">
+                            <div className="text-[11px] font-medium text-foreground">经验沉淀</div>
+                            <div className="space-y-1">
+                              {finalReview.experience.map((item, index) => (
+                                <div key={`${item}-${index}`} className="text-[11px] leading-5 text-muted-foreground">
+                                  {index + 1}. {item}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">步骤超时</Label>
                       <p className="text-sm mt-1">{timeoutMinutes} 分钟</p>
@@ -2345,36 +3701,6 @@ export default function WorkbenchPage() {
                   </div>
                 )}
               </div>
-              {sdkPlanSubtaskBanner && workflowStatus === 'running' && (
-                <div className="border-b bg-muted/50 px-4 py-2.5 text-sm shrink-0">
-                  <div className="flex items-start gap-2">
-                    <span
-                      className="material-symbols-outlined text-amber-600 dark:text-amber-400 shrink-0"
-                      style={{ fontSize: 20 }}
-                    >
-                      {sdkPlanSubtaskBanner.phase === 'end' ? 'task_alt' : 'hourglass_top'}
-                    </span>
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="font-medium text-foreground leading-snug">
-                        {sdkPlanSubtaskBanner.phase === 'end'
-                          ? `子任务已结束 · ${
-                              sdkPlanSubtaskBanner.terminal === 'failed'
-                                ? '失败'
-                                : sdkPlanSubtaskBanner.terminal === 'stopped'
-                                  ? '已停止'
-                                  : '完成'
-                            }（${sdkPlanSubtaskBanner.elapsedSec.toFixed(1)}s）`
-                          : `正在执行 ${sdkPlanSubtaskBanner.title}（${sdkPlanSubtaskBanner.elapsedSec.toFixed(1)}s）`}
-                      </div>
-                      {sdkPlanSubtaskBanner.subtitle ? (
-                        <div className="text-xs text-muted-foreground break-words">
-                          {sdkPlanSubtaskBanner.subtitle}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              )}
               <Tabs value={activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 overflow-hidden">
                 <TabsList className="w-full rounded-none border-b flex-shrink-0 px-1 !flex flex-wrap h-auto gap-0.5 py-1">
                   <TabsTrigger value="workflow" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
@@ -2382,6 +3708,9 @@ export default function WorkbenchPage() {
                   </TabsTrigger>
                   <TabsTrigger value="agents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smart_toy</span>Agents
+                  </TabsTrigger>
+                  <TabsTrigger value="openspec" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
                   </TabsTrigger>
         {(isDesignMode) && <TabsTrigger value="config" className="flex items-center justify-center gap-1 text-xs h-7 px-2"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span>配置</TabsTrigger>}
                   <TabsTrigger value="documents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
@@ -2461,14 +3790,81 @@ export default function WorkbenchPage() {
                     </div>
                   )}
                 </TabsContent>
-                <TabsContent value="agents" className="mt-0 overflow-y-auto h-full p-4"><div className="flex flex-col gap-2">
-                  {agents.map((agent) => (<div key={agent.name}
-                    className={`bg-muted p-3 rounded-md cursor-pointer transition-colors hover:bg-accent border-l-[3px] border-transparent ${selectedAgent?.name === agent.name ? 'border-l-primary bg-accent' : ''}`}
-                    onClick={() => dispatch({ type: 'SET_SELECTED_AGENT', payload: agent })}>
-                    <div className="flex items-center gap-2 mb-1.5"><span className="material-symbols-outlined text-lg">smart_toy</span><span className="text-sm font-medium">{agent.name}</span></div>
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><span className={`w-2 h-2 rounded-full ${agent.status === 'running' ? 'bg-blue-500 animate-pulse' : agent.status === 'completed' ? 'bg-green-500' : agent.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`} />{agent.status}</div>
-                  </div>))}
+                <TabsContent value="agents" className="mt-0 overflow-y-auto h-full p-4"><div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                    <div>
+                      <div className="text-sm font-medium">运行通讯录</div>
+                      <div className="text-xs text-muted-foreground">查看当前 run 中的 Agent，并补充新的角色草案。</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setRuntimeAgentDraft(createInitialAgentDraft({
+                          workingDirectory: resolvedProjectRoot || '',
+                          referenceWorkflow: configFile,
+                        }));
+                        setShowRuntimeAgentCreator(true);
+                      }}
+                    >
+                      <span className="material-symbols-outlined text-sm mr-1">person_add</span>
+                      新增角色
+                    </Button>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                  {orderedWorkflowAgents.map((agent) => {
+                    const roleConfig = agentConfigs.find((role: any) => role.name === agent.name);
+                    const entry = workflowDirectory.find((item) => item.label === agent.name);
+                    const relatedSession = listSessionsForAgent(workflowRelatedSessions, agent.name)[0];
+                    return (
+                      <div key={agent.name} className="space-y-1">
+                        <AgentHeroCard
+                          compact
+                          selected={selectedAgent?.name === agent.name}
+                          onClick={() => dispatch({ type: 'SET_SELECTED_AGENT', payload: agent })}
+                          agent={{
+                            name: agent.name,
+                            team: (roleConfig?.team || agent.team) as any,
+                            roleType: roleConfig?.roleType,
+                            avatar: roleConfig?.avatar,
+                            category: roleConfig?.category,
+                            tags: roleConfig?.tags,
+                            description: roleConfig?.description,
+                            capabilities: roleConfig?.capabilities,
+                            alwaysAvailableForChat: roleConfig?.alwaysAvailableForChat,
+                          }}
+                        />
+                        <div className="px-2 text-xs text-muted-foreground flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full ${agent.status === 'running' ? 'bg-blue-500 animate-pulse' : agent.status === 'completed' ? 'bg-green-500' : agent.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`} />
+                          <span>{agent.status}</span>
+                          <span>{agent.model}</span>
+                          {entry ? (
+                            <span className="truncate" title={entry.sessionId || getConversationSessionStatusLabel(entry)}>
+                              {entry.sessionId || getConversationSessionStatusLabel(entry)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {relatedSession ? (
+                          <div className="px-2 pb-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-[11px]"
+                              onClick={() => router.push(`/?sessionId=${encodeURIComponent(relatedSession.id)}&sidebarTab=${encodeURIComponent(agent.name === (finalReview?.supervisorAgent || 'default-supervisor') ? 'commander' : 'agent')}`)}
+                            >
+                              <span className="material-symbols-outlined text-sm mr-1">history</span>
+                              继续最近会话
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  </div>
                 </div></TabsContent>
+                <TabsContent value="openspec" className="mt-0 overflow-y-auto h-full p-4">
+                  {renderOpenSpecPanel()}
+                </TabsContent>
 {isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
           </div></TabsContent>}
 <TabsContent value="documents" className="mt-0 h-full">
@@ -2519,7 +3915,9 @@ export default function WorkbenchPage() {
                             endTime={runEndTime}
                             supervisorFlow={supervisorFlow}
                             agentFlow={agentFlow}
-                            currentPlanRound={currentPlanRound}
+                            executionTrace={executionTrace}
+                            overviewFooter={renderRuntimeInsightPanels()}
+                            activeTabOverride={executionViewTabOverride}
                             onStateClick={(s) => setFocusedState(s)}
                             onStepClick={(step) => selectStep(step)}
                             onForceTransition={handleForceTransition}
@@ -2701,7 +4099,7 @@ export default function WorkbenchPage() {
                         <div className={`${styles.markdownContent} bg-background border rounded p-2 text-sm leading-relaxed max-h-[200px] overflow-y-auto mt-1.5`}>
                           {dedupedChunks.map((chunk, i) => (
                             <div key={i} className={i < dedupedChunks.length - 1 ? 'border-b border-border/50 pb-3 mb-3' : ''}>
-                              <Markdown>{mergeSubtaskDetails(chunk)}</Markdown>
+                              <Markdown>{prepareChunkForDisplay(chunk)}</Markdown>
                             </div>
                           ))}
                         </div>
@@ -2816,7 +4214,12 @@ export default function WorkbenchPage() {
                 runStatusReason={runStatusReason}
                 currentStepName={currentStep || null}
                 onSelectPersistedStep={selectStepByLogName}
-                onViewPersistedStepOutput={openPersistedStepLogModal} />
+                onViewPersistedStepOutput={openPersistedStepLogModal}
+                chatMessages={agentChatMessages[selectedAgent.name] || []}
+                chatLoading={!!agentChatLoading[selectedAgent.name]}
+                systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
+                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
+                onSendChat={handleAgentChat} />
               ) : (<div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
             </div>
                   </>);
@@ -2837,6 +4240,13 @@ export default function WorkbenchPage() {
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">account_tree</span>
                     工作流设计
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'openspec' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('openspec')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">fact_check</span>
+                    OpenSpec
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
@@ -2880,6 +4290,12 @@ export default function WorkbenchPage() {
                 </div>
               )}
 
+              {designTab === 'openspec' && (
+                <div className="flex-1 overflow-auto bg-muted/20 p-6">
+                  {renderOpenSpecPanel({ className: 'mx-auto max-w-5xl space-y-4' })}
+                </div>
+              )}
+
               {/* Config Tab */}
               {designTab === 'config' && (
                 <div className="flex-1 overflow-auto bg-muted/20">
@@ -2915,7 +4331,7 @@ export default function WorkbenchPage() {
                             workspaceRoot="/"
                             value={projectRoot}
                             onChange={(path) => dispatch({ type: 'SET_PROJECT_ROOT', payload: path })}
-                            className="mt-2 h-60"
+                            className="mt-2"
                           />
                           <p className="text-xs text-muted-foreground mt-1.5">工作流执行时的项目根目录路径</p>
                         </div>
@@ -3123,7 +4539,7 @@ export default function WorkbenchPage() {
                             second: '2-digit'
                           }) : '-'}
                         </td>
-                        <td className="p-3 text-sm hidden sm:table-cell">{run.currentPhase || '-'}</td>
+                        <td className="p-3 text-sm hidden sm:table-cell">{run.currentPhase ? formatStateName(run.currentPhase) : '-'}</td>
                         <td className="p-3 text-sm">{run.completedSteps}/{run.totalSteps}</td>
                         <td className="p-3">
                           <div className="flex gap-2">
@@ -3203,336 +4619,6 @@ export default function WorkbenchPage() {
           </div>
         </div>
       </div>)}
-      {pendingPlanQuestion && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-card rounded-lg w-[600px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b"><h3 className="text-lg font-semibold"><span className="material-symbols-outlined text-lg mr-2 align-middle">help</span>需要用户回答</h3></div>
-            <div className="p-5">
-              <div className="bg-muted p-4 rounded-md border-l-[3px] border-l-blue-500 mb-4">
-                <p className="text-sm text-muted-foreground mb-2">来自 Agent: <strong className="text-foreground">{pendingPlanQuestion.fromAgent}</strong> (第 {pendingPlanQuestion.round + 1} 轮)</p>
-              </div>
-              <p className="text-base mb-4 whitespace-pre-wrap break-words leading-relaxed">{pendingPlanQuestion.question}</p>
-              <Textarea
-                value={planAnswer}
-                onChange={(e) => setPlanAnswer(e.target.value)}
-                placeholder="请输入您的回答..."
-                rows={4}
-                className="w-full"
-              />
-            </div>
-            <div className="p-5 border-t flex gap-3 justify-end">
-              <Button 
-                onClick={async () => {
-                  if (!planAnswer.trim()) return;
-                  setSendingPlanAnswer(true);
-                  try {
-                    const res = await fetch('/api/workflow/plan-answer', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ answer: planAnswer })
-                    });
-                    if (res.ok) {
-                      setPendingPlanQuestion(null);
-                      setPlanAnswer('');
-                      addLog('system', 'success', '✓ 回答已提交');
-                    } else {
-                      const data = await res.json();
-                      addLog('system', 'error', `提交失败: ${data.error}`);
-                    }
-                  } catch (err: any) {
-                    addLog('system', 'error', `提交失败: ${err.message}`);
-                  } finally {
-                    setSendingPlanAnswer(false);
-                  }
-                }}
-                disabled={!planAnswer.trim() || sendingPlanAnswer}
-              >
-                {sendingPlanAnswer ? '提交中...' : '提交回答'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {pendingSdkPlanQuestion && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
-          <div className="bg-card rounded-lg w-[640px] max-w-[95%] max-h-[90vh] overflow-y-auto border" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b">
-              <h3 className="text-lg font-semibold">
-                <span className="material-symbols-outlined text-lg mr-2 align-middle">quiz</span>
-                Claude 需要确认（SDK Plan）
-              </h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Agent: <strong className="text-foreground">{pendingSdkPlanQuestion.fromAgent}</strong>
-                {' · '}
-                {pendingSdkPlanQuestion.stateName} / {pendingSdkPlanQuestion.stepName}
-              </p>
-            </div>
-            <div className="p-5 space-y-8">
-              {pendingSdkPlanQuestion.questions.map((q, qi) => (
-                <div key={qi} className="border rounded-md p-4 space-y-3">
-                  {q.header ? (
-                    <Badge variant="outline" className="text-xs">{q.header}</Badge>
-                  ) : null}
-                  <p className="font-medium whitespace-pre-wrap">{q.question}</p>
-                  <div className="space-y-2">
-                    {q.multiSelect ? (
-                      q.options.map((opt, oi) => {
-                        const selected = sdkPlanMulti[q.question]?.includes(opt.label) ?? false;
-                        return (
-                          <label key={oi} className="flex items-start gap-2 cursor-pointer rounded-md border p-2 hover:bg-muted/50">
-                            <Checkbox
-                              checked={selected}
-                              onCheckedChange={(c) => {
-                                setSdkPlanMulti((prev) => {
-                                  const cur = [...(prev[q.question] || [])];
-                                  if (c) {
-                                    if (!cur.includes(opt.label)) cur.push(opt.label);
-                                  } else {
-                                    const i = cur.indexOf(opt.label);
-                                    if (i >= 0) cur.splice(i, 1);
-                                  }
-                                  return { ...prev, [q.question]: cur };
-                                });
-                              }}
-                            />
-                            <span>
-                              <span className="font-medium">{opt.label}</span>
-                              {opt.description ? (
-                                <span className="block text-sm text-muted-foreground">{opt.description}</span>
-                              ) : null}
-                            </span>
-                          </label>
-                        );
-                      })
-                    ) : (
-                      q.options.map((opt, oi) => {
-                        const picked = sdkPlanSingle[q.question] === opt.label;
-                        return (
-                          <button
-                            key={oi}
-                            type="button"
-                            className={`w-full text-left rounded-md border p-3 transition-colors ${picked ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
-                            onClick={() => setSdkPlanSingle((prev) => ({ ...prev, [q.question]: opt.label }))}
-                          >
-                            <span className="font-medium">{opt.label}</span>
-                            {opt.description ? (
-                              <span className="block text-sm text-muted-foreground mt-1">{opt.description}</span>
-                            ) : null}
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">其他（自由填写，若填写则优先于上方选项）</Label>
-                    <Input
-                      className="mt-1"
-                      placeholder="可选：自定义回答"
-                      value={sdkPlanOther[q.question] || ''}
-                      onChange={(e) => setSdkPlanOther((prev) => ({ ...prev, [q.question]: e.target.value }))}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="p-5 border-t flex gap-3 justify-end">
-              <Button
-                onClick={async () => {
-                  const answers: Record<string, string> = {};
-                  for (const q of pendingSdkPlanQuestion.questions) {
-                    const other = sdkPlanOther[q.question]?.trim();
-                    if (other) {
-                      answers[q.question] = other;
-                      continue;
-                    }
-                    if (q.multiSelect) {
-                      const labels = sdkPlanMulti[q.question] || [];
-                      answers[q.question] = labels.join(', ');
-                    } else {
-                      answers[q.question] = sdkPlanSingle[q.question] || '';
-                    }
-                  }
-                  const incomplete = pendingSdkPlanQuestion.questions.some((q) => !answers[q.question]?.trim());
-                  if (incomplete) {
-                    addLog('system', 'warning', '请回答所有问题后再提交');
-                    return;
-                  }
-                  setSendingSdkPlanAnswer(true);
-                  try {
-                    const res = await fetch('/api/workflow/plan-answer', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        type: 'sdk-plan',
-                        answers,
-                        configFile,
-                      }),
-                    });
-                    if (res.ok) {
-                      setPendingSdkPlanQuestion(null);
-                      setSdkPlanSingle({});
-                      setSdkPlanMulti({});
-                      setSdkPlanOther({});
-                      addLog('system', 'success', '✓ SDK Plan 回答已提交');
-                    } else {
-                      const data = await res.json();
-                      addLog('system', 'error', `提交失败: ${data.error}`);
-                    }
-                  } catch (err: any) {
-                    addLog('system', 'error', `提交失败: ${err.message}`);
-                  } finally {
-                    setSendingSdkPlanAnswer(false);
-                  }
-                }}
-                disabled={sendingSdkPlanAnswer}
-              >
-                {sendingSdkPlanAnswer ? '提交中...' : '提交回答'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {pendingPlanReview && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[60]">
-          <div className="bg-card rounded-lg w-[800px] max-w-[95%] max-h-[90vh] flex flex-col border shadow-lg overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b shrink-0 bg-muted/30">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold flex items-center gap-2">
-                  <span className="material-symbols-outlined text-primary">fact_check</span>
-                  Plan 待审批
-                </h3>
-                <div className="flex bg-muted rounded-md p-1">
-                  <button
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${planReviewMode === 'view' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setPlanReviewMode('view')}
-                  >预览</button>
-                  <button
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${planReviewMode === 'edit' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setPlanReviewMode('edit')}
-                  >编辑</button>
-                  <button
-                    className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${planReviewMode === 'reject' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setPlanReviewMode('reject')}
-                  >驳回修改</button>
-                </div>
-              </div>
-              <p className="text-sm text-muted-foreground mt-2 flex items-center gap-2">
-                <span className="material-symbols-outlined text-sm">smart_toy</span> <strong className="text-foreground">{pendingPlanReview.agent}</strong>
-                <span className="text-border">|</span>
-                <span className="material-symbols-outlined text-sm">route</span> {pendingPlanReview.stateName} / {pendingPlanReview.stepName}
-              </p>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-5 bg-muted/10">
-              {planReviewMode === 'view' && (
-                <div className={`${styles.markdownContent} bg-background border rounded-md p-4 text-sm leading-relaxed max-w-none`}>
-                  <Markdown>{planReviewEditContent}</Markdown>
-                </div>
-              )}
-              {planReviewMode === 'edit' && (
-                <div className="h-full flex flex-col min-h-[300px]">
-                  <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">edit_note</span>
-                    您可以直接修改 Plan 内容，保存后工作流将使用修改后的版本继续执行。
-                  </div>
-                  <textarea
-                    className="flex-1 w-full bg-background border rounded-md p-3 text-sm font-mono leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-primary"
-                    value={planReviewEditContent}
-                    onChange={(e) => setPlanReviewEditContent(e.target.value)}
-                    placeholder="Plan 内容..."
-                  />
-                </div>
-              )}
-              {planReviewMode === 'reject' && (
-                <div className="h-full flex flex-col min-h-[300px]">
-                  <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">feedback</span>
-                    请填写修改意见，模型将根据您的反馈重新生成 Plan。
-                  </div>
-                  <textarea
-                    className="flex-1 w-full bg-background border rounded-md p-3 text-sm leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-destructive"
-                    value={planReviewFeedback}
-                    onChange={(e) => setPlanReviewFeedback(e.target.value)}
-                    placeholder="例如：请补充异常处理逻辑；或者：不要使用 Redis 而是直接写本地文件..."
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="p-4 border-t bg-muted/30 flex justify-between items-center shrink-0">
-              <div className="text-xs text-muted-foreground">
-                {planReviewMode === 'view' && '确认无误后点击右侧按钮继续执行。'}
-                {planReviewMode === 'edit' && '编辑完成后点击右侧按钮保存并继续执行。'}
-                {planReviewMode === 'reject' && '填写完意见后点击右侧按钮打回重做。'}
-              </div>
-              <div className="flex gap-3">
-                {planReviewMode === 'reject' ? (
-                  <Button 
-                    variant="destructive"
-                    onClick={async () => {
-                      if (!planReviewFeedback.trim()) {
-                        addLog('system', 'warning', '请填写驳回意见');
-                        return;
-                      }
-                      setSendingPlanReview(true);
-                      try {
-                        const res = await fetch('/api/workflow/plan-answer', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ type: 'sdk-plan-review', action: 'reject', feedback: planReviewFeedback, configFile })
-                        });
-                        if (res.ok) {
-                          setPendingPlanReview(null);
-                          addLog('system', 'warning', '已驳回 Plan，模型将重新生成');
-                        } else {
-                          const data = await res.json();
-                          addLog('system', 'error', `提交失败: ${data.error}`);
-                        }
-                      } catch (err: any) {
-                        addLog('system', 'error', `提交失败: ${err.message}`);
-                      } finally {
-                        setSendingPlanReview(false);
-                      }
-                    }}
-                    disabled={!planReviewFeedback.trim() || sendingPlanReview}
-                  >
-                    {sendingPlanReview ? '提交中...' : '提交驳回意见'}
-                  </Button>
-                ) : (
-                  <Button 
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground"
-                    onClick={async () => {
-                      setSendingPlanReview(true);
-                      const action = planReviewMode === 'edit' && planReviewEditContent !== pendingPlanReview.planContent ? 'edit' : 'approve';
-                      try {
-                        const res = await fetch('/api/workflow/plan-answer', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ type: 'sdk-plan-review', action, content: planReviewEditContent, configFile })
-                        });
-                        if (res.ok) {
-                          setPendingPlanReview(null);
-                          addLog('system', 'success', `Plan 已${action === 'edit' ? '修改并' : ''}通过`);
-                        } else {
-                          const data = await res.json();
-                          addLog('system', 'error', `提交失败: ${data.error}`);
-                        }
-                      } catch (err: any) {
-                        addLog('system', 'error', `提交失败: ${err.message}`);
-                      } finally {
-                        setSendingPlanReview(false);
-                      }
-                    }}
-                    disabled={sendingPlanReview}
-                  >
-                    {sendingPlanReview ? '提交中...' : (planReviewMode === 'edit' ? '保存并继续' : '确认并继续')}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {showLiveStream && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={stopLiveStream}>
           <div className={`bg-card rounded-lg border flex flex-col ${liveStreamFullscreen ? 'w-full h-full rounded-none' : 'w-[80%] max-w-[800px] max-h-[80vh]'}`} onClick={(e) => e.stopPropagation()}>
@@ -3674,7 +4760,7 @@ export default function WorkbenchPage() {
                             </div>
                           )}
                           <div className="text-sm">
-                            <Markdown>{parsed.content}</Markdown>
+                            <Markdown>{prepareChunkForDisplay(parsed.content)}</Markdown>
                           </div>
                         </div>
                       );
@@ -3774,21 +4860,57 @@ export default function WorkbenchPage() {
                     });
                     return filtered.map((chunk, i) => (
                       <div key={i} className={`${styles.markdownContent} text-sm border-b border-border/50 pb-3 last:border-0`}>
-                        <Markdown>{mergeSubtaskDetails(chunk)}</Markdown>
+                        <Markdown>{prepareChunkForDisplay(chunk)}</Markdown>
                       </div>
                     ));
                   })()}
                 </div>
               ) : (
                 <div className={styles.markdownContent}>
-                  <Markdown>{mergeSubtaskDetails(markdownModal.chunks[0])}</Markdown>
+                  <Markdown>{prepareChunkForDisplay(markdownModal.chunks[0])}</Markdown>
                 </div>
               )}
             </div>
           </div>
         </div>
       )}
+      <Dialog open={openSpecModalOpen} onOpenChange={(open) => {
+        setOpenSpecModalOpen(open);
+        if (!open) setOpenSpecModalFullscreen(false);
+      }}>
+        <DialogContent className={`p-0 flex flex-col gap-0 ${openSpecModalFullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
+          <DialogTitle className="sr-only">OpenSpec 文件管理器</DialogTitle>
+          {renderOpenSpecExplorer()}
+        </DialogContent>
+      </Dialog>
       {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
+      <AIAgentCreatorModal
+        open={showRuntimeAgentCreator}
+        engine={globalEngine || engine}
+        model={globalDefaultModel}
+        initialDraft={runtimeAgentDraft}
+        onClose={() => setShowRuntimeAgentCreator(false)}
+        onCreate={async (agent) => {
+          try {
+            await agentApi.saveAgent(agent.name, agent as any);
+            toast('success', `已创建 Agent：${agent.name}`);
+            setShowRuntimeAgentCreator(false);
+            setRuntimeAgentDraft(createInitialAgentDraft({
+              workingDirectory: resolvedProjectRoot || '',
+              referenceWorkflow: configFile,
+            }));
+            return true;
+          } catch (error: any) {
+            toast('error', error?.message || '创建 Agent 失败');
+            return false;
+          }
+        }}
+        onContinueEdit={(agent) => {
+          setShowRuntimeAgentCreator(false);
+          toast('success', `已生成 Agent 草案：${agent.name}，请在 Agent 页面继续精修`);
+          router.push('/agents');
+        }}
+      />
 
       {showContextEditor && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowContextEditor(false)}>
@@ -3896,6 +5018,116 @@ export default function WorkbenchPage() {
                 </div>
               </div>
 
+              {humanApprovalData.supervisorAdvice && (
+                <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30">
+                  <div className="text-sm font-medium text-amber-700 dark:text-amber-300 mb-2">
+                    指挥官意见
+                  </div>
+                  <div className="text-sm whitespace-pre-wrap leading-6">
+                    {humanApprovalData.supervisorAdvice}
+                  </div>
+                </div>
+              )}
+
+              {(openSpecSummary || activeOpenSpecPhase || checkpointDeviationNotes.length > 0) && (
+                <div className="mb-4 p-3 rounded-lg border border-violet-200 bg-violet-50 dark:border-violet-900 dark:bg-violet-950/30 space-y-3">
+                  <div className="text-sm font-medium text-violet-700 dark:text-violet-300">
+                    当前 Run OpenSpec
+                  </div>
+                  {openSpecSummary ? (
+                    <div className="text-xs text-muted-foreground space-y-1">
+                      <div>版本：v{openSpecSummary.version}</div>
+                      <div>状态：{openSpecSummary.status}</div>
+                      {openSpecSummary.source ? (
+                        <div>来源：{openSpecSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
+                      ) : null}
+                      {openSpecSummary.progress?.summary ? (
+                        <div>进度：{openSpecSummary.progress.summary}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {activeOpenSpecPhase ? (
+                    <div className="rounded-md border bg-background/70 p-3 text-xs text-muted-foreground space-y-1">
+                      <div className="font-medium text-foreground">当前阶段记录</div>
+                      <div>阶段：{activeOpenSpecPhase.title}</div>
+                      <div>状态：{activeOpenSpecPhase.status}</div>
+                      {activeOpenSpecPhase.objective ? <div>目标：{activeOpenSpecPhase.objective}</div> : null}
+                      {openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id) ? (
+                        <div>
+                          检查点：{openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)?.title}
+                          {' / '}
+                          {openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)?.status}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {latestSupervisorReview?.type === 'chat-revision' ? (
+                    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground space-y-1">
+                      <div className="font-medium text-foreground">本轮由 Supervisor 刷新的修订</div>
+                      <div>阶段：{latestSupervisorReview.stateName}</div>
+                      <div className="leading-5">{latestSupervisorReview.content}</div>
+                      {latestSupervisorReview.affectedArtifacts?.length ? (
+                        <div>影响制品：{latestSupervisorReview.affectedArtifacts.join('、')}</div>
+                      ) : null}
+                      {latestSupervisorReview.impact?.length ? (
+                        <div className="space-y-1 pt-1">
+                          <div className="text-foreground">影响范围</div>
+                          {latestSupervisorReview.impact.map((item) => (
+                            <div key={item}>- {item}</div>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div>时间：{new Date(latestSupervisorReview.timestamp).toLocaleString()}</div>
+                    </div>
+                  ) : null}
+                  {openSpecDetails?.revisions?.length ? (
+                    <div className="rounded-md border bg-background/70 p-3 text-xs text-muted-foreground space-y-1">
+                      <div className="font-medium text-foreground">最近修订</div>
+                      <div>v{openSpecDetails.revisions.at(-1)?.version} · {openSpecDetails.revisions.at(-1)?.summary}</div>
+                      {openSpecDetails.revisions.at(-1)?.createdBy ? (
+                        <div>修订者：{openSpecDetails.revisions.at(-1)?.createdBy}</div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {rehearsalInfo?.enabled ? (
+                    <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-xs text-muted-foreground space-y-2">
+                      <div className="font-medium text-foreground">演练模式总结</div>
+                      <div>{rehearsalInfo.summary}</div>
+                      {rehearsalInfo.recommendedNextSteps.length ? (
+                        <div className="space-y-1">
+                          {rehearsalInfo.recommendedNextSteps.map((item) => (
+                            <div key={item}>- {item}</div>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setRehearsalMode(false);
+                            void startWorkflow('real');
+                          }}
+                          disabled={starting || isRunning}
+                        >
+                          基于演练结果正式启动
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {checkpointDeviationNotes.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="text-xs font-medium text-foreground">偏差说明</div>
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        {checkpointDeviationNotes.map((note) => (
+                          <div key={note}>- {note}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
               {/* 可选的跳转目标 */}
               <div className="mb-2">
                 <div className="text-sm font-medium mb-2">选择下一步：</div>
@@ -3962,6 +5194,115 @@ export default function WorkbenchPage() {
           </div>
         </div>
       )}
+
+      <Dialog open={rehearsalResultDialogOpen} onOpenChange={setRehearsalResultDialogOpen}>
+        <DialogContent className="sm:max-w-xl max-h-[85vh] overflow-hidden p-0">
+          <div className="flex max-h-[85vh] flex-col">
+            <div className="border-b px-6 py-4">
+              <DialogTitle className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary">theater_comedy</span>
+                演练结果
+              </DialogTitle>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <div className="space-y-4 text-sm">
+                <div className="rounded-xl border bg-muted/30 p-4">
+                  <div className="mb-3 text-xs font-medium text-muted-foreground">检查概览</div>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div className="rounded-lg border bg-background p-3">
+                      <div className="text-[10px] text-muted-foreground">检查项</div>
+                      <div className="mt-1 text-lg font-semibold">{rehearsalCheckStats.total}</div>
+                    </div>
+                    <div className="rounded-lg border bg-background p-3">
+                      <div className="text-[10px] text-muted-foreground">通过</div>
+                      <div className="mt-1 text-lg font-semibold text-emerald-600">{rehearsalCheckStats.passed}</div>
+                    </div>
+                    <div className="rounded-lg border bg-background p-3">
+                      <div className="text-[10px] text-muted-foreground">警告</div>
+                      <div className="mt-1 text-lg font-semibold text-amber-600">{rehearsalCheckStats.warning}</div>
+                    </div>
+                    <div className="rounded-lg border bg-background p-3">
+                      <div className="text-[10px] text-muted-foreground">失败</div>
+                      <div className="mt-1 text-lg font-semibold text-red-600">{rehearsalCheckStats.failed}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border bg-background p-4">
+                  <div className="mb-3 text-xs font-medium text-muted-foreground">本次已检查项目</div>
+                  <div className="space-y-2">
+                    {(preflightChecks.length > 0
+                      ? preflightChecks
+                      : displayQualityChecks.filter((check) => check.stateName === '__preflight__')
+                    ).map((check) => (
+                      <div key={check.id} className="rounded-lg border bg-muted/20 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-sm leading-6 text-foreground">{describeQualityCheck(check)}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {formatQualityCheckCategory(check.category)} · {formatQualityCheckAgent(check.agent)} · {check.origin === 'inferred' ? '系统推断' : '配置预检查'}
+                            </div>
+                          </div>
+                          <Badge
+                            className={`shrink-0 ${
+                              check.status === 'passed'
+                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                                : check.status === 'failed'
+                                  ? 'bg-red-500/15 text-red-600 border border-red-500/30'
+                                  : 'bg-amber-500/15 text-amber-600 border border-amber-500/30'
+                            }`}
+                          >
+                            {formatQualityCheckStatus(check.status)}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                    {rehearsalCheckStats.total === 0 ? (
+                      <div className="rounded-lg border border-dashed p-3 text-muted-foreground">
+                        这次没有拿到可展示的检查项。
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t px-6 py-4">
+              <Button variant="outline" onClick={() => setRehearsalResultDialogOpen(false)}>
+                关闭
+              </Button>
+              <Button
+                onClick={() => {
+                  setRehearsalResultDialogOpen(false);
+                  setRehearsalMode(false);
+                  void startWorkflow('real');
+                }}
+                disabled={starting || isRunning}
+              >
+                基于演练结果正式启动
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <NotebookSaveDialog
+        open={openSpecSaveDialogOpen}
+        onOpenChange={setOpenSpecSaveDialogOpen}
+        scope={openSpecSaveScope}
+        onScopeChange={setOpenSpecSaveScope}
+        directory={openSpecSaveDirectory}
+        onDirectoryChange={setOpenSpecSaveDirectory}
+        directories={[]}
+        saving={savingOpenSpecArtifact}
+        previewText={activeOpenSpecArtifact
+          ? `将保存：${openSpecSaveDirectory ? `${openSpecSaveDirectory}/` : ''}${sanitizeNotebookName(activeOpenSpecArtifact.label.replace(/\.md$/i, '') || activeOpenSpecArtifact.key)}-YYYYMMDD-HHMMSS.cj.md`
+          : '请选择文档'}
+        onConfirm={() => {
+          void saveOpenSpecArtifactToNotebook();
+        }}
+      />
 
       {resolvedProjectRoot && (
         <WorkspaceEditor

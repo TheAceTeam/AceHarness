@@ -4,10 +4,14 @@
 
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from './api';
 import { getWorkspaceSkillPath } from './app-paths';
+import {
+  type HomeSidebarHint,
+  shouldSuppressCardsForSidebarHint,
+} from './home-sidebar-state';
 
 // Action 类型枚举
 export type ActionType =
-  | 'config.list' | 'config.get' | 'config.create' | 'config.update' | 'config.delete'
+  | 'config.list' | 'config.get' | 'config.validate' | 'config.create' | 'config.update' | 'config.delete'
   | 'agent.list' | 'agent.get' | 'agent.create' | 'agent.update' | 'agent.delete'
   | 'model.list'
   | 'workflow.start' | 'workflow.stop' | 'workflow.status'
@@ -18,19 +22,7 @@ export type ActionType =
   | 'wizard.workflow' | 'wizard.agent' | 'wizard.skill'
   // Schedule actions
   | 'schedule.list' | 'schedule.get' | 'schedule.create' | 'schedule.update'
-  | 'schedule.delete' | 'schedule.trigger' | 'schedule.toggle'
-  // GitCode actions
-  | 'gitcode.get_pr' | 'gitcode.get_issue' | 'gitcode.get_pr_commits'
-  | 'gitcode.get_pr_changed_files' | 'gitcode.get_pr_comments' | 'gitcode.get_issues_by_pr'
-  | 'gitcode.get_prs_by_issue' | 'gitcode.check_pr_mergeable' | 'gitcode.check_repo_public'
-  | 'gitcode.list_issue_templates' | 'gitcode.get_issue_template' | 'gitcode.get_pr_template'
-  | 'gitcode.get_commit_title' | 'gitcode.parse_issue_template'
-  | 'gitcode.create_pr' | 'gitcode.create_issue' | 'gitcode.post_pr_comment'
-  | 'gitcode.add_pr_labels' | 'gitcode.remove_pr_labels' | 'gitcode.add_issue_labels'
-  | 'gitcode.assign_pr_testers' | 'gitcode.create_label' | 'gitcode.fork_repo'
-  | 'gitcode.create_release' | 'gitcode.post_issue_comment'
-  | 'gitcode.update_issue' | 'gitcode.update_pr' | 'gitcode.create_commit'
-  | 'gitcode.merge_pr';
+  | 'schedule.delete' | 'schedule.trigger' | 'schedule.toggle';
 
 // 风险等级
 export type RiskLevel = 'safe' | 'mutating' | 'destructive';
@@ -49,6 +41,7 @@ export const ACTION_REGISTRY: Record<ActionType, ActionMeta> = {
   // 配置管理
   'config.list':   { group: 'config', groupLabel: '配置管理（操作 configs/ 目录下的 YAML 文件）', risk: 'safe',        description: '列出所有工作流配置文件', params: '{}' },
   'config.get':    { group: 'config', groupLabel: '', risk: 'safe',        description: '读取某个配置文件的内容', params: '{ "filename": "xxx.yaml" }' },
+  'config.validate': { group: 'config', groupLabel: '', risk: 'safe',      description: '校验工作流配置草案或已有配置文件', params: '{ "config": {完整配置对象} } 或 { "filename": "xxx.yaml" }' },
   'config.create': { group: 'config', groupLabel: '', risk: 'mutating',    description: '创建新的配置文件', params: '{ "filename": "xxx.yaml", "config": {完整配置对象} }' },
   'config.update': { group: 'config', groupLabel: '', risk: 'mutating',    description: '更新已有配置文件', params: '{ "filename": "xxx.yaml", "config": {完整配置对象} }' },
   'config.delete': { group: 'config', groupLabel: '', risk: 'destructive', description: '删除配置文件', params: '{ "filename": "xxx.yaml" }' },
@@ -95,39 +88,6 @@ export const ACTION_REGISTRY: Record<ActionType, ActionMeta> = {
   'wizard.workflow': { group: 'wizard', groupLabel: '引导式创建向导', risk: 'safe', description: '工作流创建向导步骤', params: '{ "step": 步骤号, "title": "当前步骤标题", "hints": ["提示1","提示2"], "data": {已收集的数据} }' },
   'wizard.agent':    { group: 'wizard', groupLabel: '', risk: 'safe', description: 'Agent 创建向导步骤', params: '{ "step": 步骤号, "title": "当前步骤标题", "hints": ["提示1","提示2"], "data": {已收集的数据} }' },
   'wizard.skill':    { group: 'wizard', groupLabel: '', risk: 'safe', description: 'Skill 创建向导步骤', params: '{ "step": 步骤号, "title": "当前步骤标题", "hints": ["提示1","提示2"], "data": {已收集的数据} }' },
-
-  // GitCode - safe (read-only)
-  'gitcode.get_pr':              { group: 'gitcode', groupLabel: 'GitCode（代码托管平台集成）', risk: 'safe', description: '获取 PR 详情', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.get_issue':           { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 Issue 详情', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": Issue编号 }' },
-  'gitcode.get_pr_commits':      { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 PR 的提交列表', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.get_pr_changed_files':{ group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 PR 变更文件列表', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.get_pr_comments':     { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 PR 评论', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.get_issues_by_pr':    { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 PR 关联的 Issues', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.get_prs_by_issue':    { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 Issue 关联的 PRs', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": Issue编号 }' },
-  'gitcode.check_pr_mergeable':  { group: 'gitcode', groupLabel: '', risk: 'safe', description: '检查 PR 是否可合并', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
-  'gitcode.check_repo_public':   { group: 'gitcode', groupLabel: '', risk: 'safe', description: '检查仓库是否公开', params: '{ "owner": "仓库所有者", "repo": "仓库名" }' },
-  'gitcode.list_issue_templates':{ group: 'gitcode', groupLabel: '', risk: 'safe', description: '列出 Issue 模板', params: '{ "owner": "仓库所有者", "repo": "仓库名" }' },
-  'gitcode.get_issue_template':  { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 Issue 模板内容', params: '{ "owner": "仓库所有者", "repo": "仓库名", "name": "模板名" }' },
-  'gitcode.get_pr_template':     { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取 PR 模板内容', params: '{ "owner": "仓库所有者", "repo": "仓库名" }' },
-  'gitcode.get_commit_title':    { group: 'gitcode', groupLabel: '', risk: 'safe', description: '获取提交标题', params: '{ "owner": "仓库所有者", "repo": "仓库名", "sha": "提交SHA" }' },
-  'gitcode.parse_issue_template':{ group: 'gitcode', groupLabel: '', risk: 'safe', description: '解析 Issue 模板', params: '{ "owner": "仓库所有者", "repo": "仓库名", "name": "模板名" }' },
-  // GitCode - mutating
-  'gitcode.create_pr':           { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '创建 PR', params: '{ "owner": "仓库所有者", "repo": "仓库名", "title": "标题", "body": "描述", "head": "源分支", "base": "目标分支" }' },
-  'gitcode.create_issue':        { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '创建 Issue', params: '{ "owner": "仓库所有者", "repo": "仓库名", "title": "标题", "body": "描述" }' },
-  'gitcode.post_pr_comment':     { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '发表 PR 评论', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号, "body": "评论内容" }' },
-  'gitcode.add_pr_labels':       { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '为 PR 添加标签', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号, "labels": ["标签1"] }' },
-  'gitcode.remove_pr_labels':    { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '移除 PR 标签', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号, "labels": ["标签1"] }' },
-  'gitcode.add_issue_labels':    { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '为 Issue 添加标签', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": Issue编号, "labels": ["标签1"] }' },
-  'gitcode.assign_pr_testers':   { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '指派 PR 测试人员', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号, "testers": ["用户名"] }' },
-  'gitcode.create_label':        { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '创建标签', params: '{ "owner": "仓库所有者", "repo": "仓库名", "name": "标签名", "color": "颜色" }' },
-  'gitcode.fork_repo':           { group: 'gitcode', groupLabel: '', risk: 'mutating', description: 'Fork 仓库', params: '{ "owner": "仓库所有者", "repo": "仓库名" }' },
-  'gitcode.create_release':      { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '创建 Release', params: '{ "owner": "仓库所有者", "repo": "仓库名", "tag_name": "标签", "name": "名称", "body": "描述" }' },
-  'gitcode.post_issue_comment':  { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '发表 Issue 评论', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": Issue编号, "body": "评论内容" }' },
-  'gitcode.update_issue':      { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '更新 Issue（标题/内容/状态/标签/负责人）', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": Issue编号, "title": "标题", "body": "内容", "state": "reopen|close", "labels": ["标签"] }' },
-  'gitcode.update_pr':         { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '更新 PR（标题/内容/状态/标签/里程碑/草稿）', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号, "title": "标题", "body": "内容", "state": "open|closed", "labels": ["标签"], "draft": true }' },
-  'gitcode.create_commit':     { group: 'gitcode', groupLabel: '', risk: 'mutating', description: '创建提交（必须英文 commitlint 格式）', params: '{ "owner": "仓库所有者", "repo": "仓库名", "branch": "目标分支", "message": "提交信息（英文，type(scope): subject）", "files": [{"path": "文件路径", "content": "文件内容（base64）"}] }' },
-  // GitCode - destructive
-  'gitcode.merge_pr':            { group: 'gitcode', groupLabel: '', risk: 'destructive', description: '合并 PR', params: '{ "owner": "仓库所有者", "repo": "仓库名", "number": PR编号 }' },
 };
 
 // 从 ACTION_REGISTRY 派生 RISK_MAP，避免重复维护
@@ -149,7 +109,6 @@ export function generateActionTypesDocs(): string {
     skill: 'Skills 管理',
     prompt: '提示词优化',
     wizard: '创建向导',
-    gitcode: 'GitCode（详见 power-gitcode SKILL.md）',
   };
 
   for (const [type, meta] of Object.entries(ACTION_REGISTRY)) {
@@ -292,15 +251,73 @@ function extractBalancedJson(str: string, start: number): string | null {
   return null;
 }
 
+function getResultSections(markdown: string): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
+  const sections: Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> = [];
+  const resultRegex = /<result>([\s\S]*?)<\/result>/g;
+  let match: RegExpExecArray | null;
+  while ((match = resultRegex.exec(markdown)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const contentStart = start + '<result>'.length;
+    const contentEnd = end - '</result>'.length;
+    sections.push({
+      start,
+      end,
+      contentStart,
+      contentEnd,
+      content: match[1],
+    });
+  }
+  return sections;
+}
+
+function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
+  if (!obj || typeof obj !== 'object') return false;
+  if (obj.type !== 'home_sidebar') return false;
+  const validTabs = ['commander', 'workflow', 'agent'];
+  const tabsValid = !obj.tabs || (Array.isArray(obj.tabs) && obj.tabs.every((tab: unknown) => typeof tab === 'string' && validTabs.includes(tab)));
+  const activeValid = !obj.activeTab || validTabs.includes(obj.activeTab);
+  const modeValid = !obj.mode || ['active', 'peek', 'hidden'].includes(obj.mode);
+  const intentValid = !obj.intent || ['general', 'create-workflow', 'create-agent', 'workflow-run', 'workflow-review', 'supervisor-chat'].includes(obj.intent);
+  const stageValid = !obj.stage || ['idle', 'clarifying', 'openspec-draft', 'openspec-review', 'workflow-draft', 'agent-draft', 'preflight', 'running', 'review'].includes(obj.stage);
+  const workflowDraftValid = !obj.workflowDraft || (
+    typeof obj.workflowDraft === 'object' &&
+    ['name', 'requirements', 'description', 'referenceWorkflow', 'workingDirectory'].every((key) => obj.workflowDraft[key] === undefined || typeof obj.workflowDraft[key] === 'string') &&
+    (obj.workflowDraft.workspaceMode === undefined || obj.workflowDraft.workspaceMode === 'isolated-copy' || obj.workflowDraft.workspaceMode === 'in-place')
+  );
+  const agentDraftValid = !obj.agentDraft || (
+    typeof obj.agentDraft === 'object' &&
+    ['displayName', 'team', 'mission', 'style', 'specialties', 'workingDirectory'].every((key) => obj.agentDraft[key] === undefined || typeof obj.agentDraft[key] === 'string')
+  );
+  const summaryValid = obj.summary === undefined || typeof obj.summary === 'string';
+  const listOfStringsValid = (value: unknown) => value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+  const nextActionValid = obj.recommendedNextAction === undefined || typeof obj.recommendedNextAction === 'string';
+  const shouldOpenModalValid = obj.shouldOpenModal === undefined || typeof obj.shouldOpenModal === 'boolean';
+  return tabsValid
+    && activeValid
+    && modeValid
+    && intentValid
+    && stageValid
+    && workflowDraftValid
+    && agentDraftValid
+    && summaryValid
+    && listOfStringsValid(obj.knownFacts)
+    && listOfStringsValid(obj.missingFields)
+    && listOfStringsValid(obj.questions)
+    && nextActionValid
+    && shouldOpenModalValid;
+}
+
 /** 从 AI 回复 markdown 中提取 action blocks 和 card blocks */
-export function parseActions(markdown: string): { text: string; actions: ActionBlock[]; cards: any[] } {
+export function parseActions(markdown: string): { text: string; actions: ActionBlock[]; cards: any[]; sidebarHints: HomeSidebarHint[] } {
   const actions: ActionBlock[] = [];
   const cards: any[] = [];
+  const sidebarHints: HomeSidebarHint[] = [];
   const removals: [number, number][] = [];
 
-  // Find all code blocks: ```lang\n...\n```
-  // Only match relevant languages (action, card, json, or unmarked)
-  const codeBlockRegex = /```(action|card|json|)\s*\n/g;
+  // First pass: only parse action blocks globally.
+  // Card/json rendering is restricted to <result>...</result>.
+  const codeBlockRegex = /```(action)\s*\n/g;
   let match;
   while ((match = codeBlockRegex.exec(markdown)) !== null) {
     const lang = match[1];
@@ -335,15 +352,70 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
         codeBlockRegex.lastIndex = blockEnd;
         continue;
       }
-
-      if (isCardLike(parsed)) {
-        cards.push(validateCard(parsed));
-        removals.push([match.index, blockEnd]);
-        codeBlockRegex.lastIndex = blockEnd;
-        continue;
-      }
     } catch {
       // not valid JSON, leave as-is
+    }
+  }
+
+  const resultSections = getResultSections(markdown);
+  for (const section of resultSections) {
+    removals.push([section.start, section.contentStart]);
+    removals.push([section.contentEnd, section.end]);
+
+    const codeBlockRegex = /```(card|json)\s*\n/g;
+    let match: RegExpExecArray | null;
+    while ((match = codeBlockRegex.exec(section.content)) !== null) {
+      const contentStart = match.index + match[0].length;
+      const jsonStr = extractBalancedJson(section.content, contentStart);
+      if (!jsonStr) {
+        const fallbackClosingIdx = section.content.indexOf('```', contentStart);
+        const fallbackLocalBlockEnd = fallbackClosingIdx !== -1 ? fallbackClosingIdx + 3 : contentStart;
+        removals.push([
+          section.contentStart + match.index,
+          section.contentStart + fallbackLocalBlockEnd,
+        ]);
+        codeBlockRegex.lastIndex = fallbackLocalBlockEnd;
+        continue;
+      }
+
+      const jsonStartInContent = section.content.indexOf('{', contentStart);
+      const jsonEnd = jsonStartInContent + jsonStr.length;
+
+      let searchPos = jsonEnd;
+      while (
+        searchPos < section.content.length &&
+        (section.content[searchPos] === ' ' || section.content[searchPos] === '\n' || section.content[searchPos] === '\r')
+      ) {
+        searchPos++;
+      }
+      const closingIdx = section.content.indexOf('```', searchPos);
+      const localBlockEnd = (closingIdx !== -1 && closingIdx - jsonEnd < 10) ? closingIdx + 3 : jsonEnd;
+
+      try {
+        const parsed = JSON.parse(jsonStr);
+        if (isCardLike(parsed)) {
+          cards.push(validateCard(parsed));
+        } else if (isHomeSidebarHintLike(parsed)) {
+          sidebarHints.push(parsed);
+        }
+
+        // Any card/json code block inside <result> is machine-readable output.
+        // Non-visual JSON (for example workflow_draft/plan_draft) is consumed by
+        // feature-specific code and must not leak into the visible markdown body.
+        removals.push([
+          section.contentStart + match.index,
+          section.contentStart + localBlockEnd,
+        ]);
+        codeBlockRegex.lastIndex = localBlockEnd;
+      } catch {
+        // Malformed machine-readable JSON should be hidden from the markdown body;
+        // the owning feature can surface a structured parse error instead.
+        removals.push([
+          section.contentStart + match.index,
+          section.contentStart + localBlockEnd,
+        ]);
+        codeBlockRegex.lastIndex = localBlockEnd;
+      }
     }
   }
 
@@ -353,7 +425,9 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     text = text.substring(0, start) + text.substring(end);
   }
 
-  return { text: text.trim(), actions, cards };
+  const effectiveCards = sidebarHints.some((hint) => shouldSuppressCardsForSidebarHint(hint)) ? [] : cards;
+
+  return { text: text.trim(), actions, cards: effectiveCards, sidebarHints };
 }
 
 /** 判断 action 是否安全（自动执行） */
@@ -402,6 +476,8 @@ async function executeActionInner(type: ActionType, params: Record<string, any>)
       return configApi.listConfigs();
     case 'config.get':
       return configApi.getConfig(params.filename);
+    case 'config.validate':
+      return configApi.validateConfig({ config: params.config, filename: params.filename });
     case 'config.create':
       return configApi.saveConfig(params.filename, params.config);
     case 'config.update':
@@ -493,20 +569,6 @@ async function executeActionInner(type: ActionType, params: Record<string, any>)
       return scheduleApi.toggle(params.id);
 
     default: {
-      // GitCode actions - route to /api/gitcode
-      if (type.startsWith('gitcode.')) {
-        const command = type.replace('gitcode.', '');
-        const res = await fetch('/api/gitcode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command, args: params }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.error || '执行 GitCode 命令失败');
-        }
-        return data.data;
-      }
       throw new Error(`Unknown action type: ${type}`);
     }
   }

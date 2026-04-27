@@ -1,4 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  buildWorkflowExperiencePromptBlock,
+  findRelevantWorkflowExperiences,
+} from '@/lib/workflow-experience-store';
+import {
+  buildMemoryPromptBlock,
+  listMemoryEntries,
+} from '@/lib/workflow-memory-store';
 
 interface PhaseTemplate {
   name: string;
@@ -14,6 +22,19 @@ interface StateMachineStateTemplate {
   maxSelfTransitions?: number;
   steps: Array<{ name: string; agent: string; task: string }>;
   transitions: Array<{ to: string; condition: { verdict?: string }; priority: number; label: string }>;
+}
+
+function createDefaultWorkflowGovernance() {
+  return {
+    supervisor: {
+      enabled: true,
+      agent: 'default-supervisor',
+      stageReviewEnabled: true,
+      checkpointAdviceEnabled: true,
+      scoringEnabled: true,
+      experienceEnabled: true,
+    },
+  };
 }
 
 /**
@@ -104,6 +125,7 @@ function generatePhaseBasedConfig(requirements: string, workflowName: string, wo
     workflow: {
       name: workflowName,
       description: requirements,
+      ...createDefaultWorkflowGovernance(),
       phases,
     },
     context: {
@@ -304,6 +326,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
       description: requirements,
       mode: 'state-machine' as const,
       maxTransitions: 30,
+      ...createDefaultWorkflowGovernance(),
       states,
     },
     context: {
@@ -325,10 +348,31 @@ function generateWorkflowFromRequirements(requirements: string, workflowName: st
   return generatePhaseBasedConfig(requirements, workflowName, workspaceMode);
 }
 
+function applyExperienceHintsToConfig(config: any, hints: string[]) {
+  if (!Array.isArray(hints) || hints.length === 0) return config;
+  const note = `参考历史经验：${hints.slice(0, 2).join('；')}`;
+
+  if (Array.isArray(config?.workflow?.phases)) {
+    const firstStep = config.workflow.phases[0]?.steps?.[0];
+    if (firstStep?.task && !String(firstStep.task).includes('参考历史经验')) {
+      firstStep.task = `${firstStep.task}\n${note}`;
+    }
+  }
+
+  if (Array.isArray(config?.workflow?.states)) {
+    const firstStep = config.workflow.states[0]?.steps?.[0];
+    if (firstStep?.task && !String(firstStep.task).includes('参考历史经验')) {
+      firstStep.task = `${firstStep.task}\n${note}`;
+    }
+  }
+
+  return config;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { requirements, workflowName, workspaceMode } = body;
+    const { requirements, workflowName, workspaceMode, workingDirectory } = body;
     const normalizedWorkspaceMode = workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place';
 
     if (!requirements || requirements.trim().length < 10) {
@@ -338,14 +382,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const relatedExperiences = await findRelevantWorkflowExperiences({
+      workflowName: String(workflowName || ''),
+      requirements: String(requirements || ''),
+      projectRoot: typeof workingDirectory === 'string' ? workingDirectory : undefined,
+      limit: 3,
+    }).catch(() => []);
+    const projectMemories = typeof workingDirectory === 'string' && workingDirectory.trim()
+      ? await listMemoryEntries({
+          scope: 'project',
+          key: workingDirectory.trim(),
+          limit: 3,
+        }).catch(() => [])
+      : [];
+
     // 生成工作流配置
-    const config = generateWorkflowFromRequirements(requirements, workflowName || 'AI生成工作流', normalizedWorkspaceMode);
+    const config = applyExperienceHintsToConfig(
+      generateWorkflowFromRequirements(requirements, workflowName || 'AI生成工作流', normalizedWorkspaceMode),
+      relatedExperiences.flatMap((item) => [...item.experience.slice(0, 1), ...item.nextFocus.slice(0, 1)]).filter(Boolean)
+    );
     const mode = 'mode' in config.workflow ? config.workflow.mode : 'phase-based';
 
     return NextResponse.json({
       success: true,
       config,
       mode,
+      experienceHints: relatedExperiences,
+      experienceSummary: [
+        buildWorkflowExperiencePromptBlock(relatedExperiences, '相关历史经验'),
+        buildMemoryPromptBlock('项目级共享记忆', projectMemories, { maxItems: 3 }),
+      ].filter(Boolean).join('\n\n'),
       message: mode === 'state-machine'
         ? '根据需求描述，已生成状态机工作流模板。你可以在设计页面进一步调整状态和转移。'
         : '已根据需求描述生成阶段工作流模板。你可以在设计页面进一步调整阶段和步骤。',

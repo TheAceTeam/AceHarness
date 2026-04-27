@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { SingleCombobox, MultiCombobox, ComboboxPortalProvider, type ComboboxOption } from '@/components/ui/combobox';
+import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -46,6 +47,13 @@ type StepForm = z.infer<typeof stepSchema>;
 interface RoleOption {
   name: string;
   team: string;
+  roleType?: 'normal' | 'supervisor';
+  avatar?: any;
+  category?: string;
+  tags?: string[];
+  description?: string;
+  capabilities?: string[];
+  alwaysAvailableForChat?: boolean;
 }
 
 interface SkillOption {
@@ -83,6 +91,7 @@ export default function EditNodeModal({
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
+  const [agentSearch, setAgentSearch] = useState('');
 
   const {
     register,
@@ -117,6 +126,17 @@ export default function EditNodeModal({
 
   const checkpointEnabled = watch('checkpointEnabled');
   const iterationEnabled = watch('iterationEnabled');
+  const selectedAgentName = (watch('agent') || data?.agent || '') as string;
+  const filteredRoles = roles.filter((role) => {
+    const query = agentSearch.trim().toLowerCase();
+    if (!query) return true;
+    return (
+      role.name.toLowerCase().includes(query) ||
+      role.category?.toLowerCase().includes(query) ||
+      role.description?.toLowerCase().includes(query) ||
+      role.tags?.some((tag) => tag.toLowerCase().includes(query))
+    );
+  });
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
@@ -171,7 +191,7 @@ export default function EditNodeModal({
       onSave(phaseData);
     } else {
       const selectedRole = roles.find((r) => r.name === formData.agent);
-      const teamToRole: Record<string, string> = { blue: 'defender', red: 'attacker', judge: 'judge' };
+      const teamToRole: Record<string, string> = { blue: 'defender', red: 'attacker', judge: 'judge', yellow: 'defender' };
       const stepData: any = {
         name: formData.name,
         agent: formData.agent,
@@ -322,20 +342,38 @@ export default function EditNodeModal({
                 <Label htmlFor="agent">
                   Agent <span className="text-destructive">*</span>
                 </Label>
-                <SingleCombobox
-                  value={watch('agent') || data?.agent || ''}
-                  onValueChange={(v) => setValue('agent', v)}
-                  options={roles.map((r) => ({
-                    value: r.name,
-                    label: r.name,
-                    description: r.team === 'red' ? '红队 (攻击方)' : r.team === 'judge' ? '裁判' : '蓝队 (防守方)',
-                    icon: <span className="material-symbols-outlined text-sm">
-                      {r.team === 'red' ? 'swords' : r.team === 'judge' ? 'balance' : 'shield'}
-                    </span>,
-                  }))}
-                  placeholder="请选择 Agent"
-                  triggerClassName={errors.agent ? 'border-destructive' : ''}
+                <Input
+                  value={agentSearch}
+                  onChange={(e) => setAgentSearch(e.target.value)}
+                  placeholder="搜索角色..."
+                  className={errors.agent ? 'border-destructive' : ''}
                 />
+                <div className="grid max-h-[360px] grid-cols-1 gap-3 overflow-auto rounded-2xl border bg-muted/20 p-3 md:grid-cols-2">
+                  {filteredRoles.map((role) => (
+                    <AgentHeroCard
+                      key={role.name}
+                      compact
+                      selected={selectedAgentName === role.name}
+                      onClick={() => setValue('agent', role.name)}
+                      agent={{
+                        name: role.name,
+                        team: role.team as any,
+                        roleType: role.roleType,
+                        avatar: role.avatar,
+                        category: role.category,
+                        tags: role.tags,
+                        description: role.description,
+                        capabilities: role.capabilities,
+                        alwaysAvailableForChat: role.alwaysAvailableForChat,
+                      }}
+                    />
+                  ))}
+                  {filteredRoles.length === 0 && (
+                    <div className="col-span-full rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                      没有找到匹配的 Agent
+                    </div>
+                  )}
+                </div>
                 {errors.agent && (
                   <p className="text-sm text-destructive">{errors.agent.message as string}</p>
                 )}

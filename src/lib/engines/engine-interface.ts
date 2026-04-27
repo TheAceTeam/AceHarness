@@ -16,8 +16,6 @@ export interface EngineOptions {
   sessionId?: string;
   appendSystemPrompt?: boolean;
   runId?: string;
-  /** 'plan' for SDK plan mode */
-  mode?: string;
   /** MCP server configs */
   mcpServers?: any[];
   /** Review panel agents */

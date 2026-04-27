@@ -26,23 +26,33 @@ tags:
 
 ### 规则 1：输出格式正确性
 
-**展示任何结构化内容时，必须使用 ```card 代码块：**
-- PR/Issue 分析、统计数据、状态、列表、摘要等 → 必须用 ```card
-- 禁止使用 ```json 或纯文本输出结构化内容
+**展示任何结构化内容时，必须放在 `<result>...</result>` 内，并在其中使用 ```card 代码块：**
+- PR/Issue 分析、统计数据、状态、列表、摘要等 → 必须用 `<result>` 包裹的 ```card
+- 兼容场景下可用 `<result>` 包裹的 ```json，但不推荐
+- `<result>` 外面的 ```card / ```json 不会被系统尝试渲染
 - card 代码块与普通文字内容必须**独立输出**，不要混在同一条消息里
 
 正确示例：
 ```
 这是分析结果：
 
+<result>
 ```card
 {"header": {...}, "blocks": [...]}
 ```
+</result>
 ```
 
 错误示例（禁止）：
 ```
 这里有个 PR：`{"header": {...}, "blocks": [...]}`
+```
+
+错误示例（不会渲染）：
+```
+```card
+{"header": {...}, "blocks": [...]}
+```
 ```
 
 ### 规则 2：生成前必须验证
@@ -122,30 +132,54 @@ type Block =
 
 ## ❌ 常见错误
 
-### 错误 1：使用 ```json 而不是 ```card
+### 错误 1：没有放进 `<result>`
 
 **错误写法：**
 ````
-```json
+```card
 {"header": {...}, "blocks": [...]}
 ```
 ````
 
 **正确写法：**
 ````
+<result>
 ```card
 {"header": {...}, "blocks": [...]}
 ```
+</result>
 ````
 
-### 错误 2：card 内容和非 card 文字混在一起
+### 错误 2：使用 ```json 而不是 ```card
+
+**错误写法：**
+````
+<result>
+```json
+{"header": {...}, "blocks": [...]}
+```
+</result>
+````
+
+**正确写法：**
+````
+<result>
+```card
+{"header": {...}, "blocks": [...]}
+```
+</result>
+````
+
+### 错误 3：card 内容和非 card 文字混在一起
 
 **错误写法：**
 ```
 这里有个 PR 的分析结果：
+<result>
 ```card
 {"header": {...}}
 ```
+</result>
 请查看以上内容。
 ```
 
@@ -153,36 +187,46 @@ type Block =
 ```
 这是 PR 分析结果：
 
+<result>
 ```card
 {"header": {...}, "blocks": [...]}
 ```
+</result>
 ```
 
-### 错误 3：blocks 为空或不填
+### 错误 4：blocks 为空或不填
 
 **错误写法：**
+<result>
 ```card
 {"header": {"title": "xxx"}, "blocks": []}
 ```
+</result>
 
 **正确写法：**
+<result>
 ```card
 {"header": {"title": "xxx"}, "blocks": [{"type": "text", "content": "描述内容"}]}
 ```
+</result>
 
-### 错误 4：使用白名单外的图标名
+### 错误 5：使用白名单外的图标名
 
 **错误写法：**
+<result>
 ```card
 {"header": {"icon": "my_custom_icon", "title": "xxx"}}
 ```
+</result>
 
 **正确写法：**
+<result>
 ```card
 {"header": {"icon": "rocket_launch", "title": "xxx"}}
 ```
+</result>
 
-### 错误 5：跳过验证直接输出
+### 错误 6：跳过验证直接输出
 
 生成 card 后**必须**通过验证脚本检查格式，发现错误立即修正后再输出。
 
@@ -192,23 +236,29 @@ type Block =
 
 ### PR 分析卡片
 ````card
+<result>
 ```card
 {"header": {"icon": "merge_type", "title": "fix: 修复内存泄漏问题", "subtitle": "Cangjie/cangjie_compiler #1224", "gradient": "from-blue-500 to-cyan-500", "badges": [{"text": "open", "color": "green"}, {"text": "bug-fix", "color": "orange"}]}, "blocks": [{"type": "info", "rows": [{"label": "作者", "value": "zhangsan", "icon": "person"}, {"label": "源分支", "value": "fix/memory-leak"}, {"label": "目标分支", "value": "master"}]}, {"type": "text", "content": "修复了编译器在处理大型 AST 时的内存泄漏问题...", "maxLines": 3}, {"type": "list", "items": [{"icon": "check_circle", "color": "text-green-400", "text": "修改了 3 个文件"}, {"icon": "warning", "color": "text-yellow-400", "text": "存在 2 个待解决的评论"}]}], "actions": [{"label": "查看修改文件", "prompt": "获取这个 PR 的修改文件列表", "icon": "description"}, {"label": "查看评论", "prompt": "获取这个 PR 的评论", "icon": "comment"}]}
 ```
+</result>
 ````
 
 ### Agent 详情卡片
 ````card
+<result>
 ```card
 {"header": {"icon": "smart_toy", "title": "architect", "subtitle": "架构师 - 负责设计技术方案", "gradient": "from-purple-500 to-pink-500", "badges": [{"text": "blue-team", "color": "blue"}, {"text": "claude-sonnet", "color": "purple"}]}, "blocks": [{"type": "info", "rows": [{"label": "团队", "value": "蓝队 (defender)"}, {"label": "模型", "value": "claude-sonnet-4-6"}, {"label": "类别", "value": "architect"}]}, {"type": "tabs", "tabs": [{"key": "prompts", "label": "提示词", "blocks": [{"type": "collapse", "title": "系统提示词", "subtitle": "2048 字符", "blocks": [{"type": "code", "code": "你是一个架构师...", "copyable": true}]}]}, {"key": "capabilities", "label": "能力", "blocks": [{"type": "badges", "items": [{"text": "代码审查", "color": "blue"}, {"text": "架构设计", "color": "green"}]}]}]}], "actions": [{"label": "编辑 Agent", "prompt": "编辑这个 Agent 的配置", "icon": "edit"}]}
 ```
+</result>
 ````
 
 ### 工作流状态卡片
 ````card
+<result>
 ```card
 {"header": {"icon": "play_circle", "title": "AST 内存优化", "gradient": "from-green-500 to-emerald-500"}, "blocks": [{"type": "status", "state": "运行中", "color": "green", "animated": true, "rows": [{"label": "当前阶段", "value": "测试阶段"}, {"label": "当前步骤", "value": "tester (功能测试)"}]}, {"type": "progress", "value": 7, "max": 12, "label": "7/12 步骤完成"}], "actions": [{"label": "停止工作流", "prompt": "停止当前工作流", "icon": "stop"}, {"label": "查看日志", "prompt": "查看当前运行的详细日志", "icon": "article"}]}
 ```
+</result>
 ````
 
 ---

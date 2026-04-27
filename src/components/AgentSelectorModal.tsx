@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 
 interface AgentConfig {
   name: string;
-  team: 'blue' | 'red' | 'judge';
+  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  roleType?: 'normal' | 'supervisor';
+  avatar?: any;
   category?: string;
   tags?: string[];
   model: string;
@@ -23,12 +26,6 @@ interface AgentSelectorModalProps {
   onSelect: (agentName: string) => void;
   onClose: () => void;
 }
-
-const TEAM_COLORS = {
-  blue: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  red: 'bg-red-500/20 text-red-400 border-red-500/30',
-  judge: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-};
 
 const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
 
@@ -101,7 +98,6 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
                 size="sm"
                 variant={selectedTeam === 'blue' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('blue')}
-                className={selectedTeam === 'blue' ? TEAM_COLORS.blue : ''}
               >
                 蓝队
               </Button>
@@ -109,7 +105,6 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
                 size="sm"
                 variant={selectedTeam === 'red' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('red')}
-                className={selectedTeam === 'red' ? TEAM_COLORS.red : ''}
               >
                 红队
               </Button>
@@ -117,9 +112,22 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
                 size="sm"
                 variant={selectedTeam === 'judge' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('judge')}
-                className={selectedTeam === 'judge' ? TEAM_COLORS.judge : ''}
               >
                 裁判
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedTeam === 'yellow' ? 'default' : 'outline'}
+                onClick={() => setSelectedTeam('yellow')}
+              >
+                黄队
+              </Button>
+              <Button
+                size="sm"
+                variant={selectedTeam === 'black-gold' ? 'default' : 'outline'}
+                onClick={() => setSelectedTeam('black-gold')}
+              >
+                指挥官
               </Button>
             </div>
 
@@ -172,54 +180,12 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {filteredAgents.map(agent => (
-                <div
+                <AgentHeroCard
                   key={agent.name}
-                  className="bg-muted border rounded-lg p-3 hover:bg-accent cursor-pointer transition-colors"
+                  compact
                   onClick={() => onSelect(agent.name)}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-sm mb-1">{agent.name}</h3>
-                      <Badge className={`${TEAM_COLORS[agent.team]} text-xs`}>
-                        {agent.team === 'blue' ? '蓝队' : agent.team === 'red' ? '红队' : '裁判'}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  {agent.category && (
-                    <div className="mb-2">
-                      <Badge variant="secondary" className="text-xs">{agent.category}</Badge>
-                    </div>
-                  )}
-
-                  <div className="text-xs text-muted-foreground mb-2">
-                    {agent.model}
-                  </div>
-
-                  {agent.tags && agent.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {agent.tags.slice(0, 3).map(tag => (
-                        <Badge key={tag} variant="outline" className="text-[10px]">
-                          {tag}
-                        </Badge>
-                      ))}
-                      {agent.tags.length > 3 && (
-                        <Badge variant="outline" className="text-[10px]">
-                          +{agent.tags.length - 3}
-                        </Badge>
-                      )}
-                    </div>
-                  )}
-
-                  {agent.iterationPrompt && (
-                    <div className="mt-2 pt-2 border-t">
-                      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <span className="material-symbols-outlined text-xs">loop</span>
-                        支持迭代
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  agent={agent as any}
+                />
               ))}
             </div>
           )}

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
+import { Badge } from './ui/badge';
 import { GitBranch, BarChart3, Activity, Clock, Bot } from 'lucide-react';
 import StateTransitionTimeline from './StateTransitionTimeline';
 import StateFlowVisualizer from './StateFlowVisualizer';
@@ -53,7 +54,32 @@ interface StateMachineExecutionViewProps {
   endTime?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
   agentFlow?: AgentFlowRecord[];
-  currentPlanRound?: number;
+  executionTrace?: {
+    designTitle: string;
+    designStatus?: string | null;
+    designSummary?: string | null;
+    activePhaseTitle?: string | null;
+    activePhaseStatus?: string | null;
+    activeStepName?: string | null;
+    latestSupervisorReview?: {
+      type?: string | null;
+      stateName?: string | null;
+      content?: string | null;
+      affectedArtifacts?: string[] | null;
+      impact?: string[] | null;
+    } | null;
+    latestRevision?: {
+      version: number;
+      summary: string;
+      createdBy?: string;
+    } | null;
+    finalReview?: {
+      status: string;
+      summary: string;
+    } | null;
+  } | null;
+  overviewFooter?: ReactNode;
+  activeTabOverride?: string | null;
 
   // 回调
   onStateClick?: (stateName: string) => void;
@@ -77,12 +103,20 @@ export default function StateMachineExecutionView({
   endTime,
   supervisorFlow = [],
   agentFlow = [],
-  currentPlanRound,
+  executionTrace,
+  overviewFooter,
+  activeTabOverride,
   onStateClick,
   onStepClick,
   onForceTransition,
 }: StateMachineExecutionViewProps) {
   const [activeTab, setActiveTab] = useState('overview');
+
+  useEffect(() => {
+    if (activeTabOverride) {
+      setActiveTab(activeTabOverride);
+    }
+  }, [activeTabOverride]);
 
   const handleOverviewStateClick = (stateName: string) => {
     setActiveTab('diagram');
@@ -122,6 +156,87 @@ export default function StateMachineExecutionView({
         {/* 总览视图 */}
         <TabsContent value="overview" className="flex-1 overflow-auto">
           <div className="space-y-6">
+            {executionTrace && (
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-semibold">设计到执行映射</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {executionTrace.designStatus ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        设计 {executionTrace.designStatus}
+                      </Badge>
+                    ) : null}
+                    {executionTrace.activePhaseStatus ? (
+                      <Badge variant="secondary" className="text-[10px]">
+                        执行 {executionTrace.activePhaseStatus}
+                      </Badge>
+                    ) : null}
+                    {executionTrace.finalReview?.status ? (
+                      <Badge variant="outline" className="text-[10px]">
+                        结算 {executionTrace.finalReview.status}
+                      </Badge>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-lg border p-3 space-y-1">
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">1. 设计基线</div>
+                    <div className="text-sm font-medium">{executionTrace.designTitle}</div>
+                    {executionTrace.designSummary ? (
+                      <div className="text-xs leading-5 text-gray-600 dark:text-gray-400">
+                        {executionTrace.designSummary}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="rounded-lg border p-3 space-y-1">
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">2. 当前执行</div>
+                    <div className="text-sm font-medium">{executionTrace.activePhaseTitle || '未进入阶段'}</div>
+                    {executionTrace.activeStepName ? (
+                      <div className="text-xs leading-5 text-gray-600 dark:text-gray-400">
+                        当前步骤：{executionTrace.activeStepName}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="rounded-lg border p-3 space-y-1">
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">3. 审阅与修订</div>
+                    {executionTrace.latestSupervisorReview?.content ? (
+                      <>
+                        <div className="text-sm font-medium">
+                          {executionTrace.latestSupervisorReview.stateName || 'Supervisor 审阅'}
+                        </div>
+                        <div className="text-xs leading-5 text-gray-600 dark:text-gray-400 line-clamp-4">
+                          {executionTrace.latestSupervisorReview.content}
+                        </div>
+                      </>
+                    ) : executionTrace.latestRevision ? (
+                      <>
+                        <div className="text-sm font-medium">v{executionTrace.latestRevision.version}</div>
+                        <div className="text-xs leading-5 text-gray-600 dark:text-gray-400 line-clamp-4">
+                          {executionTrace.latestRevision.summary}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-gray-500 dark:text-gray-400">暂无审阅或修订记录</div>
+                    )}
+                  </div>
+                  <div className="rounded-lg border p-3 space-y-1">
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">4. 结算输出</div>
+                    {executionTrace.finalReview ? (
+                      <>
+                        <div className="text-sm font-medium">{executionTrace.finalReview.status}</div>
+                        <div className="text-xs leading-5 text-gray-600 dark:text-gray-400 line-clamp-4">
+                          {executionTrace.finalReview.summary}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-xs text-gray-500 dark:text-gray-400">运行尚未生成最终结算</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 实时统计面板 */}
             <StateMachineRuntimePanel
               currentState={currentState}
@@ -146,6 +261,8 @@ export default function StateMachineExecutionView({
                 />
               </div>
             )}
+
+            {overviewFooter}
           </div>
         </TabsContent>
 
@@ -170,7 +287,6 @@ export default function StateMachineExecutionView({
         <TabsContent value="supervisor" className="flex-1 overflow-auto">
           <SupervisorFlowVisualizer
             flow={supervisorFlow}
-            currentRound={currentPlanRound}
           />
         </TabsContent>
 
@@ -180,7 +296,6 @@ export default function StateMachineExecutionView({
             <AgentFlowDiagram
               flow={agentFlow}
               states={states}
-              currentRound={currentPlanRound}
               currentStep={currentStep}
             />
           </div>
@@ -198,7 +313,6 @@ export default function StateMachineExecutionView({
               isRunning={isRunning}
               focusedState={focusedState}
               supervisorFlow={supervisorFlow}
-              currentPlanRound={currentPlanRound}
               onStateClick={onStateClick}
               onStepClick={onStepClick}
               onForceTransition={onForceTransition}

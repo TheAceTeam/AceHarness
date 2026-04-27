@@ -16,28 +16,48 @@ import type { EngineJsonResult } from './engines/engine-interface';
 import { createRun, updateRun } from './run-store';
 import {
   saveRunState, saveProcessOutput, saveStreamContent,
-  loadRunState, loadStepOutputs, type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog,
+  loadRunState, loadStepOutputs,
+  type PersistedRunState,
+  type PersistedProcessInfo,
+  type PersistedStepLog,
+  type PersistedQualityCheck,
+  type PersistedQualityCommandResult,
 } from './run-state-persistence';
+import {
+  appendWorkflowExperience,
+  buildWorkflowExperiencePromptBlock,
+  findRelevantWorkflowExperiences,
+  saveWorkflowFinalReview,
+  type WorkflowFinalReview,
+} from './workflow-experience-store';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
-  Issue, WorkflowStep, RoleConfig, TransitionCondition,
+  Issue, WorkflowStep, RoleConfig, TransitionCondition, OpenSpecDocument,
 } from './schemas';
 import { formatTimestamp } from './utils';
 import { createEngine, getConfiguredEngine, type Engine, type EngineType } from './engines';
 import { getEngineSkillsSubdir } from './engines/engine-config';
 import type { EngineStreamEvent } from './engines/engine-interface';
-import type { SdkPlanSubtaskTelemetry } from './engines/claude-code-wrapper';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from './runtime-configs';
 import { getRuntimeSkillsDirPath } from './runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from './app-paths';
+import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
 import {
-  parseNeedInfo,
-  isPlanDone,
-  routeInfoRequest,
-  type AgentSummary,
-  type InfoRequest,
-  type RouteDecision,
-} from './supervisor-router';
+  DEFAULT_SUPERVISOR_NAME,
+  ensureDefaultSupervisorConfig,
+  resolveWorkflowSupervisorAgent,
+} from './default-supervisor';
+import {
+  appendOpenSpecRevision,
+  appendSupervisorOpenSpecRevision,
+  cloneOpenSpecForRun,
+  loadLatestCreationSessionByFilename,
+  markOpenSpecStateStatus,
+  normalizeOpenSpecDocument,
+  updateOpenSpecTaskStatuses,
+} from './openspec-store';
+import { appendMemoryEntries } from './workflow-memory-store';
+import { upsertRelationshipSignal } from './agent-relationship-store';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -85,6 +105,30 @@ function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): bool
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
 
+function extractTaggedBlock(text: string, tag: string): string | null {
+  const pattern = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'i');
+  return text.match(pattern)?.[1]?.trim() || null;
+}
+
+function stripJsonFence(text: string): string {
+  return text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+}
+
+function compactStepConclusion(raw: string): string {
+  const tagged = extractTaggedBlock(raw, 'step-conclusion');
+  if (tagged) return tagged;
+
+  const text = stripNonAiStreamArtifacts(raw)
+    .replace(/<openspec-tasks>[\s\S]*?<\/openspec-tasks>/gi, '')
+    .trim();
+  const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
+  const tail = lines.slice(-30).join('\n').trim();
+  return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+}
+
 export class StateMachineWorkflowManager extends EventEmitter {
   private status: 'idle' | 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' = 'idle';
   private statusReason: string | null = null;
@@ -109,6 +153,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     suggestedNextState: string;
     availableStates: string[];
     result: any;
+    supervisorAdvice?: string;
   } | null = null;
   private globalContext: string = '';
   private stateContexts: Map<string, string> = new Map();
@@ -120,6 +165,17 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private currentStep: string | null = null;
   private completedSteps: string[] = [];
   private currentProcesses: PersistedProcessInfo[] = [];
+  private currentSupervisorAgent: string = DEFAULT_SUPERVISOR_NAME;
+  private latestSupervisorReview: {
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null = null;
+  private currentRunOpenSpec: OpenSpecDocument | null = null;
+  private liveOpenSpecTaskBlocksByProcess: Map<string, string> = new Map();
   private supervisorFlow: { type: string; from: string; to: string; question?: string; method?: string; round: number; timestamp: string; stateName?: string }[] = [];
   /** Agent 工作流：追踪 Agent 之间的信息传递 */
   private agentFlow: {
@@ -134,10 +190,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     timestamp: string;
   }[] = [];
   private stepLogs: PersistedStepLog[] = [];
+  private qualityChecks: PersistedQualityCheck[] = [];
   /** Current engine instance (Kiro CLI, etc.) */
   private currentEngine: Engine | null = null;
   /** Current engine type */
   private engineType: EngineType = 'claude-code';
+  /** Optional frontend chat session to auto-bind with this run */
+  public _frontendSessionId?: string;
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
@@ -148,42 +207,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
   }
-  /** Lightweight router model, configurable from workflow context.routerModel */
-  private lightweightRouterModel: string = 'claude-sonnet-4-6';
-
-  // ========== Supervisor-Lite Plan 循环相关 ==========
-  /** 待解答的用户问题 Promise 解析器 */
-  private pendingUserQuestionResolver: ((answer: string) => void) | null = null;
-  /** 当前等待解答的问题 */
-  private pendingUserQuestion: { question: string; fromAgent: string; round: number } | null = null;
-
-  // ========== Claude SDK Plan（useSdkPlan）==========
-  private _sdkPlanAvailable: boolean | null = null;
-  private activeSdkPlanEngine: import('./engines/claude-code-wrapper').ClaudeCodeEngineWrapper | null = null;
-  /** 供 getStatus / 刷新后恢复 sdk-plan-question 弹窗 */
-  private pendingSdkPlanQuestionPayload: {
-    questions: unknown[];
-    fromAgent: string;
-    stateName: string;
-    stepName: string;
-  } | null = null;
-  /** 最近一次 SDK 子任务遥测（刷新页面时可从 getStatus 恢复横幅） */
-  private pendingSdkPlanSubtaskPayload: SdkPlanSubtaskTelemetry | null = null;
-
-  // ========== SDK Plan Review（审批）==========
-  private pendingPlanReviewPayload: {
-    planContent: string;
-    stepKey: string;
-    agent: string;
-    stateName: string;
-    stepName: string;
-  } | null = null;
-  private pendingPlanReviewResolver: ((result: {
-    action: 'approve' | 'edit' | 'reject';
-    content?: string;
-    feedback?: string;
-  }) => void) | null = null;
-
   constructor() {
     super();
   }
@@ -206,6 +229,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     } catch {
     }
+    this.agentConfigs = ensureDefaultSupervisorConfig(this.agentConfigs);
   }
 
   /**
@@ -537,6 +561,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   getStatus() {
+    const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
     const preparingPhase = this.status === 'preparing' ? '准备阶段' : null;
     return {
       status: this.status,
@@ -558,19 +583,62 @@ export class StateMachineWorkflowManager extends EventEmitter {
       supervisorFlow: this.supervisorFlow,
       agentFlow: this.agentFlow,
       stepLogs: this.stepLogs,
-      pendingSdkPlanQuestion: this.pendingSdkPlanQuestionPayload,
-      pendingSdkPlanSubtask: this.pendingSdkPlanSubtaskPayload,
-      pendingPlanReview: this.pendingPlanReviewPayload,
       workingDirectory: this.getWorkingDirectory(),
+      supervisorAgent: this.currentSupervisorAgent,
+      supervisorSessionId: supervisorAgent?.sessionId || null,
+      attachedAgentSessions: Object.fromEntries(
+        this.agents
+          .filter((agent) => Boolean(agent.sessionId))
+          .map((agent) => [agent.name, agent.sessionId as string])
+      ),
+      latestSupervisorReview: this.latestSupervisorReview,
+      qualityChecks: this.qualityChecks,
+      runOpenSpec: this.currentRunOpenSpec,
     };
   }
 
-  async start(configFile: string, requirements?: string): Promise<void> {
+  async applySupervisorChatOpenSpecRevision(input: {
+    supervisorAgent: string;
+    summary: string;
+    content: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  }): Promise<OpenSpecDocument | null> {
+    if (!this.currentRunId || !this.currentRunOpenSpec) return null;
+
+    this.currentRunOpenSpec = appendOpenSpecRevision(this.currentRunOpenSpec, {
+      summary: input.summary,
+      createdBy: input.supervisorAgent,
+      status: this.currentRunOpenSpec.status,
+      progressSummary: input.summary,
+    });
+    this.latestSupervisorReview = {
+      type: 'chat-revision',
+      stateName: this.currentState || '全局',
+      content: input.content,
+      timestamp: new Date().toISOString(),
+      affectedArtifacts: input.affectedArtifacts || [],
+      impact: input.impact || [],
+    };
+    await this.persistState();
+    this.emit('supervisor-review', this.latestSupervisorReview);
+    return this.currentRunOpenSpec;
+  }
+
+  async start(
+    configFile: string,
+    requirementsOrChecks?: string | PersistedQualityCheck[],
+    maybePreflightChecks?: PersistedQualityCheck[],
+  ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
       throw new Error('工作流已在运行中');
     }
 
     try {
+      const requirements = typeof requirementsOrChecks === 'string' ? requirementsOrChecks : undefined;
+      const preflightChecks = Array.isArray(requirementsOrChecks)
+        ? requirementsOrChecks
+        : (maybePreflightChecks || []);
       this.status = 'preparing';
       this.shouldStop = false;
       this.stateHistory = [];
@@ -581,7 +649,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.supervisorFlow = [];
       this.agentFlow = [];
       this.stepLogs = [];
+      this.qualityChecks = [...preflightChecks];
       this.currentState = null;
+      this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
+      this.latestSupervisorReview = null;
+      this.currentRunOpenSpec = null;
       this.runStartTime = new Date().toISOString();
       this.currentConfigFile = configFile;
       this.isolatedDir = null;
@@ -591,11 +663,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.pendingForceTransition = null;
       this.pendingForceInstruction = null;
       this.pendingApprovalInfo = null;
-      this._sdkPlanAvailable = null;
-      this.pendingSdkPlanQuestionPayload = null;
-      this.pendingSdkPlanSubtaskPayload = null;
-      this.pendingPlanReviewPayload = null;
-      this.pendingPlanReviewResolver = null;
       this.interruptFlag = false;
       this.feedbackInterrupt = false;
       this.liveFeedback = [];
@@ -604,8 +671,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const configPath = await getRuntimeWorkflowConfigPath(configFile);
       const configContent = await readFile(configPath, 'utf-8');
       const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
-      this.lightweightRouterModel = workflowConfig.context?.routerModel?.trim() || 'claude-sonnet-4-6';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
+      this.currentSupervisorAgent = resolveWorkflowSupervisorAgent(workflowConfig);
       // Resolve projectRoot to absolute path relative to user's personal dir
       this.currentProjectRoot = workflowConfig.context?.projectRoot
         ? this.resolveProjectRootPath(workflowConfig.context.projectRoot)
@@ -645,6 +712,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
       this.currentStep = '初始化运行上下文';
       await this.persistState();
+
+      const creationSession = await loadLatestCreationSessionByFilename(configFile).catch(() => null);
+      if (creationSession?.openSpec) {
+        this.currentRunOpenSpec = cloneOpenSpecForRun(creationSession.openSpec, {
+          runId,
+          filename: configFile,
+        });
+        await this.persistState();
+      }
 
       const reportPreparingProgress = async (message: string, step: string) => {
         this.currentStep = step;
@@ -698,6 +774,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // === Preparing phase: load agents, init engine, sync skills ===
       await reportPreparingProgress('准备中：加载 Agent 配置...', '加载 Agent 配置');
       await this.loadAgentConfigs();
+      this.ensureSupervisorAgentExists(workflowConfig);
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：构建 Agent 视图...', '构建 Agent 视图');
       this.initializeAgents(workflowConfig);
@@ -718,6 +795,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const restoredState = existingState.currentState;
         this.currentState = restoredState && validStates.has(restoredState) ? restoredState : null;
         this.runStartTime = existingState.startTime;
+        this.currentRunOpenSpec = existingState.runOpenSpec
+          ? normalizeOpenSpecDocument(existingState.runOpenSpec)
+          : this.currentRunOpenSpec;
       }
 
       // === Switch to running ===
@@ -855,6 +935,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (!this.currentRunId) return;
     this.runEndTime = new Date().toISOString();
 
+    try {
+      await this.finalizeSupervisorOutputs(status);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('log', { message: `Supervisor 结算输出失败: ${message}` });
+    }
+
     // Cleanup copied skills from workspace
     await this.cleanupWorkspaceSkills();
 
@@ -881,6 +968,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.shouldStop ? 'stopped' : (this.status === 'idle' ? 'completed' : this.status)
       );
       const preparingPhase = statusToPersist === 'preparing' ? '准备阶段' : null;
+      const attachedAgentSessions = Object.fromEntries(
+        this.agents
+          .filter((agent) => Boolean(agent.sessionId))
+          .map((agent) => [agent.name, agent.sessionId as string])
+      );
+      const supervisorSessionId = this.agents.find((agent) => agent.name === this.currentSupervisorAgent)?.sessionId || null;
       await saveRunState({
         runId: this.currentRunId,
         configFile: this.currentConfigFile,
@@ -927,14 +1020,219 @@ export class StateMachineWorkflowManager extends EventEmitter {
             isIterativePhase: false,
             suggestedNextState: this.pendingApprovalInfo.suggestedNextState,
             availableStates: this.pendingApprovalInfo.availableStates,
+            supervisorAdvice: this.pendingApprovalInfo.supervisorAdvice,
           },
         } : {}),
-        // 等待 Plan 审批时持久化，以便页面刷新后恢复弹窗
-        pendingPlanReview: !finalStatus ? (this.pendingPlanReviewPayload || null) : null,
         workingDirectory: this.getWorkingDirectory() || undefined,
+        supervisorAgent: this.currentSupervisorAgent,
+        supervisorSessionId,
+        attachedAgentSessions,
+        latestSupervisorReview: this.latestSupervisorReview,
+        qualityChecks: this.qualityChecks,
+        runOpenSpec: this.currentRunOpenSpec,
       });
+      if (this._frontendSessionId) {
+        await updateChatSessionWorkflowBinding(this._frontendSessionId, {
+          configFile: this.currentConfigFile,
+          runId: this.currentRunId,
+          supervisorAgent: this.currentSupervisorAgent,
+          supervisorSessionId,
+          attachedAgentSessions,
+        });
+        await updateChatSessionCreationBinding(this._frontendSessionId, {
+          filename: this.currentConfigFile,
+          status: 'run-bound',
+        });
+      }
     } catch (err) {
     }
+  }
+
+  private extractJsonObject(raw: string): any | null {
+    const fencedMatch = raw.match(/```json\s*([\s\S]*?)```/i);
+    const candidate = fencedMatch?.[1] || raw;
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      return JSON.parse(candidate.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  private buildFallbackFinalReview(status: 'completed' | 'failed' | 'stopped'): WorkflowFinalReview {
+    const generatedAt = new Date().toISOString();
+    return {
+      runId: this.currentRunId || '',
+      configFile: this.currentConfigFile,
+      workflowName: undefined,
+      projectRoot: this.getWorkingDirectory() || undefined,
+      workflowMode: 'state-machine',
+      supervisorAgent: this.currentSupervisorAgent,
+      status,
+      summary: `工作流以 ${status} 状态结束。建议结合运行记录进一步复盘。`,
+      nextFocus: this.issueTracker.slice(0, 3).map((issue) => `${issue.type}: ${issue.description}`),
+      experience: this.issueTracker.slice(0, 3).map((issue) => `记录 ${issue.type} 类问题的排查与修复路径，避免重复出现。`),
+      scoreCards: this.agents.map((agent) => ({
+        agent: agent.name,
+        score: agent.status === 'completed' ? 85 : agent.status === 'failed' ? 55 : 70,
+        strengths: agent.completedTasks > 0 ? ['完成了分配步骤'] : [],
+        weaknesses: agent.status !== 'completed' ? ['结果仍需进一步验证'] : [],
+      })),
+      agentNames: this.agents.map((agent) => agent.name),
+      keywords: [],
+      generatedAt,
+    };
+  }
+
+  private async finalizeSupervisorOutputs(status: 'completed' | 'failed' | 'stopped'): Promise<void> {
+    if (!this.currentRunId || !this.currentConfigFile) return;
+    const configPath = await getRuntimeWorkflowConfigPath(this.currentConfigFile);
+    const configContent = await readFile(configPath, 'utf-8');
+    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    const supervisorConfig = workflowConfig.workflow.supervisor;
+    if (supervisorConfig?.enabled === false) return;
+
+    const scoringEnabled = supervisorConfig?.scoringEnabled !== false;
+    const experienceEnabled = supervisorConfig?.experienceEnabled !== false;
+    if (!scoringEnabled && !experienceEnabled) return;
+
+    const summaryPrompt = [
+      '你是 ACEHarness 的工作流指挥官，请输出本次工作流的结算结果。',
+      '请严格输出 JSON，不要附加其他说明。',
+      'JSON 结构：',
+      '{"summary":"", "nextFocus":[""], "experience":[""], "scoreCards":[{"agent":"", "score":0, "strengths":[""], "weaknesses":[""]}]}',
+      '',
+      `工作流状态: ${status}`,
+      `当前状态数: ${this.stateHistory.length}`,
+      `问题数: ${this.issueTracker.length}`,
+      '',
+      'Agent 执行数据：',
+      ...this.agents.map((agent) => `- ${agent.name}: status=${agent.status}, completedTasks=${agent.completedTasks}, costUsd=${agent.costUsd}, summary=${agent.summary || ''}`),
+      '',
+      '问题摘要：',
+      ...(this.issueTracker.length > 0
+        ? this.issueTracker.map((issue) => `- [${issue.severity}] ${issue.type}: ${issue.description}`)
+        : ['- 无']),
+    ].join('\n');
+
+    const raw = await this.queryAgent(this.currentSupervisorAgent, summaryPrompt, workflowConfig);
+    const parsed = this.extractJsonObject(raw);
+    const fallback = this.buildFallbackFinalReview(status);
+    const finalReview: WorkflowFinalReview = {
+      ...fallback,
+      ...(parsed && typeof parsed === 'object' ? {
+        summary: typeof parsed.summary === 'string' && parsed.summary.trim() ? parsed.summary : fallback.summary,
+        nextFocus: Array.isArray(parsed.nextFocus) ? parsed.nextFocus.filter((item: unknown) => typeof item === 'string') : fallback.nextFocus,
+        experience: Array.isArray(parsed.experience) ? parsed.experience.filter((item: unknown) => typeof item === 'string') : fallback.experience,
+        scoreCards: Array.isArray(parsed.scoreCards)
+          ? parsed.scoreCards
+            .filter((item: any) => item && typeof item.agent === 'string')
+            .map((item: any) => ({
+              agent: item.agent,
+              score: Number.isFinite(item.score) ? Math.max(0, Math.min(100, Number(item.score))) : 70,
+              strengths: Array.isArray(item.strengths) ? item.strengths.filter((v: unknown) => typeof v === 'string') : [],
+              weaknesses: Array.isArray(item.weaknesses) ? item.weaknesses.filter((v: unknown) => typeof v === 'string') : [],
+            }))
+          : fallback.scoreCards,
+      } : {}),
+      runId: this.currentRunId,
+      configFile: this.currentConfigFile,
+      workflowName: workflowConfig.workflow.name,
+      projectRoot: this.getWorkingDirectory() || workflowConfig.context?.projectRoot || undefined,
+      workflowMode: 'state-machine',
+      supervisorAgent: this.currentSupervisorAgent,
+      status,
+      agentNames: this.agents.map((agent) => agent.name),
+      keywords: [
+        workflowConfig.workflow.name,
+        workflowConfig.context?.requirements,
+        ...(this.issueTracker.slice(0, 5).map((issue) => issue.type)),
+        ...(this.agents.slice(0, 6).map((agent) => agent.name)),
+      ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0),
+      generatedAt: new Date().toISOString(),
+    };
+
+    if (scoringEnabled) {
+      await saveWorkflowFinalReview(finalReview);
+    }
+    if (experienceEnabled) {
+      await appendWorkflowExperience(finalReview);
+    }
+    await appendMemoryEntries([
+      {
+        scope: 'workflow',
+        key: this.currentConfigFile,
+        kind: 'review',
+        title: `${workflowConfig.workflow.name} 运行复盘`,
+        content: finalReview.summary,
+        source: 'workflow-final-review',
+        runId: this.currentRunId,
+        configFile: this.currentConfigFile,
+        agent: this.currentSupervisorAgent,
+        tags: ['workflow', status],
+      },
+      {
+        scope: 'project',
+        key: this.getWorkingDirectory() || workflowConfig.context?.projectRoot || this.currentConfigFile,
+        kind: 'experience',
+        title: `${workflowConfig.workflow.name} 项目经验`,
+        content: [...finalReview.experience, ...finalReview.nextFocus].filter(Boolean).join('；'),
+        source: 'workflow-final-review',
+        runId: this.currentRunId,
+        configFile: this.currentConfigFile,
+        agent: this.currentSupervisorAgent,
+        tags: ['project', status],
+      },
+      {
+        scope: 'role',
+        key: this.currentSupervisorAgent,
+        kind: 'review',
+        title: `${this.currentSupervisorAgent} 监督复盘`,
+        content: finalReview.summary,
+        source: 'workflow-final-review',
+        runId: this.currentRunId,
+        configFile: this.currentConfigFile,
+        agent: this.currentSupervisorAgent,
+        tags: ['role', 'supervisor', status],
+      },
+      ...finalReview.scoreCards.map((card) => ({
+        scope: 'role' as const,
+        key: card.agent,
+        kind: 'experience' as const,
+        title: `${card.agent} 协作评分`,
+        content: [
+          `得分 ${card.score}`,
+          card.strengths.length ? `优势: ${card.strengths.join('；')}` : '',
+          card.weaknesses.length ? `短板: ${card.weaknesses.join('；')}` : '',
+        ].filter(Boolean).join('；'),
+        source: 'workflow-score-card',
+        runId: this.currentRunId || undefined,
+        configFile: this.currentConfigFile,
+        agent: card.agent,
+        tags: ['role', 'score-card', status],
+      })),
+    ]).catch(() => {});
+    const relationshipTasks: Promise<void>[] = [];
+    for (let i = 0; i < finalReview.scoreCards.length; i += 1) {
+      for (let j = i + 1; j < finalReview.scoreCards.length; j += 1) {
+        const left = finalReview.scoreCards[i];
+        const right = finalReview.scoreCards[j];
+        const deltaScore = Math.round(((left.score + right.score) / 2 - 65) / 4);
+        relationshipTasks.push(
+          upsertRelationshipSignal({
+            agent: left.agent,
+            peer: right.agent,
+            deltaScore,
+            strengths: [...left.strengths, ...right.strengths].slice(0, 4),
+            runId: this.currentRunId || undefined,
+            configFile: this.currentConfigFile,
+          })
+        );
+      }
+    }
+    await Promise.allSettled(relationshipTasks);
   }
 
   /**
@@ -1028,11 +1326,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (rawProc) {
         rawProc.streamContent += event.content;
       }
+      const totalContent = rawProc?.streamContent || event.content;
+      void this.applyLiveOpenSpecTaskUpdatesFromStream(totalContent, agent, processId);
       processManager.emit('stream', {
         id: processId,
         step: displayStep,
         delta: event.content,
-        total: rawProc?.streamContent || event.content,
+        total: totalContent,
       });
       // Persist stream content periodically
       if (this.currentRunId && rawProc?.streamContent) {
@@ -1089,6 +1389,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         },
       };
     } finally {
+      this.liveOpenSpecTaskBlocksByProcess.delete(processId);
       this.currentEngine.off('stream', streamHandler);
     }
   }
@@ -1100,13 +1401,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
         agentSet.add(step.agent);
       }
     }
+    if (workflowConfig.workflow.supervisor?.enabled !== false) {
+      agentSet.add(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
+    }
 
     this.agents = Array.from(agentSet).map((agentName) => {
       const roleConfig = this.agentConfigs.find((r) => r.name === agentName)
         || workflowConfig.roles?.find((r) => r.name === agentName);
       return {
         name: agentName,
-        team: roleConfig?.team || 'blue',
+        team: roleConfig?.team || (agentName === this.currentSupervisorAgent ? 'black-gold' : 'blue'),
         model: resolveAgentModel(roleConfig, workflowConfig.context),
         status: 'waiting',
         currentTask: null,
@@ -1120,6 +1424,148 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
 
     this.emit('agents', { agents: this.agents });
+  }
+
+  private ensureSupervisorAgentExists(workflowConfig: StateMachineWorkflowConfig): void {
+    const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    const existsInConfigs = this.agentConfigs.some((config) => config.name === supervisorName);
+    const existsInWorkflow = workflowConfig.roles?.some((config) => config.name === supervisorName);
+    if (!existsInConfigs && !existsInWorkflow) {
+      this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
+    }
+  }
+
+  private async collectSupervisorReview(
+    type: 'state-review' | 'checkpoint-advice',
+    state: StateMachineState,
+    result: StateExecutionResult,
+    config: StateMachineWorkflowConfig,
+    nextState?: string
+  ): Promise<string | null> {
+    if (config.workflow.supervisor?.enabled === false) return null;
+    if (type === 'state-review' && config.workflow.supervisor?.stageReviewEnabled === false) return null;
+    if (type === 'checkpoint-advice' && config.workflow.supervisor?.checkpointAdviceEnabled === false) return null;
+
+    const issueSummary = result.issues.length > 0
+      ? result.issues.map((issue) => `- [${issue.severity}] ${issue.type}: ${issue.description}`).join('\n')
+      : '- 无';
+    const stepSummary = result.stepOutputs
+      .map((output, index) => {
+        const snippet = output.replace(/\s+/g, ' ').trim().slice(0, 300);
+        const step = state.steps[index];
+        return `- ${step?.name || `步骤${index + 1}`}: ${snippet || '[无输出]'}`;
+      })
+      .join('\n');
+    const openSpecGuardrail = this.currentRunOpenSpec
+      ? [
+        '当前 Run OpenSpec：',
+        `- 版本: v${this.currentRunOpenSpec.version}`,
+        this.currentRunOpenSpec.summary ? `- 摘要: ${this.currentRunOpenSpec.summary}` : '',
+        this.currentRunOpenSpec.progress?.summary ? `- 进度: ${this.currentRunOpenSpec.progress.summary}` : '',
+        this.currentRunOpenSpec.tasks?.length
+          ? `- tasks.md: ${this.currentRunOpenSpec.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunOpenSpec.tasks.length} 已完成`
+          : '',
+        '- 你负责非状态内容的修订；普通步骤只能更新状态。',
+      ].filter(Boolean).join('\n')
+      : '';
+    const relatedExperiences = this.currentConfigFile
+      ? await findRelevantWorkflowExperiences({
+          configFile: this.currentConfigFile,
+          workflowName: config.workflow?.name,
+          requirements: config.context?.requirements,
+          projectRoot: this.getWorkingDirectory() || config.context?.projectRoot,
+          agentName: this.currentSupervisorAgent,
+          excludeRunId: this.currentRunId || undefined,
+          limit: 2,
+        }).catch(() => [])
+      : [];
+    const experienceBlock = buildWorkflowExperiencePromptBlock(relatedExperiences, '修订前相关历史经验');
+    const prompt = [
+      `你是工作流指挥官 ${this.currentSupervisorAgent}。`,
+      type === 'state-review'
+        ? `请对状态阶段 "${state.name}" 做一次阶段审阅。`
+        : `请在人工检查点前，对状态阶段 "${state.name}" 给出检查点建议。`,
+      '',
+      `当前 verdict: ${result.verdict}`,
+      nextState ? `建议下一状态: ${nextState}` : '',
+      '',
+      '问题摘要：',
+      issueSummary,
+      '',
+      '步骤输出摘要：',
+      stepSummary || '- 无',
+      experienceBlock,
+      openSpecGuardrail ? `\n${openSpecGuardrail}` : '',
+      '',
+      type === 'state-review'
+        ? '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见'
+        : '请输出：1. 是否建议人工放行 2. 若不建议放行，需重点检查的风险 3. 给操作者的简短建议',
+    ].filter(Boolean).join('\n');
+
+    const response = await this.queryAgent(this.currentSupervisorAgent, prompt, config);
+    const timestamp = new Date().toISOString();
+    this.latestSupervisorReview = {
+      type,
+      stateName: state.name,
+      content: response,
+      timestamp,
+    };
+    this.supervisorFlow.push({
+      type,
+      from: this.currentSupervisorAgent,
+      to: type === 'checkpoint-advice' ? 'user' : state.name,
+      question: response,
+      round: this.transitionCount,
+      timestamp,
+      stateName: state.name,
+    });
+    this.emit('supervisor-review', this.latestSupervisorReview);
+    if (this.currentRunOpenSpec) {
+      this.currentRunOpenSpec = appendSupervisorOpenSpecRevision(this.currentRunOpenSpec, {
+        stateName: state.name,
+        nextState,
+        type,
+        reviewContent: response,
+        supervisorAgent: this.currentSupervisorAgent,
+        verdict: result.verdict,
+      });
+    }
+    await this.persistState();
+    return response;
+  }
+
+  private deriveRunOpenSpecStateUpdate(
+    state: StateMachineState,
+    result: StateExecutionResult,
+    nextState?: string | null
+  ): { status: 'pending' | 'in-progress' | 'completed' | 'blocked'; summary: string } {
+    if (result.verdict === 'fail') {
+      return {
+        status: 'blocked',
+        summary: `状态 ${state.name} 执行失败，当前运行被标记为阻塞。`,
+      };
+    }
+
+    if (state.isFinal) {
+      return {
+        status: 'completed',
+        summary: `终止状态 ${state.name} 已完成，本轮运行已到达收口阶段。`,
+      };
+    }
+
+    if (nextState && nextState !== state.name) {
+      return {
+        status: 'completed',
+        summary: `状态 ${state.name} 已完成，下一状态为 ${nextState}。`,
+      };
+    }
+
+    return {
+      status: 'in-progress',
+      summary: result.verdict === 'conditional_pass'
+        ? `状态 ${state.name} 进入继续迭代。`
+        : `状态 ${state.name} 仍在推进中。`,
+    };
   }
 
   private async executeStateMachine(
@@ -1156,7 +1602,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (stateConfig.isFinal) {
         // Execute final state steps (e.g. regression tests) before completing
         if (stateConfig.steps.length > 0) {
-          await this.executeState(stateConfig, config, requirements);
+          const finalResult = await this.executeState(stateConfig, config, requirements);
+          if (this.currentRunOpenSpec) {
+            const statusUpdate = this.deriveRunOpenSpecStateUpdate(stateConfig, finalResult, null);
+            this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+              stateName: stateConfig.name,
+              status: statusUpdate.status,
+              summary: statusUpdate.summary,
+            });
+            await this.persistState();
+          }
         }
         this.emit('state-change', {
           state: this.currentState,
@@ -1176,6 +1631,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
         result,
         config
       );
+
+      if (this.currentRunOpenSpec) {
+        const statusUpdate = this.deriveRunOpenSpecStateUpdate(stateConfig, result, nextState);
+        this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+          stateName: stateConfig.name,
+          status: statusUpdate.status,
+          summary: statusUpdate.summary,
+        });
+        await this.persistState();
+      }
+
+      await this.collectSupervisorReview('state-review', stateConfig, result, config, nextState);
 
       // Check self-transition circuit breaker
       if (nextState === this.currentState) {
@@ -1227,6 +1694,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       if (requiresApproval) {
         const fromStateName = this.currentState;
+        const checkpointAdvice = await this.collectSupervisorReview('checkpoint-advice', stateConfig, result, config, nextState);
 
         // First transition: current state -> __human_approval__
         this.stateHistory.push({
@@ -1252,6 +1720,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           suggestedNextState: nextState,
           availableStates: config.workflow.states.map(s => s.name),
           result,
+          supervisorAdvice: checkpointAdvice || undefined,
         };
 
         // Persist state so crash recovery can restore to human approval
@@ -1269,6 +1738,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           suggestedNextState: nextState,
           result,
           availableStates: config.workflow.states.map(s => s.name),
+          supervisorAdvice: checkpointAdvice || undefined,
         });
 
         // Wait for human decision via forceTransition
@@ -1388,6 +1858,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       state: state.name,
       stepCount: state.steps.length,
     });
+    if (this.currentRunOpenSpec) {
+      this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+        stateName: state.name,
+        status: 'in-progress',
+        summary: `当前推进到状态 ${state.name}。`,
+      });
+      await this.persistState();
+    }
 
     const stepOutputs: string[] = [];
     const issues: Issue[] = [];
@@ -1405,15 +1883,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
 
       try {
-        // ========== SDK Plan → Supervisor-Lite → 普通步骤 ==========
         let output: string;
-        if (step.useSdkPlan && (await this.canUseSdkPlan())) {
-          output = await this.executeStepWithSdkPlan(step, state, config, requirements);
-        } else if (step.enablePlanLoop) {
-          output = await this.executeStepWithInfoGathering(step, state, config, requirements);
-        } else {
-          output = await this.executeStep(step, state, config, requirements);
-        }
+        output = await this.executeStep(step, state, config, requirements);
         stepOutputs.push(output);
 
         // Parse issues from output
@@ -1458,6 +1929,102 @@ export class StateMachineWorkflowManager extends EventEmitter {
       stepOutputs,
       summary: this.generateStateSummary(state, issues),
     };
+  }
+
+  private applyRunOpenSpecTaskUpdatesFromOutput(output: string, updatedBy: string): number {
+    if (!this.currentRunOpenSpec) return 0;
+    const block = extractTaggedBlock(output, 'openspec-tasks');
+    if (!block) return 0;
+
+    const normalizeStatus = (value: unknown): 'pending' | 'in-progress' | 'completed' | 'blocked' | '' => {
+      if (typeof value !== 'string') return '';
+      const normalized = value.trim().toLowerCase();
+      if (normalized === '[ ]' || normalized === 'todo' || normalized === 'pending') return 'pending';
+      if (normalized === '[-]' || normalized === '-' || normalized === 'doing' || normalized === 'in_progress' || normalized === 'in-progress') return 'in-progress';
+      if (normalized === '[x]' || normalized === 'x' || normalized === 'done' || normalized === 'completed' || normalized === 'complete') return 'completed';
+      if (normalized === '[!]' || normalized === 'blocked' || normalized === 'block') return 'blocked';
+      return '';
+    };
+    try {
+      const parsed = JSON.parse(stripJsonFence(block));
+      const rawUpdates = Array.isArray(parsed) ? parsed : parsed?.updates;
+      if (!Array.isArray(rawUpdates)) return 0;
+      const updates = rawUpdates.flatMap((item: any) => {
+        const id = typeof item?.id === 'string' ? item.id.trim() : '';
+        const status = normalizeStatus(item?.status);
+        if (!id || !status) return [];
+        return [{
+          id,
+          status,
+          validation: typeof item?.validation === 'string' ? item.validation.trim().slice(0, 300) : undefined,
+        }];
+      });
+
+      if (updates.length === 0) return 0;
+      this.currentRunOpenSpec = updateOpenSpecTaskStatuses(this.currentRunOpenSpec, {
+        updates,
+        updatedBy,
+      });
+      this.emit('log', { message: `OpenSpec tasks.md 已刷新 ${updates.length} 项` });
+      return updates.length;
+    } catch {
+      this.emit('log', { message: 'OpenSpec tasks.md 状态回传解析失败，已忽略本次状态块' });
+      return 0;
+    }
+  }
+
+  private buildRunOpenSpecStatusPayload() {
+    if (!this.currentRunOpenSpec) return {};
+    return {
+      openSpecSummary: {
+        id: this.currentRunOpenSpec.id,
+        version: this.currentRunOpenSpec.version,
+        status: this.currentRunOpenSpec.status,
+        source: 'run' as const,
+        summary: this.currentRunOpenSpec.summary,
+        phaseCount: this.currentRunOpenSpec.phases.length,
+        taskCount: this.currentRunOpenSpec.tasks.length,
+        assignmentCount: this.currentRunOpenSpec.assignments.length,
+        checkpointCount: this.currentRunOpenSpec.checkpoints.length,
+        revisionCount: this.currentRunOpenSpec.revisions.length,
+        progress: this.currentRunOpenSpec.progress,
+        latestRevision: this.currentRunOpenSpec.revisions.at(-1) || null,
+      },
+      openSpecDetails: {
+        phases: this.currentRunOpenSpec.phases,
+        tasks: this.currentRunOpenSpec.tasks,
+        assignments: this.currentRunOpenSpec.assignments,
+        checkpoints: this.currentRunOpenSpec.checkpoints,
+        revisions: this.currentRunOpenSpec.revisions,
+        artifacts: this.currentRunOpenSpec.artifacts,
+      },
+    };
+  }
+
+  private async applyLiveOpenSpecTaskUpdatesFromStream(output: string, updatedBy: string, processId: string): Promise<number> {
+    const block = extractTaggedBlock(output, 'openspec-tasks');
+    if (!block) return 0;
+
+    const previousBlock = this.liveOpenSpecTaskBlocksByProcess.get(processId);
+    if (previousBlock === block) return 0;
+    this.liveOpenSpecTaskBlocksByProcess.set(processId, block);
+
+    const updated = this.applyRunOpenSpecTaskUpdatesFromOutput(`<openspec-tasks>${block}</openspec-tasks>`, updatedBy);
+    if (updated <= 0) return 0;
+
+    await this.persistState();
+    this.emit('status', {
+      status: this.status,
+      message: `OpenSpec tasks.md 已实时刷新 ${updated} 项`,
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      currentConfigFile: this.currentConfigFile,
+      ...this.buildRunOpenSpecStatusPayload(),
+    });
+    return updated;
   }
 
   private async executeStep(
@@ -1508,9 +2075,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
         try {
           const preOutput = await this.runPreCommands(
             (step as any).preCommands as string[],
-            config
+            config,
+            {
+              stateName: state.name,
+              stepName: step.name,
+              agent: step.agent,
+            }
           );
-          this.lastPreCommandOutput = preOutput || null;
+          this.lastPreCommandOutput = preOutput.text || null;
         } catch (e) {
           // 预命令执行本身不应中断整个步骤，将错误文本注入上下文由 Agent 决策
           const msg = e instanceof Error ? e.message : String(e);
@@ -1524,7 +2096,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Execute step (reuse existing process manager logic)
       const stepResult = await this.runAgentStep(step, context, config, stepId);
       const output = stepResult.output;
-      const conclusion = stepResult.lastRoundOutput || output;
+      const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
 
       agent.status = 'completed';
       agent.completedTasks++;
@@ -1536,6 +2108,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = null;
       this.completedSteps.push(stepKey);
       this.currentProcesses = [];
+      this.applyRunOpenSpecTaskUpdatesFromOutput(output, step.agent);
 
       // Record step log for persistence
       this.stepLogs.push({
@@ -1642,6 +2215,61 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push(`\n# 需求说明\n${requirements}`);
     }
 
+    if (this.currentRunOpenSpec) {
+      const relevantPhase = this.currentRunOpenSpec.phases.find((phase) => phase.title === state.name);
+      const relevantTasks = relevantPhase
+        ? (this.currentRunOpenSpec.tasks || []).filter((task) => task.phaseId === relevantPhase.id)
+        : [];
+      const taskContext = relevantTasks.length > 0
+        ? relevantTasks
+        : (this.currentRunOpenSpec.tasks || []).filter((task) => task.status !== 'completed').slice(0, 12);
+      parts.push(`\n# 当前 Run OpenSpec`);
+      parts.push(`OpenSpec 版本: v${this.currentRunOpenSpec.version}`);
+      parts.push('说明: 当前 Run OpenSpec 是本次运行绑定的正式 OpenSpec 投影。即使工作目录内没有 proposal.md / design.md / tasks.md 文件实体，也必须以这里注入的 OpenSpec 和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
+      if (this.currentRunOpenSpec.summary) {
+        parts.push(`OpenSpec 摘要: ${this.currentRunOpenSpec.summary}`);
+      }
+      if (this.currentRunOpenSpec.progress?.summary) {
+        parts.push(`OpenSpec 进度: ${this.currentRunOpenSpec.progress.summary}`);
+      }
+      if (relevantPhase?.objective) {
+        parts.push(`当前阶段目标: ${relevantPhase.objective}`);
+      }
+      if (relevantPhase?.ownerAgents?.length) {
+        parts.push(`当前阶段责任 Agent: ${relevantPhase.ownerAgents.join(', ')}`);
+      }
+      if (taskContext.length > 0) {
+        parts.push(relevantTasks.length > 0 ? '\n## 当前阶段 tasks.md 条目' : '\n## 相关未完成 tasks.md 条目');
+        for (const task of taskContext) {
+          const marker = task.status === 'completed' ? 'x' : task.status === 'in-progress' ? '-' : ' ';
+          parts.push(`- [${marker}] ${task.id} ${task.title} <!-- status:${task.status} -->`);
+        }
+      }
+      parts.push([
+        '权限规则: 你只能更新状态类变化；不能修改目标、约束、阶段定义、分工或其他非状态内容，非状态修订由 Supervisor 负责。',
+        'tasks.md 状态标记: [ ]=未开始，[-]=进行中，[x]=已完成，blocked=阻塞。',
+        '首要任务: 在你开始读取资料、执行命令、输出分析之前，先立即输出一次 <openspec-tasks>，把你当前负责的 task 标记为 in-progress。',
+        '只有先输出这次 in-progress 状态回传，本步骤才算真正开始。',
+        '完成后再输出一次 <openspec-tasks>，把对应 task 更新为 completed 或 blocked；不要等到整步结束才第一次回传状态。',
+        '如果本步骤推进了 tasks.md，请输出 <openspec-tasks> JSON 块，系统会解析并同步到当前 run 的正式 tasks.md 投影；该状态块可以先于最终结论单独出现，便于前端实时刷新。',
+        '这不是系统自动推断，必须由你显式声明。',
+        '格式示例:',
+        '<openspec-tasks>',
+        '{"updates":[{"id":"1.1","status":"in-progress","validation":"已开始定位入口"},{"id":"1.2","status":"completed","validation":"已完成并产出证据"}]}',
+        '</openspec-tasks>',
+      ].join('\n'));
+    }
+
+    const recentQualityChecks = this.qualityChecks
+      .filter((item) => item.stateName === state.name || item.agent === step.agent)
+      .slice(-3);
+    if (recentQualityChecks.length > 0) {
+      parts.push(`\n# 最近质量门禁`);
+      for (const check of recentQualityChecks) {
+        parts.push(`- [${check.category}/${check.status}] ${check.stepName}: ${check.summary}`);
+      }
+    }
+
     // Add global context
     if (this.globalContext) {
       parts.push(`\n# 全局上下文\n${this.globalContext}`);
@@ -1658,18 +2286,36 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push(`\n# 项目路径\n${config.context.projectRoot}`);
     }
 
-    // Add document output path
-    if (this.currentRunId && config.context?.projectRoot) {
+    // Add system-managed step conclusion protocol
+    if (this.currentRunId) {
       const outputPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const safeName = `${state.name}-${step.name}`.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-      const fullPath = `${outputPath}${ts}-${safeName}.md`;
-      parts.push(`\n# 文档输出要求\n请将你产出的所有文档、报告、分析结果等写入以下目录：\n\`${outputPath}\`\n\n本步骤的文档路径: \`${fullPath}\`\n\n**重要**: 文件名必须以时间戳开头（格式 \`YYYY-MM-DDTHH-MM-SS-\`），这样便于按时间排序。如果你需要写多个文件，都放在上述目录下，每个文件名都以时间戳开头。`);
+      const summaryFileName = `${ts}-${state.name}-${step.name}.md`;
+      parts.push([
+        '\n# 文档输出要求',
+        `请将你产出的步骤成果详细总结写入以下目录：\n\`${outputPath}\``,
+        `当前步骤的步骤成果详细总结文件名必须是：\`${summaryFileName}\``,
+        '如果你还需要创建其他附加产物文件，也必须使用时间戳前缀，但后半段名称可以根据内容自行命名；只要不要与当前步骤的步骤成果详细总结重名即可。',
+        '\n# 步骤结论归档协议',
+        '步骤成果详细总结与步骤结论是两种不同输出。',
+        '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论只需要放在回复末尾的 <step-conclusion> 中。',
+        '如果你要先汇报进行中状态，可以在过程里提前单独输出一次 <openspec-tasks>；最终收尾时，如还需输出流程裁决 JSON 或 <openspec-tasks>，顺序必须是：裁决 JSON -> <openspec-tasks> -> <step-conclusion>。',
+        '请在回复末尾单独输出 <step-conclusion>，里面只写本步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
+        '建议结构:',
+        '<step-conclusion>',
+        '## 结论',
+        '- ...',
+        '## 证据',
+        '- ...',
+        '## 后续建议',
+        '- ...',
+        '</step-conclusion>',
+      ].join('\n'));
     }
 
     // Add structured JSON output requirement for attacker/judge roles
     if (step.role === 'attacker' || step.role === 'judge') {
-      parts.push(`\n# 结构化输出要求\n在你的回复最末尾，请务必输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论`);
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <openspec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论`);
     }
 
     // Add workspace skills (index summary + absolute path for AI to read details)
@@ -1737,6 +2383,21 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push(`\n# 预执行命令结果（系统自动执行，必须据此做出裁决）\n${display}`);
     }
 
+    if (this.currentConfigFile) {
+      const experiences = await findRelevantWorkflowExperiences({
+        configFile: this.currentConfigFile,
+        workflowName: config.workflow?.name,
+        requirements: config.context?.requirements,
+        projectRoot: this.getWorkingDirectory() || config.context?.projectRoot,
+        limit: 3,
+        excludeRunId: this.currentRunId || undefined,
+      }).catch(() => []);
+      const block = buildWorkflowExperiencePromptBlock(experiences, '历史经验记忆');
+      if (block) {
+        parts.push(`\n${block}`);
+      }
+    }
+
     // Add previous steps' conclusions from the last 2 completed states
     if (this.currentRunId && this.stateHistory.length > 0) {
       try {
@@ -1780,19 +2441,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
 
-    // ========== Supervisor-Lite: 注入信息请求协议 ==========
-    if (step.enablePlanLoop) {
-      parts.push(`\n# 信息请求协议`);
-      parts.push(`在执行任务前，请先评估你是否有足够的信息。`);
-      parts.push(`如果信息不足，先进行信息收集而不直接执行任务，请使用以下格式声明你需要的信息：`);
-      parts.push(`- 需要技术/专业信息补充信息时：[NEED_INFO] 问题描述`);
-      parts.push(`- 需要用户/人工补充信息时：[NEED_INFO:human] 问题描述`);
-      parts.push(`- 如果有多个问题需要确认，也只需要列出一个[NEED_INFO]/[NEED_INFO:human]，并在问题描述中列出所有需要确认的问题`);
-      parts.push(`- 如果有问题需要确认，则不执行任务，直接将问题以上述格式进行输出，结束本轮执行，不需要等待回复，supervisor会给你路由到对应的专家，信息收集可能存在多轮`);
-      parts.push(`- 如果信息已充分可以执行：输出[PLAN_DONE]，并执行具体任务`);
-      parts.push(`\n注意：你不需要指定由谁来回答技术问题，系统会自动路由到合适的专家。`);
-    }
-
     // ========== Supervisor-Lite: 注入额外上下文（信息收集循环） ==========
     if (extraContext) {
       parts.push(`\n# 补充信息\n${extraContext}`);
@@ -1812,14 +2460,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
    */
   private async runPreCommands(
     commands: string[],
-    config: StateMachineWorkflowConfig
-  ): Promise<string> {
+    config: StateMachineWorkflowConfig,
+    meta?: { stateName: string; stepName: string; agent: string }
+  ): Promise<{ text: string; qualityCheck?: PersistedQualityCheck }> {
     const { exec } = await import('child_process');
     const cwd = config.context?.projectRoot
       ? this.resolveProjectRootPath(config.context.projectRoot)
       : this.resolveProjectRootPath();
 
     const results: string[] = [];
+    const commandResults: PersistedQualityCommandResult[] = [];
 
     for (let i = 0; i < commands.length; i++) {
       const cmd = commands[i];
@@ -1866,9 +2516,68 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (stderr) {
         results.push(`--- stderr ---\n${truncate(stderr, 4000)}\n`);
       }
+
+      const category = this.classifyQualityCommand(cmd);
+      const status = exitCode === 0 ? 'passed' : exitCode === null ? 'warning' : 'failed';
+      commandResults.push({
+        command: cmd,
+        exitCode,
+        status,
+        stdout: truncate(stdout, 800),
+        stderr: truncate(stderr, 800),
+        errorText,
+      });
     }
 
-    return results.join('\n');
+    let qualityCheck: PersistedQualityCheck | undefined;
+    if (meta) {
+      const failed = commandResults.filter((item) => item.status === 'failed').length;
+      const warned = commandResults.filter((item) => item.status === 'warning').length;
+      const categories = [...new Set(commandResults.map((item) => this.classifyQualityCommand(item.command)))];
+      const category = categories.includes('lint')
+        ? 'lint'
+        : categories.includes('compile')
+          ? 'compile'
+          : categories.includes('test')
+            ? 'test'
+            : 'custom';
+      const status = failed > 0 ? 'failed' : warned > 0 ? 'warning' : 'passed';
+      qualityCheck = {
+        id: `${meta.stateName}-${meta.stepName}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
+        stateName: meta.stateName,
+        stepName: meta.stepName,
+        agent: meta.agent,
+        category,
+        status,
+        summary: failed > 0
+          ? `${commands.length} 条预命令中有 ${failed} 条失败`
+          : warned > 0
+            ? `${commands.length} 条预命令执行完成，但有 ${warned} 条警告`
+            : `${commands.length} 条预命令全部通过`,
+        createdAt: new Date().toISOString(),
+        commands: commandResults,
+      };
+      this.recordQualityCheck(qualityCheck);
+    }
+
+    return { text: results.join('\n'), qualityCheck };
+  }
+
+  private classifyQualityCommand(command: string): 'lint' | 'compile' | 'test' | 'custom' {
+    const normalized = command.toLowerCase();
+    if (/eslint|lint|cjlint/.test(normalized)) return 'lint';
+    if (/tsc|build|compile|cjc|cjpm build|make/.test(normalized)) return 'compile';
+    if (/test|pytest|jest|vitest|cjpm test/.test(normalized)) return 'test';
+    return 'custom';
+  }
+
+  private recordQualityCheck(check: PersistedQualityCheck): void {
+    const idx = this.qualityChecks.findIndex((item) => item.id === check.id);
+    if (idx >= 0) {
+      this.qualityChecks[idx] = check;
+    } else {
+      this.qualityChecks.push(check);
+    }
   }
 
   private async runAgentStep(
@@ -2320,11 +3029,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentConfigFile = runState.configFile;
     this.currentRequirements = runState.requirements || '';
     this.currentState = runState.currentState || null;
+    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    this.latestSupervisorReview = runState.latestSupervisorReview || null;
     this.stateHistory = runState.stateHistory || [];
     this.issueTracker = (runState.issueTracker || []) as Issue[];
     this.transitionCount = runState.transitionCount || 0;
     this.completedSteps = runState.completedSteps || [];
     this.stepLogs = runState.stepLogs || [];
+    this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
@@ -2364,11 +3076,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
-    this.lightweightRouterModel = workflowConfig.context?.routerModel?.trim() || 'claude-sonnet-4-6';
+    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
     await this.loadAgentConfigs();
+    this.ensureSupervisorAgentExists(workflowConfig);
     this.initializeAgents(workflowConfig);
+    for (const persistedAgent of runState.agents || []) {
+      const agent = this.agents.find((item) => item.name === persistedAgent.name);
+      if (agent && persistedAgent.sessionId) {
+        agent.sessionId = persistedAgent.sessionId;
+      }
+    }
 
     // Initialize engine
     await this.initializeEngine(workflowConfig.context?.engine);
@@ -2647,11 +3366,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentConfigFile = runState.configFile;
     this.currentRequirements = runState.requirements || '';
     this.currentState = stateName;
+    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    this.latestSupervisorReview = runState.latestSupervisorReview || null;
     this.stateHistory = runState.stateHistory?.slice(0, stateIndex + 1) || [];
     this.issueTracker = (runState.issueTracker || []) as Issue[];
     this.transitionCount = stateIndex + 1;
     this.completedSteps = runState.completedSteps || [];
     this.stepLogs = runState.stepLogs || [];
+    this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
@@ -2681,11 +3403,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
-    this.lightweightRouterModel = workflowConfig.context?.routerModel?.trim() || 'claude-sonnet-4-6';
+    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
     await this.loadAgentConfigs();
+    this.ensureSupervisorAgentExists(workflowConfig);
     this.initializeAgents(workflowConfig);
+    for (const persistedAgent of runState.agents || []) {
+      const agent = this.agents.find((item) => item.name === persistedAgent.name);
+      if (agent && persistedAgent.sessionId) {
+        agent.sessionId = persistedAgent.sessionId;
+      }
+    }
 
     // Continue execution from this state
     try {
@@ -2719,181 +3448,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
-  // ========== Supervisor-Lite Plan 循环实现 ==========
-
-  private async executeStepWithInfoGathering(
-    step: WorkflowStep,
-    state: StateMachineState,
-    config: StateMachineWorkflowConfig,
-    requirements?: string
-  ): Promise<string> {
-    const maxRounds = step.maxPlanRounds || 3;
-    let round = 0;
-    let extraContext = '';
-
-    while (round < maxRounds) {
-      const output = await this.executeStep(step, state, config, requirements, extraContext);
-      const infoRequests = parseNeedInfo(step,output);
-      
-      if (infoRequests.length === 0) {
-        return output;
-      }
-
-      if (isPlanDone(output)) {
-        return output;
-      }
-
-      for (const req of infoRequests) {
-        if (req.isHuman) {
-          this.emit('plan-question', { question: req.question, fromAgent: step.agent, round });
-          this.supervisorFlow.push({
-            type: 'question',
-            from: step.agent,
-            to: 'user',
-            question: req.question,
-            round,
-            timestamp: new Date().toISOString(),
-            stateName: state.name,
-          });
-          // 添加两条线：请求线（蓝色）+ 路由线（橙色）
-          // Agent -> Supervisor（请求）
-          this.agentFlow.push({
-            id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'request',
-            fromAgent: step.agent,
-            toAgent: 'supervisor',
-            message: req.question,
-            stateName: state.name,
-            stepName: step.name,
-            round,
-            timestamp: new Date().toISOString(),
-          });
-          // Supervisor -> 用户（路由）
-          this.agentFlow.push({
-            id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'supervisor',
-            fromAgent: 'supervisor',
-            toAgent: 'user',
-            message: req.question,
-            stateName: state.name,
-            stepName: step.name,
-            round,
-            timestamp: new Date().toISOString(),
-          });
-          this.emit('agent-flow', { agentFlow: this.agentFlow });
-          const answer = await this.waitForUserAnswer(req.question, step.agent, round);
-          extraContext += `\n\n[用户回答] ${req.question}\n${answer}`;
-        } else {
-          const agentSummaries = this.buildAgentSummaries();
-          const decision = await routeInfoRequest(
-            req,
-            agentSummaries,
-            step.name,
-            this.callLightweightLLM.bind(this)
-          );
-
-          if (!decision) {
-            this.emit('plan-question', { question: req.question, fromAgent: step.agent, round });
-            this.supervisorFlow.push({
-              type: 'question',
-              from: step.agent,
-              to: 'user',
-              question: req.question,
-              round,
-              timestamp: new Date().toISOString(),
-              stateName: state.name,
-            });
-            // 添加两条线：请求线（蓝色）+ 路由线（橙色）
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'request',
-              fromAgent: step.agent,
-              toAgent: 'supervisor',
-              message: req.question,
-              stateName: state.name,
-              stepName: step.name,
-              round,
-              timestamp: new Date().toISOString(),
-            });
-            // Supervisor -> 用户（路由）
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'supervisor',
-              fromAgent: 'supervisor',
-              toAgent: 'user',
-              message: req.question,
-              stateName: state.name,
-              stepName: step.name,
-              round,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-            const answer = await this.waitForUserAnswer(req.question, step.agent, round);
-            extraContext += `\n\n[用户回答] ${req.question}\n${answer}`;
-          } else {
-            this.emit('route-decision', { ...decision, round, fromAgent: step.agent });
-            this.supervisorFlow.push({
-              type: 'decision',
-              from: step.agent,
-              to: decision.route_to,
-              question: decision.question,
-              method: decision.method,
-              round,
-              timestamp: new Date().toISOString(),
-              stateName: state.name,
-            });
-            
-            // 添加两条线：请求线（蓝色）+ 路由线（橙色）
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'request',
-              fromAgent: step.agent,
-              toAgent: 'supervisor',
-              message: `Supervisor路由: ${decision.question}`,
-              stateName: state.name,
-              stepName: step.name,
-              round,
-              timestamp: new Date().toISOString(),
-            });
-            this.agentFlow.push({
-              id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              type: 'supervisor',
-              fromAgent: 'supervisor',
-              toAgent: decision.route_to,
-              message: `Supervisor路由: ${decision.question}`,
-              stateName: state.name,
-              stepName: step.name,
-              round,
-              timestamp: new Date().toISOString(),
-            });
-            this.emit('agent-flow', { agentFlow: this.agentFlow });
-            
-            const answer = await this.queryAgent(decision.route_to, decision.question, config);
-            extraContext += `\n\n[${decision.route_to} 回答] ${decision.question}\n${answer}`;
-            
-            this.addAgentResponseFlow(decision.route_to, step.agent, answer, state.name, step.name, round);
-          }
-        }
-      }
-
-      this.emit('plan-round', { step: step.name, round: round + 1, maxRounds, infoRequests });
-      round++;
-    }
-
-    extraContext += '\n\n[系统] 信息收集完成，请基于现有信息执行任务。';
-    return this.executeStep(step, state, config, requirements, extraContext);
-  }
-
-  private buildAgentSummaries(): AgentSummary[] {
-    return this.agentConfigs
-      .filter(c => c.name)
-      .map(c => ({
-        name: c.name,
-        description: c.description || '',
-        keywords: c.keywords || [],
-      }));
-  }
-
   private async queryAgent(
     agentName: string,
     question: string,
@@ -2906,9 +3460,29 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return `[错误] 找不到 Agent 配置: ${agentName}`;
     }
 
-    const prompt = `# 问题\n${question}\n\n请直接回答这个问题，不需要执行其他任务。`;
+    const openSpecBlock = this.currentRunOpenSpec
+      ? [
+        '# 当前 Run OpenSpec',
+        `- 版本: v${this.currentRunOpenSpec.version}`,
+        this.currentRunOpenSpec.summary ? `- 摘要: ${this.currentRunOpenSpec.summary}` : '',
+        this.currentRunOpenSpec.progress?.summary ? `- 进度: ${this.currentRunOpenSpec.progress.summary}` : '',
+        this.currentRunOpenSpec.tasks?.length
+          ? `- tasks.md: ${this.currentRunOpenSpec.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunOpenSpec.tasks.length} 已完成`
+          : '',
+        this.currentState ? `- 当前状态: ${this.currentState}` : '',
+        '- 规则: 你可以基于该 OpenSpec 回答问题；普通 Agent 只能推进状态，系统会同步到正式 tasks.md；任务标记使用 [ ]=未开始、[-]=进行中、[x]=已完成；结构性修订由 Supervisor 负责。',
+      ].filter(Boolean).join('\n')
+      : '';
+    const prompt = [
+      openSpecBlock,
+      '# 问题',
+      question,
+      '',
+      '请直接回答这个问题，不需要执行其他任务。',
+    ].filter(Boolean).join('\n\n');
     const model = resolveAgentModel(roleConfig, config.context);
     const systemPrompt = roleConfig.systemPrompt || `你是一个 AI 助手。`;
+    const agentState = this.agents.find((item) => item.name === agentName);
 
     const processId = `query-${agentName}-${Date.now()}`;
 
@@ -2925,9 +3499,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
             ? this.resolveProjectRootPath(config.context.projectRoot)
             : this.resolveProjectRootPath(),
           timeoutMs: 60000,
+          resumeSessionId: agentState?.sessionId || undefined,
         }
       );
       const answer = result.result || '[无输出]';
+      if (result.session_id && agentState) {
+        agentState.sessionId = result.session_id;
+      }
       
       this.agentFlow.push({
         id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -2948,486 +3526,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
-  private addAgentResponseFlow(fromAgent: string, toAgent: string, message: string, stateName: string, stepName: string, round: number): void {
-    // 记录响应
-    this.agentFlow.push({
-      id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: 'response',
-      fromAgent,
-      toAgent,
-      message,
-      stateName,
-      stepName,
-      round,
-      timestamp: new Date().toISOString(),
-    });
-
-    this.emit('agent-flow', { agentFlow: this.agentFlow });
-  }
-
-  private async callLightweightLLM(prompt: string): Promise<string> {
-    const processId = `router-llm-${Date.now()}`;
-
-    try {
-      const result = await this.executeWithEngine(
-        processId,
-        'router',
-        'route',
-        prompt,
-        '你是一个路由器，根据问题选择最合适的 Agent。',
-        this.lightweightRouterModel,
-        {
-          workingDirectory: this.resolveProjectRootPath(),
-          timeoutMs: 120000, // 增加超时时间到 2 分钟
-        }
-      );
-      return result.result || '';
-    } catch (error) {
-      console.error('[SupervisorRouter] LLM 调用失败:', error);
-      return '';
-    }
-  }
-
-  private async canUseSdkPlan(): Promise<boolean> {
-    if (this._sdkPlanAvailable !== null) return this._sdkPlanAvailable;
-    try {
-      const { ClaudeCodeEngineWrapper } = await import('./engines/claude-code-wrapper');
-      const engine = new ClaudeCodeEngineWrapper();
-      this._sdkPlanAvailable = await engine.isAvailable();
-    } catch {
-      this._sdkPlanAvailable = false;
-    }
-    if (!this._sdkPlanAvailable) {
-    }
-    return this._sdkPlanAvailable;
-  }
-
-  /**
-   * 使用 Claude Agent SDK 的 plan 模式执行步骤（AskUserQuestion → 前端弹窗 → 捕获 .claude/plans）。
-   * 失败时降级：enablePlanLoop → executeStepWithInfoGathering，否则 executeStep。
-   */
-  private async executeStepWithSdkPlan(
-    step: WorkflowStep,
-    state: StateMachineState,
-    config: StateMachineWorkflowConfig,
-    requirements?: string
-  ): Promise<string> {
-    const { ClaudeCodeEngineWrapper } = await import('./engines/claude-code-wrapper');
-    const planEngine = new ClaudeCodeEngineWrapper();
-    this.activeSdkPlanEngine = planEngine;
-
-    const agent = this.agents.find(a => a.name === step.agent);
-    if (!agent) {
-      this.activeSdkPlanEngine = null;
-      throw new Error(`找不到 agent: ${step.agent}`);
-    }
-
-    const stepId = randomUUID();
-    const stepKey = `${state.name}-${step.name}`;
-    const streamStepName = this.currentState ? `${this.currentState}-${step.name}` : step.name;
-    const startedAt = Date.now();
-
-    agent.status = 'running';
-    agent.currentTask = step.name;
-    this.currentStep = stepKey;
-    this.emit('agents', { agents: this.agents });
-
-    this.agentFlow.push({
-      id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: 'stream',
-      fromAgent: step.agent,
-      toAgent: step.agent,
-      message: `SDK Plan 模式执行步骤: ${step.name}`,
-      stateName: state.name,
-      stepName: step.name,
-      round: 0,
-      timestamp: new Date().toISOString(),
-    });
-    this.emit('agent-flow', { agentFlow: this.agentFlow });
-    await this.persistState();
-
-    this.emit('step-start', {
-      id: stepId,
-      state: state.name,
-      step: step.name,
-      agent: step.agent,
-    });
-
-    let accumulatedStream = '';
-
-    const onAsk = (data: { questions?: unknown[] }) => {
-      this.pendingSdkPlanQuestionPayload = {
-        questions: data.questions ?? [],
-        fromAgent: step.agent,
-        stateName: state.name,
-        stepName: step.name,
-      };
-      this.emit('sdk-plan-question', {
-        ...this.pendingSdkPlanQuestionPayload,
-        configFile: this.currentConfigFile,
-      });
-      void this.persistState();
-    };
-    const onCaptured = (data: { path?: string; length?: number; via?: string }) => {
-      this.emit('sdk-plan-captured', { ...data, configFile: this.currentConfigFile });
-    };
-    const onStream = (ev: EngineStreamEvent) => {
-      const chunk = ev.content || '';
-      if (!chunk) return;
-      accumulatedStream += chunk;
-      if (this.currentRunId) {
-        void saveStreamContent(this.currentRunId, streamStepName, accumulatedStream);
-      }
-    };
-
-    const onSubtask = (data: SdkPlanSubtaskTelemetry) => {
-      this.pendingSdkPlanSubtaskPayload = data;
-      this.emit('sdk-plan-subtask', {
-        ...data,
-        configFile: this.currentConfigFile,
-      });
-    };
-
-    const planEv = planEngine as EventEmitter;
-    planEv.on('ask-user-question', onAsk);
-    planEv.on('plan-file-captured', onCaptured);
-    planEv.on('stream', onStream);
-    planEv.on('sdk-plan-subtask', onSubtask);
-
-    try {
-      this.lastPreCommandOutput = null;
-      if (Array.isArray((step as any).preCommands) && (step as any).preCommands.length > 0) {
-        try {
-          const preOutput = await this.runPreCommands((step as any).preCommands as string[], config);
-          this.lastPreCommandOutput = preOutput || null;
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          this.lastPreCommandOutput = `预执行命令执行异常（不会中断步骤，请你据此判断是否 fail）：\n${msg}`;
-        }
-      }
-
-      const context = await this.buildStepContext(step, state, config, requirements);
-      const roleConfig =
-        this.agentConfigs.find(r => r.name === step.agent) ||
-        config.roles?.find(r => r.name === step.agent);
-      const model = resolveAgentModel(roleConfig, config.context);
-      const systemPrompt =
-        roleConfig?.systemPrompt || `你是一个 ${step.role || 'assistant'} 角色的 AI 助手。`;
-      const workingDirectory = config.context?.projectRoot
-        ? this.resolveProjectRootPath(config.context.projectRoot)
-        : this.resolveProjectRootPath();
-
-      const result = await planEngine.execute({
-        agent: step.agent,
-        step: step.name,
-        prompt: context,
-        systemPrompt,
-        model,
-        workingDirectory,
-        mode: 'plan',
-        timeoutMs: (config.context?.timeoutMinutes || 60) * 60 * 1000,
-      });
-
-      if (!result.success) {
-        throw new Error(result.error || 'SDK plan 执行失败');
-      }
-
-      const planContent = planEngine.capturedDeliverable;
-      const via = planEngine.capturedVia;
-      const output = planContent
-        ? `[SDK-Plan 交付物] (${via || 'result'})\n${planContent}\n\n---\n\n[模型输出]\n${result.output}`
-        : result.output;
-
-      // Persist plan file to runs/{runId}/plans/
-      if (this.currentRunId) {
-        const planText = planContent || result.output;
-        if (planText?.trim()) {
-          try {
-            const planDir = resolve(getWorkspaceRunsDir(), this.currentRunId, 'plans');
-            await mkdir(planDir, { recursive: true });
-            await writeFile(resolve(planDir, `${stepKey}.md`), planText, 'utf-8');
-          } catch { /* best-effort */ }
-        }
-      }
-
-      // ========== Plan 审批 ==========
-      let finalOutput = output;
-      const planForReview = planContent || result.output;
-      if (planForReview?.trim()) {
-        const reviewResult = await this.waitForPlanApproval(
-          stepKey, step, state, config, planForReview, planEngine, requirements
-        );
-        if (reviewResult.action === 'edit' && reviewResult.content?.trim()) {
-          finalOutput = reviewResult.content;
-          // Overwrite persisted plan with edited version
-          if (this.currentRunId) {
-            try {
-              const planDir = resolve(getWorkspaceRunsDir(), this.currentRunId, 'plans');
-              await writeFile(resolve(planDir, `${stepKey}.md`), reviewResult.content, 'utf-8');
-            } catch { /* best-effort */ }
-          }
-        }
-        // 'approve' → keep finalOutput as-is; 'reject' loop is handled inside waitForPlanApproval
-      }
-
-      agent.status = 'completed';
-      agent.completedTasks++;
-      agent.lastOutput = finalOutput;
-      if (result.sessionId) {
-        agent.sessionId = result.sessionId;
-      }
-      this.currentStep = null;
-      this.completedSteps.push(stepKey);
-      this.pendingSdkPlanQuestionPayload = null;
-      this.pendingPlanReviewPayload = null;
-      this.currentProcesses = [];
-
-      const durationMs = Date.now() - startedAt;
-      this.stepLogs.push({
-        id: stepId,
-        stepName: stepKey,
-        agent: step.agent,
-        status: 'completed',
-        output: finalOutput,
-        error: '',
-        costUsd: 0,
-        durationMs,
-        timestamp: new Date().toISOString(),
-      });
-
-      this.emit('agents', { agents: this.agents });
-      await this.persistState();
-
-      this.emit('step-complete', {
-        id: stepId,
-        state: state.name,
-        step: step.name,
-        agent: step.agent,
-        output: finalOutput,
-        costUsd: 0,
-        durationMs,
-      });
-
-      const currentStepIndex = state.steps.findIndex(s => s.name === step.name);
-      if (currentStepIndex >= 0 && currentStepIndex < state.steps.length - 1) {
-        const nextStep = state.steps[currentStepIndex + 1];
-        if (nextStep && nextStep.agent !== step.agent) {
-          this.agentFlow.push({
-            id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            type: 'stream',
-            fromAgent: step.agent,
-            toAgent: nextStep.agent,
-            message: `步骤流转: ${step.name} -> ${nextStep.name}`,
-            stateName: state.name,
-            stepName: step.name,
-            round: 0,
-            timestamp: new Date().toISOString(),
-          });
-          this.emit('agent-flow', { agentFlow: this.agentFlow });
-        }
-      }
-
-      if (this.currentRunId) {
-        await saveProcessOutput(this.currentRunId, stepKey, finalOutput).catch(() => {});
-      }
-
-      return finalOutput;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.pendingSdkPlanQuestionPayload = null;
-      this.currentStep = stepKey;
-      if (step.enablePlanLoop) {
-        return await this.executeStepWithInfoGathering(step, state, config, requirements);
-      }
-      return await this.executeStep(step, state, config, requirements);
-    } finally {
-      planEv.off('ask-user-question', onAsk);
-      planEv.off('plan-file-captured', onCaptured);
-      planEv.off('stream', onStream);
-      planEv.off('sdk-plan-subtask', onSubtask);
-      this.pendingSdkPlanSubtaskPayload = null;
-      this.activeSdkPlanEngine = null;
-    }
-  }
-
-  // ========== Plan Review（审批）==========
-
-  /**
-   * Pause execution and wait for user to approve / edit / reject the plan.
-   * On reject, re-runs the SDK Plan engine with user feedback injected, then asks again.
-   */
-  private async waitForPlanApproval(
-    stepKey: string,
-    step: WorkflowStep,
-    state: StateMachineState,
-    config: StateMachineWorkflowConfig,
-    planContent: string,
-    planEngine: import('./engines/claude-code-wrapper').ClaudeCodeEngineWrapper,
-    requirements?: string,
-  ): Promise<{ action: 'approve' | 'edit' | 'reject'; content?: string; feedback?: string }> {
-    const MAX_REJECT_ROUNDS = 5;
-    let currentPlan = planContent;
-
-    for (let round = 0; round < MAX_REJECT_ROUNDS; round++) {
-      this.pendingPlanReviewPayload = {
-        planContent: currentPlan,
-        stepKey,
-        agent: step.agent,
-        stateName: state.name,
-        stepName: step.name,
-      };
-
-      this.emit('sdk-plan-review', {
-        planContent: currentPlan,
-        stepKey,
-        agent: step.agent,
-        stateName: state.name,
-        stepName: step.name,
-      });
-      await this.persistState();
-
-      // Wait for user response (10 min timeout)
-      const result = await new Promise<{
-        action: 'approve' | 'edit' | 'reject';
-        content?: string;
-        feedback?: string;
-      }>((resolve) => {
-        this.pendingPlanReviewResolver = resolve;
-        setTimeout(() => {
-          if (this.pendingPlanReviewResolver) {
-            this.pendingPlanReviewResolver({ action: 'approve' });
-            this.pendingPlanReviewResolver = null;
-            this.pendingPlanReviewPayload = null;
-          }
-        }, 600_000);
-      });
-
-      this.pendingPlanReviewPayload = null;
-      this.pendingPlanReviewResolver = null;
-
-      if (result.action === 'approve' || result.action === 'edit') {
-        return result;
-      }
-
-      // reject → re-run SDK Plan with feedback
-      const feedback = result.feedback || '用户驳回，请修改 plan';
-      this.emit('stream', {
-        type: 'text',
-        content: `\n🔄 用户驳回 plan（第 ${round + 1} 轮），反馈: ${feedback}\n重新生成中…\n`,
-      });
-
-      const context = await this.buildStepContext(step, state, config, requirements);
-      const roleConfig =
-        this.agentConfigs.find(r => r.name === step.agent) ||
-        config.roles?.find(r => r.name === step.agent);
-      const model = resolveAgentModel(roleConfig, config.context);
-      const systemPrompt =
-        roleConfig?.systemPrompt || `你是一个 ${step.role || 'assistant'} 角色的 AI 助手。`;
-      const workingDirectory = config.context?.projectRoot
-        ? this.resolveProjectRootPath(config.context.projectRoot)
-        : this.resolveProjectRootPath();
-
-      const retryPrompt = `${context}\n\n---\n\n# 用户对上一版 Plan 的修改意见\n\n${feedback}\n\n# 上一版 Plan（需修改）\n\n${currentPlan}\n\n请根据用户意见修改 plan 并重新输出。`;
-
-      const retryResult = await planEngine.execute({
-        agent: step.agent,
-        step: step.name,
-        prompt: retryPrompt,
-        systemPrompt,
-        model,
-        workingDirectory,
-        mode: 'plan',
-        timeoutMs: (config.context?.timeoutMinutes || 60) * 60 * 1000,
-      });
-
-      if (retryResult.success) {
-        currentPlan = planEngine.capturedDeliverable || retryResult.output;
-        // Persist updated plan
-        if (this.currentRunId && currentPlan?.trim()) {
-          try {
-            const planDir = resolve(getWorkspaceRunsDir(), this.currentRunId, 'plans');
-            await mkdir(planDir, { recursive: true });
-            await writeFile(resolve(planDir, `${stepKey}.md`), currentPlan, 'utf-8');
-          } catch { /* best-effort */ }
-        }
-      } else {
-        // Engine failed on retry, auto-approve previous plan
-        return { action: 'approve' };
-      }
-    }
-
-    // Exhausted reject rounds, auto-approve
-    return { action: 'approve' };
-  }
-
-  submitPlanReview(result: { action: 'approve' | 'edit' | 'reject'; content?: string; feedback?: string }): void {
-    if (this.pendingPlanReviewResolver) {
-      this.pendingPlanReviewResolver(result);
-      this.pendingPlanReviewResolver = null;
-      this.pendingPlanReviewPayload = null;
-      void this.persistState();
-    }
-  }
-
-  getPendingPlanReview(): {
-    planContent: string;
-    stepKey: string;
-    agent: string;
-    stateName: string;
-    stepName: string;
-  } | null {
-    return this.pendingPlanReviewPayload;
-  }
-
-  submitSdkPlanAnswers(answers: Record<string, string>): void {
-    this.activeSdkPlanEngine?.submitAnswers(answers);
-    this.pendingSdkPlanQuestionPayload = null;
-    void this.persistState();
-  }
-
-  getPendingSdkPlanQuestion(): {
-    questions: unknown[];
-    fromAgent: string;
-    stateName: string;
-    stepName: string;
-  } | null {
-    return this.pendingSdkPlanQuestionPayload;
-  }
-
-  private async waitForUserAnswer(question: string, fromAgent: string, round: number): Promise<string> {
-    this.pendingUserQuestion = { question, fromAgent, round };
-
-    return new Promise((resolve) => {
-      this.pendingUserQuestionResolver = resolve;
-
-      const checkInterval = setInterval(() => {
-        if (!this.pendingUserQuestionResolver) {
-          clearInterval(checkInterval);
-        }
-      }, 500);
-
-      setTimeout(() => {
-        if (this.pendingUserQuestionResolver) {
-          this.pendingUserQuestionResolver('[超时] 用户未回答');
-          this.pendingUserQuestionResolver = null;
-          this.pendingUserQuestion = null;
-          clearInterval(checkInterval);
-        }
-      }, 300000);
-    });
-  }
-
-  submitUserAnswer(answer: string): void {
-    if (this.pendingUserQuestionResolver) {
-      this.pendingUserQuestionResolver(answer);
-      this.pendingUserQuestionResolver = null;
-      this.pendingUserQuestion = null;
-    }
-  }
-
-  getPendingUserQuestion(): { question: string; fromAgent: string; round: number } | null {
-    return this.pendingUserQuestion;
-  }
 }
 
 export const stateMachineWorkflowManager = new StateMachineWorkflowManager();

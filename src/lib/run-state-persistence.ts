@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
+import type { OpenSpecDocument } from '@/lib/schemas';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -52,6 +53,28 @@ export interface PersistedStepLog {
   timestamp: string;
 }
 
+export interface PersistedQualityCommandResult {
+  command: string;
+  exitCode: number | null;
+  status: 'passed' | 'failed' | 'warning';
+  stdout?: string;
+  stderr?: string;
+  errorText?: string | null;
+}
+
+export interface PersistedQualityCheck {
+  id: string;
+  stateName: string;
+  stepName: string;
+  agent: string;
+  category: 'lint' | 'compile' | 'test' | 'custom';
+  status: 'passed' | 'failed' | 'warning';
+  origin?: 'workflow' | 'inferred';
+  summary: string;
+  createdAt: string;
+  commands: PersistedQualityCommandResult[];
+}
+
 export interface PersistedRunState {
   runId: string;
   configFile: string;
@@ -77,6 +100,8 @@ export interface PersistedRunState {
     suggestedNextState?: string;
     /** State machine: available states to choose from */
     availableStates?: string[];
+    /** State machine: supervisor advice for human checkpoint */
+    supervisorAdvice?: string;
   };
   globalContext?: string;
   phaseContexts?: Record<string, string>;
@@ -122,16 +147,33 @@ export interface PersistedRunState {
     round: number;
     timestamp: string;
   }>;
-  /** 若 SDK Plan 步骤正在等待审批，保存待审批内容以便页面刷新后恢复弹窗 */
-  pendingPlanReview?: {
-    planContent: string;
-    stepKey: string;
-    agent: string;
-    stateName: string;
-    stepName: string;
-  } | null;
   /** 实际工作目录（隔离的 run-xxx 目录或原始 projectRoot） */
   workingDirectory?: string;
+  /** 运行绑定的 supervisor agent 名称 */
+  supervisorAgent?: string;
+  /** 运行绑定的 supervisor sessionId */
+  supervisorSessionId?: string | null;
+  /** 当前运行中各 agent 的会话绑定 */
+  attachedAgentSessions?: Record<string, string>;
+  /** 最近一次 supervisor 审阅/建议 */
+  latestSupervisorReview?: {
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null;
+  /** preCommands 收集到的结构化质量门禁结果 */
+  qualityChecks?: PersistedQualityCheck[];
+  /** 当前 run 绑定的独立 OpenSpec 快照 */
+  runOpenSpec?: OpenSpecDocument | null;
+  /** 演练模式元数据 */
+  rehearsal?: {
+    enabled: boolean;
+    summary: string;
+    recommendedNextSteps: string[];
+  } | null;
 }
 
 function runDir(runId: string): string {
@@ -170,26 +212,6 @@ export async function saveProcessOutput(
   output: string
 ): Promise<string> {
   const dir = outputsDir(runId);
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-  const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-  const filepath = resolve(dir, `${safeName}.md`);
-  await writeFile(filepath, output, 'utf-8');
-  return filepath;
-}
-
-/**
- * Save step output to the workspace directory so AI agents can read it.
- * Saves to {projectRoot}/.ace-outputs/{runId}/{stepName}.md
- */
-export async function saveOutputToWorkspace(
-  projectRoot: string,
-  runId: string,
-  stepName: string,
-  output: string
-): Promise<string> {
-  const dir = resolve(projectRoot, '.ace-outputs', runId);
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }

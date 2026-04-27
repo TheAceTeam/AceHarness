@@ -9,6 +9,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
+import { commandExists } from '../command-exists';
 
 export class KiroCliEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -105,23 +106,10 @@ export class KiroCliEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    try {
-      const { execSync } = require('child_process');
-      execSync('command -v kiro-cli', { stdio: 'ignore', shell: '/bin/bash' });
-      return true;
-    } catch (e) {
-      const commonPaths = [
-        process.env.HOME + '/.local/bin/kiro-cli',
-        '/usr/local/bin/kiro-cli',
-        '/usr/bin/kiro-cli',
-      ];
-      for (const p of commonPaths) {
-        try {
-          require('fs').accessSync(p, require('fs').constants.X_OK);
-          return true;
-        } catch (e) { /* continue */ }
-      }
-      return false;
-    }
+    return commandExists('kiro-cli', [
+      process.env.HOME ? `${process.env.HOME}/.local/bin` : '',
+      '/usr/local/bin',
+      '/usr/bin',
+    ].filter(Boolean));
   }
 }

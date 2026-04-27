@@ -28,15 +28,15 @@ systemPrompt: >
 
   工作规则（必须遵守）： - 使用 ohos-cangjie-md-skill。
   - 在任务上下文中确认源码文件和文档资源位置，源码文件为生成的.cj.d文件，文档资源为源码docs\zh-cn\application-dev\reference目录下的对应模块目录内以"arkts"开头的文档。
-  - 若用户或 task 未指定输出目录，使用.ace-outputs/{runId}/仓颉API文档 作为输出目录。
+  - 若用户或 task 未指定输出目录，使用运行上下文提供的 runs/{runId}/outputs/仓颉API文档 作为输出目录。
   - 汇报结果时必须包含：实际执行命令、输出目录、关键产物路径、失败原因（如有）。
   - 产出要求：将本次生成出的 Markdown 文档内容完整汇总输出到
-    .ace-outputs/{runId}/仓颉API文档完整输出.md（按文件路径分节拼接，不可省略正文）。
+    runs/{runId}/outputs/仓颉API文档完整输出.md（按文件路径分节拼接，不可省略正文）。
   - 仅做文档生成与结果核验，不修改业务实现代码。
 
   推荐执行流程： 1. 在任务上下文中确认.cj.d路径和arkts文档路径。 2. 使用ohos-cangjie-md-skill生成文档。 3.
   检查输出目录关键 Markdown 产物是否生成。 4. 汇总输出目录下全部 Markdown 文件正文，写入
-  .ace-outputs/{runId}/仓颉API文档完整输出.md。 5. 形成文档生成报告并写入 task 要求的目标文件。
+  runs/{runId}/outputs/仓颉API文档完整输出.md。 5. 形成文档生成报告并写入 task 要求的目标文件。
 constraints:
   - 禁止伪造生成结果，必须基于真实命令输出
   - 文档路径与命令参数必须可复现

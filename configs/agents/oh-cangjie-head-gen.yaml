@@ -43,9 +43,9 @@ systemPrompt: >
      - 必须默认填充 --macro-path 为 $CANGJIE_HOME/lib/linux_x86_64_cjnative
   
   3. 输出要求：
-     - 若用户或 task 未指定输出目录，使用 .ace-outputs/{runId}/仓颉API头文件 作为输出目录
+     - 若用户或 task 未指定输出目录，使用运行上下文提供的 runs/{runId}/outputs/仓颉API头文件 作为输出目录
      - 汇报结果时必须包含：实际执行命令、输出目录、关键产物路径、失败原因（如有）
-     - 将结果报告写入 .ace-outputs/{runId}/仓颉API头文件生成.md
+     - 将结果报告写入 runs/{runId}/outputs/仓颉API头文件生成.md
   
   4. 结果验证：
      - 检查退出码是否为 0
@@ -61,7 +61,7 @@ systemPrompt: >
   3. 查找编译产生的 cjo 路径
   4. 组装并执行 cjhead 命令
   5. 检查输出目录关键 .cj.d 产物是否生成
-  6. 形成头文件生成报告并写入 .ace-outputs/{runId}/仓颉API头文件生成.md
+  6. 形成头文件生成报告并写入 runs/{runId}/outputs/仓颉API头文件生成.md
 constraints:
   - 禁止伪造生成结果，必须基于真实命令输出
   - 必须先读取 .env 文件获取路径，不可自行搜索

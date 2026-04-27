@@ -1,5 +1,27 @@
 import { z } from 'zod';
 
+const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'yellow', 'black-gold']);
+const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
+const agentAvatarConfigSchema = z.object({
+  mode: z.enum(['deterministic', 'generated', 'uploaded', 'preset']),
+  seed: z.string().optional(),
+  style: z.enum(['personas', 'adventurer', 'pixel-art']).optional(),
+  prompt: z.string().optional(),
+  imageUrl: z.string().optional(),
+  thumbUrl: z.string().optional(),
+  presetName: z.string().optional(),
+  generatedAt: z.string().optional(),
+});
+
+const workflowSupervisorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  agent: z.string().min(1).default('default-supervisor'),
+  stageReviewEnabled: z.boolean().default(true),
+  checkpointAdviceEnabled: z.boolean().default(true),
+  scoringEnabled: z.boolean().default(true),
+  experienceEnabled: z.boolean().default(true),
+}).optional();
+
 // 迭代配置 Schema
 export const iterationConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -24,11 +46,6 @@ export const workflowStepSchema = z.object({
   parallelGroup: z.string().optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
   skills: z.array(z.string()).optional(), // 步骤级别的 skills
-  // ---- Supervisor-Lite 新增 ----
-  enablePlanLoop: z.boolean().optional(), // 是否启用 Plan 循环
-  maxPlanRounds: z.number().min(1).max(10).default(3).optional(), // 最大 Plan 轮次
-  /** Claude Agent SDK plan 模式（AskUserQuestion + plan 文件）；需 SDK 可用，否则降级 */
-  useSdkPlan: z.boolean().optional(),
 });
 
 // 检查点 Schema
@@ -48,7 +65,13 @@ export const workflowPhaseSchema = z.object({
 // 角色配置 Schema
 export const roleConfigSchema = z.object({
   name: z.string().min(1, '角色名称不能为空'),
-  team: z.enum(['blue', 'red', 'judge']),
+  team: agentTeamSchema,
+  roleType: agentRoleTypeSchema.optional().default('normal'),
+  avatar: z.union([z.string(), agentAvatarConfigSchema]).optional(),
+  title: z.string().optional(),
+  persona: z.string().optional(),
+  greeting: z.string().optional(),
+  rarity: z.enum(['common', 'rare', 'epic', 'legendary']).optional(),
   engineModels: z.record(z.string(), z.string()), // 引擎→模型映射，仅保存具体引擎；跟随全局时不保存模型
   activeEngine: z.string(), // 当前启用的引擎 key（""=跟随全局）
   temperature: z.number().optional(),
@@ -59,6 +82,8 @@ export const roleConfigSchema = z.object({
   allowedTools: z.array(z.string()).optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  specialtyTags: z.array(z.string()).optional(),
+  alwaysAvailableForChat: z.boolean().optional(),
   // ---- Supervisor-Lite 新增（给 Supervisor 路由器用，不注入 Agent prompt）----
   keywords: z.array(z.string()).optional(), // 路由关键词
   description: z.string().optional(), // Agent 能力描述
@@ -99,6 +124,7 @@ export const workflowConfigSchema = z.object({
     name: z.string().min(1, '工作流名称不能为空'),
     description: z.string().optional(),
     phases: z.array(workflowPhaseSchema).min(1, '至少需要一个阶段'),
+    supervisor: workflowSupervisorConfigSchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,
@@ -120,6 +146,7 @@ export const newConfigFormSchema = z.object({
     .min(1, '文件名不能为空')
     .regex(/^[a-zA-Z0-9_-]+\.yaml$/, '文件名必须以 .yaml 结尾且只包含字母、数字、下划线和连字符'),
   workflowName: z.string().min(1, '工作流名称不能为空'),
+  referenceWorkflow: z.string().optional(),
   workingDirectory: z
     .string()
     .min(1, '工作目录不能为空'),
@@ -144,6 +171,192 @@ export const copyConfigFormSchema = z.object({
 });
 
 export type CopyConfigForm = z.infer<typeof copyConfigFormSchema>;
+
+export const openSpecStatusSchema = z.enum(['draft', 'confirmed', 'in-progress', 'completed', 'archived']);
+export const openSpecProgressStatusSchema = z.enum(['pending', 'in-progress', 'completed', 'blocked']);
+
+export const openSpecRequirementSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  detail: z.string().optional(),
+  category: z.enum(['goal', 'constraint', 'acceptance', 'context']).default('goal'),
+});
+
+export const openSpecPhaseSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  objective: z.string().optional(),
+  ownerAgents: z.array(z.string()).default([]),
+  status: openSpecProgressStatusSchema.default('pending'),
+});
+
+export const openSpecAssignmentSchema = z.object({
+  agent: z.string(),
+  responsibility: z.string(),
+  phaseIds: z.array(z.string()).default([]),
+});
+
+export const openSpecCheckpointSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  phaseId: z.string().optional(),
+  status: openSpecProgressStatusSchema.default('pending'),
+});
+
+export const openSpecProgressSchema = z.object({
+  overallStatus: openSpecProgressStatusSchema.default('pending'),
+  completedPhaseIds: z.array(z.string()).default([]),
+  activePhaseId: z.string().optional(),
+  summary: z.string().optional(),
+});
+
+export const openSpecTaskSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  detail: z.string().optional(),
+  status: openSpecProgressStatusSchema.default('pending'),
+  phaseId: z.string().optional(),
+  ownerAgents: z.array(z.string()).default([]),
+  updatedAt: z.string().optional(),
+  updatedBy: z.string().optional(),
+  validation: z.string().optional(),
+});
+
+export const openSpecRevisionSchema = z.object({
+  id: z.string(),
+  version: z.number().int().min(1),
+  summary: z.string(),
+  createdAt: z.string(),
+  createdBy: z.string().optional(),
+});
+
+export const openSpecArtifactsSchema = z.object({
+  proposal: z.string().default(''),
+  design: z.string().default(''),
+  tasks: z.string().default(''),
+  deltaSpec: z.string().default(''),
+});
+
+export const openSpecDocumentSchema = z.object({
+  id: z.string(),
+  version: z.number().int().min(1),
+  status: openSpecStatusSchema.default('draft'),
+  title: z.string(),
+  workflowName: z.string(),
+  summary: z.string().optional(),
+  goals: z.array(z.string()).default([]),
+  nonGoals: z.array(z.string()).default([]),
+  constraints: z.array(z.string()).default([]),
+  requirements: z.array(openSpecRequirementSchema).default([]),
+  phases: z.array(openSpecPhaseSchema).default([]),
+  assignments: z.array(openSpecAssignmentSchema).default([]),
+  checkpoints: z.array(openSpecCheckpointSchema).default([]),
+  tasks: z.array(openSpecTaskSchema).default([]),
+  progress: openSpecProgressSchema,
+  revisions: z.array(openSpecRevisionSchema).default([]),
+  artifacts: openSpecArtifactsSchema.default({
+    proposal: '',
+    design: '',
+    tasks: '',
+    deltaSpec: '',
+  }),
+  linkedConfigFilename: z.string().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  confirmedAt: z.string().optional(),
+});
+
+export const creationSessionStatusSchema = z.enum(['draft', 'confirmed', 'config-generated', 'run-bound', 'archived']);
+
+export const creationSessionSchema = z.object({
+  id: z.string(),
+  chatSessionId: z.string().optional(),
+  createdBy: z.string().optional(),
+  status: creationSessionStatusSchema.default('draft'),
+  workflowName: z.string(),
+  filename: z.string(),
+  mode: z.enum(['phase-based', 'state-machine', 'ai-guided']),
+  referenceWorkflow: z.string().optional(),
+  workingDirectory: z.string(),
+  workspaceMode: z.enum(['isolated-copy', 'in-place']),
+  description: z.string().optional(),
+  requirements: z.string().optional(),
+  clarification: z.object({
+    summary: z.string().optional(),
+    knownFacts: z.array(z.string()).default([]),
+    missingFields: z.array(z.string()).default([]),
+    questions: z.array(z.string()).default([]),
+  }).optional(),
+  uiState: z.object({
+    formStep: z.number().int().min(1).max(5).optional(),
+    planningStage: z.enum(['idle', 'clarifying', 'awaiting-answers', 'generating-plan']).optional(),
+    clarificationForm: z.object({
+      type: z.literal('clarification_form'),
+      summary: z.string().optional(),
+      knownFacts: z.array(z.string()).default([]),
+      missingFields: z.array(z.string()).default([]),
+      questions: z.array(z.object({
+        id: z.string(),
+        label: z.string(),
+        question: z.string(),
+        selectionMode: z.enum(['single', 'multiple']).optional(),
+        options: z.array(z.object({
+          id: z.string(),
+          label: z.string(),
+          description: z.string().optional(),
+          recommended: z.boolean().optional(),
+        })).default([]),
+        placeholder: z.string().optional(),
+        required: z.boolean().optional(),
+      })).default([]),
+    }).optional(),
+    clarificationAnswers: z.record(z.string(), z.object({
+      optionIds: z.array(z.string()).default([]),
+      note: z.string().default(''),
+    })).default({}),
+  }).optional(),
+  openSpec: openSpecDocumentSchema,
+  generatedConfigSummary: z.object({
+    mode: z.enum(['phase-based', 'state-machine']),
+    phaseCount: z.number().int().min(0).default(0),
+    stateCount: z.number().int().min(0).default(0),
+    agentNames: z.array(z.string()).default([]),
+  }).optional(),
+  workflowDraftSummary: z.object({
+    mode: z.enum(['phase-based', 'state-machine']),
+    nodes: z.array(z.object({
+      name: z.string(),
+      detail: z.string(),
+      ownerAgents: z.array(z.string()).default([]),
+    })).default([]),
+    assignments: z.array(z.object({
+      agent: z.string(),
+      responsibility: z.string(),
+    })).default([]),
+    sourceSummary: z.string().optional(),
+  }).optional(),
+  artifactSnapshots: z.array(z.object({
+    version: z.number().int().min(1),
+    summary: z.string(),
+    createdAt: z.string(),
+    createdBy: z.string().optional(),
+    artifacts: openSpecArtifactsSchema,
+  })).default([]),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export type OpenSpecRequirement = z.infer<typeof openSpecRequirementSchema>;
+export type OpenSpecPhase = z.infer<typeof openSpecPhaseSchema>;
+export type OpenSpecAssignment = z.infer<typeof openSpecAssignmentSchema>;
+export type OpenSpecCheckpoint = z.infer<typeof openSpecCheckpointSchema>;
+export type OpenSpecProgressStatus = z.infer<typeof openSpecProgressStatusSchema>;
+export type OpenSpecProgress = z.infer<typeof openSpecProgressSchema>;
+export type OpenSpecTask = z.infer<typeof openSpecTaskSchema>;
+export type OpenSpecRevision = z.infer<typeof openSpecRevisionSchema>;
+export type OpenSpecArtifacts = z.infer<typeof openSpecArtifactsSchema>;
+export type OpenSpecDocument = z.infer<typeof openSpecDocumentSchema>;
+export type CreationSession = z.infer<typeof creationSessionSchema>;
 
 // 运行记录 Schema
 export const runRecordSchema = z.object({
@@ -232,6 +445,7 @@ export const stateMachineWorkflowSchema = z.object({
     states: z.array(stateMachineStateSchema).min(1, '至少需要一个状态'),
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
+    supervisor: workflowSupervisorConfigSchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,

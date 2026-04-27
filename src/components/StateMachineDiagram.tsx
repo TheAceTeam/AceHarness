@@ -52,7 +52,6 @@ interface StateMachineDiagramProps {
   isRunning?: boolean;
   focusedState?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
-  currentPlanRound?: number;
 }
 
 // 自动布局算法：基于层次结构排列节点，优化空间利用
@@ -360,7 +359,6 @@ function StateMachineDiagramInner({
   isRunning = false,
   focusedState,
   supervisorFlow = [],
-  currentPlanRound,
 }: StateMachineDiagramProps) {
   const [showAllEdges, setShowAllEdges] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -427,7 +425,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, currentState, currentStep, completedSteps, onStepClick, onForceTransition, isRunning, stateHistory, supervisorFlow, currentPlanRound]);
+  }, [states, currentState, currentStep, completedSteps, onStepClick, onForceTransition, isRunning, stateHistory, supervisorFlow]);
 
   // 转换为 ReactFlow 边
   const initialEdges: Edge[] = useMemo(() => {
@@ -663,7 +661,7 @@ function StateMachineDiagramInner({
     }
 
     return edges;
-  }, [states, stateHistory, currentState, showAllEdges, supervisorFlow, currentPlanRound]);
+  }, [states, stateHistory, currentState, showAllEdges, supervisorFlow]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

@@ -8,6 +8,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
+import { commandExists } from '../command-exists';
 
 export class TraeCliEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -26,21 +27,10 @@ export class TraeCliEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    try {
-      const { execSync } = require('child_process');
-      execSync('command -v trae-cli', { stdio: 'ignore', shell: '/bin/bash' });
-      return true;
-    } catch (e) {
-      const fs = require('fs');
-      const commonPaths = [
-        '/root/.local/bin/trae-cli',
-        '/usr/local/bin/trae-cli',
-        '/usr/bin/trae-cli',
-      ];
-      for (const p of commonPaths) {
-        if (fs.existsSync(p)) return true;
-      }
-      return false;
-    }
+    return commandExists('trae-cli', [
+      '/root/.local/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    ]);
   }
 }

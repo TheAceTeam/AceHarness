@@ -45,6 +45,7 @@ Available skills for working with the Cangjie compiler project and Anthropics of
 | [cangjie_toolchains](./cangjie_toolchains/SKILL.md) | 仓颉语言工具链：cjc编译器、cjdb调试器、cjcov覆盖率、cjfmt格式化、cjlint静态检查、cjprof性能分析 |
 | [cangjie_type_system](./cangjie_type_system/SKILL.md) | 仓颉语言类型系统：子类型关系、型变规则、类型转换（is/as）、Nothing/Any/Object |
 | [power-gitcode](./power-gitcode/SKILL.md) | GitCode 平台全能操作：PR/Issue 管理、评论、标签、合并、模板读取、仓库 Fork/Release |
+| [openspec](./openspec/SKILL.md) | 使用官方 OpenSpec 风格维护 specs/changes 制品，区分研发规范源与运行时内部 OpenSpecDocument |
 | [aceflow-chat-card](./aceflow-chat-card/SKILL.md) | 通用富文本卡片渲染：12 种 Block 类型，AI 通过 JSON 动态生成可视化卡片 |
 | [aceflow-workflow-creator](./aceflow-workflow-creator/SKILL.md) | 引导用户创建 AceFlow 工作流配置，提供格式规范和校验脚本 |
 
@@ -203,7 +204,7 @@ skills/
 │   ├── SKILL.md                          # 工作流创建
 │   ├── PROMPT.md                         # 系统提示词注入
 │   └── scripts/
-│       └── validate-workflow.mjs         # 工作流校验脚本
+│       └── ...                           # 其他技能脚本
 │
 ├── Anthropics 官方技能 (Official Skills)
 ├── algorithmic-art/SKILL.md              # 算法艺术

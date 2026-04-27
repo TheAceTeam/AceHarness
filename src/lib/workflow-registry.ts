@@ -31,15 +31,14 @@ class WorkflowRegistry extends EventEmitter {
     'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
     'iteration', 'iteration-complete', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled', 'context-updated',
-    'plan-question', 'plan-round', 'route-decision',
+    'route-decision',
   ];
   private static SM_EVENTS = [
     'state-change', 'step-start', 'step-complete', 'transition',
     'force-transition', 'transition-forced', 'human-approval-required',
     'status', 'agents', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled',
-    'plan-question', 'plan-round', 'route-decision', 'agent-flow',
-    'sdk-plan-question', 'sdk-plan-captured', 'sdk-plan-subtask',
+    'route-decision', 'agent-flow',
   ];
 
   /**

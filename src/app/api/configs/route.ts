@@ -60,6 +60,13 @@ export async function GET(request: NextRequest) {
         const content = await readFile(filePath, 'utf-8');
         const config = parse(content);
 
+        const hasWorkflowRoot = Boolean(config?.workflow && typeof config.workflow === 'object');
+        const hasPhaseWorkflow = Array.isArray(config?.workflow?.phases);
+        const hasStateWorkflow = Array.isArray(config?.workflow?.states);
+        if (!hasWorkflowRoot || (!hasPhaseWorkflow && !hasStateWorkflow)) {
+          continue;
+        }
+
         // 检测工作流模式
         const mode = config?.workflow?.mode || 'phase-based';
 
@@ -91,19 +98,11 @@ export async function GET(request: NextRequest) {
           agentCount,
         });
       } catch {
-        configs.push({
-          filename: file,
-          name: file,
-          description: '(解析失败)',
-          mode: 'phase-based',
-          phaseCount: 0,
-          stepCount: 0,
-          agentCount: 0,
-        });
+        // skip malformed or non-workflow yaml files
       }
     }
 
-    return NextResponse.json({ files: yamlFiles, configs });
+    return NextResponse.json({ files: configs.map((item) => item.filename), configs });
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取配置列表失败', message: error.message },

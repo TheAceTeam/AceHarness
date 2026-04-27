@@ -413,9 +413,63 @@ function closeUnterminatedFences(content: unknown): string {
   return safeContent;
 }
 
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderTaskStatusLines(content: string): string {
+  const lines = content.split('\n');
+  let inCodeBlock = false;
+  let fenceWidth = 0;
+  let fenceChar: '`' | '~' | null = null;
+
+  return lines.map((line) => {
+    if (!inCodeBlock) {
+      const fenceOpen = line.match(/^(`{3,}|~{3,})/);
+      if (fenceOpen) {
+        inCodeBlock = true;
+        fenceWidth = fenceOpen[1].length;
+        fenceChar = fenceOpen[1][0] as '`' | '~';
+        return line;
+      }
+
+      const taskLine = line.match(/^(\s*)-\s+\[([ xX-])\]\s+(.+)$/);
+      if (!taskLine) return line;
+
+      const marker = taskLine[2].toLowerCase();
+      const body = taskLine[3];
+      const bodyWithoutComment = body.replace(/\s*<!--[\s\S]*?-->\s*$/g, '').trim();
+      const trailingComment = body.slice(bodyWithoutComment.length).trim();
+      const escapedBody = escapeHtml(bodyWithoutComment);
+      const escapedComment = trailingComment ? ` ${escapeHtml(trailingComment)}` : '';
+
+      if (marker === 'x') {
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+      }
+      if (marker === '-') {
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+      }
+      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+    }
+
+    const closeRe = fenceChar === '~' ? /^(~{3,})\s*$/ : /^(`{3,})\s*$/;
+    const fenceClose = line.match(closeRe);
+    if (fenceClose && fenceClose[1].length >= fenceWidth) {
+      inCodeBlock = false;
+      fenceChar = null;
+    }
+    return line;
+  }).join('\n');
+}
+
 function preprocessMarkdown(content: unknown): string {
   const closed = closeUnterminatedFences(content);
-  return closed.replace(
+  return renderTaskStatusLines(closed).replace(
     /(?<![<"\[])(https?:\/\/[^\s<>\]")]+)/g,
     '<$1>'
   );

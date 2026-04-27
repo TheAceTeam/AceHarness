@@ -1,18 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, access } from 'fs/promises';
+import { writeFile, access, readFile } from 'fs/promises';
 import { resolve } from 'path';
-import { stringify } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { newConfigFormSchema } from '@/lib/schemas';
 import { ZodError } from 'zod';
 import { requireAuth } from '@/lib/auth-middleware';
-import { setConfigMeta } from '@/lib/config-metadata';
+import { getConfigMeta, setConfigMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
+import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/openspec-store';
+import { updateChatSessionCreationBinding } from '@/lib/chat-persistence';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
+
+function createDefaultWorkflowGovernance() {
+  return {
+    supervisor: {
+      enabled: true,
+      agent: 'default-supervisor',
+      stageReviewEnabled: true,
+      checkpointAdviceEnabled: true,
+      scoringEnabled: true,
+      experienceEnabled: true,
+    },
+  };
+}
 
 function createPhaseBasedConfig(workflowName: string, workingDirectory: string, workspaceMode: 'isolated-copy' | 'in-place', description?: string) {
   return {
     workflow: {
       name: workflowName,
       description: description || '',
+      ...createDefaultWorkflowGovernance(),
       phases: [
         {
           name: '阶段 1',
@@ -41,6 +58,7 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
       description: description || '',
       mode: 'state-machine',
       maxTransitions: 30,
+      ...createDefaultWorkflowGovernance(),
       states: [
         {
           name: '设计',
@@ -119,12 +137,77 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
   };
 }
 
+function normalizeConfigFilename(filename: string): string {
+  const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.includes('..')) {
+    throw new Error('无效文件名');
+  }
+  return normalized;
+}
+
+function structuredCloneSafe<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function updatePhaseSteps(phases: any[], requirements?: string) {
+  return (phases || []).map((phase: any, phaseIndex: number) => ({
+    ...phase,
+    steps: (phase.steps || []).map((step: any, stepIndex: number) => ({
+      ...step,
+      task: requirements?.trim()
+        ? `基于当前需求「${requirements.trim()}」，在阶段「${phase.name || `阶段 ${phaseIndex + 1}`}」中完成步骤「${step.name || `步骤 ${stepIndex + 1}`}」的任务。`
+        : step.task,
+    })),
+  }));
+}
+
+function updateStateSteps(states: any[], requirements?: string) {
+  return (states || []).map((state: any, stateIndex: number) => ({
+    ...state,
+    steps: (state.steps || []).map((step: any, stepIndex: number) => ({
+      ...step,
+      task: requirements?.trim()
+        ? `基于当前需求「${requirements.trim()}」，在状态「${state.name || `状态 ${stateIndex + 1}`}」中完成步骤「${step.name || `步骤 ${stepIndex + 1}`}」的任务。`
+        : step.task,
+    })),
+  }));
+}
+
+function createConfigFromReference(referenceConfig: any, options: {
+  workflowName: string;
+  workingDirectory: string;
+  workspaceMode: 'isolated-copy' | 'in-place';
+  description?: string;
+  requirements?: string;
+}) {
+  const cloned = structuredCloneSafe(referenceConfig || {});
+  cloned.workflow = cloned.workflow || {};
+  cloned.context = cloned.context || {};
+  cloned.workflow.name = options.workflowName;
+  cloned.workflow.description = options.description || options.requirements || cloned.workflow.description || '';
+  cloned.context.projectRoot = options.workingDirectory;
+  cloned.context.workspaceMode = options.workspaceMode;
+  cloned.context.requirements = options.requirements || cloned.context.requirements || '';
+
+  if (Array.isArray(cloned.workflow.phases)) {
+    cloned.workflow.phases = updatePhaseSteps(cloned.workflow.phases, options.requirements);
+  }
+  if (Array.isArray(cloned.workflow.states)) {
+    cloned.workflow.states = updateStateSteps(cloned.workflow.states, options.requirements);
+  }
+
+  return cloned;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
 
     const body = await request.json();
+    const frontendSessionId = typeof body.frontendSessionId === 'string' ? body.frontendSessionId : undefined;
+    const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
+    const configDraft = body.configDraft && typeof body.configDraft === 'object' ? body.configDraft : null;
 
     // 验证表单
     const validationResult = newConfigFormSchema.safeParse(body);
@@ -138,7 +221,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { filename, workflowName, workingDirectory, workspaceMode, description, mode, requirements } = validationResult.data;
+    const { filename, workflowName, referenceWorkflow, workingDirectory, workspaceMode, description, mode, requirements } = validationResult.data;
     const workflowMode = mode || 'phase-based';
 
     // 检查文件是否已存在
@@ -155,9 +238,31 @@ export async function POST(request: NextRequest) {
     }
 
     let defaultConfig: any;
+    let referenceConfig: any = null;
+
+    if (referenceWorkflow) {
+      const sourceMeta = await getConfigMeta(referenceWorkflow, 'workflow');
+      if (sourceMeta?.visibility === 'private' && sourceMeta.createdBy && sourceMeta.createdBy !== auth.id && auth.role !== 'admin') {
+        return NextResponse.json({ error: '无权限访问参考工作流' }, { status: 403 });
+      }
+
+      const referencePath = resolve(await getRuntimeConfigsDirPath(), normalizeConfigFilename(referenceWorkflow));
+      const referenceRaw = await readFile(referencePath, 'utf-8');
+      referenceConfig = parse(referenceRaw);
+    }
 
     // AI 引导模式：调用 AI 生成接口
-    if (workflowMode === 'ai-guided') {
+    if (configDraft) {
+      defaultConfig = configDraft;
+    } else if (referenceConfig) {
+      defaultConfig = createConfigFromReference(referenceConfig, {
+        workflowName,
+        workingDirectory,
+        workspaceMode,
+        description,
+        requirements,
+      });
+    } else if (workflowMode === 'ai-guided') {
       const port = process.env.PORT || '3000';
       try {
         const response = await fetch(`http://localhost:${port}/api/configs/ai-generate`, {
@@ -175,13 +280,25 @@ export async function POST(request: NextRequest) {
         defaultConfig = result.config;
       } catch (e) {
         // 如果 AI 生成失败，使用默认模板
-        defaultConfig = createPhaseBasedConfig(workflowName, workingDirectory, workspaceMode, description);
+        defaultConfig = createStateMachineConfig(workflowName, workingDirectory, workspaceMode, description);
       }
     } else if (workflowMode === 'state-machine') {
       defaultConfig = createStateMachineConfig(workflowName, workingDirectory, workspaceMode, description);
     } else {
       defaultConfig = createPhaseBasedConfig(workflowName, workingDirectory, workspaceMode, description);
     }
+
+    const configValidation = validateWorkflowDraft(defaultConfig);
+    if (!configValidation.ok || !configValidation.normalized) {
+      return NextResponse.json(
+        {
+          error: '工作流草案验证失败',
+          details: formatValidationIssuesForResponse(configValidation),
+        },
+        { status: 400 }
+      );
+    }
+    defaultConfig = configValidation.normalized;
 
     const yamlContent = stringify(defaultConfig);
     await writeFile(filepath, yamlContent, 'utf-8');
@@ -200,10 +317,77 @@ export async function POST(request: NextRequest) {
         : 'AI 已根据需求生成阶段工作流，请在设计页面调整阶段和步骤。';
     }
 
+    let creationSession = creationSessionId ? await loadCreationSession(creationSessionId) : null;
+    if (creationSession?.createdBy && creationSession.createdBy !== auth.id) {
+      return NextResponse.json({ error: '无权复用该创建态会话' }, { status: 403 });
+    }
+    if (creationSession) {
+      creationSession = await updateCreationSession(creationSession.id, {
+        chatSessionId: frontendSessionId || creationSession.chatSessionId,
+        status: 'config-generated',
+        mode: workflowMode,
+        filename,
+        workflowName,
+        workingDirectory,
+        workspaceMode,
+        description,
+        requirements,
+        referenceWorkflow,
+        openSpec: {
+          ...creationSession.openSpec,
+          status: creationSession.openSpec.status === 'draft' ? 'confirmed' : creationSession.openSpec.status,
+          confirmedAt: creationSession.openSpec.confirmedAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        generatedConfigSummary: {
+          mode: defaultConfig?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based',
+          phaseCount: Array.isArray(defaultConfig?.workflow?.phases) ? defaultConfig.workflow.phases.length : 0,
+          stateCount: Array.isArray(defaultConfig?.workflow?.states) ? defaultConfig.workflow.states.length : 0,
+          agentNames: [...new Set(
+            (Array.isArray(defaultConfig?.workflow?.phases)
+              ? defaultConfig.workflow.phases.flatMap((phase: any) => (phase.steps || []).map((step: any) => step.agent))
+              : Array.isArray(defaultConfig?.workflow?.states)
+                ? defaultConfig.workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
+              : []).filter(Boolean)
+          )] as string[],
+        },
+      });
+    } else {
+      creationSession = buildCreationSession({
+        chatSessionId: frontendSessionId,
+        createdBy: auth.id,
+        status: 'config-generated',
+        openSpecStatus: 'confirmed',
+        filename,
+        workflowName,
+        mode: workflowMode,
+        workingDirectory,
+        workspaceMode,
+        description,
+        requirements,
+        referenceWorkflow,
+        config: defaultConfig,
+      });
+      await saveCreationSession(creationSession);
+    }
+    if (!creationSession) {
+      throw new Error('创建态会话生成失败');
+    }
+    if (frontendSessionId) {
+      await updateChatSessionCreationBinding(frontendSessionId, {
+        creationSessionId: creationSession.id,
+        filename,
+        workflowName,
+        status: creationSession.status,
+        openSpecId: creationSession.openSpec.id,
+      });
+    }
+
     return NextResponse.json({
       success: true,
-      message: workflowMode === 'ai-guided' ? 'AI 引导创建成功！' : '配置文件已创建',
+      message: '配置文件已创建',
       filename,
+      creationSession,
     });
   } catch (error: any) {
     if (error instanceof ZodError) {

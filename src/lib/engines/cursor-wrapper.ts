@@ -15,6 +15,7 @@ import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
 import { fenced } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
+import { commandExists } from '../command-exists';
 
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */
@@ -47,24 +48,11 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    try {
-      const { execSync } = require('child_process');
-      execSync('command -v agent', { stdio: 'ignore', shell: '/bin/bash' });
-      return true;
-    } catch (e) {
-      const commonPaths = [
-        process.env.HOME + '/.local/bin/agent',
-        '/usr/local/bin/agent',
-        '/usr/bin/agent',
-      ];
-      for (const p of commonPaths) {
-        try {
-          require('fs').accessSync(p, require('fs').constants.X_OK);
-          return true;
-        } catch (e) { /* continue */ }
-      }
-      return false;
-    }
+    return commandExists('agent', [
+      process.env.HOME ? `${process.env.HOME}/.local/bin` : '',
+      '/usr/local/bin',
+      '/usr/bin',
+    ].filter(Boolean));
   }
 
   /**
@@ -286,10 +274,8 @@ export class CursorEngineWrapper extends ACPWrapperBase {
           if (inner.type === 'text' && inner.text) {
             const text = inner.text.trim();
             const lines = text.split('\n');
-            if (lines.length > 15) {
+            if (text) {
               parts.push(`\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`);
-            } else if (text) {
-              parts.push(`\n${fenced(text)}\n`);
             }
           }
         }
@@ -316,12 +302,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         const text = raw.output.trim();
         if (!text) return raw.exit !== undefined && raw.exit !== 0 ? `\n(exit code: ${raw.exit})\n` : '';
         const lines = text.split('\n');
-        let result = '';
-        if (lines.length > 15) {
-          result = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
-        } else {
-          result = `\n${fenced(text)}\n`;
-        }
+        let result = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
         if (raw.exit !== undefined && raw.exit !== 0) result += `(exit code: ${raw.exit})\n`;
         return result;
       }

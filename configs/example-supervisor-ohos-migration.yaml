@@ -25,11 +25,9 @@ workflow:
             
             依据 context.requirements 中给定的 ArkTS API 需求，
             使用 ohos-cangjie-analyst-skill 执行 Gap 分析与源码定位，
-            输出结构化分析报告和分批建议，并将报告写入 .ace-outputs/{runId}/Gap_分析.md。
+            输出结构化分析报告和分批建议，并将报告写入 runs/{runId}/outputs/Gap_分析.md。
           skills:
             - ohos-cangjie-analyst-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
       transitions:
         - to: 架构设计
           condition:
@@ -63,11 +61,9 @@ workflow:
                示例：cat << 'ARCH_EOF' > /path/to/file.md
                文档内容...
                ARCH_EOF
-            3. 输出路径：.ace-outputs/{runId}/架构设计.md
+            3. 输出路径：runs/{runId}/outputs/架构设计.md
           skills:
             - ohos-cangjie-architect-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
       transitions:
         - to: 实现编码
           condition:
@@ -99,7 +95,7 @@ workflow:
           task: >
             依据「架构设计」产出的架构文档，
             使用 ohos-cangjie-coder-skill 实现仓颉层与 C++ FFI 层，
-            将说明写入 .ace-outputs/{runId}/编码实现.md。
+            将说明写入 runs/{runId}/outputs/编码实现.md。
           skills:
             - ohos-cangjie-coder-skill
         - name: 编译验证
@@ -127,8 +123,6 @@ workflow:
             - cat out/rk3568/error.log 2>/dev/null | head -80
           skills:
             - ohos-cangjie-reviewer-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
       transitions:
         - to: 红军审查
           condition:
@@ -160,7 +154,7 @@ workflow:
           task: >
             对上一步「编码实现」产出的 CJ/FFI 代码，使用 ohos-cangjie-reviewer-skill 按审查清单逐项检查
             （FFI 命名、NAPI 对齐、文件组织、仓颉约束、构建配置等），列出问题与修复建议，不修改代码，
-            将审查报告写入 .ace-outputs/{runId}/代码审查_红军.md。
+            将审查报告写入 runs/{runId}/outputs/代码审查_红军.md。
             
             ⚠️ 编译验证为必须步骤，不可跳过：
             1. 在 projectRoot 目录下执行 C++ FFI 编译：./build.sh --product-name rk3568 --build-target <cj_xxx_ffi_target>
@@ -187,8 +181,6 @@ workflow:
             pass/conditional_pass 时 next_state 填「最终验证」，fail 时填「实现编码」。
           skills:
             - ohos-cangjie-reviewer-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
       transitions:
         - to: 最终验证
           condition:
@@ -219,7 +211,7 @@ workflow:
           agent: oh-cangjie-reviewer
           task: >
             汇总前序产出，使用 ohos-cangjie-reviewer-skill 对本轮变更做完整审查与编译验证，
-            输出最终审查报告（通过/有条件通过/不通过），写入 .ace-outputs/{runId}/最终审查与编译验证.md。
+            输出最终审查报告（通过/有条件通过/不通过），写入 runs/{runId}/outputs/最终审查与编译验证.md。
           skills:
             - ohos-cangjie-reviewer-skill
         - name: 验收裁决
@@ -239,8 +231,6 @@ workflow:
             pass 时 next_state 填「生成API文档」，fail 时填「实现编码」。
           skills:
             - ohos-cangjie-reviewer-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
       transitions:
         - to: 生成仓颉头文件
           condition:
@@ -271,10 +261,10 @@ workflow:
           agent: oh-cangjie-head-gen
           task: >
             基于当前批次已完成的仓颉接口实现，使用 cjhead-assistant-skill 生成仓颉 API 的 .cj.d 头文件。
-            头文件生成输出目录默认为 .ace-outputs/{runId}/。 将结果报告写入
-            .ace-outputs/{runId}/仓颉API头文件生成.md。
+            头文件生成输出目录默认为 runs/{runId}/outputs/。 将结果报告写入
+            runs/{runId}/outputs/仓颉API头文件生成.md。
             报告需包含：实际执行命令、输出目录、关键产物路径、失败原因（如有）。 同时必须将本次生成出的全部 Markdown 文档正文完整汇总写入
-            .ace-outputs/{runId}/仓颉API文档完整输出.md （按原始文件路径分节展示，禁止仅写摘要）。
+            runs/{runId}/outputs/仓颉API文档完整输出.md （按原始文件路径分节展示，禁止仅写摘要）。
           role: defender
           skills:
             - cjhead-assistant
@@ -309,15 +299,13 @@ workflow:
           role: defender
           task: >
             基于当前批次已完成的仓颉接口实现，使用 cangjie-doc-generator-skill 生成仓颉 API 的 md-sys 文档。
-            文档生成输出目录默认为 .ace-outputs/{runId}/仓颉API文档。
-            将结果报告写入 .ace-outputs/{runId}/仓颉API文档生成.md。
+            文档生成输出目录默认为 runs/{runId}/outputs/仓颉API文档。
+            将结果报告写入 runs/{runId}/outputs/仓颉API文档生成.md。
             报告需包含：实际执行命令、输出目录、关键产物路径、失败原因（如有）。
-            同时必须将本次生成出的全部 Markdown 文档正文完整汇总写入 .ace-outputs/{runId}/仓颉API文档完整输出.md
+            同时必须将本次生成出的全部 Markdown 文档正文完整汇总写入 runs/{runId}/outputs/仓颉API文档完整输出.md
             （按原始文件路径分节展示，禁止仅写摘要）。
           skills:
-            - cangjie-doc-generator-skill
-          enablePlanLoop: true
-          maxPlanRounds: 2
+            - ohos-cangjie-md-skill
       transitions:
         - to: 完成
           condition:
@@ -347,7 +335,7 @@ workflow:
           agent: oh-cangjie-architect
           task: >
             基于本 run 各步骤产出，生成一份简短总结（Gap 报告、架构文档、实现与审查结论的路径与要点），
-            写入 .ace-outputs/{runId}/产出汇总.md。不新增技术内容，仅汇总引用。
+            写入 runs/{runId}/outputs/产出汇总.md。不新增技术内容，仅汇总引用。
           skills: []
       transitions: []
 

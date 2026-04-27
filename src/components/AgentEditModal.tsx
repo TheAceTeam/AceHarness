@@ -7,10 +7,19 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineSelect } from '@/components/EngineSelect';
 import { getEngineMeta } from '@/lib/engine-metadata';
+import { agentApi } from '@/lib/api';
+import {
+  createDeterministicAvatarConfig,
+  normalizeAgentAvatar,
+  resolveAgentAvatarSrc,
+  type AgentAvatarConfig,
+} from '@/lib/agent-personas';
+import { useToast } from '@/components/ui/toast';
 
 interface SubAgent {
   description: string;
@@ -27,7 +36,9 @@ interface ReviewPanel {
 
 interface AgentConfig {
   name: string;
-  team: 'blue' | 'red' | 'judge';
+  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  roleType?: 'normal' | 'supervisor';
+  avatar?: AgentAvatarConfig | string;
   category?: string;
   tags?: string[];
   engineModels: Record<string, string>;
@@ -41,6 +52,7 @@ interface AgentConfig {
   // Supervisor-Lite 新增
   keywords?: string[];
   description?: string;
+  alwaysAvailableForChat?: boolean;
 }
 
 interface AgentEditModalProps {
@@ -53,6 +65,7 @@ interface AgentEditModalProps {
 const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
 
 export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentEditModalProps) {
+  const { toast } = useToast();
   // Normalize: ensure engineModels exists and strip legacy global-model entry
   const normalizedEngineModels = { ...(agent.engineModels || {}) };
   if ((agent as any).model && !(agent.activeEngine || '').trim()) {
@@ -65,6 +78,12 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     ...agent,
     engineModels: normalizedEngineModels,
     activeEngine: agent.activeEngine ?? '',
+    roleType: agent.roleType ?? 'normal',
+    avatar: normalizeAgentAvatar(agent.avatar, agent.name || 'agent', {
+      team: agent.team || 'blue',
+      roleType: agent.roleType || 'normal',
+    }),
+    alwaysAvailableForChat: agent.alwaysAvailableForChat ?? false,
   };
   const [formData, setFormData] = useState<AgentConfig>(normalizedAgent);
   const [newTag, setNewTag] = useState('');
@@ -74,6 +93,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [editingSubAgent, setEditingSubAgent] = useState<{ name: string; config: SubAgent } | null>(null);
   const [newSubAgentName, setNewSubAgentName] = useState('');
+  const [refreshingAvatar, setRefreshingAvatar] = useState(false);
 
   useEffect(() => {
     fetch('/api/engine')
@@ -105,6 +125,12 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     }
 
     const dataToSave = { ...formData };
+    if (!dataToSave.avatar) {
+      dataToSave.avatar = createDeterministicAvatarConfig(dataToSave.name, {
+        team: dataToSave.team,
+        roleType: dataToSave.roleType || 'normal',
+      });
+    }
     if (dataToSave.engineModels['']) {
       delete dataToSave.engineModels[''];
     }
@@ -166,6 +192,44 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     });
   };
 
+  const avatarConfig = normalizeAgentAvatar(formData.avatar, formData.name || 'agent', {
+    team: formData.team,
+    roleType: formData.roleType || 'normal',
+  });
+  const avatarSrc = resolveAgentAvatarSrc(avatarConfig, formData.name || 'agent', {
+    team: formData.team,
+    roleType: formData.roleType || 'normal',
+  });
+  const refreshAvatar = async () => {
+    try {
+      setRefreshingAvatar(true);
+      const result = await agentApi.generateAvatar({
+        displayName: formData.name || 'agent',
+        team: formData.team,
+        mission: formData.description || formData.capabilities?.join('、') || '',
+        style: formData.category || '',
+        variant: Math.random().toString(36).slice(2, 10),
+      });
+      setFormData((prev) => ({
+        ...prev,
+        avatar: result.avatar,
+      }));
+      toast('success', '已刷新默认头像');
+    } catch (error: any) {
+      const nextSeed = `${formData.name || 'agent'}-${Math.random().toString(36).slice(2, 10)}`;
+      setFormData((prev) => ({
+        ...prev,
+        avatar: createDeterministicAvatarConfig(nextSeed, {
+          team: prev.team,
+          roleType: prev.roleType || 'normal',
+        }),
+      }));
+      toast('warning', error?.message || '头像刷新失败，已回退为默认头像');
+    } finally {
+      setRefreshingAvatar(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <form
@@ -184,7 +248,9 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
 
         <div className="flex-1 overflow-auto p-6 space-y-6">
           {/* Basic Info */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="rounded-2xl border bg-muted/20 p-4">
+            <div className="mb-4 text-sm font-medium">基础设定</div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <Label>名称 *</Label>
               <Input
@@ -204,8 +270,24 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                   { value: 'blue', label: '蓝队（防守）' },
                   { value: 'red', label: '红队（攻击）' },
                   { value: 'judge', label: '裁判' },
+                  { value: 'yellow', label: '黄队（辅助）' },
+                  { value: 'black-gold', label: '黑金（指挥官）' },
                 ]}
                 placeholder="选择团队"
+                searchable={false}
+              />
+            </div>
+
+            <div>
+              <Label>角色类型</Label>
+              <SingleCombobox
+                value={formData.roleType || 'normal'}
+                onValueChange={(v) => setFormData({ ...formData, roleType: v as any })}
+                options={[
+                  { value: 'normal', label: '普通 Agent' },
+                  { value: 'supervisor', label: 'Supervisor / 指挥官' },
+                ]}
+                placeholder="选择角色类型"
                 searchable={false}
               />
             </div>
@@ -235,6 +317,46 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 onChange={(e) => setFormData({ ...formData, temperature: e.target.value ? parseFloat(e.target.value) : undefined })}
                 placeholder="0.7"
               />
+            </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <Label>头像</Label>
+              <div className="mt-2 rounded-2xl border bg-muted/20 p-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center">
+                  <Avatar className="h-20 w-20 shrink-0 ring-2 ring-primary/20">
+                    <AvatarImage src={avatarSrc} alt={formData.name || 'agent avatar'} />
+                    <AvatarFallback>{(formData.name || 'AG').slice(0, 2).toUpperCase()}</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0 flex-1 space-y-3">
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                      <div>
+                        <div className="text-xs font-medium text-muted-foreground">当前模式</div>
+                        <div className="mt-1 text-sm">Deterministic Avatar</div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="rounded-full"
+                        onClick={refreshAvatar}
+                        disabled={refreshingAvatar}
+                      >
+                        <span className="material-symbols-outlined mr-1 text-sm">refresh</span>
+                        {refreshingAvatar ? '刷新中...' : '刷新头像'}
+                      </Button>
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground">Seed</div>
+                      <div className="mt-1 break-all rounded-xl bg-background/80 px-3 py-2 text-xs">
+                        {avatarConfig.seed || formData.name || 'agent'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -436,21 +558,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 keywords: e.target.value.split(',').map(s => s.trim()).filter(Boolean) 
               })}
               placeholder="如：架构, 接口, 模块, API"
-            />
-          </div>
-
-          {/* Description (Supervisor-Lite) */}
-          <div>
-            <Label>
-              Agent 描述
-              <span className="text-xs text-muted-foreground ml-2">
-                （Supervisor-Lite 架构用，不注入 prompt）
-              </span>
-            </Label>
-            <Input
-              value={formData.description || ''}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="如：负责系统架构设计"
             />
           </div>
 

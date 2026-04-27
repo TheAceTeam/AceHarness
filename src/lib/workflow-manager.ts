@@ -17,7 +17,7 @@ import { createRun, updateRun } from './run-store';
 import type { RunRecord } from './run-store';
 import {
   saveRunState, saveProcessOutput, saveStreamContent, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
-  type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog,
+  type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck,
 } from './run-state-persistence';
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from './schemas';
 import { formatTimestamp } from './utils';
@@ -28,12 +28,8 @@ import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from './runtime
 import { getRuntimeSkillsDirPath } from './runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from './app-paths';
 import { resolveAgentSelection } from './agent-engine-selection';
-import {
-  parseNeedInfo,
-  isPlanDone,
-  routeInfoRequest,
-  type AgentSummary,
-} from './supervisor-router';
+import { ensureDefaultSupervisorConfig } from './default-supervisor';
+import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
@@ -128,6 +124,7 @@ export class WorkflowManager extends EventEmitter {
   private completedStepNames: string[] = [];
   private failedStepNames: string[] = [];
   private stepLogs: PersistedStepLog[] = [];
+  private qualityChecks: PersistedQualityCheck[] = [];
   private forceCompleteFlag: boolean = false;
   private interruptFlag: boolean = false;
   private feedbackInterrupt: boolean = false;
@@ -155,6 +152,8 @@ export class WorkflowManager extends EventEmitter {
   public _createdBy?: string;
   /** Multi-user: user's personal directory for isolation */
   public _userPersonalDir?: string;
+  /** Optional frontend chat session to auto-bind with this run */
+  public _frontendSessionId?: string;
   /** The isolated working directory for this run (if isolation is active) */
   private isolatedDir: string | null = null;
   /** Original projectRoot from config (before isolation) */
@@ -180,12 +179,6 @@ export class WorkflowManager extends EventEmitter {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
   }
-
-  // ========== Supervisor-Lite Plan 循环相关 ==========
-  /** 待解答的用户问题 Promise 解析器 */
-  private pendingUserQuestionResolver: ((answer: string) => void) | null = null;
-  /** 当前等待解答的问题 */
-  private pendingUserQuestion: { question: string; fromAgent: string; round: number } | null = null;
 
   /**
    * Load a single skill's content from either project or system skills directory
@@ -514,9 +507,9 @@ export class WorkflowManager extends EventEmitter {
           if (agent?.name) configs.push(agent);
         } catch { /* skip malformed */ }
       }
-      return configs;
+      return ensureDefaultSupervisorConfig(configs);
     } catch {
-      return [];
+      return ensureDefaultSupervisorConfig([]);
     }
   }
 
@@ -714,6 +707,11 @@ export class WorkflowManager extends EventEmitter {
   private async persistState(): Promise<void> {
     if (!this.currentRunId) return;
     try {
+      const attachedAgentSessions = Object.fromEntries(
+        this.agents
+          .filter((agent) => Boolean(agent.sessionId))
+          .map((agent) => [agent.name, agent.sessionId as string])
+      );
       const state: PersistedRunState = {
         runId: this.currentRunId,
         configFile: this.currentConfigFile || '',
@@ -726,6 +724,7 @@ export class WorkflowManager extends EventEmitter {
         completedSteps: [...this.completedStepNames],
         failedSteps: [...this.failedStepNames],
         stepLogs: [...this.stepLogs],
+        qualityChecks: [...this.qualityChecks],
         agents: this.agents.map(a => ({
           name: a.name,
           team: a.team,
@@ -744,8 +743,20 @@ export class WorkflowManager extends EventEmitter {
         globalContext: this.globalContext || undefined,
         phaseContexts: this.phaseContexts.size > 0 ? Object.fromEntries(this.phaseContexts) : undefined,
         workingDirectory: this.getWorkingDirectory() || undefined,
+        attachedAgentSessions,
       };
       await saveRunState(state);
+      if (this._frontendSessionId) {
+        await updateChatSessionWorkflowBinding(this._frontendSessionId, {
+          configFile: this.currentConfigFile || '',
+          runId: this.currentRunId,
+          attachedAgentSessions,
+        });
+        await updateChatSessionCreationBinding(this._frontendSessionId, {
+          filename: this.currentConfigFile || '',
+          status: 'run-bound',
+        });
+      }
     } catch { /* non-critical */ }
   }
 
@@ -776,11 +787,18 @@ export class WorkflowManager extends EventEmitter {
     } catch { /* non-critical on startup */ }
   }
 
-  async start(configFile: string): Promise<void> {
+  async start(
+    configFile: string,
+    requirementsOrChecks?: string | PersistedQualityCheck[],
+    maybePreflightChecks?: PersistedQualityCheck[],
+  ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
       throw new Error('已有工作流正在运行');
     }
 
+    const preflightChecks = Array.isArray(requirementsOrChecks)
+      ? requirementsOrChecks
+      : (maybePreflightChecks || []);
     this.status = 'preparing';
     this.statusReason = null;
     this.logs = [];
@@ -791,6 +809,7 @@ export class WorkflowManager extends EventEmitter {
     this.completedStepNames = [];
     this.failedStepNames = [];
     this.stepLogs = [];
+    this.qualityChecks = [...preflightChecks];
     this.runStartTime = new Date().toISOString();
     this.runEndTime = null;
     this.currentRunId = null;
@@ -1422,16 +1441,10 @@ export class WorkflowManager extends EventEmitter {
     await this.persistState();
 
     try {
-      // ========== Supervisor-Lite: 判断是否启用 Plan 循环 ==========
       let resultText: string;
       let jsonResult: EngineJsonResult;
-      if (step.enablePlanLoop) {
-        jsonResult = await this.executeStepWithInfoGathering(step, workflowConfig);
-        resultText = jsonResult.result;
-      } else {
-        jsonResult = await this.executeStep(step, workflowConfig);
-        resultText = jsonResult.result;
-      }
+      jsonResult = await this.executeStep(step, workflowConfig);
+      resultText = jsonResult.result;
 
       const tokenUsage: TokenUsage = {
         inputTokens: jsonResult.usage.input_tokens,
@@ -1910,10 +1923,13 @@ export class WorkflowManager extends EventEmitter {
       if (this.currentRunId) {
         const outputDir = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs');
         const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const phaseName = this.currentPhase || '当前阶段';
+        const summaryFileName = `${ts}-${phaseName}-${step.name}.md`;
         prompt += `## 文档输出要求\n`;
-        prompt += `请将你产出的所有文档、报告、分析结果等写入以下目录：\n`;
+        prompt += `请将你产出的步骤成果详细总结写入以下目录：\n`;
         prompt += `\`${outputDir}/\`\n\n`;
-        prompt += `**重要**: 文件名必须以时间戳开头（如 \`${ts}-报告名称.md\`），这样便于按时间排序且不会覆盖已有文件。\n\n`;
+        prompt += `当前步骤的步骤成果详细总结文件名必须是：\`${summaryFileName}\`\n`;
+        prompt += `如果你还需要创建其他附加产物文件，也必须使用时间戳前缀，但后半段名称可以根据内容自行命名；只要不要与当前步骤的步骤成果详细总结重名即可。\n\n`;
       }
     }
 
@@ -2047,19 +2063,6 @@ export class WorkflowManager extends EventEmitter {
       prompt += `1. **迭代改进分析**（单独文件，如 \`迭代改进分析-迭代N.md\`）：本轮发现的问题、改进点对比、修复方案选择等分析过程。\n`;
       prompt += `2. **最终完整方案**（单独文件，如 \`最终设计方案.md\` 或 \`最终代码.md\`）：融合所有历史迭代改进后的完整最终产出。这份文档中不得出现任何"补丁"、"增量修改"、"相比上一轮"等措辞，它必须是一份从零可读的、独立完整的最终文档，读者无需了解迭代历史即可理解全貌。\n\n`;
       prompt += `最终方案文档是你最重要的交付物，请确保它的质量和完整性。\n\n`;
-    }
-
-    // ========== Supervisor-Lite: 注入信息请求协议 ==========
-    if (step.enablePlanLoop) {
-      prompt += `## 信息请求协议\n`;
-      prompt += `在执行任务前，请先评估你是否有足够的信息。\n`;
-      prompt += `如果信息不足，先进行信息收集而不直接执行任务，请使用以下格式声明你需要的信息：\n`;
-      prompt += `- 需要技术/专业信息补充信息时：[NEED_INFO] 问题描述\n`;
-      prompt += `- 需要用户/人工补充信息时：[NEED_INFO:human] 问题描述\n`;
-      prompt += `- 如果有多个问题需要确认，也只需要列出一个[NEED_INFO]/[NEED_INFO:human]，并在问题描述中列出所有需要确认的问题\n`;
-      prompt += `- 如果有问题需要确认，则不执行任务，直接将问题以上述格式进行输出，结束本轮执行，不需要等待回复，supervisor会给你路由到对应的专家，信息收集可能存在多轮\n`;
-      prompt += `- 如果信息已充分可以执行：输出[PLAN_DONE]，并执行具体任务\n`;
-      prompt += `\n注意：你不需要指定由谁来回答技术问题，系统会自动路由到合适的专家。\n\n`;
     }
 
     // ========== Supervisor-Lite: 注入额外上下文（信息收集循环） ==========
@@ -2407,6 +2410,7 @@ export class WorkflowManager extends EventEmitter {
 
     this.failedStepNames = []; // Reset failed — we'll retry truly failed ones
     this.stepLogs = [...(runState.stepLogs || []).filter(l => l.status === 'completed')];
+    this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime;
     this.runEndTime = null;
     this.statusReason = null;
@@ -2764,6 +2768,7 @@ export class WorkflowManager extends EventEmitter {
       completedSteps: this.completedStepNames,
       failedSteps: this.failedStepNames,
       stepLogs: this.stepLogs,
+      qualityChecks: this.qualityChecks,
       workflow: this.currentWorkflow,
       iterationStates: Object.fromEntries(this.iterationStates),
       workingDirectory: this.getWorkingDirectory(),
@@ -2774,185 +2779,6 @@ export class WorkflowManager extends EventEmitter {
     return this.iterationStates;
   }
 
-  // ========== Supervisor-Lite Plan 循环实现 ==========
-
-  private async executeStepWithInfoGathering(
-    step: WorkflowStep,
-    workflowConfig: WorkflowConfig
-  ): Promise<EngineJsonResult> {
-    const maxRounds = step.maxPlanRounds || 3;
-    let round = 0;
-    let extraContext = '';
-
-    while (round < maxRounds) {
-      const jsonResult = await this.executeStep(step, workflowConfig, extraContext);
-      const output = jsonResult.result;
-
-      const infoRequests = parseNeedInfo(step, output);
-      if (infoRequests.length === 0) {
-        console.log(`[WorkflowManager] Step ${step.name} 没有信息请求，结束`);
-        return jsonResult;
-      }
-
-      if (isPlanDone(output)) {
-        console.log(`[WorkflowManager] Step ${step.name} 已 PLAN_DONE，继续执行任务`);
-        return jsonResult;
-      }
-
-      for (const req of infoRequests) {
-        if (req.isHuman) {
-          this.emit('plan-question', { question: req.question, fromAgent: step.agent, round });
-          const answer = await this.waitForUserAnswer(req.question, step.agent, round);
-          extraContext += `\n\n[用户回答] ${req.question}\n${answer}`;
-          console.log(`[WorkflowManager] 用户回答: ${answer}`);
-        } else {
-          const agentSummaries = this.buildAgentSummaries();
-          const decision = await routeInfoRequest(
-            req,
-            agentSummaries,
-            step.name,
-            this.callLightweightLLM.bind(this)
-          );
-
-          if (!decision) {
-            console.log(`[WorkflowManager] 无法路由，fallback 到用户回答`);
-            this.emit('plan-question', { question: req.question, fromAgent: step.agent, round });
-            const answer = await this.waitForUserAnswer(req.question, step.agent, round);
-            extraContext += `\n\n[用户回答] ${req.question}\n${answer}`;
-            console.log(`[WorkflowManager] 用户回答: ${answer}`);
-          } else {
-            this.emit('route-decision', { ...decision, round });
-            const answer = await this.queryAgent(decision.route_to, decision.question, workflowConfig);
-            console.log(`[WorkflowManager] ${decision.route_to} 回答: ${answer}`);
-            extraContext += `\n\n[${decision.route_to} 回答] ${decision.question}\n${answer}`;
-          }
-        }
-      }
-
-      this.emit('plan-round', { step: step.name, round: round + 1, maxRounds, infoRequests });
-      round++;
-    }
-
-    extraContext += '\n\n[系统] 信息收集已完成，请基于现有信息执行任务。';
-    return this.executeStep(step, workflowConfig, extraContext);
-  }
-
-  private buildAgentSummaries(): AgentSummary[] {
-    return this.agentConfigs
-      .filter(c => c.name)
-      .map(c => ({
-        name: c.name,
-        description: c.description || '',
-        keywords: c.keywords || [],
-      }));
-  }
-
-  private async queryAgent(
-    agentName: string,
-    question: string,
-    workflowConfig: WorkflowConfig
-  ): Promise<string> {
-    const roleConfig = this.agentConfigs.find(r => r.name === agentName)
-      || workflowConfig.roles?.find(r => r.name === agentName);
-
-    if (!roleConfig) {
-      return `[错误] 找不到 Agent 配置: ${agentName}`;
-    }
-
-    const prompt = `# 问题\n${question}\n\n请直接回答这个问题，不需要执行其他任务。`;
-    const model = resolveAgentModel(roleConfig, workflowConfig.context);
-    const systemPrompt = roleConfig.systemPrompt || `你是一个 AI 助手。`;
-
-    const processId = `query-${agentName}-${Date.now()}`;
-
-    try {
-      const result = await this.executeWithEngine(
-        processId,
-        agentName,
-        'query',
-        prompt,
-        systemPrompt,
-        model,
-        {
-          workingDirectory: workflowConfig.context?.projectRoot
-            ? this.resolveProjectRootPath(workflowConfig.context.projectRoot)
-            : this.resolveProjectRootPath(),
-          timeoutMs: 60000,
-          mcpServers: roleConfig.mcpServers,
-        }
-      );
-      return result.result || '[无输出]';
-    } catch (error) {
-      return `[错误] 查询 Agent 失败: ${error}`;
-    }
-  }
-
-  private async callLightweightLLM(prompt: string): Promise<string> {
-    const processId = `router-llm-${Date.now()}`;
-
-    try {
-      const result = await this.executeWithEngine(
-        processId,
-        'router',
-        'route',
-        prompt,
-        '你是一个路由器，根据问题选择最合适的 Agent。',
-        'claude-sonnet-4-6',
-        {
-          workingDirectory: this.resolveProjectRootPath(),
-          timeoutMs: 120000, // 2 分钟超时
-        }
-      );
-      return result.result || '';
-    } catch (error: any) {
-      console.error('[SupervisorRouter] LLM 调用失败:', error?.message || error);
-      return ''; // 返回空字符串，让上层处理
-    }
-  }
-
-  private async waitForUserAnswer(question: string, fromAgent: string, round: number): Promise<string> {
-    this.pendingUserQuestion = { question, fromAgent, round };
-
-    return new Promise((resolve) => {
-      this.pendingUserQuestionResolver = resolve;
-
-      const checkInterval = setInterval(() => {
-        if (!this.pendingUserQuestionResolver) {
-          clearInterval(checkInterval);
-        }
-      }, 500);
-
-      setTimeout(() => {
-        if (this.pendingUserQuestionResolver) {
-          this.pendingUserQuestionResolver('[超时] 用户未回答');
-          this.pendingUserQuestionResolver = null;
-          this.pendingUserQuestion = null;
-          clearInterval(checkInterval);
-        }
-      }, 300000);
-    });
-  }
-
-  submitUserAnswer(answer: string): void {
-    if (this.pendingUserQuestionResolver) {
-      this.pendingUserQuestionResolver(answer);
-      this.pendingUserQuestionResolver = null;
-      this.pendingUserQuestion = null;
-    }
-  }
-
-  getPendingUserQuestion(): { question: string; fromAgent: string; round: number } | null {
-    return this.pendingUserQuestion;
-  }
-
-  /** Phase 模式无 SDK Plan；与 StateMachineWorkflowManager 接口对齐 */
-  submitSdkPlanAnswers(_answers: Record<string, string>): void {
-    /* no-op */
-  }
-
-  getPendingSdkPlanQuestion(): null {
-    return null;
-  }
 }
 
 // 全局单例 — use globalThis to survive Next.js dev HMR

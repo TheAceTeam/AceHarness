@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile, readdir, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { unifiedWorkflowConfigSchema } from '@/lib/schemas';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -39,6 +39,7 @@ export async function GET(
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     const content = await readFile(filepath, 'utf-8');
     const config = parse(content);
+    const validation = validateWorkflowDraft(config);
 
     // Load agents from configs/agents/*.yaml
     const agents: any[] = [];
@@ -54,7 +55,15 @@ export async function GET(
       }
     } catch { /* agents dir may not exist */ }
 
-    return NextResponse.json({ config, raw: content, agents });
+    return NextResponse.json({
+      config,
+      raw: content,
+      agents,
+      validation: {
+        ...formatValidationIssuesForResponse(validation),
+        normalized: validation.normalized,
+      },
+    });
   } catch (error: any) {
     // List available configs to help AI self-correct
     let available: string[] = [];
@@ -96,19 +105,19 @@ export async function POST(
     const { roles, ...configWithoutRoles } = config;
 
     // Validate config (roles is optional now)
-    const validationResult = unifiedWorkflowConfigSchema.safeParse(configWithoutRoles);
-    if (!validationResult.success) {
+    const validationResult = validateWorkflowDraft(configWithoutRoles);
+    if (!validationResult.ok || !validationResult.normalized) {
       return NextResponse.json(
         {
           error: '配置验证失败',
-          details: validationResult.error,
+          details: formatValidationIssuesForResponse(validationResult),
         },
         { status: 400 }
       );
     }
 
     const filepath = await getRuntimeWorkflowConfigPath(filename);
-    const yamlContent = stringify(configWithoutRoles);
+    const yamlContent = stringify(validationResult.normalized);
     await writeFile(filepath, yamlContent, 'utf-8');
 
     return NextResponse.json({ success: true, message: '配置已保存' });

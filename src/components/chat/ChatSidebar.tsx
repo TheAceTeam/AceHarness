@@ -5,15 +5,14 @@ import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import {
+  buildWorkflowConversationDirectory,
+  getConversationSessionStatusLabel,
+  getWorkbenchSessionKind,
+  listWorkbenchSessions,
+  type ChatSessionSummaryLike,
+} from '@/lib/agent-conversations';
 import { RobotLogo } from './ChatMessage';
-
-interface SessionSummaryItem {
-  id: string;
-  title: string;
-  updatedAt: number;
-  messageCount: number;
-  lastMessage?: string;
-}
 
 type SkillItem = {
   name: string;
@@ -24,11 +23,30 @@ type SkillItem = {
 };
 
 export default function ChatSidebar() {
-  const { sessions, activeSessionId, setActiveSessionId, createSession, deleteSession, renameSession, skillSettings, discoveredSkills, toggleSkill } = useChat();
+  const {
+    sessions,
+    activeSession,
+    activeSessionId,
+    setActiveSessionId,
+    createSession,
+    deleteSession,
+    renameSession,
+    skillSettings,
+    discoveredSkills,
+    toggleSkill,
+  } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 
   const enabledCount = discoveredSkills.filter(s => !!skillSettings[s.name]).length;
+  const workflowSessions = useMemo(
+    () => listWorkbenchSessions(sessions as ChatSessionSummaryLike[]).slice(0, 6),
+    [sessions]
+  );
+  const workflowDirectory = useMemo(
+    () => buildWorkflowConversationDirectory(activeSession?.workflowBinding),
+    [activeSession?.workflowBinding]
+  );
 
   return (
     <div className="w-full bg-muted/30 flex flex-col h-full">
@@ -96,6 +114,51 @@ export default function ChatSidebar() {
       )}
 
       <div className="flex-1 overflow-y-auto">
+        {workflowDirectory.length > 0 && (
+          <div className="border-b border-border/40 px-3 py-3">
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold text-foreground">当前工作流通讯录</div>
+              <span className="text-[10px] text-muted-foreground">
+                {workflowDirectory.length} 个会话
+              </span>
+            </div>
+            <div className="space-y-2">
+              {workflowDirectory.map((entry) => (
+                <div key={entry.key} className="rounded-lg border border-border/50 bg-background/70 px-2.5 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">
+                      {entry.role}
+                    </span>
+                    <span className="truncate text-xs font-medium">{entry.label}</span>
+                  </div>
+                  <div className="mt-1 truncate text-[10px] text-muted-foreground" title={entry.sessionId || getConversationSessionStatusLabel(entry)}>
+                    {entry.sessionId || getConversationSessionStatusLabel(entry)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {workflowSessions.length > 0 && (
+          <div className="border-b border-border/40 px-3 py-3">
+            <div className="mb-2 text-xs font-semibold text-foreground">已沉淀的工作流会话</div>
+            <div className="space-y-1">
+              {workflowSessions.map(session => (
+                <SessionItem
+                  key={`workflow-${session.id}`}
+                  session={session}
+                  active={session.id === activeSessionId}
+                  compact
+                  onClick={() => setActiveSessionId(session.id)}
+                  onDelete={() => deleteSession(session.id)}
+                  onRename={(title) => renameSession(session.id, title)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
         {sessions.length === 0 && (
           <div className="p-4 text-xs text-muted-foreground text-center">暂无会话</div>
         )}
@@ -295,22 +358,51 @@ function SkillManagerModal({
   );
 }
 
-function SessionItem({ session, active, onClick, onDelete, onRename }: {
-  session: SessionSummaryItem;
+function SessionItem({ session, active, compact = false, onClick, onDelete, onRename }: {
+  session: ChatSessionSummaryLike & {
+    agentBinding?: {
+      agentName: string;
+    };
+  };
   active: boolean;
+  compact?: boolean;
   onClick: () => void;
   onDelete: () => void;
   onRename: (title: string) => void;
 }) {
+  void onRename;
   const summary = session.lastMessage?.slice(0, 40) || '空会话';
+  const kind = getWorkbenchSessionKind(session);
+  const statusBadge = session.workflowBinding
+    ? { label: '运行态', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
+    : session.creationSession
+      ? { label: '创建态', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
+      : session.agentBinding
+        ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
+      : null;
+  const subLabel = session.workflowBinding?.configFile || session.creationSession?.workflowName || session.agentBinding?.agentName || '';
 
   return (
     <div
-      className={`group flex items-start gap-2 px-3 py-2.5 cursor-pointer border-b border-border/30 hover:bg-muted/50 transition-colors ${active ? 'bg-muted' : ''}`}
+      className={`group flex items-start gap-2 px-3 py-2.5 cursor-pointer ${!compact ? 'border-b border-border/30' : 'rounded-lg'} hover:bg-muted/50 transition-colors ${active ? 'bg-muted' : ''}`}
       onClick={onClick}
     >
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{session.title}</div>
+        <div className="flex items-center gap-1.5">
+          <div className="text-sm font-medium truncate">{session.title}</div>
+          {statusBadge ? (
+            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${
+              kind === 'run'
+                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                : 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
+            }`}>
+              {statusBadge.label}
+            </span>
+          ) : null}
+        </div>
+        {subLabel ? (
+          <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{subLabel}</div>
+        ) : null}
         <div className="text-xs text-muted-foreground truncate mt-0.5">{summary}</div>
         <div className="text-[10px] text-muted-foreground/60 mt-0.5">
           {new Date(session.updatedAt).toLocaleString()}
