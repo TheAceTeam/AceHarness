@@ -116,13 +116,17 @@
 }
 
 .markdownContent a {
-  color: #3b82f6;
+  color: currentColor;
+  font-weight: 600;
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 72%, transparent);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.2em;
 }
 
 .markdownContent a:hover {
-  color: #2563eb;
+  opacity: 0.82;
+  text-decoration-color: currentColor;
 }
 
 .markdownContent del {

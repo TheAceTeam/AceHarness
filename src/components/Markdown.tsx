@@ -476,7 +476,7 @@ const components = {
       return (
         <button
           type="button"
-          className="text-primary underline underline-offset-4 hover:text-primary/80"
+          className="font-semibold text-current underline decoration-current/70 underline-offset-4 hover:opacity-80"
           onClick={() => {
             if (typeof window === 'undefined') return;
             window.dispatchEvent(new CustomEvent('ace:open-workspace-path', {
