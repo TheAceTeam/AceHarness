@@ -252,6 +252,8 @@ export default function WorkbenchPage() {
     availableStates: string[];
     supervisorAdvice?: string;
   } | null>(null);
+  const [humanApprovalMinimized, setHumanApprovalMinimized] = useState(false);
+  const [humanApprovalMinimizedPulse, setHumanApprovalMinimizedPulse] = useState(false);
   const humanApprovalSignatureRef = useRef<string | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
@@ -1316,7 +1318,7 @@ export default function WorkbenchPage() {
         const restoredAvailableStates = smStatus.pendingCheckpoint.availableStates
           || workflowStates.filter((stateName: string) => stateName !== '__human_approval__');
         const restoredResult = smStatus.pendingCheckpoint.result || { issues: [] };
-        setHumanApprovalData({
+        setHumanApprovalDataIfChanged({
           currentState: '__human_approval__',
           nextState: smStatus.pendingCheckpoint.suggestedNextState || restoredAvailableStates[0] || '',
           result: {
@@ -1329,7 +1331,7 @@ export default function WorkbenchPage() {
           supervisorAdvice: smStatus.pendingCheckpoint.supervisorAdvice,
         });
       } else if (!requestedRunId) {
-        setHumanApprovalData(null);
+        clearHumanApprovalData();
       }
       if (status.startTime) {
         setRunStartTime(status.startTime);
@@ -1369,6 +1371,24 @@ export default function WorkbenchPage() {
     }
   }, []);
 
+  const clearHumanApprovalData = useCallback(() => {
+    humanApprovalSignatureRef.current = null;
+    setHumanApprovalData(null);
+    setHumanApprovalMinimized(false);
+    setHumanApprovalMinimizedPulse(false);
+  }, []);
+
+  const minimizeHumanApprovalDialog = useCallback(() => {
+    if (!humanApprovalData) return;
+    setHumanApprovalMinimized(true);
+    setHumanApprovalMinimizedPulse(true);
+  }, [humanApprovalData]);
+
+  const restoreHumanApprovalDialog = useCallback(() => {
+    setHumanApprovalMinimized(false);
+    setHumanApprovalMinimizedPulse(false);
+  }, []);
+
   const setHumanApprovalDataIfChanged = useCallback((next: {
     currentState: string;
     nextState: string;
@@ -1377,8 +1397,7 @@ export default function WorkbenchPage() {
     supervisorAdvice?: string;
   } | null) => {
     if (!next) {
-      humanApprovalSignatureRef.current = null;
-      setHumanApprovalData(null);
+      clearHumanApprovalData();
       return;
     }
 
@@ -1399,7 +1418,17 @@ export default function WorkbenchPage() {
 
     humanApprovalSignatureRef.current = signature;
     setHumanApprovalData(next);
-  }, []);
+    setHumanApprovalMinimized(false);
+    setHumanApprovalMinimizedPulse(false);
+  }, [clearHumanApprovalData]);
+
+  useEffect(() => {
+    if (!humanApprovalMinimizedPulse) return;
+    const timer = window.setTimeout(() => {
+      setHumanApprovalMinimizedPulse(false);
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [humanApprovalMinimizedPulse]);
 
   const restoreHumanApprovalFromDetail = useCallback((detail: any) => {
     if (detail?.mode !== 'state-machine' || detail?.currentState !== '__human_approval__') {
@@ -1685,7 +1714,7 @@ export default function WorkbenchPage() {
 
       // Restore state-machine human approval dialog when viewing a historical run
       if (!restoreHumanApprovalFromDetail(detail)) {
-        setHumanApprovalData(null);
+        clearHumanApprovalData();
       }
       addLog('system', 'info', `查看历史运行: ${runId}`);
     } catch (error: any) {
@@ -1821,7 +1850,7 @@ export default function WorkbenchPage() {
       case 'human-approval-required':
         addLog('system', 'info', `👤 等待人工审查: ${event.data.currentState} → ${event.data.nextState || event.data.suggestedNextState || ''}`);
         // Show human approval dialog
-        setHumanApprovalData({
+        setHumanApprovalDataIfChanged({
           currentState: event.data.currentState,
           nextState: event.data.nextState || event.data.suggestedNextState || '',
           result: event.data.result,
@@ -2069,7 +2098,7 @@ export default function WorkbenchPage() {
       fetchCurrentStatus();
       toast('success', `已请求跳转到: ${forceTransitionModal.targetState}`);
       setForceTransitionModal(null);
-      setHumanApprovalData(null);
+      clearHumanApprovalData();
       setPendingCheckpointPhase(null);
     } catch (e: any) {
       toast('error', e.message);
@@ -5184,8 +5213,8 @@ export default function WorkbenchPage() {
       )}
 
       {/* 人工审查对话框 */}
-      {humanApprovalData && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80" onClick={() => setHumanApprovalData(null)}>
+      {humanApprovalData && !humanApprovalMinimized && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80" onClick={minimizeHumanApprovalDialog}>
           <div className="bg-card rounded-lg w-[700px] max-w-[90%] border shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="p-5 border-b bg-orange-50 dark:bg-orange-950">
               <div className="flex items-center justify-between">
@@ -5193,7 +5222,7 @@ export default function WorkbenchPage() {
                   <span className="material-symbols-outlined text-orange-500">person</span>
                   人工审查 - {formatStateName(humanApprovalData.currentState)}
                 </h3>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setHumanApprovalData(null)}>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={minimizeHumanApprovalDialog} title="缩到右下角">
                   <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>close</span>
                 </Button>
               </div>
@@ -5396,6 +5425,24 @@ export default function WorkbenchPage() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {humanApprovalData && humanApprovalMinimized && (
+        <div className="fixed bottom-5 right-5 z-40">
+          <Button
+            type="button"
+            onClick={restoreHumanApprovalDialog}
+            className={`h-auto min-h-0 rounded-full border border-orange-300 bg-orange-500 px-4 py-3 text-white shadow-xl hover:bg-orange-600 ${
+              humanApprovalMinimizedPulse ? 'animate-pulse' : ''
+            }`}
+          >
+            <span className="material-symbols-outlined mr-2 text-[18px]">person_alert</span>
+            <span className="flex flex-col items-start leading-tight">
+              <span className="text-xs text-orange-50/90">待人工审查</span>
+              <span className="text-sm font-medium">语义裁决与问题归类</span>
+            </span>
+          </Button>
         </div>
       )}
 
