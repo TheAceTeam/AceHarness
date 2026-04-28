@@ -209,6 +209,9 @@ export default function WorkbenchPage() {
       if (val === null) sp.delete(key);
       else sp.set(key, val);
     }
+    if (Object.prototype.hasOwnProperty.call(updates, 'run')) {
+      sp.delete('runId');
+    }
     const qs = sp.toString();
     router.replace(`/workbench/${encodeURIComponent(configFile)}${qs ? '?' + qs : ''}`, { scroll: false });
   }, [searchParams, configFile, router]);
@@ -1665,7 +1668,7 @@ export default function WorkbenchPage() {
       // Switch to run view
       setViewingHistoryRun(true);
       dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-      updateUrl({ run: runId, mode: 'history' });
+      updateUrl({ run: runId, mode: 'run' });
       if (agents.length > 0) {
         dispatch({ type: 'SET_SELECTED_AGENT', payload: agents[0] });
       }
