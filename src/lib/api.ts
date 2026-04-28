@@ -946,11 +946,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async forceTransition(targetState: string, instruction?: string, configFile?: string): Promise<any> {
+  async forceTransition(targetState: string, instruction?: string, configFile?: string, runId?: string): Promise<any> {
     const response = await authFetch(`${API_BASE}/workflow/force-transition`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetState, instruction, configFile }),
+      body: JSON.stringify({ targetState, instruction, configFile, runId }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -959,8 +959,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async getStatus(configFile?: string): Promise<WorkflowStatusResponse> {
-    const params = configFile ? `?configFile=${encodeURIComponent(configFile)}` : '';
+  async getStatus(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
+    const search = new URLSearchParams();
+    if (configFile) search.set('configFile', configFile);
+    if (runId) search.set('runId', runId);
+    const params = search.toString() ? `?${search.toString()}` : '';
     const response = await authFetch(`${API_BASE}/workflow/status${params}`);
     if (!response.ok) throw new Error('获取状态失败');
     return response.json();

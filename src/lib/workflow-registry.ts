@@ -12,6 +12,15 @@ import { ensureRuntimeConfigsSeeded, getBundledWorkflowConfigPath, getRuntimeWor
 
 export type AnyWorkflowManager = WorkflowManager | StateMachineWorkflowManager;
 
+export function isStateMachineManagerLike(manager: AnyWorkflowManager | null | undefined): manager is StateMachineWorkflowManager {
+  return Boolean(
+    manager
+    && typeof (manager as StateMachineWorkflowManager).forceTransition === 'function'
+    && typeof (manager as StateMachineWorkflowManager).setQueuedApprovalAction === 'function'
+    && typeof (manager as StateMachineWorkflowManager).resume === 'function'
+  );
+}
+
 interface ManagerEntry {
   configFile: string;
   manager: AnyWorkflowManager;
@@ -47,17 +56,24 @@ class WorkflowRegistry extends EventEmitter {
    * If it's running, return the existing running instance.
    */
   async getManager(configFile: string): Promise<AnyWorkflowManager> {
+    const expectedIsStateMachine = await this.detectStateMachine(configFile);
     const existing = this.managers.get(configFile);
-    if (existing) return existing.manager;
-    return this.createManager(configFile);
+    if (existing) {
+      if (existing.isStateMachine === expectedIsStateMachine) {
+        return existing.manager;
+      }
+      this.managers.delete(configFile);
+      existing.manager.removeAllListeners();
+    }
+    return this.createManager(configFile, expectedIsStateMachine);
   }
 
-  private async createManager(configFile: string): Promise<AnyWorkflowManager> {
-    const isSM = await this.detectStateMachine(configFile);
-    const manager = isSM ? new StateMachineWorkflowManager() : new WorkflowManager();
-    const entry: ManagerEntry = { configFile, manager, isStateMachine: isSM, createdAt: Date.now() };
+  private async createManager(configFile: string, isSM?: boolean): Promise<AnyWorkflowManager> {
+    const resolvedIsSM = isSM ?? await this.detectStateMachine(configFile);
+    const manager = resolvedIsSM ? new StateMachineWorkflowManager() : new WorkflowManager();
+    const entry: ManagerEntry = { configFile, manager, isStateMachine: resolvedIsSM, createdAt: Date.now() };
     this.managers.set(configFile, entry);
-    const events = isSM ? WorkflowRegistry.SM_EVENTS : WorkflowRegistry.PHASE_EVENTS;
+    const events = resolvedIsSM ? WorkflowRegistry.SM_EVENTS : WorkflowRegistry.PHASE_EVENTS;
     for (const evt of events) {
       manager.on(evt, (data: any) => {
         this.emit(evt, { ...data, __configFile: configFile });
@@ -67,13 +83,30 @@ class WorkflowRegistry extends EventEmitter {
   }
 
   async getManagerByRunId(runId: string): Promise<AnyWorkflowManager | null> {
+    const runState = await loadRunState(runId);
+    const expectedIsStateMachine = runState?.mode === 'state-machine';
+
     for (const [, entry] of this.managers) {
       const s = entry.manager.getStatus();
-      if (s.runId === runId) return entry.manager;
+      if (s.runId !== runId) continue;
+      if (runState && entry.isStateMachine !== expectedIsStateMachine) {
+        this.managers.delete(entry.configFile);
+        entry.manager.removeAllListeners();
+        break;
+      }
+      return entry.manager;
     }
-    const runState = await loadRunState(runId);
+
     if (!runState?.configFile) return null;
-    return this.getManager(runState.configFile);
+    const existing = this.managers.get(runState.configFile);
+    if (existing) {
+      if (existing.isStateMachine === expectedIsStateMachine) {
+        return existing.manager;
+      }
+      this.managers.delete(runState.configFile);
+      existing.manager.removeAllListeners();
+    }
+    return this.createManager(runState.configFile, expectedIsStateMachine);
   }
 
   getRunningManagers(): { configFile: string; manager: AnyWorkflowManager; isStateMachine: boolean }[] {

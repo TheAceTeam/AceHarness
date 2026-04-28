@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow-registry';
 import { loadRunState } from '@/lib/run-state-persistence';
-import { StateMachineWorkflowManager } from '@/lib/state-machine-workflow-manager';
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,10 +22,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const manager = await workflowRegistry.getManager(runState.configFile);
+    const manager = await workflowRegistry.getManagerByRunId(runId) || await workflowRegistry.getManager(runState.configFile);
 
     const currentStatus = manager.getStatus();
     if (currentStatus.status === 'running') {
+      const isSameRunPendingApproval =
+        currentStatus.runId === runId
+        && currentStatus.currentState === '__human_approval__';
+      if (action === 'force-transition' && isSameRunPendingApproval && isStateMachineManagerLike(manager) && targetState) {
+        manager.setQueuedApprovalAction('approve');
+        manager.forceTransition(targetState, instruction);
+        return NextResponse.json({
+          success: true,
+          message: `已请求强制跳转到: ${targetState}`,
+        });
+      }
       return NextResponse.json(
         { error: '该配置的工作流已在运行中' },
         { status: 409 }
@@ -40,10 +50,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (action === 'force-transition' && manager instanceof StateMachineWorkflowManager && targetState) {
+    if (action === 'force-transition' && isStateMachineManagerLike(manager) && targetState) {
       manager.setQueuedApprovalAction('approve');
       setTimeout(() => {
-        (manager as StateMachineWorkflowManager).forceTransition(targetState, instruction);
+        manager.forceTransition(targetState, instruction);
       }, 500);
     }
 

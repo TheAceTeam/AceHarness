@@ -246,6 +246,7 @@ export default function WorkbenchPage() {
     availableStates: string[];
     supervisorAdvice?: string;
   } | null>(null);
+  const humanApprovalSignatureRef = useRef<string | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
@@ -654,16 +655,19 @@ export default function WorkbenchPage() {
     designTitle: creationSessionSummary?.workflowName || openSpecSummary?.id || workflowConfig?.workflow?.name || configFile,
     designStatus: creationSessionSummary?.status || openSpecSummary?.status || null,
     designSummary: openSpecSummary?.summary || workflowConfig?.workflow?.description || requirements || null,
-    activePhaseTitle: activeOpenSpecPhase?.title || currentPhase || null,
+    activePhaseTitle: activeOpenSpecPhase?.title || (currentPhase ? formatStateName(currentPhase) : null),
     activePhaseStatus: activeOpenSpecPhase?.status || openSpecSummary?.progress?.overallStatus || workflowStatus || null,
     activeStepName: currentStep || null,
     latestSupervisorReview: supervisorFlow.length > 0 ? {
       type: supervisorFlow.at(-1)?.type || null,
-      stateName: supervisorFlow.at(-1)?.stateName || supervisorFlow.at(-1)?.to || null,
+      stateName: (() => {
+        const raw = supervisorFlow.at(-1)?.stateName || supervisorFlow.at(-1)?.to || null;
+        return raw ? formatStateName(raw) : null;
+      })(),
       content: supervisorFlow.at(-1)?.question || null,
     } : latestSupervisorReview ? {
       type: latestSupervisorReview.type,
-      stateName: latestSupervisorReview.stateName,
+      stateName: latestSupervisorReview.stateName ? formatStateName(latestSupervisorReview.stateName) : null,
       content: latestSupervisorReview.content,
     } : null,
     latestRevision: openSpecSummary?.latestRevision
@@ -1101,8 +1105,21 @@ export default function WorkbenchPage() {
   useDocumentTitle(attentionSignal.active ? attentionSignal.title || null : workflowTitle);
 
   const loadChatSessions = useCallback(async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    if (!token) {
+      setChatSessions([]);
+      return;
+    }
     try {
-      const response = await fetch('/api/chat/sessions');
+      const response = await fetch('/api/chat/sessions', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (response.status === 401) {
+        setChatSessions([]);
+        return;
+      }
       const data = await response.json();
       setChatSessions(data.sessions || []);
     } catch {
@@ -1124,7 +1141,8 @@ export default function WorkbenchPage() {
 
   const fetchCurrentStatus = async () => {
     try {
-      const status = await workflowApi.getStatus(configFile);
+      const requestedRunId = runId || initialRunId || selectedRun?.id || undefined;
+      const status = await workflowApi.getStatus(configFile, requestedRunId);
       if (!status?.status) return;
       const smStatus = status as typeof status & {
         mode?: 'state-machine' | 'phase-based';
@@ -1259,7 +1277,7 @@ export default function WorkbenchPage() {
           availableStates: restoredAvailableStates,
           supervisorAdvice: smStatus.pendingCheckpoint.supervisorAdvice,
         });
-      } else {
+      } else if (!requestedRunId) {
         setHumanApprovalData(null);
       }
       if (status.startTime) {
@@ -1291,14 +1309,83 @@ export default function WorkbenchPage() {
     } catch { /* ignore */ }
   };
 
-  const loadRunDetail = async (runId: string) => {
+  const loadRunDetail = useCallback(async (runId: string) => {
     try {
       const detail = await runsApi.getRunDetail(runId);
       setRunDetail(detail);
     } catch {
       setRunDetail(null);
     }
-  };
+  }, []);
+
+  const setHumanApprovalDataIfChanged = useCallback((next: {
+    currentState: string;
+    nextState: string;
+    result: any;
+    availableStates: string[];
+    supervisorAdvice?: string;
+  } | null) => {
+    if (!next) {
+      humanApprovalSignatureRef.current = null;
+      setHumanApprovalData(null);
+      return;
+    }
+
+    const signature = JSON.stringify({
+      currentState: next.currentState,
+      nextState: next.nextState,
+      verdict: next.result?.verdict || null,
+      summary: next.result?.summary || null,
+      stepOutputs: next.result?.stepOutputs || [],
+      issues: next.result?.issues || [],
+      availableStates: next.availableStates,
+      supervisorAdvice: next.supervisorAdvice || null,
+    });
+
+    if (humanApprovalSignatureRef.current === signature) {
+      return;
+    }
+
+    humanApprovalSignatureRef.current = signature;
+    setHumanApprovalData(next);
+  }, []);
+
+  const restoreHumanApprovalFromDetail = useCallback((detail: any) => {
+    if (detail?.mode !== 'state-machine' || detail?.currentState !== '__human_approval__') {
+      return false;
+    }
+
+    const approvalTransition = (detail.stateHistory || []).findLast?.((item: any) => item.to === '__human_approval__');
+    const currentStateName = approvalTransition?.from || '未知状态';
+    const derivedStepOutputs = Array.isArray(detail.stepLogs)
+      ? detail.stepLogs
+          .filter((log: any) => typeof log?.stepName === 'string' && log.stepName.startsWith(`${currentStateName}-`))
+          .filter((log: any) => typeof log?.output === 'string' && log.output.trim().length > 0)
+          .map((log: any) => log.output)
+      : [];
+    const workflowStates = (workflowConfig as any)?.workflow?.states?.map((state: any) => state.name) || [];
+    const restoredAvailableStates = detail.pendingCheckpoint?.availableStates
+      || workflowStates.filter((stateName: string) => stateName !== '__human_approval__');
+    const suggestedNextState = detail.pendingCheckpoint?.suggestedNextState
+      || restoredAvailableStates[0]
+      || '完成';
+
+    setHumanApprovalDataIfChanged({
+      currentState: currentStateName,
+      nextState: suggestedNextState,
+      result: {
+        verdict: detail.pendingCheckpoint?.result?.verdict || (approvalTransition?.issues?.length > 0 ? 'conditional_pass' : 'pass'),
+        issues: detail.pendingCheckpoint?.result?.issues || approvalTransition?.issues || [],
+        summary: detail.pendingCheckpoint?.result?.summary || approvalTransition?.reason || '等待人工审查',
+        stepOutputs: detail.pendingCheckpoint?.result?.stepOutputs?.length
+          ? detail.pendingCheckpoint.result.stepOutputs
+          : derivedStepOutputs,
+      },
+      availableStates: restoredAvailableStates,
+      supervisorAdvice: detail.pendingCheckpoint?.supervisorAdvice,
+    });
+    return true;
+  }, [setHumanApprovalDataIfChanged, workflowConfig]);
 
   useEffect(() => {
     loadWorkflowConfig();
@@ -1306,10 +1393,6 @@ export default function WorkbenchPage() {
     if (isRunMode) {
       // 如果正在查看历史运行，不连接实时事件流
       if (viewingHistoryRun) {
-        return;
-      }
-      // 如果 URL 中有 run 参数但还没加载历史数据，等待加载
-      if (initialRunId && !runId) {
         return;
       }
       // 否则连接实时事件流
@@ -1341,10 +1424,36 @@ export default function WorkbenchPage() {
 
   // Auto-load run from URL ?run=xxx on mount
   useEffect(() => {
-    if (initialRunId && !runId && workflowConfig) {
-      viewHistoryRun(initialRunId);
+    if (!initialRunId || runId || !workflowConfig) {
+      return;
     }
-  }, [initialRunId, runId, workflowConfig]);
+
+    const modeFromUrl = (searchParams.get('mode') as ViewMode) || 'run';
+    if (modeFromUrl === 'history') {
+      viewHistoryRun(initialRunId);
+      return;
+    }
+
+    dispatch({ type: 'SET_RUN_ID', payload: initialRunId });
+    dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
+    setViewingHistoryRun(false);
+    fetchCurrentStatus();
+  }, [dispatch, fetchCurrentStatus, initialRunId, restoreHumanApprovalFromDetail, runId, searchParams, workflowConfig]);
+
+  useEffect(() => {
+    const activeRunId = runId || initialRunId;
+    if (viewMode !== 'run' || !activeRunId) {
+      return;
+    }
+    void loadRunDetail(activeRunId);
+  }, [initialRunId, loadRunDetail, runId, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== 'run' || viewingHistoryRun || !runDetail) {
+      return;
+    }
+    restoreHumanApprovalFromDetail(runDetail);
+  }, [restoreHumanApprovalFromDetail, runDetail, viewingHistoryRun, viewMode]);
 
   // Sync runId to URL
   useEffect(() => {
@@ -1524,28 +1633,7 @@ export default function WorkbenchPage() {
       }
 
       // Restore state-machine human approval dialog when viewing a historical run
-      if (detail.mode === 'state-machine' && detail.currentState === '__human_approval__') {
-        const approvalTransition = (detail.stateHistory || []).findLast?.((item: any) => item.to === '__human_approval__');
-        const currentStateName = approvalTransition?.from || '未知状态';
-        const workflowStates = (workflowConfig as any)?.workflow?.states?.map((state: any) => state.name) || [];
-        const restoredAvailableStates = detail.pendingCheckpoint?.availableStates
-          || workflowStates.filter((stateName: string) => stateName !== '__human_approval__');
-        const suggestedNextState = detail.pendingCheckpoint?.suggestedNextState
-          || restoredAvailableStates[0]
-          || '完成';
-        setHumanApprovalData({
-          currentState: currentStateName,
-          nextState: suggestedNextState,
-          result: {
-            verdict: detail.pendingCheckpoint?.result?.verdict || (approvalTransition?.issues?.length > 0 ? 'conditional_pass' : 'pass'),
-            issues: detail.pendingCheckpoint?.result?.issues || approvalTransition?.issues || [],
-            summary: detail.pendingCheckpoint?.result?.summary || approvalTransition?.reason || '等待人工审查',
-            stepOutputs: detail.pendingCheckpoint?.result?.stepOutputs || [],
-          },
-          availableStates: restoredAvailableStates,
-          supervisorAdvice: detail.pendingCheckpoint?.supervisorAdvice,
-        });
-      } else {
+      if (!restoreHumanApprovalFromDetail(detail)) {
         setHumanApprovalData(null);
       }
       addLog('system', 'info', `查看历史运行: ${runId}`);
@@ -1911,28 +1999,23 @@ export default function WorkbenchPage() {
     if (!forceTransitionModal) return;
     try {
       const rid = runId || selectedRun?.id;
-
-      // 先查后端内存里的实际状态，避免重复 resume
-      const liveStatus = await workflowApi.getStatus(configFile);      const alreadyRunningInMemory = liveStatus.status === 'running' || liveStatus.status === 'preparing';
-
-      if (!alreadyRunningInMemory && rid) {
-        // 内存里没有运行中的 workflow，先 resume 再 force-transition
+      if (rid) {
+        // 对人工审查跳转统一走专用 runId 驱动接口，避免服务热重载后丢失内存 manager。
         setViewingHistoryRun(false);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'running' });
         dispatch({ type: 'SET_FAILED_STEPS', payload: [] });
-        await workflowApi.resume(
-          rid,
-          'force-transition',
-          undefined,
+        await workflowApi.forceTransition(
           forceTransitionModal.targetState,
-          forceTransitionModal.instruction || undefined
+          forceTransitionModal.instruction || undefined,
+          configFile,
+          rid,
         );
-        dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
-        fetchCurrentStatus();
       } else {
-        // 内存里已经有运行中的 workflow，直接 force-transition
+        // 兜底：没有 runId 时再直接命中当前内存态
         await workflowApi.forceTransition(forceTransitionModal.targetState, forceTransitionModal.instruction || undefined, configFile);
       }
+      dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
+      fetchCurrentStatus();
       toast('success', `已请求跳转到: ${forceTransitionModal.targetState}`);
       setForceTransitionModal(null);
       setHumanApprovalData(null);
@@ -2355,6 +2438,15 @@ export default function WorkbenchPage() {
 
   const prepareChunkForDisplay = (text: string): string => {
     return sanitizeProtocolBlocksForDisplay(mergeSubtaskDetails(text));
+  };
+
+  const extractStepConclusion = (text: string): string => {
+    if (!text) return '';
+    const tagged = text.match(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/i)?.[1]?.trim();
+    if (tagged) {
+      return tagged;
+    }
+    return prepareChunkForDisplay(text);
   };
 
   // Parse chunk with optional timestamp
@@ -5046,18 +5138,32 @@ export default function WorkbenchPage() {
                 </div>
               </div>
 
-              {/* Agent 输出内容 */}
+              {/* 步骤结论 */}
               {humanApprovalData.result?.stepOutputs?.length > 0 && (
                 <div className="mb-4">
-                  <div className="text-sm font-medium mb-2">Agent 输出</div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium">步骤结论</div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        dispatch({ type: 'SET_ACTIVE_TAB', payload: 'documents' });
+                        setOpenLatestAiDocRequest((value) => value + 1);
+                      }}
+                    >
+                      <span className="material-symbols-outlined mr-1" style={{ fontSize: '14px' }}>description</span>
+                      打开文档窗口
+                    </Button>
+                  </div>
                   <div className="space-y-2">
                     {humanApprovalData.result.stepOutputs.map((output: string, idx: number) => (
                       <details key={idx} open={humanApprovalData.result.stepOutputs.length === 1}>
                         <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground py-1">
-                          步骤 {idx + 1} 输出 ({output.length > 200 ? `${Math.ceil(output.length / 1024)}KB` : `${output.length} 字符`})
+                          步骤 {idx + 1} 结论
                         </summary>
                         <div className="mt-1 p-3 bg-muted/20 rounded border text-xs max-h-[300px] overflow-y-auto">
-                          <Markdown>{prepareChunkForDisplay(output)}</Markdown>
+                          <Markdown>{extractStepConclusion(output)}</Markdown>
                         </div>
                       </details>
                     ))}

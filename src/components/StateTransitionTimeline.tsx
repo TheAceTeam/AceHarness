@@ -266,7 +266,7 @@ export default function StateTransitionTimeline({
                   </span>
                 </div>
                 <div className="px-3 py-1.5 rounded-lg bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 inline-block">
-                  <span className="font-semibold">{currentState}</span>
+                  <span className="font-semibold">{formatStateName(currentState)}</span>
                 </div>
               </div>
             </div>

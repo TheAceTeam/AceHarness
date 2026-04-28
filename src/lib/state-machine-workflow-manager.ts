@@ -3105,11 +3105,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
         ? workflowConfig.workflow.states.find(s => s.name === previousState)
         : null;
       const suggestedNextState = prevStateConfig?.transitions?.[0]?.to || availableStates[0] || '';
+      const restoredApprovalResult = runState.pendingCheckpoint?.result || { issues: [] };
 
       this.pendingApprovalInfo = {
         suggestedNextState,
         availableStates,
-        result: { issues: [] },
+        result: restoredApprovalResult,
+        supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
       };
 
       this.emit('state-change', {
@@ -3121,8 +3123,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         currentState: '__human_approval__',
         nextState: suggestedNextState,
         suggestedNextState,
-        result: { issues: [] },
+        result: restoredApprovalResult,
         availableStates,
+        supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
       });
 
       // Wait for human decision

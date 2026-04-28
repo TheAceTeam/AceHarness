@@ -203,9 +203,11 @@ export default function StateMachineExecutionView({
                     {executionTrace.latestSupervisorReview?.content ? (
                       <>
                         <div className="text-sm font-medium">
-                          {executionTrace.latestSupervisorReview.stateName || 'Supervisor 审阅'}
+                          {executionTrace.latestSupervisorReview.type === 'checkpoint-advice'
+                            ? `检查点建议 · ${executionTrace.latestSupervisorReview.stateName || '当前阶段'}`
+                            : executionTrace.latestSupervisorReview.stateName || 'Supervisor 审阅'}
                         </div>
-                        <div className="text-xs leading-5 text-gray-600 dark:text-gray-400 line-clamp-4">
+                        <div className="text-xs leading-5 text-gray-600 dark:text-gray-400 whitespace-pre-line line-clamp-5">
                           {executionTrace.latestSupervisorReview.content}
                         </div>
                       </>

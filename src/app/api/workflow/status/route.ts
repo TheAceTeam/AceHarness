@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow-registry';
+import { loadRunState } from '@/lib/run-state-persistence';
 import { loadLatestCreationSessionByFilename } from '@/lib/openspec-store';
 import {
   findRelevantWorkflowExperiences,
@@ -283,8 +284,35 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
 export async function GET(request: NextRequest) {
   try {
     const configFile = request.nextUrl.searchParams.get('configFile');
+    const requestedRunId = request.nextUrl.searchParams.get('runId');
 
     if (configFile) {
+      const runningManager = workflowRegistry.getRunningManager(configFile);
+      const runningStatus = runningManager?.getStatus?.();
+      if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
+        return NextResponse.json(await withCreationSession(runningStatus, configFile));
+      }
+
+      if (requestedRunId) {
+        const runState = await loadRunState(requestedRunId);
+        if (runState && runState.configFile === configFile) {
+          const restoredStatus = {
+            ...runState,
+            runId: runState.runId,
+            currentConfigFile: runState.configFile,
+            currentPhase: runState.currentPhase || runState.currentState || null,
+            logs: [],
+            iterationStates: runState.iterationStates || {},
+            agents: runState.agents || [],
+            stepLogs: runState.stepLogs || [],
+            completedSteps: runState.completedSteps || [],
+            failedSteps: runState.failedSteps || [],
+            workingDirectory: runState.workingDirectory || null,
+          };
+          return NextResponse.json(await withCreationSession(restoredStatus, configFile));
+        }
+      }
+
       const manager = await workflowRegistry.getManager(configFile);
       return NextResponse.json(await withCreationSession(manager.getStatus(), configFile));
     }
