@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
 import type { OpenSpecDocument } from '@/lib/schemas';
+import { normalizeOpenSpecDocument } from '@/lib/openspec-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -207,7 +208,11 @@ export async function saveRunState(state: PersistedRunState): Promise<void> {
 export async function loadRunState(runId: string): Promise<PersistedRunState | null> {
   try {
     const content = await readFile(stateFilePath(runId), 'utf-8');
-    return parse(content) as PersistedRunState;
+    const state = parse(content) as PersistedRunState;
+    if (state?.runOpenSpec) {
+      state.runOpenSpec = normalizeOpenSpecDocument(state.runOpenSpec);
+    }
+    return state;
   } catch {
     return null;
   }

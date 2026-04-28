@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import { Loader2, FileCode2, Play } from "lucide-react"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
+import { AnsiLogBlock } from "@/components/AnsiLogBlock"
 import { registerCangjieLanguage } from "@/lib/cangjie-language"
 import { registerCMakeLanguage } from "@/lib/cmake-language"
 import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/api"
@@ -791,19 +792,19 @@ export function EditorPanel({
                 {runResult?.commandSummary && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">执行命令</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3">{runResult.commandSummary}</pre>
+                    <AnsiLogBlock text={runResult.commandSummary} />
                   </div>
                 )}
                 {runResult?.stdout && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">stdout</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3">{runResult.stdout}</pre>
+                    <AnsiLogBlock text={runResult.stdout} />
                   </div>
                 )}
                 {runResult?.stderr && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">stderr</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3 text-red-400">{runResult.stderr}</pre>
+                    <AnsiLogBlock text={runResult.stderr} />
                   </div>
                 )}
                 {!runResult?.stdout && !runResult?.stderr && !runResult?.commandSummary && (

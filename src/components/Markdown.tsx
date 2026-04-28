@@ -10,7 +10,76 @@ import { useToast } from '@/components/ui/toast';
 import { workspaceApi } from '@/lib/api';
 import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook-markdown';
 import { copyText } from '@/lib/clipboard';
+import { AnsiLogBlock } from '@/components/AnsiLogBlock';
 import styles from './Markdown.module.css';
+
+function normalizeWindowsSeparators(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+function isUnixAbsolutePath(input: string): boolean {
+  return input.startsWith('/');
+}
+
+function isWindowsDrivePath(input: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(input);
+}
+
+function isUncPath(input: string): boolean {
+  return /^\\\\[^\\]+\\[^\\]+/.test(input) || /^\/\/[^/]+\/[^/]+/.test(input);
+}
+
+function toWorkspaceAbsolutePath(href: string): string | null {
+  if (!href) return null;
+  const raw = decodeURIComponent(String(href).trim());
+  if (!raw) return null;
+
+  if (isUnixAbsolutePath(raw) || isWindowsDrivePath(raw) || isUncPath(raw)) {
+    return normalizeWindowsSeparators(raw);
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      const path = decodeURIComponent(url.pathname || '');
+      const normalizedPath = normalizeWindowsSeparators(path);
+      if (/^\/[a-zA-Z]:\//.test(normalizedPath)) {
+        return normalizedPath.slice(1);
+      }
+      if (isUnixAbsolutePath(normalizedPath) && (
+        normalizedPath.startsWith('/root/') ||
+        normalizedPath.startsWith('/usr') ||
+        normalizedPath.startsWith('/home/') ||
+        normalizedPath.startsWith('/tmp/') ||
+        normalizedPath.startsWith('/mnt/') ||
+        normalizedPath.startsWith('/var/') ||
+        normalizedPath.startsWith('/opt/')
+      )) {
+        return normalizedPath;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getWorkspaceLinkParts(absolutePath: string): { workspacePath: string; filePath: string | null } {
+  const normalized = normalizeWindowsSeparators(absolutePath);
+  const trimmed = normalized.replace(/\/+$/g, '');
+  const slashIndex = trimmed.lastIndexOf('/');
+  if (slashIndex <= 0) {
+    return {
+      workspacePath: trimmed || normalized,
+      filePath: null,
+    };
+  }
+  return {
+    workspacePath: trimmed.slice(0, slashIndex) || '/',
+    filePath: trimmed.slice(slashIndex + 1) || null,
+  };
+}
 
 function isSummaryElement(child: unknown): child is React.ReactElement<any> {
   return isValidElement(child) && (
@@ -293,13 +362,13 @@ function RunnableCodeBlock({ code, language }: { code: string; language: string 
               {result?.stdout && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">stdout</div>
-                  <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 border">{result.stdout}</pre>
+                  <AnsiLogBlock text={result.stdout} />
                 </div>
               )}
               {result?.stderr && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">stderr</div>
-                  <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 border text-red-400">{result.stderr}</pre>
+                  <AnsiLogBlock text={result.stderr} />
                 </div>
               )}
               {!result?.stdout && !result?.stderr && <div className="text-muted-foreground">无输出</div>}
@@ -344,6 +413,29 @@ const components = {
   },
   a({ href, children, ...props }: any) {
     const isGitCode = href && href.includes('gitcode.com');
+    const workspaceAbsolutePath = href ? toWorkspaceAbsolutePath(href) : null;
+
+    if (workspaceAbsolutePath) {
+      const { workspacePath, filePath } = getWorkspaceLinkParts(workspaceAbsolutePath);
+      return (
+        <button
+          type="button"
+          className="text-primary underline underline-offset-4 hover:text-primary/80"
+          onClick={() => {
+            if (typeof window === 'undefined') return;
+            window.dispatchEvent(new CustomEvent('ace:open-workspace-path', {
+              detail: {
+                absolutePath: workspaceAbsolutePath,
+                workspacePath,
+                filePath,
+              },
+            }));
+          }}
+        >
+          {children}
+        </button>
+      );
+    }
 
     if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
       return (

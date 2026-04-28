@@ -54,6 +54,12 @@ function parseTaskComment(line: string): { id?: string; status?: OpenSpecProgres
   };
 }
 
+function getTaskStatusFromCheckbox(marker: string): OpenSpecProgressStatus {
+  if (marker.toLowerCase() === 'x') return 'completed';
+  if (marker === '-') return 'in-progress';
+  return 'pending';
+}
+
 function cleanTaskSectionTitle(raw: string): string {
   return raw
     .replace(/^#+\s*/, '')
@@ -129,19 +135,44 @@ function parseOpenSpecTasksFromMarkdown(
       id,
       title,
       detail,
-      status: commentMeta.status || (
-        taskLine[1].toLowerCase() === 'x'
-          ? 'completed'
-          : taskLine[1] === '-'
-            ? 'in-progress'
-            : 'pending'
-      ),
+      status: getTaskStatusFromCheckbox(taskLine[1]),
       phaseId,
       ownerAgents,
     });
   }
 
   return tasks;
+}
+
+function assignTaskPhasesByCheckpointBoundaries(
+  tasks: OpenSpecTask[],
+  phases: Array<Pick<OpenSpecPhase, 'id' | 'title' | 'ownerAgents'>>
+): OpenSpecTask[] {
+  if (tasks.length === 0 || phases.length === 0) return tasks;
+  if (tasks.every((task) => task.phaseId)) {
+    return tasks.map((task) => ({
+      ...task,
+      ownerAgents: task.phaseId
+        ? phases.find((phase) => phase.id === task.phaseId)?.ownerAgents || task.ownerAgents || []
+        : task.ownerAgents || [],
+    }));
+  }
+
+  let phaseIndex = 0;
+  return tasks.map((task) => {
+    const inferredPhase = task.phaseId
+      ? phases.find((phase) => phase.id === task.phaseId) || phases[phaseIndex]
+      : phases[phaseIndex];
+    const nextTask = {
+      ...task,
+      phaseId: task.phaseId || inferredPhase?.id,
+      ownerAgents: task.ownerAgents?.length ? task.ownerAgents : (inferredPhase?.ownerAgents || []),
+    };
+    if (/^CP\d+\b/i.test(task.title) && phaseIndex < phases.length - 1) {
+      phaseIndex += 1;
+    }
+    return nextTask;
+  });
 }
 
 function mergeRebuiltOpenSpecWithExisting(
@@ -220,15 +251,36 @@ export function normalizeOpenSpecDocument(openSpec: OpenSpecDocument): OpenSpecD
   }
 
   const existingById = new Map((openSpec.tasks || []).map((task) => [task.id, task]));
-  const tasks = parsedTasks.map((task) => {
+  const phaseStatusById = new Map((openSpec.phases || []).map((phase) => [phase.id, phase.status]));
+  const tasks: OpenSpecTask[] = assignTaskPhasesByCheckpointBoundaries(parsedTasks, openSpec.phases).map((task): OpenSpecTask => {
     const existing = existingById.get(task.id);
-    if (!existing) return task;
+    const mergedPhaseId = task.phaseId || existing?.phaseId;
+    const ownerAgents = task.ownerAgents?.length
+      ? task.ownerAgents
+      : mergedPhaseId
+        ? openSpec.phases.find((phase) => phase.id === mergedPhaseId)?.ownerAgents || existing?.ownerAgents || []
+        : existing?.ownerAgents || [];
+    const phaseStatus = mergedPhaseId ? phaseStatusById.get(mergedPhaseId) : undefined;
+    if (!existing) {
+      return phaseStatus === 'completed'
+        ? { ...task, phaseId: mergedPhaseId, ownerAgents, status: 'completed' }
+        : { ...task, phaseId: mergedPhaseId, ownerAgents };
+    }
     const statusFromMarkdown = task.status;
-    const status = statusFromMarkdown === 'pending' && existing.status !== 'pending'
+    let status: OpenSpecProgressStatus = statusFromMarkdown === 'pending' && existing.status !== 'pending'
       ? existing.status
       : statusFromMarkdown;
+    if (phaseStatus === 'completed') {
+      status = 'completed';
+    } else if (phaseStatus === 'pending' && status === 'in-progress') {
+      status = existing.status === 'completed' ? 'completed' : 'pending';
+    } else if (phaseStatus === 'blocked' && status === 'pending') {
+      status = existing.status === 'completed' ? existing.status : 'blocked';
+    }
     return {
       ...task,
+      phaseId: mergedPhaseId,
+      ownerAgents,
       status,
       updatedAt: existing.updatedAt,
       updatedBy: existing.updatedBy,

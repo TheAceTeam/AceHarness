@@ -10,10 +10,11 @@ import { Badge } from '@/components/ui/badge';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useTranslations } from '@/hooks/useTranslations';
-import { Search, ArrowLeft, FileText, Tag, Calendar, User, Upload, Download, Puzzle, X } from 'lucide-react';
+import { Search, ArrowLeft, FileText, Tag, Calendar, User, Upload, Download, Puzzle, X, FolderOpen } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import Markdown from '@/components/Markdown';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 
 interface Skill {
   name: string;
@@ -66,6 +67,8 @@ export default function SkillsPage() {
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [runtimeSkillsDir, setRuntimeSkillsDir] = useState('');
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -82,6 +85,7 @@ export default function SkillsPage() {
         setError(data.error);
       } else {
         setSkills(data.skills || []);
+        setRuntimeSkillsDir(data.runtimeSkillsDir || '');
       }
     } catch (err) {
       setError('加载 skills 失败');
@@ -263,6 +267,15 @@ export default function SkillsPage() {
             <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
             {exporting ? '导出中...' : `导出选中 (${selectedForExport.size})`}
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setWorkspaceOpen(true)}
+            disabled={!runtimeSkillsDir}
+          >
+            <FolderOpen className="w-4 h-4 mr-1" />
+            打开工作目录
+          </Button>
           <LanguageToggle />
           <ThemeToggle />
         </div>
@@ -309,6 +322,15 @@ export default function SkillsPage() {
           </div>
         )}
       </div>
+
+      {runtimeSkillsDir ? (
+        <WorkspaceEditor
+          open={workspaceOpen}
+          onOpenChange={setWorkspaceOpen}
+          workspacePath={runtimeSkillsDir}
+          title="Runtime Skills"
+        />
+      ) : null}
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-6">

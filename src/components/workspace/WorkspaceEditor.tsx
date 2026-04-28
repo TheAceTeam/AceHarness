@@ -27,6 +27,7 @@ interface WorkspaceEditorProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   workspacePath: string
+  initialFilePath?: string | null
   mode?: WorkspaceMode
   title?: string
   notebookScope?: NotebookScope
@@ -181,6 +182,7 @@ export function WorkspaceEditor({
   open,
   onOpenChange,
   workspacePath,
+  initialFilePath,
   mode = "default",
   title,
   notebookScope = 'personal',
@@ -427,11 +429,26 @@ export function WorkspaceEditor({
 
   React.useEffect(() => {
     if (!open) return
+    if (initialFilePath && mode !== 'notebook') {
+      const normalizedWorkspace = workspacePath.replace(/\\/g, "/").replace(/\/+$/g, "")
+      const normalizedFile = initialFilePath.replace(/\\/g, "/")
+      if (normalizedFile === normalizedWorkspace) {
+        setSelectedFile(null)
+        return
+      }
+      if (normalizedFile.startsWith(`${normalizedWorkspace}/`)) {
+        const relativePath = normalizedFile.slice(normalizedWorkspace.length + 1)
+        if (relativePath) {
+          setSelectedFile(relativePath)
+          return
+        }
+      }
+    }
     const fileFromUrl = searchParams.get(fileParamKey)
     if (fileFromUrl) {
       setSelectedFile(fileFromUrl)
     }
-  }, [fileParamKey, open, searchParams])
+  }, [fileParamKey, initialFilePath, mode, open, searchParams, workspacePath])
 
   React.useEffect(() => {
     if (!selectedFile || !workspacePath) return

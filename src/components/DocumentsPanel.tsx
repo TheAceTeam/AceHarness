@@ -31,6 +31,7 @@ interface DocFile {
 interface DocumentsPanelProps {
   runId: string | null;
   openLatestTimestampedRequest?: number;
+  onOpenWorkspaceDirectory?: (path: string) => void;
 }
 
 type SortField = 'name' | 'time' | 'size';
@@ -68,9 +69,10 @@ function getFileGroup(filename: string): string {
   return stripped || '其他';
 }
 
-export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0 }: DocumentsPanelProps) {
+export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
   const { toast } = useToast();
   const [files, setFiles] = useState<DocFile[]>([]);
+  const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -190,7 +192,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     try {
       const data = await runsApi.listDocuments(runId);
       setFiles(data.files || []);
-    } catch { setFiles([]); }
+      setDocumentDirectory(data.documentDirectory || null);
+    } catch {
+      setFiles([]);
+      setDocumentDirectory(null);
+    }
     setLoading(false);
   }, [runId]);
 
@@ -487,6 +493,18 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       <div className="flex-1" />
+      {documentDirectory && onOpenWorkspaceDirectory && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+          title="使用工作区查看文档目录"
+        >
+          <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
+          工作区查看目录
+        </Button>
+      )}
       {selected.size > 0 && (
         <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(Array.from(selected))}>
           <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selected.size})
@@ -653,6 +671,18 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/20 shrink-0">
             <span className="material-symbols-outlined text-sm">description</span>
             <span className="text-xs font-medium truncate flex-1">{previewFile.filename}</span>
+            {documentDirectory && onOpenWorkspaceDirectory && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+                title="使用工作区查看文档目录"
+              >
+                <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
+                目录
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => downloadFile(previewFile)}>
               <span className="material-symbols-outlined text-sm">download</span>
             </Button>

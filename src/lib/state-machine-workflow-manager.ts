@@ -563,6 +563,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   getStatus() {
     const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
     const preparingPhase = this.status === 'preparing' ? '准备阶段' : null;
+    const runOpenSpec = this.currentRunOpenSpec
+      ? normalizeOpenSpecDocument(this.currentRunOpenSpec)
+      : null;
     return {
       status: this.status,
       statusReason: this.statusReason,
@@ -593,7 +596,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       ),
       latestSupervisorReview: this.latestSupervisorReview,
       qualityChecks: this.qualityChecks,
-      runOpenSpec: this.currentRunOpenSpec,
+      runOpenSpec,
     };
   }
 
@@ -964,6 +967,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
     if (!this.currentRunId) return;
     try {
+      if (this.currentRunOpenSpec) {
+        this.currentRunOpenSpec = normalizeOpenSpecDocument(this.currentRunOpenSpec);
+      }
       const statusToPersist = finalStatus || (
         this.shouldStop ? 'stopped' : (this.status === 'idle' ? 'completed' : this.status)
       );
@@ -3042,6 +3048,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.currentRunOpenSpec = runState.runOpenSpec
+      ? normalizeOpenSpecDocument(runState.runOpenSpec)
+      : null;
 
     // Restore self-transition counts from state history
     this.selfTransitionCounts = new Map();
@@ -3383,6 +3392,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.currentRunOpenSpec = runState.runOpenSpec
+      ? normalizeOpenSpecDocument(runState.runOpenSpec)
+      : null;
     this.status = 'running';
     this.shouldStop = false;
 

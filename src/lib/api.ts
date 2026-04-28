@@ -512,7 +512,7 @@ export const configApi = {
 };
 
 export const agentApi = {
-  async listAgents(): Promise<{ agents: any[] }> {
+  async listAgents(): Promise<{ agents: any[]; runtimeAgentsDir?: string }> {
     const response = await authFetch(`${API_BASE}/agents`);
     if (!response.ok) throw new Error('获取 Agent 列表失败');
     return response.json();
@@ -714,9 +714,9 @@ export const runsApi = {
     return response.json();
   },
 
-  async listDocuments(id: string): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string }[] }> {
+  async listDocuments(id: string): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string }[]; documentDirectory?: string | null }> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents`);
-    if (!response.ok) return { files: [] };
+    if (!response.ok) return { files: [], documentDirectory: null };
     return response.json();
   },
 

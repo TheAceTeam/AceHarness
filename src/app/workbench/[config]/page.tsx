@@ -235,6 +235,9 @@ export default function WorkbenchPage() {
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
+  const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
+  const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
+  const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [smIssueTracker, setSmIssueTracker] = useState<any[]>([]);
   const [smTransitionCount, setSmTransitionCount] = useState(0);
   const [runStartTime, setRunStartTime] = useState<string | null>(null);
@@ -275,6 +278,14 @@ export default function WorkbenchPage() {
     timestamp: string;
     stateName?: string;
   }[]>([]);
+
+  const openWorkspaceEditorAtPath = useCallback((path: string, title?: string, filePath?: string | null) => {
+    if (!path) return;
+    setWorkspaceEditorPath(path);
+    setWorkspaceEditorTitle(title);
+    setWorkspaceEditorFilePath(filePath || null);
+    setWorkspaceEditorOpen(true);
+  }, []);
   const [agentFlow, setAgentFlow] = useState<{
     id: string;
     type: 'stream' | 'request' | 'response' | 'supervisor';
@@ -521,12 +532,51 @@ export default function WorkbenchPage() {
     }));
   }, [resolvedProjectRoot]);
 
+  useEffect(() => {
+    const handleOpenWorkspacePath = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        absolutePath?: string;
+        workspacePath?: string;
+        filePath?: string | null;
+      }>).detail;
+      if (!detail?.workspacePath) return;
+      openWorkspaceEditorAtPath(detail.workspacePath, '文档链接', detail.absolutePath || detail.filePath || null);
+    };
+    window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
+    return () => {
+      window.removeEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
+    };
+  }, [openWorkspaceEditorAtPath]);
+
   const activeOpenSpecPhase = useMemo(() => {
     if (!openSpecDetails?.phases?.length) return null;
     return openSpecDetails.phases.find((phase) => phase.id === openSpecSummary?.progress?.activePhaseId)
       || openSpecDetails.phases.find((phase) => phase.title === currentPhase)
       || null;
   }, [currentPhase, openSpecDetails, openSpecSummary?.progress?.activePhaseId]);
+
+  const structuredTasksMarkdown = useMemo(() => {
+    const tasks = openSpecDetails?.tasks || [];
+    if (tasks.length === 0) return '';
+    return [
+      '# tasks.md',
+      '',
+      '## 任务列表',
+      '',
+      ...tasks.flatMap((task) => {
+        const checkbox = task.status === 'completed'
+          ? '[x]'
+          : task.status === 'in-progress'
+            ? '[-]'
+            : '[ ]';
+        const lines = [`- ${checkbox} ${task.title}`];
+        if (task.detail?.trim()) {
+          lines.push(...task.detail.trim().split(/\r?\n/));
+        }
+        return [...lines, ''];
+      }),
+    ].join('\n').trim();
+  }, [openSpecDetails?.tasks]);
 
   const openSpecArtifactEntries = useMemo<Array<{
     key: OpenSpecArtifactKey;
@@ -552,7 +602,7 @@ export default function WorkbenchPage() {
         key: 'tasks',
         label: 'tasks.md',
         title: '任务',
-        content: artifacts.tasks || '',
+        content: structuredTasksMarkdown || artifacts.tasks || '',
       },
       {
         key: 'deltaSpec',
@@ -561,7 +611,7 @@ export default function WorkbenchPage() {
         content: artifacts.deltaSpec || '',
       },
     ];
-  }, [openSpecDetails?.artifacts]);
+  }, [openSpecDetails?.artifacts, structuredTasksMarkdown]);
 
   const activeOpenSpecArtifact = useMemo(
     () => openSpecArtifactEntries.find((entry) => entry.key === openSpecArtifactTab) || openSpecArtifactEntries[0],
@@ -1069,16 +1119,13 @@ export default function WorkbenchPage() {
   }, [displayQualityChecks, preflightChecks]);
   const overviewTasks = useMemo(() => {
     const tasks = openSpecDetails?.tasks || [];
-    const priority = (status: string) => {
-      if (status === 'in-progress') return 0;
-      if (status === 'blocked') return 1;
-      if (status === 'pending') return 2;
-      if (status === 'completed') return 3;
-      return 4;
-    };
-    return [...tasks]
-      .sort((a, b) => priority(a.status) - priority(b.status))
-      .slice(0, 8);
+    if (tasks.length <= 8) return tasks;
+    const firstActiveIndex = tasks.findIndex((task) => task.status !== 'completed');
+    if (firstActiveIndex === -1) {
+      return tasks.slice(Math.max(0, tasks.length - 8));
+    }
+    const startIndex = Math.max(0, firstActiveIndex - 2);
+    return tasks.slice(startIndex, startIndex + 8);
   }, [openSpecDetails?.tasks]);
   const focusTaskOnDiagram = useCallback((task: { phaseId?: string }) => {
     const phaseTitle = getOpenSpecTaskPhaseTitle(task);
@@ -3698,7 +3745,7 @@ export default function WorkbenchPage() {
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit_note</span><span className="hidden sm:inline">上下文</span>
               </Button>
               {projectRoot && (
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setWorkspaceEditorOpen(true)} title="打开工作区编辑器">
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => openWorkspaceEditorAtPath(state.workingDirectory || resolvedProjectRoot || projectRoot, '工作区')} title="打开工作区编辑器">
                   <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_open</span><span className="hidden sm:inline">工作区</span>
                 </Button>
               )}
@@ -4026,10 +4073,11 @@ export default function WorkbenchPage() {
                 </TabsContent>
 {isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
           </div></TabsContent>}
-<TabsContent value="documents" className="mt-0 h-full">
+                <TabsContent value="documents" className="mt-0 h-full">
                   <DocumentsPanel
                     runId={runId || selectedRun?.id || null}
                     openLatestTimestampedRequest={openLatestAiDocRequest}
+                    onOpenWorkspaceDirectory={(path) => openWorkspaceEditorAtPath(path, '文档目录')}
                   />
                 </TabsContent>
                 <TabsContent value="schedules" className="mt-0 h-full">
@@ -5173,22 +5221,8 @@ export default function WorkbenchPage() {
 
               {/* AI 建议的下一步 */}
               <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200 dark:border-blue-800">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <div className="text-sm font-medium text-blue-700 dark:text-blue-400">
-                    AI 建议
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => {
-                      dispatch({ type: 'SET_ACTIVE_TAB', payload: 'documents' });
-                      setOpenLatestAiDocRequest((value) => value + 1);
-                    }}
-                  >
-                    <span className="material-symbols-outlined mr-1" style={{ fontSize: '14px' }}>description</span>
-                    查看分析报告
-                  </Button>
+                <div className="mb-2 text-sm font-medium text-blue-700 dark:text-blue-400">
+                  AI 建议
                 </div>
                 <div className="text-sm">
                   → {humanApprovalData.nextState}
@@ -5481,11 +5515,13 @@ export default function WorkbenchPage() {
         }}
       />
 
-      {resolvedProjectRoot && (
+      {(workspaceEditorPath || resolvedProjectRoot) && (
         <WorkspaceEditor
           open={workspaceEditorOpen}
           onOpenChange={setWorkspaceEditorOpen}
-          workspacePath={state.workingDirectory || resolvedProjectRoot}
+          workspacePath={workspaceEditorPath || state.workingDirectory || resolvedProjectRoot}
+          initialFilePath={workspaceEditorFilePath}
+          title={workspaceEditorTitle}
         />
       )}
     </div>

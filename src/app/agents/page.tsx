@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { Globe } from 'lucide-react';
+import { FolderOpen, Globe } from 'lucide-react';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/engine-metadata';
 import AgentEditModal from '@/components/AgentEditModal';
@@ -37,6 +37,7 @@ import {
 } from '@/lib/agent-conversations';
 import { cn } from '@/lib/utils';
 import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
+import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 
 interface AgentConfig {
   name: string;
@@ -84,6 +85,8 @@ export default function AgentsPage() {
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
+  const [runtimeAgentsDir, setRuntimeAgentsDir] = useState('');
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
   const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
@@ -157,6 +160,7 @@ export default function AgentsPage() {
       setLoading(true);
       const data = await agentApi.listAgents();
       setAgents(data.agents || []);
+      setRuntimeAgentsDir(data.runtimeAgentsDir || '');
     } catch (error) {
       console.error('Failed to load agents:', error);
     } finally {
@@ -469,6 +473,14 @@ export default function AgentsPage() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.08),_transparent_25%),radial-gradient(circle_at_20%_20%,_rgba(59,130,246,0.1),_transparent_30%),radial-gradient(circle_at_80%_10%,_rgba(244,63,94,0.08),_transparent_28%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--background)))]">
+      {runtimeAgentsDir ? (
+        <WorkspaceEditor
+          open={workspaceOpen}
+          onOpenChange={setWorkspaceOpen}
+          workspacePath={runtimeAgentsDir}
+          title="Runtime Agents"
+        />
+      ) : null}
       <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -479,6 +491,10 @@ export default function AgentsPage() {
           <h1 className="text-lg font-semibold">Agent 管理</h1>
         </div>
         <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
+            <FolderOpen className="w-4 h-4 mr-1" />
+            打开工作目录
+          </Button>
           <Button size="sm" onClick={() => setShowAICreateModal(true)} variant="outline">
             <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
             AI 创建

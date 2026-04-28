@@ -46,10 +46,10 @@ export async function GET() {
     const skillsDir = await getRuntimeSkillsDirPath();
     const dirExists = existsSync(skillsDir);
     if (!dirExists) {
-      return NextResponse.json({ skills: [], isCloned: true, message: 'Skills 目录不存在' });
+      return NextResponse.json({ skills: [], isCloned: true, message: 'Skills 目录不存在', runtimeSkillsDir: skillsDir });
     }
     const skills = await discoverSkills();
-    return NextResponse.json({ skills, isCloned: true });
+    return NextResponse.json({ skills, isCloned: true, runtimeSkillsDir: skillsDir });
   } catch (error) {
     console.error('Failed to read skills:', error);
     return NextResponse.json({ error: 'Failed to read skills' }, { status: 500 });
