@@ -8,6 +8,7 @@ import { dirname, resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/app-paths';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
+import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
 
 const SETTINGS_PATH = getWorkspaceDataFile('chat-settings.yaml');
 
@@ -50,18 +51,6 @@ function parseSkillMdBody(content: string): { label: string; description: string
   return { label, description };
 }
 
-/** Parse YAML frontmatter from SKILL.md */
-function parseFrontmatter(content: string): Record<string, any> | null {
-  if (!content.startsWith('---')) return null;
-  const endIdx = content.indexOf('---', 3);
-  if (endIdx < 0) return null;
-  try {
-    return parse(content.substring(3, endIdx)) || null;
-  } catch {
-    return null;
-  }
-}
-
 /** 扫描 skills/xxx/SKILL.md，发现所有技能并提取元数据 */
 export async function discoverSkills(): Promise<SkillInfo[]> {
   const skills: SkillInfo[] = [];
@@ -73,8 +62,9 @@ export async function discoverSkills(): Promise<SkillInfo[]> {
       const name = entry.name;
       try {
         const content = await readFile(resolve(skillsDir, name, 'SKILL.md'), 'utf-8');
-        const fm = parseFrontmatter(content);
-        if (!fm || !fm.name) continue; // Must have frontmatter with name
+        const validation = validateSkillFrontmatter(content);
+        if (!validation.ok) continue;
+        const fm = validation.frontmatter;
 
         const body = parseSkillMdBody(content);
         const label = body.label || fm.name;
@@ -86,8 +76,8 @@ export async function discoverSkills(): Promise<SkillInfo[]> {
           label,
           description,
           enabled: true,
-          source: fm.source || 'cangjie',
-          tags: fm.tags || [],
+          source: normalizeSkillSource(fm.source),
+          tags: normalizeStringArray(fm.tags),
         });
       } catch { /* no SKILL.md */ }
     }

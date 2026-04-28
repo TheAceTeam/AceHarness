@@ -1,21 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { parse } from 'yaml';
 import { existsSync } from 'fs';
 import { getRuntimeSkillsDirPath, getSkillsTempPath } from '@/lib/runtime-skills';
-
-/** Parse YAML frontmatter from SKILL.md content */
-function parseFrontmatter(content: string): Record<string, any> | null {
-  if (!content.startsWith('---')) return null;
-  const endIdx = content.indexOf('---', 3);
-  if (endIdx < 0) return null;
-  try {
-    return parse(content.substring(3, endIdx)) || null;
-  } catch {
-    return null;
-  }
-}
+import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
 
 /** Scan skills/ directory, find xxx/SKILL.md with valid frontmatter */
 async function discoverSkills() {
@@ -28,8 +16,9 @@ async function discoverSkills() {
       const skillMdPath = path.join(skillsDir, entry.name, 'SKILL.md');
       try {
         const content = await fs.readFile(skillMdPath, 'utf-8');
-        const fm = parseFrontmatter(content);
-        if (!fm || !fm.name) continue; // Must have frontmatter with name
+        const validation = validateSkillFrontmatter(content);
+        if (!validation.ok) continue;
+        const fm = validation.frontmatter;
 
         // Check for PROMPT.md
         const promptMdPath = path.join(skillsDir, entry.name, 'PROMPT.md');
@@ -38,10 +27,10 @@ async function discoverSkills() {
         skills.push({
           name: fm.name,
           path: entry.name,
-          description: fm.description || '',
+          description: fm.description,
           descriptionZh: fm.descriptionZH || '',
-          tags: fm.tags || [],
-          source: fm.source || 'cangjie',
+          tags: normalizeStringArray(fm.tags),
+          source: normalizeSkillSource(fm.source),
           hasPromptMd,
           detailedDescription: content,
         });
@@ -99,39 +88,57 @@ export async function POST(request: NextRequest) {
     const execAsync = promisify(exec);
     await execAsync(`unzip -o "${zipPath}" -d "${extractDir}"`, { maxBuffer: 50 * 1024 * 1024 });
 
-    // Find valid skills (directories containing SKILL.md)
-    const imported: string[] = [];
-    const entries = await fs.readdir(extractDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const skillMd = path.join(extractDir, entry.name, 'SKILL.md');
-      const hasSkillMd = existsSync(skillMd);
-      if (!hasSkillMd) continue;
+    type SkillImportCandidate = {
+      sourceDir: string;
+      destName: string;
+      label: string;
+    };
 
-      // Copy to skills/
-      const dest = path.join(skillsDir, entry.name);
-      await fs.cp(path.join(extractDir, entry.name), dest, { recursive: true });
-      imported.push(entry.name);
+    const candidates: SkillImportCandidate[] = [];
+    const rootSkillMd = path.join(extractDir, 'SKILL.md');
+
+    // Root SKILL.md means the zip itself is a single skill; subdirectories are resources.
+    if (existsSync(rootSkillMd)) {
+      const skillName = file.name.replace(/\.zip$/i, '');
+      candidates.push({ sourceDir: extractDir, destName: skillName, label: skillName });
+    } else {
+      // Otherwise import every top-level directory that contains SKILL.md.
+      const entries = await fs.readdir(extractDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const skillMd = path.join(extractDir, entry.name, 'SKILL.md');
+        if (!existsSync(skillMd)) continue;
+        candidates.push({ sourceDir: path.join(extractDir, entry.name), destName: entry.name, label: entry.name });
+      }
     }
 
-    // Also check if the zip itself is a single skill (SKILL.md at root of extracted)
-    if (imported.length === 0) {
-      const rootSkillMd = path.join(extractDir, 'SKILL.md');
-      if (existsSync(rootSkillMd)) {
-        // Use the zip filename (without .zip) as skill name
-        const skillName = file.name.replace(/\.zip$/i, '');
-        const dest = path.join(skillsDir, skillName);
-        await fs.cp(extractDir, dest, { recursive: true });
-        imported.push(skillName);
+    if (candidates.length === 0) {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      return NextResponse.json({ error: '未找到有效的 Skill（需包含 SKILL.md）' }, { status: 400 });
+    }
+
+    for (const candidate of candidates) {
+      const skillMdPath = path.join(candidate.sourceDir, 'SKILL.md');
+      const content = await fs.readFile(skillMdPath, 'utf-8');
+      const validation = validateSkillFrontmatter(content);
+      if (!validation.ok) {
+        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+        return NextResponse.json(
+          { error: `Skill 校验失败（${candidate.label}/SKILL.md）：${validation.error}` },
+          { status: 400 }
+        );
       }
+    }
+
+    const imported: string[] = [];
+    for (const candidate of candidates) {
+      const dest = path.join(skillsDir, candidate.destName);
+      await fs.cp(candidate.sourceDir, dest, { recursive: true });
+      imported.push(candidate.destName);
     }
 
     // Cleanup
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-
-    if (imported.length === 0) {
-      return NextResponse.json({ error: '未找到有效的 Skill（需包含 SKILL.md）' }, { status: 400 });
-    }
 
     return NextResponse.json({ success: true, imported, message: `导入了 ${imported.length} 个 Skill` });
   } catch (error) {

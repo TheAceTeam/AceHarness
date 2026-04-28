@@ -34,6 +34,22 @@ const SOURCE_COLORS: Record<string, string> = {
   cangjie: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   anthropics: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
 };
+const DEFAULT_SOURCE_COLOR = 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+const SOURCE_LABELS: Record<string, string> = { cangjie: 'Cangjie', anthropics: 'Anthropics' };
+const SOURCE_ICONS: Record<string, string> = { cangjie: '🔧', anthropics: '✨' };
+const SOURCE_ORDER = ['cangjie', 'anthropics'];
+
+function normalizeSkillSource(skill: Pick<Skill, 'source'>): string {
+  return skill.source?.trim() || 'cangjie';
+}
+
+function getSourceLabel(source: string): string {
+  return SOURCE_LABELS[source] || source;
+}
+
+function getSourceIcon(source: string): string {
+  return SOURCE_ICONS[source] || '🧩';
+}
 
 export default function SkillsPage() {
   const router = useRouter();
@@ -145,6 +161,27 @@ export default function SkillsPage() {
     [skills]
   );
 
+  const sourceKeys = useMemo(() => {
+    return Array.from(new Set(skills.map(normalizeSkillSource))).sort((a, b) => {
+      const aIndex = SOURCE_ORDER.indexOf(a);
+      const bIndex = SOURCE_ORDER.indexOf(b);
+      if (aIndex >= 0 || bIndex >= 0) {
+        return (aIndex >= 0 ? aIndex : SOURCE_ORDER.length) - (bIndex >= 0 ? bIndex : SOURCE_ORDER.length);
+      }
+      return a.localeCompare(b);
+    });
+  }, [skills]);
+
+  const sourceCounts = useMemo(() => {
+    return skills.reduce<Record<string, number>>((acc, skill) => {
+      const source = normalizeSkillSource(skill);
+      acc[source] = (acc[source] || 0) + 1;
+      return acc;
+    }, {});
+  }, [skills]);
+
+  const sourceFilterOptions = useMemo(() => ['all', ...sourceKeys], [sourceKeys]);
+
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
       prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
@@ -154,7 +191,7 @@ export default function SkillsPage() {
   // Filter skills
   const filteredSkills = useMemo(() => {
     return skills.filter(skill => {
-      if (selectedSource !== 'all' && (skill.source || 'cangjie') !== selectedSource) return false;
+      if (selectedSource !== 'all' && normalizeSkillSource(skill) !== selectedSource) return false;
       if (selectedTags.length > 0 && !selectedTags.some(tag => skill.tags?.includes(tag))) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -169,13 +206,17 @@ export default function SkillsPage() {
     });
   }, [skills, selectedSource, selectedTags, searchQuery]);
 
-  const groupedSkills = useMemo(() => ({
-    cangjie: filteredSkills.filter(s => (s.source || 'cangjie') === 'cangjie'),
-    anthropics: filteredSkills.filter(s => s.source === 'anthropics'),
-  }), [filteredSkills]);
-
-  const sourceLabels: Record<string, string> = { cangjie: 'Cangjie', anthropics: 'Anthropics' };
-  const sourceIcons: Record<string, string> = { cangjie: '🔧', anthropics: '✨' };
+  const groupedSkills = useMemo(() => {
+    const groups = filteredSkills.reduce<Record<string, Skill[]>>((acc, skill) => {
+      const source = normalizeSkillSource(skill);
+      acc[source] = acc[source] || [];
+      acc[source].push(skill);
+      return acc;
+    }, {});
+    return sourceKeys
+      .filter(source => groups[source]?.length)
+      .map(source => [source, groups[source]] as const);
+  }, [filteredSkills, sourceKeys]);
 
   const getDisplayDescription = (skill: Skill) => {
     return skill.descriptionZh || skill.description;
@@ -238,14 +279,14 @@ export default function SkillsPage() {
           />
           <div className="flex gap-2 items-center">
             <span className="text-sm text-muted-foreground">来源:</span>
-            {(['all', 'cangjie', 'anthropics'] as const).map(src => (
+            {sourceFilterOptions.map(src => (
               <Button
                 key={src}
                 size="sm"
                 variant={selectedSource === src ? 'default' : 'outline'}
                 onClick={() => setSelectedSource(src)}
               >
-                {src === 'all' ? `全部 (${skills.length})` : `${sourceLabels[src]} (${skills.filter(s => (s.source || 'cangjie') === src).length})`}
+                {src === 'all' ? `全部 (${skills.length})` : `${getSourceLabel(src)} (${sourceCounts[src] || 0})`}
               </Button>
             ))}
           </div>
@@ -287,12 +328,12 @@ export default function SkillsPage() {
           </div>
         ) : (
           <div className="space-y-8">
-            {Object.entries(groupedSkills).map(([source, sourceSkills]) =>
+            {groupedSkills.map(([source, sourceSkills]) =>
               sourceSkills.length > 0 && (
                 <div key={source}>
                   <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <span>{sourceIcons[source]}</span>
-                    {sourceLabels[source]}
+                    <span>{getSourceIcon(source)}</span>
+                    {getSourceLabel(source)}
                     <Badge variant="secondary">{sourceSkills.length}</Badge>
                   </h2>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -358,8 +399,8 @@ export default function SkillsPage() {
               <div>
                 <h2 className="text-xl font-semibold">{selectedSkill.name}</h2>
                 <div className="flex gap-2 mt-1">
-                  <Badge className={SOURCE_COLORS[selectedSkill.source || 'cangjie']}>
-                    {selectedSkill.source || 'cangjie'}
+                  <Badge className={SOURCE_COLORS[normalizeSkillSource(selectedSkill)] || DEFAULT_SOURCE_COLOR}>
+                    {normalizeSkillSource(selectedSkill)}
                   </Badge>
                   {selectedSkill.hasPromptMd && (
                     <Badge variant="default" className="bg-green-500/20 text-green-400 border-green-500/30">
