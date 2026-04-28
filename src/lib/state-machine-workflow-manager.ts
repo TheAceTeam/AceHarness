@@ -1021,6 +1021,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
             suggestedNextState: this.pendingApprovalInfo.suggestedNextState,
             availableStates: this.pendingApprovalInfo.availableStates,
             supervisorAdvice: this.pendingApprovalInfo.supervisorAdvice,
+            result: this.pendingApprovalInfo.result,
           },
         } : {}),
         workingDirectory: this.getWorkingDirectory() || undefined,
@@ -1735,6 +1736,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         // Emit human approval required event and wait
         this.emit('human-approval-required', {
           currentState: '__human_approval__',
+          nextState,
           suggestedNextState: nextState,
           result,
           availableStates: config.workflow.states.map(s => s.name),
@@ -3117,6 +3119,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       this.emit('human-approval-required', {
         currentState: '__human_approval__',
+        nextState: suggestedNextState,
         suggestedNextState,
         result: { issues: [] },
         availableStates,

@@ -475,6 +475,20 @@ export default function WorkbenchPage() {
   const isRunMode = state.viewMode === 'run';
   const isHistoryMode = state.viewMode === 'history';
 
+  const switchViewMode = useCallback((mode: ViewMode) => {
+    if (mode !== 'history') {
+      setViewingHistoryRun(false);
+    }
+    dispatch({ type: 'SET_VIEW_MODE', payload: mode });
+    if (mode === 'run') {
+      updateUrl({ mode: 'run', run: runId || null });
+    } else if (mode === 'design') {
+      updateUrl({ mode: 'design', run: null });
+    } else {
+      updateUrl({ mode: 'history', run: null });
+    }
+  }, [dispatch, runId, updateUrl]);
+
   useEffect(() => {
     fetch('/api/engine')
       .then((res) => res.json())
@@ -599,26 +613,33 @@ export default function WorkbenchPage() {
   const checkpointDeviationNotes = useMemo(() => {
     if (!humanApprovalData || !openSpecDetails?.phases?.length) return [];
     const notes: string[] = [];
-    const reviewPhase = openSpecDetails.phases.find((phase) => phase.title === humanApprovalData.currentState);
+    const reviewStateName = humanApprovalData.currentState === '__human_approval__'
+      ? activeOpenSpecPhase?.title || null
+      : humanApprovalData.currentState;
+    const reviewPhase = reviewStateName
+      ? openSpecDetails.phases.find((phase) => phase.title === reviewStateName)
+      : null;
 
     if (!reviewPhase) {
-      notes.push(`运行态 OpenSpec 中未找到与当前人工审查状态「${humanApprovalData.currentState}」对应的阶段定义。`);
+      if (reviewStateName) {
+        notes.push(`运行态 OpenSpec 中未找到与当前审查阶段「${formatStateName(reviewStateName)}」对应的阶段定义。`);
+      }
       return notes;
     }
 
-    if (activeOpenSpecPhase && activeOpenSpecPhase.title !== humanApprovalData.currentState) {
-      notes.push(`OpenSpec 当前活跃阶段是「${activeOpenSpecPhase.title}」，与待审状态「${humanApprovalData.currentState}」不一致。`);
+    if (reviewStateName && activeOpenSpecPhase && activeOpenSpecPhase.title !== reviewStateName) {
+      notes.push(`OpenSpec 当前活跃阶段是「${activeOpenSpecPhase.title}」，与待审阶段「${formatStateName(reviewStateName)}」不一致。`);
     }
 
     if (reviewPhase.status === 'blocked' && humanApprovalData.result?.verdict !== 'fail') {
       notes.push(`OpenSpec 已将该阶段标记为 blocked，但本次判定为 ${humanApprovalData.result?.verdict || '未知'}，需要确认是否继续阻塞。`);
     }
 
-    if (humanApprovalData.nextState === humanApprovalData.currentState && reviewPhase.status === 'completed') {
+    if (reviewStateName && humanApprovalData.nextState === reviewStateName && reviewPhase.status === 'completed') {
       notes.push(`OpenSpec 已将该阶段标记为 completed，但 AI 仍建议继续留在当前状态。`);
     }
 
-    if (humanApprovalData.nextState !== humanApprovalData.currentState && reviewPhase.status === 'in-progress') {
+    if (reviewStateName && humanApprovalData.nextState !== reviewStateName && reviewPhase.status === 'in-progress') {
       notes.push(`OpenSpec 当前仍显示该阶段 in-progress，但 AI 建议流转到「${humanApprovalData.nextState}」。`);
     }
 
@@ -1105,6 +1126,22 @@ export default function WorkbenchPage() {
     try {
       const status = await workflowApi.getStatus(configFile);
       if (!status?.status) return;
+      const smStatus = status as typeof status & {
+        mode?: 'state-machine' | 'phase-based';
+        currentState?: string | null;
+        pendingCheckpoint?: {
+          suggestedNextState?: string;
+          availableStates?: string[];
+          supervisorAdvice?: string;
+          message?: string;
+          result?: {
+            verdict?: string;
+            issues?: any[];
+            summary?: string;
+            stepOutputs?: string[];
+          };
+        };
+      };
 
       // Check if the running workflow is for this config file
       const isForCurrentConfig = !status.currentConfigFile || status.currentConfigFile === configFile;
@@ -1205,6 +1242,26 @@ export default function WorkbenchPage() {
       if (status.transitionCount !== undefined) {
         setSmTransitionCount(status.transitionCount);
       }
+      if (smStatus.mode === 'state-machine' && smStatus.currentState === '__human_approval__' && smStatus.pendingCheckpoint) {
+        const workflowStates = (workflowConfig as any)?.workflow?.states?.map((state: any) => state.name) || [];
+        const restoredAvailableStates = smStatus.pendingCheckpoint.availableStates
+          || workflowStates.filter((stateName: string) => stateName !== '__human_approval__');
+        const restoredResult = smStatus.pendingCheckpoint.result || { issues: [] };
+        setHumanApprovalData({
+          currentState: '__human_approval__',
+          nextState: smStatus.pendingCheckpoint.suggestedNextState || restoredAvailableStates[0] || '',
+          result: {
+            verdict: restoredResult.verdict || (Array.isArray(restoredResult.issues) && restoredResult.issues.length > 0 ? 'conditional_pass' : 'pass'),
+            issues: restoredResult.issues || [],
+            summary: restoredResult.summary || smStatus.pendingCheckpoint.message || '等待人工审查',
+            stepOutputs: restoredResult.stepOutputs || [],
+          },
+          availableStates: restoredAvailableStates,
+          supervisorAdvice: smStatus.pendingCheckpoint.supervisorAdvice,
+        });
+      } else {
+        setHumanApprovalData(null);
+      }
       if (status.startTime) {
         setRunStartTime(status.startTime);
       }
@@ -1271,6 +1328,16 @@ export default function WorkbenchPage() {
       loadHistory();
     }
   }, [viewMode, viewingHistoryRun, initialRunId, runId]);
+
+  useEffect(() => {
+    const modeFromUrl = (searchParams.get('mode') as ViewMode) || 'run';
+    if (modeFromUrl !== state.viewMode) {
+      dispatch({ type: 'SET_VIEW_MODE', payload: modeFromUrl });
+    }
+    if (modeFromUrl !== 'history' && viewingHistoryRun) {
+      setViewingHistoryRun(false);
+    }
+  }, [dispatch, searchParams, state.viewMode, viewingHistoryRun]);
 
   // Auto-load run from URL ?run=xxx on mount
   useEffect(() => {
@@ -1470,10 +1537,10 @@ export default function WorkbenchPage() {
           currentState: currentStateName,
           nextState: suggestedNextState,
           result: {
-            verdict: approvalTransition?.issues?.length > 0 ? 'conditional_pass' : 'pass',
-            issues: approvalTransition?.issues || [],
-            summary: approvalTransition?.reason || '等待人工审查',
-            stepOutputs: [],
+            verdict: detail.pendingCheckpoint?.result?.verdict || (approvalTransition?.issues?.length > 0 ? 'conditional_pass' : 'pass'),
+            issues: detail.pendingCheckpoint?.result?.issues || approvalTransition?.issues || [],
+            summary: detail.pendingCheckpoint?.result?.summary || approvalTransition?.reason || '等待人工审查',
+            stepOutputs: detail.pendingCheckpoint?.result?.stepOutputs || [],
           },
           availableStates: restoredAvailableStates,
           supervisorAdvice: detail.pendingCheckpoint?.supervisorAdvice,
@@ -1613,11 +1680,11 @@ export default function WorkbenchPage() {
         addLog('system', 'warning', `⚠️ 升级人工: ${event.data.phase} - ${event.data.reason}`);
         break;
       case 'human-approval-required':
-        addLog('system', 'info', `👤 等待人工审查: ${event.data.currentState} → ${event.data.nextState}`);
+        addLog('system', 'info', `👤 等待人工审查: ${event.data.currentState} → ${event.data.nextState || event.data.suggestedNextState || ''}`);
         // Show human approval dialog
         setHumanApprovalData({
           currentState: event.data.currentState,
-          nextState: event.data.nextState,
+          nextState: event.data.nextState || event.data.suggestedNextState || '',
           result: event.data.result,
           availableStates: event.data.availableStates || [],
           supervisorAdvice: event.data.supervisorAdvice,
@@ -3478,15 +3545,15 @@ export default function WorkbenchPage() {
         </div>
         <div className="flex gap-0.5 bg-background/50 rounded-md p-0.5 shrink-0">
           <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isRunMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'run' })}>
+            onClick={() => switchViewMode('run')}>
             <span className="material-symbols-outlined text-sm">home</span><span className="hidden sm:inline ml-1">首页</span>
           </Button>
           <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isDesignMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'design' })}>
+            onClick={() => switchViewMode('design')}>
             <span className="material-symbols-outlined text-sm">edit</span><span className="hidden sm:inline ml-1">设计</span>
           </Button>
           <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isHistoryMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => dispatch({ type: 'SET_VIEW_MODE', payload: 'history' })}>
+            onClick={() => switchViewMode('history')}>
             <span className="material-symbols-outlined text-sm">history</span><span className="hidden sm:inline ml-1">历史</span>
           </Button>
         </div>

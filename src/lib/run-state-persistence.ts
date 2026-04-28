@@ -102,6 +102,13 @@ export interface PersistedRunState {
     availableStates?: string[];
     /** State machine: supervisor advice for human checkpoint */
     supervisorAdvice?: string;
+    /** State machine: full approval result for UI restore */
+    result?: {
+      verdict?: string;
+      issues?: any[];
+      summary?: string;
+      stepOutputs?: string[];
+    };
   };
   globalContext?: string;
   phaseContexts?: Record<string, string>;
