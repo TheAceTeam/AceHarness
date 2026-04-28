@@ -476,6 +476,7 @@ export default function WorkbenchPage() {
   const LIVE_STREAM_PAGE_SIZE = 30;
   const [liveStreamVisibleCount, setLiveStreamVisibleCount] = useState(LIVE_STREAM_PAGE_SIZE);
   const liveStreamUserScrolledUp = useRef(false);
+  const [liveStreamScrollLocked, setLiveStreamScrollLocked] = useState(false);
   const {
     viewMode, workflowConfig, editingConfig, agentConfigs,
     workflowStatus, runId, currentPhase, currentStep, agents, logs, completedSteps, failedSteps,
@@ -2531,6 +2532,7 @@ export default function WorkbenchPage() {
     liveStreamRawRef.current = '';
     setLiveStreamVisibleCount(LIVE_STREAM_PAGE_SIZE);
     liveStreamUserScrolledUp.current = false;
+    setLiveStreamScrollLocked(false);
     setInlineFeedbacks([]);
     setLiveStream([]);
 
@@ -2672,6 +2674,7 @@ export default function WorkbenchPage() {
     liveStreamRawRef.current = '';
     setShowLiveStream(false);
     setLiveStreamFullscreen(false);
+    setLiveStreamScrollLocked(false);
   };
 
   // Auto-reconnect live stream when currentStep changes while modal is open
@@ -2782,10 +2785,18 @@ export default function WorkbenchPage() {
 
   // Auto-scroll live stream to bottom when content updates (only if user hasn't scrolled up)
   useEffect(() => {
-    if (liveStreamScrollRef.current && !liveStreamUserScrolledUp.current) {
+    if (liveStreamScrollRef.current && !liveStreamScrollLocked) {
       liveStreamScrollRef.current.scrollTop = liveStreamScrollRef.current.scrollHeight;
     }
-  }, [liveStream]);
+  }, [liveStream, liveStreamScrollLocked]);
+
+  const unlockLiveStreamScroll = useCallback(() => {
+    liveStreamUserScrolledUp.current = false;
+    setLiveStreamScrollLocked(false);
+    if (liveStreamScrollRef.current) {
+      liveStreamScrollRef.current.scrollTop = liveStreamScrollRef.current.scrollHeight;
+    }
+  }, []);
 
   // Find the latest iteration result key for a step (e.g. "代码审计" → UUID or "代码审计-迭代3" if that's the latest)
   const getLatestStepKey = (baseName: string): string => {
@@ -4835,6 +4846,22 @@ export default function WorkbenchPage() {
             <div className="p-5 border-b flex justify-between items-center">
               <h3 className="text-lg font-semibold"><span className="material-symbols-outlined text-lg mr-2 align-middle">cell_tower</span>实时输出 {currentStep ? `- ${currentStep}` : ''}</h3>
               <div className="flex items-center gap-1">
+                <Button
+                  variant={liveStreamScrollLocked ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => {
+                    if (liveStreamScrollLocked) {
+                      unlockLiveStreamScroll();
+                    } else {
+                      liveStreamUserScrolledUp.current = true;
+                      setLiveStreamScrollLocked(true);
+                    }
+                  }}
+                  title={liveStreamScrollLocked ? '解除滚动锁并跳到底部' : '锁定当前滚动位置'}
+                >
+                  <span className="material-symbols-outlined text-sm mr-1">{liveStreamScrollLocked ? 'lock' : 'lock_open'}</span>
+                  {liveStreamScrollLocked ? '滚动已锁定' : '跟随滚动'}
+                </Button>
                 <Button variant="ghost" size="sm" onClick={() => setLiveStreamFullscreen(f => !f)} title={liveStreamFullscreen ? '退出全屏' : '全屏'}>
                   <span className="material-symbols-outlined text-sm">{liveStreamFullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
                 </Button>
@@ -4845,6 +4872,7 @@ export default function WorkbenchPage() {
               const el = e.currentTarget;
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
               liveStreamUserScrolledUp.current = !atBottom;
+              setLiveStreamScrollLocked(!atBottom);
               if (el.scrollTop === 0 && liveStream.length > liveStreamVisibleCount) {
                 setLiveStreamVisibleCount(prev => prev + LIVE_STREAM_PAGE_SIZE);
               }

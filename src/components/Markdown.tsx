@@ -11,6 +11,7 @@ import { workspaceApi } from '@/lib/api';
 import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook-markdown';
 import { copyText } from '@/lib/clipboard';
 import { AnsiLogBlock } from '@/components/AnsiLogBlock';
+import { Button } from '@/components/ui/button';
 import styles from './Markdown.module.css';
 
 function normalizeWindowsSeparators(input: string): string {
@@ -314,6 +315,61 @@ function MermaidBlock({ code }: { code: string }) {
   );
 }
 
+const DETAILS_LAZY_CHAR_THRESHOLD = 120000;
+const DETAILS_LAZY_LINE_THRESHOLD = 2000;
+
+function LazyDetailsBody({
+  bodyText,
+  bodyNodes,
+  open,
+}: {
+  bodyText: string;
+  bodyNodes: any[];
+  open: boolean;
+}) {
+  const [contentLoaded, setContentLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const lineCount = bodyText ? bodyText.split(/\r?\n/).length : 0;
+    const shouldLazyLoad = bodyText.length > DETAILS_LAZY_CHAR_THRESHOLD || lineCount > DETAILS_LAZY_LINE_THRESHOLD;
+    if (!shouldLazyLoad) {
+      setContentLoaded(true);
+    }
+  }, [bodyText, open]);
+
+  useEffect(() => {
+    if (!open) {
+      setContentLoaded(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const lineCount = bodyText ? bodyText.split(/\r?\n/).length : 0;
+  const shouldLazyLoad = bodyText.length > DETAILS_LAZY_CHAR_THRESHOLD || lineCount > DETAILS_LAZY_LINE_THRESHOLD;
+
+  if (shouldLazyLoad && !contentLoaded) {
+    return (
+      <div className="px-3 py-3 space-y-3">
+        <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-6 text-muted-foreground">
+          这段详情较大，约 {lineCount.toLocaleString()} 行 / {bodyText.length.toLocaleString()} 字符。默认不立即渲染，避免实时输出卡顿。
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setContentLoaded(true)}>
+          加载详情内容
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-3 py-2">
+      {bodyText ? renderMarkdownFragment(bodyText) : null}
+      {bodyNodes}
+    </div>
+  );
+}
+
 function RunnableCodeBlock({ code, language }: { code: string; language: string }) {
   const { toast } = useToast();
   const [running, setRunning] = useState(false);
@@ -460,6 +516,7 @@ const components = {
       return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
     }
 
+    const [open, setOpen] = useState(Boolean(props.open));
     const parts = Children.toArray(children);
     const summaryNode = parts.find(isSummaryElement) || null;
     const bodyText = parts
@@ -469,14 +526,18 @@ const components = {
     const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
 
     return (
-      <details className="my-2 border border-border/50 rounded-md" {...props}>
+      <details
+        className="my-2 border border-border/50 rounded-md"
+        {...props}
+        onToggle={(event: any) => {
+          setOpen(Boolean(event.currentTarget?.open));
+          props.onToggle?.(event);
+        }}
+      >
         {summaryNode}
-        {(bodyText || bodyNodes.length > 0) && (
-          <div className="px-3 py-2">
-            {bodyText ? renderMarkdownFragment(bodyText) : null}
-            {bodyNodes}
-          </div>
-        )}
+        {(bodyText || bodyNodes.length > 0) ? (
+          <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
+        ) : null}
       </details>
     );
   },
