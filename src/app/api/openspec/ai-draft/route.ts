@@ -214,6 +214,7 @@ export async function POST(request: NextRequest) {
       '- clarification 里的问题只问会改变业务方案的重要变量，不问系统机制、角色分工或配置实现。',
       '- proposal 必须写清楚业务目标、当前问题、范围、非范围、验收标准、需求切片，以及已确认事实 / 当前假设 / 待确认点。',
       '- design 必须包含 Overview、Architecture、Core Components、Data Models、Interfaces And Contracts、业务流程图或 Mermaid 图，以及能落到真实逻辑的伪代码或步骤化算法说明。',
+      '- 只要 design 中出现 Mermaid 图，必须使用独立的 ```mermaid fenced code block；不要写成“Mermaid 流程图如下：flowchart ...”这类普通文本。',
       '- tasks 必须足够细，按阶段拆分；每项都写清楚关联需求、关联设计、任务类型、目标、输入/依赖、实施内容、产物和验证方式。',
       '- requirements/spec 应尽量使用稳定的需求 DSL：术语表 + 可编号需求 + 场景/验收标准。',
       '- 文档表面保持业务化，不直接写 workflow、agent、状态机等系统术语；但结构必须清晰到足以支撑后续 workflow 和角色分工派生。',

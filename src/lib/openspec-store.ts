@@ -107,6 +107,14 @@ function parseOpenSpecTasksFromMarkdown(
     const numbered = body.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
     const id = commentMeta.id || numbered?.[1] || `task-${lineIndex + 1}`;
     const title = (numbered?.[2] || body).trim();
+    const detailLines: string[] = [];
+    for (let nextIndex = lineIndex + 1; nextIndex < lines.length; nextIndex += 1) {
+      const nextLine = lines[nextIndex];
+      if (/^##\s+/.test(nextLine)) break;
+      if (/^\s*-\s+\[([ xX-])\]\s+(.+?)\s*$/.test(nextLine)) break;
+      detailLines.push(nextLine);
+    }
+    const detail = detailLines.join('\n').trim() || undefined;
     const phaseId = commentMeta.phaseId || inferTaskPhaseId({
       sectionTitle: currentSectionTitle,
       sectionIndex: currentSectionIndex,
@@ -120,6 +128,7 @@ function parseOpenSpecTasksFromMarkdown(
     tasks.push({
       id,
       title,
+      detail,
       status: commentMeta.status || (
         taskLine[1].toLowerCase() === 'x'
           ? 'completed'
@@ -133,6 +142,50 @@ function parseOpenSpecTasksFromMarkdown(
   }
 
   return tasks;
+}
+
+function mergeRebuiltOpenSpecWithExisting(
+  existing: OpenSpecDocument,
+  rebuilt: OpenSpecDocument,
+  input?: {
+    status?: OpenSpecDocument['status'];
+  }
+): OpenSpecDocument {
+  const nextStatus = input?.status || existing.status || rebuilt.status;
+  const merged: OpenSpecDocument = {
+    ...rebuilt,
+    id: existing.id,
+    version: existing.version,
+    status: nextStatus,
+    title: existing.title || rebuilt.title,
+    workflowName: existing.workflowName || rebuilt.workflowName,
+    summary: existing.summary || rebuilt.summary,
+    goals: existing.goals?.length ? existing.goals : rebuilt.goals,
+    nonGoals: existing.nonGoals?.length ? existing.nonGoals : rebuilt.nonGoals,
+    constraints: existing.constraints?.length ? existing.constraints : rebuilt.constraints,
+    requirements: existing.requirements?.length ? existing.requirements : rebuilt.requirements,
+    progress: {
+      ...rebuilt.progress,
+      overallStatus: existing.progress?.overallStatus || rebuilt.progress.overallStatus,
+      completedPhaseIds: existing.progress?.completedPhaseIds || rebuilt.progress.completedPhaseIds,
+      activePhaseId: existing.progress?.activePhaseId || rebuilt.progress.activePhaseId,
+      summary: existing.progress?.summary || rebuilt.progress.summary,
+    },
+    revisions: existing.revisions?.length ? existing.revisions : rebuilt.revisions,
+    artifacts: {
+      proposal: existing.artifacts?.proposal?.trim() || rebuilt.artifacts.proposal,
+      design: existing.artifacts?.design?.trim() || rebuilt.artifacts.design,
+      tasks: existing.artifacts?.tasks?.trim() || rebuilt.artifacts.tasks,
+      deltaSpec: existing.artifacts?.deltaSpec?.trim() || rebuilt.artifacts.deltaSpec,
+    },
+    createdAt: existing.createdAt || rebuilt.createdAt,
+    updatedAt: new Date().toISOString(),
+    confirmedAt: nextStatus === 'confirmed'
+      ? (existing.confirmedAt || rebuilt.confirmedAt || new Date().toISOString())
+      : existing.confirmedAt || rebuilt.confirmedAt,
+  };
+
+  return normalizeOpenSpecDocument(merged);
 }
 
 function updateTasksMarkdownStatus(markdown: string, tasks: OpenSpecTask[]): string {
@@ -896,6 +949,31 @@ export function cloneOpenSpecForRun(
       overallStatus: openSpec.progress.overallStatus === 'completed' ? 'in-progress' : openSpec.progress.overallStatus,
       summary: `Run ${input.runId} 已从创建态基线派生独立 OpenSpec 快照。`,
     },
+  });
+}
+
+export function rebuildOpenSpecPreservingArtifacts(input: {
+  existing: OpenSpecDocument;
+  workflowName: string;
+  description?: string;
+  requirements?: string;
+  filename: string;
+  workspaceMode: 'isolated-copy' | 'in-place';
+  workingDirectory: string;
+  config: WorkflowConfig | Record<string, any>;
+  status?: OpenSpecDocument['status'];
+}): OpenSpecDocument {
+  const rebuilt = buildOpenSpecFromWorkflowConfig({
+    workflowName: input.workflowName,
+    description: input.description,
+    requirements: input.requirements,
+    filename: input.filename,
+    workspaceMode: input.workspaceMode,
+    workingDirectory: input.workingDirectory,
+    config: input.config,
+  });
+  return mergeRebuiltOpenSpecWithExisting(input.existing, rebuilt, {
+    status: input.status,
   });
 }
 

@@ -2495,6 +2495,7 @@ export default function NewConfigModal({
       '2. 需求拆分要足够细，必须能支撑后续逐项执行和审查，不要停留在口号式总结。',
       '3. requirements/spec 应优先采用如下 DSL：术语表 -> 编号化需求 -> 目标用户与诉求 -> 场景/验收标准。验收标准优先使用“当 <条件> 时，系统应 <结果>”句式。',
       '4. design.md 必须包含 Overview、Architecture、Core Components、Data Models、Interfaces And Contracts、Assumptions And Unknowns、清晰的流程图或 Mermaid 图，以及与真实业务规则对应的伪代码、判定逻辑或步骤算法。',
+      '4.1 如果使用 Mermaid，必须写成独立的 ```mermaid fenced code block；不要写成“Mermaid 流程图如下：flowchart ...”这种普通段落。',
       '5. tasks.md 必须按阶段和任务编号细拆，每项任务都写清楚关联需求、关联设计、任务类型、目标、输入或依赖、具体动作、交付产物、验证方式和完成标准。',
       '6. proposal 要写清需求切片、事实与假设；design 要写清主链路和关键决策；tasks 要写清执行顺序和验证闭环。',
       '7. 正式制品中不要直接写 workflow、Agent、状态机、编排等系统术语，但任务切片和阶段结构必须足够稳定，以便后续派生 workflow 和角色分工。',

@@ -1,6 +1,6 @@
 'use client';
 
-import { Children, isValidElement, useMemo, useState, useCallback, useEffect } from 'react';
+import { Children, isValidElement, useMemo, useState, useCallback, useEffect, useId } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -52,6 +52,7 @@ const verdictConfig: Record<string, { icon: string; label: string; color: string
 let basicHljsLanguagesRegistered = false;
 let cangjieLanguageRegistered = false;
 let highlightReady = false;
+let mermaidInitialized = false;
 
 function VerdictCard({ data }: { data: { verdict: string; remaining_issues?: number; summary?: string } }) {
   const cfg = verdictConfig[data.verdict] || verdictConfig.fail;
@@ -180,6 +181,70 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   return renderHighlightedCode(code, language);
 }
 
+function MermaidBlock({ code }: { code: string }) {
+  const diagramId = useId().replace(/:/g, '-');
+  const [svg, setSvg] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const mod = await import('mermaid');
+        const mermaid = mod.default || mod;
+        if (!mermaidInitialized) {
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'loose',
+            theme: 'neutral',
+          });
+          mermaidInitialized = true;
+        }
+        const result = await mermaid.render(`mermaid-${diagramId}`, code);
+        if (cancelled) return;
+        setSvg(result.svg);
+        setError(null);
+      } catch (err: any) {
+        if (cancelled) return;
+        setSvg('');
+        setError(err?.message || 'Mermaid 渲染失败');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [code, diagramId]);
+
+  return (
+    <div className="my-3 rounded-lg border border-border/60 bg-background/70 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-medium text-muted-foreground">Mermaid</div>
+        <CopyButton text={code} className="static" />
+      </div>
+      {svg ? (
+        <div
+          className="overflow-x-auto rounded-md bg-white p-3 dark:bg-slate-950"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      ) : (
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          {error || 'Mermaid 渲染中...'}
+        </div>
+      )}
+      {error ? (
+        <details className="mt-3 rounded-md border border-border/50">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">查看 Mermaid 源码</summary>
+          <div className="p-3">
+            <CodeBlock code={code} language="text" />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 function RunnableCodeBlock({ code, language }: { code: string; language: string }) {
   const { toast } = useToast();
   const [running, setRunning] = useState(false);
@@ -251,6 +316,10 @@ const components = {
     const language = normalizeFenceLanguage(className);
     const code = String(children).replace(/\n$/, '');
     const isMultiLine = code.includes('\n');
+
+    if (language === 'mermaid') {
+      return <MermaidBlock code={code} />;
+    }
 
     if (language === 'json') {
       const verdict = tryParseVerdict(code);
@@ -444,17 +513,15 @@ function renderTaskStatusLines(content: string): string {
       const marker = taskLine[2].toLowerCase();
       const body = taskLine[3];
       const bodyWithoutComment = body.replace(/\s*<!--[\s\S]*?-->\s*$/g, '').trim();
-      const trailingComment = body.slice(bodyWithoutComment.length).trim();
       const escapedBody = escapeHtml(bodyWithoutComment);
-      const escapedComment = trailingComment ? ` ${escapeHtml(trailingComment)}` : '';
 
       if (marker === 'x') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>`;
       }
       if (marker === '-') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>`;
       }
-      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span>${escapedComment}</span>`;
+      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>`;
     }
 
     const closeRe = fenceChar === '~' ? /^(~{3,})\s*$/ : /^(`{3,})\s*$/;
@@ -467,9 +534,13 @@ function renderTaskStatusLines(content: string): string {
   }).join('\n');
 }
 
+function stripHiddenOpenSpecComments(content: string): string {
+  return content.replace(/\s*<!--\s*openspec-task:[\s\S]*?-->\s*$/gm, '');
+}
+
 function preprocessMarkdown(content: unknown): string {
   const closed = closeUnterminatedFences(content);
-  return renderTaskStatusLines(closed).replace(
+  return renderTaskStatusLines(stripHiddenOpenSpecComments(closed)).replace(
     /(?<![<"\[])(https?:\/\/[^\s<>\]")]+)/g,
     '<$1>'
   );

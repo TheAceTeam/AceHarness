@@ -95,6 +95,7 @@
     "lowlight": "^3.3.0",
     "lucide-react": "^0.564.0",
     "material-symbols": "^0.44.0",
+    "mermaid": "^11.14.0",
     "monaco-editor": "^0.55.1",
     "next": "^16.1.6",
     "next-intl": "^4.8.2",

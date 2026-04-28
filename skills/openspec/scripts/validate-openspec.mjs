@@ -139,6 +139,9 @@ function validateDesign(file) {
   if (mermaidBlocks.length < 2) {
     fail(`${file}: 至少需要 2 个 Mermaid 图块，用于表达架构/执行链路和数据流`);
   }
+  if (/Mermaid\s*流程图如下[:：]?\s*\n\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|mindmap|timeline)\b/m.test(content)) {
+    fail(`${file}: Mermaid 图必须使用独立的 \`\`\`mermaid 代码块，不能写成普通文本段落`);
+  }
 
   const pseudocodeBlock = content.match(/## Core Logic Pseudocode[\s\S]*?```(?:text|pseudo|plaintext)?[\s\S]*?```/m);
   if (!pseudocodeBlock) {

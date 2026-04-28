@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
-import { appendOpenSpecRevision, buildOpenSpecFromWorkflowConfig, loadCreationSession, updateCreationSession } from '@/lib/openspec-store';
+import { appendOpenSpecRevision, buildOpenSpecFromWorkflowConfig, loadCreationSession, rebuildOpenSpecPreservingArtifacts, updateCreationSession } from '@/lib/openspec-store';
 
 function canAccess(userId: string, createdBy?: string) {
   return !createdBy || createdBy === userId;
@@ -42,15 +42,27 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     const body = await request.json();
     const patch = { ...body } as Record<string, any>;
     if (patch.rebuildOpenSpecFromConfig && patch.config) {
-      patch.openSpec = buildOpenSpecFromWorkflowConfig({
-        workflowName: patch.workflowName || existing.workflowName,
-        description: patch.description ?? existing.description,
-        requirements: patch.requirements ?? existing.requirements,
-        filename: patch.filename || existing.filename,
-        workspaceMode: patch.workspaceMode || existing.workspaceMode,
-        workingDirectory: patch.workingDirectory || existing.workingDirectory,
-        config: patch.config,
-      });
+      patch.openSpec = existing.openSpec
+        ? rebuildOpenSpecPreservingArtifacts({
+            existing: existing.openSpec,
+            workflowName: patch.workflowName || existing.workflowName,
+            description: patch.description ?? existing.description,
+            requirements: patch.requirements ?? existing.requirements,
+            filename: patch.filename || existing.filename,
+            workspaceMode: patch.workspaceMode || existing.workspaceMode,
+            workingDirectory: patch.workingDirectory || existing.workingDirectory,
+            config: patch.config,
+            status: patch.openSpecStatus || existing.openSpec.status,
+          })
+        : buildOpenSpecFromWorkflowConfig({
+            workflowName: patch.workflowName || existing.workflowName,
+            description: patch.description ?? existing.description,
+            requirements: patch.requirements ?? existing.requirements,
+            filename: patch.filename || existing.filename,
+            workspaceMode: patch.workspaceMode || existing.workspaceMode,
+            workingDirectory: patch.workingDirectory || existing.workingDirectory,
+            config: patch.config,
+          });
       if (patch.openSpecStatus) {
         patch.openSpec = {
           ...patch.openSpec,
