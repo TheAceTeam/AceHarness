@@ -57,7 +57,7 @@ const MAX_PLAN_DRAFT_REPAIR_ATTEMPTS = 2;
 const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = 2;
 const CREATION_SESSION_TAG_PREFIX = '创建工作流 ·';
 const SPEC_LANGUAGE_RULE = [
-  '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、proposal.md、design.md、tasks.md、spec.md/deltaSpec 必须统一使用该主语言。',
+  '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。',
   '如果输入混合多种语言，以用户需求正文占比最高的语言为准；若用户最后明确指定语言，则以用户指定语言为准。',
   '文件名、代码、YAML key、API 名称、技术专名和产品名可以保留原文，但不要在多份正式计划制品之间混用中文和英文标题/说明。',
 ].join('\n');
@@ -108,7 +108,7 @@ function buildPlanDraftRepairMessage(previousOutput: string) {
     '2. <result> 内只能放一个 ```json 代码块。',
     '3. JSON 顶层必须是 {"type":"plan_draft", ...}。',
     '4. 必须包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
-    '5. artifacts 必须包含 proposal、design、tasks、deltaSpec 四个字符串字段。',
+    '5. artifacts 必须包含 requirements、design、tasks 三个字符串字段。',
     '6. 输出 </result> 后不要再追加任何文字。',
     '',
     SPEC_LANGUAGE_RULE,
@@ -227,7 +227,7 @@ type WorkflowCreationRecommendations = {
   }>;
 };
 
-type SpecCodingArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
+type SpecCodingArtifactKey = 'requirements' | 'design' | 'tasks';
 
 type SpecCodingArtifactDrafts = Record<SpecCodingArtifactKey, string>;
 
@@ -244,10 +244,9 @@ type PlanDraftResult = {
     questions?: string[];
   };
   artifacts?: {
-    proposal?: string;
+    requirements?: string;
     design?: string;
     tasks?: string;
-    deltaSpec?: string;
   };
 };
 
@@ -291,10 +290,9 @@ type ClarificationFormResult = {
 
 function buildArtifactDrafts(specCoding: any): SpecCodingArtifactDrafts {
   return {
-    proposal: specCoding?.artifacts?.proposal || '',
+    requirements: specCoding?.artifacts?.requirements || '',
     design: specCoding?.artifacts?.design || '',
     tasks: specCoding?.artifacts?.tasks || '',
-    deltaSpec: specCoding?.artifacts?.deltaSpec || '',
   };
 }
 
@@ -890,7 +888,7 @@ function parseRevisionSummaryMeta(summary: string): {
   artifact?: string;
   impactArea?: string;
 } {
-  const artifact = summary.match(/针对\s+(proposal\.md|design\.md|tasks\.md|spec\.md)/)?.[1];
+  const artifact = summary.match(/针对\s+(requirements\.md|design\.md|tasks\.md)/)?.[1];
   const impactArea = summary.match(/主要影响\s+([^：:]+)[：:]/)?.[1]?.trim();
   return { artifact, impactArea };
 }
@@ -1379,15 +1377,14 @@ export default function NewConfigModal({
   const [previewSession, setPreviewSession] = useState<any | null>(null);
   const [previewConfigValidation, setPreviewConfigValidation] = useState<any | null>(null);
   const [revisionNotes, setRevisionNotes] = useState('');
-  const [revisionTarget, setRevisionTarget] = useState<'proposal' | 'design' | 'tasks' | 'spec'>('tasks');
+  const [revisionTarget, setRevisionTarget] = useState<'requirements' | 'design' | 'tasks'>('tasks');
   const [revisionImpactArea, setRevisionImpactArea] = useState<'phases' | 'agents' | 'checkpoints' | 'transitions'>('phases');
-  const [selectedArtifactKey, setSelectedArtifactKey] = useState<SpecCodingArtifactKey>('proposal');
+  const [selectedArtifactKey, setSelectedArtifactKey] = useState<SpecCodingArtifactKey>('requirements');
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'edit' | 'diff'>('preview');
   const [artifactDrafts, setArtifactDrafts] = useState<SpecCodingArtifactDrafts>({
-    proposal: '',
+    requirements: '',
     design: '',
     tasks: '',
-    deltaSpec: '',
   });
   const [planWorkspaceOpen, setPlanWorkspaceOpen] = useState(false);
   const [planWorkspaceTab, setPlanWorkspaceTab] = useState<'artifacts' | 'nodes' | 'assignments' | 'revisions'>('artifacts');
@@ -2387,7 +2384,7 @@ export default function NewConfigModal({
           {
             id: 'target_outcome',
             label: '目标结果',
-            question: '这次工作流创建完成后，最重要的可观察成功结果是什么？这个答案会决定 proposal 的目标、需求优先级和验收标准。',
+            question: '这次工作流创建完成后，最重要的可观察成功结果是什么？这个答案会决定 requirements 的目标、需求优先级和验收标准。',
             selectionMode: 'single',
             options: [
               {
@@ -2487,7 +2484,7 @@ export default function NewConfigModal({
               {
                 id: 'artifact_review',
                 label: '制品审阅',
-                description: '审查 proposal/design/tasks/spec 之间的追踪链、一致性和非目标边界。',
+                description: '审查 requirements/design/tasks 之间的追踪链、一致性和非目标边界。',
               },
             ],
             placeholder: '请补充项目已有命令或验收入口。例如：npm run build、npx tsc --noEmit、指定页面操作路径。',
@@ -2513,7 +2510,7 @@ export default function NewConfigModal({
       '4. 问题必须领域化：使用用户需求里的实体、入口、数据、流程、失败条件，不要只问通用项目管理问题。',
       '5. 优先问会改变计划的变量：范围/非目标、兼容/迁移、数据模型、UI/API 行为、权限、安全、验证证据。',
       '6. 不要问代码或用户输入已经回答过的问题；如果信息能从参考 workflow 推断，就写成事实或假设再问是否覆盖当前需求。',
-      '7. 每个问题都要能映射到后续 proposal/design/tasks/spec 的字段，不能只收集偏好。',
+      '7. 每个问题都要能映射到后续 requirements/design/tasks 的字段，不能只收集偏好。',
       '8. 如果信息不足，也要给出跳过问题时的保守假设，并把风险留在 missingFields。',
     ].filter(Boolean).join('\n\n');
   }, [getValues, referenceConfig]);
@@ -2559,10 +2556,9 @@ export default function NewConfigModal({
           questions: ['下一步要问的问题'],
         },
         artifacts: {
-          proposal: '# proposal.md\\n...',
+          requirements: '# requirements.md\\n...',
           design: '# design.md\\n...',
           tasks: '# tasks.md\\n...',
-          deltaSpec: '# specs/.../spec.md\\n...',
         },
       }, null, 2),
       '```',
@@ -2585,9 +2581,9 @@ export default function NewConfigModal({
       '4. design.md 必须包含 Overview、Architecture、Core Components、Data Models、Interfaces And Contracts、Assumptions And Unknowns、清晰的流程图或 Mermaid 图，以及与真实业务规则对应的伪代码、判定逻辑或步骤算法。',
       '4.1 如果使用 Mermaid，必须写成独立的 ```mermaid fenced code block；不要写成“Mermaid 流程图如下：flowchart ...”这种普通段落。',
       '5. tasks.md 必须按阶段和任务编号细拆，每项任务都写清楚关联需求、关联设计、任务类型、目标、输入或依赖、具体动作、交付产物、验证方式和完成标准。',
-      '6. proposal 要写清需求切片、事实与假设；design 要写清主链路和关键决策；tasks 要写清执行顺序和验证闭环。',
+      '6. requirements 要写清用户故事和 WHEN/THEN 验收标准；design 要写清主链路和关键决策；tasks 要写清执行顺序和验证闭环。',
       '7. 正式制品中不要直接写 workflow、Agent、状态机、编排等系统术语，但任务切片和阶段结构必须足够稳定，以便后续派生 workflow 和角色分工。',
-      '8. 输出前先做一次一致性自检，确保 proposal/design/tasks/spec 没有互相矛盾、越界或把假设写成事实。',
+      '8. 输出前先做一次一致性自检，确保 requirements/design/tasks 没有互相矛盾、越界或把假设写成事实。',
       '9. 如果仍有少量待确认项，就把它们自然地整理进 clarification.missingFields/questions，并同时给出当前最佳业务计划草案。',
     ].filter(Boolean).join('\n\n');
   }, [creationRecommendations, getValues, referenceConfig]);
@@ -2624,10 +2620,9 @@ export default function NewConfigModal({
     }
 
     const revisionTargetLabel = {
-      proposal: 'proposal.md',
+      requirements: 'requirements.md',
       design: 'design.md',
       tasks: 'tasks.md',
-      spec: 'spec.md',
     }[revisionTarget];
     const revisionImpactLabel = {
       phases: '阶段拆分',
@@ -2641,7 +2636,7 @@ export default function NewConfigModal({
     const currentArtifacts = currentSpecCoding.artifacts || {};
     const config = buildPreviewConfigFromForm();
     const planningSystemPrompt = buildPlanningSystemPrompt(config);
-    const targetArtifactKey: SpecCodingArtifactKey = revisionTarget === 'spec' ? 'deltaSpec' : revisionTarget;
+    const targetArtifactKey: SpecCodingArtifactKey = revisionTarget;
 
     try {
       const targetFrontendSessionId = await ensurePlanningChatSession();
@@ -2659,7 +2654,7 @@ export default function NewConfigModal({
 
       const revisionRequestMessage = [
         '请基于当前已生成的正式计划制品和用户修订说明，重新生成完整计划草案。',
-        '这不是普通总结，也不是只改一份文档；你必须输出完整 plan_draft JSON，并同步刷新 proposal.md、design.md、tasks.md、spec.md/deltaSpec。',
+        '这不是普通总结，也不是只改一份文档；你必须输出完整 plan_draft JSON，并同步刷新 requirements.md、design.md、tasks.md。',
         '修订后各制品必须语言统一、术语统一、需求编号和任务追踪关系自洽。',
         SPEC_LANGUAGE_RULE,
         '',
@@ -2682,9 +2677,9 @@ export default function NewConfigModal({
         }, null, 2),
         '```',
         '',
-        '当前 proposal.md：',
+        '当前 requirements.md：',
         '```markdown',
-        truncateForPrompt(currentArtifacts.proposal, 5000),
+        truncateForPrompt(currentArtifacts.requirements, 5000),
         '```',
         '',
         '当前 design.md：',
@@ -2697,16 +2692,12 @@ export default function NewConfigModal({
         truncateForPrompt(currentArtifacts.tasks, 5000),
         '```',
         '',
-        '当前 spec.md / deltaSpec：',
-        '```markdown',
-        truncateForPrompt(currentArtifacts.deltaSpec, 5000),
-        '```',
         '',
         '输出要求：',
         '1. 可以先用普通文本说明你的修订思路，页面会实时显示。',
         '2. 最终必须在 <result>...</result> 内输出一个 ```json 代码块。',
         '3. JSON 顶层必须是 {"type":"plan_draft", ...}，并包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
-        '4. artifacts 必须包含完整 proposal、design、tasks、deltaSpec 四个字符串字段，不能只返回被修订的片段。',
+        '4. artifacts 必须包含完整 requirements、design、tasks 三个字符串字段，不能只返回被修订的片段。',
         '5. 输出 </result> 后不要追加任何文字。',
       ].filter(Boolean).join('\n\n');
 
@@ -2831,10 +2822,9 @@ export default function NewConfigModal({
     if (!previewSession?.id || !previewSession?.specCoding) return;
 
     const artifactLabel = {
-      proposal: 'proposal.md',
+      requirements: 'requirements.md',
       design: 'design.md',
       tasks: 'tasks.md',
-      deltaSpec: 'spec.md',
     }[selectedArtifactKey];
 
     const currentSpecCoding = previewSession.specCoding;
@@ -2851,10 +2841,9 @@ export default function NewConfigModal({
       ...currentSpecCoding,
       artifacts: {
         ...currentSpecCoding.artifacts,
-        proposal: artifactDrafts.proposal,
+        requirements: artifactDrafts.requirements,
         design: artifactDrafts.design,
         tasks: artifactDrafts.tasks,
-        deltaSpec: artifactDrafts.deltaSpec,
       },
     };
 
@@ -2934,9 +2923,9 @@ ${JSON.stringify({
 }, null, 2)}
 \`\`\`
 
-**proposal.md**
+**requirements.md**
 \`\`\`markdown
-${truncateForPrompt(artifacts.proposal, 4000)}
+${truncateForPrompt(artifacts.requirements, 4000)}
 \`\`\`
 
 **design.md**
@@ -2947,11 +2936,6 @@ ${truncateForPrompt(artifacts.design, 5000)}
 **tasks.md**
 \`\`\`markdown
 ${truncateForPrompt(artifacts.tasks, 5000)}
-\`\`\`
-
-**spec.md / deltaSpec**
-\`\`\`markdown
-${truncateForPrompt(artifacts.deltaSpec, 4000)}
 \`\`\`
 `
       : '';
@@ -4573,10 +4557,9 @@ ${confirmedSpecPrompt}
     const draftMode = draftSummary?.mode || previewSession.generatedConfigSummary?.mode || 'phase-based';
     const draftNodes = draftSummary?.nodes || [];
     const artifactItems = [
-      { key: 'proposal' as const, title: 'proposal.md', content: specCoding.artifacts?.proposal || '' },
+      { key: 'requirements' as const, title: 'requirements.md', content: specCoding.artifacts?.requirements || '' },
       { key: 'design' as const, title: 'design.md', content: specCoding.artifacts?.design || '' },
       { key: 'tasks' as const, title: 'tasks.md', content: specCoding.artifacts?.tasks || '' },
-      { key: 'deltaSpec' as const, title: 'specs/.../spec.md', content: specCoding.artifacts?.deltaSpec || '' },
     ].filter((item) => item.content);
     const activeArtifact = artifactItems.find((item) => item.key === selectedArtifactKey) || artifactItems[0] || null;
     const activeDraft = activeArtifact ? artifactDrafts[activeArtifact.key] || '' : '';
@@ -5266,17 +5249,16 @@ ${confirmedSpecPrompt}
                         <Label className="text-xs text-muted-foreground">修订哪份制品</Label>
                         <Select
                           value={revisionTarget}
-                          onValueChange={(value) => setRevisionTarget(value as 'proposal' | 'design' | 'tasks' | 'spec')}
+                          onValueChange={(value) => setRevisionTarget(value as 'requirements' | 'design' | 'tasks')}
                           disabled={isRevisingPlan}
                         >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="proposal">proposal.md</SelectItem>
+                            <SelectItem value="requirements">requirements.md</SelectItem>
                             <SelectItem value="design">design.md</SelectItem>
                             <SelectItem value="tasks">tasks.md</SelectItem>
-                            <SelectItem value="spec">spec.md</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -5316,7 +5298,7 @@ ${confirmedSpecPrompt}
                           AI 正在按修订说明重新生成正式计划制品
                         </div>
                         <div className="text-[11px] leading-5 text-amber-700/80 dark:text-amber-300/80">
-                          修订完成前不能进入下一步；完成后会自动刷新 proposal、design、tasks 和 spec，并记录 revision。
+                          修订完成前不能进入下一步；完成后会自动刷新 requirements、design、tasks，并记录 revision。
                         </div>
                         {currentThinking ? (
                           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">

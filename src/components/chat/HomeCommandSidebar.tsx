@@ -341,18 +341,23 @@ export default function HomeCommandSidebar({
     clearModalOpenHint();
   }, [clearModalOpenHint]);
 
+  const modalOpenHandledRef = useRef(false);
+
   useEffect(() => {
-    if (!sidebarHint?.shouldOpenModal) return;
-    if (activeTab === 'workflow') {
-      setWorkflowModalOpen(true);
-      clearModalOpenHint();
+    if (!sidebarHint?.shouldOpenModal) {
+      modalOpenHandledRef.current = false;
       return;
     }
-    if (activeTab === 'agent') {
+    if (modalOpenHandledRef.current) return;
+    modalOpenHandledRef.current = true;
+
+    if (activeTab === 'workflow') {
+      setWorkflowModalOpen(true);
+    } else if (activeTab === 'agent') {
       setAgentModalOpen(true);
-      clearModalOpenHint();
     }
-  }, [activeTab, clearModalOpenHint, sidebarHint?.shouldOpenModal]);
+    clearModalOpenHint();
+  }, [activeTab, sidebarHint?.shouldOpenModal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSidebarData = useCallback(async () => {
     try {

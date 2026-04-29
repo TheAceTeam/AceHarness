@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { extname, join } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { commandExists } from '../command-exists';
-import { fenced } from '../markdown-utils';
+import { fenced, formatLargeContent } from '../markdown-utils';
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
   private static readonly MAX_INLINE_FILE_BYTES = 64 * 1024;
@@ -107,8 +107,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       resultText += resultText ? `\n(exit code: ${exitCode})` : `(exit code: ${exitCode})`;
     }
     if (!resultText) return '';
-    const lines = resultText.split('\n');
-    return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(resultText)}\n\n</details>\n`;
+    return formatLargeContent(resultText, { summaryLabel: '查看输出' });
   }
 
   private getStringField(source: any, keys: string[]): string {
@@ -165,18 +164,13 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       const stats = statSync(path);
       if (!stats.isFile()) return '';
       if (stats.size > CodexEngineWrapper.MAX_INLINE_FILE_BYTES) {
-        return '\n<details><summary>查看文件内容</summary>\n\n文件过大，已跳过内联预览。\n\n</details>\n';
+        return `\n📎 文件较大，点击打开查看: [${path}](${path})\n`;
       }
       const content = readFileSync(path, 'utf-8');
       if (content.includes('\u0000')) {
         return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
       }
-      const lines = content.split('\n');
-      const truncated = lines.length > CodexEngineWrapper.MAX_INLINE_FILE_LINES;
-      const preview = truncated
-        ? `${lines.slice(0, CodexEngineWrapper.MAX_INLINE_FILE_LINES).join('\n')}\n\n... (已截断)`
-        : content;
-      return `\n<details><summary>查看文件内容</summary>\n\n${fenced(preview, this.inferFenceLanguage(path))}\n\n</details>\n`;
+      return formatLargeContent(content, { filePath: path, lang: this.inferFenceLanguage(path), summaryLabel: '查看文件内容' });
     } catch {
       return '';
     }
@@ -191,7 +185,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     if (newText && !oldText) {
       const lines = newText.split('\n').length;
       let out = `\n📝 写入文件: \`${path}\` (${lines} 行)\n`;
-      out += `\n<details><summary>查看变更</summary>\n\n${fenced(this.buildUnifiedDiff('', newText), 'diff')}\n\n</details>\n`;
+      out += formatLargeContent(this.buildUnifiedDiff('', newText), { filePath: path, lang: 'diff', summaryLabel: '查看变更' });
       return out;
     }
 
@@ -204,7 +198,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       if (added > 0) stats += `, +${added} 行`;
       if (removed > 0) stats += `, -${removed} 行`;
       let out = `\n✏️ 编辑文件: \`${path}\` (${stats})\n`;
-      out += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(this.buildUnifiedDiff(oldText, newText), 'diff')}\n\n</details>\n`;
+      out += formatLargeContent(this.buildUnifiedDiff(oldText, newText), { filePath: path, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
       return out;
     }
 

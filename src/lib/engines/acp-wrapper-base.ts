@@ -9,7 +9,7 @@
 import { EventEmitter } from 'events';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
-import { fenced } from '../markdown-utils';
+import { fenced, formatLargeContent } from '../markdown-utils';
 
 export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected engine: ACPEngine | null = null;
@@ -289,7 +289,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         header += `\n📝 写入文件: \`${wPath}\` (${wLines} 行)\n`;
         if (wContent) {
           const ext = wPath.split('.').pop() || '';
-          header += `\n<details><summary>查看内容 (${wLines} 行)</summary>\n\n${fenced(wContent, ext)}\n\n</details>\n`;
+          header += formatLargeContent(wContent, { filePath: wPath, lang: ext, summaryLabel: '查看内容' });
         }
         break;
       }
@@ -310,7 +310,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         if (oldStr || newStr) {
           const diff = (oldStr ? oldStr.split('\n').map((l: string) => '- ' + l).join('\n') + '\n' : '')
             + (newStr ? newStr.split('\n').map((l: string) => '+ ' + l).join('\n') + '\n' : '');
-          header += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(diff.trimEnd(), 'diff')}\n\n</details>\n`;
+          header += formatLargeContent(diff.trimEnd(), { filePath, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
         }
         break;
       }
@@ -364,15 +364,14 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     if (!output) return '';
     const parsed = this.parseToolXmlOutput(output);
     if (parsed) return parsed;
-    const lines = output.split('\n');
-    return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(output)}\n\n</details>\n`;
+    return formatLargeContent(output, { summaryLabel: '查看输出' });
   }
 
   private parseToolXmlOutput(output: string): string | null {
     const taskMatch = output.match(/<task_result>([\s\S]*?)<\/task_result>/);
     if (taskMatch) {
       const inner = taskMatch[1].trim();
-      return `\n<details><summary>🤖 子任务结果 (${inner.split('\n').length} 行)</summary>\n\n${fenced(inner)}\n\n</details>\n`;
+      return formatLargeContent(inner, { summaryLabel: '🤖 子任务结果' });
     }
     const pathRegex = /<path>(.*?)<\/path>\s*(?:<type>.*?<\/type>\s*)?<content>([\s\S]*?)<\/content>/g;
     let match;
@@ -381,8 +380,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       const fp = match[1].trim();
       const ct = match[2].trim();
       const ext = fp.split('.').pop() || '';
-      const lines = ct.split('\n');
-      blocks.push(`\n<details><summary>📄 ${fp} (${lines.length} 行)</summary>\n\n${fenced(ct, ext)}\n\n</details>\n`);
+      blocks.push(formatLargeContent(ct, { filePath: fp, lang: ext, summaryLabel: `📄 ${fp}` }));
     }
     if (blocks.length > 0) return blocks.join('');
     return null;

@@ -194,10 +194,9 @@ interface WorkflowStatusResponse {
       createdBy?: string;
     }>;
     artifacts?: {
-      proposal?: string;
+      requirements?: string;
       design?: string;
       tasks?: string;
-      deltaSpec?: string;
     };
   };
   sourceOfTruth?: {

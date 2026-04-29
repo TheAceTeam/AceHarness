@@ -186,7 +186,7 @@ type WorkflowMemoryLayers = {
   }>;
 };
 
-type SpecCodingArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
+type SpecCodingArtifactKey = 'requirements' | 'design' | 'tasks';
 
 export default function WorkbenchPage() {
   const params = useParams();
@@ -404,10 +404,9 @@ export default function WorkbenchPage() {
       createdBy?: string;
     }>;
     artifacts?: {
-      proposal?: string;
+      requirements?: string;
       design?: string;
       tasks?: string;
-      deltaSpec?: string;
     };
   } | null>(null);
   const [specCodingSourceOfTruth, setSpecCodingSourceOfTruth] = useState<{
@@ -471,7 +470,7 @@ export default function WorkbenchPage() {
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [designTab, setDesignTab] = useState<'workflow' | 'spec-coding' | 'config'>('workflow');
-  const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('proposal');
+  const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
   const [specCodingSaveScope, setSpecCodingSaveScope] = useState<NotebookScope>('personal');
@@ -600,10 +599,10 @@ export default function WorkbenchPage() {
     const artifacts = specCodingDetails?.artifacts || {};
     return [
       {
-        key: 'proposal',
-        label: 'proposal.md',
-        title: '提案',
-        content: artifacts.proposal || '',
+        key: 'requirements',
+        label: 'requirements.md',
+        title: '需求',
+        content: artifacts.requirements || '',
       },
       {
         key: 'design',
@@ -616,12 +615,6 @@ export default function WorkbenchPage() {
         label: 'tasks.md',
         title: '任务',
         content: structuredTasksMarkdown || artifacts.tasks || '',
-      },
-      {
-        key: 'deltaSpec',
-        label: 'specs/.../spec.md',
-        title: '增量规范',
-        content: artifacts.deltaSpec || '',
       },
     ];
   }, [specCodingDetails?.artifacts, structuredTasksMarkdown]);
@@ -3508,7 +3501,7 @@ export default function WorkbenchPage() {
                 <h3 className="text-base font-semibold">Spec Coding 草案</h3>
               </div>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                查看创建期确认的 proposal、design、tasks 和增量 spec；运行后这里会展示当前 run 的快照与进度投影。
+                查看创建期确认的 requirements、design、tasks；运行后这里会展示当前 run 的快照与进度投影。
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">

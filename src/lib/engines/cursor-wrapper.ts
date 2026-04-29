@@ -13,7 +13,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced } from '../markdown-utils';
+import { fenced, formatLargeContent } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
@@ -271,7 +271,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
             const text = inner.text.trim();
             const lines = text.split('\n');
             if (text) {
-              parts.push(`\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`);
+              parts.push(formatLargeContent(text, { summaryLabel: '查看内容' }));
             }
           }
         }
@@ -297,8 +297,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if ('output' in raw && typeof raw.output === 'string') {
         const text = raw.output.trim();
         if (!text) return raw.exit !== undefined && raw.exit !== 0 ? `\n(exit code: ${raw.exit})\n` : '';
-        const lines = text.split('\n');
-        let result = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
+        let result = formatLargeContent(text, { summaryLabel: '查看输出' });
         if (raw.exit !== undefined && raw.exit !== 0) result += `(exit code: ${raw.exit})\n`;
         return result;
       }
@@ -307,7 +306,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (raw.content && typeof raw.content === 'string') {
         const lines = raw.content.split('\n');
         if (lines.length > 15) {
-          return `\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(raw.content)}\n\n</details>\n`;
+          return formatLargeContent(raw.content, { summaryLabel: '查看内容' });
         }
         if (lines.length > 0) {
           return `\n${fenced(raw.content)}\n`;

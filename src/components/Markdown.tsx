@@ -698,8 +698,14 @@ function preprocessMarkdown(content: unknown): string {
   );
 }
 
+const MESSAGE_LAZY_CHAR_THRESHOLD = 500_000; // 500KB
+
 export default function Markdown({ children }: { children?: string | null }) {
-  const processedContent = useMemo(() => preprocessMarkdown(children), [children]);
+  const contentLength = children?.length || 0;
+  const [forceRenderLarge, setForceRenderLarge] = useState(false);
+  const isLarge = contentLength > MESSAGE_LAZY_CHAR_THRESHOLD && !forceRenderLarge;
+  const effectiveChildren = isLarge ? (children || '').slice(0, 2000) + '\n\n---' : children;
+  const processedContent = useMemo(() => preprocessMarkdown(effectiveChildren), [effectiveChildren]);
   const [, forceRefresh] = useState(0);
 
   useEffect(() => {
@@ -788,6 +794,14 @@ export default function Markdown({ children }: { children?: string | null }) {
   return (
     <div className={styles.markdownContent}>
       {renderMarkdownFragment(processedContent)}
+      {isLarge && (
+        <button
+          onClick={() => setForceRenderLarge(true)}
+          className="mt-2 px-3 py-1.5 text-xs rounded-md border border-border bg-muted/50 hover:bg-muted text-muted-foreground transition-colors"
+        >
+          展开完整内容 ({(contentLength / 1024).toFixed(0)} KB)
+        </button>
+      )}
     </div>
   );
 }

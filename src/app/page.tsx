@@ -147,6 +147,10 @@ function ChatPageContent() {
   const starterPromptRef = useRef<string | null>(null);
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
+    // 已有持久化状态时跳过昂贵的 parseActions 解析
+    if (activeSession?.sessionWorkbenchState?.homeSidebar) {
+      return null;
+    }
     const assistantMessages = [...(activeSession?.messages || [])]
       .filter((message) => message.role === 'assistant')
       .reverse();
@@ -157,7 +161,7 @@ function ChatPageContent() {
       }
     }
     return null;
-  }, [activeSession?.messages]);
+  }, [activeSession?.messages, activeSession?.sessionWorkbenchState?.homeSidebar]);
 
   const latestSidebarHint = activeSession?.sessionWorkbenchState?.homeSidebar || parsedSidebarHint;
   const derivedHomeSidebarTab = useMemo(
@@ -853,26 +857,41 @@ function ChatPageContent() {
     return callbacks;
   }, [messages, confirmAction, rejectAction, undoActionById, retryAction]);
 
-  const renderedMessages = useMemo(() => messages.map(msg => (
-    <ChatMessage
-      key={msg.id}
-      message={msg}
-      isStreaming={msg.id === streamingMessageId}
-      onConfirmAction={messageCallbacks[msg.id]?.onConfirmAction}
-      onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
-      onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
-      onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
-      onAction={handleQuickAction}
-      onDelete={deleteMessage}
-      onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
-      onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
-      onContinue={msg.role === 'error' ? continueFromMessage : undefined}
-      onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
-    />
-  )), [messages, streamingMessageId, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
     streamingMessageId,
   }), [messages, streamingMessageId]);
+
+  const renderedMessages = useMemo(() => {
+    const hiddenCount = Math.max(0, messages.length - recentWindowSize);
+    return messages.map((msg, index) => {
+      // 折叠区域的消息：用轻量占位符，不做 Markdown 解析
+      if (index < hiddenCount && !historyExpanded) {
+        return (
+          <div key={msg.id} className="px-4 py-2 text-xs text-muted-foreground truncate">
+            {msg.role === 'user' ? '👤 ' : '🤖 '}
+            {(msg.content || '').slice(0, 120)}
+          </div>
+        );
+      }
+      return (
+        <ChatMessage
+          key={msg.id}
+          message={msg}
+          isStreaming={msg.id === streamingMessageId}
+          onConfirmAction={messageCallbacks[msg.id]?.onConfirmAction}
+          onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
+          onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
+          onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
+          onAction={handleQuickAction}
+          onDelete={deleteMessage}
+          onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
+          onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
+          onContinue={msg.role === 'error' ? continueFromMessage : undefined}
+          onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+        />
+      );
+    });
+  }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
   const hiddenMessageCount = Math.max(0, messages.length - recentWindowSize);
   const historicalMessageItems = hiddenMessageCount > 0
     ? messages.slice(0, hiddenMessageCount).map((message, index) => ({

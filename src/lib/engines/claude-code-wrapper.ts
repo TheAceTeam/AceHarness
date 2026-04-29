@@ -9,7 +9,7 @@
 import { EventEmitter } from 'events';
 import { existsSync, readFileSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
-import { fenced } from '../markdown-utils';
+import { fenced, formatLargeContent } from '../markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 
 // ============================================================================
@@ -61,8 +61,7 @@ function formatCommandOutput(output: string, exitCode?: number | null): string {
   if (!trimmed) {
     return exitCode != null && exitCode !== 0 ? `\n(exit code: ${exitCode})\n` : '';
   }
-  const lines = trimmed.split('\n');
-  let rendered = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(trimmed)}\n\n</details>\n`;
+  let rendered = formatLargeContent(trimmed, { summaryLabel: '查看输出' });
   if (exitCode != null && exitCode !== 0) rendered += `(exit code: ${exitCode})\n`;
   return rendered;
 }
@@ -90,14 +89,12 @@ function formatClaudeToolExecutionResult(toolNameRaw: string, result: unknown): 
   if (toolName === 'read') {
     const text = extractTextFromUnknown(raw.content ?? raw.result ?? raw.text).trim();
     if (!text) return '';
-    const lines = text.split('\n');
-    return `\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
+    return formatLargeContent(text, { summaryLabel: '查看内容' });
   }
 
   const text = extractTextFromUnknown(raw.output ?? raw.content ?? raw.result ?? raw.message ?? result).trim();
   if (!text) return '';
-  const lines = text.split('\n');
-  return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
+  return formatLargeContent(text, { summaryLabel: '查看输出' });
 }
 function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string {
   const toolName = resolveToolName(toolNameRaw);
@@ -110,7 +107,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     const content = toolText(rawInput, ['content', 'text', 'new_string', 'newString']);
     const lines = content ? content.split('\n').length : 0;
     let out = `\n📝 写入文件: \`${p || '(未知路径)'}\`${lines ? ` (${lines} 行)` : ''}\n`;
-    if (content) out += `\n<details><summary>查看内容 (${lines} 行)</summary>\n\n${fenced(content, lang)}\n\n</details>\n`;
+    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
     return out;
   }
   if (toolName === 'bash') {
@@ -124,7 +121,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     const content = toolText(rawInput, ['content', 'result', 'text']) || readToolFileContent(p);
     const lines = content ? content.split('\n').length : 0;
     let out = `\n📖 读取文件: \`${p || '(未知路径)'}\`\n`;
-    if (content) out += `\n<details><summary>查看内容 (${lines} 行)</summary>\n\n${fenced(content, lang)}\n\n</details>\n`;
+    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
     return out;
   }
   if (toolName === 'edit' || toolName === 'multiedit' || toolName === 'patch') {
@@ -141,7 +138,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (oldStr || newStr) {
       const diff = (oldStr ? oldStr.split('\n').map((l) => `- ${l}`).join('\n') + '\n' : '')
         + (newStr ? newStr.split('\n').map((l) => `+ ${l}`).join('\n') + '\n' : '');
-      out += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(diff.trimEnd(), 'diff')}\n\n</details>\n`;
+      out += formatLargeContent(diff.trimEnd(), { filePath: p, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
     }
     return out;
   }

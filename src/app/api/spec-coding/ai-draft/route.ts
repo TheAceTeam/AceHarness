@@ -35,10 +35,9 @@ function applyAiSpecCodingDraft(base: SpecCodingDocument, ai: any): SpecCodingDo
   const goals = normalizeStringArray(ai?.goals, 8);
   const nonGoals = normalizeStringArray(ai?.nonGoals, 8);
   const constraints = normalizeStringArray(ai?.constraints, 12);
-  const proposal = typeof ai?.artifacts?.proposal === 'string' ? ai.artifacts.proposal.trim() : '';
+  const requirements = typeof ai?.artifacts?.requirements === 'string' ? ai.artifacts.requirements.trim() : '';
   const design = typeof ai?.artifacts?.design === 'string' ? ai.artifacts.design.trim() : '';
   const tasks = typeof ai?.artifacts?.tasks === 'string' ? ai.artifacts.tasks.trim() : '';
-  const deltaSpec = typeof ai?.artifacts?.deltaSpec === 'string' ? ai.artifacts.deltaSpec.trim() : '';
 
   return {
     ...base,
@@ -53,10 +52,9 @@ function applyAiSpecCodingDraft(base: SpecCodingDocument, ai: any): SpecCodingDo
         : base.progress.summary,
     },
     artifacts: {
-      proposal: proposal || base.artifacts.proposal,
+      requirements: requirements || base.artifacts.requirements,
       design: design || base.artifacts.design,
       tasks: tasks || base.artifacts.tasks,
-      deltaSpec: deltaSpec || base.artifacts.deltaSpec,
     },
   };
 }
@@ -202,24 +200,21 @@ export async function POST(request: NextRequest) {
       '- clarification.knownFacts: string[]，当前已确认信息',
       '- clarification.missingFields: string[]，仍缺失的信息',
       '- clarification.questions: string[]，下一步需要向用户确认的问题',
-      '- artifacts.proposal: string，正式 proposal.md 内容',
-      '- artifacts.design: string，正式 design.md 内容',
-      '- artifacts.tasks: string，正式 tasks.md 内容',
-      '- artifacts.deltaSpec: string，正式 spec.md / delta spec 内容',
+      '- artifacts.requirements: string，正式 requirements.md 内容（用户故事 + WHEN/THEN 验收标准）',
+      '- artifacts.design: string，正式 design.md 内容（架构图 + 组件接口 + 关键决策）',
+      '- artifacts.tasks: string，正式 tasks.md 内容（多级嵌套 checkbox + 需求追溯）',
       '',
       '要求：',
       '- 所有内容都用业务语言表达，聚焦业务目标、业务对象、业务规则、边界条件、验证标准和实施范围。',
-      '- 先判断用户原始需求、补充说明和澄清回答的主语言；summary、clarification、proposal.md、design.md、tasks.md、spec.md/deltaSpec 必须统一使用该主语言。',
+      '- 先判断用户原始需求、补充说明和澄清回答的主语言；summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。',
       '- 如果输入混合多种语言，以用户需求正文占比最高的语言为准；若用户最后明确指定语言，则以用户指定语言为准。文件名、代码、YAML key、API 名称、技术专名和产品名可以保留原文。',
       '- clarification 里的问题只问会改变业务方案的重要变量，不问系统机制、角色分工或配置实现。',
-      '- proposal 必须写清楚业务目标、当前问题、范围、非范围、验收标准、需求切片，以及已确认事实 / 当前假设 / 待确认点。',
-      '- design 必须包含 Overview、Architecture、Core Components、Data Models、Interfaces And Contracts、业务流程图或 Mermaid 图，以及能落到真实逻辑的伪代码或步骤化算法说明。',
-      '- 只要 design 中出现 Mermaid 图，必须使用独立的 ```mermaid fenced code block；不要写成“Mermaid 流程图如下：flowchart ...”这类普通文本。',
-      '- tasks 必须足够细，按阶段拆分；每项都写清楚关联需求、关联设计、任务类型、目标、输入/依赖、实施内容、产物和验证方式。',
-      '- requirements/spec 应尽量使用稳定的需求 DSL：术语表 + 可编号需求 + 场景/验收标准。',
+      '- requirements.md 必须包含：用户故事（作为<角色>，我希望<目标>，以便<价值>）+ WHEN/THEN 验收标准 + 术语表。',
+      '- design.md 必须包含概述、Mermaid 架构图、组件接口与伪代码、关键决策表（选择/理由/替代方案）。',
+      '- 只要 design 中出现 Mermaid 图，必须使用独立的 ```mermaid fenced code block；不要写成普通文本。',
+      '- tasks.md 必须使用多级嵌套 checkbox 格式：顶层任务（- [ ] N. 标题）→ 子任务（  - [ ] N.M 标题）→ 步骤描述和需求引用（_需求：x.x_）。包含检查点任务。',
       '- 文档表面保持业务化，不直接写 workflow、agent、状态机等系统术语；但结构必须清晰到足以支撑后续 workflow 和角色分工派生。',
       '- 输出前先做一致性自检，确保 requirements/design/tasks 之间没有互相矛盾、越界执行或把假设写成事实的情况。',
-      '- deltaSpec 只写对外行为契约和业务场景，不写实现细节。',
       '- 如果信息仍有空缺，也要基于已知事实给出当前最佳草案，并把缺口整理进 clarification。',
     ].filter(Boolean).join('\n');
 

@@ -2427,7 +2427,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         : (this.currentRunSpecCoding.tasks || []).filter((task) => task.status !== 'completed').slice(0, 12);
       parts.push(`\n# 当前 Run Spec Coding 投影`);
       parts.push(`Spec Coding 版本: v${this.currentRunSpecCoding.version}`);
-      parts.push('说明: 当前 Run Spec Coding 投影是本次运行绑定的正式规范制品投影。即使工作目录内没有 proposal.md / design.md / tasks.md 文件实体，也必须以这里注入的规范投影和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
+      parts.push('说明: 当前 Run Spec Coding 投影是本次运行绑定的正式规范制品投影。即使工作目录内没有 requirements.md / design.md / tasks.md 文件实体，也必须以这里注入的规范投影和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
       if (this.currentRunSpecCoding.summary) {
         parts.push(`Spec Coding 摘要: ${this.currentRunSpecCoding.summary}`);
       }

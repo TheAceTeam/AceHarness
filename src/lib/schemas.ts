@@ -210,17 +210,35 @@ export const specCodingProgressSchema = z.object({
   summary: z.string().optional(),
 });
 
-export const specCodingTaskSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  detail: z.string().optional(),
-  status: specCodingProgressStatusSchema.default('pending'),
-  phaseId: z.string().optional(),
-  ownerAgents: z.array(z.string()).default([]),
-  updatedAt: z.string().optional(),
-  updatedBy: z.string().optional(),
-  validation: z.string().optional(),
-});
+export interface SpecCodingTaskInput {
+  id: string;
+  title: string;
+  detail?: string;
+  status?: z.infer<typeof specCodingProgressStatusSchema>;
+  requirements?: string[];
+  children: SpecCodingTaskInput[];
+  phaseId?: string;
+  ownerAgents?: string[];
+  updatedAt?: string;
+  updatedBy?: string;
+  validation?: string;
+}
+
+export const specCodingTaskSchema: z.ZodType<SpecCodingTaskInput> = z.lazy(() =>
+  z.object({
+    id: z.string(),
+    title: z.string(),
+    detail: z.string().optional(),
+    status: specCodingProgressStatusSchema.default('pending'),
+    requirements: z.array(z.string()).default([]),
+    children: z.array(specCodingTaskSchema).default([]),
+    phaseId: z.string().optional(),
+    ownerAgents: z.array(z.string()).default([]),
+    updatedAt: z.string().optional(),
+    updatedBy: z.string().optional(),
+    validation: z.string().optional(),
+  })
+);
 
 export const specCodingRevisionSchema = z.object({
   id: z.string(),
@@ -231,10 +249,9 @@ export const specCodingRevisionSchema = z.object({
 });
 
 export const specCodingArtifactsSchema = z.object({
-  proposal: z.string().default(''),
+  requirements: z.string().default(''),
   design: z.string().default(''),
   tasks: z.string().default(''),
-  deltaSpec: z.string().default(''),
 });
 
 export const specCodingDocumentSchema = z.object({
@@ -255,10 +272,9 @@ export const specCodingDocumentSchema = z.object({
   progress: specCodingProgressSchema,
   revisions: z.array(specCodingRevisionSchema).default([]),
   artifacts: specCodingArtifactsSchema.default({
-    proposal: '',
+    requirements: '',
     design: '',
     tasks: '',
-    deltaSpec: '',
   }),
   linkedConfigFilename: z.string().optional(),
   createdAt: z.string(),
@@ -352,7 +368,7 @@ export type SpecCodingAssignment = z.infer<typeof specCodingAssignmentSchema>;
 export type SpecCodingCheckpoint = z.infer<typeof specCodingCheckpointSchema>;
 export type SpecCodingProgressStatus = z.infer<typeof specCodingProgressStatusSchema>;
 export type SpecCodingProgress = z.infer<typeof specCodingProgressSchema>;
-export type SpecCodingTask = z.infer<typeof specCodingTaskSchema>;
+export type SpecCodingTask = SpecCodingTaskInput;
 export type SpecCodingRevision = z.infer<typeof specCodingRevisionSchema>;
 export type SpecCodingArtifacts = z.infer<typeof specCodingArtifactsSchema>;
 export type SpecCodingDocument = z.infer<typeof specCodingDocumentSchema>;

@@ -91,11 +91,68 @@ function parseSpecCodingTasksFromMarkdown(
   phases: Array<Pick<SpecCodingPhase, 'id' | 'title' | 'ownerAgents'>>
 ): SpecCodingTask[] {
   const lines = markdown.split(/\r?\n/);
-  const tasks: SpecCodingTask[] = [];
+
+  // 解析单行 checkbox：返回缩进层级、状态、标题、ID
+  function parseCheckboxLine(line: string) {
+    const match = line.match(/^(\s*)-\s+\[([ xX-])\](\*?)\s+(.+?)\s*$/);
+    if (!match) return null;
+    const indent = match[1].length;
+    const level = Math.floor(indent / 2); // 0=顶层, 1=子任务, 2=子子任务
+    const marker = match[2];
+    const rawTitle = stripSpecCodingTaskComment(match[4]);
+    const numbered = rawTitle.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
+    const id = numbered?.[1] || null;
+    const title = (numbered?.[2] || rawTitle).trim();
+    return { level, marker, id, title, indent };
+  }
+
+  // 从详情行中提取需求引用：_需求：1.1, 1.2_
+  function extractRequirements(detailLines: string[]): string[] {
+    const reqs: string[] = [];
+    for (const line of detailLines) {
+      const match = line.match(/_需求[：:]\s*(.+?)_/);
+      if (match) {
+        reqs.push(...match[1].split(/[,，]\s*/).map((s) => s.trim()).filter(Boolean));
+      }
+    }
+    return reqs;
+  }
+
+  // 收集当前 checkbox 之后的非 checkbox 详情行
+  function collectDetailLines(startIndex: number, minIndent: number): string[] {
+    const details: string[] = [];
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^##\s+/.test(line)) break;
+      if (/^\s*-\s+\[([ xX-])\]/.test(line)) break;
+      // 空行或缩进大于当前 checkbox 的行都算详情
+      if (line.trim() === '' || (line.match(/^(\s*)/)?.[1].length || 0) >= minIndent) {
+        details.push(line);
+      } else {
+        break;
+      }
+    }
+    return details;
+  }
+
+  // 第一遍：收集所有 checkbox 节点（扁平列表，带 level）
+  interface RawNode {
+    level: number;
+    id: string;
+    title: string;
+    status: SpecCodingProgressStatus;
+    requirements: string[];
+    detail?: string;
+    lineIndex: number;
+    sectionTitle: string;
+    sectionIndex?: number;
+  }
+
+  const rawNodes: RawNode[] = [];
   let currentSectionTitle = '';
   let currentSectionIndex: number | undefined;
 
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
     const heading = line.match(/^##\s+(.+?)\s*$/);
     if (heading) {
@@ -105,43 +162,78 @@ function parseSpecCodingTasksFromMarkdown(
       continue;
     }
 
-    const taskLine = line.match(/^\s*-\s+\[([ xX-])\]\s+(.+?)\s*$/);
-    if (!taskLine) continue;
+    const parsed = parseCheckboxLine(line);
+    if (!parsed) continue;
 
     const commentMeta = parseTaskComment(line);
-    const body = stripSpecCodingTaskComment(taskLine[2]);
-    const numbered = body.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
-    const id = commentMeta.id || numbered?.[1] || `task-${lineIndex + 1}`;
-    const title = (numbered?.[2] || body).trim();
-    const detailLines: string[] = [];
-    for (let nextIndex = lineIndex + 1; nextIndex < lines.length; nextIndex += 1) {
-      const nextLine = lines[nextIndex];
-      if (/^##\s+/.test(nextLine)) break;
-      if (/^\s*-\s+\[([ xX-])\]\s+(.+?)\s*$/.test(nextLine)) break;
-      detailLines.push(nextLine);
-    }
-    const detail = detailLines.join('\n').trim() || undefined;
-    const phaseId = commentMeta.phaseId || inferTaskPhaseId({
+    const detailLines = collectDetailLines(lineIndex + 1, parsed.indent + 2);
+    const requirements = extractRequirements(detailLines);
+    // 过滤掉需求引用行，剩余作为 detail
+    const detailText = detailLines
+      .filter((l) => !/_需求[：:]/.test(l))
+      .join('\n').trim() || undefined;
+
+    const id = commentMeta.id || parsed.id || `task-${lineIndex + 1}`;
+
+    rawNodes.push({
+      level: parsed.level,
+      id,
+      title: parsed.title,
+      status: commentMeta.status || getTaskStatusFromCheckbox(parsed.marker),
+      requirements,
+      detail: detailText,
+      lineIndex,
       sectionTitle: currentSectionTitle,
       sectionIndex: currentSectionIndex,
-      taskTitle: title,
-      phases,
-    });
-    const ownerAgents = phaseId
-      ? phases.find((phase) => phase.id === phaseId)?.ownerAgents || []
-      : [];
-
-    tasks.push({
-      id,
-      title,
-      detail,
-      status: getTaskStatusFromCheckbox(taskLine[1]),
-      phaseId,
-      ownerAgents,
     });
   }
 
-  return tasks;
+  // 第二遍：根据 level 构建树形结构
+  function buildTree(nodes: RawNode[]): SpecCodingTask[] {
+    const roots: SpecCodingTask[] = [];
+    // 栈：[task, level]
+    const stack: Array<{ task: SpecCodingTask; level: number }> = [];
+
+    for (const node of nodes) {
+      const phaseId = inferTaskPhaseId({
+        sectionTitle: node.sectionTitle,
+        sectionIndex: node.sectionIndex,
+        taskTitle: node.title,
+        phases,
+      });
+      const ownerAgents = phaseId
+        ? phases.find((phase) => phase.id === phaseId)?.ownerAgents || []
+        : [];
+
+      const task: SpecCodingTask = {
+        id: node.id,
+        title: node.title,
+        detail: node.detail,
+        status: node.status,
+        requirements: node.requirements,
+        children: [],
+        phaseId,
+        ownerAgents,
+      };
+
+      // 弹出栈中 level >= 当前 level 的节点
+      while (stack.length > 0 && stack[stack.length - 1].level >= node.level) {
+        stack.pop();
+      }
+
+      if (stack.length === 0) {
+        roots.push(task);
+      } else {
+        stack[stack.length - 1].task.children.push(task);
+      }
+
+      stack.push({ task, level: node.level });
+    }
+
+    return roots;
+  }
+
+  return buildTree(rawNodes);
 }
 
 function assignTaskPhasesByCheckpointBoundaries(
@@ -149,30 +241,47 @@ function assignTaskPhasesByCheckpointBoundaries(
   phases: Array<Pick<SpecCodingPhase, 'id' | 'title' | 'ownerAgents'>>
 ): SpecCodingTask[] {
   if (tasks.length === 0 || phases.length === 0) return tasks;
-  if (tasks.every((task) => task.phaseId)) {
-    return tasks.map((task) => ({
-      ...task,
-      ownerAgents: task.phaseId
-        ? phases.find((phase) => phase.id === task.phaseId)?.ownerAgents || task.ownerAgents || []
-        : task.ownerAgents || [],
-    }));
+
+  function allHavePhase(list: SpecCodingTask[]): boolean {
+    return list.every((t) => t.phaseId && (t.children.length === 0 || allHavePhase(t.children)));
+  }
+
+  if (allHavePhase(tasks)) {
+    function enrichOwners(list: SpecCodingTask[]): SpecCodingTask[] {
+      return list.map((task) => ({
+        ...task,
+        ownerAgents: task.phaseId
+          ? phases.find((phase) => phase.id === task.phaseId)?.ownerAgents || task.ownerAgents || []
+          : task.ownerAgents || [],
+        children: enrichOwners(task.children),
+      }));
+    }
+    return enrichOwners(tasks);
   }
 
   let phaseIndex = 0;
-  return tasks.map((task) => {
-    const inferredPhase = task.phaseId
-      ? phases.find((phase) => phase.id === task.phaseId) || phases[phaseIndex]
-      : phases[phaseIndex];
-    const nextTask = {
-      ...task,
-      phaseId: task.phaseId || inferredPhase?.id,
-      ownerAgents: task.ownerAgents?.length ? task.ownerAgents : (inferredPhase?.ownerAgents || []),
-    };
-    if (/^CP\d+\b/i.test(task.title) && phaseIndex < phases.length - 1) {
-      phaseIndex += 1;
-    }
-    return nextTask;
-  });
+  function assignPhases(list: SpecCodingTask[], parentPhaseId?: string): SpecCodingTask[] {
+    return list.map((task) => {
+      const inferredPhase = task.phaseId
+        ? phases.find((phase) => phase.id === task.phaseId) || phases[phaseIndex]
+        : parentPhaseId
+          ? phases.find((phase) => phase.id === parentPhaseId) || phases[phaseIndex]
+          : phases[phaseIndex];
+      const assignedPhaseId = task.phaseId || parentPhaseId || inferredPhase?.id;
+      const nextTask: SpecCodingTask = {
+        ...task,
+        phaseId: assignedPhaseId,
+        ownerAgents: task.ownerAgents?.length ? task.ownerAgents : (inferredPhase?.ownerAgents || []),
+        children: assignPhases(task.children, assignedPhaseId),
+      };
+      if (/^CP\d+\b/i.test(task.title) && phaseIndex < phases.length - 1) {
+        phaseIndex += 1;
+      }
+      return nextTask;
+    });
+  }
+
+  return assignPhases(tasks);
 }
 
 function mergeRebuiltSpecCodingWithExisting(
@@ -204,10 +313,9 @@ function mergeRebuiltSpecCodingWithExisting(
     },
     revisions: existing.revisions?.length ? existing.revisions : rebuilt.revisions,
     artifacts: {
-      proposal: existing.artifacts?.proposal?.trim() || rebuilt.artifacts.proposal,
+      requirements: existing.artifacts?.requirements?.trim() || rebuilt.artifacts.requirements,
       design: existing.artifacts?.design?.trim() || rebuilt.artifacts.design,
       tasks: existing.artifacts?.tasks?.trim() || rebuilt.artifacts.tasks,
-      deltaSpec: existing.artifacts?.deltaSpec?.trim() || rebuilt.artifacts.deltaSpec,
     },
     createdAt: existing.createdAt || rebuilt.createdAt,
     updatedAt: new Date().toISOString(),
@@ -219,9 +327,23 @@ function mergeRebuiltSpecCodingWithExisting(
   return normalizeSpecCodingDocument(merged);
 }
 
+/** Flatten a tree of tasks into a flat list for ID-based lookup */
+function flattenTasks(tasks: SpecCodingTask[]): SpecCodingTask[] {
+  const result: SpecCodingTask[] = [];
+  function walk(list: SpecCodingTask[]) {
+    for (const task of list) {
+      result.push(task);
+      if (task.children.length > 0) walk(task.children);
+    }
+  }
+  walk(tasks);
+  return result;
+}
+
 function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): string {
   if (!markdown.trim() || tasks.length === 0) return markdown;
-  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const flat = flattenTasks(tasks);
+  const byId = new Map(flat.map((task) => [task.id, task]));
   const lines = markdown.split(/\r?\n/);
 
   return lines.map((line, lineIndex) => {
@@ -250,43 +372,52 @@ export function normalizeSpecCodingDocument(specCoding: SpecCodingDocument): Spe
     };
   }
 
-  const existingById = new Map((specCoding.tasks || []).map((task) => [task.id, task]));
+  const existingFlat = flattenTasks(specCoding.tasks || []);
+  const existingById = new Map(existingFlat.map((task) => [task.id, task]));
   const phaseStatusById = new Map((specCoding.phases || []).map((phase) => [phase.id, phase.status]));
-  const tasks: SpecCodingTask[] = assignTaskPhasesByCheckpointBoundaries(parsedTasks, specCoding.phases).map((task): SpecCodingTask => {
-    const existing = existingById.get(task.id);
-    const mergedPhaseId = task.phaseId || existing?.phaseId;
-    const ownerAgents = task.ownerAgents?.length
-      ? task.ownerAgents
-      : mergedPhaseId
-        ? specCoding.phases.find((phase) => phase.id === mergedPhaseId)?.ownerAgents || existing?.ownerAgents || []
-        : existing?.ownerAgents || [];
-    const phaseStatus = mergedPhaseId ? phaseStatusById.get(mergedPhaseId) : undefined;
-    if (!existing) {
-      return phaseStatus === 'completed'
-        ? { ...task, phaseId: mergedPhaseId, ownerAgents, status: 'completed' }
-        : { ...task, phaseId: mergedPhaseId, ownerAgents };
-    }
-    const statusFromMarkdown = task.status;
-    let status: SpecCodingProgressStatus = statusFromMarkdown === 'pending' && existing.status !== 'pending'
-      ? existing.status
-      : statusFromMarkdown;
-    if (phaseStatus === 'completed') {
-      status = 'completed';
-    } else if (phaseStatus === 'pending' && status === 'in-progress') {
-      status = existing.status === 'completed' ? 'completed' : 'pending';
-    } else if (phaseStatus === 'blocked' && status === 'pending') {
-      status = existing.status === 'completed' ? existing.status : 'blocked';
-    }
-    return {
-      ...task,
-      phaseId: mergedPhaseId,
-      ownerAgents,
-      status,
-      updatedAt: existing.updatedAt,
-      updatedBy: existing.updatedBy,
-      validation: existing.validation,
-    };
-  });
+
+  function mergeTaskTree(taskList: SpecCodingTask[]): SpecCodingTask[] {
+    return taskList.map((task): SpecCodingTask => {
+      const existing = existingById.get(task.id);
+      const mergedPhaseId = task.phaseId || existing?.phaseId;
+      const ownerAgents = task.ownerAgents?.length
+        ? task.ownerAgents
+        : mergedPhaseId
+          ? specCoding.phases.find((phase) => phase.id === mergedPhaseId)?.ownerAgents || existing?.ownerAgents || []
+          : existing?.ownerAgents || [];
+      const phaseStatus = mergedPhaseId ? phaseStatusById.get(mergedPhaseId) : undefined;
+
+      const mergedChildren = mergeTaskTree(task.children);
+
+      if (!existing) {
+        const base = { ...task, phaseId: mergedPhaseId, ownerAgents, children: mergedChildren };
+        return phaseStatus === 'completed' ? { ...base, status: 'completed' } : base;
+      }
+      const statusFromMarkdown = task.status ?? 'pending';
+      let status: SpecCodingProgressStatus = statusFromMarkdown === 'pending' && existing.status !== 'pending'
+        ? existing.status ?? 'pending'
+        : statusFromMarkdown;
+      if (phaseStatus === 'completed') {
+        status = 'completed';
+      } else if (phaseStatus === 'pending' && status === 'in-progress') {
+        status = existing.status === 'completed' ? 'completed' : 'pending';
+      } else if (phaseStatus === 'blocked' && status === 'pending') {
+        status = existing.status === 'completed' ? existing.status : 'blocked';
+      }
+      return {
+        ...task,
+        phaseId: mergedPhaseId,
+        ownerAgents,
+        status,
+        children: mergedChildren,
+        updatedAt: existing.updatedAt,
+        updatedBy: existing.updatedBy,
+        validation: existing.validation,
+      };
+    });
+  }
+
+  const tasks = mergeTaskTree(assignTaskPhasesByCheckpointBoundaries(parsedTasks, specCoding.phases));
 
   return {
     ...specCoding,
@@ -314,17 +445,24 @@ export function updateSpecCodingTaskStatuses(
 
   const updateById = new Map(input.updates.map((update) => [update.id, update]));
   const nowIso = new Date().toISOString();
-  const tasks = normalized.tasks.map((task) => {
-    const update = updateById.get(task.id);
-    if (!update) return task;
-    return {
-      ...task,
-      status: update.status,
-      updatedAt: nowIso,
-      updatedBy: input.updatedBy || task.updatedBy,
-      validation: update.validation || task.validation,
-    };
-  });
+
+  function applyUpdates(taskList: SpecCodingTask[]): SpecCodingTask[] {
+    return taskList.map((task) => {
+      const update = updateById.get(task.id);
+      const updatedChildren = applyUpdates(task.children);
+      if (!update) return { ...task, children: updatedChildren };
+      return {
+        ...task,
+        status: update.status,
+        updatedAt: nowIso,
+        updatedBy: input.updatedBy || task.updatedBy,
+        validation: update.validation || task.validation,
+        children: updatedChildren,
+      };
+    });
+  }
+
+  const tasks = applyUpdates(normalized.tasks);
 
   return {
     ...normalized,
@@ -350,16 +488,23 @@ function updateTasksForPhaseStatus(
   if (!input.phaseId || normalized.tasks.length === 0) return normalized;
 
   const nowIso = new Date().toISOString();
-  const tasks = normalized.tasks.map((task) => {
-    if (task.phaseId !== input.phaseId) return task;
-    return {
-      ...task,
-      status: input.status,
-      updatedAt: nowIso,
-      updatedBy: input.updatedBy || task.updatedBy,
-      validation: input.validation || task.validation,
-    };
-  });
+
+  function applyPhaseStatus(taskList: SpecCodingTask[]): SpecCodingTask[] {
+    return taskList.map((task) => {
+      const updatedChildren = applyPhaseStatus(task.children);
+      if (task.phaseId !== input.phaseId) return { ...task, children: updatedChildren };
+      return {
+        ...task,
+        status: input.status,
+        updatedAt: nowIso,
+        updatedBy: input.updatedBy || task.updatedBy,
+        validation: input.validation || task.validation,
+        children: updatedChildren,
+      };
+    });
+  }
+
+  const tasks = applyPhaseStatus(normalized.tasks);
 
   return {
     ...normalized,
@@ -445,110 +590,91 @@ function buildSpecCodingArtifacts(input: {
   const normalizedRequirements = (input.requirements || '').trim();
   const normalizedDescription = (input.description || '').trim();
   const goalSummary = normalizedRequirements || normalizedDescription || `${input.workflowName} 的需求澄清`;
-  const scopeIncludes = [
-    normalizedRequirements ? `围绕「${normalizedRequirements}」生成正式 SpecCoding 制品` : '',
-    `在 ${input.workingDirectory} 下规划执行`,
-    `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 承载后续执行`,
-    input.assignments.length ? `规划 ${input.assignments.length} 个 Agent 的职责分工` : '',
-  ].filter(Boolean);
-  const scopeExcludes = [
-    '不包含与当前目标无关的额外能力扩展',
-  ];
 
-  const proposal = [
-    `# Proposal: ${input.workflowName}`,
+  // requirements.md — 用户故事 + WHEN/THEN 验收标准
+  const reqSections = input.phases.length > 0
+    ? input.phases.map((phase, index) => {
+      const ownerText = phase.ownerAgents.length ? phase.ownerAgents.join('、') : '相关 Agent';
+      return [
+        `### 需求 ${index + 1}：${phase.title}`,
+        `**用户故事：** 作为${ownerText}，我希望完成${phase.title}，以便推进整体工作流目标。`,
+        '',
+        '#### 验收标准',
+        `1. WHEN ${phase.title}阶段启动 THEN ${ownerText}开始执行对应任务`,
+        `2. WHEN ${phase.title}阶段完成 THEN 所有子任务标记为已完成`,
+      ].join('\n');
+    }).join('\n\n')
+    : [
+      '### 需求 1：需求澄清',
+      '**用户故事：** 作为用户，我希望明确目标和约束，以便后续执行有清晰的基线。',
+      '',
+      '#### 验收标准',
+      '1. WHEN 需求澄清完成 THEN 目标、约束与验收标准已补齐',
+      '2. WHEN 需求澄清完成 THEN 后续执行阶段与角色分工已明确',
+    ].join('\n');
+
+  const requirements = [
+    `# 需求文档：${input.workflowName}`,
     '',
-    '## Intent',
+    '## 简介',
     goalSummary,
     '',
-    '## Scope',
+    '## 术语表',
+    `- **工作目录**: ${input.workingDirectory}`,
+    `- **工作区模式**: ${input.workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行'}`,
+    `- **执行模式**: ${mode === 'state-machine' ? '状态机' : '阶段式'}`,
     '',
-    'Includes:',
-    ...scopeIncludes.map((line) => `- ${line}`),
+    '## 需求',
     '',
-    'Excludes:',
-    ...scopeExcludes.map((line) => `- ${line}`),
-    '',
-    '## Approach',
-    '先完成需求澄清、方案设计与任务拆解，形成清晰的协作与执行基线，再推进后续实现。',
+    reqSections,
   ].join('\n');
 
-  const designDecisions = [
-    `### Decision: 使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 作为执行载体`,
-    `原因：当前需求更适合通过 ${mode === 'state-machine' ? '状态流转与 verdict 驱动' : '显式阶段拆分'} 来组织执行。`,
-    '',
-    '### Decision: 先确认阶段目标与职责边界',
-    '原因：先锁定需求、约束、设计与任务，再细化执行编排，能降低后续协作偏差。',
-  ].join('\n');
-  const affectedAreas = [
-    '- 创建态会话与 SpecCoding 制品',
-    '- workflow 草案生成',
-    '- Agent 分工与 Supervisor 收口',
-  ].join('\n');
-  const risks = [
-    '1. 需求澄清不充分会导致后续 workflow 草案偏差。',
-    '2. Agent 分工如果只看名称不看职责，容易形成空泛配置。',
-    '3. 参考 workflow 存在时，需要保留骨架同时替换需求语义。',
-  ].join('\n');
+  // design.md — 精简版
   const design = [
-    `# Design: ${input.workflowName}`,
+    `# 设计文档：${input.workflowName}`,
     '',
-    '## Technical Approach',
-    '创建阶段先明确目标、边界、关键决策、任务拆分与角色分工，作为后续执行编排与协作对齐的共同依据。',
+    '## 概述',
+    `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 作为执行载体，先锁定需求与设计，再推进实现。`,
     '',
-    '## Key Decisions',
+    '## 关键决策',
     '',
-    designDecisions,
-    '',
-    '## Affected Areas',
-    affectedAreas,
-    '',
-    '## Risks And Tradeoffs',
-    risks,
+    '| 决策 | 选择 | 理由 |',
+    '| --- | --- | --- |',
+    `| 执行模式 | ${mode === 'state-machine' ? '状态机' : '阶段式'} | 当前需求更适合通过${mode === 'state-machine' ? '状态流转与 verdict 驱动' : '显式阶段拆分'}来组织执行 |`,
+    '| 规划优先 | 先确认阶段目标与职责边界 | 降低后续协作偏差 |',
   ].join('\n');
 
+  // tasks.md — 多级嵌套 checkbox
   const taskSections = input.phases.length > 0
     ? input.phases.map((phase, index) => {
       const ownerText = phase.ownerAgents.length ? `（负责人：${phase.ownerAgents.join('、')}）` : '';
       return [
-        `## ${index + 1}. ${phase.title}${ownerText}`,
-        `- [ ] ${index + 1}.1 明确 ${phase.title} 的验收标准`,
-        `- [ ] ${index + 1}.2 按 spec 完成 ${phase.title} 的执行内容`,
+        `- [ ] ${index + 1}. ${phase.title}${ownerText}`,
+        `  - [ ] ${index + 1}.1 明确 ${phase.title} 的验收标准`,
+        `    - _需求：${index + 1}_`,
+        `  - [ ] ${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
+        `    - _需求：${index + 1}_`,
       ].join('\n');
     }).join('\n\n')
-    : '## 1. 需求澄清\n- [ ] 1.1 补齐目标、约束与验收标准\n- [ ] 1.2 明确后续执行阶段与角色分工';
-  const tasks = ['# Tasks', '', taskSections].join('\n');
-
-  const deltaRequirements = input.phases.length > 0
-    ? input.phases.map((phase) => [
-      `### 需求:${phase.title}`,
-      `系统 MUST 在执行编排中显式体现「${phase.title}」这一阶段。`,
-      '',
-      `#### 场景:${phase.title} 纳入执行编排`,
-      `- 假如该计划已进入执行编排阶段`,
-      `- 当系统组织后续执行流程时`,
-      `- 则必须保留名称为「${phase.title}」的阶段或状态`,
-      `- 并且将 ${phase.ownerAgents.length ? phase.ownerAgents.join('、') : '对应 Agent'} 的职责绑定到该阶段`,
-    ].join('\n')).join('\n\n')
     : [
-      '### 需求:计划先于执行编排确认',
-      '系统 MUST 在计划确认后再进入后续执行编排。',
-      '',
-      '#### 场景:先确认计划再推进执行',
-      '- 假如用户正在创建 workflow',
-      '- 当计划内容还未确认时',
-      '- 则系统不能直接跳过到最终执行配置',
-      '- 并且必须先展示正式计划制品供用户确认',
+      '- [ ] 1. 需求澄清',
+      '  - [ ] 1.1 补齐目标、约束与验收标准',
+      '    - _需求：1_',
+      '  - [ ] 1.2 明确后续执行阶段与角色分工',
+      '    - _需求：1_',
     ].join('\n');
-  const deltaSpec = [
-    `# ${input.workflowName} 增量规范`,
+  const tasks = [
+    `# 实现计划：${input.workflowName}`,
     '',
-    '## 新增需求',
+    '## 概述',
+    '先完成需求澄清、方案设计与任务拆解，形成清晰的协作与执行基线，再推进后续实现。',
     '',
-    deltaRequirements,
+    '## 任务',
+    '',
+    taskSections,
   ].join('\n');
 
-  return { proposal, design, tasks, deltaSpec };
+  return { requirements, design, tasks };
 }
 
 export function buildSpecCodingFromWorkflowConfig(input: {
@@ -679,10 +805,9 @@ export function buildCreationSession(input: {
     createdAt: specCoding.updatedAt || nowIso,
     createdBy: specCoding.revisions.at(-1)?.createdBy,
     artifacts: {
-      proposal: specCoding.artifacts?.proposal || '',
+      requirements: specCoding.artifacts?.requirements || '',
       design: specCoding.artifacts?.design || '',
       tasks: specCoding.artifacts?.tasks || '',
-      deltaSpec: specCoding.artifacts?.deltaSpec || '',
     },
   };
 
@@ -726,10 +851,9 @@ function syncCreationSessionArtifactSnapshots(session: CreationSession): Creatio
     createdAt: session.specCoding.updatedAt || new Date(session.updatedAt).toISOString(),
     createdBy: session.specCoding.revisions.at(-1)?.createdBy,
     artifacts: {
-      proposal: session.specCoding.artifacts?.proposal || '',
+      requirements: session.specCoding.artifacts?.requirements || '',
       design: session.specCoding.artifacts?.design || '',
       tasks: session.specCoding.artifacts?.tasks || '',
-      deltaSpec: session.specCoding.artifacts?.deltaSpec || '',
     },
   };
 

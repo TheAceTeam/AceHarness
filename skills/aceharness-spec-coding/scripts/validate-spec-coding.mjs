@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
-import { resolve, basename, join } from 'path';
+import { resolve, join } from 'path';
 
 function fail(message) {
   console.error(`ACEHarness Spec Coding 校验失败: ${message}`);
@@ -13,19 +13,11 @@ function info(message) {
 }
 
 function isDirectory(path) {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
+  try { return statSync(path).isDirectory(); } catch { return false; }
 }
 
 function isFile(path) {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
+  try { return statSync(path).isFile(); } catch { return false; }
 }
 
 function read(path) {
@@ -46,244 +38,113 @@ function requirePattern(content, pattern, file, message) {
   }
 }
 
-function extractTaskEntries(content) {
-  const lines = content.split(/\r?\n/);
-  const tasks = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const match = lines[i].match(/^-\s\[( |x)\]\s(\d+\.\d+)\s+(.+)$/);
-    if (!match) continue;
-
-    const details = [];
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const line = lines[j];
-      if (/^##\s+/.test(line) || /^-\s\[( |x)\]\s/.test(line)) break;
-      if (/^\s{2,}-\s+/.test(line) || /^\s{2,}\S/.test(line)) {
-        details.push(line.trim());
-      }
-    }
-
-    tasks.push({
-      id: match[2],
-      title: match[3].trim(),
-      details,
-    });
-  }
-
-  return tasks;
-}
-
-function formatTask(task) {
-  return `${task.id} ${task.title}`;
-}
-
-const REQUIRED_TASK_FIELDS = [
-  { label: '目标', pattern: /^-\s+目标：/ },
-  { label: '输入/依赖', pattern: /^-\s+(输入\/依赖|输入|依赖)：/ },
-  { label: '关联需求', pattern: /^-\s+关联需求：/ },
-  { label: '关联设计', pattern: /^-\s+关联设计：/ },
-  { label: '任务类型', pattern: /^-\s+任务类型：/ },
-  { label: '具体改动对象', pattern: /^-\s+具体改动对象：/ },
-  { label: '执行动作', pattern: /^-\s+执行动作：/ },
-  { label: '交付产物', pattern: /^-\s+交付产物：/ },
-  { label: '验证方式', pattern: /^-\s+(验证方式|验收方式)：/ },
-  { label: '完成标准', pattern: /^-\s+完成标准：/ },
-];
-
-function validateTaskFields(file, tasks) {
-  for (const task of tasks) {
-    const missing = REQUIRED_TASK_FIELDS
-      .filter((field) => !task.details.some((detail) => field.pattern.test(detail)))
-      .map((field) => field.label);
-
-    if (missing.length > 0) {
-      fail(`${file}: 任务 ${formatTask(task)} 缺少字段：${missing.join('、')}`);
-    }
-  }
-}
-
-function validateMainSpec(file) {
+// ---- requirements.md 校验 ----
+function validateRequirements(file) {
   if (!isFile(file)) {
-    fail(`${file}: 缺少 spec.md`);
+    fail(`${file}: 缺少 requirements.md`);
     return;
   }
   const content = read(file);
-  requirePattern(content, /^# .+规范/m, file, '必须以一级标题“<领域名>规范”开头');
-  requirePattern(content, /^## 目的$/m, file, '缺少 `## 目的`');
-  requirePattern(content, /^## 需求$/m, file, '缺少 `## 需求`');
-  requirePattern(content, /^### 需求:.+/m, file, '至少需要一个 `### 需求:`');
-  requirePattern(content, /^#### 场景:.+/m, file, '至少需要一个 `#### 场景:`');
+  requirePattern(content, /^# 需求文档[：:].+/m, file, '必须以 `# 需求文档：<功能名称>` 开头');
+  requirePattern(content, /^## 需求$/m, file, '缺少 `## 需求` 章节');
+  requirePattern(content, /^### 需求 \d+[：:].+/m, file, '至少需要一个 `### 需求 N：<名称>`');
+  requirePattern(content, /\*\*用户故事[：:]\*\*/m, file, '至少需要一个用户故事');
+  requirePattern(content, /^#### 验收标准$/m, file, '至少需要一个 `#### 验收标准` 章节');
+  requirePattern(content, /WHEN .+ THEN .+/m, file, '至少需要一个 WHEN/THEN 验收标准');
 }
 
-function validateDeltaSpec(file) {
-  if (!isFile(file)) {
-    fail(`${file}: 缺少增量 spec.md`);
-    return;
-  }
-  const content = read(file);
-  requirePattern(content, /^# .+增量规范/m, file, '必须以一级标题“<领域名>增量规范”开头');
-  requirePattern(content, /^## (新增需求|修改需求|删除需求)$/m, file, '缺少增量节标题（新增需求/修改需求/删除需求）');
-  requirePattern(content, /^### 需求:.+/m, file, '至少需要一个 `### 需求:`');
-  requirePattern(content, /^#### 场景:.+/m, file, '至少需要一个 `#### 场景:`');
-}
-
-function validateProposal(file) {
-  if (!isFile(file)) {
-    fail(`${file}: 缺少 proposal.md`);
-    return;
-  }
-  const content = read(file);
-  requirePattern(content, /^# Proposal: .+/m, file, '必须以 `# Proposal: <change-id>` 开头');
-  requirePattern(content, /^## Intent$/m, file, '缺少 `## Intent`');
-  requirePattern(content, /^## Scope$/m, file, '缺少 `## Scope`');
-  requirePattern(content, /^Includes:$/m, file, '缺少 `Includes:`');
-  requirePattern(content, /^Excludes:$/m, file, '缺少 `Excludes:`');
-  requirePattern(content, /^## Approach$/m, file, '缺少 `## Approach`');
-}
-
+// ---- design.md 校验 ----
 function validateDesign(file) {
   if (!isFile(file)) {
     fail(`${file}: 缺少 design.md`);
     return;
   }
   const content = read(file);
-  requirePattern(content, /^# Design: .+/m, file, '必须以 `# Design: <change-id>` 开头');
-  requirePattern(content, /^## Overview$/m, file, '缺少 `## Overview`');
-  requirePattern(content, /^## Technical Approach$/m, file, '缺少 `## Technical Approach`');
-  requirePattern(content, /^## Architecture$/m, file, '缺少 `## Architecture`');
-  requirePattern(content, /^## Data Flow$/m, file, '缺少 `## Data Flow`');
-  requirePattern(content, /^## Core Logic Pseudocode$/m, file, '缺少 `## Core Logic Pseudocode`');
-  requirePattern(content, /^## Data Models$/m, file, '缺少 `## Data Models`');
-  requirePattern(content, /^## Interfaces And Contracts$/m, file, '缺少 `## Interfaces And Contracts`');
-  requirePattern(content, /^## Assumptions And Unknowns$/m, file, '缺少 `## Assumptions And Unknowns`');
-  requirePattern(content, /^## Key Decisions$/m, file, '缺少 `## Key Decisions`');
-  requirePattern(content, /^## Affected Areas$/m, file, '缺少 `## Affected Areas`');
-  requirePattern(content, /^## Risks And Tradeoffs$/m, file, '缺少 `## Risks And Tradeoffs`');
-
-  const mermaidBlocks = content.match(/```mermaid[\s\S]*?```/g) || [];
-  if (mermaidBlocks.length < 2) {
-    fail(`${file}: 至少需要 2 个 Mermaid 图块，用于表达架构/执行链路和数据流`);
+  requirePattern(content, /^# 设计文档[：:].+/m, file, '必须以 `# 设计文档：<功能名称>` 开头');
+  requirePattern(content, /^## 概述$/m, file, '缺少 `## 概述` 章节');
+  // 检查是否有 Mermaid 图或架构图
+  const hasMermaid = /```mermaid/m.test(content);
+  const hasArchSection = /^## 架构$/m.test(content);
+  if (!hasMermaid && !hasArchSection) {
+    fail(`${file}: 缺少架构图（Mermaid 代码块或 ## 架构 章节）`);
   }
-  if (/Mermaid\s*流程图如下[:：]?\s*\n\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|mindmap|timeline)\b/m.test(content)) {
-    fail(`${file}: Mermaid 图必须使用独立的 \`\`\`mermaid 代码块，不能写成普通文本段落`);
-  }
-
-  const pseudocodeBlock = content.match(/## Core Logic Pseudocode[\s\S]*?```(?:text|pseudo|plaintext)?[\s\S]*?```/m);
-  if (!pseudocodeBlock) {
-    fail(`${file}: ` + '必须在 `## Core Logic Pseudocode` 下提供伪代码代码块');
-  }
-
-  const placeholderPattern = /<[^>\n]+>/;
-  if (placeholderPattern.test(content)) {
-    fail(`${file}: 仍包含未替换的模板占位符，请补成真实节点、组件、字段或规则`);
-  }
-
-  const decisionCount = (content.match(/^### Decision: .+/gm) || []).length;
-  if (decisionCount < 3) {
-    fail(`${file}: 关键决策不足，至少需要 3 条 \`### Decision:\` 条目`);
+  requirePattern(content, /^## 关键决策$/m, file, '缺少 `## 关键决策` 章节');
+  // 检查关键决策表至少有一行数据
+  const tableRowPattern = /^\|[^|]+\|[^|]+\|[^|]+\|/m;
+  if (!tableRowPattern.test(content)) {
+    fail(`${file}: 关键决策表至少需要一行数据`);
   }
 }
 
+// ---- tasks.md 校验 ----
 function validateTasks(file) {
   if (!isFile(file)) {
     fail(`${file}: 缺少 tasks.md`);
     return;
   }
   const content = read(file);
-  requirePattern(content, /^# Tasks$/m, file, '必须以 `# Tasks` 开头');
-  requirePattern(content, /^## \d+\.\s.+/m, file, '至少需要一个二级任务分组标题，如 `## 1. ...`');
-  requirePattern(content, /^- \[( |x)\] \d+\.\d+\s.+/m, file, '至少需要一个复选框任务，如 `- [ ] 1.1 ...`');
+  requirePattern(content, /^# 实现计划[：:].+/m, file, '必须以 `# 实现计划：<功能名称>` 开头');
+  requirePattern(content, /^## 任务$/m, file, '缺少 `## 任务` 章节');
 
-  const tasks = extractTaskEntries(content);
-  if (tasks.length < 3) {
-    fail(`${file}: 任务数量过少，至少需要 3 个复选框任务，不能只有零散条目`);
+  // 检查多级嵌套 checkbox
+  const topLevelTasks = content.match(/^- \[[ xX-]\] \d+\./gm) || [];
+  if (topLevelTasks.length === 0) {
+    fail(`${file}: 至少需要一个顶层任务（格式：- [ ] N. <标题>）`);
   }
 
-  const emptyDetailTasks = tasks.filter((task) => task.details.length === 0);
-  if (emptyDetailTasks.length > 0) {
-    fail(`${file}: 以下任务缺少展开说明，不能只写标题：${emptyDetailTasks.map((task) => task.id).join(', ')}`);
+  const subTasks = content.match(/^\s{2,}- \[[ xX-]\] \d+\.\d+/gm) || [];
+  if (subTasks.length === 0) {
+    fail(`${file}: 至少需要一个子任务（格式：  - [ ] N.M <标题>）`);
   }
 
-  const tooThinTasks = tasks.filter((task) => task.details.length < 2);
-  if (tooThinTasks.length > 0) {
-    fail(`${file}: 以下任务说明过短，至少补充 2 行以上细节：${tooThinTasks.map((task) => task.id).join(', ')}`);
+  // 检查需求引用
+  const reqRefs = content.match(/_需求[：:].+?_/gm) || [];
+  if (reqRefs.length === 0) {
+    fail(`${file}: 至少需要一个需求引用（格式：_需求：x.x_）`);
   }
 
-  const placeholderPattern = /<[^>\n]+>/;
-  const placeholderTasks = tasks.filter((task) =>
-    placeholderPattern.test(task.title) || task.details.some((detail) => placeholderPattern.test(detail))
-  );
-  if (placeholderTasks.length > 0) {
-    fail(`${file}: 以下任务仍包含未替换的模板占位符：${placeholderTasks.map((task) => task.id).join(', ')}`);
+  // 检查检查点
+  const checkpoints = content.match(/^- \[[ xX-]\] \d+\.\s*检查点/gm) || [];
+  if (checkpoints.length === 0) {
+    fail(`${file}: 至少需要一个检查点任务`);
   }
-
-  validateTaskFields(file, tasks);
 }
 
-function validateChange(changeDir, specsRoot) {
-  const changeId = basename(changeDir);
-  const proposal = join(changeDir, 'proposal.md');
-  const design = join(changeDir, 'design.md');
-  const tasks = join(changeDir, 'tasks.md');
-  const changeSpecsRoot = join(changeDir, 'specs');
+// ---- 目录校验 ----
+function validateSpecDomain(domainDir) {
+  const requirements = join(domainDir, 'requirements.md');
+  const design = join(domainDir, 'design.md');
+  const tasks = join(domainDir, 'tasks.md');
 
-  validateProposal(proposal);
+  validateRequirements(requirements);
   validateDesign(design);
   validateTasks(tasks);
-
-  if (!isDirectory(changeSpecsRoot)) {
-    fail(`${changeDir}: 缺少 specs/ 目录`);
-    return;
-  }
-
-  const domains = listDirs(changeSpecsRoot);
-  if (domains.length === 0) {
-    fail(`${changeDir}: specs/ 下至少需要一个 domain`);
-    return;
-  }
-
-  for (const domain of domains) {
-    const deltaSpec = join(changeSpecsRoot, domain, 'spec.md');
-    validateDeltaSpec(deltaSpec);
-
-    const mainSpec = join(specsRoot, domain, 'spec.md');
-    if (!isFile(mainSpec)) {
-      fail(`${changeId}: 引用了 domain \`${domain}\`，但主规范 ${mainSpec} 不存在`);
-    }
-  }
 }
 
 function validateRoot(rootDir) {
-  const specsRoot = join(rootDir, 'specs');
-  const changesRoot = join(rootDir, 'changes');
-
   if (!isDirectory(rootDir)) {
     fail(`根目录不存在: ${rootDir}`);
     return;
   }
-  if (!isDirectory(specsRoot)) {
-    fail(`${rootDir}: 缺少 specs/ 目录`);
-    return;
-  }
-  if (!isDirectory(changesRoot)) {
-    fail(`${rootDir}: 缺少 changes/ 目录`);
-    return;
-  }
 
-  const mainDomains = listDirs(specsRoot);
-  if (mainDomains.length === 0) {
-    fail(`${specsRoot}: 至少需要一个 domain`);
-  }
-  for (const domain of mainDomains) {
-    validateMainSpec(join(specsRoot, domain, 'spec.md'));
-  }
+  // 支持两种结构：
+  // 1. specs/<domain>/ 下有 requirements.md, design.md, tasks.md
+  // 2. 直接在 rootDir 下有 requirements.md, design.md, tasks.md
+  const specsRoot = join(rootDir, 'specs');
 
-  const changeDirs = listDirs(changesRoot);
-  if (changeDirs.length === 0) {
-    fail(`${changesRoot}: 至少需要一个 change 目录`);
-  }
-  for (const changeId of changeDirs) {
-    validateChange(join(changesRoot, changeId), specsRoot);
+  if (isDirectory(specsRoot)) {
+    const domains = listDirs(specsRoot);
+    if (domains.length === 0) {
+      fail(`${specsRoot}: 至少需要一个 domain 目录`);
+    }
+    for (const domain of domains) {
+      info(`校验 domain: ${domain}`);
+      validateSpecDomain(join(specsRoot, domain));
+    }
+  } else {
+    // 直接校验 rootDir 下的制品
+    info(`校验目录: ${rootDir}`);
+    validateSpecDomain(rootDir);
   }
 }
 
