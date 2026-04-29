@@ -30,6 +30,14 @@ export async function POST(request: NextRequest) {
         currentStatus.runId === runId
         && currentStatus.currentState === '__human_approval__';
       if (action === 'force-transition' && isSameRunPendingApproval && isStateMachineManagerLike(manager) && targetState) {
+        const pendingQuestion = manager.getPendingHumanQuestion();
+        if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
+          await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
+          return NextResponse.json({
+            success: true,
+            message: `已回答人工审查并请求跳转到: ${targetState}`,
+          });
+        }
         manager.setQueuedApprovalAction('approve');
         manager.forceTransition(targetState, instruction);
         return NextResponse.json({
@@ -51,10 +59,15 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === 'force-transition' && isStateMachineManagerLike(manager) && targetState) {
-      manager.setQueuedApprovalAction('approve');
-      setTimeout(() => {
-        manager.forceTransition(targetState, instruction);
-      }, 500);
+      const pendingQuestion = manager.getPendingHumanQuestion();
+      if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
+        await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
+      } else {
+        manager.setQueuedApprovalAction('approve');
+        setTimeout(() => {
+          manager.forceTransition(targetState, instruction);
+        }, 500);
+      }
     }
 
     manager.resume(runId).catch(() => {});

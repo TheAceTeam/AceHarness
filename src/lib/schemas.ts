@@ -172,49 +172,49 @@ export const copyConfigFormSchema = z.object({
 
 export type CopyConfigForm = z.infer<typeof copyConfigFormSchema>;
 
-export const openSpecStatusSchema = z.enum(['draft', 'confirmed', 'in-progress', 'completed', 'archived']);
-export const openSpecProgressStatusSchema = z.enum(['pending', 'in-progress', 'completed', 'blocked']);
+export const specCodingStatusSchema = z.enum(['draft', 'confirmed', 'in-progress', 'completed', 'archived']);
+export const specCodingProgressStatusSchema = z.enum(['pending', 'in-progress', 'completed', 'blocked']);
 
-export const openSpecRequirementSchema = z.object({
+export const specCodingRequirementSchema = z.object({
   id: z.string(),
   title: z.string(),
   detail: z.string().optional(),
   category: z.enum(['goal', 'constraint', 'acceptance', 'context']).default('goal'),
 });
 
-export const openSpecPhaseSchema = z.object({
+export const specCodingPhaseSchema = z.object({
   id: z.string(),
   title: z.string(),
   objective: z.string().optional(),
   ownerAgents: z.array(z.string()).default([]),
-  status: openSpecProgressStatusSchema.default('pending'),
+  status: specCodingProgressStatusSchema.default('pending'),
 });
 
-export const openSpecAssignmentSchema = z.object({
+export const specCodingAssignmentSchema = z.object({
   agent: z.string(),
   responsibility: z.string(),
   phaseIds: z.array(z.string()).default([]),
 });
 
-export const openSpecCheckpointSchema = z.object({
+export const specCodingCheckpointSchema = z.object({
   id: z.string(),
   title: z.string(),
   phaseId: z.string().optional(),
-  status: openSpecProgressStatusSchema.default('pending'),
+  status: specCodingProgressStatusSchema.default('pending'),
 });
 
-export const openSpecProgressSchema = z.object({
-  overallStatus: openSpecProgressStatusSchema.default('pending'),
+export const specCodingProgressSchema = z.object({
+  overallStatus: specCodingProgressStatusSchema.default('pending'),
   completedPhaseIds: z.array(z.string()).default([]),
   activePhaseId: z.string().optional(),
   summary: z.string().optional(),
 });
 
-export const openSpecTaskSchema = z.object({
+export const specCodingTaskSchema = z.object({
   id: z.string(),
   title: z.string(),
   detail: z.string().optional(),
-  status: openSpecProgressStatusSchema.default('pending'),
+  status: specCodingProgressStatusSchema.default('pending'),
   phaseId: z.string().optional(),
   ownerAgents: z.array(z.string()).default([]),
   updatedAt: z.string().optional(),
@@ -222,7 +222,7 @@ export const openSpecTaskSchema = z.object({
   validation: z.string().optional(),
 });
 
-export const openSpecRevisionSchema = z.object({
+export const specCodingRevisionSchema = z.object({
   id: z.string(),
   version: z.number().int().min(1),
   summary: z.string(),
@@ -230,31 +230,31 @@ export const openSpecRevisionSchema = z.object({
   createdBy: z.string().optional(),
 });
 
-export const openSpecArtifactsSchema = z.object({
+export const specCodingArtifactsSchema = z.object({
   proposal: z.string().default(''),
   design: z.string().default(''),
   tasks: z.string().default(''),
   deltaSpec: z.string().default(''),
 });
 
-export const openSpecDocumentSchema = z.object({
+export const specCodingDocumentSchema = z.object({
   id: z.string(),
   version: z.number().int().min(1),
-  status: openSpecStatusSchema.default('draft'),
+  status: specCodingStatusSchema.default('draft'),
   title: z.string(),
   workflowName: z.string(),
   summary: z.string().optional(),
   goals: z.array(z.string()).default([]),
   nonGoals: z.array(z.string()).default([]),
   constraints: z.array(z.string()).default([]),
-  requirements: z.array(openSpecRequirementSchema).default([]),
-  phases: z.array(openSpecPhaseSchema).default([]),
-  assignments: z.array(openSpecAssignmentSchema).default([]),
-  checkpoints: z.array(openSpecCheckpointSchema).default([]),
-  tasks: z.array(openSpecTaskSchema).default([]),
-  progress: openSpecProgressSchema,
-  revisions: z.array(openSpecRevisionSchema).default([]),
-  artifacts: openSpecArtifactsSchema.default({
+  requirements: z.array(specCodingRequirementSchema).default([]),
+  phases: z.array(specCodingPhaseSchema).default([]),
+  assignments: z.array(specCodingAssignmentSchema).default([]),
+  checkpoints: z.array(specCodingCheckpointSchema).default([]),
+  tasks: z.array(specCodingTaskSchema).default([]),
+  progress: specCodingProgressSchema,
+  revisions: z.array(specCodingRevisionSchema).default([]),
+  artifacts: specCodingArtifactsSchema.default({
     proposal: '',
     design: '',
     tasks: '',
@@ -315,7 +315,7 @@ export const creationSessionSchema = z.object({
       note: z.string().default(''),
     })).default({}),
   }).optional(),
-  openSpec: openSpecDocumentSchema,
+  specCoding: specCodingDocumentSchema,
   generatedConfigSummary: z.object({
     mode: z.enum(['phase-based', 'state-machine']),
     phaseCount: z.number().int().min(0).default(0),
@@ -340,22 +340,22 @@ export const creationSessionSchema = z.object({
     summary: z.string(),
     createdAt: z.string(),
     createdBy: z.string().optional(),
-    artifacts: openSpecArtifactsSchema,
+    artifacts: specCodingArtifactsSchema,
   })).default([]),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
 
-export type OpenSpecRequirement = z.infer<typeof openSpecRequirementSchema>;
-export type OpenSpecPhase = z.infer<typeof openSpecPhaseSchema>;
-export type OpenSpecAssignment = z.infer<typeof openSpecAssignmentSchema>;
-export type OpenSpecCheckpoint = z.infer<typeof openSpecCheckpointSchema>;
-export type OpenSpecProgressStatus = z.infer<typeof openSpecProgressStatusSchema>;
-export type OpenSpecProgress = z.infer<typeof openSpecProgressSchema>;
-export type OpenSpecTask = z.infer<typeof openSpecTaskSchema>;
-export type OpenSpecRevision = z.infer<typeof openSpecRevisionSchema>;
-export type OpenSpecArtifacts = z.infer<typeof openSpecArtifactsSchema>;
-export type OpenSpecDocument = z.infer<typeof openSpecDocumentSchema>;
+export type SpecCodingRequirement = z.infer<typeof specCodingRequirementSchema>;
+export type SpecCodingPhase = z.infer<typeof specCodingPhaseSchema>;
+export type SpecCodingAssignment = z.infer<typeof specCodingAssignmentSchema>;
+export type SpecCodingCheckpoint = z.infer<typeof specCodingCheckpointSchema>;
+export type SpecCodingProgressStatus = z.infer<typeof specCodingProgressStatusSchema>;
+export type SpecCodingProgress = z.infer<typeof specCodingProgressSchema>;
+export type SpecCodingTask = z.infer<typeof specCodingTaskSchema>;
+export type SpecCodingRevision = z.infer<typeof specCodingRevisionSchema>;
+export type SpecCodingArtifacts = z.infer<typeof specCodingArtifactsSchema>;
+export type SpecCodingDocument = z.infer<typeof specCodingDocumentSchema>;
 export type CreationSession = z.infer<typeof creationSessionSchema>;
 
 // 运行记录 Schema

@@ -13,7 +13,7 @@ export interface WorkflowCreationBindingLike {
   filename: string;
   workflowName: string;
   status: 'draft' | 'confirmed' | 'config-generated' | 'run-bound' | 'archived';
-  openSpecId: string;
+  specCodingId: string;
   createdAt: number;
   updatedAt: number;
 }

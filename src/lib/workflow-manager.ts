@@ -2259,10 +2259,12 @@ export class WorkflowManager extends EventEmitter {
         const streamContent = await loadStreamContent(this.currentRunId, stepName);
         if (streamContent) {
           // Kill any orphaned claude processes
-          try {
-            const { execSync } = await import('child_process');
-            execSync('pkill -f "claude.*--output-format json" 2>/dev/null || true', { timeout: 5000 });
-          } catch { /* ignore */ }
+          if (process.platform !== 'win32') {
+            try {
+              const { execSync } = await import('child_process');
+              execSync('pkill -f "claude.*--output-format json" 2>/dev/null || true', { timeout: 5000 });
+            } catch { /* ignore */ }
+          }
 
           // Mark step as completed with stream content
           return { step: stepName, output: streamContent };

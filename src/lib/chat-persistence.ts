@@ -47,7 +47,7 @@ export interface WorkflowCreationBinding {
   filename: string;
   workflowName: string;
   status: 'draft' | 'confirmed' | 'config-generated' | 'run-bound' | 'archived';
-  openSpecId: string;
+  specCodingId: string;
   updatedAt: number;
   createdAt: number;
 }
@@ -230,7 +230,7 @@ export async function updateChatSessionCreationBinding(
 
   const now = patch.updatedAt ?? Date.now();
   const existing = session.creationSession;
-  if (!existing && (!patch.creationSessionId || !patch.filename || !patch.workflowName || !patch.status || !patch.openSpecId)) {
+  if (!existing && (!patch.creationSessionId || !patch.filename || !patch.workflowName || !patch.status || !patch.specCodingId)) {
     return;
   }
   session.creationSession = {

@@ -15,7 +15,7 @@ import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
 import { fenced } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */
@@ -48,11 +48,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('agent', [
-      process.env.HOME ? `${process.env.HOME}/.local/bin` : '',
-      '/usr/local/bin',
-      '/usr/bin',
-    ].filter(Boolean));
+    return commandExists('agent', getCommonCliSearchPaths());
   }
 
   /**

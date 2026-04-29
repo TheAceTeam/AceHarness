@@ -1,6 +1,5 @@
 import { mkdir, readFile, rm, writeFile, rename, chmod, cp, symlink } from 'fs/promises';
 import { createWriteStream, existsSync, createReadStream } from 'fs';
-import { execSync } from 'child_process';
 import { dirname, join, normalize, resolve } from 'path';
 import { pipeline, Readable, Transform } from 'stream';
 import { promisify } from 'util';
@@ -420,11 +419,7 @@ async function safeReplaceDir(src: string, dest: string): Promise<void> {
     throw error;
   }
   if (destExists) {
-    if (process.platform !== 'win32') {
-      try { execSync(`rm -rf ${JSON.stringify(tempDest)}`); } catch { /* ignore */ }
-    } else {
-      rm(tempDest, { recursive: true, force: true }).catch(() => {});
-    }
+    rm(tempDest, { recursive: true, force: true }).catch(() => {});
   }
 }
 

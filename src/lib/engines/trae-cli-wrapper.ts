@@ -8,7 +8,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
 export class TraeCliEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -27,10 +27,6 @@ export class TraeCliEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('trae-cli', [
-      '/root/.local/bin',
-      '/usr/local/bin',
-      '/usr/bin',
-    ]);
+    return commandExists('trae-cli', getCommonCliSearchPaths());
   }
 }

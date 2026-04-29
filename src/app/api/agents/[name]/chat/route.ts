@@ -9,10 +9,10 @@ import { getEngineConfigPath } from '@/lib/app-paths';
 import type { RoleConfig } from '@/lib/schemas';
 import { existsSync, readFileSync } from 'fs';
 import {
-  appendOpenSpecRevision,
+  appendSpecCodingRevision,
   loadLatestCreationSessionByFilename,
   updateCreationSession,
-} from '@/lib/openspec-store';
+} from '@/lib/spec-coding-store';
 import {
   appendMemoryEntries,
   buildMemoryPromptBlock,
@@ -40,17 +40,17 @@ function readGlobalEngineSelection(): { engine?: string; defaultModel?: string }
 
 type ChatMode = 'standalone-chat' | 'workflow-chat';
 
-type OpenSpecRevisionCommand = {
-  type: 'openspec-revision';
+type SpecCodingRevisionCommand = {
+  type: 'spec-coding-revision';
   apply?: boolean;
   summary?: string;
   affectedArtifacts?: string[];
   impact?: string[];
 };
 
-function extractOpenSpecRevisionCommand(text: string): OpenSpecRevisionCommand | null {
+function extractSpecCodingRevisionCommand(text: string): SpecCodingRevisionCommand | null {
   const fenced = text.match(/```json\s*([\s\S]*?)```/i)?.[1];
-  const tagged = text.match(/<openspec-revision>\s*([\s\S]*?)\s*<\/openspec-revision>/i)?.[1];
+  const tagged = text.match(/<spec-coding-revision>\s*([\s\S]*?)\s*<\/spec-coding-revision>/i)?.[1];
   const candidate = (fenced || tagged || text).trim();
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');
@@ -58,9 +58,9 @@ function extractOpenSpecRevisionCommand(text: string): OpenSpecRevisionCommand |
 
   try {
     const parsed = JSON.parse(candidate.slice(start, end + 1));
-    if (parsed?.type !== 'openspec-revision') return null;
+    if (parsed?.type !== 'spec-coding-revision') return null;
     return {
-      type: 'openspec-revision',
+      type: 'spec-coding-revision',
       apply: parsed.apply !== false,
       summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
       affectedArtifacts: Array.isArray(parsed.affectedArtifacts)
@@ -75,10 +75,10 @@ function extractOpenSpecRevisionCommand(text: string): OpenSpecRevisionCommand |
   }
 }
 
-async function applySupervisorOpenSpecRevision(input: {
+async function applySupervisorSpecCodingRevision(input: {
   workflowContext: Record<string, any>;
   supervisorAgent: string;
-  command: OpenSpecRevisionCommand;
+  command: SpecCodingRevisionCommand;
 }) {
   const summary = (input.command.summary || '').trim();
   if (!summary) return null;
@@ -95,12 +95,12 @@ async function applySupervisorOpenSpecRevision(input: {
   const configFile = typeof input.workflowContext.configFile === 'string' ? input.workflowContext.configFile : '';
   if (configFile) {
     const creationSession = await loadLatestCreationSessionByFilename(configFile);
-    if (creationSession?.openSpec) {
+    if (creationSession?.specCoding) {
       await updateCreationSession(creationSession.id, {
-        openSpec: appendOpenSpecRevision(creationSession.openSpec, {
+        specCoding: appendSpecCodingRevision(creationSession.specCoding, {
           summary,
           createdBy: input.supervisorAgent,
-          status: creationSession.openSpec.status,
+          status: creationSession.specCoding.status,
           progressSummary: summary,
         }),
       });
@@ -112,8 +112,8 @@ async function applySupervisorOpenSpecRevision(input: {
   if (runId) {
     const manager = await workflowRegistry.getRunningManager(configFile);
     const managerStatus = manager?.getStatus?.();
-    if (manager && managerStatus?.runId === runId && 'applySupervisorChatOpenSpecRevision' in manager && typeof (manager as any).applySupervisorChatOpenSpecRevision === 'function') {
-      await (manager as any).applySupervisorChatOpenSpecRevision({
+    if (manager && managerStatus?.runId === runId && 'applySupervisorChatSpecCodingRevision' in manager && typeof (manager as any).applySupervisorChatSpecCodingRevision === 'function') {
+      await (manager as any).applySupervisorChatSpecCodingRevision({
         supervisorAgent: input.supervisorAgent,
         summary,
         content: reviewContent,
@@ -124,11 +124,11 @@ async function applySupervisorOpenSpecRevision(input: {
       applied = true;
     } else {
       const runState = await loadRunState(runId);
-      if (runState?.runOpenSpec) {
-        runState.runOpenSpec = appendOpenSpecRevision(runState.runOpenSpec, {
+      if (runState?.runSpecCoding) {
+        runState.runSpecCoding = appendSpecCodingRevision(runState.runSpecCoding, {
           summary,
           createdBy: input.supervisorAgent,
-          status: runState.runOpenSpec.status,
+          status: runState.runSpecCoding.status,
           progressSummary: summary,
         });
         runState.latestSupervisorReview = {
@@ -227,16 +227,16 @@ async function buildAgentMemoryContext(input: {
   ].join('\n\n');
 }
 
-function buildWorkflowOpenSpecBlock(workflowContext: Record<string, any>): string {
-  const summary = workflowContext.openSpecSummary;
-  const details = workflowContext.openSpecDetails;
+function buildWorkflowSpecCodingBlock(workflowContext: Record<string, any>): string {
+  const summary = workflowContext.specCodingSummary;
+  const details = workflowContext.specCodingDetails;
   if (!summary && !details) return '';
 
   const activePhase = details?.phases?.find((phase: any) => phase.id === summary?.progress?.activePhaseId)
     || details?.phases?.find((phase: any) => phase.title === workflowContext.currentPhase);
 
   return [
-    '## 当前 Run OpenSpec',
+    '## 当前 Run Spec Coding 投影',
     summary?.version ? `- 版本: v${summary.version}` : '',
     summary?.source ? `- 来源: ${summary.source === 'run' ? 'run snapshot' : 'creation baseline'}` : '',
     summary?.status ? `- 状态: ${summary.status}` : '',
@@ -247,7 +247,7 @@ function buildWorkflowOpenSpecBlock(workflowContext: Record<string, any>): strin
     Array.isArray(activePhase?.ownerAgents) && activePhase.ownerAgents.length
       ? `- 阶段责任 Agent: ${activePhase.ownerAgents.join(', ')}`
       : '',
-    '- 规则: 普通 Agent 只能基于 spec 更新状态认知，非状态修订由 Supervisor 负责。',
+    '- 规则: 普通 Agent 只能基于 Spec Coding 投影更新状态认知，非状态修订由 Supervisor 负责。',
   ].filter(Boolean).join('\n');
 }
 
@@ -327,7 +327,7 @@ export async function POST(
         formatLatestSupervisorReview(workflowContext.latestSupervisorReview)
           ? `- 最近 Supervisor 审阅: ${formatLatestSupervisorReview(workflowContext.latestSupervisorReview)}`
           : '',
-        buildWorkflowOpenSpecBlock(workflowContext),
+        buildWorkflowSpecCodingBlock(workflowContext),
       ].filter(Boolean).join('\n')
       : '';
     const memoryContextBlock = await buildAgentMemoryContext({
@@ -344,9 +344,9 @@ export async function POST(
         : '这是普通角色聊天，可以复用角色长期记忆与当前会话记忆，但不要默认引入 workflow 上下文，除非用户主动提及。',
       roleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
         ? [
-          '## Supervisor OpenSpec 修订协议',
-          '- 当用户明确要求你刷新、修订、更新、收敛 OpenSpec / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<openspec-revision>...</openspec-revision>` JSON 块。',
-          '- JSON 格式: {"type":"openspec-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["proposal.md","design.md","tasks.md","spec.md"],"impact":["影响1","影响2"]}',
+          '## Supervisor Spec Coding 修订协议',
+          '- 当用户明确要求你刷新、修订、更新、收敛 Spec Coding 制品 / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<spec-coding-revision>...</spec-coding-revision>` JSON 块。',
+          '- JSON 格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["proposal.md","design.md","tasks.md","spec.md"],"impact":["影响1","影响2"]}',
           '- 只有你判断需要真正落盘修订时才输出该块；否则不要输出。',
         ].join('\n')
         : '',
@@ -378,18 +378,20 @@ export async function POST(
     }
 
     const finalSessionId = result.sessionId || resumeSessionId || null;
-    const openSpecRevisionCommand = roleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
-      ? extractOpenSpecRevisionCommand(result.output || '')
+    const specCodingRevisionCommand = roleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
+      ? extractSpecCodingRevisionCommand(result.output || '')
       : null;
-    const openSpecRevision = openSpecRevisionCommand && openSpecRevisionCommand.apply !== false && workflowContext
-      ? await applySupervisorOpenSpecRevision({
+    const specCodingRevision = specCodingRevisionCommand && specCodingRevisionCommand.apply !== false && workflowContext
+      ? await applySupervisorSpecCodingRevision({
           workflowContext,
           supervisorAgent: roleConfig.name,
-          command: openSpecRevisionCommand,
+          command: specCodingRevisionCommand,
         })
       : null;
-    const cleanedOutput = openSpecRevisionCommand
-      ? (result.output || '').replace(/<openspec-revision>[\s\S]*?<\/openspec-revision>/gi, '').trim()
+    const cleanedOutput = specCodingRevisionCommand
+      ? (result.output || '')
+        .replace(/<spec-coding-revision>[\s\S]*?<\/spec-coding-revision>/gi, '')
+        .trim()
       : (result.output || '');
     if (finalSessionId) {
       await appendMemoryEntries([
@@ -418,7 +420,7 @@ export async function POST(
       model: effectiveModel,
       isError: !result.success,
       error: result.error || null,
-      openSpecRevision,
+      specCodingRevision,
       reusePolicy: mode === 'workflow-chat'
         ? 'workflow-chat 优先复用 run 绑定会话；standalone-chat 不自动继承 workflow 记忆。'
         : 'standalone-chat 仅复用该角色的独立会话与长期角色记忆。',

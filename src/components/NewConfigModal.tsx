@@ -63,7 +63,7 @@ const SPEC_LANGUAGE_RULE = [
 ].join('\n');
 const WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT = [
   '## Workflow 草案阶段硬约束',
-  '当前处于创建工作流的 workflow 草案阶段。AI 只负责根据已确认的 OpenSpec/计划制品生成草案文本和机器可读 workflow_draft。',
+  '当前处于创建工作流的 workflow 草案阶段。AI 只负责根据已确认的 SpecCoding/计划制品生成草案文本和机器可读 workflow_draft。',
   '可以为整理草案文本或辅助生成内容使用脚本，但不要写入最终 workflow 文件。',
   '禁止自行校验 workflow/YAML：不要调用 validateWorkflowDraft，不要运行 ts-node/Node 脚本校验 YAML，不要调用 config.validate，不要输出 action，也不要声称“我会做本地结构校验”或“我已本地校验”。',
   '系统会在你输出后自动解析 <result> 或 YAML 代码块，并使用服务端内建校验器判断 valid/invalid；校验失败时系统会把错误反馈给你继续修。',
@@ -146,7 +146,7 @@ function buildWorkflowDraftRepairMessage(previousOutput: string, validation: any
     '请继续当前对话，不要重新询问用户，不要只输出解释，不要声明文件已经写入。',
     '禁止自行校验 workflow/YAML：不要调用 validateWorkflowDraft，不要运行 ts-node/Node 脚本校验 YAML，不要调用 config.validate，不要输出 action，也不要声称会做本地结构校验。',
     '系统已经完成解析/校验，并会继续负责下一次校验；你只需要按错误修正并补发完整 workflow_draft。',
-    '你必须基于前文已确认的 OpenSpec、Agent 分工和上一轮草案，直接补发一个修正后的完整 workflow_draft。',
+    '你必须基于前文已确认的 SpecCoding、Agent 分工和上一轮草案，直接补发一个修正后的完整 workflow_draft。',
     '',
     '硬性格式要求：',
     '1. 最终输出必须包含一个 <result>...</result> 块。',
@@ -227,9 +227,9 @@ type WorkflowCreationRecommendations = {
   }>;
 };
 
-type OpenSpecArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
+type SpecCodingArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
 
-type OpenSpecArtifactDrafts = Record<OpenSpecArtifactKey, string>;
+type SpecCodingArtifactDrafts = Record<SpecCodingArtifactKey, string>;
 
 type PlanDraftResult = {
   type: 'plan_draft';
@@ -289,12 +289,12 @@ type ClarificationFormResult = {
   questions: ClarificationQuestionItem[];
 };
 
-function buildArtifactDrafts(openSpec: any): OpenSpecArtifactDrafts {
+function buildArtifactDrafts(specCoding: any): SpecCodingArtifactDrafts {
   return {
-    proposal: openSpec?.artifacts?.proposal || '',
-    design: openSpec?.artifacts?.design || '',
-    tasks: openSpec?.artifacts?.tasks || '',
-    deltaSpec: openSpec?.artifacts?.deltaSpec || '',
+    proposal: specCoding?.artifacts?.proposal || '',
+    design: specCoding?.artifacts?.design || '',
+    tasks: specCoding?.artifacts?.tasks || '',
+    deltaSpec: specCoding?.artifacts?.deltaSpec || '',
   };
 }
 
@@ -841,14 +841,14 @@ function buildClarificationAnswerContext(
     .join('\n');
 }
 
-function buildPlanTaskAgentMappings(openSpec: any, config: any): PlanTaskAgentMapping[] {
+function buildPlanTaskAgentMappings(specCoding: any, config: any): PlanTaskAgentMapping[] {
   const phaseById = new Map<string, any>(
-    Array.isArray(openSpec?.phases)
-      ? openSpec.phases.map((phase: any) => [phase.id, phase])
+    Array.isArray(specCoding?.phases)
+      ? specCoding.phases.map((phase: any) => [phase.id, phase])
       : []
   );
-  const taskRows: PlanTaskAgentMapping[] = Array.isArray(openSpec?.tasks)
-    ? openSpec.tasks.map((task: any, index: number) => {
+  const taskRows: PlanTaskAgentMapping[] = Array.isArray(specCoding?.tasks)
+    ? specCoding.tasks.map((task: any, index: number) => {
       const phase = task?.phaseId ? phaseById.get(task.phaseId) : null;
       const owners = Array.isArray(task?.ownerAgents) && task.ownerAgents.length
         ? task.ownerAgents
@@ -1381,9 +1381,9 @@ export default function NewConfigModal({
   const [revisionNotes, setRevisionNotes] = useState('');
   const [revisionTarget, setRevisionTarget] = useState<'proposal' | 'design' | 'tasks' | 'spec'>('tasks');
   const [revisionImpactArea, setRevisionImpactArea] = useState<'phases' | 'agents' | 'checkpoints' | 'transitions'>('phases');
-  const [selectedArtifactKey, setSelectedArtifactKey] = useState<OpenSpecArtifactKey>('proposal');
+  const [selectedArtifactKey, setSelectedArtifactKey] = useState<SpecCodingArtifactKey>('proposal');
   const [artifactViewMode, setArtifactViewMode] = useState<'preview' | 'edit' | 'diff'>('preview');
-  const [artifactDrafts, setArtifactDrafts] = useState<OpenSpecArtifactDrafts>({
+  const [artifactDrafts, setArtifactDrafts] = useState<SpecCodingArtifactDrafts>({
     proposal: '',
     design: '',
     tasks: '',
@@ -1439,7 +1439,7 @@ export default function NewConfigModal({
   const aiModelRef = useRef('');
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
-    if (!session?.openSpec) return 1;
+    if (!session?.specCoding) return 1;
     if (session.status === 'draft') return 4;
     if (session.mode === 'ai-guided' && session.status === 'confirmed') {
       return 5;
@@ -1553,7 +1553,7 @@ export default function NewConfigModal({
   useEffect(() => {
     if (!isOpen || !resumeCreationSessionId) return;
     let cancelled = false;
-    modalSessionJsonFetch<any>(`/api/openspec/sessions/${encodeURIComponent(resumeCreationSessionId)}`)
+    modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(resumeCreationSessionId)}`)
       .then((data) => {
         if (cancelled || !data?.session) return;
         const session = data.session;
@@ -1588,7 +1588,7 @@ export default function NewConfigModal({
   useEffect(() => {
     if (!isOpen || resumeCreationSessionId || previewSession || !frontendSessionId) return;
     let cancelled = false;
-    modalSessionJsonFetch<any>(`/api/openspec/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`)
+    modalSessionJsonFetch<any>(`/api/spec-coding/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`)
       .then((data) => {
         if (cancelled || !Array.isArray(data?.sessions) || data.sessions.length === 0) return;
         const session = data.sessions[0];
@@ -1755,17 +1755,17 @@ export default function NewConfigModal({
   ]);
 
   useEffect(() => {
-    if (!previewSession?.openSpec) return;
-    setArtifactDrafts(buildArtifactDrafts(previewSession.openSpec));
-  }, [previewSession?.id, previewSession?.openSpec?.version]);
+    if (!previewSession?.specCoding) return;
+    setArtifactDrafts(buildArtifactDrafts(previewSession.specCoding));
+  }, [previewSession?.id, previewSession?.specCoding?.version]);
 
   useEffect(() => {
     const snapshots = previewSession?.artifactSnapshots || [];
     const previous = [...snapshots]
-      .filter((item: any) => item.version !== previewSession?.openSpec?.version)
+      .filter((item: any) => item.version !== previewSession?.specCoding?.version)
       .sort((a: any, b: any) => b.version - a.version)[0];
     setSelectedSnapshotVersion(previous ? String(previous.version) : 'current');
-  }, [previewSession?.artifactSnapshots, previewSession?.openSpec?.version]);
+  }, [previewSession?.artifactSnapshots, previewSession?.specCoding?.version]);
 
   const applySchemaIssues = useCallback((issues: Array<{ path?: (string | number)[]; message?: string }>) => {
     const supported = ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode'];
@@ -2141,7 +2141,7 @@ export default function NewConfigModal({
           filename: session.filename,
           workflowName: session.workflowName,
           status: session.status,
-          openSpecId: session.openSpec?.id,
+          specCodingId: session.specCoding?.id,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
         },
@@ -2153,7 +2153,7 @@ export default function NewConfigModal({
     const values = getValues();
     const previewConfig = buildPreviewConfigFromForm();
     const targetChatSessionId = chatSessionId || frontendSessionId || undefined;
-    const draftData = await modalSessionJsonFetch<any>('/api/openspec/ai-draft', {
+    const draftData = await modalSessionJsonFetch<any>('/api/spec-coding/ai-draft', {
       method: 'POST',
       body: JSON.stringify({
         filename: values.filename,
@@ -2167,14 +2167,14 @@ export default function NewConfigModal({
         draft,
       }),
     });
-    if (!draftData?.openSpec) {
+    if (!draftData?.specCoding) {
       throw new Error(draftData?.error || '生成计划 AI 草案失败');
     }
     setPreviewConfigValidation(draftData.configValidation || null);
     const sessionPayload = {
       chatSessionId: targetChatSessionId,
       status: 'draft',
-      openSpecStatus: 'draft',
+      specCodingStatus: 'draft',
       filename: values.filename,
       workflowName: values.workflowName,
       referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -2185,7 +2185,7 @@ export default function NewConfigModal({
       requirements: values.requirements,
       clarification: draftData.clarification,
       config: previewConfig,
-      openSpec: draftData.openSpec,
+      specCoding: draftData.specCoding,
       uiState: {
         formStep: 4,
         planningStage: 'idle',
@@ -2194,11 +2194,11 @@ export default function NewConfigModal({
       },
     };
     const data = draftCreationSessionId
-      ? await modalSessionJsonFetch<any>(`/api/openspec/sessions/${encodeURIComponent(draftCreationSessionId)}`, {
+      ? await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(draftCreationSessionId)}`, {
           method: 'PUT',
           body: JSON.stringify(sessionPayload),
         })
-      : await modalSessionJsonFetch<any>('/api/openspec/sessions', {
+      : await modalSessionJsonFetch<any>('/api/spec-coding/sessions', {
           method: 'POST',
           body: JSON.stringify(sessionPayload),
         });
@@ -2218,7 +2218,7 @@ export default function NewConfigModal({
 
     const values = getValues();
     const previewConfig = buildPreviewConfigFromForm();
-    const draftData = await modalSessionJsonFetch<any>('/api/openspec/ai-draft', {
+    const draftData = await modalSessionJsonFetch<any>('/api/spec-coding/ai-draft', {
       method: 'POST',
       body: JSON.stringify({
         filename: values.filename,
@@ -2232,17 +2232,17 @@ export default function NewConfigModal({
         draft,
       }),
     });
-    if (!draftData?.openSpec) {
+    if (!draftData?.specCoding) {
       throw new Error(draftData?.error || '生成修订计划草案失败');
     }
 
     setPreviewConfigValidation(draftData.configValidation || null);
-    const data = await modalSessionJsonFetch<any>(`/api/openspec/sessions/${encodeURIComponent(previewSession.id)}`, {
+    const data = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(previewSession.id)}`, {
       method: 'PUT',
       body: JSON.stringify({
         chatSessionId: planningFrontendSessionId || frontendSessionId || previewSession.chatSessionId,
         status: 'draft',
-        openSpecStatus: 'draft',
+        specCodingStatus: 'draft',
         filename: values.filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -2253,7 +2253,7 @@ export default function NewConfigModal({
         requirements: values.requirements,
         clarification: draftData.clarification,
         config: previewConfig,
-        openSpec: draftData.openSpec,
+        specCoding: draftData.specCoding,
         uiState: {
           formStep: 4,
           planningStage: 'idle',
@@ -2277,12 +2277,12 @@ export default function NewConfigModal({
     if (draftCreationSessionId) return draftCreationSessionId;
     const values = getValues();
     const config = buildPreviewConfigFromForm();
-    const data = await modalSessionJsonFetch<any>('/api/openspec/sessions', {
+    const data = await modalSessionJsonFetch<any>('/api/spec-coding/sessions', {
       method: 'POST',
       body: JSON.stringify({
         chatSessionId: chatSessionId || frontendSessionId || undefined,
         status: 'draft',
-        openSpecStatus: 'draft',
+        specCodingStatus: 'draft',
         filename: values.filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -2314,7 +2314,7 @@ export default function NewConfigModal({
     clarificationAnswers?: Record<string, ClarificationAnswerValue>;
   }) => {
     const targetSessionId = await ensureDraftCreationSession(planningFrontendSessionId);
-    await modalSessionJsonFetch(`/api/openspec/sessions/${encodeURIComponent(targetSessionId)}`, {
+    await modalSessionJsonFetch(`/api/spec-coding/sessions/${encodeURIComponent(targetSessionId)}`, {
       method: 'PUT',
       body: JSON.stringify({
         uiState: {
@@ -2358,13 +2358,13 @@ export default function NewConfigModal({
       : '';
 
     return [
-      '你正在帮助用户做正式计划前的业务澄清。',
-      '这一轮要做的是把业务问题问完整，让后续计划可以直接进入详细拆解、设计和实现准备。',
-      '你现在的工作方式是：先读懂用户已经给出的业务目标、业务范围、目录背景和改造方向；再补齐那些会改变业务方案、业务边界、兼容策略、验收标准和实施范围的关键信息。',
-      '提问时始终使用业务语言，让问题自然落在业务结果、覆盖对象、边界条件、兼容要求、人工决策标准和实施范围上。',
-      '把你要收集的信息理解为后续计划 DSL 的输入：术语表、需求编号、验收标准、设计主链路、任务切片都依赖这一轮澄清。',
+      '你正在帮助用户做正式计划前的需求访谈。目标不是多问问题，而是补齐会改变方案、边界、兼容、验收或任务拆分的关键信息。',
+      '先从用户输入、工作目录、参考工作流和已有上下文中提炼已确认事实；不要重复询问已经给出的信息，也不要把推测写成事实。',
+      '本轮输出必须像资深产品/技术负责人做需求访谈：先给当前理解，再指出证据来源，再把缺口分为 blocking 与 optional，最后只问 3 到 7 个高价值问题。',
+      '问题必须落到具体决策：目标用户与成功结果、当前行为与目标行为、范围与非目标、输入/输出/状态、兼容/迁移、失败/边界、安全/隐私、性能/可靠性、验证/发布。',
       '每个问题都使用结构化表单表达：声明 selectionMode=single 或 selectionMode=multiple，提供 2 到 4 个选项，至少一个选项带 recommended=true，同时保留 placeholder 供用户补充自由文本。',
-      '你这一轮先输出澄清表单，帮助用户把关键信息补全；完成补全后，下一轮再继续生成正式计划。',
+      '每个问题的题面都要说明“这个答案会影响什么决策”，避免“还需要什么功能”“是否要优化体验”“是否需要联调”这类无法直接落地的问题。',
+      '如果用户跳过某个问题，后续计划应采用保守默认假设；因此问题的 placeholder 或选项描述里要能看出默认假设和剩余风险。',
       '机器可读结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。',
       SPEC_LANGUAGE_RULE,
       '结构如下：',
@@ -2372,40 +2372,126 @@ export default function NewConfigModal({
       '```json',
       JSON.stringify({
         type: 'clarification_form',
-        summary: '为什么还需要这些补充信息',
-        knownFacts: ['已确认事实'],
-        missingFields: ['仍缺失的信息'],
+        summary: '当前理解：用户要为某个工作目录创建可执行工作流；已知目标、入口或约束不足，需要先确认会影响计划 DSL 的关键决策。',
+        knownFacts: [
+          '用户已提供工作流名称和工作目录，证据来自表单字段。',
+          '用户已描述主要诉求，证据来自需求描述。',
+        ],
+        missingFields: [
+          'blocking: 目标用户、成功结果和本次必须覆盖的主流程仍未确认',
+          'blocking: 当前行为、目标行为和不做范围仍未确认',
+          'blocking: 兼容/迁移和失败路径要求仍未确认',
+          'optional: 验证命令、人工验收证据和发布偏好可进一步补充',
+        ],
         questions: [
           {
-            id: 'business_deliverables',
-            label: '业务产物',
-            question: '这次业务方案最终需要沉淀出哪些内容，才能支撑后续执行、迭代和人工审查？请直接围绕业务分析、设计、实现准备和验证材料来问。',
-            selectionMode: 'multiple',
+            id: 'target_outcome',
+            label: '目标结果',
+            question: '这次工作流创建完成后，最重要的可观察成功结果是什么？这个答案会决定 proposal 的目标、需求优先级和验收标准。',
+            selectionMode: 'single',
             options: [
               {
-                id: 'domain_analysis',
-                label: '现状分析',
-                description: '需要形成现状能力盘点、问题归因和影响面说明。',
-              },
-              {
-                id: 'solution_design',
-                label: '方案设计(推荐)',
-                description: '需要形成详细方案、流程设计、关键规则和取舍依据。',
+                id: 'implementation_ready',
+                label: '可直接实现(推荐)',
+                description: '产出能直接进入编码、验证和交付的计划，包含明确任务、入口、数据和验收证据。',
                 recommended: true,
               },
               {
-                id: 'implementation_ready',
-                label: '实现准备',
-                description: '需要形成可直接落地的任务拆解、接口/数据约束和验证方案。',
+                id: 'decision_review',
+                label: '方案评审',
+                description: '重点产出方案比较、关键决策、风险和需要人工确认的边界。',
               },
               {
-                id: 'validation_materials',
-                label: '验证材料',
-                description: '需要形成样例、验收场景、回归点或评审结论等验证依据。',
+                id: 'process_automation',
+                label: '流程自动化',
+                description: '重点产出可派生 workflow 的阶段、角色分工、检查点和失败处理。',
               },
             ],
-            placeholder: '例如：需要 DSL 能力矩阵、候选语法方案、关键场景流程图、伪代码、任务拆解，以及代表性场景的验证样例',
+            placeholder: '如果跳过，将默认以“可直接实现”为目标，并把未确认评审点记录为 open questions。',
             required: true,
+          },
+          {
+            id: 'scope_boundaries',
+            label: '范围边界',
+            question: '本次必须覆盖和明确排除的入口、角色、数据或场景有哪些？这个答案会决定 spec 的需求范围和 tasks 不能越界的非目标。',
+            selectionMode: 'multiple',
+            options: [
+              {
+                id: 'user_flow',
+                label: '用户主流程(推荐)',
+                description: '覆盖用户从输入需求到确认计划、生成 workflow 草案的完整主路径。',
+                recommended: true,
+              },
+              {
+                id: 'api_state',
+                label: 'API/状态',
+                description: '覆盖 API payload、状态字段、持久化记录或历史会话读取。',
+              },
+              {
+                id: 'ui_feedback',
+                label: 'UI反馈',
+                description: '覆盖加载、错误、空数据、确认和修订等用户可见状态。',
+              },
+              {
+                id: 'exclude_migration',
+                label: '排除迁移',
+                description: '本次只处理新流程，不迁移旧配置或旧会话；若选择此项，兼容风险需记录。',
+              },
+            ],
+            placeholder: '请补充必须不做的内容。例如：不改历史 API 字段、不迁移旧 workflow、不新增权限模型。',
+            required: true,
+          },
+          {
+            id: 'failure_compatibility',
+            label: '异常兼容',
+            question: '遇到缺失输入、旧数据、模型输出不合规或外部依赖失败时，系统应如何处理？这个答案会决定 design 的失败路径、兼容策略和验证任务。',
+            selectionMode: 'single',
+            options: [
+              {
+                id: 'conservative_continue',
+                label: '保守继续(推荐)',
+                description: '使用明确默认假设继续生成计划，并把风险写入 missingFields/open questions。',
+                recommended: true,
+              },
+              {
+                id: 'block_until_answered',
+                label: '阻止继续',
+                description: 'blocking 信息缺失时不生成正式计划，要求用户先补齐。',
+              },
+              {
+                id: 'fallback_existing',
+                label: '沿用旧逻辑',
+                description: '旧配置、旧会话或参考 workflow 可读时优先沿用，失败时再提示用户确认。',
+              },
+            ],
+            placeholder: '如果跳过，将默认保守继续：生成计划但显式标注假设、风险和待确认项。',
+            required: true,
+          },
+          {
+            id: 'validation_evidence',
+            label: '验证证据',
+            question: '后续用什么证据判断计划或实现完成？这个答案会决定 tasks 的验证方式和收口标准。',
+            selectionMode: 'multiple',
+            options: [
+              {
+                id: 'automated_checks',
+                label: '自动检查(推荐)',
+                description: '使用类型检查、构建、测试、schema 或规范校验命令作为证据。',
+                recommended: true,
+              },
+              {
+                id: 'manual_acceptance',
+                label: '人工验收',
+                description: '用用户可见流程、错误路径、状态刷新和持久化结果做验收记录。',
+              },
+              {
+                id: 'artifact_review',
+                label: '制品审阅',
+                description: '审查 proposal/design/tasks/spec 之间的追踪链、一致性和非目标边界。',
+              },
+            ],
+            placeholder: '请补充项目已有命令或验收入口。例如：npm run build、npx tsc --noEmit、指定页面操作路径。',
+            required: false,
           },
         ],
       }, null, 2),
@@ -2420,13 +2506,15 @@ export default function NewConfigModal({
       data.referenceWorkflow ? `参考工作流: ${data.referenceWorkflow}` : '',
       referencePrompt,
       '',
-      '提问原则：',
-      '1. 优先吸收已知信息，在此基础上只补那些会影响业务方案与业务拆解的关键变量。',
-      '2. 问题应直接服务于后续产出详细需求、流程图、伪代码和可执行任务，不要停留在空泛流程管理层。',
-      '3. 适合并列选择的题目用 multiple，例如覆盖范围、业务结果、必须保留的兼容项；更适合单一取舍的题目用 single。',
-      '4. 像“业务产物”“实现边界”“兼容策略”这类概念，题面里直接解释它会影响哪类业务方案决策，让用户能顺着当前领域语境回答。',
-      '5. 先用当前业务领域的话语方式来问，例如 DSL 能力、迁移范围、评审结论、验证样例，而不是抽象的通用项目管理术语。',
-      '6. 优先补齐这些信息：关键术语、能力边界、必须覆盖的场景、兼容策略、验证标准、未决技术约束。',
+      '需求访谈检查清单：',
+      '1. 先写 current understanding：用户要解决什么问题、影响谁、成功后能观察到什么结果。',
+      '2. knownFacts 必须带证据来源，例如“来自需求描述”“来自参考工作流”“来自工作目录”。',
+      '3. missingFields 必须显式区分 blocking 与 optional；blocking 缺失会改变实现或验收，optional 只影响偏好或增强。',
+      '4. 问题必须领域化：使用用户需求里的实体、入口、数据、流程、失败条件，不要只问通用项目管理问题。',
+      '5. 优先问会改变计划的变量：范围/非目标、兼容/迁移、数据模型、UI/API 行为、权限、安全、验证证据。',
+      '6. 不要问代码或用户输入已经回答过的问题；如果信息能从参考 workflow 推断，就写成事实或假设再问是否覆盖当前需求。',
+      '7. 每个问题都要能映射到后续 proposal/design/tasks/spec 的字段，不能只收集偏好。',
+      '8. 如果信息不足，也要给出跳过问题时的保守假设，并把风险留在 missingFields。',
     ].filter(Boolean).join('\n\n');
   }, [getValues, referenceConfig]);
 
@@ -2450,7 +2538,7 @@ export default function NewConfigModal({
     return [
       '你正在帮助用户生成正式计划，并且当前处于“业务计划生成”阶段。',
       '这一步要产出一套可以直接执行、可以继续迭代、可以被人工审查的正式计划制品。',
-      '你显式使用 openspec skill 来组织正式计划文档，但文档内容本身必须完全围绕业务目标、业务规则和真实实现约束展开。',
+      '你显式使用 aceharness-spec-coding skill 来组织正式计划文档；底层制品仍采用 SpecCoding-style 的 specs/changes 结构，但文档内容本身必须完全围绕业务目标、业务规则和真实实现约束展开。',
       '请把输出写成稳定的计划 DSL，而不是自由散文。后续 workflow 和角色分工会根据这些正式制品自动派生，所以结构必须清晰、可引用、可追踪。',
       '你可以分多段普通文本逐步展示分析、思路和计划制品草案。',
       '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。',
@@ -2506,11 +2594,11 @@ export default function NewConfigModal({
 
   const confirmPreviewSession = useCallback(async (session: any) => {
     const values = getValues();
-    const data = await modalSessionJsonFetch<any>(`/api/openspec/sessions/${encodeURIComponent(session.id)}`, {
+    const data = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(session.id)}`, {
       method: 'PUT',
       body: JSON.stringify({
         status: 'confirmed',
-        openSpecStatus: 'confirmed',
+        specCodingStatus: 'confirmed',
         workflowName: values.workflowName,
         filename: values.filename,
         referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -2549,11 +2637,11 @@ export default function NewConfigModal({
     }[revisionImpactArea];
     const revisionSummary = `用户在确认前补充针对 ${revisionTargetLabel} 的修订要求，主要影响 ${revisionImpactLabel}：${trimmed}`;
     const values = getValues();
-    const currentOpenSpec = previewSession.openSpec || {};
-    const currentArtifacts = currentOpenSpec.artifacts || {};
+    const currentSpecCoding = previewSession.specCoding || {};
+    const currentArtifacts = currentSpecCoding.artifacts || {};
     const config = buildPreviewConfigFromForm();
     const planningSystemPrompt = buildPlanningSystemPrompt(config);
-    const targetArtifactKey: OpenSpecArtifactKey = revisionTarget === 'spec' ? 'deltaSpec' : revisionTarget;
+    const targetArtifactKey: SpecCodingArtifactKey = revisionTarget === 'spec' ? 'deltaSpec' : revisionTarget;
 
     try {
       const targetFrontendSessionId = await ensurePlanningChatSession();
@@ -2583,14 +2671,14 @@ export default function NewConfigModal({
         `用户修订说明：${trimmed}`,
         '',
         '当前计划摘要：',
-        currentOpenSpec.summary || '无',
+        currentSpecCoding.summary || '无',
         '',
         '当前 goals / nonGoals / constraints：',
         '```json',
         JSON.stringify({
-          goals: currentOpenSpec.goals || [],
-          nonGoals: currentOpenSpec.nonGoals || [],
-          constraints: currentOpenSpec.constraints || [],
+          goals: currentSpecCoding.goals || [],
+          nonGoals: currentSpecCoding.nonGoals || [],
+          constraints: currentSpecCoding.constraints || [],
         }, null, 2),
         '```',
         '',
@@ -2740,7 +2828,7 @@ export default function NewConfigModal({
   }, [appendPlanningAssistantMessage, appendVisibleSessionTag, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, toast, updatePreviewSessionFromPlanDraft]);
 
   const saveArtifactEdits = useCallback(async () => {
-    if (!previewSession?.id || !previewSession?.openSpec) return;
+    if (!previewSession?.id || !previewSession?.specCoding) return;
 
     const artifactLabel = {
       proposal: 'proposal.md',
@@ -2749,8 +2837,8 @@ export default function NewConfigModal({
       deltaSpec: 'spec.md',
     }[selectedArtifactKey];
 
-    const currentOpenSpec = previewSession.openSpec;
-    const originalDrafts = buildArtifactDrafts(currentOpenSpec);
+    const currentSpecCoding = previewSession.specCoding;
+    const originalDrafts = buildArtifactDrafts(currentSpecCoding);
     const edited = artifactDrafts[selectedArtifactKey];
     const original = originalDrafts[selectedArtifactKey];
 
@@ -2759,10 +2847,10 @@ export default function NewConfigModal({
       return;
     }
 
-    const nextOpenSpec = {
-      ...currentOpenSpec,
+    const nextSpecCoding = {
+      ...currentSpecCoding,
       artifacts: {
-        ...currentOpenSpec.artifacts,
+        ...currentSpecCoding.artifacts,
         proposal: artifactDrafts.proposal,
         design: artifactDrafts.design,
         tasks: artifactDrafts.tasks,
@@ -2772,11 +2860,11 @@ export default function NewConfigModal({
 
     try {
       setSavingArtifact(true);
-      const data = await modalSessionJsonFetch<any>(`/api/openspec/sessions/${encodeURIComponent(previewSession.id)}`, {
+      const data = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(previewSession.id)}`, {
         method: 'PUT',
         body: JSON.stringify({
-          openSpec: nextOpenSpec,
-          openSpecStatus: currentOpenSpec.status || 'draft',
+          specCoding: nextSpecCoding,
+          specCodingStatus: currentSpecCoding.status || 'draft',
           revisionSummary: `用户直接编辑 ${artifactLabel}，并在确认前保存制品级修订。`,
         }),
       });
@@ -2784,7 +2872,7 @@ export default function NewConfigModal({
         throw new Error(data?.error || '保存计划制品编辑失败');
       }
       setPreviewSession(data.session);
-      setArtifactDrafts(buildArtifactDrafts(data.session.openSpec));
+      setArtifactDrafts(buildArtifactDrafts(data.session.specCoding));
       setArtifactViewMode('preview');
       toast('success', `${artifactLabel} 已保存到创建态计划`);
     } catch (error: any) {
@@ -2794,15 +2882,15 @@ export default function NewConfigModal({
     }
   }, [artifactDrafts, previewSession, selectedArtifactKey, toast]);
 
-  // Start AI-guided workflow YAML drafting after OpenSpec has been confirmed.
+  // Start AI-guided workflow YAML drafting after SpecCoding has been confirmed.
   const startAiStream = async (sourceSession?: any) => {
     const data = getValues();
     const filename = data.filename;
     const reqs = data.requirements || data.description || '';
     const workDir = data.workingDirectory;
     const activePreviewSession = sourceSession || previewSession;
-    const openSpec = activePreviewSession?.openSpec || {};
-    const artifacts = openSpec.artifacts || {};
+    const specCoding = activePreviewSession?.specCoding || {};
+    const artifacts = specCoding.artifacts || {};
     const workflowDraftSummary = activePreviewSession?.workflowDraftSummary;
 
     setAiFilename('');
@@ -2826,22 +2914,22 @@ ${referenceConfig.raw}
 `
       : '';
     const recommendationPrompt = buildCreationRecommendationsPrompt(creationRecommendations);
-    const confirmedSpecPrompt = openSpec?.id
+    const confirmedSpecPrompt = specCoding?.id
       ? `
-**已确认 OpenSpec**
-- OpenSpec ID: ${openSpec.id}
-- 版本: v${openSpec.version || 1}
-- 摘要: ${openSpec.summary || '无'}
-- Goals: ${(openSpec.goals || []).join('；') || '无'}
-- NonGoals: ${(openSpec.nonGoals || []).join('；') || '无'}
-- Constraints: ${(openSpec.constraints || []).join('；') || '无'}
+**已确认 SpecCoding**
+- SpecCoding ID: ${specCoding.id}
+- 版本: v${specCoding.version || 1}
+- 摘要: ${specCoding.summary || '无'}
+- Goals: ${(specCoding.goals || []).join('；') || '无'}
+- NonGoals: ${(specCoding.nonGoals || []).join('；') || '无'}
+- Constraints: ${(specCoding.constraints || []).join('；') || '无'}
 
-**OpenSpec 分工/阶段投影**
+**SpecCoding 分工/阶段投影**
 \`\`\`json
 ${JSON.stringify({
-  phases: openSpec.phases || [],
-  assignments: openSpec.assignments || [],
-  checkpoints: openSpec.checkpoints || [],
+  phases: specCoding.phases || [],
+  assignments: specCoding.assignments || [],
+  checkpoints: specCoding.checkpoints || [],
   workflowDraftSummary: workflowDraftSummary || null,
 }, null, 2)}
 \`\`\`
@@ -2868,7 +2956,7 @@ ${truncateForPrompt(artifacts.deltaSpec, 4000)}
 `
       : '';
 
-    const prompt = `请基于用户已经确认的 OpenSpec 和 Agent 分工，直接搭建 AceHarness 工作流 YAML 草案。
+    const prompt = `请基于用户已经确认的 SpecCoding 和 Agent 分工，直接搭建 AceHarness 工作流 YAML 草案。
 
 **目标文件名**: configs/${filename}
 **工作流名称**: ${data.workflowName}
@@ -2882,10 +2970,10 @@ ${recommendationPrompt}
 ${confirmedSpecPrompt}
 
 当前阶段要求：
-1. 不要重新生成 OpenSpec，不要重新澄清需求，不要把前面的 spec 制品再次作为输出目标。
-2. 直接读取上面的已确认 OpenSpec、tasks、design、阶段/分工投影和参考工作流，生成 workflow YAML 草案。
+1. 不要重新生成 SpecCoding，不要重新澄清需求，不要把前面的 spec 制品再次作为输出目标。
+2. 直接读取上面的已确认 SpecCoding、tasks、design、阶段/分工投影和参考工作流，生成 workflow YAML 草案。
 3. 草案必须明确 workflow mode、context、supervisor、roles、phases/states、steps、agent 分配、checkpoint 和必要的 preCommands。
-4. 如果引用 Agent，请优先使用已确认 OpenSpec assignments、推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
+4. 如果引用 Agent，请优先使用已确认 SpecCoding assignments、推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
 5. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
 6. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
 7. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 \`\`\`json 代码块。
@@ -3776,8 +3864,8 @@ ${confirmedSpecPrompt}
     const values = getValues();
     const targetSessionId = previewSession?.id;
     const sessionResponse = await fetch(targetSessionId
-      ? `/api/openspec/sessions/${encodeURIComponent(targetSessionId)}`
-      : '/api/openspec/sessions', {
+      ? `/api/spec-coding/sessions/${encodeURIComponent(targetSessionId)}`
+      : '/api/spec-coding/sessions', {
       method: targetSessionId ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3786,7 +3874,7 @@ ${confirmedSpecPrompt}
       body: JSON.stringify({
         chatSessionId: frontendSessionId || undefined,
         status: 'config-generated',
-        openSpecStatus: 'confirmed',
+        specCodingStatus: 'confirmed',
         filename,
         workflowName: values.workflowName,
         referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -3796,7 +3884,7 @@ ${confirmedSpecPrompt}
         description: values.description,
         requirements: values.requirements,
         config: configResult.config,
-        rebuildOpenSpecFromConfig: true,
+        rebuildSpecCodingFromConfig: true,
       }),
     });
     if (!sessionResponse.ok) {
@@ -3824,7 +3912,7 @@ ${confirmedSpecPrompt}
             filename: sessionResult.session.filename,
             workflowName: sessionResult.session.workflowName,
             status: sessionResult.session.status,
-            openSpecId: sessionResult.session.openSpec.id,
+            specCodingId: sessionResult.session.specCoding.id,
             createdAt: sessionResult.session.createdAt,
             updatedAt: sessionResult.session.updatedAt,
           },
@@ -4480,15 +4568,15 @@ ${confirmedSpecPrompt}
   // PLACEHOLDER_RENDER_FORM
 
   if (formStep === 4 && previewSession) {
-    const openSpec = previewSession.openSpec;
+    const specCoding = previewSession.specCoding;
     const draftSummary = previewSession.workflowDraftSummary;
     const draftMode = draftSummary?.mode || previewSession.generatedConfigSummary?.mode || 'phase-based';
     const draftNodes = draftSummary?.nodes || [];
     const artifactItems = [
-      { key: 'proposal' as const, title: 'proposal.md', content: openSpec.artifacts?.proposal || '' },
-      { key: 'design' as const, title: 'design.md', content: openSpec.artifacts?.design || '' },
-      { key: 'tasks' as const, title: 'tasks.md', content: openSpec.artifacts?.tasks || '' },
-      { key: 'deltaSpec' as const, title: 'specs/.../spec.md', content: openSpec.artifacts?.deltaSpec || '' },
+      { key: 'proposal' as const, title: 'proposal.md', content: specCoding.artifacts?.proposal || '' },
+      { key: 'design' as const, title: 'design.md', content: specCoding.artifacts?.design || '' },
+      { key: 'tasks' as const, title: 'tasks.md', content: specCoding.artifacts?.tasks || '' },
+      { key: 'deltaSpec' as const, title: 'specs/.../spec.md', content: specCoding.artifacts?.deltaSpec || '' },
     ].filter((item) => item.content);
     const activeArtifact = artifactItems.find((item) => item.key === selectedArtifactKey) || artifactItems[0] || null;
     const activeDraft = activeArtifact ? artifactDrafts[activeArtifact.key] || '' : '';
@@ -4497,14 +4585,14 @@ ${confirmedSpecPrompt}
     const selectedSnapshot = selectedSnapshotVersion === 'current'
       ? null
       : artifactSnapshots.find((item: any) => String(item.version) === selectedSnapshotVersion) || null;
-    const latestRevision = openSpec.revisions?.length ? openSpec.revisions[openSpec.revisions.length - 1] : null;
+    const latestRevision = specCoding.revisions?.length ? specCoding.revisions[specCoding.revisions.length - 1] : null;
     const latestRevisionMeta = latestRevision ? parseRevisionSummaryMeta(latestRevision.summary || '') : {};
-    const planTaskAgentMappings = buildPlanTaskAgentMappings(openSpec, previewSession.config);
+    const planTaskAgentMappings = buildPlanTaskAgentMappings(specCoding, previewSession.config);
     const workflowAgentSummaries = (() => {
       const direct = buildWorkflowAgentTaskSummaries(previewSession.config);
       if (direct.length > 0) return direct;
       const fallbackAgents = Array.from(new Set([
-        ...(openSpec.assignments || []).map((assignment: any) => assignment.agent).filter(Boolean),
+        ...(specCoding.assignments || []).map((assignment: any) => assignment.agent).filter(Boolean),
         ...planTaskAgentMappings.flatMap((row) => row.agentNames || []).filter(Boolean),
       ]));
       return fallbackAgents.map((agent) => ({
@@ -4585,18 +4673,18 @@ ${confirmedSpecPrompt}
                 <div className="flex flex-wrap gap-2">
                   <span className="text-sm font-medium">{previewSession.workflowName}</span>
                   <span className="text-xs rounded-full border px-2 py-0.5">创建态 {previewSession.status}</span>
-                  <span className="text-xs rounded-full border px-2 py-0.5">计划 {openSpec.status}</span>
-                  <span className="text-xs rounded-full border px-2 py-0.5">v{openSpec.version}</span>
+                  <span className="text-xs rounded-full border px-2 py-0.5">计划 {specCoding.status}</span>
+                  <span className="text-xs rounded-full border px-2 py-0.5">v{specCoding.version}</span>
                 </div>
-                {openSpec.summary ? (
-                  <p className="text-sm text-muted-foreground leading-6">{openSpec.summary}</p>
+                {specCoding.summary ? (
+                  <p className="text-sm text-muted-foreground leading-6">{specCoding.summary}</p>
                 ) : null}
                 <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                   <div>配置文件：{previewSession.filename}</div>
                   <div>参考工作流：{previewSession.referenceWorkflow || '无'}</div>
                   <div>工作目录：{previewSession.workingDirectory}</div>
                   <div>工作区模式：{previewSession.workspaceMode}</div>
-                  <div>计划节点数：{openSpec.phases?.length || 0}</div>
+                  <div>计划节点数：{specCoding.phases?.length || 0}</div>
                   <div>计划 Agent 数：{workflowAgentNames.length || 0}</div>
                 </div>
               </div>
@@ -4625,7 +4713,7 @@ ${confirmedSpecPrompt}
                     </div>
                     <div className="rounded-lg border bg-muted/20 p-3">
                       <div className="text-[11px] text-muted-foreground">Spec 节点</div>
-                      <div className="mt-1 text-sm font-medium">{openSpec.phases?.length || 0} 个</div>
+                      <div className="mt-1 text-sm font-medium">{specCoding.phases?.length || 0} 个</div>
                       <div className="mt-1 text-[11px] text-muted-foreground">
                         目标、owner 与阶段状态在弹窗中查看
                       </div>
@@ -4892,7 +4980,7 @@ ${confirmedSpecPrompt}
                     ) : null}
                   </div>
                   {artifactItems.length ? (
-                    <Tabs value={activeArtifact?.key || selectedArtifactKey} onValueChange={(value) => setSelectedArtifactKey(value as OpenSpecArtifactKey)}>
+                    <Tabs value={activeArtifact?.key || selectedArtifactKey} onValueChange={(value) => setSelectedArtifactKey(value as SpecCodingArtifactKey)}>
                       <TabsList className="w-full justify-start overflow-auto">
                         {artifactItems.map((artifact) => (
                           <TabsTrigger key={artifact.key} value={artifact.key}>{artifact.title}</TabsTrigger>
@@ -5015,7 +5103,7 @@ ${confirmedSpecPrompt}
                     </div>
                   </div>
                   <div className="space-y-3">
-                    {openSpec.phases?.length ? openSpec.phases.map((phase: any) => (
+                    {specCoding.phases?.length ? specCoding.phases.map((phase: any) => (
                       <div key={phase.id} className="rounded-xl border p-4 space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-sm font-medium">{phase.title}</div>
@@ -5099,9 +5187,9 @@ ${confirmedSpecPrompt}
                       <div className="text-xs text-muted-foreground">当前预览还没有生成任务与 Agent 的直接映射。</div>
                     )}
                   </div>
-                  {openSpec.assignments?.length ? (
+                  {specCoding.assignments?.length ? (
                     <div className="grid gap-3 lg:grid-cols-2">
-                      {openSpec.assignments.map((assignment: any) => (
+                      {specCoding.assignments.map((assignment: any) => (
                         <div key={assignment.agent} className="rounded-xl border p-4">
                           <div className="text-sm font-medium">{assignment.agent}</div>
                           <div className="mt-1 text-xs text-muted-foreground leading-5">{assignment.responsibility}</div>
@@ -5146,11 +5234,11 @@ ${confirmedSpecPrompt}
               {planWorkspaceTab === 'revisions' ? (
                 <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
                   <div className="space-y-4">
-                    {openSpec.revisions?.length ? (
+                    {specCoding.revisions?.length ? (
                       <div className="rounded-xl border p-4 space-y-2">
                         <div className="text-sm font-medium">修订记录</div>
                         <div className="space-y-2">
-                          {[...openSpec.revisions].reverse().map((revision: any) => (
+                          {[...specCoding.revisions].reverse().map((revision: any) => (
                             <div key={revision.id} className="rounded-md border bg-muted/20 p-3">
                               <div className="flex items-center justify-between gap-2">
                                 <div className="text-[11px] font-medium">v{revision.version}</div>
@@ -5294,7 +5382,7 @@ ${confirmedSpecPrompt}
           <CreationStageStepper currentStep={1} />
 
           <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
-            当前处于第 1 步：先收敛需求与约束，并按 `skills/openspec` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
+            当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
           </div>
 
           <input type="hidden" {...register('mode')} />
@@ -5436,7 +5524,7 @@ ${confirmedSpecPrompt}
                     ) : (
                       <div>默认角色编队：将回退到基础角色骨架。</div>
                     )}
-                    <div>当你未手动提供参考骨架时，OpenSpec 预览和 workflow 草案会直接采用这组编排决策。</div>
+                    <div>当你未手动提供参考骨架时，SpecCoding 预览和 workflow 草案会直接采用这组编排决策。</div>
                   </div>
                 ) : null}
                 {creationRecommendations.relationshipHints.length ? (

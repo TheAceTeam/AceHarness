@@ -686,13 +686,13 @@ function renderTaskStatusLines(content: string): string {
   }).join('\n');
 }
 
-function stripHiddenOpenSpecComments(content: string): string {
-  return content.replace(/\s*<!--\s*openspec-task:[\s\S]*?-->\s*$/gm, '');
+function stripHiddenSpecCodingComments(content: string): string {
+  return content.replace(/\s*<!--\s*spec-coding-task:[\s\S]*?-->\s*$/gm, '');
 }
 
 function preprocessMarkdown(content: unknown): string {
   const closed = closeUnterminatedFences(content);
-  return renderTaskStatusLines(stripHiddenOpenSpecComments(closed)).replace(
+  return renderTaskStatusLines(stripHiddenSpecCodingComments(closed)).replace(
     /(?<![<"\[])(https?:\/\/[^\s<>\]")]+)/g,
     '<$1>'
   );

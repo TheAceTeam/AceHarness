@@ -8,7 +8,7 @@ import { parse } from 'yaml';
 import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
 import { createRun } from '@/lib/run-store';
 import { saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
-import { loadLatestCreationSessionByFilename, cloneOpenSpecForRun } from '@/lib/openspec-store';
+import { loadLatestCreationSessionByFilename, cloneSpecCodingForRun } from '@/lib/spec-coding-store';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
 
 function countWorkflowSteps(config: any): number {
@@ -31,12 +31,12 @@ async function startRehearsalRun(input: {
   const now = new Date().toISOString();
   const totalSteps = countWorkflowSteps(config);
   const creationSession = await loadLatestCreationSessionByFilename(input.configFile).catch(() => null);
-  const runOpenSpec = creationSession?.openSpec
-    ? cloneOpenSpecForRun(creationSession.openSpec, { runId, filename: input.configFile })
+  const runSpecCoding = creationSession?.specCoding
+    ? cloneSpecCodingForRun(creationSession.specCoding, { runId, filename: input.configFile })
     : null;
-  const summary = '演练模式未执行真实项目改动，仅生成 OpenSpec / workflow 编排推演与风险提示。';
+  const summary = '演练模式未执行真实项目改动，仅生成 SpecCoding / workflow 编排推演与风险提示。';
   const recommendedNextSteps = [
-    '检查 OpenSpec 阶段拆分与 Agent 编队是否合理',
+    '检查 SpecCoding 阶段拆分与 Agent 编队是否合理',
     '确认 preflight 检查、风险点和人工检查点是否齐全',
     '如方案可行，关闭演练模式后再正式启动工作流',
   ];
@@ -80,13 +80,13 @@ async function startRehearsalRun(input: {
       content: summary,
       timestamp: now,
     },
-    runOpenSpec: runOpenSpec ? {
-      ...runOpenSpec,
+    runSpecCoding: runSpecCoding ? {
+      ...runSpecCoding,
       status: 'completed',
       summary,
       updatedAt: now,
       progress: {
-        ...runOpenSpec.progress,
+        ...runSpecCoding.progress,
         overallStatus: 'completed',
         summary,
       },

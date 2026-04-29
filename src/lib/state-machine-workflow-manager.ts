@@ -22,6 +22,9 @@ import {
   type PersistedStepLog,
   type PersistedQualityCheck,
   type PersistedQualityCommandResult,
+  type HumanQuestion,
+  type HumanQuestionAnswer,
+  type HumanAnswerContext,
 } from './run-state-persistence';
 import {
   appendWorkflowExperience,
@@ -32,7 +35,7 @@ import {
 } from './workflow-experience-store';
 import type {
   StateMachineWorkflowConfig, StateMachineState, StateTransition,
-  Issue, WorkflowStep, RoleConfig, TransitionCondition, OpenSpecDocument,
+  Issue, WorkflowStep, RoleConfig, TransitionCondition, SpecCodingDocument,
 } from './schemas';
 import { formatTimestamp } from './utils';
 import { createEngine, getConfiguredEngine, type Engine, type EngineType } from './engines';
@@ -48,14 +51,14 @@ import {
   resolveWorkflowSupervisorAgent,
 } from './default-supervisor';
 import {
-  appendOpenSpecRevision,
-  appendSupervisorOpenSpecRevision,
-  cloneOpenSpecForRun,
+  appendSpecCodingRevision,
+  appendSupervisorSpecCodingRevision,
+  cloneSpecCodingForRun,
   loadLatestCreationSessionByFilename,
-  markOpenSpecStateStatus,
-  normalizeOpenSpecDocument,
-  updateOpenSpecTaskStatuses,
-} from './openspec-store';
+  markSpecCodingStateStatus,
+  normalizeSpecCodingDocument,
+  updateSpecCodingTaskStatuses,
+} from './spec-coding-store';
 import { appendMemoryEntries } from './workflow-memory-store';
 import { upsertRelationshipSignal } from './agent-relationship-store';
 
@@ -110,6 +113,14 @@ function extractTaggedBlock(text: string, tag: string): string | null {
   return text.match(pattern)?.[1]?.trim() || null;
 }
 
+function extractSpecTasksBlock(text: string): string | null {
+  return extractTaggedBlock(text, 'spec-tasks');
+}
+
+function stripSpecTasksBlocks(text: string): string {
+  return text.replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '');
+}
+
 function stripJsonFence(text: string): string {
   return text
     .replace(/^```(?:json)?\s*/i, '')
@@ -121,8 +132,7 @@ function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
 
-  const text = stripNonAiStreamArtifacts(raw)
-    .replace(/<openspec-tasks>[\s\S]*?<\/openspec-tasks>/gi, '')
+  const text = stripSpecTasksBlocks(stripNonAiStreamArtifacts(raw))
     .trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
@@ -167,15 +177,19 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private currentProcesses: PersistedProcessInfo[] = [];
   private currentSupervisorAgent: string = DEFAULT_SUPERVISOR_NAME;
   private latestSupervisorReview: {
-    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
     stateName: string;
     content: string;
     timestamp: string;
     affectedArtifacts?: string[];
     impact?: string[];
   } | null = null;
-  private currentRunOpenSpec: OpenSpecDocument | null = null;
-  private liveOpenSpecTaskBlocksByProcess: Map<string, string> = new Map();
+  private humanQuestions: HumanQuestion[] = [];
+  private pendingHumanQuestionId: string | null = null;
+  private humanAnswersContext: HumanAnswerContext[] = [];
+  private humanQuestionWaiters = new Map<string, (question: HumanQuestion | null) => void>();
+  private currentRunSpecCoding: SpecCodingDocument | null = null;
+  private liveSpecCodingTaskBlocksByProcess: Map<string, string> = new Map();
   private supervisorFlow: { type: string; from: string; to: string; question?: string; method?: string; round: number; timestamp: string; stateName?: string }[] = [];
   /** Agent 工作流：追踪 Agent 之间的信息传递 */
   private agentFlow: {
@@ -563,8 +577,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   getStatus() {
     const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
     const preparingPhase = this.status === 'preparing' ? '准备阶段' : null;
-    const runOpenSpec = this.currentRunOpenSpec
-      ? normalizeOpenSpecDocument(this.currentRunOpenSpec)
+    const runSpecCoding = this.currentRunSpecCoding
+      ? normalizeSpecCodingDocument(this.currentRunSpecCoding)
       : null;
     return {
       status: this.status,
@@ -595,24 +609,28 @@ export class StateMachineWorkflowManager extends EventEmitter {
           .map((agent) => [agent.name, agent.sessionId as string])
       ),
       latestSupervisorReview: this.latestSupervisorReview,
+      humanQuestions: this.humanQuestions,
+      pendingHumanQuestionId: this.pendingHumanQuestionId,
+      pendingHumanQuestion: this.getPendingHumanQuestion(),
+      humanAnswersContext: this.humanAnswersContext,
       qualityChecks: this.qualityChecks,
-      runOpenSpec,
+      runSpecCoding,
     };
   }
 
-  async applySupervisorChatOpenSpecRevision(input: {
+  async applySupervisorChatSpecCodingRevision(input: {
     supervisorAgent: string;
     summary: string;
     content: string;
     affectedArtifacts?: string[];
     impact?: string[];
-  }): Promise<OpenSpecDocument | null> {
-    if (!this.currentRunId || !this.currentRunOpenSpec) return null;
+  }): Promise<SpecCodingDocument | null> {
+    if (!this.currentRunId || !this.currentRunSpecCoding) return null;
 
-    this.currentRunOpenSpec = appendOpenSpecRevision(this.currentRunOpenSpec, {
+    this.currentRunSpecCoding = appendSpecCodingRevision(this.currentRunSpecCoding, {
       summary: input.summary,
       createdBy: input.supervisorAgent,
-      status: this.currentRunOpenSpec.status,
+      status: this.currentRunSpecCoding.status,
       progressSummary: input.summary,
     });
     this.latestSupervisorReview = {
@@ -625,7 +643,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
     await this.persistState();
     this.emit('supervisor-review', this.latestSupervisorReview);
-    return this.currentRunOpenSpec;
+    return this.currentRunSpecCoding;
   }
 
   async start(
@@ -656,7 +674,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentState = null;
       this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
       this.latestSupervisorReview = null;
-      this.currentRunOpenSpec = null;
+      this.currentRunSpecCoding = null;
       this.runStartTime = new Date().toISOString();
       this.currentConfigFile = configFile;
       this.isolatedDir = null;
@@ -666,6 +684,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.pendingForceTransition = null;
       this.pendingForceInstruction = null;
       this.pendingApprovalInfo = null;
+      this.humanQuestions = [];
+      this.pendingHumanQuestionId = null;
+      this.humanAnswersContext = [];
+      this.humanQuestionWaiters.clear();
       this.interruptFlag = false;
       this.feedbackInterrupt = false;
       this.liveFeedback = [];
@@ -717,8 +739,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await this.persistState();
 
       const creationSession = await loadLatestCreationSessionByFilename(configFile).catch(() => null);
-      if (creationSession?.openSpec) {
-        this.currentRunOpenSpec = cloneOpenSpecForRun(creationSession.openSpec, {
+      if (creationSession?.specCoding) {
+        this.currentRunSpecCoding = cloneSpecCodingForRun(creationSession.specCoding, {
           runId,
           filename: configFile,
         });
@@ -798,9 +820,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const restoredState = existingState.currentState;
         this.currentState = restoredState && validStates.has(restoredState) ? restoredState : null;
         this.runStartTime = existingState.startTime;
-        this.currentRunOpenSpec = existingState.runOpenSpec
-          ? normalizeOpenSpecDocument(existingState.runOpenSpec)
-          : this.currentRunOpenSpec;
+        this.latestSupervisorReview = existingState.latestSupervisorReview || this.latestSupervisorReview;
+        this.humanQuestions = existingState.humanQuestions || [];
+        this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
+        this.humanAnswersContext = existingState.humanAnswersContext || [];
+        this.currentRunSpecCoding = existingState.runSpecCoding
+          ? normalizeSpecCodingDocument(existingState.runSpecCoding)
+          : this.currentRunSpecCoding;
       }
 
       // === Switch to running ===
@@ -922,7 +948,150 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
   }
 
+  getHumanQuestions(): HumanQuestion[] {
+    return [...this.humanQuestions];
+  }
+
+  getPendingHumanQuestion(): HumanQuestion | null {
+    if (!this.pendingHumanQuestionId) return null;
+    return this.humanQuestions.find((question) => question.id === this.pendingHumanQuestionId && question.status === 'unanswered') || null;
+  }
+
+  private formatHumanQuestionAnswer(answer: HumanQuestionAnswer): string {
+    const parts: string[] = [];
+    if (answer.selectedState) parts.push(`选择状态: ${answer.selectedState}`);
+    if (answer.selectedOption) parts.push(`选择: ${answer.selectedOption}`);
+    if (answer.selectedOptions?.length) parts.push(`选择: ${answer.selectedOptions.join('、')}`);
+    if (answer.text) parts.push(answer.text);
+    if (answer.instruction) parts.push(`附加指令: ${answer.instruction}`);
+    return parts.filter(Boolean).join('\n') || '已确认';
+  }
+
+  async createHumanQuestion(input: Partial<HumanQuestion> & {
+    title: string;
+    message: string;
+    answerSchema: HumanQuestion['answerSchema'];
+  }): Promise<HumanQuestion> {
+    if (!this.currentRunId) {
+      throw new Error('当前没有运行中的工作流');
+    }
+
+    const existingPending = this.getPendingHumanQuestion();
+    if (existingPending && existingPending.source?.type === input.source?.type && input.kind === existingPending.kind) {
+      return existingPending;
+    }
+
+    const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
+    const question: HumanQuestion = {
+      id: input.id || `hq-${Date.now()}-${randomUUID().slice(0, 8)}`,
+      runId: this.currentRunId,
+      configFile: this.currentConfigFile,
+      status: 'unanswered',
+      kind: input.kind || 'clarification',
+      title: input.title,
+      message: input.message,
+      supervisorAdvice: input.supervisorAdvice,
+      createdAt: input.createdAt || new Date().toISOString(),
+      supervisorAgent: input.supervisorAgent || this.currentSupervisorAgent,
+      supervisorSessionId: input.supervisorSessionId ?? supervisorAgent?.sessionId ?? null,
+      currentState: input.currentState ?? this.currentState,
+      previousState: input.previousState,
+      suggestedNextState: input.suggestedNextState,
+      availableStates: input.availableStates,
+      result: input.result,
+      requiresWorkflowPause: input.requiresWorkflowPause ?? true,
+      answerSchema: input.answerSchema,
+      source: input.source || { type: 'manual' },
+    };
+
+    this.humanQuestions = [question, ...this.humanQuestions.filter((item) => item.id !== question.id)].slice(0, 100);
+    if (question.requiresWorkflowPause) {
+      this.pendingHumanQuestionId = question.id;
+    }
+    this.latestSupervisorReview = {
+      type: 'human-question',
+      stateName: this.currentState || '全局',
+      content: `${question.title}\n${question.message}`,
+      timestamp: question.createdAt,
+    };
+    await this.persistState();
+    this.emit('human-question-required', { question, humanQuestions: this.humanQuestions });
+    this.emit('status', { status: this.status, pendingHumanQuestion: question, currentConfigFile: this.currentConfigFile });
+    return question;
+  }
+
+  async answerHumanQuestion(questionId: string, answer: HumanQuestionAnswer): Promise<HumanQuestion> {
+    const index = this.humanQuestions.findIndex((question) => question.id === questionId);
+    if (index < 0) {
+      throw new Error('找不到待回答的 Supervisor 消息');
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.humanQuestions[index];
+    if (existing.status === 'answered') return existing;
+    const updated: HumanQuestion = {
+      ...existing,
+      status: 'answered',
+      answer,
+      answeredAt: now,
+    };
+    this.humanQuestions[index] = updated;
+    if (this.pendingHumanQuestionId === questionId) {
+      this.pendingHumanQuestionId = null;
+    }
+
+    const answerText = this.formatHumanQuestionAnswer(answer);
+    this.humanAnswersContext = [
+      ...this.humanAnswersContext,
+      {
+        questionId,
+        title: existing.title,
+        question: existing.message,
+        answer: answerText,
+        instruction: answer.instruction,
+        answeredAt: now,
+      },
+    ].slice(-20);
+
+    if (existing.answerSchema.type === 'approval-transition') {
+      this.pendingForceTransition = answer.selectedState || existing.suggestedNextState || existing.availableStates?.[0] || null;
+      this.pendingForceInstruction = answer.instruction || answer.text || null;
+    }
+
+    await this.persistState();
+    this.emit('human-question-answered', { question: updated, answer });
+    this.emit('status', { status: this.status, pendingHumanQuestion: null, currentConfigFile: this.currentConfigFile });
+    const waiter = this.humanQuestionWaiters.get(questionId);
+    if (waiter) {
+      this.humanQuestionWaiters.delete(questionId);
+      waiter(updated);
+    }
+    return updated;
+  }
+
+  private async waitForHumanQuestionAnswer(questionId: string): Promise<HumanQuestion | null> {
+    const existing = this.humanQuestions.find((question) => question.id === questionId);
+    if (!existing || existing.status !== 'unanswered') return existing || null;
+    return new Promise((resolve) => {
+      this.humanQuestionWaiters.set(questionId, resolve);
+      const checkInterval = setInterval(() => {
+        const question = this.humanQuestions.find((item) => item.id === questionId) || null;
+        if (!question || question.status !== 'unanswered' || this.pendingForceTransition || this.shouldStop) {
+          clearInterval(checkInterval);
+          this.humanQuestionWaiters.delete(questionId);
+          resolve(question);
+        }
+      }, 500);
+    });
+  }
+
   private async waitForHumanApproval(): Promise<void> {
+    const pendingQuestion = this.getPendingHumanQuestion();
+    if (pendingQuestion) {
+      await this.waitForHumanQuestionAnswer(pendingQuestion.id);
+      return;
+    }
+
     // Wait for human to call forceTransition
     return new Promise((resolve) => {
       const checkInterval = setInterval(() => {
@@ -967,8 +1136,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
     if (!this.currentRunId) return;
     try {
-      if (this.currentRunOpenSpec) {
-        this.currentRunOpenSpec = normalizeOpenSpecDocument(this.currentRunOpenSpec);
+      if (this.currentRunSpecCoding) {
+        this.currentRunSpecCoding = normalizeSpecCodingDocument(this.currentRunSpecCoding);
       }
       const statusToPersist = finalStatus || (
         this.shouldStop ? 'stopped' : (this.status === 'idle' ? 'completed' : this.status)
@@ -1028,6 +1197,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
             availableStates: this.pendingApprovalInfo.availableStates,
             supervisorAdvice: this.pendingApprovalInfo.supervisorAdvice,
             result: this.pendingApprovalInfo.result,
+            humanQuestionId: this.pendingHumanQuestionId || undefined,
+            humanQuestion: this.getPendingHumanQuestion() || undefined,
           },
         } : {}),
         workingDirectory: this.getWorkingDirectory() || undefined,
@@ -1035,8 +1206,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
         supervisorSessionId,
         attachedAgentSessions,
         latestSupervisorReview: this.latestSupervisorReview,
+        humanQuestions: this.humanQuestions,
+        pendingHumanQuestionId: this.pendingHumanQuestionId,
+        humanAnswersContext: this.humanAnswersContext,
         qualityChecks: this.qualityChecks,
-        runOpenSpec: this.currentRunOpenSpec,
+        runSpecCoding: this.currentRunSpecCoding,
       });
       if (this._frontendSessionId) {
         await updateChatSessionWorkflowBinding(this._frontendSessionId, {
@@ -1334,7 +1508,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         rawProc.streamContent += event.content;
       }
       const totalContent = rawProc?.streamContent || event.content;
-      void this.applyLiveOpenSpecTaskUpdatesFromStream(totalContent, agent, processId);
+      void this.applyLiveSpecCodingTaskUpdatesFromStream(totalContent, agent, processId);
       processManager.emit('stream', {
         id: processId,
         step: displayStep,
@@ -1396,7 +1570,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         },
       };
     } finally {
-      this.liveOpenSpecTaskBlocksByProcess.delete(processId);
+      this.liveSpecCodingTaskBlocksByProcess.delete(processId);
       this.currentEngine.off('stream', streamHandler);
     }
   }
@@ -1463,14 +1637,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
         return `- ${step?.name || `步骤${index + 1}`}: ${snippet || '[无输出]'}`;
       })
       .join('\n');
-    const openSpecGuardrail = this.currentRunOpenSpec
+    const specCodingGuardrail = this.currentRunSpecCoding
       ? [
-        '当前 Run OpenSpec：',
-        `- 版本: v${this.currentRunOpenSpec.version}`,
-        this.currentRunOpenSpec.summary ? `- 摘要: ${this.currentRunOpenSpec.summary}` : '',
-        this.currentRunOpenSpec.progress?.summary ? `- 进度: ${this.currentRunOpenSpec.progress.summary}` : '',
-        this.currentRunOpenSpec.tasks?.length
-          ? `- tasks.md: ${this.currentRunOpenSpec.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunOpenSpec.tasks.length} 已完成`
+        '当前 Run Spec Coding 投影：',
+        `- 版本: v${this.currentRunSpecCoding.version}`,
+        this.currentRunSpecCoding.summary ? `- 摘要: ${this.currentRunSpecCoding.summary}` : '',
+        this.currentRunSpecCoding.progress?.summary ? `- 进度: ${this.currentRunSpecCoding.progress.summary}` : '',
+        this.currentRunSpecCoding.tasks?.length
+          ? `- tasks.md: ${this.currentRunSpecCoding.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunSpecCoding.tasks.length} 已完成`
           : '',
         '- 你负责非状态内容的修订；普通步骤只能更新状态。',
       ].filter(Boolean).join('\n')
@@ -1502,7 +1676,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       '步骤输出摘要：',
       stepSummary || '- 无',
       experienceBlock,
-      openSpecGuardrail ? `\n${openSpecGuardrail}` : '',
+      specCodingGuardrail ? `\n${specCodingGuardrail}` : '',
       '',
       type === 'state-review'
         ? '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见'
@@ -1527,8 +1701,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       stateName: state.name,
     });
     this.emit('supervisor-review', this.latestSupervisorReview);
-    if (this.currentRunOpenSpec) {
-      this.currentRunOpenSpec = appendSupervisorOpenSpecRevision(this.currentRunOpenSpec, {
+    if (this.currentRunSpecCoding) {
+      this.currentRunSpecCoding = appendSupervisorSpecCodingRevision(this.currentRunSpecCoding, {
         stateName: state.name,
         nextState,
         type,
@@ -1541,7 +1715,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return response;
   }
 
-  private deriveRunOpenSpecStateUpdate(
+  private deriveRunSpecCodingStateUpdate(
     state: StateMachineState,
     result: StateExecutionResult,
     nextState?: string | null
@@ -1610,9 +1784,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         // Execute final state steps (e.g. regression tests) before completing
         if (stateConfig.steps.length > 0) {
           const finalResult = await this.executeState(stateConfig, config, requirements);
-          if (this.currentRunOpenSpec) {
-            const statusUpdate = this.deriveRunOpenSpecStateUpdate(stateConfig, finalResult, null);
-            this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+          if (this.currentRunSpecCoding) {
+            const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, finalResult, null);
+            this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
               stateName: stateConfig.name,
               status: statusUpdate.status,
               summary: statusUpdate.summary,
@@ -1639,9 +1813,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         config
       );
 
-      if (this.currentRunOpenSpec) {
-        const statusUpdate = this.deriveRunOpenSpecStateUpdate(stateConfig, result, nextState);
-        this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+      if (this.currentRunSpecCoding) {
+        const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, result, nextState);
+        this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
           stateName: stateConfig.name,
           status: statusUpdate.status,
           summary: statusUpdate.summary,
@@ -1733,6 +1907,25 @@ export class StateMachineWorkflowManager extends EventEmitter {
         // Persist state so crash recovery can restore to human approval
         await this.persistState();
 
+        const humanQuestion = await this.createHumanQuestion({
+          kind: 'approval',
+          title: '等待人工审查',
+          message: checkpointAdvice || `Supervisor 建议进入 ${nextState}，请确认下一步状态。`,
+          supervisorAdvice: checkpointAdvice || undefined,
+          currentState: '__human_approval__',
+          previousState: fromStateName,
+          suggestedNextState: nextState,
+          availableStates: config.workflow.states.map(s => s.name),
+          result,
+          requiresWorkflowPause: true,
+          answerSchema: {
+            type: 'approval-transition',
+            required: true,
+            options: config.workflow.states.map(s => ({ label: s.name, value: s.name })),
+          },
+          source: { type: 'checkpoint-advice', fromState: fromStateName, suggestedNextState: nextState },
+        });
+
         // Emit state change to human approval
         this.emit('state-change', {
           state: '__human_approval__',
@@ -1747,6 +1940,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           result,
           availableStates: config.workflow.states.map(s => s.name),
           supervisorAdvice: checkpointAdvice || undefined,
+          humanQuestion,
         });
 
         // Wait for human decision via forceTransition
@@ -1866,8 +2060,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       state: state.name,
       stepCount: state.steps.length,
     });
-    if (this.currentRunOpenSpec) {
-      this.currentRunOpenSpec = markOpenSpecStateStatus(this.currentRunOpenSpec, {
+    if (this.currentRunSpecCoding) {
+      this.currentRunSpecCoding = markSpecCodingStateStatus(this.currentRunSpecCoding, {
         stateName: state.name,
         status: 'in-progress',
         summary: `当前推进到状态 ${state.name}。`,
@@ -1939,9 +2133,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
   }
 
-  private applyRunOpenSpecTaskUpdatesFromOutput(output: string, updatedBy: string): number {
-    if (!this.currentRunOpenSpec) return 0;
-    const block = extractTaggedBlock(output, 'openspec-tasks');
+  private applyRunSpecCodingTaskUpdatesFromOutput(output: string, updatedBy: string): number {
+    if (!this.currentRunSpecCoding) return 0;
+    const block = extractSpecTasksBlock(output);
     if (!block) return 0;
 
     const normalizeStatus = (value: unknown): 'pending' | 'in-progress' | 'completed' | 'blocked' | '' => {
@@ -1969,68 +2163,68 @@ export class StateMachineWorkflowManager extends EventEmitter {
       });
 
       if (updates.length === 0) return 0;
-      this.currentRunOpenSpec = updateOpenSpecTaskStatuses(this.currentRunOpenSpec, {
+      this.currentRunSpecCoding = updateSpecCodingTaskStatuses(this.currentRunSpecCoding, {
         updates,
         updatedBy,
       });
-      this.emit('log', { message: `OpenSpec tasks.md 已刷新 ${updates.length} 项` });
+      this.emit('log', { message: `Spec Coding tasks.md 已刷新 ${updates.length} 项` });
       return updates.length;
     } catch {
-      this.emit('log', { message: 'OpenSpec tasks.md 状态回传解析失败，已忽略本次状态块' });
+      this.emit('log', { message: 'Spec Coding tasks.md 状态回传解析失败，已忽略本次状态块' });
       return 0;
     }
   }
 
-  private buildRunOpenSpecStatusPayload() {
-    if (!this.currentRunOpenSpec) return {};
+  private buildRunSpecCodingStatusPayload() {
+    if (!this.currentRunSpecCoding) return {};
     return {
-      openSpecSummary: {
-        id: this.currentRunOpenSpec.id,
-        version: this.currentRunOpenSpec.version,
-        status: this.currentRunOpenSpec.status,
+      specCodingSummary: {
+        id: this.currentRunSpecCoding.id,
+        version: this.currentRunSpecCoding.version,
+        status: this.currentRunSpecCoding.status,
         source: 'run' as const,
-        summary: this.currentRunOpenSpec.summary,
-        phaseCount: this.currentRunOpenSpec.phases.length,
-        taskCount: this.currentRunOpenSpec.tasks.length,
-        assignmentCount: this.currentRunOpenSpec.assignments.length,
-        checkpointCount: this.currentRunOpenSpec.checkpoints.length,
-        revisionCount: this.currentRunOpenSpec.revisions.length,
-        progress: this.currentRunOpenSpec.progress,
-        latestRevision: this.currentRunOpenSpec.revisions.at(-1) || null,
+        summary: this.currentRunSpecCoding.summary,
+        phaseCount: this.currentRunSpecCoding.phases.length,
+        taskCount: this.currentRunSpecCoding.tasks.length,
+        assignmentCount: this.currentRunSpecCoding.assignments.length,
+        checkpointCount: this.currentRunSpecCoding.checkpoints.length,
+        revisionCount: this.currentRunSpecCoding.revisions.length,
+        progress: this.currentRunSpecCoding.progress,
+        latestRevision: this.currentRunSpecCoding.revisions.at(-1) || null,
       },
-      openSpecDetails: {
-        phases: this.currentRunOpenSpec.phases,
-        tasks: this.currentRunOpenSpec.tasks,
-        assignments: this.currentRunOpenSpec.assignments,
-        checkpoints: this.currentRunOpenSpec.checkpoints,
-        revisions: this.currentRunOpenSpec.revisions,
-        artifacts: this.currentRunOpenSpec.artifacts,
+      specCodingDetails: {
+        phases: this.currentRunSpecCoding.phases,
+        tasks: this.currentRunSpecCoding.tasks,
+        assignments: this.currentRunSpecCoding.assignments,
+        checkpoints: this.currentRunSpecCoding.checkpoints,
+        revisions: this.currentRunSpecCoding.revisions,
+        artifacts: this.currentRunSpecCoding.artifacts,
       },
     };
   }
 
-  private async applyLiveOpenSpecTaskUpdatesFromStream(output: string, updatedBy: string, processId: string): Promise<number> {
-    const block = extractTaggedBlock(output, 'openspec-tasks');
+  private async applyLiveSpecCodingTaskUpdatesFromStream(output: string, updatedBy: string, processId: string): Promise<number> {
+    const block = extractSpecTasksBlock(output);
     if (!block) return 0;
 
-    const previousBlock = this.liveOpenSpecTaskBlocksByProcess.get(processId);
+    const previousBlock = this.liveSpecCodingTaskBlocksByProcess.get(processId);
     if (previousBlock === block) return 0;
-    this.liveOpenSpecTaskBlocksByProcess.set(processId, block);
+    this.liveSpecCodingTaskBlocksByProcess.set(processId, block);
 
-    const updated = this.applyRunOpenSpecTaskUpdatesFromOutput(`<openspec-tasks>${block}</openspec-tasks>`, updatedBy);
+    const updated = this.applyRunSpecCodingTaskUpdatesFromOutput(`<spec-tasks>${block}</spec-tasks>`, updatedBy);
     if (updated <= 0) return 0;
 
     await this.persistState();
     this.emit('status', {
       status: this.status,
-      message: `OpenSpec tasks.md 已实时刷新 ${updated} 项`,
+      message: `Spec Coding tasks.md 已实时刷新 ${updated} 项`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
       currentPhase: this.currentState,
       currentStep: this.currentStep,
       currentConfigFile: this.currentConfigFile,
-      ...this.buildRunOpenSpecStatusPayload(),
+      ...this.buildRunSpecCodingStatusPayload(),
     });
     return updated;
   }
@@ -2116,7 +2310,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = null;
       this.completedSteps.push(stepKey);
       this.currentProcesses = [];
-      this.applyRunOpenSpecTaskUpdatesFromOutput(output, step.agent);
+      this.applyRunSpecCodingTaskUpdatesFromOutput(output, step.agent);
 
       // Record step log for persistence
       this.stepLogs.push({
@@ -2223,22 +2417,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push(`\n# 需求说明\n${requirements}`);
     }
 
-    if (this.currentRunOpenSpec) {
-      const relevantPhase = this.currentRunOpenSpec.phases.find((phase) => phase.title === state.name);
+    if (this.currentRunSpecCoding) {
+      const relevantPhase = this.currentRunSpecCoding.phases.find((phase) => phase.title === state.name);
       const relevantTasks = relevantPhase
-        ? (this.currentRunOpenSpec.tasks || []).filter((task) => task.phaseId === relevantPhase.id)
+        ? (this.currentRunSpecCoding.tasks || []).filter((task) => task.phaseId === relevantPhase.id)
         : [];
       const taskContext = relevantTasks.length > 0
         ? relevantTasks
-        : (this.currentRunOpenSpec.tasks || []).filter((task) => task.status !== 'completed').slice(0, 12);
-      parts.push(`\n# 当前 Run OpenSpec`);
-      parts.push(`OpenSpec 版本: v${this.currentRunOpenSpec.version}`);
-      parts.push('说明: 当前 Run OpenSpec 是本次运行绑定的正式 OpenSpec 投影。即使工作目录内没有 proposal.md / design.md / tasks.md 文件实体，也必须以这里注入的 OpenSpec 和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
-      if (this.currentRunOpenSpec.summary) {
-        parts.push(`OpenSpec 摘要: ${this.currentRunOpenSpec.summary}`);
+        : (this.currentRunSpecCoding.tasks || []).filter((task) => task.status !== 'completed').slice(0, 12);
+      parts.push(`\n# 当前 Run Spec Coding 投影`);
+      parts.push(`Spec Coding 版本: v${this.currentRunSpecCoding.version}`);
+      parts.push('说明: 当前 Run Spec Coding 投影是本次运行绑定的正式规范制品投影。即使工作目录内没有 proposal.md / design.md / tasks.md 文件实体，也必须以这里注入的规范投影和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
+      if (this.currentRunSpecCoding.summary) {
+        parts.push(`Spec Coding 摘要: ${this.currentRunSpecCoding.summary}`);
       }
-      if (this.currentRunOpenSpec.progress?.summary) {
-        parts.push(`OpenSpec 进度: ${this.currentRunOpenSpec.progress.summary}`);
+      if (this.currentRunSpecCoding.progress?.summary) {
+        parts.push(`Spec Coding 进度: ${this.currentRunSpecCoding.progress.summary}`);
       }
       if (relevantPhase?.objective) {
         parts.push(`当前阶段目标: ${relevantPhase.objective}`);
@@ -2256,15 +2450,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push([
         '权限规则: 你只能更新状态类变化；不能修改目标、约束、阶段定义、分工或其他非状态内容，非状态修订由 Supervisor 负责。',
         'tasks.md 状态标记: [ ]=未开始，[-]=进行中，[x]=已完成，blocked=阻塞。',
-        '首要任务: 在你开始读取资料、执行命令、输出分析之前，先立即输出一次 <openspec-tasks>，把你当前负责的 task 标记为 in-progress。',
+        '首要任务: 在你开始读取资料、执行命令、输出分析之前，先立即输出一次 <spec-tasks>，把你当前负责的 task 标记为 in-progress。',
         '只有先输出这次 in-progress 状态回传，本步骤才算真正开始。',
-        '完成后再输出一次 <openspec-tasks>，把对应 task 更新为 completed 或 blocked；不要等到整步结束才第一次回传状态。',
-        '如果本步骤推进了 tasks.md，请输出 <openspec-tasks> JSON 块，系统会解析并同步到当前 run 的正式 tasks.md 投影；该状态块可以先于最终结论单独出现，便于前端实时刷新。',
+        '完成后再输出一次 <spec-tasks>，把对应 task 更新为 completed 或 blocked；不要等到整步结束才第一次回传状态。',
+        '如果本步骤推进了 tasks.md，请输出 <spec-tasks> JSON 块，系统会解析并同步到当前 run 的正式 tasks.md 投影；该状态块可以先于最终结论单独出现，便于前端实时刷新。',
         '这不是系统自动推断，必须由你显式声明。',
         '格式示例:',
-        '<openspec-tasks>',
+        '<spec-tasks>',
         '{"updates":[{"id":"1.1","status":"in-progress","validation":"已开始定位入口"},{"id":"1.2","status":"completed","validation":"已完成并产出证据"}]}',
-        '</openspec-tasks>',
+        '</spec-tasks>',
       ].join('\n'));
     }
 
@@ -2281,6 +2475,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Add global context
     if (this.globalContext) {
       parts.push(`\n# 全局上下文\n${this.globalContext}`);
+    }
+
+    if (this.humanAnswersContext.length > 0) {
+      const recentAnswers = this.humanAnswersContext.slice(-5).map((item) => [
+        `- 问题: ${item.title}`,
+        `  - 询问内容: ${item.question}`,
+        `  - 人类回答: ${item.answer}`,
+        item.instruction ? `  - 附加指令: ${item.instruction}` : '',
+      ].filter(Boolean).join('\n'));
+      parts.push(`\n# 本轮运行中的人类答复\n${recentAnswers.join('\n')}`);
     }
 
     // Add state-specific context
@@ -2307,23 +2511,30 @@ export class StateMachineWorkflowManager extends EventEmitter {
         '\n# 步骤结论归档协议',
         '步骤成果详细总结与步骤结论是两种不同输出。',
         '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论只需要放在回复末尾的 <step-conclusion> 中。',
-        '如果你要先汇报进行中状态，可以在过程里提前单独输出一次 <openspec-tasks>；最终收尾时，如还需输出流程裁决 JSON 或 <openspec-tasks>，顺序必须是：裁决 JSON -> <openspec-tasks> -> <step-conclusion>。',
-        '请在回复末尾单独输出 <step-conclusion>，里面只写本步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
+        '如果你要先汇报进行中状态，可以在过程里提前单独输出一次 <spec-tasks>；最终收尾时，如还需输出流程裁决 JSON 或 <spec-tasks>，顺序必须是：裁决 JSON -> <spec-tasks> -> <step-conclusion>。',
+        '请在回复末尾单独输出 <step-conclusion>，里面只写可被下一步 agent 直接复用的步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
+        '步骤结论必须自包含：下一步 agent 不读完整对话时，也能知道本步骤做了什么、改了哪里、验证到什么程度、还剩什么风险。',
         '建议结构:',
         '<step-conclusion>',
-        '## 结论',
-        '- ...',
-        '## 证据',
-        '- ...',
-        '## 后续建议',
-        '- ...',
+        '## 结果 / 裁决',
+        '- 本步骤最终完成了什么，或给出了什么 pass / conditional_pass / fail 判断。',
+        '## 下一步所需上下文',
+        '- 后续 agent 必须继承的事实、决策、约束、假设和用户确认点。',
+        '## 涉及对象',
+        '- 读取、修改或重点审查过的文件、符号、配置项、API、状态字段或制品路径。',
+        '## 验证状态',
+        '- 已运行的命令、人工检查或替代证据；如果未验证，说明原因和影响。',
+        '## 未决问题 / 风险',
+        '- 仍阻塞、待确认、兼容风险、失败路径或需要 owner/Supervisor 决策的事项；没有则写“无”。',
+        '## 下一步建议',
+        '- 建议下一个 agent 直接执行的最小动作，避免泛泛而谈。',
         '</step-conclusion>',
       ].join('\n'));
     }
 
     // Add structured JSON output requirement for attacker/judge roles
     if (step.role === 'attacker' || step.role === 'judge') {
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <openspec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进 <step-conclusion> 的“后续建议”或“附加观察”，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <spec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进 <step-conclusion> 的“后续建议”或“附加观察”，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     // Add workspace skills (index summary + absolute path for AI to read details)
@@ -2856,12 +3067,30 @@ export class StateMachineWorkflowManager extends EventEmitter {
       result,
     };
 
+    const humanQuestion = await this.createHumanQuestion({
+      kind: 'approval',
+      title: '需要人工选择下一状态',
+      message: `verdict "${result.verdict}" 没有匹配的转移规则，请选择下一步状态。`,
+      currentState: result.stateName,
+      suggestedNextState: transitions[0]?.to || result.stateName,
+      availableStates: config.workflow.states.map(s => s.name),
+      result,
+      requiresWorkflowPause: true,
+      answerSchema: {
+        type: 'approval-transition',
+        required: true,
+        options: config.workflow.states.map(s => ({ label: s.name, value: s.name })),
+      },
+      source: { type: 'human-approval', reason: 'no-matching-transition' },
+    });
+
     this.emit('human-approval-required', {
       currentState: result.stateName,
       suggestedNextState: transitions[0]?.to || result.stateName,
       result,
       availableStates: config.workflow.states.map(s => s.name),
       reason: `verdict "${result.verdict}" 没有匹配的转移规则`,
+      humanQuestion,
     });
 
     // Wait for human to force-transition
@@ -3039,6 +3268,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentState = runState.currentState || null;
     this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
     this.latestSupervisorReview = runState.latestSupervisorReview || null;
+    this.humanQuestions = runState.humanQuestions || [];
+    this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
+    this.humanAnswersContext = runState.humanAnswersContext || [];
     this.stateHistory = runState.stateHistory || [];
     this.issueTracker = (runState.issueTracker || []) as Issue[];
     this.transitionCount = runState.transitionCount || 0;
@@ -3048,9 +3280,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
-    this.currentRunOpenSpec = runState.runOpenSpec
-      ? normalizeOpenSpecDocument(runState.runOpenSpec)
+    this.currentRunSpecCoding = runState.runSpecCoding
+      ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
+
+    this.humanQuestionWaiters.clear();
 
     // Restore self-transition counts from state history
     this.selfTransitionCounts = new Map();
@@ -3123,6 +3357,37 @@ export class StateMachineWorkflowManager extends EventEmitter {
         supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
       };
 
+      if (!this.getPendingHumanQuestion() && runState.pendingCheckpoint?.humanQuestion) {
+        const restoredQuestion = runState.pendingCheckpoint.humanQuestion;
+        this.humanQuestions = [
+          { ...restoredQuestion, status: 'unanswered' as const, runId, configFile: runState.configFile },
+          ...this.humanQuestions.filter((item) => item.id !== restoredQuestion.id),
+        ];
+        this.pendingHumanQuestionId = restoredQuestion.id;
+      }
+      if (!this.getPendingHumanQuestion()) {
+        const restoredQuestion = await this.createHumanQuestion({
+          kind: 'approval',
+          title: '等待人工审查',
+          message: runState.pendingCheckpoint?.supervisorAdvice || `请确认下一步状态：${suggestedNextState}`,
+          supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
+          currentState: '__human_approval__',
+          previousState,
+          suggestedNextState,
+          availableStates,
+          result: restoredApprovalResult,
+          requiresWorkflowPause: true,
+          answerSchema: {
+            type: 'approval-transition',
+            required: true,
+            options: availableStates.map(s => ({ label: s, value: s })),
+          },
+          source: { type: 'human-approval', restored: true },
+        });
+        if (restoredQuestion?.id) this.pendingHumanQuestionId = restoredQuestion.id;
+      }
+      const pendingHumanQuestion = this.getPendingHumanQuestion();
+
       this.emit('state-change', {
         state: '__human_approval__',
         message: '等待人工审查决策',
@@ -3135,20 +3400,29 @@ export class StateMachineWorkflowManager extends EventEmitter {
         result: restoredApprovalResult,
         availableStates,
         supervisorAdvice: runState.pendingCheckpoint?.supervisorAdvice,
+        humanQuestion: pendingHumanQuestion,
       });
+
+      if (pendingHumanQuestion) {
+        this.emit('human-question-required', { question: pendingHumanQuestion, humanQuestions: this.humanQuestions });
+      }
 
       // Wait for human decision
       await this.waitForHumanApproval();
 
       const humanSelectedState: string = this.pendingForceTransition || suggestedNextState;
+      const instruction = this.pendingForceInstruction || '';
       this.pendingForceTransition = null;
+      this.pendingForceInstruction = null;
       this.pendingApprovalInfo = null;
 
       // Record transition from __human_approval__ to selected state
       this.stateHistory.push({
         from: '__human_approval__',
         to: humanSelectedState,
-        reason: `人工决策: 选择进入 ${humanSelectedState}`,
+        reason: instruction
+          ? `人工决策: 选择进入 ${humanSelectedState}，附加指令: ${instruction}`
+          : `人工决策: 选择进入 ${humanSelectedState}`,
         issues: [],
         timestamp: new Date().toISOString(),
       });
@@ -3392,8 +3666,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
-    this.currentRunOpenSpec = runState.runOpenSpec
-      ? normalizeOpenSpecDocument(runState.runOpenSpec)
+    this.currentRunSpecCoding = runState.runSpecCoding
+      ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
     this.status = 'running';
     this.shouldStop = false;
@@ -3478,21 +3752,21 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return `[错误] 找不到 Agent 配置: ${agentName}`;
     }
 
-    const openSpecBlock = this.currentRunOpenSpec
+    const specCodingBlock = this.currentRunSpecCoding
       ? [
-        '# 当前 Run OpenSpec',
-        `- 版本: v${this.currentRunOpenSpec.version}`,
-        this.currentRunOpenSpec.summary ? `- 摘要: ${this.currentRunOpenSpec.summary}` : '',
-        this.currentRunOpenSpec.progress?.summary ? `- 进度: ${this.currentRunOpenSpec.progress.summary}` : '',
-        this.currentRunOpenSpec.tasks?.length
-          ? `- tasks.md: ${this.currentRunOpenSpec.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunOpenSpec.tasks.length} 已完成`
+        '# 当前 Run Spec Coding 投影',
+        `- 版本: v${this.currentRunSpecCoding.version}`,
+        this.currentRunSpecCoding.summary ? `- 摘要: ${this.currentRunSpecCoding.summary}` : '',
+        this.currentRunSpecCoding.progress?.summary ? `- 进度: ${this.currentRunSpecCoding.progress.summary}` : '',
+        this.currentRunSpecCoding.tasks?.length
+          ? `- tasks.md: ${this.currentRunSpecCoding.tasks.filter((task) => task.status === 'completed').length}/${this.currentRunSpecCoding.tasks.length} 已完成`
           : '',
         this.currentState ? `- 当前状态: ${this.currentState}` : '',
-        '- 规则: 你可以基于该 OpenSpec 回答问题；普通 Agent 只能推进状态，系统会同步到正式 tasks.md；任务标记使用 [ ]=未开始、[-]=进行中、[x]=已完成；结构性修订由 Supervisor 负责。',
+        '- 规则: 你可以基于该 Spec Coding 投影回答问题；普通 Agent 只能推进状态，系统会同步到正式 tasks.md；任务标记使用 [ ]=未开始、[-]=进行中、[x]=已完成；结构性修订由 Supervisor 负责。',
       ].filter(Boolean).join('\n')
       : '';
     const prompt = [
-      openSpecBlock,
+      specCodingBlock,
       '# 问题',
       question,
       '',

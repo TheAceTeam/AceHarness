@@ -4,12 +4,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { resolve, basename, join } from 'path';
 
 function fail(message) {
-  console.error(`OpenSpec 校验失败: ${message}`);
+  console.error(`ACEHarness Spec Coding 校验失败: ${message}`);
   process.exitCode = 1;
 }
 
 function info(message) {
-  console.log(`OpenSpec: ${message}`);
+  console.log(`ACEHarness Spec Coding: ${message}`);
 }
 
 function isDirectory(path) {
@@ -73,8 +73,33 @@ function extractTaskEntries(content) {
   return tasks;
 }
 
-function countTasksContaining(tasks, matcher) {
-  return tasks.filter((task) => matcher(task)).length;
+function formatTask(task) {
+  return `${task.id} ${task.title}`;
+}
+
+const REQUIRED_TASK_FIELDS = [
+  { label: '目标', pattern: /^-\s+目标：/ },
+  { label: '输入/依赖', pattern: /^-\s+(输入\/依赖|输入|依赖)：/ },
+  { label: '关联需求', pattern: /^-\s+关联需求：/ },
+  { label: '关联设计', pattern: /^-\s+关联设计：/ },
+  { label: '任务类型', pattern: /^-\s+任务类型：/ },
+  { label: '具体改动对象', pattern: /^-\s+具体改动对象：/ },
+  { label: '执行动作', pattern: /^-\s+执行动作：/ },
+  { label: '交付产物', pattern: /^-\s+交付产物：/ },
+  { label: '验证方式', pattern: /^-\s+(验证方式|验收方式)：/ },
+  { label: '完成标准', pattern: /^-\s+完成标准：/ },
+];
+
+function validateTaskFields(file, tasks) {
+  for (const task of tasks) {
+    const missing = REQUIRED_TASK_FIELDS
+      .filter((field) => !task.details.some((detail) => field.pattern.test(detail)))
+      .map((field) => field.label);
+
+    if (missing.length > 0) {
+      fail(`${file}: 任务 ${formatTask(task)} 缺少字段：${missing.join('、')}`);
+    }
+  }
 }
 
 function validateMainSpec(file) {
@@ -192,21 +217,7 @@ function validateTasks(file) {
     fail(`${file}: 以下任务仍包含未替换的模板占位符：${placeholderTasks.map((task) => task.id).join(', ')}`);
   }
 
-  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^(验证方式|验收方式)：/.test(detail))) === 0) {
-    fail(`${file}: 至少需要一个任务明确写出“验证方式”或“验收方式”`);
-  }
-
-  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^完成标准：/.test(detail))) === 0) {
-    fail(`${file}: 至少需要一个任务明确写出“完成标准”`);
-  }
-
-  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^具体改动对象：/.test(detail))) === 0) {
-    fail(`${file}: 至少需要一个任务明确写出“具体改动对象”，避免任务只有抽象描述`);
-  }
-
-  if (countTasksContaining(tasks, (task) => task.details.some((detail) => /^交付产物：/.test(detail))) === 0) {
-    fail(`${file}: 至少需要一个任务明确写出“交付产物”`);
-  }
+  validateTaskFields(file, tasks);
 }
 
 function validateChange(changeDir, specsRoot) {
@@ -278,7 +289,7 @@ function validateRoot(rootDir) {
 
 const input = process.argv[2];
 if (!input) {
-  console.error('用法: node validate-openspec.mjs <openspec-root>');
+  console.error('用法: node validate-spec-coding.mjs <spec-root>');
   process.exit(1);
 }
 

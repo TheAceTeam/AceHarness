@@ -9,7 +9,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
 export class KiroCliEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -106,10 +106,6 @@ export class KiroCliEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('kiro-cli', [
-      process.env.HOME ? `${process.env.HOME}/.local/bin` : '',
-      '/usr/local/bin',
-      '/usr/bin',
-    ].filter(Boolean));
+    return commandExists('kiro-cli', getCommonCliSearchPaths());
   }
 }

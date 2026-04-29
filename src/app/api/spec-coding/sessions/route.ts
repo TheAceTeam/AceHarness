@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
-import { buildCreationSession, listCreationSessions, saveCreationSession } from '@/lib/openspec-store';
+import { buildCreationSession, listCreationSessions, saveCreationSession } from '@/lib/spec-coding-store';
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request);
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
       chatSessionId: body.chatSessionId,
       createdBy: auth.id,
       status: body.status,
-      openSpecStatus: body.openSpecStatus,
+      specCodingStatus: body.specCodingStatus,
       filename: body.filename,
       workflowName: body.workflowName,
       mode: body.mode,
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       clarification: body.clarification,
       uiState: body.uiState,
       config: body.config,
-      openSpec: body.openSpec,
+      specCoding: body.specCoding,
     });
     await saveCreationSession(session);
     return NextResponse.json({ session });

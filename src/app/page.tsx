@@ -618,13 +618,18 @@ function ChatPageContent() {
     }));
   }, [setSessionWorkbenchState]);
 
-  const openHomeSidebar = useCallback((tab?: HomeSidebarTab, intent?: HomeSidebarHint['intent'], stage?: HomeSidebarHint['stage']) => {
+  const openHomeSidebar = useCallback((
+    tab?: HomeSidebarTab,
+    intent?: HomeSidebarHint['intent'],
+    stage?: HomeSidebarHint['stage'],
+    options?: { shouldOpenModal?: boolean }
+  ) => {
     applyHomeSidebarState({
       tab,
       mode: 'active',
       intent,
       stage,
-      shouldOpenModal: tab === 'workflow' || tab === 'agent',
+      shouldOpenModal: options?.shouldOpenModal ?? false,
     });
   }, [applyHomeSidebarState]);
 
@@ -670,7 +675,7 @@ function ChatPageContent() {
 
   const handleQuickAction = useCallback((prompt: string) => {
     if (prompt === '__HOME_ACTION__:create_workflow') {
-      openHomeSidebar('workflow', 'create-workflow', 'clarifying');
+      openHomeSidebar('workflow', 'create-workflow', 'clarifying', { shouldOpenModal: true });
       const hiddenPrompt = [
         '这是一次来自首页按钮的“创建工作流”界面动作，不是用户新增的一条需求内容。',
         '你必须只根据当前已有对话历史来提取真实需求、约束、工作目录、参考工作流、目标、范围、技术栈、已有角色分工，不要把本条指令本身写进 workflowDraft.requirements 或 description。',
@@ -687,7 +692,7 @@ function ChatPageContent() {
     }
 
     if (prompt === '__HOME_ACTION__:create_agent') {
-      openHomeSidebar('agent', 'create-agent', 'clarifying');
+      openHomeSidebar('agent', 'create-agent', 'clarifying', { shouldOpenModal: true });
       const hiddenPrompt = [
         '这是一次来自首页按钮的“创建 Agent”界面动作，不是用户新增的一条职责需求内容。',
         '你必须只根据当前已有对话历史来提取这个 Agent 的真实职责、风格、能力边界、输入输出、协作对象、参考 workflow 和工作目录，不要把本条指令本身写进 agentDraft.mission 或 style。',

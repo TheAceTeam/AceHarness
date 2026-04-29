@@ -8,7 +8,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
 export class OpenCodeEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -27,6 +27,6 @@ export class OpenCodeEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('opencode');
+    return commandExists('opencode', getCommonCliSearchPaths());
   }
 }

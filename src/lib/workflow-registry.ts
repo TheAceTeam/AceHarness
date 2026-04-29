@@ -18,6 +18,9 @@ export function isStateMachineManagerLike(manager: AnyWorkflowManager | null | u
     && typeof (manager as StateMachineWorkflowManager).forceTransition === 'function'
     && typeof (manager as StateMachineWorkflowManager).setQueuedApprovalAction === 'function'
     && typeof (manager as StateMachineWorkflowManager).resume === 'function'
+    && typeof (manager as StateMachineWorkflowManager).getHumanQuestions === 'function'
+    && typeof (manager as StateMachineWorkflowManager).createHumanQuestion === 'function'
+    && typeof (manager as StateMachineWorkflowManager).answerHumanQuestion === 'function'
   );
 }
 
@@ -45,6 +48,7 @@ class WorkflowRegistry extends EventEmitter {
   private static SM_EVENTS = [
     'state-change', 'step-start', 'step-complete', 'transition',
     'force-transition', 'transition-forced', 'human-approval-required',
+    'human-question-required', 'human-question-answered', 'human-question-updated',
     'status', 'agents', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled',
     'route-decision', 'agent-flow',

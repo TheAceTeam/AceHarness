@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { agentApi, configApi, workflowApi } from '@/lib/api';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/home-sidebar-state';
+import type { HumanQuestion } from '@/lib/run-state-persistence';
+import HumanQuestionInbox from '@/components/workflow/HumanQuestionInbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -112,10 +114,10 @@ function formatSidebarStage(stage?: string | null): string {
   switch (stage) {
     case 'clarifying':
       return '需求澄清';
-    case 'openspec-draft':
-      return 'OpenSpec 草案';
-    case 'openspec-review':
-      return 'OpenSpec 评审';
+    case 'spec-draft':
+      return 'Spec Coding 草案';
+    case 'spec-review':
+      return 'Spec Coding 评审';
     case 'workflow-draft':
       return '工作流草案';
     case 'agent-draft':
@@ -214,6 +216,7 @@ export default function HomeCommandSidebar({
   const [selectedWorkflow, setSelectedWorkflow] = useState('');
   const [inspectedWorkflow, setInspectedWorkflow] = useState<WorkflowSummary | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<any>(null);
+  const [unansweredHumanQuestions, setUnansweredHumanQuestions] = useState<HumanQuestion[]>([]);
   const [currentCreationSession, setCurrentCreationSession] = useState<CreationSessionBinding | null>(activeSession?.creationSession || null);
   const [reports, setReports] = useState<ProgressReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -319,16 +322,37 @@ export default function HomeCommandSidebar({
     }
   }, [sidebarHint]);
 
+  const clearModalOpenHint = useCallback(() => {
+    setSessionWorkbenchState((prev) => ({
+      ...(prev || {}),
+      homeSidebar: prev?.homeSidebar
+        ? { ...prev.homeSidebar, shouldOpenModal: false }
+        : prev?.homeSidebar,
+    }));
+  }, [setSessionWorkbenchState]);
+
+  const closeWorkflowModal = useCallback(() => {
+    setWorkflowModalOpen(false);
+    clearModalOpenHint();
+  }, [clearModalOpenHint]);
+
+  const closeAgentModal = useCallback(() => {
+    setAgentModalOpen(false);
+    clearModalOpenHint();
+  }, [clearModalOpenHint]);
+
   useEffect(() => {
     if (!sidebarHint?.shouldOpenModal) return;
     if (activeTab === 'workflow') {
       setWorkflowModalOpen(true);
+      clearModalOpenHint();
       return;
     }
     if (activeTab === 'agent') {
       setAgentModalOpen(true);
+      clearModalOpenHint();
     }
-  }, [activeTab, sidebarHint?.shouldOpenModal]);
+  }, [activeTab, clearModalOpenHint, sidebarHint?.shouldOpenModal]);
 
   const loadSidebarData = useCallback(async () => {
     try {
@@ -374,6 +398,29 @@ export default function HomeCommandSidebar({
       }))
     );
   }, [persistedPreflight, preflightChecks.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const result = await workflowApi.listHumanQuestions({ status: 'unanswered', limit: 20 });
+        if (!cancelled) setUnansweredHumanQuestions(result.questions || []);
+      } catch {
+        // Inbox is best-effort.
+      }
+    };
+
+    poll();
+    const timer = window.setInterval(poll, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const navigateToHumanQuestion = useCallback((question: HumanQuestion) => {
+    router.push(`/workbench/${encodeURIComponent(question.configFile)}?mode=run&focus=human-question&questionId=${encodeURIComponent(question.id)}&runId=${encodeURIComponent(question.runId)}`);
+  }, [router]);
 
   useEffect(() => {
     if (!boundWorkflow) {
@@ -688,6 +735,11 @@ export default function HomeCommandSidebar({
 
           {availableTabs.includes('commander') && activeTab === 'commander' && (
             <div className="space-y-4">
+              <HumanQuestionInbox
+                questions={unansweredHumanQuestions}
+                onNavigate={navigateToHumanQuestion}
+              />
+
               <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-background to-background p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -753,24 +805,24 @@ export default function HomeCommandSidebar({
                     </div>
                   </div>
                 ) : null}
-                {workflowStatus?.openSpecSummary ? (
+                {workflowStatus?.specCodingSummary ? (
                   <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">运行绑定的 OpenSpec</div>
-                    <div>版本：v{workflowStatus.openSpecSummary.version}</div>
-                    <div>状态：{workflowStatus.openSpecSummary.status}</div>
-                    {workflowStatus.openSpecSummary.source ? (
-                      <div>来源：{workflowStatus.openSpecSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
+                    <div className="font-medium text-foreground">运行绑定的 Spec Coding 制品</div>
+                    <div>版本：v{workflowStatus.specCodingSummary.version}</div>
+                    <div>状态：{workflowStatus.specCodingSummary.status}</div>
+                    {workflowStatus.specCodingSummary.source ? (
+                      <div>来源：{workflowStatus.specCodingSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
                     ) : null}
-                    <div>阶段：{workflowStatus.openSpecSummary.phaseCount}</div>
-                    {typeof workflowStatus.openSpecSummary.taskCount === 'number' ? (
-                      <div>任务：{workflowStatus.openSpecSummary.taskCount}</div>
+                    <div>阶段：{workflowStatus.specCodingSummary.phaseCount}</div>
+                    {typeof workflowStatus.specCodingSummary.taskCount === 'number' ? (
+                      <div>任务：{workflowStatus.specCodingSummary.taskCount}</div>
                     ) : null}
-                    <div>修订：{workflowStatus.openSpecSummary.revisionCount}</div>
-                    {workflowStatus.openSpecSummary.progress?.summary ? (
-                      <div>进度：{workflowStatus.openSpecSummary.progress.summary}</div>
+                    <div>修订：{workflowStatus.specCodingSummary.revisionCount}</div>
+                    {workflowStatus.specCodingSummary.progress?.summary ? (
+                      <div>进度：{workflowStatus.specCodingSummary.progress.summary}</div>
                     ) : null}
-                    {workflowStatus.openSpecSummary.latestRevision?.summary ? (
-                      <div>最近修订：{workflowStatus.openSpecSummary.latestRevision.summary}</div>
+                    {workflowStatus.specCodingSummary.latestRevision?.summary ? (
+                      <div>最近修订：{workflowStatus.specCodingSummary.latestRevision.summary}</div>
                     ) : null}
                   </div>
                 ) : null}
@@ -917,7 +969,7 @@ export default function HomeCommandSidebar({
                     <div>工作流：{currentCreationSession.workflowName}</div>
                     <div>配置文件：{currentCreationSession.filename}</div>
                     <div>状态：{currentCreationSession.status}</div>
-                    <div>OpenSpec：{currentCreationSession.openSpecId}</div>
+                    <div>Spec Coding：{currentCreationSession.specCodingId}</div>
                   </div>
                 ) : null}
                 {workflowDraft.workingDirectory ? (
@@ -1194,7 +1246,7 @@ export default function HomeCommandSidebar({
 
       <NewConfigModal
         isOpen={workflowModalOpen}
-        onClose={() => setWorkflowModalOpen(false)}
+        onClose={closeWorkflowModal}
         homepageCompact
         resumeCreationSessionId={currentCreationSession?.creationSessionId || creationBinding?.creationSessionId || null}
         frontendSessionId={activeSessionId}
@@ -1206,7 +1258,7 @@ export default function HomeCommandSidebar({
               filename: nextCreationSession.filename,
               workflowName: nextCreationSession.workflowName,
               status: nextCreationSession.status,
-              openSpecId: nextCreationSession.openSpec.id,
+              specCodingId: nextCreationSession.specCoding.id,
               createdAt: nextCreationSession.createdAt,
               updatedAt: nextCreationSession.updatedAt,
             });
@@ -1215,7 +1267,6 @@ export default function HomeCommandSidebar({
             ...(prev || {}),
             homeSidebar: {
               type: 'home_sidebar',
-              ...(prev?.homeSidebar || {}),
               mode: 'peek',
               activeTab: 'commander',
               intent: 'workflow-run',
@@ -1243,7 +1294,7 @@ export default function HomeCommandSidebar({
         engine={engine}
         model={model}
         initialDraft={agentDraft}
-        onClose={() => setAgentModalOpen(false)}
+        onClose={closeAgentModal}
         onCreate={async (agent) => {
           try {
             await agentApi.saveAgent(agent.name, agent);

@@ -27,6 +27,11 @@ export async function POST(request: NextRequest) {
         && currentStatus.currentState === '__human_approval__';
 
       if (canDirectTransition) {
+        const pendingQuestion = currentStatus.pendingHumanQuestion;
+        if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
+          await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
+          return NextResponse.json({ success: true, message: `已回答人工审查并请求跳转到: ${targetState}` });
+        }
         manager.setQueuedApprovalAction('approve');
         manager.forceTransition(targetState, instruction);
         return NextResponse.json({ success: true, message: `已请求强制跳转到: ${targetState}` });
@@ -47,6 +52,11 @@ export async function POST(request: NextRequest) {
     const manager = workflowRegistry.getRunningManager(configFile);
     if (!isStateMachineManagerLike(manager)) {
       return NextResponse.json({ error: '没有运行中的状态机工作流' }, { status: 400 });
+    }
+    const pendingQuestion = manager.getPendingHumanQuestion();
+    if (pendingQuestion?.answerSchema?.type === 'approval-transition') {
+      await manager.answerHumanQuestion(pendingQuestion.id, { selectedState: targetState, instruction });
+      return NextResponse.json({ success: true, message: `已回答人工审查并请求跳转到: ${targetState}` });
     }
     manager.forceTransition(targetState, instruction);
     return NextResponse.json({ success: true, message: `已请求强制跳转到: ${targetState}` });

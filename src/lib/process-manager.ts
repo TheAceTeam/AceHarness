@@ -136,16 +136,18 @@ class ProcessManager extends EventEmitter {
     }
     // Also kill orphan system claude processes
     const pids: number[] = [];
-    try {
-      const out = execSync("pgrep -f 'claude.*-p' || true", { encoding: 'utf-8' });
-      const lines = out.trim().split('\n').filter(Boolean);
-      for (const line of lines) {
-        const pid = parseInt(line, 10);
-        if (!isNaN(pid) && pid !== process.pid) {
-          try { process.kill(pid, 'SIGTERM'); pids.push(pid); } catch {}
+    if (process.platform !== 'win32') {
+      try {
+        const out = execSync("pgrep -f 'claude.*-p' || true", { encoding: 'utf-8' });
+        const lines = out.trim().split('\n').filter(Boolean);
+        for (const line of lines) {
+          const pid = parseInt(line, 10);
+          if (!isNaN(pid) && pid !== process.pid) {
+            try { process.kill(pid, 'SIGTERM'); pids.push(pid); } catch {}
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
     return { killed: pids.length, pids };
   }
 

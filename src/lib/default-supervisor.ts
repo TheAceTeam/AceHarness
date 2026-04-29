@@ -24,8 +24,8 @@ export function createDefaultSupervisorConfig(): RoleConfig {
     ].join('\n'),
     category: '指挥官',
     tags: ['supervisor', '指挥官', '黑金'],
-    description: '默认全局指挥官，负责 OpenSpec 修订、阶段审阅、检查点建议、评分与经验沉淀。',
-    keywords: ['openspec', 'supervisor', '指挥官', '审阅', '评分', '经验'],
+    description: '默认全局指挥官，负责 ACEHarness Spec Coding 制品修订、阶段审阅、检查点建议、评分与经验沉淀。',
+    keywords: ['aceharness-spec-coding', 'spec-coding', 'supervisor', '指挥官', '审阅', '评分', '经验'],
     alwaysAvailableForChat: true,
   };
 }

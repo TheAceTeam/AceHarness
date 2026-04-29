@@ -6,10 +6,10 @@ import { parse, stringify } from 'yaml';
 import {
   creationSessionSchema,
   type CreationSession,
-  type OpenSpecDocument,
-  type OpenSpecPhase,
-  type OpenSpecProgressStatus,
-  type OpenSpecTask,
+  type SpecCodingDocument,
+  type SpecCodingPhase,
+  type SpecCodingProgressStatus,
+  type SpecCodingTask,
   type WorkflowConfig,
 } from '@/lib/schemas';
 import { getWorkspaceDataFile } from '@/lib/app-paths';
@@ -32,20 +32,20 @@ const GENERIC_TASK_SECTION_TITLES = new Set([
   '需求与范围确认',
   '设计确认',
   '实现任务',
-  'OpenSpec 同步',
+  'SpecCoding 同步',
   '验证',
   '收口',
 ]);
 
-function stripOpenSpecTaskComment(input: string): string {
-  return input.replace(/\s*<!--\s*openspec-task:[\s\S]*?-->\s*$/g, '').trim();
+function stripSpecCodingTaskComment(input: string): string {
+  return input.replace(/\s*<!--\s*spec-coding-task:[\s\S]*?-->\s*$/g, '').trim();
 }
 
-function parseTaskComment(line: string): { id?: string; status?: OpenSpecProgressStatus; phaseId?: string } {
-  const comment = line.match(/<!--\s*openspec-task:([^\s>]+)([^>]*)-->/);
+function parseTaskComment(line: string): { id?: string; status?: SpecCodingProgressStatus; phaseId?: string } {
+  const comment = line.match(/<!--\s*spec-coding-task:([^\s>]+)([^>]*)-->/);
   if (!comment) return {};
   const meta = comment[2] || '';
-  const status = meta.match(/\bstatus:(pending|in-progress|completed|blocked)\b/)?.[1] as OpenSpecProgressStatus | undefined;
+  const status = meta.match(/\bstatus:(pending|in-progress|completed|blocked)\b/)?.[1] as SpecCodingProgressStatus | undefined;
   const phaseId = meta.match(/\bphase:([^\s>]+)\b/)?.[1];
   return {
     id: comment[1],
@@ -54,7 +54,7 @@ function parseTaskComment(line: string): { id?: string; status?: OpenSpecProgres
   };
 }
 
-function getTaskStatusFromCheckbox(marker: string): OpenSpecProgressStatus {
+function getTaskStatusFromCheckbox(marker: string): SpecCodingProgressStatus {
   if (marker.toLowerCase() === 'x') return 'completed';
   if (marker === '-') return 'in-progress';
   return 'pending';
@@ -71,7 +71,7 @@ function inferTaskPhaseId(input: {
   sectionTitle?: string;
   sectionIndex?: number;
   taskTitle: string;
-  phases: Array<Pick<OpenSpecPhase, 'id' | 'title'>>;
+  phases: Array<Pick<SpecCodingPhase, 'id' | 'title'>>;
 }): string | undefined {
   const sectionTitle = input.sectionTitle ? cleanTaskSectionTitle(input.sectionTitle) : '';
   if (sectionTitle && !GENERIC_TASK_SECTION_TITLES.has(sectionTitle)) {
@@ -86,12 +86,12 @@ function inferTaskPhaseId(input: {
   return byTaskTitle?.id;
 }
 
-function parseOpenSpecTasksFromMarkdown(
+function parseSpecCodingTasksFromMarkdown(
   markdown: string,
-  phases: Array<Pick<OpenSpecPhase, 'id' | 'title' | 'ownerAgents'>>
-): OpenSpecTask[] {
+  phases: Array<Pick<SpecCodingPhase, 'id' | 'title' | 'ownerAgents'>>
+): SpecCodingTask[] {
   const lines = markdown.split(/\r?\n/);
-  const tasks: OpenSpecTask[] = [];
+  const tasks: SpecCodingTask[] = [];
   let currentSectionTitle = '';
   let currentSectionIndex: number | undefined;
 
@@ -109,7 +109,7 @@ function parseOpenSpecTasksFromMarkdown(
     if (!taskLine) continue;
 
     const commentMeta = parseTaskComment(line);
-    const body = stripOpenSpecTaskComment(taskLine[2]);
+    const body = stripSpecCodingTaskComment(taskLine[2]);
     const numbered = body.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
     const id = commentMeta.id || numbered?.[1] || `task-${lineIndex + 1}`;
     const title = (numbered?.[2] || body).trim();
@@ -145,9 +145,9 @@ function parseOpenSpecTasksFromMarkdown(
 }
 
 function assignTaskPhasesByCheckpointBoundaries(
-  tasks: OpenSpecTask[],
-  phases: Array<Pick<OpenSpecPhase, 'id' | 'title' | 'ownerAgents'>>
-): OpenSpecTask[] {
+  tasks: SpecCodingTask[],
+  phases: Array<Pick<SpecCodingPhase, 'id' | 'title' | 'ownerAgents'>>
+): SpecCodingTask[] {
   if (tasks.length === 0 || phases.length === 0) return tasks;
   if (tasks.every((task) => task.phaseId)) {
     return tasks.map((task) => ({
@@ -175,15 +175,15 @@ function assignTaskPhasesByCheckpointBoundaries(
   });
 }
 
-function mergeRebuiltOpenSpecWithExisting(
-  existing: OpenSpecDocument,
-  rebuilt: OpenSpecDocument,
+function mergeRebuiltSpecCodingWithExisting(
+  existing: SpecCodingDocument,
+  rebuilt: SpecCodingDocument,
   input?: {
-    status?: OpenSpecDocument['status'];
+    status?: SpecCodingDocument['status'];
   }
-): OpenSpecDocument {
+): SpecCodingDocument {
   const nextStatus = input?.status || existing.status || rebuilt.status;
-  const merged: OpenSpecDocument = {
+  const merged: SpecCodingDocument = {
     ...rebuilt,
     id: existing.id,
     version: existing.version,
@@ -216,10 +216,10 @@ function mergeRebuiltOpenSpecWithExisting(
       : existing.confirmedAt || rebuilt.confirmedAt,
   };
 
-  return normalizeOpenSpecDocument(merged);
+  return normalizeSpecCodingDocument(merged);
 }
 
-function updateTasksMarkdownStatus(markdown: string, tasks: OpenSpecTask[]): string {
+function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): string {
   if (!markdown.trim() || tasks.length === 0) return markdown;
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const lines = markdown.split(/\r?\n/);
@@ -229,7 +229,7 @@ function updateTasksMarkdownStatus(markdown: string, tasks: OpenSpecTask[]): str
     if (!taskLine) return line;
 
     const commentMeta = parseTaskComment(line);
-    const body = stripOpenSpecTaskComment(taskLine[4]);
+    const body = stripSpecCodingTaskComment(taskLine[4]);
     const numbered = body.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
     const id = commentMeta.id || numbered?.[1] || `task-${lineIndex + 1}`;
     const task = byId.get(id);
@@ -237,28 +237,28 @@ function updateTasksMarkdownStatus(markdown: string, tasks: OpenSpecTask[]): str
 
     const checked = task.status === 'completed' ? 'x' : task.status === 'in-progress' ? '-' : ' ';
     const phaseMeta = task.phaseId ? ` phase:${task.phaseId}` : '';
-    return `${taskLine[1]}${checked}${taskLine[3]}${body} <!-- openspec-task:${task.id} status:${task.status}${phaseMeta} -->`;
+    return `${taskLine[1]}${checked}${taskLine[3]}${body} <!-- spec-coding-task:${task.id} status:${task.status}${phaseMeta} -->`;
   }).join('\n');
 }
 
-export function normalizeOpenSpecDocument(openSpec: OpenSpecDocument): OpenSpecDocument {
-  const parsedTasks = parseOpenSpecTasksFromMarkdown(openSpec.artifacts?.tasks || '', openSpec.phases);
+export function normalizeSpecCodingDocument(specCoding: SpecCodingDocument): SpecCodingDocument {
+  const parsedTasks = parseSpecCodingTasksFromMarkdown(specCoding.artifacts?.tasks || '', specCoding.phases);
   if (parsedTasks.length === 0) {
     return {
-      ...openSpec,
-      tasks: openSpec.tasks || [],
+      ...specCoding,
+      tasks: specCoding.tasks || [],
     };
   }
 
-  const existingById = new Map((openSpec.tasks || []).map((task) => [task.id, task]));
-  const phaseStatusById = new Map((openSpec.phases || []).map((phase) => [phase.id, phase.status]));
-  const tasks: OpenSpecTask[] = assignTaskPhasesByCheckpointBoundaries(parsedTasks, openSpec.phases).map((task): OpenSpecTask => {
+  const existingById = new Map((specCoding.tasks || []).map((task) => [task.id, task]));
+  const phaseStatusById = new Map((specCoding.phases || []).map((phase) => [phase.id, phase.status]));
+  const tasks: SpecCodingTask[] = assignTaskPhasesByCheckpointBoundaries(parsedTasks, specCoding.phases).map((task): SpecCodingTask => {
     const existing = existingById.get(task.id);
     const mergedPhaseId = task.phaseId || existing?.phaseId;
     const ownerAgents = task.ownerAgents?.length
       ? task.ownerAgents
       : mergedPhaseId
-        ? openSpec.phases.find((phase) => phase.id === mergedPhaseId)?.ownerAgents || existing?.ownerAgents || []
+        ? specCoding.phases.find((phase) => phase.id === mergedPhaseId)?.ownerAgents || existing?.ownerAgents || []
         : existing?.ownerAgents || [];
     const phaseStatus = mergedPhaseId ? phaseStatusById.get(mergedPhaseId) : undefined;
     if (!existing) {
@@ -267,7 +267,7 @@ export function normalizeOpenSpecDocument(openSpec: OpenSpecDocument): OpenSpecD
         : { ...task, phaseId: mergedPhaseId, ownerAgents };
     }
     const statusFromMarkdown = task.status;
-    let status: OpenSpecProgressStatus = statusFromMarkdown === 'pending' && existing.status !== 'pending'
+    let status: SpecCodingProgressStatus = statusFromMarkdown === 'pending' && existing.status !== 'pending'
       ? existing.status
       : statusFromMarkdown;
     if (phaseStatus === 'completed') {
@@ -289,27 +289,27 @@ export function normalizeOpenSpecDocument(openSpec: OpenSpecDocument): OpenSpecD
   });
 
   return {
-    ...openSpec,
+    ...specCoding,
     tasks,
     artifacts: {
-      ...openSpec.artifacts,
-      tasks: updateTasksMarkdownStatus(openSpec.artifacts?.tasks || '', tasks),
+      ...specCoding.artifacts,
+      tasks: updateTasksMarkdownStatus(specCoding.artifacts?.tasks || '', tasks),
     },
   };
 }
 
-export function updateOpenSpecTaskStatuses(
-  openSpec: OpenSpecDocument,
+export function updateSpecCodingTaskStatuses(
+  specCoding: SpecCodingDocument,
   input: {
     updates: Array<{
       id: string;
-      status: OpenSpecProgressStatus;
+      status: SpecCodingProgressStatus;
       validation?: string;
     }>;
     updatedBy?: string;
   }
-): OpenSpecDocument {
-  const normalized = normalizeOpenSpecDocument(openSpec);
+): SpecCodingDocument {
+  const normalized = normalizeSpecCodingDocument(specCoding);
   if (input.updates.length === 0 || normalized.tasks.length === 0) return normalized;
 
   const updateById = new Map(input.updates.map((update) => [update.id, update]));
@@ -338,15 +338,15 @@ export function updateOpenSpecTaskStatuses(
 }
 
 function updateTasksForPhaseStatus(
-  openSpec: OpenSpecDocument,
+  specCoding: SpecCodingDocument,
   input: {
     phaseId?: string;
-    status: OpenSpecProgressStatus;
+    status: SpecCodingProgressStatus;
     updatedBy?: string;
     validation?: string;
   }
-): OpenSpecDocument {
-  const normalized = normalizeOpenSpecDocument(openSpec);
+): SpecCodingDocument {
+  const normalized = normalizeSpecCodingDocument(specCoding);
   if (!input.phaseId || normalized.tasks.length === 0) return normalized;
 
   const nowIso = new Date().toISOString();
@@ -387,7 +387,7 @@ function buildRequirementLines(requirements?: string, description?: string) {
   }));
 }
 
-function deriveOpenSpecStructure(config: WorkflowConfig | Record<string, any>) {
+function deriveSpecCodingStructure(config: WorkflowConfig | Record<string, any>) {
   const workflow = (config as any)?.workflow || {};
   const phases = Array.isArray(workflow.phases)
     ? workflow.phases.map((phase: any, index: number) => ({
@@ -430,7 +430,7 @@ function deriveOpenSpecStructure(config: WorkflowConfig | Record<string, any>) {
   return { phases, assignments, checkpoints };
 }
 
-function buildOpenSpecArtifacts(input: {
+function buildSpecCodingArtifacts(input: {
   workflowName: string;
   description?: string;
   requirements?: string;
@@ -446,7 +446,7 @@ function buildOpenSpecArtifacts(input: {
   const normalizedDescription = (input.description || '').trim();
   const goalSummary = normalizedRequirements || normalizedDescription || `${input.workflowName} 的需求澄清`;
   const scopeIncludes = [
-    normalizedRequirements ? `围绕「${normalizedRequirements}」生成正式 OpenSpec 制品` : '',
+    normalizedRequirements ? `围绕「${normalizedRequirements}」生成正式 SpecCoding 制品` : '',
     `在 ${input.workingDirectory} 下规划执行`,
     `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 承载后续执行`,
     input.assignments.length ? `规划 ${input.assignments.length} 个 Agent 的职责分工` : '',
@@ -481,7 +481,7 @@ function buildOpenSpecArtifacts(input: {
     '原因：先锁定需求、约束、设计与任务，再细化执行编排，能降低后续协作偏差。',
   ].join('\n');
   const affectedAreas = [
-    '- 创建态会话与 OpenSpec 制品',
+    '- 创建态会话与 SpecCoding 制品',
     '- workflow 草案生成',
     '- Agent 分工与 Supervisor 收口',
   ].join('\n');
@@ -551,7 +551,7 @@ function buildOpenSpecArtifacts(input: {
   return { proposal, design, tasks, deltaSpec };
 }
 
-export function buildOpenSpecFromWorkflowConfig(input: {
+export function buildSpecCodingFromWorkflowConfig(input: {
   workflowName: string;
   description?: string;
   requirements?: string;
@@ -559,13 +559,13 @@ export function buildOpenSpecFromWorkflowConfig(input: {
   workspaceMode: 'isolated-copy' | 'in-place';
   workingDirectory: string;
   config: WorkflowConfig | Record<string, any>;
-}): OpenSpecDocument {
+}): SpecCodingDocument {
   const nowIso = new Date().toISOString();
-  const { phases, assignments, checkpoints } = deriveOpenSpecStructure(input.config);
+  const { phases, assignments, checkpoints } = deriveSpecCodingStructure(input.config);
 
   const requirements = buildRequirementLines(input.requirements, input.description);
   const summary = input.description?.trim() || input.requirements?.trim() || `${input.workflowName} 的创建期设计草案`;
-  const artifacts = buildOpenSpecArtifacts({
+  const artifacts = buildSpecCodingArtifacts({
     workflowName: input.workflowName,
     description: input.description,
     requirements: input.requirements,
@@ -576,11 +576,11 @@ export function buildOpenSpecFromWorkflowConfig(input: {
     assignments,
   });
 
-  const openSpec: OpenSpecDocument = {
+  const specCoding: SpecCodingDocument = {
     id: randomUUID(),
     version: 1,
     status: 'draft',
-    title: `${input.workflowName} OpenSpec`,
+    title: `${input.workflowName} SpecCoding`,
     workflowName: input.workflowName,
     summary,
     goals: input.requirements?.trim() ? [input.requirements.trim()] : [input.workflowName],
@@ -614,14 +614,14 @@ export function buildOpenSpecFromWorkflowConfig(input: {
     updatedAt: nowIso,
   };
 
-  return normalizeOpenSpecDocument(openSpec);
+  return normalizeSpecCodingDocument(specCoding);
 }
 
 export function buildCreationSession(input: {
   chatSessionId?: string;
   createdBy?: string;
   status?: CreationSession['status'];
-  openSpecStatus?: OpenSpecDocument['status'];
+  specCodingStatus?: SpecCodingDocument['status'];
   filename: string;
   workflowName: string;
   mode: 'phase-based' | 'state-machine' | 'ai-guided';
@@ -633,12 +633,12 @@ export function buildCreationSession(input: {
   clarification?: CreationSession['clarification'];
   uiState?: CreationSession['uiState'];
   config: WorkflowConfig | Record<string, any>;
-  openSpec?: OpenSpecDocument;
+  specCoding?: SpecCodingDocument;
 }): CreationSession {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
   const workflow = (input.config as any)?.workflow || {};
-  const openSpec = input.openSpec ?? buildOpenSpecFromWorkflowConfig({
+  const specCoding = input.specCoding ?? buildSpecCodingFromWorkflowConfig({
     workflowName: input.workflowName,
     description: input.description,
     requirements: input.requirements,
@@ -662,27 +662,27 @@ export function buildCreationSession(input: {
   };
   const workflowDraftSummary: CreationSession['workflowDraftSummary'] = {
     mode: generatedConfigSummary.mode,
-    nodes: openSpec.phases.map((phase) => ({
+    nodes: specCoding.phases.map((phase) => ({
       name: phase.title,
       detail: phase.objective || '来自当前已确认的计划阶段目标',
       ownerAgents: phase.ownerAgents || [],
     })),
-    assignments: openSpec.assignments.map((assignment) => ({
+    assignments: specCoding.assignments.map((assignment) => ({
       agent: assignment.agent,
       responsibility: assignment.responsibility,
     })),
     sourceSummary: '当前草案已整理出节点拆分、职责分工与执行重点，可继续确认后续编排细节。',
   };
   const initialSnapshot = {
-    version: openSpec.version,
-    summary: openSpec.summary || '初始 OpenSpec 草案',
-    createdAt: openSpec.updatedAt || nowIso,
-    createdBy: openSpec.revisions.at(-1)?.createdBy,
+    version: specCoding.version,
+    summary: specCoding.summary || '初始 SpecCoding 草案',
+    createdAt: specCoding.updatedAt || nowIso,
+    createdBy: specCoding.revisions.at(-1)?.createdBy,
     artifacts: {
-      proposal: openSpec.artifacts?.proposal || '',
-      design: openSpec.artifacts?.design || '',
-      tasks: openSpec.artifacts?.tasks || '',
-      deltaSpec: openSpec.artifacts?.deltaSpec || '',
+      proposal: specCoding.artifacts?.proposal || '',
+      design: specCoding.artifacts?.design || '',
+      tasks: specCoding.artifacts?.tasks || '',
+      deltaSpec: specCoding.artifacts?.deltaSpec || '',
     },
   };
 
@@ -701,12 +701,12 @@ export function buildCreationSession(input: {
     requirements: input.requirements,
     clarification: input.clarification,
     uiState: input.uiState,
-    openSpec: (() => {
-      const openSpecStatus = input.openSpecStatus || openSpec.status;
+    specCoding: (() => {
+      const specCodingStatus = input.specCodingStatus || specCoding.status;
       return {
-        ...openSpec,
-        status: openSpecStatus,
-        confirmedAt: openSpecStatus === 'confirmed' ? (openSpec.confirmedAt || nowIso) : openSpec.confirmedAt,
+        ...specCoding,
+        status: specCodingStatus,
+        confirmedAt: specCodingStatus === 'confirmed' ? (specCoding.confirmedAt || nowIso) : specCoding.confirmedAt,
         updatedAt: nowIso,
       };
     })(),
@@ -721,15 +721,15 @@ export function buildCreationSession(input: {
 function syncCreationSessionArtifactSnapshots(session: CreationSession): CreationSession {
   const snapshots = [...(session.artifactSnapshots || [])];
   const nextSnapshot = {
-    version: session.openSpec.version,
-    summary: session.openSpec.summary || 'OpenSpec 已更新',
-    createdAt: session.openSpec.updatedAt || new Date(session.updatedAt).toISOString(),
-    createdBy: session.openSpec.revisions.at(-1)?.createdBy,
+    version: session.specCoding.version,
+    summary: session.specCoding.summary || 'SpecCoding 已更新',
+    createdAt: session.specCoding.updatedAt || new Date(session.updatedAt).toISOString(),
+    createdBy: session.specCoding.revisions.at(-1)?.createdBy,
     artifacts: {
-      proposal: session.openSpec.artifacts?.proposal || '',
-      design: session.openSpec.artifacts?.design || '',
-      tasks: session.openSpec.artifacts?.tasks || '',
-      deltaSpec: session.openSpec.artifacts?.deltaSpec || '',
+      proposal: session.specCoding.artifacts?.proposal || '',
+      design: session.specCoding.artifacts?.design || '',
+      tasks: session.specCoding.artifacts?.tasks || '',
+      deltaSpec: session.specCoding.artifacts?.deltaSpec || '',
     },
   };
 
@@ -751,7 +751,7 @@ export async function saveCreationSession(session: CreationSession): Promise<voi
   await ensureDir();
   const normalized = creationSessionSchema.parse(syncCreationSessionArtifactSnapshots({
     ...session,
-    openSpec: normalizeOpenSpecDocument(session.openSpec),
+    specCoding: normalizeSpecCodingDocument(session.specCoding),
   }));
   await writeFile(sessionPath(normalized.id), stringify(normalized), 'utf-8');
 }
@@ -762,7 +762,7 @@ export async function loadCreationSession(id: string): Promise<CreationSession |
     const parsed = creationSessionSchema.parse(parse(content));
     return syncCreationSessionArtifactSnapshots({
       ...parsed,
-      openSpec: normalizeOpenSpecDocument(parsed.openSpec),
+      specCoding: normalizeSpecCodingDocument(parsed.specCoding),
     } as CreationSession);
   } catch {
     return null;
@@ -782,7 +782,7 @@ export async function listCreationSessions(filter?: { chatSessionId?: string; cr
       if (filter?.createdBy && session.createdBy && session.createdBy !== filter.createdBy) continue;
       sessions.push(syncCreationSessionArtifactSnapshots({
         ...session,
-        openSpec: normalizeOpenSpecDocument(session.openSpec),
+        specCoding: normalizeSpecCodingDocument(session.specCoding),
       } as CreationSession));
     } catch {
       // skip broken records
@@ -820,31 +820,31 @@ function extractRevisionSummary(reviewContent: string, fallback: string): string
   return (normalized || fallback).slice(0, 160);
 }
 
-export function appendOpenSpecRevision(
-  openSpec: OpenSpecDocument,
+export function appendSpecCodingRevision(
+  specCoding: SpecCodingDocument,
   input: {
     summary: string;
     createdBy?: string;
-    status?: OpenSpecDocument['status'];
+    status?: SpecCodingDocument['status'];
     progressSummary?: string;
   }
-): OpenSpecDocument {
+): SpecCodingDocument {
   const nowIso = new Date().toISOString();
-  const revisionVersion = openSpec.version + 1;
-  const summary = input.summary.trim().slice(0, 200) || 'OpenSpec 已更新';
+  const revisionVersion = specCoding.version + 1;
+  const summary = input.summary.trim().slice(0, 200) || 'SpecCoding 已更新';
 
   return {
-    ...openSpec,
+    ...specCoding,
     version: revisionVersion,
-    status: input.status || openSpec.status,
+    status: input.status || specCoding.status,
     summary,
     updatedAt: nowIso,
     progress: input.progressSummary ? {
-      ...openSpec.progress,
+      ...specCoding.progress,
       summary: input.progressSummary,
-    } : openSpec.progress,
+    } : specCoding.progress,
     revisions: [
-      ...openSpec.revisions,
+      ...specCoding.revisions,
       {
         id: randomUUID(),
         version: revisionVersion,
@@ -857,16 +857,16 @@ export function appendOpenSpecRevision(
 }
 
 function applyPhaseProgress(
-  openSpec: OpenSpecDocument,
+  specCoding: SpecCodingDocument,
   options: {
     stateName: string;
     nextState?: string;
     type: 'state-review' | 'checkpoint-advice';
     verdict?: 'pass' | 'conditional_pass' | 'fail';
   }
-): OpenSpecDocument {
-  const phases = openSpec.phases.map((phase) => ({ ...phase }));
-  const checkpoints = openSpec.checkpoints.map((checkpoint) => ({ ...checkpoint }));
+): SpecCodingDocument {
+  const phases = specCoding.phases.map((phase) => ({ ...phase }));
+  const checkpoints = specCoding.checkpoints.map((checkpoint) => ({ ...checkpoint }));
   const currentIndex = phases.findIndex((phase) => phase.title === options.stateName);
   const nextIndex = options.nextState ? phases.findIndex((phase) => phase.title === options.nextState) : -1;
 
@@ -894,13 +894,13 @@ function applyPhaseProgress(
   const completedPhaseIds = phases.filter((phase) => phase.status === 'completed').map((phase) => phase.id);
   const activePhase = phases.find((phase) => phase.status === 'in-progress');
   const blockedPhase = phases.find((phase) => phase.status === 'blocked');
-  const overallStatus: OpenSpecProgressStatus =
+  const overallStatus: SpecCodingProgressStatus =
     blockedPhase ? 'blocked' :
       activePhase ? 'in-progress' :
         completedPhaseIds.length === phases.length && phases.length > 0 ? 'completed' : 'pending';
 
-  let nextOpenSpec: OpenSpecDocument = {
-    ...openSpec,
+  let nextSpecCoding: SpecCodingDocument = {
+    ...specCoding,
     phases,
     checkpoints,
     progress: {
@@ -913,29 +913,29 @@ function applyPhaseProgress(
           ? `当前推进到阶段 ${activePhase.title}。`
           : completedPhaseIds.length === phases.length && phases.length > 0
             ? '所有阶段已完成。'
-            : openSpec.progress.summary,
+            : specCoding.progress.summary,
     },
   };
 
   if (currentIndex >= 0) {
-    nextOpenSpec = updateTasksForPhaseStatus(nextOpenSpec, {
+    nextSpecCoding = updateTasksForPhaseStatus(nextSpecCoding, {
       phaseId: phases[currentIndex].id,
       status: phases[currentIndex].status,
       updatedBy: 'supervisor',
     });
   }
   if (nextIndex >= 0) {
-    nextOpenSpec = updateTasksForPhaseStatus(nextOpenSpec, {
+    nextSpecCoding = updateTasksForPhaseStatus(nextSpecCoding, {
       phaseId: phases[nextIndex].id,
       status: 'in-progress',
       updatedBy: 'supervisor',
     });
   }
 
-  return nextOpenSpec;
+  return nextSpecCoding;
 }
 
-export async function appendSupervisorOpenSpecRevisionByFilename(input: {
+export async function appendSupervisorSpecCodingRevisionByFilename(input: {
   filename: string;
   stateName: string;
   nextState?: string;
@@ -948,28 +948,28 @@ export async function appendSupervisorOpenSpecRevisionByFilename(input: {
   if (!session) return null;
 
   const nowIso = new Date().toISOString();
-  const revisionVersion = session.openSpec.version + 1;
+  const revisionVersion = session.specCoding.version + 1;
   const typeLabel = input.type === 'state-review' ? '阶段审阅' : '检查点建议';
   const summary = extractRevisionSummary(
     input.reviewContent,
     `${input.supervisorAgent} 对 ${input.stateName} 进行了 ${typeLabel}`
   );
 
-  let nextOpenSpec = applyPhaseProgress(session.openSpec, {
+  let nextSpecCoding = applyPhaseProgress(session.specCoding, {
     stateName: input.stateName,
     nextState: input.nextState,
     type: input.type,
     verdict: input.verdict,
   });
 
-  nextOpenSpec = {
-    ...nextOpenSpec,
+  nextSpecCoding = {
+    ...nextSpecCoding,
     version: revisionVersion,
-    status: nextOpenSpec.progress.overallStatus === 'completed' ? 'completed' : 'in-progress',
+    status: nextSpecCoding.progress.overallStatus === 'completed' ? 'completed' : 'in-progress',
     summary,
     updatedAt: nowIso,
     revisions: [
-      ...nextOpenSpec.revisions,
+      ...nextSpecCoding.revisions,
       {
         id: randomUUID(),
         version: revisionVersion,
@@ -981,31 +981,31 @@ export async function appendSupervisorOpenSpecRevisionByFilename(input: {
   };
 
   return updateCreationSession(session.id, {
-    openSpec: nextOpenSpec,
+    specCoding: nextSpecCoding,
   });
 }
 
-export function cloneOpenSpecForRun(
-  openSpec: OpenSpecDocument,
+export function cloneSpecCodingForRun(
+  specCoding: SpecCodingDocument,
   input: { runId: string; filename: string }
-): OpenSpecDocument {
+): SpecCodingDocument {
   const nowIso = new Date().toISOString();
-  return normalizeOpenSpecDocument({
-    ...JSON.parse(JSON.stringify(openSpec)),
+  return normalizeSpecCodingDocument({
+    ...JSON.parse(JSON.stringify(specCoding)),
     id: randomUUID(),
-    status: openSpec.status === 'completed' ? 'in-progress' : openSpec.status,
+    status: specCoding.status === 'completed' ? 'in-progress' : specCoding.status,
     linkedConfigFilename: input.filename,
     updatedAt: nowIso,
     progress: {
-      ...openSpec.progress,
-      overallStatus: openSpec.progress.overallStatus === 'completed' ? 'in-progress' : openSpec.progress.overallStatus,
-      summary: `Run ${input.runId} 已从创建态基线派生独立 OpenSpec 快照。`,
+      ...specCoding.progress,
+      overallStatus: specCoding.progress.overallStatus === 'completed' ? 'in-progress' : specCoding.progress.overallStatus,
+      summary: `Run ${input.runId} 已从创建态基线派生独立 SpecCoding 快照。`,
     },
   });
 }
 
-export function rebuildOpenSpecPreservingArtifacts(input: {
-  existing: OpenSpecDocument;
+export function rebuildSpecCodingPreservingArtifacts(input: {
+  existing: SpecCodingDocument;
   workflowName: string;
   description?: string;
   requirements?: string;
@@ -1013,9 +1013,9 @@ export function rebuildOpenSpecPreservingArtifacts(input: {
   workspaceMode: 'isolated-copy' | 'in-place';
   workingDirectory: string;
   config: WorkflowConfig | Record<string, any>;
-  status?: OpenSpecDocument['status'];
-}): OpenSpecDocument {
-  const rebuilt = buildOpenSpecFromWorkflowConfig({
+  status?: SpecCodingDocument['status'];
+}): SpecCodingDocument {
+  const rebuilt = buildSpecCodingFromWorkflowConfig({
     workflowName: input.workflowName,
     description: input.description,
     requirements: input.requirements,
@@ -1024,34 +1024,34 @@ export function rebuildOpenSpecPreservingArtifacts(input: {
     workingDirectory: input.workingDirectory,
     config: input.config,
   });
-  return mergeRebuiltOpenSpecWithExisting(input.existing, rebuilt, {
+  return mergeRebuiltSpecCodingWithExisting(input.existing, rebuilt, {
     status: input.status,
   });
 }
 
-export function markOpenSpecStateStatus(
-  openSpec: OpenSpecDocument,
+export function markSpecCodingStateStatus(
+  specCoding: SpecCodingDocument,
   input: {
     stateName: string;
-    status: OpenSpecPhase['status'];
+    status: SpecCodingPhase['status'];
     summary?: string;
   }
-): OpenSpecDocument {
-  const phases = openSpec.phases.map((phase) => ({ ...phase }));
+): SpecCodingDocument {
+  const phases = specCoding.phases.map((phase) => ({ ...phase }));
   const targetIndex = phases.findIndex((phase) => phase.title === input.stateName);
-  if (targetIndex < 0) return openSpec;
+  if (targetIndex < 0) return specCoding;
 
   phases[targetIndex].status = input.status;
   const completedPhaseIds = phases.filter((phase) => phase.status === 'completed').map((phase) => phase.id);
   const activePhase = phases.find((phase) => phase.status === 'in-progress');
   const blockedPhase = phases.find((phase) => phase.status === 'blocked');
-  const overallStatus: OpenSpecProgressStatus =
+  const overallStatus: SpecCodingProgressStatus =
     blockedPhase ? 'blocked' :
       activePhase ? 'in-progress' :
         completedPhaseIds.length === phases.length && phases.length > 0 ? 'completed' : 'pending';
 
-  let nextOpenSpec: OpenSpecDocument = {
-    ...openSpec,
+  let nextSpecCoding: SpecCodingDocument = {
+    ...specCoding,
     phases,
     status: overallStatus === 'completed' ? 'completed' : 'in-progress',
     updatedAt: new Date().toISOString(),
@@ -1059,21 +1059,21 @@ export function markOpenSpecStateStatus(
       overallStatus,
       completedPhaseIds,
       activePhaseId: activePhase?.id,
-      summary: input.summary || openSpec.progress.summary,
+      summary: input.summary || specCoding.progress.summary,
     },
   };
 
-  nextOpenSpec = updateTasksForPhaseStatus(nextOpenSpec, {
+  nextSpecCoding = updateTasksForPhaseStatus(nextSpecCoding, {
     phaseId: phases[targetIndex].id,
     status: input.status,
     validation: input.summary,
   });
 
-  return nextOpenSpec;
+  return nextSpecCoding;
 }
 
-export function appendSupervisorOpenSpecRevision(
-  openSpec: OpenSpecDocument,
+export function appendSupervisorSpecCodingRevision(
+  specCoding: SpecCodingDocument,
   input: {
     stateName: string;
     nextState?: string;
@@ -1082,16 +1082,16 @@ export function appendSupervisorOpenSpecRevision(
     supervisorAgent: string;
     verdict?: 'pass' | 'conditional_pass' | 'fail';
   }
-): OpenSpecDocument {
+): SpecCodingDocument {
   const typeLabel = input.type === 'state-review' ? '阶段审阅' : '检查点建议';
   const summary = extractRevisionSummary(
     input.reviewContent,
     `${input.supervisorAgent} 对 ${input.stateName} 进行了 ${typeLabel}`
   );
 
-  return appendOpenSpecRevision(openSpec, {
+  return appendSpecCodingRevision(specCoding, {
     summary: `${typeLabel}: ${summary}`,
     createdBy: input.supervisorAgent,
-    status: openSpec.progress.overallStatus === 'completed' ? 'completed' : openSpec.status,
+    status: specCoding.progress.overallStatus === 'completed' ? 'completed' : specCoding.status,
   });
 }

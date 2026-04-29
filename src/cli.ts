@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
+import { commandExists } from './lib/command-exists';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from './lib/models';
 import { ACPEngine } from './lib/engines/acp-engine';
@@ -337,25 +338,6 @@ async function setupFirstAdmin(data: {
 
   await mkdir(getWorkspaceDataDir(), { recursive: true });
   await writeFile(USERS_FILE, JSON.stringify([user], null, 2), 'utf-8');
-}
-
-function commandExists(command: string): boolean {
-  const envPath = process.env.PATH || '';
-  const paths = envPath.split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
-  const exts = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
-    : [''];
-
-  for (const dir of paths) {
-    for (const ext of exts) {
-      const fullPath = `${dir}/${command}${ext}`;
-      if (existsSync(fullPath)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 async function moduleExists(moduleName: string): Promise<boolean> {
@@ -730,16 +712,16 @@ function tryOpenBrowser(url: string): boolean {
   const commands: Array<[string, string[]]> = process.platform === 'darwin'
     ? [['open', [url]]]
     : process.platform === 'win32'
-      ? [['cmd', ['/c', 'start', '', url]]]
+      ? [[process.env.ComSpec || 'cmd.exe', ['/c', 'start', '', url]]]
       : [['xdg-open', [url]]];
 
   for (const [command, args] of commands) {
-    if (!commandExists(command)) {
+    if (process.platform !== 'win32' && !commandExists(command)) {
       continue;
     }
 
     try {
-      const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+      const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
       child.on('error', () => {
         // ignore launcher failures and fall back to printing the URL
       });

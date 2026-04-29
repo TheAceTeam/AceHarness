@@ -279,7 +279,7 @@ function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
   const activeValid = !obj.activeTab || validTabs.includes(obj.activeTab);
   const modeValid = !obj.mode || ['active', 'peek', 'hidden'].includes(obj.mode);
   const intentValid = !obj.intent || ['general', 'create-workflow', 'create-agent', 'workflow-run', 'workflow-review', 'supervisor-chat'].includes(obj.intent);
-  const stageValid = !obj.stage || ['idle', 'clarifying', 'openspec-draft', 'openspec-review', 'workflow-draft', 'agent-draft', 'preflight', 'running', 'review'].includes(obj.stage);
+  const stageValid = !obj.stage || ['idle', 'clarifying', 'spec-draft', 'spec-review', 'workflow-draft', 'agent-draft', 'preflight', 'running', 'review'].includes(obj.stage);
   const workflowDraftValid = !obj.workflowDraft || (
     typeof obj.workflowDraft === 'object' &&
     ['name', 'requirements', 'description', 'referenceWorkflow', 'workingDirectory'].every((key) => obj.workflowDraft[key] === undefined || typeof obj.workflowDraft[key] === 'string') &&

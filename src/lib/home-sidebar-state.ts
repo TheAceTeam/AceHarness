@@ -12,8 +12,8 @@ export type HomeSidebarIntent =
 export type HomeSidebarStage =
   | 'idle'
   | 'clarifying'
-  | 'openspec-draft'
-  | 'openspec-review'
+  | 'spec-draft'
+  | 'spec-review'
   | 'workflow-draft'
   | 'agent-draft'
   | 'preflight'

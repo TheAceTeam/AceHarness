@@ -40,7 +40,7 @@ function parseEnvFileContent(content) {
 function loadProjectEnvFiles() {
   const root = __dirname;
   const isDev =
-    process.argv.includes('dev') || process.env.NODE_ENV !== 'production';
+    process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
   const names = isDev
     ? ['.env', '.env.development', '.env.local', '.env.development.local']
     : ['.env', '.env.production', '.env.local', '.env.production.local'];
@@ -89,7 +89,7 @@ const {
   getWorkspaceNotebookRoot,
 } = require(path.join(__dirname, 'dist/lib/app-paths.js'));
 
-const dev = process.argv.includes('dev') || process.env.NODE_ENV !== 'production';
+const dev = process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
 const host = process.env.ACE_HOST || '127.0.0.1';
 const port = Number(process.env.PORT || process.env.ACE_PORT || 3000);
 const app = next({ dev, hostname: host, port });
@@ -98,8 +98,10 @@ const handle = app.getRequestHandler();
 const docs = new Map();
 
 function safeResolve(root, relPath) {
-  const resolved = path.resolve(root, relPath || '.');
-  if (!resolved.startsWith(root + path.sep) && resolved !== root) return null;
+  const rootPath = path.resolve(root);
+  const resolved = path.resolve(rootPath, relPath || '.');
+  const relative = path.relative(rootPath, resolved);
+  if (relative && (relative.startsWith('..') || path.isAbsolute(relative))) return null;
   return resolved;
 }
 

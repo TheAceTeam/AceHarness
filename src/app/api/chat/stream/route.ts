@@ -17,7 +17,7 @@ import {
 import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
 import { loadChatSession } from '@/lib/chat-persistence';
-import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/openspec-store';
+import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
@@ -75,19 +75,19 @@ async function buildBoundSessionContext(frontendSessionId?: string): Promise<str
 
     if (session.creationSession) {
       const creationRecord = await loadCreationSession(session.creationSession.creationSessionId);
-      const openSpec = creationRecord?.openSpec;
-      const latestRevision = openSpec?.revisions?.at(-1);
+      const specCoding = creationRecord?.specCoding;
+      const latestRevision = specCoding?.revisions?.at(-1);
 
       sections.push([
         '### 创建态绑定',
         `- 工作流: ${session.creationSession.workflowName}`,
         `- 配置文件: ${session.creationSession.filename}`,
         `- 创建状态: ${session.creationSession.status}`,
-        `- OpenSpec ID: ${session.creationSession.openSpecId}`,
-        openSpec ? `- OpenSpec 版本: v${openSpec.version}` : '',
-        openSpec?.status ? `- OpenSpec 状态: ${openSpec.status}` : '',
-        openSpec?.summary ? `- OpenSpec 摘要: ${openSpec.summary}` : '',
-        openSpec?.progress?.summary ? `- OpenSpec 进度: ${openSpec.progress.summary}` : '',
+        `- SpecCoding ID: ${session.creationSession.specCodingId}`,
+        specCoding ? `- SpecCoding 版本: v${specCoding.version}` : '',
+        specCoding?.status ? `- SpecCoding 状态: ${specCoding.status}` : '',
+        specCoding?.summary ? `- SpecCoding 摘要: ${specCoding.summary}` : '',
+        specCoding?.progress?.summary ? `- SpecCoding 进度: ${specCoding.progress.summary}` : '',
         latestRevision?.summary ? `- 最近修订: ${latestRevision.summary}` : '',
       ].filter(Boolean).join('\n'));
     }
@@ -96,8 +96,8 @@ async function buildBoundSessionContext(frontendSessionId?: string): Promise<str
       const manager = await workflowRegistry.getManager(session.workflowBinding.configFile);
       const status = manager.getStatus();
       const creationRecord = await loadLatestCreationSessionByFilename(session.workflowBinding.configFile);
-      const openSpec = creationRecord?.openSpec;
-      const latestRevision = openSpec?.revisions?.at(-1);
+      const specCoding = creationRecord?.specCoding;
+      const latestRevision = specCoding?.revisions?.at(-1);
 
       sections.push([
         '### 运行态绑定',
@@ -108,9 +108,9 @@ async function buildBoundSessionContext(frontendSessionId?: string): Promise<str
         status?.status ? `- 运行状态: ${status.status}` : '',
         status?.currentPhase ? `- 当前阶段: ${status.currentPhase}` : '',
         status?.currentStep ? `- 当前步骤: ${status.currentStep}` : '',
-        openSpec ? `- 运行关联 OpenSpec: v${openSpec.version} / ${openSpec.status}` : '',
-        openSpec?.progress?.summary ? `- OpenSpec 执行进度: ${openSpec.progress.summary}` : '',
-        latestRevision?.summary ? `- OpenSpec 最近修订: ${latestRevision.summary}` : '',
+        specCoding ? `- 运行关联 SpecCoding: v${specCoding.version} / ${specCoding.status}` : '',
+        specCoding?.progress?.summary ? `- SpecCoding 执行进度: ${specCoding.progress.summary}` : '',
+        latestRevision?.summary ? `- SpecCoding 最近修订: ${latestRevision.summary}` : '',
       ].filter(Boolean).join('\n'));
     }
 

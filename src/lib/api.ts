@@ -3,6 +3,7 @@
  */
 
 import type { RunRecord } from '@/lib/run-store';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 
 const API_BASE = '/api';
 
@@ -130,7 +131,7 @@ interface WorkflowStatusResponse {
     status: string;
     updatedAt: number;
   };
-  openSpecSummary?: {
+  specCodingSummary?: {
     id: string;
     version: number;
     status: string;
@@ -155,7 +156,7 @@ interface WorkflowStatusResponse {
       createdBy?: string;
     } | null;
   };
-  openSpecDetails?: {
+  specCodingDetails?: {
     phases: Array<{
       id: string;
       title: string;
@@ -202,27 +203,38 @@ interface WorkflowStatusResponse {
   sourceOfTruth?: {
     mode: 'phase-based' | 'state-machine' | 'unknown';
     yamlSourceOfTruth: string[];
-    derivedIntoOpenSpec: string[];
-    runtimeOpenSpecSourceOfTruth: string[];
+    derivedIntoSpecCoding: string[];
+    runtimeSpecCodingSourceOfTruth: string[];
     counts: {
       yamlPhases: number;
       yamlStates: number;
       yamlSteps: number;
       yamlCheckpoints: number;
-      openSpecPhases: number;
-      openSpecTasks?: number;
-      openSpecAssignments: number;
-      openSpecCheckpoints: number;
+      specCodingPhases: number;
+      specCodingTasks?: number;
+      specCodingAssignments: number;
+      specCodingCheckpoints: number;
     };
   } | null;
   latestSupervisorReview?: {
-    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
     stateName: string;
     content: string;
     timestamp: string;
     affectedArtifacts?: string[];
     impact?: string[];
   } | null;
+  humanQuestions?: HumanQuestion[];
+  pendingHumanQuestionId?: string | null;
+  pendingHumanQuestion?: HumanQuestion | null;
+  humanAnswersContext?: Array<{
+    questionId: string;
+    title: string;
+    question: string;
+    answer: string;
+    instruction?: string;
+    answeredAt: string;
+  }>;
   rehearsal?: {
     enabled: boolean;
     summary: string;
@@ -268,7 +280,7 @@ interface WorkflowStatusResponse {
       rules: string[];
     };
     runtime: {
-      openSpecSummary?: {
+      specCodingSummary?: {
         id: string;
         version: number;
         summary?: string;
@@ -651,7 +663,7 @@ export const agentApi = {
     model?: string;
     isError?: boolean;
     error?: string | null;
-    openSpecRevision?: {
+    specCodingRevision?: {
       applied: boolean;
       summary: string;
       affectedArtifacts: string[];
@@ -966,6 +978,69 @@ export const workflowApi = {
     const params = search.toString() ? `?${search.toString()}` : '';
     const response = await authFetch(`${API_BASE}/workflow/status${params}`);
     if (!response.ok) throw new Error('获取状态失败');
+    return response.json();
+  },
+
+  async listHumanQuestions(filters?: {
+    status?: 'unanswered' | 'answered' | 'dismissed';
+    runId?: string;
+    configFile?: string;
+    limit?: number;
+  }): Promise<{ questions: HumanQuestion[] }> {
+    const search = new URLSearchParams();
+    if (filters?.status) search.set('status', filters.status);
+    if (filters?.runId) search.set('runId', filters.runId);
+    if (filters?.configFile) search.set('configFile', filters.configFile);
+    if (filters?.limit) search.set('limit', String(filters.limit));
+    const params = search.toString() ? `?${search.toString()}` : '';
+    const response = await authFetch(`${API_BASE}/workflow/human-questions${params}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '获取 Supervisor 消息失败');
+    }
+    return response.json();
+  },
+
+  async createHumanQuestion(input: {
+    configFile?: string;
+    runId?: string;
+    kind?: HumanQuestion['kind'];
+    title: string;
+    message: string;
+    supervisorAdvice?: string;
+    suggestedNextState?: string;
+    availableStates?: string[];
+    requiresWorkflowPause?: boolean;
+    answerSchema?: HumanQuestion['answerSchema'];
+    source?: HumanQuestion['source'];
+  }): Promise<{ question: HumanQuestion }> {
+    const response = await authFetch(`${API_BASE}/workflow/human-questions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '创建 Supervisor 消息失败');
+    }
+    return response.json();
+  },
+
+  async answerHumanQuestion(input: {
+    questionId: string;
+    runId?: string;
+    configFile?: string;
+    answer: HumanQuestionAnswer;
+  }): Promise<{ question: HumanQuestion }> {
+    const response = await authFetch(`${API_BASE}/workflow/human-questions/${encodeURIComponent(input.questionId)}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: input.runId, configFile: input.configFile, answer: input.answer }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '回答 Supervisor 消息失败');
+    }
     return response.json();
   },
 

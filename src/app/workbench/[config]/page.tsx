@@ -60,6 +60,8 @@ import {
 } from '@/lib/agent-conversations';
 import { getEngineMeta } from '@/lib/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent-draft';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import styles from './page.module.css';
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
@@ -95,7 +97,7 @@ type WorkflowMemoryLayers = {
     rules: string[];
   };
   runtime: {
-    openSpecSummary?: {
+    specCodingSummary?: {
       id: string;
       version: number;
       summary?: string;
@@ -184,7 +186,7 @@ type WorkflowMemoryLayers = {
   }>;
 };
 
-type OpenSpecArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
+type SpecCodingArtifactKey = 'proposal' | 'design' | 'tasks' | 'deltaSpec';
 
 export default function WorkbenchPage() {
   const params = useParams();
@@ -200,7 +202,9 @@ export default function WorkbenchPage() {
   };
 
   const initialMode = (searchParams.get('mode') as ViewMode) || 'run';
-  const initialRunId = searchParams.get('run');
+  const initialRunId = searchParams.get('run') || searchParams.get('runId');
+  const focusTarget = searchParams.get('focus');
+  const focusQuestionId = searchParams.get('questionId');
 
   // Update URL query params without full navigation
   const updateUrl = useCallback((updates: Record<string, string | null>) => {
@@ -232,8 +236,8 @@ export default function WorkbenchPage() {
   const [fullStepOutput, setFullStepOutput] = useState<string | null>(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
   const [markdownModal, setMarkdownModal] = useState<{ title: string; chunks: string[] } | null>(null);
-  const [openSpecModalOpen, setOpenSpecModalOpen] = useState(false);
-  const [openSpecModalFullscreen, setOpenSpecModalFullscreen] = useState(false);
+  const [specCodingModalOpen, setSpecCodingModalOpen] = useState(false);
+  const [specCodingModalFullscreen, setSpecCodingModalFullscreen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
@@ -255,6 +259,9 @@ export default function WorkbenchPage() {
   const [humanApprovalMinimized, setHumanApprovalMinimized] = useState(false);
   const [humanApprovalMinimizedPulse, setHumanApprovalMinimizedPulse] = useState(false);
   const humanApprovalSignatureRef = useRef<string | null>(null);
+  const [pendingHumanQuestion, setPendingHumanQuestion] = useState<HumanQuestion | null>(null);
+  const [submittingHumanQuestion, setSubmittingHumanQuestion] = useState(false);
+  const humanQuestionSignatureRef = useRef<string | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
@@ -321,7 +328,7 @@ export default function WorkbenchPage() {
     status: string;
     updatedAt: number;
   } | null>(null);
-  const [openSpecSummary, setOpenSpecSummary] = useState<{
+  const [specCodingSummary, setSpecCodingSummary] = useState<{
     id: string;
     version: number;
     status: string;
@@ -346,7 +353,7 @@ export default function WorkbenchPage() {
     } | null;
   } | null>(null);
   const [latestSupervisorReview, setLatestSupervisorReview] = useState<{
-    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
     stateName: string;
     content: string;
     timestamp: string;
@@ -359,7 +366,7 @@ export default function WorkbenchPage() {
     recommendedNextSteps: string[];
   } | null>(null);
   const [rehearsalResultDialogOpen, setRehearsalResultDialogOpen] = useState(false);
-  const [openSpecDetails, setOpenSpecDetails] = useState<{
+  const [specCodingDetails, setSpecCodingDetails] = useState<{
     phases: Array<{
       id: string;
       title: string;
@@ -403,20 +410,20 @@ export default function WorkbenchPage() {
       deltaSpec?: string;
     };
   } | null>(null);
-  const [openSpecSourceOfTruth, setOpenSpecSourceOfTruth] = useState<{
+  const [specCodingSourceOfTruth, setSpecCodingSourceOfTruth] = useState<{
     mode: 'phase-based' | 'state-machine' | 'unknown';
     yamlSourceOfTruth: string[];
-    derivedIntoOpenSpec: string[];
-    runtimeOpenSpecSourceOfTruth: string[];
+    derivedIntoSpecCoding: string[];
+    runtimeSpecCodingSourceOfTruth: string[];
     counts: {
       yamlPhases: number;
       yamlStates: number;
       yamlSteps: number;
       yamlCheckpoints: number;
-      openSpecPhases: number;
-      openSpecTasks?: number;
-      openSpecAssignments: number;
-      openSpecCheckpoints: number;
+      specCodingPhases: number;
+      specCodingTasks?: number;
+      specCodingAssignments: number;
+      specCodingCheckpoints: number;
     };
   } | null>(null);
   const [finalReview, setFinalReview] = useState<{
@@ -463,13 +470,13 @@ export default function WorkbenchPage() {
   const [editingContextValue, setEditingContextValue] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
-  const [designTab, setDesignTab] = useState<'workflow' | 'openspec' | 'config'>('workflow');
-  const [openSpecArtifactTab, setOpenSpecArtifactTab] = useState<OpenSpecArtifactKey>('proposal');
+  const [designTab, setDesignTab] = useState<'workflow' | 'spec-coding' | 'config'>('workflow');
+  const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('proposal');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
-  const [openSpecSaveDialogOpen, setOpenSpecSaveDialogOpen] = useState(false);
-  const [openSpecSaveScope, setOpenSpecSaveScope] = useState<NotebookScope>('personal');
-  const [openSpecSaveDirectory, setOpenSpecSaveDirectory] = useState('');
-  const [savingOpenSpecArtifact, setSavingOpenSpecArtifact] = useState(false);
+  const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
+  const [specCodingSaveScope, setSpecCodingSaveScope] = useState<NotebookScope>('personal');
+  const [specCodingSaveDirectory, setSpecCodingSaveDirectory] = useState('');
+  const [savingSpecCodingArtifact, setSavingSpecCodingArtifact] = useState(false);
   const liveStreamRef = useRef<EventSource | ReturnType<typeof setInterval> | null>(null);
   const liveStreamLenRef = useRef(0);
   const liveStreamRawRef = useRef('');
@@ -554,15 +561,15 @@ export default function WorkbenchPage() {
     };
   }, [openWorkspaceEditorAtPath]);
 
-  const activeOpenSpecPhase = useMemo(() => {
-    if (!openSpecDetails?.phases?.length) return null;
-    return openSpecDetails.phases.find((phase) => phase.id === openSpecSummary?.progress?.activePhaseId)
-      || openSpecDetails.phases.find((phase) => phase.title === currentPhase)
+  const activeSpecCodingPhase = useMemo(() => {
+    if (!specCodingDetails?.phases?.length) return null;
+    return specCodingDetails.phases.find((phase) => phase.id === specCodingSummary?.progress?.activePhaseId)
+      || specCodingDetails.phases.find((phase) => phase.title === currentPhase)
       || null;
-  }, [currentPhase, openSpecDetails, openSpecSummary?.progress?.activePhaseId]);
+  }, [currentPhase, specCodingDetails, specCodingSummary?.progress?.activePhaseId]);
 
   const structuredTasksMarkdown = useMemo(() => {
-    const tasks = openSpecDetails?.tasks || [];
+    const tasks = specCodingDetails?.tasks || [];
     if (tasks.length === 0) return '';
     return [
       '# tasks.md',
@@ -582,15 +589,15 @@ export default function WorkbenchPage() {
         return [...lines, ''];
       }),
     ].join('\n').trim();
-  }, [openSpecDetails?.tasks]);
+  }, [specCodingDetails?.tasks]);
 
-  const openSpecArtifactEntries = useMemo<Array<{
-    key: OpenSpecArtifactKey;
+  const specCodingArtifactEntries = useMemo<Array<{
+    key: SpecCodingArtifactKey;
     label: string;
     title: string;
     content: string;
   }>>(() => {
-    const artifacts = openSpecDetails?.artifacts || {};
+    const artifacts = specCodingDetails?.artifacts || {};
     return [
       {
         key: 'proposal',
@@ -617,11 +624,11 @@ export default function WorkbenchPage() {
         content: artifacts.deltaSpec || '',
       },
     ];
-  }, [openSpecDetails?.artifacts, structuredTasksMarkdown]);
+  }, [specCodingDetails?.artifacts, structuredTasksMarkdown]);
 
-  const activeOpenSpecArtifact = useMemo(
-    () => openSpecArtifactEntries.find((entry) => entry.key === openSpecArtifactTab) || openSpecArtifactEntries[0],
-    [openSpecArtifactEntries, openSpecArtifactTab]
+  const activeSpecCodingArtifact = useMemo(
+    () => specCodingArtifactEntries.find((entry) => entry.key === specCodingArtifactTab) || specCodingArtifactEntries[0],
+    [specCodingArtifactEntries, specCodingArtifactTab]
   );
   const sanitizeNotebookName = useCallback((name: string) => {
     return name
@@ -640,79 +647,79 @@ export default function WorkbenchPage() {
     a.click();
     URL.revokeObjectURL(url);
   }, []);
-  const openOpenSpecSaveDialog = useCallback((artifactKey: OpenSpecArtifactKey) => {
-    setOpenSpecArtifactTab(artifactKey);
-    setOpenSpecSaveScope('personal');
-    setOpenSpecSaveDirectory('');
-    setOpenSpecSaveDialogOpen(true);
+  const specCodingCodingSaveDialog = useCallback((artifactKey: SpecCodingArtifactKey) => {
+    setSpecCodingArtifactTab(artifactKey);
+    setSpecCodingSaveScope('personal');
+    setSpecCodingSaveDirectory('');
+    setSpecCodingSaveDialogOpen(true);
   }, []);
-  const saveOpenSpecArtifactToNotebook = useCallback(async () => {
-    if (!activeOpenSpecArtifact?.content?.trim()) return;
-    setSavingOpenSpecArtifact(true);
+  const saveSpecCodingArtifactToNotebook = useCallback(async () => {
+    if (!activeSpecCodingArtifact?.content?.trim()) return;
+    setSavingSpecCodingArtifact(true);
     try {
       const ts = new Date();
       const stamp = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}-${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}${String(ts.getSeconds()).padStart(2, '0')}`;
-      const base = sanitizeNotebookName(activeOpenSpecArtifact.label.replace(/\.md$/i, '') || activeOpenSpecArtifact.key);
+      const base = sanitizeNotebookName(activeSpecCodingArtifact.label.replace(/\.md$/i, '') || activeSpecCodingArtifact.key);
       const fileName = `${base}-${stamp}.cj.md`;
-      const normalizedDir = (openSpecSaveDirectory || '').replace(/^\/+|\/+$/g, '');
+      const normalizedDir = (specCodingSaveDirectory || '').replace(/^\/+|\/+$/g, '');
       const notebookPath = normalizedDir ? `${normalizedDir}/${fileName}` : fileName;
-      await workspaceApi.manageNotebook('create-file', { path: notebookPath }, { scope: openSpecSaveScope });
-      await workspaceApi.saveNotebookFile(notebookPath, activeOpenSpecArtifact.content, { scope: openSpecSaveScope });
+      await workspaceApi.manageNotebook('create-file', { path: notebookPath }, { scope: specCodingSaveScope });
+      await workspaceApi.saveNotebookFile(notebookPath, activeSpecCodingArtifact.content, { scope: specCodingSaveScope });
       toast('success', `已保存到 Notebook：${notebookPath}`);
-      setOpenSpecSaveDialogOpen(false);
+      setSpecCodingSaveDialogOpen(false);
     } catch (error: any) {
       toast('error', error?.message || '保存到 Notebook 失败');
     } finally {
-      setSavingOpenSpecArtifact(false);
+      setSavingSpecCodingArtifact(false);
     }
-  }, [activeOpenSpecArtifact, openSpecSaveDirectory, openSpecSaveScope, sanitizeNotebookName, toast]);
+  }, [activeSpecCodingArtifact, specCodingSaveDirectory, specCodingSaveScope, sanitizeNotebookName, toast]);
 
   const checkpointDeviationNotes = useMemo(() => {
-    if (!humanApprovalData || !openSpecDetails?.phases?.length) return [];
+    if (!humanApprovalData || !specCodingDetails?.phases?.length) return [];
     const notes: string[] = [];
     const reviewStateName = humanApprovalData.currentState === '__human_approval__'
-      ? activeOpenSpecPhase?.title || null
+      ? activeSpecCodingPhase?.title || null
       : humanApprovalData.currentState;
     const reviewPhase = reviewStateName
-      ? openSpecDetails.phases.find((phase) => phase.title === reviewStateName)
+      ? specCodingDetails.phases.find((phase) => phase.title === reviewStateName)
       : null;
 
     if (!reviewPhase) {
       if (reviewStateName) {
-        notes.push(`运行态 OpenSpec 中未找到与当前审查阶段「${formatStateName(reviewStateName)}」对应的阶段定义。`);
+        notes.push(`运行态 Spec Coding 投影中未找到与当前审查阶段「${formatStateName(reviewStateName)}」对应的阶段定义。`);
       }
       return notes;
     }
 
-    if (reviewStateName && activeOpenSpecPhase && activeOpenSpecPhase.title !== reviewStateName) {
-      notes.push(`OpenSpec 当前活跃阶段是「${activeOpenSpecPhase.title}」，与待审阶段「${formatStateName(reviewStateName)}」不一致。`);
+    if (reviewStateName && activeSpecCodingPhase && activeSpecCodingPhase.title !== reviewStateName) {
+      notes.push(`Spec Coding 当前活跃阶段是「${activeSpecCodingPhase.title}」，与待审阶段「${formatStateName(reviewStateName)}」不一致。`);
     }
 
     if (reviewPhase.status === 'blocked' && humanApprovalData.result?.verdict !== 'fail') {
-      notes.push(`OpenSpec 已将该阶段标记为 blocked，但本次判定为 ${humanApprovalData.result?.verdict || '未知'}，需要确认是否继续阻塞。`);
+      notes.push(`Spec Coding 已将该阶段标记为 blocked，但本次判定为 ${humanApprovalData.result?.verdict || '未知'}，需要确认是否继续阻塞。`);
     }
 
     if (reviewStateName && humanApprovalData.nextState === reviewStateName && reviewPhase.status === 'completed') {
-      notes.push(`OpenSpec 已将该阶段标记为 completed，但 AI 仍建议继续留在当前状态。`);
+      notes.push(`Spec Coding 已将该阶段标记为 completed，但 AI 仍建议继续留在当前状态。`);
     }
 
     if (reviewStateName && humanApprovalData.nextState !== reviewStateName && reviewPhase.status === 'in-progress') {
-      notes.push(`OpenSpec 当前仍显示该阶段 in-progress，但 AI 建议流转到「${humanApprovalData.nextState}」。`);
+      notes.push(`Spec Coding 当前仍显示该阶段 in-progress，但 AI 建议流转到「${humanApprovalData.nextState}」。`);
     }
 
     if (notes.length === 0) {
-      notes.push('当前人工审查结论与运行态 OpenSpec 记录基本一致。');
+      notes.push('当前人工审查结论与运行态 Spec Coding 记录基本一致。');
     }
 
     return notes;
-  }, [activeOpenSpecPhase, humanApprovalData, openSpecDetails]);
+  }, [activeSpecCodingPhase, humanApprovalData, specCodingDetails]);
 
   const executionTrace = useMemo(() => ({
-    designTitle: creationSessionSummary?.workflowName || openSpecSummary?.id || workflowConfig?.workflow?.name || configFile,
-    designStatus: creationSessionSummary?.status || openSpecSummary?.status || null,
-    designSummary: openSpecSummary?.summary || workflowConfig?.workflow?.description || requirements || null,
-    activePhaseTitle: activeOpenSpecPhase?.title || (currentPhase ? formatStateName(currentPhase) : null),
-    activePhaseStatus: activeOpenSpecPhase?.status || openSpecSummary?.progress?.overallStatus || workflowStatus || null,
+    designTitle: creationSessionSummary?.workflowName || specCodingSummary?.id || workflowConfig?.workflow?.name || configFile,
+    designStatus: creationSessionSummary?.status || specCodingSummary?.status || null,
+    designSummary: specCodingSummary?.summary || workflowConfig?.workflow?.description || requirements || null,
+    activePhaseTitle: activeSpecCodingPhase?.title || (currentPhase ? formatStateName(currentPhase) : null),
+    activePhaseStatus: activeSpecCodingPhase?.status || specCodingSummary?.progress?.overallStatus || workflowStatus || null,
     activeStepName: currentStep || null,
     latestSupervisorReview: supervisorFlow.length > 0 ? {
       type: supervisorFlow.at(-1)?.type || null,
@@ -726,11 +733,11 @@ export default function WorkbenchPage() {
       stateName: latestSupervisorReview.stateName ? formatStateName(latestSupervisorReview.stateName) : null,
       content: latestSupervisorReview.content,
     } : null,
-    latestRevision: openSpecSummary?.latestRevision
+    latestRevision: specCodingSummary?.latestRevision
       ? {
-        version: openSpecSummary.latestRevision.version,
-        summary: openSpecSummary.latestRevision.summary,
-        createdBy: openSpecSummary.latestRevision.createdBy,
+        version: specCodingSummary.latestRevision.version,
+        summary: specCodingSummary.latestRevision.summary,
+        createdBy: specCodingSummary.latestRevision.createdBy,
       }
       : null,
     finalReview: finalReview
@@ -740,14 +747,14 @@ export default function WorkbenchPage() {
       }
       : null,
   }), [
-    activeOpenSpecPhase,
+    activeSpecCodingPhase,
     configFile,
     creationSessionSummary,
     currentPhase,
     currentStep,
     finalReview,
     latestSupervisorReview,
-    openSpecSummary,
+    specCodingSummary,
     requirements,
     supervisorFlow,
     workflowConfig?.workflow?.description,
@@ -756,38 +763,38 @@ export default function WorkbenchPage() {
   ]);
 
   const designExecutionComparison = useMemo(() => {
-    const checkpointForActivePhase = activeOpenSpecPhase
-      ? openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)
+    const checkpointForActivePhase = activeSpecCodingPhase
+      ? specCodingDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeSpecCodingPhase.id)
       : null;
 
     return {
       designInput: {
         workflowName: creationSessionSummary?.workflowName || workflowConfig?.workflow?.name || configFile,
-        creationStatus: creationSessionSummary?.status || openSpecSummary?.status || 'unknown',
-        baselineSummary: openSpecSummary?.summary || requirements || workflowConfig?.workflow?.description || '暂无设计摘要',
-        phaseCount: openSpecSummary?.phaseCount || openSpecDetails?.phases?.length || 0,
+        creationStatus: creationSessionSummary?.status || specCodingSummary?.status || 'unknown',
+        baselineSummary: specCodingSummary?.summary || requirements || workflowConfig?.workflow?.description || '暂无设计摘要',
+        phaseCount: specCodingSummary?.phaseCount || specCodingDetails?.phases?.length || 0,
       },
       runtime: {
         workflowStatus: workflowStatus || 'idle',
-        activePhaseTitle: activeOpenSpecPhase?.title || currentPhase || '未进入阶段',
-        activePhaseStatus: activeOpenSpecPhase?.status || openSpecSummary?.progress?.overallStatus || 'pending',
+        activePhaseTitle: activeSpecCodingPhase?.title || currentPhase || '未进入阶段',
+        activePhaseStatus: activeSpecCodingPhase?.status || specCodingSummary?.progress?.overallStatus || 'pending',
         activeStepName: currentStep || '未进入步骤',
         checkpointTitle: checkpointForActivePhase?.title || null,
         checkpointStatus: checkpointForActivePhase?.status || null,
       },
-      latestRevision: openSpecSummary?.latestRevision || openSpecDetails?.revisions?.at(-1) || null,
+      latestRevision: specCodingSummary?.latestRevision || specCodingDetails?.revisions?.at(-1) || null,
     };
   }, [
-    activeOpenSpecPhase,
+    activeSpecCodingPhase,
     configFile,
     creationSessionSummary?.status,
     creationSessionSummary?.workflowName,
     currentPhase,
     currentStep,
-    openSpecDetails?.checkpoints,
-    openSpecDetails?.phases?.length,
-    openSpecDetails?.revisions,
-    openSpecSummary,
+    specCodingDetails?.checkpoints,
+    specCodingDetails?.phases?.length,
+    specCodingDetails?.revisions,
+    specCodingSummary,
     requirements,
     workflowConfig?.workflow?.description,
     workflowConfig?.workflow?.name,
@@ -900,8 +907,8 @@ export default function WorkbenchPage() {
           currentStep,
           selectedStepName: selectedStep?.name || null,
           requirements,
-          openSpecSummary,
-          openSpecDetails,
+          specCodingSummary,
+          specCodingDetails,
           latestSupervisorReview: {
             content: supervisorFlow.at(-1)?.question || null,
             type: supervisorFlow.at(-1)?.type || null,
@@ -917,13 +924,13 @@ export default function WorkbenchPage() {
       appendAgentChatMessage(agentName, {
         id: `${Date.now()}-assistant`,
         role: result.isError ? 'error' : 'assistant',
-        content: result.openSpecRevision?.applied
-          ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 OpenSpec：${result.openSpecRevision.summary}`
+        content: result.specCodingRevision?.applied
+          ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 Spec Coding：${result.specCodingRevision.summary}`
           : (result.output || result.error || '无输出'),
         mode: 'workflow-chat',
         timestamp: Date.now(),
       });
-      if (result.openSpecRevision?.applied) {
+      if (result.specCodingRevision?.applied) {
         await fetchCurrentStatus();
       }
     } catch (error: any) {
@@ -943,7 +950,7 @@ export default function WorkbenchPage() {
     configFile,
     currentPhase,
     currentStep,
-    openSpecSummary,
+    specCodingSummary,
     requirements,
     resolvedProjectRoot,
     runId,
@@ -1076,16 +1083,16 @@ export default function WorkbenchPage() {
     if (agent === 'system') return '系统';
     return agent;
   }, []);
-  const formatOpenSpecTaskStatus = useCallback((status: string) => {
+  const formatSpecCodingTaskStatus = useCallback((status: string) => {
     if (status === 'completed') return '已完成';
     if (status === 'in-progress') return '进行中';
     if (status === 'blocked') return '阻塞';
     return '未开始';
   }, []);
-  const getOpenSpecTaskPhaseTitle = useCallback((task: { phaseId?: string }) => {
+  const getSpecCodingTaskPhaseTitle = useCallback((task: { phaseId?: string }) => {
     if (!task.phaseId) return '';
-    return openSpecDetails?.phases?.find((phase) => phase.id === task.phaseId)?.title || '';
-  }, [openSpecDetails?.phases]);
+    return specCodingDetails?.phases?.find((phase) => phase.id === task.phaseId)?.title || '';
+  }, [specCodingDetails?.phases]);
   const describeQualityCheck = useCallback((check: QualityCheckRecord) => {
     const command = check.commands?.[0]?.command?.trim() || '';
     if (!command) return check.summary;
@@ -1124,7 +1131,7 @@ export default function WorkbenchPage() {
     };
   }, [displayQualityChecks, preflightChecks]);
   const overviewTasks = useMemo(() => {
-    const tasks = openSpecDetails?.tasks || [];
+    const tasks = specCodingDetails?.tasks || [];
     if (tasks.length <= 8) return tasks;
     const firstActiveIndex = tasks.findIndex((task) => task.status !== 'completed');
     if (firstActiveIndex === -1) {
@@ -1132,13 +1139,13 @@ export default function WorkbenchPage() {
     }
     const startIndex = Math.max(0, firstActiveIndex - 2);
     return tasks.slice(startIndex, startIndex + 8);
-  }, [openSpecDetails?.tasks]);
+  }, [specCodingDetails?.tasks]);
   const focusTaskOnDiagram = useCallback((task: { phaseId?: string }) => {
-    const phaseTitle = getOpenSpecTaskPhaseTitle(task);
+    const phaseTitle = getSpecCodingTaskPhaseTitle(task);
     if (!phaseTitle) return;
     setFocusedState(phaseTitle);
     setExecutionViewTabOverride('diagram');
-  }, [getOpenSpecTaskPhaseTitle]);
+  }, [getSpecCodingTaskPhaseTitle]);
   const openAgentFromTask = useCallback((agentName: string) => {
     const matchedAgent = orderedWorkflowAgents.find((agent) => agent.name === agentName)
       || agents.find((agent) => agent.name === agentName);
@@ -1267,12 +1274,14 @@ export default function WorkbenchPage() {
         setAgentFlow((status as any).agentFlow);
       }
       setCreationSessionSummary((status as any).creationSession || null);
-      setOpenSpecSummary((status as any).openSpecSummary || null);
-      setOpenSpecDetails((status as any).openSpecDetails || null);
-      setOpenSpecSourceOfTruth((status as any).sourceOfTruth || null);
+      setSpecCodingSummary((status as any).specCodingSummary || null);
+      setSpecCodingDetails((status as any).specCodingDetails || null);
+      setSpecCodingSourceOfTruth((status as any).sourceOfTruth || null);
       setFinalReview((status as any).finalReview || null);
       setQualityChecks((status as any).qualityChecks || []);
       setMemoryLayers((status as any).memoryLayers || null);
+      const nextPendingHumanQuestion = (status as any).pendingHumanQuestion || null;
+      setPendingHumanQuestionIfChanged(nextPendingHumanQuestion);
 
       {
         if (Array.isArray(status.stepLogs)) {
@@ -1332,6 +1341,9 @@ export default function WorkbenchPage() {
         });
       } else if (!requestedRunId) {
         clearHumanApprovalData();
+        if (!nextPendingHumanQuestion) {
+          clearPendingHumanQuestion();
+        }
       }
       if (status.startTime) {
         setRunStartTime(status.startTime);
@@ -1371,6 +1383,37 @@ export default function WorkbenchPage() {
     }
   }, []);
 
+  const clearPendingHumanQuestion = useCallback(() => {
+    humanQuestionSignatureRef.current = null;
+    setPendingHumanQuestion(null);
+  }, []);
+
+  const setPendingHumanQuestionIfChanged = useCallback((next: HumanQuestion | null) => {
+    if (!next) {
+      clearPendingHumanQuestion();
+      return;
+    }
+
+    const signature = JSON.stringify({
+      id: next.id,
+      status: next.status,
+      title: next.title,
+      message: next.message,
+      suggestedNextState: next.suggestedNextState || null,
+      availableStates: next.availableStates || [],
+      answerSchema: next.answerSchema,
+    });
+
+    if (humanQuestionSignatureRef.current === signature) {
+      return;
+    }
+
+    humanQuestionSignatureRef.current = signature;
+    setPendingHumanQuestion(next);
+    setHumanApprovalMinimized(false);
+    setHumanApprovalMinimizedPulse(false);
+  }, [clearPendingHumanQuestion]);
+
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
     setHumanApprovalData(null);
@@ -1379,10 +1422,10 @@ export default function WorkbenchPage() {
   }, []);
 
   const minimizeHumanApprovalDialog = useCallback(() => {
-    if (!humanApprovalData) return;
+    if (!humanApprovalData && !pendingHumanQuestion) return;
     setHumanApprovalMinimized(true);
     setHumanApprovalMinimizedPulse(true);
-  }, [humanApprovalData]);
+  }, [humanApprovalData, pendingHumanQuestion]);
 
   const restoreHumanApprovalDialog = useCallback(() => {
     setHumanApprovalMinimized(false);
@@ -1421,6 +1464,12 @@ export default function WorkbenchPage() {
     setHumanApprovalMinimized(false);
     setHumanApprovalMinimizedPulse(false);
   }, [clearHumanApprovalData]);
+
+  useEffect(() => {
+    if (focusTarget !== 'human-question') return;
+    setHumanApprovalMinimized(false);
+    setHumanApprovalMinimizedPulse(false);
+  }, [focusTarget, focusQuestionId]);
 
   useEffect(() => {
     if (!humanApprovalMinimizedPulse) return;
@@ -1769,8 +1818,8 @@ export default function WorkbenchPage() {
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
-        if (event.data.openSpecSummary) setOpenSpecSummary(event.data.openSpecSummary);
-        if (event.data.openSpecDetails) setOpenSpecDetails(event.data.openSpecDetails);
+        if (event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
+        if (event.data.specCodingDetails) setSpecCodingDetails(event.data.specCodingDetails);
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
         break;
@@ -1849,6 +1898,9 @@ export default function WorkbenchPage() {
         break;
       case 'human-approval-required':
         addLog('system', 'info', `👤 等待人工审查: ${event.data.currentState} → ${event.data.nextState || event.data.suggestedNextState || ''}`);
+        if (event.data.pendingHumanQuestion) {
+          setPendingHumanQuestionIfChanged(event.data.pendingHumanQuestion);
+        }
         // Show human approval dialog
         setHumanApprovalDataIfChanged({
           currentState: event.data.currentState,
@@ -1857,6 +1909,28 @@ export default function WorkbenchPage() {
           availableStates: event.data.availableStates || [],
           supervisorAdvice: event.data.supervisorAdvice,
         });
+        break;
+      case 'human-question-required':
+        if (event.data.question) {
+          addLog('system', 'info', `👤 Supervisor 等待回复: ${event.data.question.title}`);
+          setPendingHumanQuestionIfChanged(event.data.question);
+          if (event.data.question.kind === 'approval' && event.data.question.answerSchema?.type === 'approval-transition') {
+            setHumanApprovalDataIfChanged({
+              currentState: event.data.question.currentState || '__human_approval__',
+              nextState: event.data.question.suggestedNextState || event.data.question.availableStates?.[0] || '',
+              result: event.data.question.result || { issues: [], summary: event.data.question.message },
+              availableStates: event.data.question.availableStates || [],
+              supervisorAdvice: event.data.question.supervisorAdvice || event.data.question.message,
+            });
+          }
+        }
+        break;
+      case 'human-question-answered':
+        addLog('system', 'success', 'Supervisor 消息已回复');
+        if (!event.data.question || event.data.question.id === pendingHumanQuestion?.id) {
+          clearPendingHumanQuestion();
+          clearHumanApprovalData();
+        }
         break;
       case 'force-transition':
         addLog('system', 'warning', `⚡ 强制跳转请求: ${event.data.from} → ${event.data.targetState}`);
@@ -1924,7 +1998,7 @@ export default function WorkbenchPage() {
         setAgentFlow(event.data.agentFlow || []);
         break;
     }
-  }, [selectedAgent, addLog, currentPhase]);
+  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData]);
 
   // Keep a ref to the latest handleEvent so SSE callback never goes stale
   const handleEventRef = useRef(handleEvent);
@@ -2099,9 +2173,33 @@ export default function WorkbenchPage() {
       toast('success', `已请求跳转到: ${forceTransitionModal.targetState}`);
       setForceTransitionModal(null);
       clearHumanApprovalData();
+      clearPendingHumanQuestion();
       setPendingCheckpointPhase(null);
     } catch (e: any) {
       toast('error', e.message);
+    }
+  };
+
+  const handleSubmitHumanQuestion = async (answer: HumanQuestionAnswer) => {
+    if (!pendingHumanQuestion) return;
+    setSubmittingHumanQuestion(true);
+    try {
+      setViewingHistoryRun(false);
+      await workflowApi.answerHumanQuestion({
+        questionId: pendingHumanQuestion.id,
+        runId: pendingHumanQuestion.runId || runId || selectedRun?.id,
+        configFile: pendingHumanQuestion.configFile || configFile,
+        answer,
+      });
+      toast('success', '已提交 Supervisor 回复');
+      clearPendingHumanQuestion();
+      clearHumanApprovalData();
+      setPendingCheckpointPhase(null);
+      fetchCurrentStatus();
+    } catch (error: any) {
+      toast('error', error.message || '提交回复失败');
+    } finally {
+      setSubmittingHumanQuestion(false);
     }
   };
 
@@ -2511,7 +2609,7 @@ export default function WorkbenchPage() {
   const sanitizeProtocolBlocksForDisplay = (text: string): string => {
     if (!text) return text;
     return text
-      .replace(/<openspec-tasks>[\s\S]*?<\/openspec-tasks>/gi, '')
+      .replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '')
       .replace(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/gi, '$1')
       .trim();
   };
@@ -3137,14 +3235,14 @@ export default function WorkbenchPage() {
   };
 
   const renderRuntimeInsightPanels = () => {
-    const hasOpenSpecTasks = Boolean(openSpecSummary && openSpecDetails?.tasks?.length);
+    const hasSpecCodingTasks = Boolean(specCodingSummary && specCodingDetails?.tasks?.length);
     const hasQualityChecks = displayQualityChecks.length > 0;
     const hasMemoryLayers = Boolean(memoryLayers);
-    if (!hasOpenSpecTasks && !hasQualityChecks && !hasMemoryLayers) return null;
+    if (!hasSpecCodingTasks && !hasQualityChecks && !hasMemoryLayers) return null;
 
     return (
       <div className="mt-4 space-y-3">
-        {hasOpenSpecTasks ? (
+        {hasSpecCodingTasks ? (
           <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -3158,15 +3256,15 @@ export default function WorkbenchPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="text-[10px]">
-                  {openSpecDetails?.tasks?.filter((task) => task.status === 'completed').length || 0}/{openSpecDetails?.tasks?.length || 0}
+                  {specCodingDetails?.tasks?.filter((task) => task.status === 'completed').length || 0}/{specCodingDetails?.tasks?.length || 0}
                 </Badge>
                 <Button
                   variant="outline"
                   size="sm"
                   className="h-7 text-xs"
                   onClick={() => {
-                    setOpenSpecArtifactTab('tasks');
-                    setOpenSpecModalOpen(true);
+                    setSpecCodingArtifactTab('tasks');
+                    setSpecCodingModalOpen(true);
                   }}
                 >
                   <span className="material-symbols-outlined text-sm mr-1">article</span>
@@ -3227,7 +3325,7 @@ export default function WorkbenchPage() {
                         ) : null}
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {getOpenSpecTaskPhaseTitle(task) ? (
+                        {getSpecCodingTaskPhaseTitle(task) ? (
                           <Button
                             type="button"
                             variant="outline"
@@ -3252,7 +3350,7 @@ export default function WorkbenchPage() {
                               : 'bg-muted text-muted-foreground border border-border'
                       }`}
                     >
-                      {formatOpenSpecTaskStatus(task.status)}
+                      {formatSpecCodingTaskStatus(task.status)}
                     </Badge>
                   </div>
                 </div>
@@ -3396,9 +3494,9 @@ export default function WorkbenchPage() {
     );
   };
 
-  const renderOpenSpecPanel = (options?: { className?: string }) => {
-    const completedTaskCount = openSpecDetails?.tasks?.filter((task) => task.status === 'completed').length || 0;
-    const totalTaskCount = openSpecDetails?.tasks?.length || 0;
+  const renderSpecCodingPanel = (options?: { className?: string }) => {
+    const completedTaskCount = specCodingDetails?.tasks?.filter((task) => task.status === 'completed').length || 0;
+    const totalTaskCount = specCodingDetails?.tasks?.length || 0;
 
     return (
       <div className={options?.className || 'space-y-4'}>
@@ -3407,20 +3505,20 @@ export default function WorkbenchPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
-                <h3 className="text-base font-semibold">OpenSpec 草案</h3>
+                <h3 className="text-base font-semibold">Spec Coding 草案</h3>
               </div>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 查看创建期确认的 proposal、design、tasks 和增量 spec；运行后这里会展示当前 run 的快照与进度投影。
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {openSpecSummary ? (
+              {specCodingSummary ? (
                 <>
-                  <Badge variant="outline" className="text-[10px]">v{openSpecSummary.version}</Badge>
-                  <Badge variant="secondary" className="text-[10px]">{openSpecSummary.status}</Badge>
-                  {openSpecSummary.source ? (
+                  <Badge variant="outline" className="text-[10px]">v{specCodingSummary.version}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{specCodingSummary.status}</Badge>
+                  {specCodingSummary.source ? (
                     <Badge variant="outline" className="text-[10px]">
-                      {openSpecSummary.source === 'run' ? 'Run Snapshot' : 'Creation Baseline'}
+                      {specCodingSummary.source === 'run' ? 'Run Snapshot' : 'Creation Baseline'}
                     </Badge>
                   ) : null}
                 </>
@@ -3431,52 +3529,52 @@ export default function WorkbenchPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                disabled={!openSpecSummary}
-                onClick={() => setOpenSpecModalOpen(true)}
-                title="弹出 OpenSpec 文件管理器"
+                disabled={!specCodingSummary}
+                onClick={() => setSpecCodingModalOpen(true)}
+                title="弹出 Spec Coding 文件管理器"
               >
                 <span className="material-symbols-outlined text-sm">open_in_new</span>
               </Button>
             </div>
           </div>
 
-          {openSpecSummary ? (
+          {specCodingSummary ? (
             <div className="space-y-3">
               <div className="grid gap-2 sm:grid-cols-3">
                 <div className="rounded-xl border bg-muted/20 p-3">
                   <div className="text-[10px] text-muted-foreground">任务</div>
-                  <div className="mt-1 text-lg font-semibold">{completedTaskCount}/{totalTaskCount || openSpecSummary.taskCount || 0}</div>
+                  <div className="mt-1 text-lg font-semibold">{completedTaskCount}/{totalTaskCount || specCodingSummary.taskCount || 0}</div>
                 </div>
                 <div className="rounded-xl border bg-muted/20 p-3">
                   <div className="text-[10px] text-muted-foreground">制品</div>
                   <div className="mt-1 text-lg font-semibold">
-                    {openSpecArtifactEntries.filter((entry) => entry.content.trim()).length}/{openSpecArtifactEntries.length}
+                    {specCodingArtifactEntries.filter((entry) => entry.content.trim()).length}/{specCodingArtifactEntries.length}
                   </div>
                 </div>
                 <div className="rounded-xl border bg-muted/20 p-3">
                   <div className="text-[10px] text-muted-foreground">修订</div>
-                  <div className="mt-1 text-lg font-semibold">{openSpecDetails?.revisions?.length || 0}</div>
+                  <div className="mt-1 text-lg font-semibold">{specCodingDetails?.revisions?.length || 0}</div>
                 </div>
               </div>
-              {openSpecSummary.summary ? (
+              {specCodingSummary.summary ? (
                 <div className="rounded-xl border bg-muted/20 p-3 text-sm leading-6 text-muted-foreground">
-                  {openSpecSummary.summary}
+                  {specCodingSummary.summary}
                 </div>
               ) : null}
-              {openSpecSummary.progress?.summary ? (
+              {specCodingSummary.progress?.summary ? (
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">
-                  当前进度：{openSpecSummary.progress.summary}
+                  当前进度：{specCodingSummary.progress.summary}
                 </div>
               ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-              当前工作流没有绑定创建期 OpenSpec。通过首页 AI 创建工作流并确认 OpenSpec 后，这里会显示完整草案。
+              当前工作流没有绑定创建期 Spec Coding 制品。通过首页 AI 创建工作流并确认 Spec Coding 后，这里会显示完整草案。
             </div>
           )}
         </div>
 
-        {openSpecSummary && (
+        {specCodingSummary && (
           <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -3484,22 +3582,22 @@ export default function WorkbenchPage() {
                 <div className="text-xs text-muted-foreground">在弹窗中查看完整内容。</div>
               </div>
               <Badge variant="outline" className="text-[10px]">
-                {openSpecArtifactEntries.filter((entry) => entry.content.trim()).length}/{openSpecArtifactEntries.length}
+                {specCodingArtifactEntries.filter((entry) => entry.content.trim()).length}/{specCodingArtifactEntries.length}
               </Badge>
             </div>
             <div className="space-y-2">
-              {openSpecArtifactEntries.map((entry) => (
+              {specCodingArtifactEntries.map((entry) => (
                 <button
                   key={entry.key}
                   type="button"
                   className={`w-full rounded-xl border px-3 py-2 text-left transition-colors ${
-                    activeOpenSpecArtifact.key === entry.key
+                    activeSpecCodingArtifact.key === entry.key
                       ? 'border-primary bg-primary/10'
                       : 'bg-background/60 hover:bg-background'
                   }`}
                   onClick={() => {
-                    setOpenSpecArtifactTab(entry.key);
-                    setOpenSpecModalOpen(true);
+                    setSpecCodingArtifactTab(entry.key);
+                    setSpecCodingModalOpen(true);
                   }}
                 >
                   <div className="flex items-center justify-between gap-3">
@@ -3517,11 +3615,11 @@ export default function WorkbenchPage() {
           </div>
         )}
 
-        {openSpecDetails?.revisions?.length ? (
+        {specCodingDetails?.revisions?.length ? (
           <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
             <div className="text-sm font-semibold">修订记录</div>
             <div className="space-y-2">
-              {[...openSpecDetails.revisions].reverse().map((revision) => (
+              {[...specCodingDetails.revisions].reverse().map((revision) => (
                 <div key={revision.id} className="rounded-xl border bg-muted/10 p-3 text-xs text-muted-foreground">
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-medium text-foreground">v{revision.version}</span>
@@ -3540,17 +3638,17 @@ export default function WorkbenchPage() {
     );
   };
 
-  const renderOpenSpecExplorer = () => (
+  const renderSpecCodingExplorer = () => (
     <>
       <div className="border-b border-border px-3 py-2">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
-                <div className="truncate text-sm font-semibold">OpenSpec 文件管理器</div>
+                <div className="truncate text-sm font-semibold">Spec Coding 文件管理器</div>
             </div>
             <div className="mt-0.5 truncate text-xs text-muted-foreground">
-              {openSpecSummary?.id || workflowConfig?.workflow?.name || configFile}
+              {specCodingSummary?.id || workflowConfig?.workflow?.name || configFile}
             </div>
             </div>
             <div className="flex items-center gap-1">
@@ -3558,8 +3656,8 @@ export default function WorkbenchPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => triggerDownload(activeOpenSpecArtifact.content, activeOpenSpecArtifact.label)}
-                disabled={!activeOpenSpecArtifact.content.trim()}
+                onClick={() => triggerDownload(activeSpecCodingArtifact.content, activeSpecCodingArtifact.label)}
+                disabled={!activeSpecCodingArtifact.content.trim()}
                 title="下载当前文档"
               >
                 <span className="material-symbols-outlined text-sm">download</span>
@@ -3568,8 +3666,8 @@ export default function WorkbenchPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => openOpenSpecSaveDialog(activeOpenSpecArtifact.key)}
-                disabled={!activeOpenSpecArtifact.content.trim()}
+                onClick={() => specCodingCodingSaveDialog(activeSpecCodingArtifact.key)}
+                disabled={!activeSpecCodingArtifact.content.trim()}
                 title="保存到 Notebook"
               >
                 <span className="material-symbols-outlined text-sm">note_add</span>
@@ -3578,11 +3676,11 @@ export default function WorkbenchPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setOpenSpecModalFullscreen((value) => !value)}
-              title={openSpecModalFullscreen ? '退出全屏' : '全屏'}
+                onClick={() => setSpecCodingModalFullscreen((value) => !value)}
+              title={specCodingModalFullscreen ? '退出全屏' : '全屏'}
             >
               <span className="material-symbols-outlined text-sm">
-                {openSpecModalFullscreen ? 'fullscreen_exit' : 'fullscreen'}
+                {specCodingModalFullscreen ? 'fullscreen_exit' : 'fullscreen'}
               </span>
             </Button>
           </div>
@@ -3594,8 +3692,8 @@ export default function WorkbenchPage() {
             制品列表
           </div>
           <div className="space-y-1 p-2">
-            {openSpecArtifactEntries.map((entry) => {
-              const active = activeOpenSpecArtifact.key === entry.key;
+            {specCodingArtifactEntries.map((entry) => {
+              const active = activeSpecCodingArtifact.key === entry.key;
               return (
                 <button
                   key={entry.key}
@@ -3605,7 +3703,7 @@ export default function WorkbenchPage() {
                       ? 'border-primary bg-primary/10 text-foreground'
                       : 'border-transparent hover:border-border hover:bg-background'
                   }`}
-                  onClick={() => setOpenSpecArtifactTab(entry.key)}
+                  onClick={() => setSpecCodingArtifactTab(entry.key)}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-xs font-medium">{entry.label}</span>
@@ -3618,11 +3716,11 @@ export default function WorkbenchPage() {
               );
             })}
           </div>
-          {openSpecDetails?.revisions?.length ? (
+          {specCodingDetails?.revisions?.length ? (
             <div className="border-t border-border p-3">
               <div className="text-xs font-medium text-muted-foreground">最近修订</div>
               <div className="mt-2 space-y-2">
-                {[...openSpecDetails.revisions].reverse().slice(0, 3).map((revision) => (
+                {[...specCodingDetails.revisions].reverse().slice(0, 3).map((revision) => (
                   <div key={revision.id} className="rounded-lg border bg-background/70 p-2 text-[11px] text-muted-foreground">
                     <div className="font-medium text-foreground">v{revision.version}</div>
                     <div className="mt-1 line-clamp-2">{revision.summary}</div>
@@ -3635,29 +3733,29 @@ export default function WorkbenchPage() {
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{activeOpenSpecArtifact.title}</div>
-              <div className="mt-0.5 truncate text-xs text-muted-foreground">{activeOpenSpecArtifact.label}</div>
+              <div className="truncate text-sm font-semibold">{activeSpecCodingArtifact.title}</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{activeSpecCodingArtifact.label}</div>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {openSpecSummary ? (
+              {specCodingSummary ? (
                 <>
-                  <Badge variant="outline" className="text-[10px]">v{openSpecSummary.version}</Badge>
-                  <Badge variant="secondary" className="text-[10px]">{openSpecSummary.status}</Badge>
+                  <Badge variant="outline" className="text-[10px]">v{specCodingSummary.version}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">{specCodingSummary.status}</Badge>
                 </>
               ) : null}
               <Badge variant="outline" className="text-[10px]">
-                {activeOpenSpecArtifact.content.trim() ? 'available' : 'empty'}
+                {activeSpecCodingArtifact.content.trim() ? 'available' : 'empty'}
               </Badge>
             </div>
           </div>
           <div className="flex-1 overflow-auto p-5">
-            {activeOpenSpecArtifact.content.trim() ? (
+            {activeSpecCodingArtifact.content.trim() ? (
               <div className={`${styles.markdownContent} max-w-none`}>
-                <Markdown>{activeOpenSpecArtifact.content}</Markdown>
+                <Markdown>{activeSpecCodingArtifact.content}</Markdown>
               </div>
             ) : (
               <div className="flex h-full items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
-                这份 OpenSpec 制品还没有内容。
+                这份 Spec Coding 制品还没有内容。
               </div>
             )}
           </div>
@@ -3958,7 +4056,7 @@ export default function WorkbenchPage() {
                   <TabsTrigger value="agents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smart_toy</span>Agents
                   </TabsTrigger>
-                  <TabsTrigger value="openspec" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                  <TabsTrigger value="spec-coding" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
                   </TabsTrigger>
         {(isDesignMode) && <TabsTrigger value="config" className="flex items-center justify-center gap-1 text-xs h-7 px-2"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span>配置</TabsTrigger>}
@@ -4111,8 +4209,8 @@ export default function WorkbenchPage() {
                   })}
                   </div>
                 </div></TabsContent>
-                <TabsContent value="openspec" className="mt-0 overflow-y-auto h-full p-4">
-                  {renderOpenSpecPanel()}
+                <TabsContent value="spec-coding" className="mt-0 overflow-y-auto h-full p-4">
+                  {renderSpecCodingPanel()}
                 </TabsContent>
 {isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
           </div></TabsContent>}
@@ -4492,11 +4590,11 @@ export default function WorkbenchPage() {
                     工作流设计
                   </button>
                   <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'openspec' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('openspec')}
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'spec-coding' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('spec-coding')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">fact_check</span>
-                    OpenSpec
+                    SpecCoding
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
@@ -4540,9 +4638,9 @@ export default function WorkbenchPage() {
                 </div>
               )}
 
-              {designTab === 'openspec' && (
+              {designTab === 'spec-coding' && (
                 <div className="flex-1 overflow-auto bg-muted/20 p-6">
-                  {renderOpenSpecPanel({ className: 'mx-auto max-w-5xl space-y-4' })}
+                  {renderSpecCodingPanel({ className: 'mx-auto max-w-5xl space-y-4' })}
                 </div>
               )}
 
@@ -5143,13 +5241,13 @@ export default function WorkbenchPage() {
           </div>
         </div>
       )}
-      <Dialog open={openSpecModalOpen} onOpenChange={(open) => {
-        setOpenSpecModalOpen(open);
-        if (!open) setOpenSpecModalFullscreen(false);
+      <Dialog open={specCodingModalOpen} onOpenChange={(open) => {
+        setSpecCodingModalOpen(open);
+        if (!open) setSpecCodingModalFullscreen(false);
       }}>
-        <DialogContent className={`p-0 flex flex-col gap-0 ${openSpecModalFullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
-          <DialogTitle className="sr-only">OpenSpec 文件管理器</DialogTitle>
-          {renderOpenSpecExplorer()}
+        <DialogContent className={`p-0 flex flex-col gap-0 ${specCodingModalFullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
+          <DialogTitle className="sr-only">SpecCoding 文件管理器</DialogTitle>
+          {renderSpecCodingExplorer()}
         </DialogContent>
       </Dialog>
       {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
@@ -5213,25 +5311,37 @@ export default function WorkbenchPage() {
       )}
 
       {/* 人工审查对话框 */}
-      {humanApprovalData && !humanApprovalMinimized && (
+      {(humanApprovalData || pendingHumanQuestion) && !humanApprovalMinimized && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/80" onClick={minimizeHumanApprovalDialog}>
           <div className="bg-card rounded-lg w-[700px] max-w-[90%] border shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="p-5 border-b bg-orange-50 dark:bg-orange-950">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold flex items-center gap-2">
                   <span className="material-symbols-outlined text-orange-500">person</span>
-                  人工审查 - {formatStateName(humanApprovalData.currentState)}
+                  {pendingHumanQuestion ? pendingHumanQuestion.title : `人工审查 - ${formatStateName(humanApprovalData?.currentState || '__human_approval__')}`}
                 </h3>
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={minimizeHumanApprovalDialog} title="缩到右下角">
                   <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>close</span>
                 </Button>
               </div>
               <p className="text-sm text-muted-foreground mt-1">
-                状态已完成，请选择下一步操作
+                Supervisor 正在等待人类回复，工作流会保持人工审查状态。
               </p>
             </div>
 
             <div className="p-5 max-h-[60vh] overflow-y-auto">
+              {pendingHumanQuestion ? (
+                <HumanQuestionCard
+                  key={pendingHumanQuestion.id}
+                  question={pendingHumanQuestion}
+                  autoFocus={focusTarget === 'human-question' && (!focusQuestionId || focusQuestionId === pendingHumanQuestion.id)}
+                  submitting={submittingHumanQuestion}
+                  onSubmit={handleSubmitHumanQuestion}
+                />
+              ) : null}
+
+              {humanApprovalData ? (
+                <>
               {/* 执行结果摘要 */}
               <div className="mb-4 p-3 bg-muted/30 rounded-lg">
                 <div className="text-sm font-medium mb-2">执行结果</div>
@@ -5300,34 +5410,34 @@ export default function WorkbenchPage() {
                 </div>
               )}
 
-              {(openSpecSummary || activeOpenSpecPhase || checkpointDeviationNotes.length > 0) && (
+              {(specCodingSummary || activeSpecCodingPhase || checkpointDeviationNotes.length > 0) && (
                 <div className="mb-4 p-3 rounded-lg border border-violet-200 bg-violet-50 dark:border-violet-900 dark:bg-violet-950/30 space-y-3">
                   <div className="text-sm font-medium text-violet-700 dark:text-violet-300">
-                    当前 Run OpenSpec
+                    当前 Run SpecCoding
                   </div>
-                  {openSpecSummary ? (
+                  {specCodingSummary ? (
                     <div className="text-xs text-muted-foreground space-y-1">
-                      <div>版本：v{openSpecSummary.version}</div>
-                      <div>状态：{openSpecSummary.status}</div>
-                      {openSpecSummary.source ? (
-                        <div>来源：{openSpecSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
+                      <div>版本：v{specCodingSummary.version}</div>
+                      <div>状态：{specCodingSummary.status}</div>
+                      {specCodingSummary.source ? (
+                        <div>来源：{specCodingSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
                       ) : null}
-                      {openSpecSummary.progress?.summary ? (
-                        <div>进度：{openSpecSummary.progress.summary}</div>
+                      {specCodingSummary.progress?.summary ? (
+                        <div>进度：{specCodingSummary.progress.summary}</div>
                       ) : null}
                     </div>
                   ) : null}
-                  {activeOpenSpecPhase ? (
+                  {activeSpecCodingPhase ? (
                     <div className="rounded-md border bg-background/70 p-3 text-xs text-muted-foreground space-y-1">
                       <div className="font-medium text-foreground">当前阶段记录</div>
-                      <div>阶段：{activeOpenSpecPhase.title}</div>
-                      <div>状态：{activeOpenSpecPhase.status}</div>
-                      {activeOpenSpecPhase.objective ? <div>目标：{activeOpenSpecPhase.objective}</div> : null}
-                      {openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id) ? (
+                      <div>阶段：{activeSpecCodingPhase.title}</div>
+                      <div>状态：{activeSpecCodingPhase.status}</div>
+                      {activeSpecCodingPhase.objective ? <div>目标：{activeSpecCodingPhase.objective}</div> : null}
+                      {specCodingDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeSpecCodingPhase.id) ? (
                         <div>
-                          检查点：{openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)?.title}
+                          检查点：{specCodingDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeSpecCodingPhase.id)?.title}
                           {' / '}
-                          {openSpecDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeOpenSpecPhase.id)?.status}
+                          {specCodingDetails?.checkpoints?.find((checkpoint) => checkpoint.phaseId === activeSpecCodingPhase.id)?.status}
                         </div>
                       ) : null}
                     </div>
@@ -5351,12 +5461,12 @@ export default function WorkbenchPage() {
                       <div>时间：{new Date(latestSupervisorReview.timestamp).toLocaleString()}</div>
                     </div>
                   ) : null}
-                  {openSpecDetails?.revisions?.length ? (
+                  {specCodingDetails?.revisions?.length ? (
                     <div className="rounded-md border bg-background/70 p-3 text-xs text-muted-foreground space-y-1">
                       <div className="font-medium text-foreground">最近修订</div>
-                      <div>v{openSpecDetails.revisions.at(-1)?.version} · {openSpecDetails.revisions.at(-1)?.summary}</div>
-                      {openSpecDetails.revisions.at(-1)?.createdBy ? (
-                        <div>修订者：{openSpecDetails.revisions.at(-1)?.createdBy}</div>
+                      <div>v{specCodingDetails.revisions.at(-1)?.version} · {specCodingDetails.revisions.at(-1)?.summary}</div>
+                      {specCodingDetails.revisions.at(-1)?.createdBy ? (
+                        <div>修订者：{specCodingDetails.revisions.at(-1)?.createdBy}</div>
                       ) : null}
                     </div>
                   ) : null}
@@ -5423,12 +5533,14 @@ export default function WorkbenchPage() {
                   ))}
                 </div>
               </div>
+              </>
+              ) : null}
             </div>
           </div>
         </div>
       )}
 
-      {humanApprovalData && humanApprovalMinimized && (
+      {(humanApprovalData || pendingHumanQuestion) && humanApprovalMinimized && (
         <div className="fixed bottom-5 right-5 z-40">
           <Button
             type="button"
@@ -5577,19 +5689,19 @@ export default function WorkbenchPage() {
       </Dialog>
 
       <NotebookSaveDialog
-        open={openSpecSaveDialogOpen}
-        onOpenChange={setOpenSpecSaveDialogOpen}
-        scope={openSpecSaveScope}
-        onScopeChange={setOpenSpecSaveScope}
-        directory={openSpecSaveDirectory}
-        onDirectoryChange={setOpenSpecSaveDirectory}
+        open={specCodingSaveDialogOpen}
+        onOpenChange={setSpecCodingSaveDialogOpen}
+        scope={specCodingSaveScope}
+        onScopeChange={setSpecCodingSaveScope}
+        directory={specCodingSaveDirectory}
+        onDirectoryChange={setSpecCodingSaveDirectory}
         directories={[]}
-        saving={savingOpenSpecArtifact}
-        previewText={activeOpenSpecArtifact
-          ? `将保存：${openSpecSaveDirectory ? `${openSpecSaveDirectory}/` : ''}${sanitizeNotebookName(activeOpenSpecArtifact.label.replace(/\.md$/i, '') || activeOpenSpecArtifact.key)}-YYYYMMDD-HHMMSS.cj.md`
+        saving={savingSpecCodingArtifact}
+        previewText={activeSpecCodingArtifact
+          ? `将保存：${specCodingSaveDirectory ? `${specCodingSaveDirectory}/` : ''}${sanitizeNotebookName(activeSpecCodingArtifact.label.replace(/\.md$/i, '') || activeSpecCodingArtifact.key)}-YYYYMMDD-HHMMSS.cj.md`
           : '请选择文档'}
         onConfirm={() => {
-          void saveOpenSpecArtifactToNotebook();
+          void saveSpecCodingArtifactToNotebook();
         }}
       />
 

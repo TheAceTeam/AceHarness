@@ -7,7 +7,7 @@ import { ZodError } from 'zod';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, setConfigMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/openspec-store';
+import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
 import { updateChatSessionCreationBinding } from '@/lib/chat-persistence';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
 
@@ -333,10 +333,10 @@ export async function POST(request: NextRequest) {
         description,
         requirements,
         referenceWorkflow,
-        openSpec: {
-          ...creationSession.openSpec,
-          status: creationSession.openSpec.status === 'draft' ? 'confirmed' : creationSession.openSpec.status,
-          confirmedAt: creationSession.openSpec.confirmedAt || new Date().toISOString(),
+        specCoding: {
+          ...creationSession.specCoding,
+          status: creationSession.specCoding.status === 'draft' ? 'confirmed' : creationSession.specCoding.status,
+          confirmedAt: creationSession.specCoding.confirmedAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
         generatedConfigSummary: {
@@ -357,7 +357,7 @@ export async function POST(request: NextRequest) {
         chatSessionId: frontendSessionId,
         createdBy: auth.id,
         status: 'config-generated',
-        openSpecStatus: 'confirmed',
+        specCodingStatus: 'confirmed',
         filename,
         workflowName,
         mode: workflowMode,
@@ -379,7 +379,7 @@ export async function POST(request: NextRequest) {
         filename,
         workflowName,
         status: creationSession.status,
-        openSpecId: creationSession.openSpec.id,
+        specCodingId: creationSession.specCoding.id,
       });
     }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
-import { appendOpenSpecRevision, buildOpenSpecFromWorkflowConfig, loadCreationSession, rebuildOpenSpecPreservingArtifacts, updateCreationSession } from '@/lib/openspec-store';
+import { appendSpecCodingRevision, buildSpecCodingFromWorkflowConfig, loadCreationSession, rebuildSpecCodingPreservingArtifacts, updateCreationSession } from '@/lib/spec-coding-store';
 
 function canAccess(userId: string, createdBy?: string) {
   return !createdBy || createdBy === userId;
@@ -41,10 +41,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
     const body = await request.json();
     const patch = { ...body } as Record<string, any>;
-    if (patch.rebuildOpenSpecFromConfig && patch.config) {
-      patch.openSpec = existing.openSpec
-        ? rebuildOpenSpecPreservingArtifacts({
-            existing: existing.openSpec,
+    if (patch.rebuildSpecCodingFromConfig && patch.config) {
+      patch.specCoding = existing.specCoding
+        ? rebuildSpecCodingPreservingArtifacts({
+            existing: existing.specCoding,
             workflowName: patch.workflowName || existing.workflowName,
             description: patch.description ?? existing.description,
             requirements: patch.requirements ?? existing.requirements,
@@ -52,9 +52,9 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
             workspaceMode: patch.workspaceMode || existing.workspaceMode,
             workingDirectory: patch.workingDirectory || existing.workingDirectory,
             config: patch.config,
-            status: patch.openSpecStatus || existing.openSpec.status,
+            status: patch.specCodingStatus || existing.specCoding.status,
           })
-        : buildOpenSpecFromWorkflowConfig({
+        : buildSpecCodingFromWorkflowConfig({
             workflowName: patch.workflowName || existing.workflowName,
             description: patch.description ?? existing.description,
             requirements: patch.requirements ?? existing.requirements,
@@ -63,33 +63,33 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
             workingDirectory: patch.workingDirectory || existing.workingDirectory,
             config: patch.config,
           });
-      if (patch.openSpecStatus) {
-        patch.openSpec = {
-          ...patch.openSpec,
-          status: patch.openSpecStatus,
-          confirmedAt: patch.openSpecStatus === 'confirmed'
-          ? (patch.openSpec.confirmedAt || new Date().toISOString())
-          : patch.openSpec.confirmedAt,
+      if (patch.specCodingStatus) {
+        patch.specCoding = {
+          ...patch.specCoding,
+          status: patch.specCodingStatus,
+          confirmedAt: patch.specCodingStatus === 'confirmed'
+          ? (patch.specCoding.confirmedAt || new Date().toISOString())
+          : patch.specCoding.confirmedAt,
         };
       }
-    } else if (patch.openSpec && patch.openSpecStatus) {
-      patch.openSpec = {
-        ...patch.openSpec,
-        status: patch.openSpecStatus,
-        confirmedAt: patch.openSpecStatus === 'confirmed'
-          ? (patch.openSpec.confirmedAt || new Date().toISOString())
-          : patch.openSpec.confirmedAt,
+    } else if (patch.specCoding && patch.specCodingStatus) {
+      patch.specCoding = {
+        ...patch.specCoding,
+        status: patch.specCodingStatus,
+        confirmedAt: patch.specCodingStatus === 'confirmed'
+          ? (patch.specCoding.confirmedAt || new Date().toISOString())
+          : patch.specCoding.confirmedAt,
       };
     }
 
-    if (patch.openSpec && typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()) {
-      patch.openSpec = appendOpenSpecRevision(patch.openSpec, {
+    if (patch.specCoding && typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()) {
+      patch.specCoding = appendSpecCodingRevision(patch.specCoding, {
         summary: patch.revisionSummary.trim(),
         createdBy: auth.id,
-        status: patch.openSpecStatus || patch.openSpec.status,
-        progressSummary: patch.openSpecStatus === 'confirmed'
+        status: patch.specCodingStatus || patch.specCoding.status,
+        progressSummary: patch.specCodingStatus === 'confirmed'
           ? '计划已确认，可继续整理 workflow 草案。'
-          : '创建态 OpenSpec 已根据最新修订说明重新生成，等待再次确认。',
+          : '创建态 SpecCoding 已根据最新修订说明重新生成，等待再次确认。',
       });
     }
 

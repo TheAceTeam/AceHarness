@@ -23,6 +23,7 @@ export async function GET(request: NextRequest) {
         // State machine events forwarded with normalized type names
         'state-change', 'step-start', 'step-complete', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
+        'human-question-required', 'human-question-answered', 'human-question-updated',
         'agent-flow',
       ];
 

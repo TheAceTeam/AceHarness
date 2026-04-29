@@ -3,8 +3,8 @@ import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import type { OpenSpecDocument } from '@/lib/schemas';
-import { normalizeOpenSpecDocument } from '@/lib/openspec-store';
+import type { SpecCodingDocument } from '@/lib/schemas';
+import { normalizeSpecCodingDocument } from '@/lib/spec-coding-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -76,6 +76,58 @@ export interface PersistedQualityCheck {
   commands: PersistedQualityCommandResult[];
 }
 
+export interface HumanQuestionAnswerSchema {
+  type: 'text' | 'single-choice' | 'multi-choice' | 'approval-transition';
+  required?: boolean;
+  placeholder?: string;
+  options?: Array<{ label: string; value: string; description?: string }>;
+}
+
+export interface HumanQuestionAnswer {
+  text?: string;
+  selectedOption?: string;
+  selectedOptions?: string[];
+  selectedState?: string;
+  instruction?: string;
+  raw?: any;
+}
+
+export interface HumanQuestion {
+  id: string;
+  runId: string;
+  configFile: string;
+  status: 'unanswered' | 'answered' | 'dismissed';
+  kind: 'approval' | 'clarification' | 'choice' | 'confirmation' | 'freeform';
+  title: string;
+  message: string;
+  supervisorAdvice?: string;
+  createdAt: string;
+  answeredAt?: string;
+  supervisorAgent?: string;
+  supervisorSessionId?: string | null;
+  currentState?: string | null;
+  previousState?: string | null;
+  suggestedNextState?: string;
+  availableStates?: string[];
+  result?: any;
+  requiresWorkflowPause?: boolean;
+  answerSchema: HumanQuestionAnswerSchema;
+  answer?: HumanQuestionAnswer;
+  source?: {
+    type: 'human-approval' | 'checkpoint-advice' | 'supervisor-chat' | 'manual' | string;
+    [key: string]: any;
+  };
+}
+
+export interface HumanAnswerContext {
+  questionId: string;
+  title: string;
+  question: string;
+  answer: string;
+  instruction?: string;
+  answeredAt: string;
+}
+
 export interface PersistedRunState {
   runId: string;
   configFile: string;
@@ -110,7 +162,13 @@ export interface PersistedRunState {
       summary?: string;
       stepOutputs?: string[];
     };
+    /** State machine: linked supervisor question for restored approval UI */
+    humanQuestionId?: string;
+    humanQuestion?: HumanQuestion;
   };
+  humanQuestions?: HumanQuestion[];
+  pendingHumanQuestionId?: string | null;
+  humanAnswersContext?: HumanAnswerContext[];
   globalContext?: string;
   phaseContexts?: Record<string, string>;
 
@@ -165,7 +223,7 @@ export interface PersistedRunState {
   attachedAgentSessions?: Record<string, string>;
   /** 最近一次 supervisor 审阅/建议 */
   latestSupervisorReview?: {
-    type: 'state-review' | 'checkpoint-advice' | 'chat-revision';
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
     stateName: string;
     content: string;
     timestamp: string;
@@ -174,8 +232,8 @@ export interface PersistedRunState {
   } | null;
   /** preCommands 收集到的结构化质量门禁结果 */
   qualityChecks?: PersistedQualityCheck[];
-  /** 当前 run 绑定的独立 OpenSpec 快照 */
-  runOpenSpec?: OpenSpecDocument | null;
+  /** 当前 run 绑定的独立 SpecCoding 快照 */
+  runSpecCoding?: SpecCodingDocument | null;
   /** 演练模式元数据 */
   rehearsal?: {
     enabled: boolean;
@@ -209,8 +267,8 @@ export async function loadRunState(runId: string): Promise<PersistedRunState | n
   try {
     const content = await readFile(stateFilePath(runId), 'utf-8');
     const state = parse(content) as PersistedRunState;
-    if (state?.runOpenSpec) {
-      state.runOpenSpec = normalizeOpenSpecDocument(state.runOpenSpec);
+    if (state?.runSpecCoding) {
+      state.runSpecCoding = normalizeSpecCodingDocument(state.runSpecCoding);
     }
     return state;
   } catch {

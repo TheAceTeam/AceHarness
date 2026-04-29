@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
-import { buildOpenSpecFromWorkflowConfig } from '@/lib/openspec-store';
+import { buildSpecCodingFromWorkflowConfig } from '@/lib/spec-coding-store';
 import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
 import { loadChatSettings } from '@/lib/chat-settings';
 import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
-import type { OpenSpecDocument } from '@/lib/schemas';
+import type { SpecCodingDocument } from '@/lib/schemas';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
 
 function extractJsonObject(text: string): any | null {
@@ -30,7 +30,7 @@ function normalizeStringArray(input: unknown, limit = 12): string[] {
     .slice(0, limit);
 }
 
-function applyAiOpenSpecDraft(base: OpenSpecDocument, ai: any): OpenSpecDocument {
+function applyAiSpecCodingDraft(base: SpecCodingDocument, ai: any): SpecCodingDocument {
   const summary = typeof ai?.summary === 'string' && ai.summary.trim() ? ai.summary.trim() : base.summary;
   const goals = normalizeStringArray(ai?.goals, 8);
   const nonGoals = normalizeStringArray(ai?.nonGoals, 8);
@@ -112,7 +112,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少生成计划草案所需参数' }, { status: 400 });
     }
 
-    const baseOpenSpec = buildOpenSpecFromWorkflowConfig({
+    const baseSpecCoding = buildSpecCodingFromWorkflowConfig({
       workflowName,
       description,
       requirements,
@@ -131,7 +131,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (draft) {
-      const openSpec = applyAiOpenSpecDraft(baseOpenSpec, draft);
+      const specCoding = applyAiSpecCodingDraft(baseSpecCoding, draft);
       const clarification = draft?.clarification && typeof draft.clarification === 'object'
         ? {
             summary: typeof draft.clarification.summary === 'string' ? draft.clarification.summary.trim() : fallbackClarification.summary,
@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
         : fallbackClarification;
 
       return NextResponse.json({
-        openSpec,
+        specCoding,
         clarification,
         configValidation: formatValidationIssuesForResponse(configValidation),
         fallback: false,
@@ -155,14 +155,14 @@ export async function POST(request: NextRequest) {
       .filter(([, enabled]) => enabled)
       .map(([name]) => name);
     const systemPrompt = await buildDashboardSystemPrompt(
-      enabledSkills.includes('openspec') ? enabledSkills : [...enabledSkills, 'openspec']
+      enabledSkills.includes('spec-coding') ? enabledSkills : [...enabledSkills, 'spec-coding']
     );
 
     const engineType = await getConfiguredEngine();
     const engine = await createEngine(engineType as EngineType);
     if (!engine) {
       return NextResponse.json({
-        openSpec: baseOpenSpec,
+        specCoding: baseSpecCoding,
         clarification: fallbackClarification,
         configValidation: formatValidationIssuesForResponse(configValidation),
       fallback: true,
@@ -224,8 +224,8 @@ export async function POST(request: NextRequest) {
     ].filter(Boolean).join('\n');
 
     const result = await engine.execute({
-      agent: 'openspec',
-      step: 'draft-openspec',
+      agent: 'spec-coding',
+      step: 'draft-spec-coding',
       prompt,
       systemPrompt,
       model: '',
@@ -235,7 +235,7 @@ export async function POST(request: NextRequest) {
 
     const raw = result.output || chunks.join('');
     const parsed = extractJsonObject(raw);
-    const openSpec = parsed ? applyAiOpenSpecDraft(baseOpenSpec, parsed) : baseOpenSpec;
+    const specCoding = parsed ? applyAiSpecCodingDraft(baseSpecCoding, parsed) : baseSpecCoding;
     const clarification = parsed?.clarification && typeof parsed.clarification === 'object'
       ? {
           summary: typeof parsed.clarification.summary === 'string' ? parsed.clarification.summary.trim() : fallbackClarification.summary,
@@ -246,7 +246,7 @@ export async function POST(request: NextRequest) {
       : fallbackClarification;
 
     return NextResponse.json({
-      openSpec,
+      specCoding,
       clarification,
       configValidation: formatValidationIssuesForResponse(configValidation),
       fallback: !parsed,
@@ -254,7 +254,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || '生成 OpenSpec AI 草案失败' },
+      { error: error?.message || '生成 SpecCoding AI 草案失败' },
       { status: 500 }
     );
   }

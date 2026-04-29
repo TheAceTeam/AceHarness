@@ -1,72 +1,88 @@
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
-import { join, delimiter } from 'path';
+import { delimiter, isAbsolute, join } from 'path';
 
 const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
 
 function defaultWindowsScanDirs(): string[] {
   const out: string[] = [];
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+  if (home) out.push(join(home, 'AppData', 'Roaming', 'npm'));
   if (process.env.APPDATA) out.push(join(process.env.APPDATA, 'npm'));
   if (process.env.LOCALAPPDATA) out.push(join(process.env.LOCALAPPDATA, 'Programs'));
   out.push('C:\\Program Files\\nodejs');
   return out;
 }
 
-function existsNamedInDir(dir: string, name: string): boolean {
-  const candidates = [
-    join(dir, `${name}.exe`),
-    join(dir, `${name}.cmd`),
-    join(dir, `${name}.bat`),
-    join(dir, name),
-  ];
-  return candidates.some((p) => existsSync(p));
+function getExecutableCandidates(command: string): string[] {
+  if (process.platform !== 'win32') return [command];
+
+  const hasExtension = /\.[^./\\]+$/.test(command);
+  if (hasExtension) return [command];
+
+  const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
+    .split(';')
+    .map((ext) => ext.trim())
+    .filter(Boolean);
+
+  return [command, ...pathext.map((ext) => `${command}${ext}`)];
 }
 
-/**
- * True if `name` is on PATH or exists under known bin dirs.
- * Windows: uses `where.exe` (no Git Bash required); falls back to scanning npm/global dirs.
- * POSIX: uses bash `command -v` with PATH augmented by extraDirs.
- * `name` must be a single token (no slashes).
- */
-export function commandExists(name: string, extraDirs?: string[]): boolean {
-  if (!/^[\w.-]+$/.test(name)) return false;
+export function getCommonCliSearchPaths(): string[] {
+  const home = process.env.HOME || process.env.USERPROFILE || '';
 
   if (process.platform === 'win32') {
+    return defaultWindowsScanDirs();
+  }
+
+  return [
+    home ? join(home, '.local', 'bin') : '',
+    ...DEFAULT_SCAN_DIRS_POSIX,
+  ].filter(Boolean);
+}
+
+export function findCommand(command: string, extraPaths: string[] = []): string | null {
+  if (!command || /[\r\n]/.test(command)) return null;
+
+  if (isAbsolute(command) || command.includes('/') || command.includes('\\')) {
+    for (const candidate of getExecutableCandidates(command)) {
+      if (existsSync(candidate)) return candidate;
+    }
+    return existsSync(command) ? command : null;
+  }
+
+  if (process.platform === 'win32' && /^[\w.-]+$/.test(command)) {
     try {
-      execSync(`where.exe ${name}`, {
-        stdio: 'ignore',
+      const output = execSync(`where.exe ${command}`, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
         shell: process.env.ComSpec,
-      });
-      return true;
+      }).trim();
+      const first = output.split(/\r?\n/).find(Boolean);
+      if (first) return first;
     } catch {
-      const dirs = [...(extraDirs ?? []), ...defaultWindowsScanDirs()];
-      const seen = new Set<string>();
-      for (const dir of dirs) {
-        if (!dir || seen.has(dir)) continue;
-        seen.add(dir);
-        try {
-          if (existsSync(dir) && existsNamedInDir(dir, name)) return true;
-        } catch {
-          /* ignore */
-        }
-      }
-      return false;
+      /* fall through to PATH scanning */
     }
   }
 
-  const dirs = extraDirs?.length ? extraDirs : DEFAULT_SCAN_DIRS_POSIX;
-  const pathEnv = [...dirs, process.env.PATH || ''].filter(Boolean).join(delimiter);
-  try {
-    execSync(`command -v ${name}`, {
-      stdio: 'ignore',
-      shell: '/bin/bash',
-      env: { ...process.env, PATH: pathEnv },
-    });
-    return true;
-  } catch {
-    for (const dir of dirs) {
-      if (existsSync(join(dir, name))) return true;
+  const pathDirs = (process.env.PATH || '')
+    .split(delimiter)
+    .filter(Boolean);
+  const candidates = getExecutableCandidates(command);
+  const seen = new Set<string>();
+
+  for (const dir of [...extraPaths, ...pathDirs]) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    for (const candidate of candidates) {
+      const fullPath = join(dir, candidate);
+      if (existsSync(fullPath)) return fullPath;
     }
-    return false;
   }
+
+  return null;
+}
+
+export function commandExists(command: string, extraPaths: string[] = []): boolean {
+  return findCommand(command, extraPaths.length ? extraPaths : getCommonCliSearchPaths()) !== null;
 }

@@ -266,7 +266,7 @@ export default function AgentPanel({
           <Badge variant="outline" className="text-[10px]">workflow-chat</Badge>
         </div>
         <div className="mb-2 rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
-          对这个 Agent 的对话始终带当前 workflow、步骤、运行态与 OpenSpec 上下文，适合直接追问当前阶段、风险、下一步和具体执行判断。
+          对这个 Agent 的对话始终带当前 workflow、步骤、运行态与 SpecCoding 上下文，适合直接追问当前阶段、风险、下一步和具体执行判断。
         </div>
         {chatDisabledReason ? (
           <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-300">

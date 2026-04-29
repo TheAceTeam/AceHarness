@@ -3,14 +3,14 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { loadRunState } from '@/lib/run-state-persistence';
-import { loadLatestCreationSessionByFilename } from '@/lib/openspec-store';
+import { loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
 import {
   findRelevantWorkflowExperiences,
   listWorkflowExperiences,
   loadWorkflowFinalReview,
 } from '@/lib/workflow-experience-store';
 import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
-import type { OpenSpecDocument } from '@/lib/schemas';
+import type { SpecCodingDocument } from '@/lib/schemas';
 import {
   listMemoryEntries,
   type MemoryEntry,
@@ -19,21 +19,21 @@ import {
 type WorkflowStructureMapping = {
   mode: 'phase-based' | 'state-machine' | 'unknown';
   yamlSourceOfTruth: string[];
-  derivedIntoOpenSpec: string[];
-  runtimeOpenSpecSourceOfTruth: string[];
+  derivedIntoSpecCoding: string[];
+  runtimeSpecCodingSourceOfTruth: string[];
   counts: {
     yamlPhases: number;
     yamlStates: number;
     yamlSteps: number;
     yamlCheckpoints: number;
-    openSpecPhases: number;
-    openSpecTasks: number;
-    openSpecAssignments: number;
-    openSpecCheckpoints: number;
+    specCodingPhases: number;
+    specCodingTasks: number;
+    specCodingAssignments: number;
+    specCodingCheckpoints: number;
   };
 };
 
-async function buildWorkflowStructureMapping(configFile: string, openSpec: OpenSpecDocument): Promise<WorkflowStructureMapping | null> {
+async function buildWorkflowStructureMapping(configFile: string, specCoding: SpecCodingDocument): Promise<WorkflowStructureMapping | null> {
   try {
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
     const raw = await readFile(configPath, 'utf-8');
@@ -59,19 +59,19 @@ async function buildWorkflowStructureMapping(configFile: string, openSpec: OpenS
         'context.projectRoot / workspaceMode / requirements',
         'workflow.supervisor',
       ].filter(Boolean),
-      derivedIntoOpenSpec: [
-        'openSpec.workflowName <- workflow.name',
-        'openSpec.summary <- workflow.description / requirements',
+      derivedIntoSpecCoding: [
+        'specCoding.workflowName <- workflow.name',
+        'specCoding.summary <- workflow.description / requirements',
         phases.length > 0
-          ? 'openSpec.phases <- workflow.phases[].name + steps[].task'
-          : 'openSpec.phases <- workflow.states[].name + description / steps[].task',
-        'openSpec.assignments <- steps[].agent 聚合',
-        'openSpec.checkpoints <- workflow.phases[].checkpoint',
+          ? 'specCoding.phases <- workflow.phases[].name + steps[].task'
+          : 'specCoding.phases <- workflow.states[].name + description / steps[].task',
+        'specCoding.assignments <- steps[].agent 聚合',
+        'specCoding.checkpoints <- workflow.phases[].checkpoint',
       ],
-      runtimeOpenSpecSourceOfTruth: [
-        'openSpec.progress',
-        'openSpec.tasks <- artifacts.tasks 的结构化状态投影',
-        'openSpec.revisions',
+      runtimeSpecCodingSourceOfTruth: [
+        'specCoding.progress',
+        'specCoding.tasks <- artifacts.tasks 的结构化状态投影',
+        'specCoding.revisions',
         'run snapshot status',
         'Supervisor 非状态修订摘要',
       ],
@@ -80,10 +80,10 @@ async function buildWorkflowStructureMapping(configFile: string, openSpec: OpenS
         yamlStates: states.length,
         yamlSteps,
         yamlCheckpoints,
-        openSpecPhases: openSpec.phases.length,
-        openSpecTasks: openSpec.tasks.length,
-        openSpecAssignments: openSpec.assignments.length,
-        openSpecCheckpoints: openSpec.checkpoints.length,
+        specCodingPhases: specCoding.phases.length,
+        specCodingTasks: specCoding.tasks.length,
+        specCodingAssignments: specCoding.assignments.length,
+        specCodingCheckpoints: specCoding.checkpoints.length,
       },
     };
   } catch {
@@ -122,29 +122,29 @@ function compactMemory(entries: MemoryEntry[]) {
   }));
 }
 
-function buildOpenSpecPayload(openSpec: OpenSpecDocument, source: 'run' | 'creation') {
+function buildSpecCodingPayload(specCoding: SpecCodingDocument, source: 'run' | 'creation') {
   return {
-    openSpecSummary: {
-      id: openSpec.id,
-      version: openSpec.version,
-      status: openSpec.status,
+    specCodingSummary: {
+      id: specCoding.id,
+      version: specCoding.version,
+      status: specCoding.status,
       source,
-      summary: openSpec.summary,
-      phaseCount: openSpec.phases.length,
-      taskCount: openSpec.tasks.length,
-      assignmentCount: openSpec.assignments.length,
-      checkpointCount: openSpec.checkpoints.length,
-      revisionCount: openSpec.revisions.length,
-      progress: openSpec.progress,
-      latestRevision: openSpec.revisions.at(-1) || null,
+      summary: specCoding.summary,
+      phaseCount: specCoding.phases.length,
+      taskCount: specCoding.tasks.length,
+      assignmentCount: specCoding.assignments.length,
+      checkpointCount: specCoding.checkpoints.length,
+      revisionCount: specCoding.revisions.length,
+      progress: specCoding.progress,
+      latestRevision: specCoding.revisions.at(-1) || null,
     },
-    openSpecDetails: {
-      phases: openSpec.phases,
-      tasks: openSpec.tasks,
-      assignments: openSpec.assignments,
-      checkpoints: openSpec.checkpoints,
-      revisions: openSpec.revisions,
-      artifacts: openSpec.artifacts,
+    specCodingDetails: {
+      phases: specCoding.phases,
+      tasks: specCoding.tasks,
+      assignments: specCoding.assignments,
+      checkpoints: specCoding.checkpoints,
+      revisions: specCoding.revisions,
+      artifacts: specCoding.artifacts,
     },
   };
 }
@@ -169,13 +169,13 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     excludeRunId: status?.runId || undefined,
     limit: 5,
   }).catch(() => []);
-  const runOpenSpec = status?.runOpenSpec || null;
-  const displayOpenSpec = runOpenSpec || creationSession.openSpec;
-  const openSpecPayload = displayOpenSpec
-    ? buildOpenSpecPayload(displayOpenSpec, runOpenSpec ? 'run' : 'creation')
+  const runSpecCoding = status?.runSpecCoding || null;
+  const displaySpecCoding = runSpecCoding || creationSession.specCoding;
+  const specCodingPayload = displaySpecCoding
+    ? buildSpecCodingPayload(displaySpecCoding, runSpecCoding ? 'run' : 'creation')
     : {};
-  const sourceOfTruth = displayOpenSpec
-    ? await buildWorkflowStructureMapping(configFile, displayOpenSpec)
+  const sourceOfTruth = displaySpecCoding
+    ? await buildWorkflowStructureMapping(configFile, displaySpecCoding)
     : null;
   const supervisorName = status?.supervisorAgent || finalReview?.supervisorAgent || 'default-supervisor';
   const workflowMemories = await listMemoryEntries({
@@ -210,7 +210,7 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
       status: creationSession.status,
       updatedAt: creationSession.updatedAt,
     },
-    ...openSpecPayload,
+    ...specCodingPayload,
     sourceOfTruth,
     finalReview,
     qualityChecks: status?.qualityChecks || [],
@@ -225,12 +225,12 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
         ],
       },
       runtime: {
-        openSpecSummary: runOpenSpec
+        specCodingSummary: runSpecCoding
           ? {
-              id: runOpenSpec.id,
-              version: runOpenSpec.version,
-              summary: runOpenSpec.summary,
-              progressSummary: runOpenSpec.progress?.summary,
+              id: runSpecCoding.id,
+              version: runSpecCoding.version,
+              summary: runSpecCoding.summary,
+              progressSummary: runSpecCoding.progress?.summary,
             }
           : null,
         qualityChecks: status?.qualityChecks || [],
@@ -296,6 +296,9 @@ export async function GET(request: NextRequest) {
       if (requestedRunId) {
         const runState = await loadRunState(requestedRunId);
         if (runState && runState.configFile === configFile) {
+          const pendingHumanQuestion = runState.pendingHumanQuestionId
+            ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
+            : runState.pendingCheckpoint?.humanQuestion || null;
           const restoredStatus = {
             ...runState,
             runId: runState.runId,
@@ -308,6 +311,7 @@ export async function GET(request: NextRequest) {
             completedSteps: runState.completedSteps || [],
             failedSteps: runState.failedSteps || [],
             workingDirectory: runState.workingDirectory || null,
+            pendingHumanQuestion,
           };
           return NextResponse.json(await withCreationSession(restoredStatus, configFile));
         }
