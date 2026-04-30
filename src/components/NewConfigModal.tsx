@@ -3682,8 +3682,20 @@ ${confirmedSpecPrompt}
       }
       return true;
     } catch (error: any) {
-      toast('error', error?.message || '保存 workflow 草案失败');
-      return false;
+      const errorMsg = error?.message || '保存 workflow 草案失败';
+      // 将错误自动发回 AI 进行修复，而不是只显示 toast
+      const repairPrompt = buildWorkflowDraftRepairMessage(
+        JSON.stringify(workflowDraftConfig, null, 2),
+        { ok: false, message: errorMsg },
+        filename
+      );
+      setWorkflowDraftConfig(null);
+      setAiMessages(prev => [...prev, {
+        role: 'ai',
+        content: `创建失败: ${errorMsg}，正在自动修复...`,
+      }]);
+      await sendToAi(repairPrompt, backendSessionId, { workflowDraftAttempt: 1 });
+      return true;
     } finally {
       setIsSavingWorkflowDraft(false);
     }

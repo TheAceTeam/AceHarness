@@ -238,9 +238,11 @@ export async function POST(request: NextRequest) {
     }
 
     let defaultConfig: any;
-    let referenceConfig: any = null;
 
-    if (referenceWorkflow) {
+    // AI 引导模式：已有 configDraft 时直接使用，跳过 referenceWorkflow 读取
+    if (configDraft) {
+      defaultConfig = configDraft;
+    } else if (referenceWorkflow) {
       const sourceMeta = await getConfigMeta(referenceWorkflow, 'workflow');
       if (sourceMeta?.visibility === 'private' && sourceMeta.createdBy && sourceMeta.createdBy !== auth.id && auth.role !== 'admin') {
         return NextResponse.json({ error: '无权限访问参考工作流' }, { status: 403 });
@@ -248,13 +250,7 @@ export async function POST(request: NextRequest) {
 
       const referencePath = resolve(await getRuntimeConfigsDirPath(), normalizeConfigFilename(referenceWorkflow));
       const referenceRaw = await readFile(referencePath, 'utf-8');
-      referenceConfig = parse(referenceRaw);
-    }
-
-    // AI 引导模式：调用 AI 生成接口
-    if (configDraft) {
-      defaultConfig = configDraft;
-    } else if (referenceConfig) {
+      const referenceConfig = parse(referenceRaw);
       defaultConfig = createConfigFromReference(referenceConfig, {
         workflowName,
         workingDirectory,
