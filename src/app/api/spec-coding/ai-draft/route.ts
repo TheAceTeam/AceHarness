@@ -153,7 +153,9 @@ export async function POST(request: NextRequest) {
       .filter(([, enabled]) => enabled)
       .map(([name]) => name);
     const systemPrompt = await buildDashboardSystemPrompt(
-      enabledSkills.includes('spec-coding') ? enabledSkills : [...enabledSkills, 'spec-coding']
+      enabledSkills.includes('spec-coding')
+        ? (enabledSkills.includes('aceharness-workflow-creator') ? enabledSkills : [...enabledSkills, 'aceharness-workflow-creator'])
+        : [...enabledSkills, 'spec-coding', 'aceharness-workflow-creator']
     );
 
     const engineType = await getConfiguredEngine();

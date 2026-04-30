@@ -170,7 +170,12 @@ export async function POST(request: NextRequest) {
           ? `当前启用的 Skills: ${enabledSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`
           : '';
       } else {
-        systemPrompt = await buildDashboardSystemPrompt(enabledSkills);
+        const requiredSkills = ['aceharness-workflow-creator'];
+        const merged = [...enabledSkills];
+        for (const s of requiredSkills) {
+          if (!merged.includes(s)) merged.push(s);
+        }
+        systemPrompt = await buildDashboardSystemPrompt(merged);
       }
     } else if (!isResume) {
       systemPrompt = DEFAULT_PROMPT;
