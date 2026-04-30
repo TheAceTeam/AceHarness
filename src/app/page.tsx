@@ -197,6 +197,8 @@ function ChatPageContent() {
       tabs.add('workflow');
     }
     for (const tab of latestSidebarHint?.tabs || []) {
+      // commander tab 仅在有 workflowBinding 时才有意义
+      if (tab === 'commander' && !activeSession?.workflowBinding) continue;
       tabs.add(tab);
     }
     if (tabs.size === 0 && activeSession?.workflowBinding) tabs.add('commander');
