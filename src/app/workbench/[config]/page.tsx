@@ -961,7 +961,7 @@ export default function WorkbenchPage() {
   ]);
 
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
-  const canStartWorkflow = isRunMode && !starting && !isRunning;
+  const canStartWorkflow = isRunMode && !starting && (!isRunning || workspaceMode === 'isolated-copy');
   const preparingProgress = useMemo(() => {
     if (workflowStatus !== 'preparing') return null;
     const text = currentStep || '';
@@ -1587,7 +1587,7 @@ export default function WorkbenchPage() {
 
   // Smart polling: start at 5s, increase to 10s if stable
   useEffect(() => {
-    if (viewMode !== 'run' || !isRunning) return;
+    if (viewMode !== 'run' || (!isRunning && workflowStatus !== 'waiting')) return;
     let interval = 5000;
     let stableCount = 0;
     const poll = async () => {
@@ -1601,7 +1601,7 @@ export default function WorkbenchPage() {
     };
     let timer = setInterval(poll, interval);
     return () => clearInterval(timer);
-  }, [viewMode, isRunning]);
+  }, [viewMode, isRunning, workflowStatus]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig) {
@@ -3858,7 +3858,7 @@ export default function WorkbenchPage() {
               size="sm"
               className={`h-7 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`}
               onClick={() => void startWorkflow()}
-              disabled={starting || isRunning}
+              disabled={!canStartWorkflow}
             >
               {starting ? (
                 <ClipLoader color="currentColor" size={14} className="mr-1" />
@@ -5482,7 +5482,7 @@ export default function WorkbenchPage() {
                             setRehearsalMode(false);
                             void startWorkflow('real');
                           }}
-                          disabled={starting || isRunning}
+                          disabled={!canStartWorkflow}
                         >
                           基于演练结果正式启动
                         </Button>
@@ -5672,7 +5672,7 @@ export default function WorkbenchPage() {
                   setRehearsalMode(false);
                   void startWorkflow('real');
                 }}
-                disabled={starting || isRunning}
+                disabled={!canStartWorkflow}
               >
                 基于演练结果正式启动
               </Button>

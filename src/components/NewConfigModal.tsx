@@ -109,7 +109,8 @@ function buildPlanDraftRepairMessage(previousOutput: string) {
     '3. JSON 顶层必须是 {"type":"plan_draft", ...}。',
     '4. 必须包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
     '5. artifacts 必须包含 requirements、design、tasks 三个字符串字段。',
-    '6. 输出 </result> 后不要再追加任何文字。',
+    '6. artifacts 字符串内如需 Mermaid 或代码块，用 ~~~ 代替 ``` 作为分隔符，避免与外层 JSON 代码块冲突。',
+    '7. 输出 </result> 后不要再追加任何文字。',
     '',
     SPEC_LANGUAGE_RULE,
     '',
@@ -1753,10 +1754,13 @@ export default function NewConfigModal({
     workspaceModeValue,
   ]);
 
+  const artifactsSyncKey = previewSession?.specCoding?.artifacts
+    ? `${(previewSession.specCoding.artifacts.requirements || '').length}:${(previewSession.specCoding.artifacts.design || '').length}:${(previewSession.specCoding.artifacts.tasks || '').length}`
+    : '';
   useEffect(() => {
     if (!previewSession?.specCoding) return;
     setArtifactDrafts(buildArtifactDrafts(previewSession.specCoding));
-  }, [previewSession?.id, previewSession?.specCoding?.version]);
+  }, [previewSession?.id, previewSession?.specCoding?.version, artifactsSyncKey]);
 
   useEffect(() => {
     const snapshots = previewSession?.artifactSnapshots || [];
@@ -2541,6 +2545,7 @@ export default function NewConfigModal({
       '请把输出写成稳定的计划 DSL，而不是自由散文。后续 workflow 和角色分工会根据这些正式制品自动派生，所以结构必须清晰、可引用、可追踪。',
       '你可以分多段普通文本逐步展示分析、思路和计划制品草案。',
       '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。',
+      '重要：artifacts 中的 requirements、design、tasks 是 JSON 字符串值。字符串内的换行用 \\n 表示，字符串内如果需要 Mermaid 或代码块，用 ~~~ 代替 ``` 作为 fenced code block 分隔符（例如 ~~~mermaid\\n...\\n~~~），这样不会与外层 JSON 代码块冲突。不要在 JSON 字符串值内使用 ``` 三个反引号。',
       SPEC_LANGUAGE_RULE,
       '当你完成本轮计划草案时，输出如下结构化结果：',
       '<result>',
@@ -2581,8 +2586,8 @@ export default function NewConfigModal({
       '2. 需求拆分要足够细，必须能支撑后续逐项执行和审查，不要停留在口号式总结。',
       '3. requirements/spec 应优先采用如下 DSL：术语表 -> 编号化需求 -> 目标用户与诉求 -> 场景/验收标准。验收标准优先使用“当 <条件> 时，系统应 <结果>”句式。',
       '4. design.md 必须包含 Overview、Architecture、Core Components、Data Models、Interfaces And Contracts、Assumptions And Unknowns、清晰的流程图或 Mermaid 图，以及与真实业务规则对应的伪代码、判定逻辑或步骤算法。',
-      '4.1 如果使用 Mermaid，必须写成独立的 ```mermaid fenced code block；不要写成“Mermaid 流程图如下：flowchart ...”这种普通段落。',
-      '5. tasks.md 必须按阶段和任务编号细拆，每项任务都写清楚关联需求、关联设计、任务类型、目标、输入或依赖、具体动作、交付产物、验证方式和完成标准。',
+      '4.1 如果使用 Mermaid，必须写成独立的 ~~~mermaid fenced code block（注意用 ~~~ 而非 ```）；不要写成"Mermaid 流程图如下：flowchart ..."这种普通段落。',
+      '5. tasks.md 必须按阶段和任务编号细拆，每项任务都写清楚关联需求、关联设计、任务类型、目标、输入或依赖、具体动作、交付产物、验证方式和完成标准。每个任务项必须使用 `- [ ]` checkbox 格式（例如 `- [ ] T1.1 实现用户登录接口`），方便后续追踪完成状态。',
       '6. requirements 要写清用户故事和 WHEN/THEN 验收标准；design 要写清主链路和关键决策；tasks 要写清执行顺序和验证闭环。',
       '7. 正式制品中不要直接写 workflow、Agent、状态机、编排等系统术语，但任务切片和阶段结构必须足够稳定，以便后续派生 workflow 和角色分工。',
       '8. 输出前先做一次一致性自检，确保 requirements/design/tasks 没有互相矛盾、越界或把假设写成事实。',
@@ -2700,7 +2705,8 @@ export default function NewConfigModal({
         '2. 最终必须在 <result>...</result> 内输出一个 ```json 代码块。',
         '3. JSON 顶层必须是 {"type":"plan_draft", ...}，并包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
         '4. artifacts 必须包含完整 requirements、design、tasks 三个字符串字段，不能只返回被修订的片段。',
-        '5. 输出 </result> 后不要追加任何文字。',
+        '5. artifacts 字符串内如需 Mermaid 或代码块，用 ~~~ 代替 ``` 作为分隔符，避免与外层 JSON 代码块冲突。',
+        '6. 输出 </result> 后不要追加任何文字。',
       ].filter(Boolean).join('\n\n');
 
       let activeBackendSessionId = backendSessionId;
@@ -4005,7 +4011,7 @@ ${confirmedSpecPrompt}
             <div className="text-xs leading-5 text-muted-foreground">
               AI 会先提出会影响后续计划和 Agent 编排的关键问题。你用表单补全后，系统才会继续生成正式计划。
             </div>
-            <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-xl border bg-background p-4">
+            <div className="mt-4 flex-1 overflow-y-auto rounded-xl border bg-background p-4">
                 {clarificationForm ? (
                   <div className="space-y-4">
                     <div>
