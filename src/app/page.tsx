@@ -48,6 +48,10 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 });
 
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
+
+const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
+  ssr: false,
+});
 const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
@@ -127,6 +131,10 @@ function ChatPageContent() {
   const [debugMode, setDebugMode] = useState(false);
   const [debugPrompt, setDebugPrompt] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
+  const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
+  const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
+  const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
+  const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
   const editorLoadedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
@@ -218,6 +226,25 @@ function ChatPageContent() {
     setHomeSidebarTab((prev) => (prev === derivedHomeSidebarTab ? prev : derivedHomeSidebarTab));
     setHomeSidebarMode((prev) => (prev === derivedHomeSidebarMode ? prev : derivedHomeSidebarMode));
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab]);
+
+  useEffect(() => {
+    const handleOpenWorkspacePath = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        absolutePath?: string;
+        workspacePath?: string;
+        filePath?: string | null;
+      }>).detail;
+      if (!detail?.workspacePath) return;
+      setWorkspaceEditorPath(detail.workspacePath);
+      setWorkspaceEditorTitle('文档链接');
+      setWorkspaceEditorFilePath(detail.absolutePath || detail.filePath || null);
+      setWorkspaceEditorOpen(true);
+    };
+    window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
+    return () => {
+      window.removeEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
+    };
+  }, []);
 
   const chatTitle = useMemo(() => {
     const notebookFile = searchParams.get('notebookFile');
@@ -1249,6 +1276,15 @@ function ChatPageContent() {
           )}
           onConfirm={handleConfirmNotebookExport}
         />
+        {workspaceEditorPath && (
+          <WorkspaceEditor
+            open={workspaceEditorOpen}
+            onOpenChange={setWorkspaceEditorOpen}
+            workspacePath={workspaceEditorPath}
+            initialFilePath={workspaceEditorFilePath}
+            title={workspaceEditorTitle}
+          />
+        )}
       </div>
     </div>
   );

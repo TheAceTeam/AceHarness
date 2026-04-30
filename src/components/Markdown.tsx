@@ -476,7 +476,7 @@ const components = {
       return (
         <button
           type="button"
-          className="font-semibold text-current underline decoration-current/70 underline-offset-4 hover:opacity-80"
+          className="inline-flex items-center gap-0.5 text-primary font-medium underline decoration-primary/40 underline-offset-4 hover:decoration-primary/80 hover:opacity-90 transition-opacity"
           onClick={() => {
             if (typeof window === 'undefined') return;
             window.dispatchEvent(new CustomEvent('ace:open-workspace-path', {
@@ -488,6 +488,7 @@ const components = {
             }));
           }}
         >
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_open</span>
           {children}
         </button>
       );
