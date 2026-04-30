@@ -188,6 +188,7 @@ interface NewConfigModalProps {
   initialWorkingDirectory?: string;
   initialWorkspaceMode?: 'isolated-copy' | 'in-place';
   frontendSessionId?: string | null;
+  hideAiGuided?: boolean;
 }
 
 type ReferenceWorkflowSummary = {
@@ -1367,6 +1368,7 @@ export default function NewConfigModal({
   initialWorkingDirectory,
   initialWorkspaceMode,
   frontendSessionId,
+  hideAiGuided = false,
 }: NewConfigModalProps) {
   const { toast } = useToast();
   const { appendVisibleSessionTag, appendSessionMessage } = useChat();
@@ -5382,6 +5384,7 @@ ${confirmedSpecPrompt}
                   value={workflowMode}
                   onChange={setWorkflowMode}
                   showDetails={true}
+                  hideAiGuided={hideAiGuided}
                 />
               </div>
 

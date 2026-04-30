@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, readFile, stat, writeFile } from 'fs/promises';
+import { cp, mkdir, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, relative, resolve } from 'path';
 import {
@@ -75,7 +75,17 @@ export async function ensureRuntimeConfigsSeeded(): Promise<void> {
       return;
     }
 
-    await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, await loadDeletedSet(runtimeConfigsDir), runtimeConfigsDir);
+    const deletedSet = await loadDeletedSet(runtimeConfigsDir);
+
+    // Remove tombstoned files that still exist on disk
+    for (const rel of deletedSet) {
+      const fullPath = resolve(runtimeConfigsDir, rel);
+      if (existsSync(fullPath)) {
+        try { await unlink(fullPath); } catch { /* ignore */ }
+      }
+    }
+
+    await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, deletedSet, runtimeConfigsDir);
   })().finally(() => {
     seedPromise = null;
   });

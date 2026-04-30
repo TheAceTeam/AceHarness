@@ -26,6 +26,13 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 
 interface WorkflowConfig {
@@ -52,6 +59,7 @@ export default function WorkflowsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMode, setSelectedMode] = useState<string>('all');
   const [showNewModal, setShowNewModal] = useState(false);
+  const [showAIGuide, setShowAIGuide] = useState(false);
   const [referenceWorkflow, setReferenceWorkflow] = useState<string>('');
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(new Set());
@@ -109,6 +117,18 @@ export default function WorkflowsPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleAICreate = () => {
+    setShowAIGuide(true);
+  };
+
+  const AI_GUIDE_SAMPLE_MESSAGE = '我想围绕【目标】创建一个工作流，工作目录是【路径】，请先帮我梳理需求、阶段、候选 Agent 和任务拆分。';
+
+  const handleAIGuideConfirm = () => {
+    setShowAIGuide(false);
+    const encoded = encodeURIComponent(AI_GUIDE_SAMPLE_MESSAGE);
+    router.push(`/?starterPrompt=${encoded}&sidebarTab=workflow&sessionTitle=创建工作流`);
   };
 
   const handleDelete = async (filename: string) => {
@@ -205,9 +225,13 @@ export default function WorkflowsPage() {
             <div className="flex items-center gap-3">
               <LanguageToggle />
               <ThemeToggle />
+              <Button size="sm" variant="outline" onClick={handleAICreate}>
+                <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+                AI 创建
+              </Button>
               <Button onClick={() => setShowNewModal(true)}>
                 <Plus className="w-4 h-4 mr-2" />
-                新建工作流
+                手动创建
               </Button>
             </div>
           </div>
@@ -313,10 +337,16 @@ export default function WorkflowsPage() {
               {workflows.length === 0 ? '创建你的第一个工作流配置' : '尝试调整搜索条件'}
             </p>
             {workflows.length === 0 && (
-              <Button onClick={() => setShowNewModal(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                新建工作流
-              </Button>
+              <div className="flex items-center gap-3">
+                <Button size="sm" variant="outline" onClick={handleAICreate}>
+                  <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+                  AI 创建
+                </Button>
+                <Button onClick={() => setShowNewModal(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  手动创建
+                </Button>
+              </div>
             )}
           </div>
         ) : viewMode === 'table' ? (
@@ -470,6 +500,7 @@ export default function WorkflowsPage() {
           isOpen={showNewModal}
           onClose={() => { setShowNewModal(false); setReferenceWorkflow(''); }}
           initialReferenceWorkflow={referenceWorkflow || undefined}
+          hideAiGuided
           onSuccess={(filename) => {
             setShowNewModal(false);
             setReferenceWorkflow('');
@@ -480,6 +511,63 @@ export default function WorkflowsPage() {
       )}
 
       {dialogProps && <ConfirmDialog {...dialogProps} />}
+
+      {/* AI 引导创建指南弹窗 */}
+      <Dialog open={showAIGuide} onOpenChange={setShowAIGuide}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-xl">auto_awesome</span>
+              AI 引导创建工作流
+            </DialogTitle>
+            <DialogDescription>
+              先描述目标，再创建工作流
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              这类操作依赖当前对话上下文。先把目标、工作目录和约束告诉 AI，再让它生成右侧表单预填信息会更稳定。
+            </p>
+
+            <div className="text-sm font-medium">建议先发送这样一条消息</div>
+            <div className="rounded-lg border bg-muted/50 p-3">
+              <div className="flex items-start gap-2">
+                <span className="material-symbols-outlined text-base text-primary mt-0.5">smart_toy</span>
+                <p className="text-sm italic text-muted-foreground">
+                  {AI_GUIDE_SAMPLE_MESSAGE}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-base text-primary">auto_awesome</span>
+                AI 将这样推进
+              </div>
+              <ul className="space-y-1.5 text-sm text-muted-foreground pl-6">
+                <li>先确认你的目标、输入、工作目录和约束。</li>
+                <li>整理出阶段、候选 Agent、工作流结构和关键风险。</li>
+                <li>把这些信息同步到右侧工作流表单，再进入创建。</li>
+              </ul>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              点击下面按钮后，这条示例消息会直接放入输入框，不会自动发送。你可以先补充细节，再手动发出。
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="outline" onClick={() => setShowAIGuide(false)}>
+              稍后再说
+            </Button>
+            <Button onClick={handleAIGuideConfirm}>
+              <span className="material-symbols-outlined text-sm mr-1.5">edit_note</span>
+              把示例消息放入输入框
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
