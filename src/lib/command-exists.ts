@@ -1,17 +1,22 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
 
 const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
 
 function defaultWindowsScanDirs(): string[] {
-  const out: string[] = [];
   const home = process.env.HOME || process.env.USERPROFILE || '';
-  if (home) out.push(join(home, 'AppData', 'Roaming', 'npm'));
-  if (process.env.APPDATA) out.push(join(process.env.APPDATA, 'npm'));
-  if (process.env.LOCALAPPDATA) out.push(join(process.env.LOCALAPPDATA, 'Programs'));
-  out.push('C:\\Program Files\\nodejs');
-  return out;
+  return [
+    home ? join(home, 'AppData', 'Roaming', 'npm') : '',
+    process.env.APPDATA ? join(process.env.APPDATA, 'npm') : '',
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Programs') : '',
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : '',
+    home ? join(home, 'go', 'bin') : '',
+    home ? join(home, '.cargo', 'bin') : '',
+    home ? join(home, 'scoop', 'shims') : '',
+    home ? join(home, '.local', 'bin') : '',
+    'C:\\Program Files\\nodejs',
+  ].filter(Boolean);
 }
 
 function getExecutableCandidates(command: string): string[] {
@@ -37,6 +42,8 @@ export function getCommonCliSearchPaths(): string[] {
 
   return [
     home ? join(home, '.local', 'bin') : '',
+    home ? join(home, 'go', 'bin') : '',
+    home ? join(home, '.cargo', 'bin') : '',
     ...DEFAULT_SCAN_DIRS_POSIX,
   ].filter(Boolean);
 }
@@ -84,5 +91,17 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
 }
 
 export function commandExists(command: string, extraPaths: string[] = []): boolean {
-  return findCommand(command, extraPaths.length ? extraPaths : getCommonCliSearchPaths()) !== null;
+  const searchPaths = extraPaths.length ? extraPaths : getCommonCliSearchPaths();
+  if (findCommand(command, searchPaths) !== null) return true;
+
+  try {
+    execFileSync(command, ['--version'], {
+      stdio: 'ignore',
+      timeout: 5000,
+      windowsHide: true,
+    });
+    return true;
+  } catch (err: any) {
+    return err?.status != null;
+  }
 }

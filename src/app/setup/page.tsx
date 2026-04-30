@@ -43,6 +43,8 @@ export default function SetupPage() {
   const [defaultModel, setDefaultModel] = useState('');
   const [availableModels, setAvailableModels] = useState<Array<{ value: string; label: string }>>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean | null>>({});
+  const [checkingEngine, setCheckingEngine] = useState(false);
 
   // Skills
   const [skills, setSkills] = useState<DiscoveredSkill[]>([]);
@@ -85,9 +87,40 @@ export default function SetupPage() {
     }
 
     let cancelled = false;
-    const loadModels = async () => {
+    const checkAndLoadModels = async () => {
       setLoadingModels(true);
       setError('');
+      setCheckingEngine(true);
+
+      // Check engine availability first (use cached result if available)
+      if (engineAvailability[engine] == null) {
+        try {
+          const availRes = await fetch(`/api/engine/availability?engine=${encodeURIComponent(engine)}`);
+          const availData = await availRes.json();
+          if (cancelled) return;
+          setEngineAvailability((prev) => ({ ...prev, [engine]: availData.available }));
+          if (!availData.available) {
+            setAvailableModels([]);
+            setDefaultModel('');
+            setError(`引擎 ${engine} 不可用，请确保已安装对应的命令行工具`);
+            setLoadingModels(false);
+            setCheckingEngine(false);
+            return;
+          }
+        } catch {
+          if (cancelled) return;
+          // availability check failed, still try loading models
+        }
+      } else if (engineAvailability[engine] === false) {
+        setAvailableModels([]);
+        setDefaultModel('');
+        setError(`引擎 ${engine} 不可用，请确保已安装对应的命令行工具`);
+        setLoadingModels(false);
+        setCheckingEngine(false);
+        return;
+      }
+      setCheckingEngine(false);
+
       try {
         if (['opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor', 'trae-cli'].includes(engine)) {
           const res = await fetch(`/api/engine/models?engine=${encodeURIComponent(engine)}`);
@@ -125,7 +158,7 @@ export default function SetupPage() {
       }
     };
 
-    loadModels();
+    checkAndLoadModels();
     return () => {
       cancelled = true;
     };
@@ -367,10 +400,19 @@ export default function SetupPage() {
                 <label className="text-sm font-medium mb-1.5 block">默认引擎</label>
                 <SingleCombobox
                   value={engine}
-                  onValueChange={setEngine}
+                  onValueChange={(v) => {
+                    setEngine(v);
+                    setEngineAvailability((prev) => ({ ...prev, [v]: null }));
+                  }}
                   options={getConcreteEngines().map((item) => ({ value: item.id, label: item.name }))}
                   placeholder="请选择默认引擎"
                 />
+                {checkingEngine && (
+                  <p className="text-xs text-muted-foreground mt-1 animate-pulse">正在检测引擎可用性...</p>
+                )}
+                {!checkingEngine && engine && engineAvailability[engine] === false && (
+                  <p className="text-xs text-destructive mt-1">该引擎不可用，请确保已安装对应的命令行工具</p>
+                )}
               </div>
 
               <div>
@@ -379,8 +421,8 @@ export default function SetupPage() {
                   value={defaultModel}
                   onValueChange={setDefaultModel}
                   options={availableModels}
-                  placeholder={loadingModels ? '正在加载模型...' : '请选择默认模型'}
-                  disabled={!engine || loadingModels || availableModels.length === 0}
+                  placeholder={checkingEngine ? '正在检测引擎...' : loadingModels ? '正在加载模型...' : '请选择默认模型'}
+                  disabled={!engine || checkingEngine || loadingModels || availableModels.length === 0}
                 />
                 <p className="text-xs text-muted-foreground mt-1">首次进入和 Agent 跟随系统时都会使用这里的默认模型</p>
               </div>
