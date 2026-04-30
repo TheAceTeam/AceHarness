@@ -4,7 +4,7 @@ import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/runtime-configs';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
 
 function normalizeConfigFilename(filename: string): string {
@@ -119,6 +119,8 @@ export async function POST(
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     const yamlContent = stringify(validationResult.normalized);
     await writeFile(filepath, yamlContent, 'utf-8');
+    const configsDir = await getRuntimeConfigsDirPath();
+    await unmarkConfigDeleted(configsDir, filename);
 
     return NextResponse.json({ success: true, message: '配置已保存' });
   } catch (error: any) {
@@ -144,6 +146,8 @@ export async function DELETE(
     }
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     await unlink(filepath);
+    const configsDir = await getRuntimeConfigsDirPath();
+    await markConfigDeleted(configsDir, filename);
     await deleteConfigMeta(filename, 'workflow');
     return NextResponse.json({ success: true, message: '配置已删除' });
   } catch (error: any) {

@@ -520,6 +520,16 @@ export const configApi = {
     if (!response.ok) throw new Error('删除配置失败');
     return response.json();
   },
+
+  async batchDeleteConfigs(filenames: string[]): Promise<ApiResponse & { deletedCount: number; errors?: string[] }> {
+    const response = await authFetch(`${API_BASE}/configs/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames }),
+    });
+    if (!response.ok) throw new Error('批量删除失败');
+    return response.json();
+  },
 };
 
 export const agentApi = {
