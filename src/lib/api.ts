@@ -3,7 +3,7 @@
  */
 
 import type { RunRecord } from '@/lib/run-store';
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 
 const API_BASE = '/api';
 
@@ -97,6 +97,10 @@ interface WorkflowStatusResponse {
   globalContext?: string;
   phaseContexts?: Record<string, string>;
   workingDirectory?: string | null;
+  persistMode?: 'none' | 'repository';
+  deltaSpecMerged?: boolean;
+  deltaMergeState?: DeltaMergeState;
+  masterSpecPath?: string;
   // State machine specific fields
   stateHistory?: any[];
   issueTracker?: any[];
@@ -845,6 +849,7 @@ export const workflowApi = {
   },
 
   async start(configFile: string, frontendSessionId?: string, options?: {
+    creationSessionId?: string;
     skipPreflight?: boolean;
     rehearsal?: boolean;
     preflightChecks?: Array<{
@@ -873,6 +878,7 @@ export const workflowApi = {
       body: JSON.stringify({
         configFile,
         frontendSessionId,
+        creationSessionId: options?.creationSessionId,
         skipPreflight: options?.skipPreflight || false,
         rehearsal: options?.rehearsal || false,
         preflightChecks: options?.preflightChecks,
@@ -1087,6 +1093,41 @@ export const workflowApi = {
       throw new Error(err.error || '重新运行失败');
     }
     return response.json();
+  },
+
+  async previewSpecMerge(input: { runId: string; configFile: string }): Promise<{
+    masterBefore: string;
+    mergedContent: string;
+    diff: string;
+    aiSummary: string;
+    mergeState: DeltaMergeState;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'preview', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '生成 Spec 合入预览失败');
+    }
+    return data;
+  },
+
+  async applySpecMerge(input: { runId: string; configFile: string; mergedHash: string }): Promise<{
+    success: boolean;
+    mergeState: DeltaMergeState;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '确认合入 Spec 失败');
+    }
+    return data;
   },
 
   connectEventStream(onMessage: (data: any) => void): EventSource {
@@ -1537,7 +1578,7 @@ export const workspaceApi = {
     const res = await authFetch(`${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&depth=${depth}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '获取文件树失败');
+      throw new Error(data.message || data.error || '获取文件树失败');
     }
     return res.json();
   },
@@ -1547,7 +1588,7 @@ export const workspaceApi = {
     );
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '获取子目录失败');
+      throw new Error(data.message || data.error || '获取子目录失败');
     }
     return res.json();
   },
@@ -1555,7 +1596,7 @@ export const workspaceApi = {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      const err = new Error(data.error || '读取文件失败') as Error & { size?: number };
+      const err = new Error(data.message || data.error || '读取文件失败') as Error & { size?: number };
       if (data.size != null) err.size = data.size;
       throw err;
     }
@@ -1569,16 +1610,64 @@ export const workspaceApi = {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '保存文件失败');
+      throw new Error(data.message || data.error || '保存文件失败');
     }
     return res.json();
   },
   async getFileBlob(workspace: string, file: string): Promise<Blob> {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}&mode=blob`);
     if (!res.ok) {
-      throw new Error('获取文件失败');
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取文件失败');
     }
     return res.blob();
+  },
+  async upload(workspace: string, targetPath: string, files: File[], options?: { conflict?: 'rename' | 'error'; relativePaths?: string[] }): Promise<{ success: boolean; count: number; files: Array<{ name: string; path: string; size: number }> }> {
+    const formData = new FormData();
+    formData.append('workspace', workspace);
+    formData.append('targetPath', targetPath || '');
+    formData.append('conflict', options?.conflict || 'rename');
+    const relativePaths = options?.relativePaths || files.map((file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+    formData.append('relativePaths', JSON.stringify(relativePaths));
+    files.forEach((file) => formData.append('files', file));
+
+    const res = await authFetch(`${API_BASE}/workspace/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '上传失败');
+    }
+    return res.json();
+  },
+  async download(workspace: string, targetPath: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(targetPath)}`);
+    if (!res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || data.error || '下载失败');
+      }
+      const text = await res.text().catch(() => '');
+      throw new Error(text || '下载失败');
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+    const filename = decodeURIComponent(match?.[1] || match?.[2] || targetPath.split('/').filter(Boolean).pop() || 'download');
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   },
   async manage(workspace: string, action: string, params: Record<string, any>): Promise<{ success: boolean }> {
     const res = await authFetch(`${API_BASE}/workspace/manage`, {
@@ -1588,7 +1677,7 @@ export const workspaceApi = {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '操作失败');
+      throw new Error(data.message || data.error || '操作失败');
     }
     return res.json();
   },

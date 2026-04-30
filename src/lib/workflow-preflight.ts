@@ -15,7 +15,7 @@ function resolveProjectRoot(personalDir: string, projectRoot?: string | null): s
   return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
 }
 
-function classifyQualityCommand(command: string): 'lint' | 'compile' | 'test' | 'custom' {
+export function classifyQualityCommand(command: string): 'lint' | 'compile' | 'test' | 'custom' {
   const normalized = command.toLowerCase();
   if (/eslint|lint|cjlint/.test(normalized)) return 'lint';
   if (/tsc|build|compile|cjc|cjpm build|make/.test(normalized)) return 'compile';
@@ -23,7 +23,7 @@ function classifyQualityCommand(command: string): 'lint' | 'compile' | 'test' | 
   return 'custom';
 }
 
-function truncate(text: string, max: number): string {
+export function truncate(text: string, max: number): string {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)}\n...(截断)...` : text;
 }

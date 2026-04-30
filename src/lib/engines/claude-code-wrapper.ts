@@ -10,11 +10,49 @@ import { EventEmitter } from 'events';
 import { existsSync, readFileSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
 import { fenced, formatLargeContent } from '../markdown-utils';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function metadataFromClaudeResult(result: Record<string, unknown>, resolvedModel?: string): EngineResultMetadata {
+  const usage = result.usage && typeof result.usage === 'object' ? result.usage as Record<string, unknown> : {};
+  return {
+    usage: {
+      input_tokens: numberOrZero(usage.input_tokens),
+      output_tokens: numberOrZero(usage.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage.cache_read_input_tokens),
+    },
+    cost_usd: numberOrZero(result.cost_usd),
+    duration_ms: numberOrZero(result.duration_ms),
+    duration_api_ms: numberOrZero(result.duration_api_ms),
+    num_turns: numberOrZero(result.num_turns),
+    ...(resolvedModel ? { resolvedModel } : {}),
+  };
+}
+
+function zeroUsageMetadata(resolvedModel?: string): EngineResultMetadata {
+  return resolvedModel ? { ...ZERO_USAGE_METADATA, resolvedModel } : ZERO_USAGE_METADATA;
+}
 
 function parseToolJson(inputJson: string): Record<string, unknown> | null {
   if (!inputJson.trim()) return null;
@@ -644,7 +682,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
           }
         } else if (msg.type === 'result') {
           if (msg.subtype === 'success') {
-            const r = msg as { result?: string; session_id?: string };
+            const r = msg as { result?: string; session_id?: string } & Record<string, unknown>;
             const resultText = r.result ?? '';
             const streamedHasAssistantText = assistantTextBytesEmitted > 0;
             const finalOutput = streamedHasAssistantText
@@ -654,7 +692,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
               success: true,
               output: finalOutput,
               sessionId: r.session_id || capturedSessionId,
-              metadata: resolvedModel ? { resolvedModel } : undefined,
+              metadata: metadataFromClaudeResult(r, resolvedModel),
             };
           }
           const err = msg as { errors?: string[] };
@@ -670,7 +708,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         success: true,
         output: accumulated,
         sessionId: capturedSessionId,
-        metadata: resolvedModel ? { resolvedModel } : undefined,
+        metadata: zeroUsageMetadata(resolvedModel),
       };
     } catch (e: unknown) {
       const isAborted = this._abortController?.signal.aborted;

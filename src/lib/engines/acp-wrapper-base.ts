@@ -8,8 +8,21 @@
 
 import { EventEmitter } from 'events';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { fenced, formatLargeContent } from '../markdown-utils';
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
 
 export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected engine: ACPEngine | null = null;
@@ -66,6 +79,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
             success: false,
             output: '',
             error: modelErr.message,
+            metadata: ZERO_USAGE_METADATA,
           };
         }
       }
@@ -83,7 +97,8 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         success: isSuccess,
         output: this.collectedOutput.trim(),
         sessionId: this.currentSessionId ?? undefined,
-        stopReason
+        stopReason,
+        metadata: ZERO_USAGE_METADATA
       };
     } catch (error) {
       this.streaming = false;
@@ -99,13 +114,15 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
           output: this.collectedOutput.trim(),
           sessionId: this.currentSessionId ?? undefined,
           stopReason: 'end_turn',
+          metadata: ZERO_USAGE_METADATA,
         };
       }
 
       return {
         success: false,
         output: '',
-        error: errorMessage
+        error: errorMessage,
+        metadata: ZERO_USAGE_METADATA
       };
     }
   }

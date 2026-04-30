@@ -8,9 +8,42 @@
 import { EventEmitter } from 'events';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { extname, join } from 'path';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { commandExists } from '../command-exists';
 import { fenced, formatLargeContent } from '../markdown-utils';
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function metadataFromCodexEvent(event: Record<string, unknown> | null): EngineResultMetadata {
+  const usage = event?.usage && typeof event.usage === 'object' ? event.usage as Record<string, unknown> : {};
+  return {
+    usage: {
+      input_tokens: numberOrZero(usage.input_tokens),
+      output_tokens: numberOrZero(usage.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage.cache_read_input_tokens),
+    },
+    cost_usd: numberOrZero(event?.cost_usd),
+    duration_ms: numberOrZero(event?.duration_ms),
+    duration_api_ms: numberOrZero(event?.duration_api_ms),
+    num_turns: numberOrZero(event?.num_turns),
+  };
+}
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
   private static readonly MAX_INLINE_FILE_BYTES = 64 * 1024;
@@ -254,6 +287,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         signal: this._abortController!.signal,
       });
 
+      let completionMetadata: EngineResultMetadata = ZERO_USAGE_METADATA;
       for await (const event of events) {
         switch (event.type) {
           case 'item.started': {
@@ -316,6 +350,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
             break;
           }
           case 'turn.completed': {
+            completionMetadata = metadataFromCodexEvent(event as Record<string, unknown>);
             break;
           }
           case 'turn.failed': {
@@ -328,6 +363,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
               success: false,
               output: this.collectedOutput,
               error: errMsg,
+              metadata: ZERO_USAGE_METADATA,
             };
           }
         }
@@ -337,6 +373,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         success: true,
         output: this.collectedOutput,
         sessionId: this.currentThread?.id,
+        metadata: completionMetadata,
       };
     } catch (error: any) {
       // Abort is expected when cancel() is called
@@ -345,6 +382,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
           success: true,
           output: this.collectedOutput || '',
           stopReason: 'cancelled',
+          metadata: ZERO_USAGE_METADATA,
         };
       }
       const errMsg = error.message || String(error);
@@ -356,6 +394,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         success: false,
         output: '',
         error: errMsg,
+        metadata: ZERO_USAGE_METADATA,
       };
     }
   }

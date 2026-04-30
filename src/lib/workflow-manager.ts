@@ -12,7 +12,7 @@ import { cpus } from 'os';
 import { parse } from 'yaml';
 import { fenced } from './markdown-utils';
 import { processManager } from './process-manager';
-import type { EngineJsonResult } from './engines/engine-interface';
+import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from './engines/engine-interface';
 import { createRun, updateRun } from './run-store';
 import type { RunRecord } from './run-store';
 import {
@@ -65,6 +65,42 @@ export function resolveAgentModel(roleConfig: any, workflowContext?: any): strin
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
+const ZERO_ENGINE_USAGE: EngineTokenUsage = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
+  const usage = metadata?.usage;
+  return {
+    input_tokens: numberOrZero(usage?.input_tokens),
+    output_tokens: numberOrZero(usage?.output_tokens),
+    cache_creation_input_tokens: numberOrZero(usage?.cache_creation_input_tokens),
+    cache_read_input_tokens: numberOrZero(usage?.cache_read_input_tokens),
+  };
+}
+
+function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: string, camelKey: string): number {
+  return numberOrZero(metadata?.[snakeKey] ?? metadata?.[camelKey]);
+}
+
+function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens,
+    cacheReadInputTokens: usage.cache_read_input_tokens,
+  };
 }
 
 export interface ChangeRecord {
@@ -629,18 +665,17 @@ export class WorkflowManager extends EventEmitter {
       }
     };
 
+    let fullStreamContent = '';
+
     // Set up stream handler for the engine
     const streamHandler = (event: EngineStreamEvent) => {
-      // Accumulate stream content on the registered process
-      const rawProc = processManager.getProcessRaw(processId);
-      if (rawProc) {
-        rawProc.streamContent += event.content;
-      }
+      fullStreamContent += event.content;
+      const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
       processManager.emit('stream', {
         id: processId,
         step: step,
         delta: event.content,
-        total: rawProc?.streamContent || event.content,
+        total: retainedPreview,
       });
     };
 
@@ -666,26 +701,24 @@ export class WorkflowManager extends EventEmitter {
       if (rawProc) {
         rawProc.status = result.success ? 'completed' : 'failed';
         rawProc.endTime = new Date();
-        rawProc.output = result.output || rawProc.streamContent;
+        processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
         rawProc.sessionId = result.sessionId;
-        if (!result.success) rawProc.error = result.error || '';
+        if (!result.success) processManager.setProcessError(processId, result.error || '');
       }
+
+      const metadata = result.metadata;
+      const usage = normalizeEngineUsage(metadata);
 
       // Convert engine result to EngineJsonResult format
       return {
         result: result.success ? result.output : (result.error || result.output),
         session_id: result.sessionId || '',
         is_error: !result.success,
-        cost_usd: 0,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 0,
-        usage: {
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
+        cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
+        duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
+        duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
+        num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
+        usage,
       };
     } finally {
       this.currentEngine.off('stream', streamHandler);
@@ -1038,6 +1071,8 @@ export class WorkflowManager extends EventEmitter {
     if (agent) {
       agent.tokenUsage.inputTokens += usage.inputTokens;
       agent.tokenUsage.outputTokens += usage.outputTokens;
+      agent.tokenUsage.cacheCreationInputTokens = (agent.tokenUsage.cacheCreationInputTokens || 0) + (usage.cacheCreationInputTokens || 0);
+      agent.tokenUsage.cacheReadInputTokens = (agent.tokenUsage.cacheReadInputTokens || 0) + (usage.cacheReadInputTokens || 0);
       this.emit('token-usage', {
         agent: agentName,
         usage: agent.tokenUsage,
@@ -1446,10 +1481,7 @@ export class WorkflowManager extends EventEmitter {
       jsonResult = await this.executeStep(step, workflowConfig);
       resultText = jsonResult.result;
 
-      const tokenUsage: TokenUsage = {
-        inputTokens: jsonResult.usage.input_tokens,
-        outputTokens: jsonResult.usage.output_tokens,
-      };
+      const tokenUsage: TokenUsage = toPersistedTokenUsage(jsonResult.usage);
       this.updateAgentTokenUsage(step.agent, tokenUsage);
 
       if (jsonResult.session_id) {
@@ -1479,6 +1511,9 @@ export class WorkflowManager extends EventEmitter {
         costUsd: jsonResult.cost_usd || 0,
         durationMs: jsonResult.duration_ms || 0,
         timestamp: new Date().toISOString(),
+        tokenUsage,
+        sessionId: jsonResult.session_id || null,
+        engineName: this.engineType,
       });
 
       this.emit('result', {
@@ -1532,6 +1567,9 @@ export class WorkflowManager extends EventEmitter {
           costUsd: 0,
           durationMs: 0,
           timestamp: new Date().toISOString(),
+          tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
+          sessionId: null,
+          engineName: this.engineType,
         });
 
         this.emit('result', {

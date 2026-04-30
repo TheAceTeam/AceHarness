@@ -13,6 +13,7 @@ import {
   type WorkflowConfig,
 } from '@/lib/schemas';
 import { getWorkspaceDataFile } from '@/lib/app-paths';
+import { readMasterSpec, getSpecRootDir, hasPersistedSpec } from '@/lib/spec-persistence';
 
 const CREATION_SESSIONS_DIR = getWorkspaceDataFile('workflow-creation-sessions');
 
@@ -363,11 +364,36 @@ function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): s
   }).join('\n');
 }
 
+function normalizeSpecCodingArtifactMarkdown(input: string): string {
+  const trimmed = input.trim();
+  const escapedNewlines = (trimmed.match(/\\n/g) || []).length;
+  const realNewlines = (trimmed.match(/\n/g) || []).length;
+
+  if (escapedNewlines >= 2 && escapedNewlines > realNewlines * 2) {
+    return trimmed
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t');
+  }
+
+  return trimmed;
+}
+
+function normalizeSpecCodingArtifacts(specCoding: SpecCodingDocument): SpecCodingDocument['artifacts'] {
+  return {
+    requirements: normalizeSpecCodingArtifactMarkdown(specCoding.artifacts?.requirements || ''),
+    design: normalizeSpecCodingArtifactMarkdown(specCoding.artifacts?.design || ''),
+    tasks: normalizeSpecCodingArtifactMarkdown(specCoding.artifacts?.tasks || ''),
+  };
+}
+
 export function normalizeSpecCodingDocument(specCoding: SpecCodingDocument): SpecCodingDocument {
-  const parsedTasks = parseSpecCodingTasksFromMarkdown(specCoding.artifacts?.tasks || '', specCoding.phases);
+  const artifacts = normalizeSpecCodingArtifacts(specCoding);
+  const parsedTasks = parseSpecCodingTasksFromMarkdown(artifacts.tasks || '', specCoding.phases);
   if (parsedTasks.length === 0) {
     return {
       ...specCoding,
+      artifacts,
       tasks: specCoding.tasks || [],
     };
   }
@@ -423,8 +449,8 @@ export function normalizeSpecCodingDocument(specCoding: SpecCodingDocument): Spe
     ...specCoding,
     tasks,
     artifacts: {
-      ...specCoding.artifacts,
-      tasks: updateTasksMarkdownStatus(specCoding.artifacts?.tasks || '', tasks),
+      ...artifacts,
+      tasks: updateTasksMarkdownStatus(artifacts.tasks || '', tasks),
     },
   };
 }
@@ -760,6 +786,8 @@ export function buildCreationSession(input: {
   uiState?: CreationSession['uiState'];
   config: WorkflowConfig | Record<string, any>;
   specCoding?: SpecCodingDocument;
+  persistMode?: 'none' | 'repository';
+  specRoot?: string;
 }): CreationSession {
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
@@ -831,6 +859,8 @@ export function buildCreationSession(input: {
       return {
         ...specCoding,
         status: specCodingStatus,
+        persistMode: input.persistMode || specCoding.persistMode,
+        specRoot: input.specRoot || specCoding.specRoot,
         confirmedAt: specCodingStatus === 'confirmed' ? (specCoding.confirmedAt || nowIso) : specCoding.confirmedAt,
         updatedAt: nowIso,
       };
@@ -1119,6 +1149,8 @@ export function cloneSpecCodingForRun(
     id: randomUUID(),
     status: specCoding.status === 'completed' ? 'in-progress' : specCoding.status,
     linkedConfigFilename: input.filename,
+    persistMode: specCoding.persistMode,
+    specRoot: specCoding.specRoot,
     updatedAt: nowIso,
     progress: {
       ...specCoding.progress,
@@ -1217,5 +1249,38 @@ export function appendSupervisorSpecCodingRevision(
     summary: `${typeLabel}: ${summary}`,
     createdBy: input.supervisorAgent,
     status: specCoding.progress.overallStatus === 'completed' ? 'completed' : specCoding.status,
+  });
+}
+
+/**
+ * 从持久化 master spec 加载为 CreationSession。
+ * 如果 master spec 不存在，返回 null。
+ */
+export async function loadMasterSpecAsCreationSession(
+  workingDirectory: string,
+  configFilename: string,
+  specRoot?: string,
+): Promise<CreationSession | null> {
+  const specRootDir = getSpecRootDir(workingDirectory, specRoot);
+  if (!hasPersistedSpec(specRootDir)) return null;
+
+  const masterSpec = await readMasterSpec(specRootDir);
+  if (!masterSpec) return null;
+
+  return buildCreationSession({
+    filename: configFilename,
+    workflowName: masterSpec.workflowName || configFilename.replace(/\.ya?ml$/i, ''),
+    mode: 'state-machine',
+    workingDirectory,
+    workspaceMode: 'in-place',
+    config: { workflow: { mode: 'state-machine', states: masterSpec.phases.map((p) => ({ name: p.title })) } },
+    specCoding: {
+      ...masterSpec,
+      persistMode: 'repository',
+      specRoot: specRootDir,
+      linkedConfigFilename: configFilename,
+    },
+    persistMode: 'repository',
+    specRoot: specRootDir,
   });
 }

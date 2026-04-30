@@ -31,6 +31,49 @@ export const iterationConfigSchema = z.object({
   escalateToHuman: z.boolean().default(true),
 });
 
+// 并发设计元数据 Schema（当前用于设计/展示；运行时仍按现有执行器能力调度）
+export const joinPolicySchema = z.object({
+  mode: z.enum(['all', 'any', 'quorum', 'manual']).default('all'),
+  quorum: z.number().int().min(1).optional(),
+  timeoutMinutes: z.number().min(1).optional(),
+  onTimeout: z.enum(['continue', 'fail', 'manual-review']).optional(),
+});
+
+export const channelBindingSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  type: z.enum(['shared', 'supervisor', 'agent-direct']).default('shared'),
+  participants: z.array(z.string()).default([]),
+  description: z.string().optional(),
+});
+
+export const agentInstanceSchema = z.object({
+  id: z.string().min(1),
+  role: z.string().min(1),
+  label: z.string().optional(),
+  channelIds: z.array(z.string()).default([]),
+  maxParallelTasks: z.number().int().min(1).optional(),
+});
+
+export const specTaskBindingSchema = z.object({
+  taskId: z.string().min(1),
+  requirementIds: z.array(z.string()).default([]),
+  artifactKeys: z.array(z.string()).default([]),
+});
+
+export const stepConcurrencySchema = z.object({
+  groupId: z.string().optional(),
+  branchId: z.string().optional(),
+  joinPolicy: joinPolicySchema.optional(),
+});
+
+export const workflowConcurrencySchema = z.object({
+  enabled: z.boolean().default(false).optional(),
+  agentInstances: z.array(agentInstanceSchema).default([]).optional(),
+  channels: z.array(channelBindingSchema).default([]).optional(),
+  joinPolicies: z.record(z.string(), joinPolicySchema).default({}).optional(),
+}).optional();
+
 // 工作流步骤 Schema
 export const workflowStepSchema = z.object({
   name: z.string().min(1, '步骤名称不能为空'),
@@ -44,6 +87,10 @@ export const workflowStepSchema = z.object({
   role: z.enum(['attacker', 'defender', 'judge']).optional(),
   constraints: z.array(z.string()).optional(),
   parallelGroup: z.string().optional(),
+  concurrency: stepConcurrencySchema.optional(),
+  agentInstanceId: z.string().optional(),
+  channelIds: z.array(z.string()).optional(),
+  specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
   skills: z.array(z.string()).optional(), // 步骤级别的 skills
 });
@@ -125,12 +172,19 @@ export const workflowConfigSchema = z.object({
     description: z.string().optional(),
     phases: z.array(workflowPhaseSchema).min(1, '至少需要一个阶段'),
     supervisor: workflowSupervisorConfigSchema,
+    concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,
 });
 
 // TypeScript 类型导出
+export type JoinPolicy = z.infer<typeof joinPolicySchema>;
+export type ChannelBinding = z.infer<typeof channelBindingSchema>;
+export type AgentInstance = z.infer<typeof agentInstanceSchema>;
+export type SpecTaskBinding = z.infer<typeof specTaskBindingSchema>;
+export type StepConcurrency = z.infer<typeof stepConcurrencySchema>;
+export type WorkflowConcurrency = z.infer<typeof workflowConcurrencySchema>;
 export type IterationConfig = z.infer<typeof iterationConfigSchema>;
 export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
@@ -154,6 +208,8 @@ export const newConfigFormSchema = z.object({
   description: z.string().optional(),
   mode: z.enum(['phase-based', 'state-machine', 'ai-guided']).default('phase-based').optional(),
   requirements: z.string().optional(), // AI 引导模式下的需求描述
+  persistMode: z.enum(['none', 'repository']).default('none').optional(),
+  specRoot: z.string().optional(),
 });
 
 export type NewConfigForm = z.infer<typeof newConfigFormSchema>;
@@ -277,6 +333,8 @@ export const specCodingDocumentSchema = z.object({
     tasks: '',
   }),
   linkedConfigFilename: z.string().optional(),
+  persistMode: z.enum(['none', 'repository']).optional(),
+  specRoot: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   confirmedAt: z.string().optional(),
@@ -442,6 +500,11 @@ export const stateMachineStateSchema = z.object({
   isInitial: z.boolean().default(false), // 是否为初始状态
   isFinal: z.boolean().default(false), // 是否为终止状态
   maxSelfTransitions: z.number().min(1).max(100).default(3).optional(), // 最大自我转换次数，超出后自动熔断
+  executionMode: z.enum(['sequential', 'parallel']).optional(), // 并发设计元数据；当前执行器不保证真实并发
+  joinPolicy: joinPolicySchema.optional(),
+  channels: z.array(z.string()).optional(),
+  instancePolicy: z.enum(['single', 'multi-instance']).optional(),
+  specPhaseId: z.string().optional(),
 });
 
 // 问题路由规则 Schema
@@ -462,6 +525,7 @@ export const stateMachineWorkflowSchema = z.object({
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
     supervisor: workflowSupervisorConfigSchema,
+    concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,

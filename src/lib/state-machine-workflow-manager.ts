@@ -12,7 +12,7 @@ import { cpus } from 'os';
 import { parse } from 'yaml';
 import { resolveAgentModel } from './workflow-manager';
 import { processManager } from './process-manager';
-import type { EngineJsonResult } from './engines/engine-interface';
+import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from './engines/engine-interface';
 import { createRun, updateRun } from './run-store';
 import {
   saveRunState, saveProcessOutput, saveStreamContent,
@@ -22,6 +22,7 @@ import {
   type PersistedStepLog,
   type PersistedQualityCheck,
   type PersistedQualityCommandResult,
+  type DeltaMergeState,
   type HumanQuestion,
   type HumanQuestionAnswer,
   type HumanAnswerContext,
@@ -54,17 +55,68 @@ import {
   appendSpecCodingRevision,
   appendSupervisorSpecCodingRevision,
   cloneSpecCodingForRun,
-  loadLatestCreationSessionByFilename,
+  loadCreationSession,
   markSpecCodingStateStatus,
   normalizeSpecCodingDocument,
   updateSpecCodingTaskStatuses,
 } from './spec-coding-store';
+import {
+  ensureSpecDirStructure,
+  getSpecRootDir,
+  writeDeltaSpec,
+  readDeltaSpec,
+  readChecklist,
+  type ChecklistQuestion,
+} from './spec-persistence';
 import { appendMemoryEntries } from './workflow-memory-store';
 import { upsertRelationshipSignal } from './agent-relationship-store';
 
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
+const ZERO_ENGINE_USAGE: EngineTokenUsage = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
+  const usage = metadata?.usage;
+  return {
+    input_tokens: numberOrZero(usage?.input_tokens),
+    output_tokens: numberOrZero(usage?.output_tokens),
+    cache_creation_input_tokens: numberOrZero(usage?.cache_creation_input_tokens),
+    cache_read_input_tokens: numberOrZero(usage?.cache_read_input_tokens),
+  };
+}
+
+function metadataNumber(metadata: EngineResultMetadata | undefined, snakeKey: string, camelKey: string): number {
+  return numberOrZero(metadata?.[snakeKey] ?? metadata?.[camelKey]);
+}
+
+function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    cacheCreationInputTokens: usage.cache_creation_input_tokens,
+    cacheReadInputTokens: usage.cache_read_input_tokens,
+  };
+}
+
+function addTokenUsage(agent: AgentState, usage: TokenUsage): void {
+  agent.tokenUsage.inputTokens += usage.inputTokens;
+  agent.tokenUsage.outputTokens += usage.outputTokens;
+  agent.tokenUsage.cacheCreationInputTokens = (agent.tokenUsage.cacheCreationInputTokens || 0) + (usage.cacheCreationInputTokens || 0);
+  agent.tokenUsage.cacheReadInputTokens = (agent.tokenUsage.cacheReadInputTokens || 0) + (usage.cacheReadInputTokens || 0);
 }
 
 export interface AgentState {
@@ -97,7 +149,7 @@ export interface StateTransitionRecord {
   timestamp: string;
 }
 
-function stripNonAiStreamArtifacts(text: string): string {
+export function stripNonAiStreamArtifacts(text: string): string {
   return text
     .replace(/\n?\s*<!-- chunk-boundary -->\s*\n?/g, '\n')
     .replace(/\n?\s*<!-- human-feedback:[\s\S]*?-->\s*\n?/g, '\n')
@@ -108,27 +160,27 @@ function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): bool
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
 
-function extractTaggedBlock(text: string, tag: string): string | null {
+export function extractTaggedBlock(text: string, tag: string): string | null {
   const pattern = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'i');
   return text.match(pattern)?.[1]?.trim() || null;
 }
 
-function extractSpecTasksBlock(text: string): string | null {
+export function extractSpecTasksBlock(text: string): string | null {
   return extractTaggedBlock(text, 'spec-tasks');
 }
 
-function stripSpecTasksBlocks(text: string): string {
+export function stripSpecTasksBlocks(text: string): string {
   return text.replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '');
 }
 
-function stripJsonFence(text: string): string {
+export function stripJsonFence(text: string): string {
   return text
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
 }
 
-function compactStepConclusion(raw: string): string {
+export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
 
@@ -137,6 +189,82 @@ function compactStepConclusion(raw: string): string {
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
+}
+
+export type StepSegment =
+  | { type: 'serial'; step: WorkflowStep }
+  | { type: 'parallel'; groupId: string; steps: WorkflowStep[] };
+
+type RuntimeJoinPolicy = {
+  mode: 'all' | 'any' | 'quorum' | 'manual';
+  quorum?: number;
+  timeoutMinutes?: number;
+  onTimeout?: 'continue' | 'fail' | 'manual-review';
+};
+
+type ActiveConcurrencyGroup = {
+  id: string;
+  stateName: string;
+  steps: string[];
+  joinPolicy?: RuntimeJoinPolicy;
+  status: 'running' | 'completed' | 'failed';
+};
+
+type ChannelOutputEntry = {
+  stateName: string;
+  stepName: string;
+  agent: string;
+  summary: string;
+  timestamp: string;
+};
+
+function getStepConcurrencyGroup(step: WorkflowStep): string | undefined {
+  return step.concurrency?.groupId || step.parallelGroup || undefined;
+}
+
+function getStepRuntimeAgentName(step: WorkflowStep): string {
+  return step.agentInstanceId || step.agent;
+}
+
+export function groupStateStepsIntoSegments(steps: WorkflowStep[]): StepSegment[] {
+  const segments: StepSegment[] = [];
+  let i = 0;
+  while (i < steps.length) {
+    const step = steps[i];
+    const groupId = getStepConcurrencyGroup(step);
+    if (!groupId) {
+      segments.push({ type: 'serial', step });
+      i += 1;
+      continue;
+    }
+
+    const groupSteps: WorkflowStep[] = [step];
+    let j = i + 1;
+    while (j < steps.length && getStepConcurrencyGroup(steps[j]) === groupId) {
+      groupSteps.push(steps[j]);
+      j += 1;
+    }
+
+    if (groupSteps.length > 1) {
+      segments.push({ type: 'parallel', groupId, steps: groupSteps });
+    } else {
+      segments.push({ type: 'serial', step });
+    }
+    i = j;
+  }
+  return segments;
+}
+
+function resolveJoinPolicy(segment: Extract<StepSegment, { type: 'parallel' }>, config: StateMachineWorkflowConfig): RuntimeJoinPolicy {
+  const stepPolicy = segment.steps.find((step) => step.concurrency?.joinPolicy)?.concurrency?.joinPolicy;
+  const workflowPolicy = config.workflow.concurrency?.joinPolicies?.[segment.groupId];
+  return (stepPolicy || workflowPolicy || { mode: 'all' }) as RuntimeJoinPolicy;
+}
+
+export function isEngineLevelFailure(message: string): boolean {
+  return /acp\s+connection\s+closed/i.test(message)
+    || /引擎执行失败/.test(message)
+    || /engine\s+.*failed/i.test(message);
 }
 
 export class StateMachineWorkflowManager extends EventEmitter {
@@ -173,6 +301,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   /** Skills copied to workspace that need cleanup on finish */
   private copiedSkills: { dir: string; indexCopied: boolean } | null = null;
   private currentStep: string | null = null;
+  private activeStepKeys: Set<string> = new Set();
+  private activeConcurrencyGroups: ActiveConcurrencyGroup[] = [];
+  private channelOutputsById: Map<string, ChannelOutputEntry[]> = new Map();
   private completedSteps: string[] = [];
   private currentProcesses: PersistedProcessInfo[] = [];
   private currentSupervisorAgent: string = DEFAULT_SUPERVISOR_NAME;
@@ -189,6 +320,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private humanAnswersContext: HumanAnswerContext[] = [];
   private humanQuestionWaiters = new Map<string, (question: HumanQuestion | null) => void>();
   private currentRunSpecCoding: SpecCodingDocument | null = null;
+  private deltaSpecMerged: boolean = false;
+  private deltaMergeState: DeltaMergeState | undefined;
+  private workflowName: string = '';
   private liveSpecCodingTaskBlocksByProcess: Map<string, string> = new Map();
   private supervisorFlow: { type: string; from: string; to: string; question?: string; method?: string; round: number; timestamp: string; stateName?: string }[] = [];
   /** Agent 工作流：追踪 Agent 之间的信息传递 */
@@ -211,6 +345,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private engineType: EngineType = 'claude-code';
   /** Optional frontend chat session to auto-bind with this run */
   public _frontendSessionId?: string;
+  /** Explicit creation session to bind to the next run */
+  public _creationSessionId?: string;
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
@@ -587,6 +723,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       currentState: this.currentState,
       currentPhase: this.currentState || preparingPhase, // alias for frontend compatibility
       currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      activeConcurrencyGroups: this.activeConcurrencyGroups,
       completedSteps: this.completedSteps,
       currentConfigFile: this.currentConfigFile,
       agents: this.agents,
@@ -615,6 +753,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       humanAnswersContext: this.humanAnswersContext,
       qualityChecks: this.qualityChecks,
       runSpecCoding,
+      persistMode: this.currentRunSpecCoding?.persistMode,
+      deltaSpecMerged: this.deltaSpecMerged,
+      deltaMergeState: this.deltaMergeState,
     };
   }
 
@@ -642,6 +783,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       impact: input.impact || [],
     };
     await this.persistState();
+    // 持久化模式：同步写入 delta 目录
+    if (this.currentRunSpecCoding.persistMode === 'repository') {
+      const workingDir = this.getWorkingDirectory();
+      if (workingDir && this.currentRunId) {
+        const specRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
+        await writeDeltaSpec(specRootDir, this.workflowName, this.currentRunId, this.currentRunSpecCoding).catch(() => {});
+      }
+    }
     this.emit('supervisor-review', this.latestSupervisorReview);
     return this.currentRunSpecCoding;
   }
@@ -667,6 +816,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.transitionCount = 0;
       this.selfTransitionCounts = new Map();
       this.completedSteps = [];
+      this.activeStepKeys.clear();
+      this.activeConcurrencyGroups = [];
+      this.channelOutputsById.clear();
+      this.currentProcesses = [];
       this.supervisorFlow = [];
       this.agentFlow = [];
       this.stepLogs = [];
@@ -696,6 +849,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const configPath = await getRuntimeWorkflowConfigPath(configFile);
       const configContent = await readFile(configPath, 'utf-8');
       const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
       this.currentSupervisorAgent = resolveWorkflowSupervisorAgent(workflowConfig);
       // Resolve projectRoot to absolute path relative to user's personal dir
@@ -738,12 +892,23 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentStep = '初始化运行上下文';
       await this.persistState();
 
-      const creationSession = await loadLatestCreationSessionByFilename(configFile).catch(() => null);
+      const creationSession = this._creationSessionId
+        ? await loadCreationSession(this._creationSessionId).catch(() => null)
+        : null;
       if (creationSession?.specCoding) {
         this.currentRunSpecCoding = cloneSpecCodingForRun(creationSession.specCoding, {
           runId,
           filename: configFile,
         });
+        // 持久化 spec 模式：初始化 delta 目录并写入初始快照
+        if (this.currentRunSpecCoding.persistMode === 'repository') {
+          const workingDir = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || '';
+          if (workingDir) {
+            const specRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
+            await ensureSpecDirStructure(specRootDir);
+            await writeDeltaSpec(specRootDir, this.workflowName, runId, this.currentRunSpecCoding);
+          }
+        }
         await this.persistState();
       }
 
@@ -812,6 +977,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Try to load existing state (for continuing previous runs)
       const existingState = await loadRunState(runId);
       if (existingState) {
+        this._creationSessionId = existingState.creationSessionId || this._creationSessionId;
         this.stateHistory = (existingState.stateHistory || []) as StateTransitionRecord[];
         this.issueTracker = (existingState.issueTracker || []) as Issue[];
         this.transitionCount = existingState.transitionCount || 0;
@@ -885,18 +1051,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
 
     // Kill any running child processes immediately
-    const currentProcId = this.currentProcesses?.[0]?.id;
-    if (currentProcId) {
-      const proc = processManager.getProcessRaw(currentProcId);
-      if (proc?.childProcess) {
-        try { proc.childProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        proc.status = 'killed';
-        proc.endTime = new Date();
-      } else if (this.currentEngine) {
-        this.currentEngine.cancel();
-        if (proc) { proc.status = 'killed'; proc.endTime = new Date(); }
-      }
-    }
+    this.cancelCurrentProcesses();
 
     await this.finalizeRun('stopped');
   }
@@ -911,25 +1066,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
     this.emit('force-transition', { targetState, from: this.currentState, instruction });
 
-    // Kill the running process so the main loop can pick up the forced transition immediately
-    const currentProcId = this.currentProcesses?.[0]?.id;
-    const currentStepId = this.currentProcesses?.[0]?.stepId;
-    if (currentProcId || currentStepId) {
-      const allProcs = processManager.getAllProcesses();
-      const running = allProcs.find(
-        (p: any) => (p.status === 'running' || p.status === 'queued') && (
-          (currentStepId && p.stepId === currentStepId) ||
-          (currentProcId && p.id === currentProcId)
-        )
-      );
-      if (running) {
-        if (!processManager.killProcess(running.id) && this.currentEngine) {
-          this.currentEngine.cancel();
-          const rawProc = processManager.getProcessRaw(running.id);
-          if (rawProc) { rawProc.status = 'killed'; rawProc.endTime = new Date(); }
-        }
-      }
-    }
+    // Kill the running processes so the main loop can pick up the forced transition immediately
+    this.cancelCurrentProcesses();
   }
 
   setContext(scope: 'global' | 'phase', context: string, stateName?: string): void {
@@ -1117,6 +1255,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Cleanup copied skills from workspace
     await this.cleanupWorkspaceSkills();
 
+    // 持久化 spec 模式：运行完成后标记 delta 可人工合入 master
+    if (status === 'completed' && this.currentRunSpecCoding?.persistMode === 'repository' && this.currentRunId) {
+      if (!this.deltaSpecMerged && this.deltaMergeState?.status !== 'merged') {
+        this.deltaMergeState = {
+          ...(this.deltaMergeState || {}),
+          status: 'available',
+          requestedAt: this.deltaMergeState?.requestedAt || new Date().toISOString(),
+          error: undefined,
+        };
+        this.deltaSpecMerged = false;
+        this.emit('log', { message: '持久化 Spec: Delta 已可合入 Master，请在 Workbench 中人工确认。' });
+      }
+    }
+
     try {
       const completedSteps = this.agents.reduce((sum, a) => sum + a.completedTasks, 0);
       await updateRun(this.currentRunId, {
@@ -1131,6 +1283,67 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     this.status = 'idle';
+  }
+
+  private refreshCurrentStep(): void {
+    const active = Array.from(this.activeStepKeys);
+    if (active.length === 0) {
+      this.currentStep = null;
+    } else if (active.length === 1) {
+      this.currentStep = active[0];
+    } else {
+      const runningGroup = this.activeConcurrencyGroups.find((group) => group.status === 'running');
+      this.currentStep = runningGroup ? `并发:${runningGroup.stateName}:${runningGroup.id}` : active[0];
+    }
+  }
+
+  private markStepActive(stepKey: string): void {
+    this.activeStepKeys.add(stepKey);
+    this.refreshCurrentStep();
+  }
+
+  private markStepInactive(stepKey: string): void {
+    this.activeStepKeys.delete(stepKey);
+    this.refreshCurrentStep();
+  }
+
+  private upsertCurrentProcess(proc: PersistedProcessInfo): void {
+    const idx = this.currentProcesses.findIndex((item) => item.id === proc.id);
+    if (idx >= 0) this.currentProcesses[idx] = proc;
+    else this.currentProcesses.push(proc);
+  }
+
+  private removeCurrentProcess(processId?: string): void {
+    if (!processId) return;
+    this.currentProcesses = this.currentProcesses.filter((proc) => proc.id !== processId);
+  }
+
+  private cancelCurrentProcesses(): void {
+    const processIds = new Set(this.currentProcesses.map((proc) => proc.id).filter(Boolean));
+    const stepIds = new Set(this.currentProcesses.map((proc) => proc.stepId).filter(Boolean) as string[]);
+    const running = processManager.getAllProcesses().filter((p: any) =>
+      (p.status === 'running' || p.status === 'queued') && (processIds.has(p.id) || (p.stepId && stepIds.has(p.stepId)))
+    );
+
+    for (const proc of running) {
+      const killed = processManager.killProcess(proc.id);
+      if (!killed) {
+        const rawProc = processManager.getProcessRaw(proc.id);
+        if (rawProc?.childProcess) {
+          try { rawProc.childProcess.kill('SIGTERM'); } catch { /* already dead */ }
+        } else if (this.currentEngine) {
+          this.currentEngine.cancel();
+        }
+        if (rawProc) {
+          rawProc.status = 'killed';
+          rawProc.endTime = new Date();
+        }
+      }
+    }
+
+    if (running.length === 0 && this.currentEngine && this.currentProcesses.length > 0) {
+      this.currentEngine.cancel();
+    }
   }
 
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
@@ -1158,6 +1371,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         endTime: finalStatus ? this.runEndTime : null,
         currentPhase: this.currentState || preparingPhase,
         currentStep: this.currentStep,
+        activeSteps: Array.from(this.activeStepKeys),
+        activeConcurrencyGroups: this.activeConcurrencyGroups,
         completedSteps: this.completedSteps,
         failedSteps: [],
         stepLogs: [...this.stepLogs],
@@ -1210,7 +1425,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
         pendingHumanQuestionId: this.pendingHumanQuestionId,
         humanAnswersContext: this.humanAnswersContext,
         qualityChecks: this.qualityChecks,
-        runSpecCoding: this.currentRunSpecCoding,
+        creationSessionId: this._creationSessionId,
+        // 持久化模式下不将 spec 存入 YAML，而是从 delta 目录读取
+        runSpecCoding: this.currentRunSpecCoding?.persistMode === 'repository' ? null : this.currentRunSpecCoding,
+        persistMode: this.currentRunSpecCoding?.persistMode,
+        workflowName: this.workflowName || undefined,
+        deltaSpecMerged: this.deltaSpecMerged,
+        deltaMergeState: this.deltaMergeState,
       });
       if (this._frontendSessionId) {
         await updateChatSessionWorkflowBinding(this._frontendSessionId, {
@@ -1487,6 +1708,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     };
 
+    let fullStreamContent = '';
+
     const streamHandler = (event: EngineStreamEvent) => {
       // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
       // not accumulated into streamContent.
@@ -1502,26 +1725,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Only accumulate 'text' events into the preview stream.
       if (event.type !== 'text') return;
 
-      // Accumulate stream content on the registered process
-      const rawProc = processManager.getProcessRaw(processId);
-      if (rawProc) {
-        rawProc.streamContent += event.content;
-      }
-      const totalContent = rawProc?.streamContent || event.content;
-      void this.applyLiveSpecCodingTaskUpdatesFromStream(totalContent, agent, processId);
+      fullStreamContent += event.content;
+      const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
+      void this.applyLiveSpecCodingTaskUpdatesFromStream(fullStreamContent, agent, processId);
       processManager.emit('stream', {
         id: processId,
         step: displayStep,
         delta: event.content,
-        total: totalContent,
+        total: retainedPreview,
       });
       // Persist stream content periodically
-      if (this.currentRunId && rawProc?.streamContent) {
+      if (this.currentRunId && fullStreamContent) {
         const smStepName =
           options.streamStepName ||
           options.streamStepLabel ||
           (this.currentState ? `${this.currentState}-${step}` : step);
-        saveStreamContent(this.currentRunId, smStepName, rawProc.streamContent).catch(() => {});
+        saveStreamContent(this.currentRunId, smStepName, fullStreamContent).catch(() => {});
       }
     };
 
@@ -1543,31 +1762,32 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (rawProc) {
         rawProc.status = 'completed';
         rawProc.endTime = new Date();
-        rawProc.output = result.output || rawProc.streamContent;
+        processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
         rawProc.sessionId = result.sessionId;
       }
 
       // If engine reports failure, throw so the step is marked as failed
       if (!result.success) {
         const errorMsg = result.error || '引擎执行失败（无输出）';
-        if (rawProc) { rawProc.status = 'failed'; rawProc.error = errorMsg; }
+        if (rawProc) {
+          rawProc.status = 'failed';
+          processManager.setProcessError(processId, errorMsg);
+        }
         throw new Error(`${this.engineType} 引擎执行失败: ${errorMsg}`);
       }
+
+      const metadata = result.metadata;
+      const usage = normalizeEngineUsage(metadata);
 
       return {
         result: result.output,
         session_id: result.sessionId || '',
         is_error: false,
-        cost_usd: 0,
-        duration_ms: 0,
-        duration_api_ms: 0,
-        num_turns: 0,
-        usage: {
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
+        cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
+        duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
+        duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
+        num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
+        usage,
       };
     } finally {
       this.liveSpecCodingTaskBlocksByProcess.delete(processId);
@@ -1576,27 +1796,41 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private initializeAgents(workflowConfig: StateMachineWorkflowConfig): void {
-    const agentSet = new Set<string>();
+    const runtimeAgentRoles = new Map<string, string>();
+    const addRuntimeAgent = (runtimeName: string | undefined, baseRole: string | undefined) => {
+      if (!runtimeName || !baseRole) return;
+      if (!runtimeAgentRoles.has(runtimeName)) runtimeAgentRoles.set(runtimeName, baseRole);
+    };
+
     for (const state of workflowConfig.workflow.states) {
       for (const step of state.steps) {
-        agentSet.add(step.agent);
+        addRuntimeAgent(step.agent, step.agent);
+        if (step.agentInstanceId) addRuntimeAgent(step.agentInstanceId, step.agent);
       }
     }
+    for (const instance of workflowConfig.workflow.concurrency?.agentInstances || []) {
+      addRuntimeAgent(instance.id, instance.role);
+    }
     if (workflowConfig.workflow.supervisor?.enabled !== false) {
-      agentSet.add(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
+      addRuntimeAgent(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME, this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
     }
 
-    this.agents = Array.from(agentSet).map((agentName) => {
-      const roleConfig = this.agentConfigs.find((r) => r.name === agentName)
-        || workflowConfig.roles?.find((r) => r.name === agentName);
+    this.agents = Array.from(runtimeAgentRoles.entries()).map(([agentName, baseRole]) => {
+      const roleConfig = this.agentConfigs.find((r) => r.name === baseRole)
+        || workflowConfig.roles?.find((r) => r.name === baseRole);
       return {
         name: agentName,
-        team: roleConfig?.team || (agentName === this.currentSupervisorAgent ? 'black-gold' : 'blue'),
+        team: roleConfig?.team || (baseRole === this.currentSupervisorAgent ? 'black-gold' : 'blue'),
         model: resolveAgentModel(roleConfig, workflowConfig.context),
         status: 'waiting',
         currentTask: null,
         completedTasks: 0,
-        tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        tokenUsage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+        },
         costUsd: 0,
         sessionId: null,
         lastOutput: '',
@@ -1649,6 +1883,24 @@ export class StateMachineWorkflowManager extends EventEmitter {
         '- 你负责非状态内容的修订；普通步骤只能更新状态。',
       ].filter(Boolean).join('\n')
       : '';
+    // 持久化模式：注入 CHECKLIST 问题
+    let checklistBlock = '';
+    if (this.currentRunSpecCoding?.persistMode === 'repository') {
+      const workingDir = this.getWorkingDirectory() || config.context?.projectRoot;
+      if (workingDir) {
+        const specRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
+        const checklist = await readChecklist(specRootDir).catch(() => []);
+        const unanswered = checklist.filter((q) => !q.answered);
+        if (unanswered.length > 0) {
+          checklistBlock = [
+            '',
+            '## CHECKLIST - 待提问问题',
+            '以下问题来自仓库持久化 CHECKLIST.md，必须在人工审批或 supervisor 审查时全部提出：',
+            ...unanswered.map((q) => `- [ ] ${q.text}`),
+          ].join('\n');
+        }
+      }
+    }
     const relatedExperiences = this.currentConfigFile
       ? await findRelevantWorkflowExperiences({
           configFile: this.currentConfigFile,
@@ -1677,6 +1929,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       stepSummary || '- 无',
       experienceBlock,
       specCodingGuardrail ? `\n${specCodingGuardrail}` : '',
+      checklistBlock ? `\n${checklistBlock}` : '',
       '',
       type === 'state-review'
         ? '请输出：1. 当前阶段结论 2. 是否建议继续迭代 3. 下一步指导意见'
@@ -2051,6 +2304,128 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
   }
 
+  private summarizeParallelResults(groupId: string, results: Array<{ step: WorkflowStep; status: 'fulfilled' | 'rejected'; output?: string; error?: string }>): string {
+    return [
+      `并发组 ${groupId} 已完成，以下结果供后续串行步骤继承：`,
+      ...results.map((item) => {
+        const branchId = item.step.concurrency?.branchId || item.step.name;
+        const status = item.status === 'fulfilled' ? '成功' : '失败';
+        const text = item.output || item.error || '';
+        const summary = compactStepConclusion(text).replace(/\s+/g, ' ').trim().slice(0, 800) || '[无摘要]';
+        return `- ${item.step.name} (${branchId}, ${getStepRuntimeAgentName(item.step)}): ${status}。${summary}`;
+      }),
+    ].join('\n');
+  }
+
+  private evaluateParallelJoin(
+    groupId: string,
+    results: Array<{ step: WorkflowStep; status: 'fulfilled' | 'rejected'; output?: string; error?: string }>,
+    joinPolicy: RuntimeJoinPolicy,
+  ): { passed: boolean; manualNotice?: string } {
+    const successCount = results.filter((item) => item.status === 'fulfilled').length;
+    const requiredQuorum = joinPolicy.mode === 'quorum' ? (joinPolicy.quorum || results.length) : results.length;
+    let passed = false;
+    if (joinPolicy.mode === 'any') passed = successCount > 0;
+    else if (joinPolicy.mode === 'quorum') passed = successCount >= requiredQuorum;
+    else passed = successCount === results.length;
+
+    return {
+      passed,
+      manualNotice: joinPolicy.mode === 'manual'
+        ? `并发组 ${groupId} 使用 manual join，第一阶段按 all 执行；请人工关注分支汇总。`
+        : undefined,
+    };
+  }
+
+  private async executeParallelSegment(
+    segment: Extract<StepSegment, { type: 'parallel' }>,
+    state: StateMachineState,
+    config: StateMachineWorkflowConfig,
+    requirements?: string
+  ): Promise<{ outputs: string[]; issues: Issue[]; verdict: 'pass' | 'conditional_pass' | 'fail'; summary: string; failed: boolean }> {
+    const joinPolicy = resolveJoinPolicy(segment, config);
+    const groupState: ActiveConcurrencyGroup = {
+      id: segment.groupId,
+      stateName: state.name,
+      steps: segment.steps.map((step) => step.name),
+      joinPolicy,
+      status: 'running',
+    };
+    this.activeConcurrencyGroups = [...this.activeConcurrencyGroups.filter((group) => !(group.id === segment.groupId && group.stateName === state.name)), groupState];
+    this.refreshCurrentStep();
+    this.emit('parallel-group-start', {
+      state: state.name,
+      groupId: segment.groupId,
+      steps: segment.steps.map((step) => step.name),
+      joinPolicy,
+    });
+    await this.persistState();
+
+    const siblingNames = segment.steps.map((step) => step.name).join(', ');
+    const settled = await Promise.allSettled(segment.steps.map(async (step) => {
+      const extraContext = [
+        `当前步骤属于并发组 ${segment.groupId}。`,
+        step.concurrency?.branchId ? `当前分支 branchId: ${step.concurrency.branchId}。` : '',
+        `同组并行步骤: ${siblingNames}。`,
+        step.channelIds?.length ? `绑定 channelIds: ${step.channelIds.join(', ')}。` : '',
+        '第一阶段并发执行不会等待兄弟分支输出；请只基于当前上下文完成本分支，后续串行步骤会收到汇总结果。',
+      ].filter(Boolean).join('\n');
+      const output = await this.executeStep(step, state, config, requirements, extraContext);
+      return { step, output };
+    }));
+
+    const results = settled.map((result, index) => {
+      const step = segment.steps[index];
+      if (result.status === 'fulfilled') {
+        return { step, status: 'fulfilled' as const, output: result.value.output };
+      }
+      const error = result.reason?.message || String(result.reason);
+      return { step, status: 'rejected' as const, error };
+    });
+
+    const engineError = results.find((item) => item.status === 'rejected' && isEngineLevelFailure(item.error || ''));
+    if (engineError) {
+      groupState.status = 'failed';
+      this.activeConcurrencyGroups = this.activeConcurrencyGroups.map((group) =>
+        group === groupState ? { ...groupState } : group
+      );
+      await this.persistState();
+      throw new Error(`引擎异常，已停止工作流：${engineError.error}`);
+    }
+
+    const joinResult = this.evaluateParallelJoin(segment.groupId, results, joinPolicy);
+    groupState.status = joinResult.passed ? 'completed' : 'failed';
+    this.activeConcurrencyGroups = this.activeConcurrencyGroups.map((group) =>
+      group.id === groupState.id && group.stateName === groupState.stateName ? { ...groupState } : group
+    );
+
+    const outputs = results.map((item) => item.status === 'fulfilled' ? (item.output || '') : `ERROR: ${item.error || '并发分支失败'}`);
+    const issues = results.flatMap((item) => item.status === 'fulfilled'
+      ? this.parseIssuesFromOutput(item.output || '', item.step, state.name)
+      : []);
+    let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
+    for (const item of results) {
+      if (item.status === 'fulfilled' && item.step.role === 'judge') {
+        const stepVerdict = this.parseVerdict(item.output || '');
+        if (stepVerdict === 'fail') verdict = 'fail';
+        else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+      }
+    }
+    if (!joinResult.passed) verdict = 'fail';
+
+    const summary = this.summarizeParallelResults(segment.groupId, results);
+    const logMessage = [
+      `并发组 ${segment.groupId} 完成：${joinResult.passed ? '通过' : '失败'} (${results.filter((item) => item.status === 'fulfilled').length}/${results.length})`,
+      joinResult.manualNotice,
+      joinPolicy.timeoutMinutes ? `timeoutMinutes=${joinPolicy.timeoutMinutes}, onTimeout=${joinPolicy.onTimeout || '未设置'}（第一阶段仅记录，不主动终止分支）` : '',
+    ].filter(Boolean).join('；');
+    this.emit('log', { message: logMessage });
+    this.emit('parallel-group-complete', { state: state.name, groupId: segment.groupId, joinPolicy, results, passed: joinResult.passed });
+    await this.persistState();
+
+    return { outputs, issues, verdict, summary, failed: !joinResult.passed };
+  }
+
   private async executeState(
     state: StateMachineState,
     config: StateMachineWorkflowConfig,
@@ -2072,21 +2447,35 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const stepOutputs: string[] = [];
     const issues: Issue[] = [];
     let verdict: 'pass' | 'conditional_pass' | 'fail' = 'pass';
+    let previousParallelSummary = '';
 
-    for (let i = 0; i < state.steps.length; i++) {
-      const step = state.steps[i];
+    const segments = groupStateStepsIntoSegments(state.steps);
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
       if (this.shouldStop) break;
       // Allow forced transition to interrupt mid-state
       if (this.pendingForceTransition) break;
 
-      // Delay between steps when using non-claude engines to avoid throttling
+      // Delay between segments when using non-claude engines to avoid throttling
       if (i > 0 && this.engineType !== 'claude-code') {
         await new Promise(r => setTimeout(r, 30000));
       }
 
+      if (segment.type === 'parallel') {
+        const parallelResult = await this.executeParallelSegment(segment, state, config, requirements);
+        stepOutputs.push(...parallelResult.outputs);
+        issues.push(...parallelResult.issues);
+        previousParallelSummary = parallelResult.summary;
+        if (parallelResult.verdict === 'fail') verdict = 'fail';
+        else if (parallelResult.verdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+        if (parallelResult.failed) break;
+        continue;
+      }
+
+      const step = segment.step;
       try {
-        let output: string;
-        output = await this.executeStep(step, state, config, requirements);
+        const output = await this.executeStep(step, state, config, requirements, previousParallelSummary);
+        previousParallelSummary = '';
         stepOutputs.push(output);
 
         // Parse issues from output
@@ -2104,12 +2493,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       } catch (stepError: any) {
         const errorMsg = stepError.message || String(stepError);
         stepOutputs.push(`ERROR: ${errorMsg}`);
-        const isEngineLevelFailure =
-          /acp\s+connection\s+closed/i.test(errorMsg)
-          || /引擎执行失败/.test(errorMsg)
-          || /engine\s+.*failed/i.test(errorMsg);
 
-        if (isEngineLevelFailure) {
+        if (isEngineLevelFailure(errorMsg)) {
           // Engine-level failures are fatal for state-machine execution to avoid
           // uncontrolled fallback iterations and token burn.
           throw new Error(`引擎异常，已停止工作流：${errorMsg}`);
@@ -2236,9 +2621,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
     requirements?: string,
     extraContext?: string
   ): Promise<string> {
-    const agent = this.agents.find(a => a.name === step.agent);
+    const runtimeAgentName = getStepRuntimeAgentName(step);
+    const agent = this.agents.find(a => a.name === runtimeAgentName);
     if (!agent) {
-      throw new Error(`找不到 agent: ${step.agent}`);
+      throw new Error(`找不到 agent: ${runtimeAgentName}`);
     }
 
     const stepId = randomUUID();
@@ -2246,7 +2632,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     agent.status = 'running';
     agent.currentTask = step.name;
-    this.currentStep = stepKey;
+    this.markStepActive(stepKey);
     this.emit('agents', { agents: this.agents });
     
     this.agentFlow.push({
@@ -2302,27 +2688,33 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       agent.status = 'completed';
       agent.completedTasks++;
+      addTokenUsage(agent, stepResult.tokenUsage);
+      agent.costUsd += stepResult.costUsd;
       agent.lastOutput = output;
-      // Store session ID for reuse across iterations of the same agent
+      agent.summary = conclusion;
+      // Store session ID for reuse across iterations of the same runtime agent
       if (stepResult.sessionId) {
         agent.sessionId = stepResult.sessionId;
       }
-      this.currentStep = null;
+      this.markStepInactive(stepKey);
       this.completedSteps.push(stepKey);
-      this.currentProcesses = [];
-      this.applyRunSpecCodingTaskUpdatesFromOutput(output, step.agent);
+      this.removeCurrentProcess(stepId);
+      this.applyRunSpecCodingTaskUpdatesFromOutput(output, runtimeAgentName);
 
       // Record step log for persistence
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
-        agent: step.agent,
+        agent: runtimeAgentName,
         status: 'completed',
         output,
         error: '',
         costUsd: stepResult.costUsd,
         durationMs: stepResult.durationMs,
         timestamp: new Date().toISOString(),
+        tokenUsage: stepResult.tokenUsage,
+        sessionId: stepResult.sessionId || null,
+        engineName: this.engineType,
       });
 
       this.emit('agents', { agents: this.agents });
@@ -2332,7 +2724,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         id: stepId,
         state: state.name,
         step: step.name,
-        agent: step.agent,
+        agent: runtimeAgentName,
         output,
         costUsd: stepResult.costUsd,
         durationMs: stepResult.durationMs,
@@ -2364,24 +2756,41 @@ export class StateMachineWorkflowManager extends EventEmitter {
         await saveProcessOutput(this.currentRunId, stepFileName, conclusion).catch(() => {});
       }
 
+      if (step.channelIds?.length) {
+        const entry: ChannelOutputEntry = {
+          stateName: state.name,
+          stepName: step.name,
+          agent: runtimeAgentName,
+          summary: conclusion,
+          timestamp: new Date().toISOString(),
+        };
+        for (const channelId of step.channelIds) {
+          const existing = this.channelOutputsById.get(channelId) || [];
+          this.channelOutputsById.set(channelId, [...existing, entry].slice(-20));
+        }
+      }
+
       return output;
     } catch (error: any) {
       agent.status = 'failed';
-      this.currentStep = null;
-      this.currentProcesses = [];
+      this.markStepInactive(stepKey);
+      this.removeCurrentProcess(stepId);
 
       // Record failed step log
       const errorMsg = error.message || String(error);
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
-        agent: step.agent,
+        agent: runtimeAgentName,
         status: 'failed',
         output: '',
         error: errorMsg,
         costUsd: 0,
         durationMs: 0,
         timestamp: new Date().toISOString(),
+        tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
+        sessionId: null,
+        engineName: this.engineType,
       });
 
       this.emit('agents', { agents: this.agents });
@@ -2394,6 +2803,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       throw error;
     }
+  }
+
+  private getChannelContext(step: WorkflowStep): string {
+    if (!step.channelIds?.length) return '';
+    const blocks: string[] = [];
+    for (const channelId of step.channelIds) {
+      const entries = (this.channelOutputsById.get(channelId) || []).slice(-5);
+      if (entries.length === 0) continue;
+      blocks.push([
+        `## Channel ${channelId} 最近输出`,
+        ...entries.map((entry) => `- [${entry.timestamp}] ${entry.stateName}/${entry.stepName} (${entry.agent}): ${entry.summary.replace(/\s+/g, ' ').slice(0, 600)}`),
+      ].join('\n'));
+    }
+    return blocks.join('\n\n');
   }
 
   private async buildStepContext(
@@ -2487,7 +2910,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       parts.push(`\n# 本轮运行中的人类答复\n${recentAnswers.join('\n')}`);
     }
 
-    // Add state-specific context
+    if (step.channelIds?.length) {
+      const channelContext = this.getChannelContext(step);
+      if (channelContext) {
+        parts.push(`\n# 共享 Channel 最近输出\n${channelContext}`);
+      }
+    }
+
     const stateContext = this.stateContexts.get(state.name);
     if (stateContext) {
       parts.push(`\n# 状态上下文\n${stateContext}`);
@@ -2804,11 +3233,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     context: string,
     config: StateMachineWorkflowConfig,
     stepId?: string
-  ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string }> {
+  ): Promise<{ output: string; lastRoundOutput: string; costUsd: number; durationMs: number; sessionId?: string; tokenUsage: TokenUsage }> {
     // Find agent config for system prompt and model
     const roleConfig = this.agentConfigs.find(r => r.name === step.agent)
       || config.roles?.find(r => r.name === step.agent);
 
+    const runtimeAgentName = getStepRuntimeAgentName(step);
     const model = resolveAgentModel(roleConfig, config.context);
     const systemPrompt = roleConfig?.systemPrompt || `你是一个 ${step.role || 'assistant'} 角色的 AI 助手。`;
     const workingDirectory = config.context?.projectRoot
@@ -2818,26 +3248,27 @@ export class StateMachineWorkflowManager extends EventEmitter {
     let currentProcessId = stepId || randomUUID();
     let currentPrompt = context;
     // Reuse session from same agent if available (saves tokens, preserves memory)
-    const agent = this.agents.find(a => a.name === step.agent);
+    const agent = this.agents.find(a => a.name === runtimeAgentName);
     let currentSessionId: string | undefined = agent?.sessionId || undefined;
     let accumulatedOutput = '';
     let lastRoundOutput = '';
     let accumulatedStream = '';
     let accumulatedCost = 0;
     let accumulatedDuration = 0;
+    const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
     const streamStepName = this.currentState ? `${this.currentState}-${step.name}` : step.name;
 
     // Track process
-    this.currentProcesses = [{
+    this.upsertCurrentProcess({
       pid: Date.now(),
       id: currentProcessId,
-      agent: step.agent,
+      agent: runtimeAgentName,
       step: streamStepName,
       stepId,
       startTime: new Date().toISOString(),
-    }];
+    });
     await this.persistState();
 
     // Set up periodic stream content flushing to disk (so frontend can read it)
@@ -2901,6 +3332,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
             lastRoundOutput: '',
             costUsd: accumulatedCost,
             durationMs: accumulatedDuration,
+            tokenUsage: accumulatedTokenUsage,
           };
         }
         // If interrupted with feedback, resume with feedback
@@ -2931,18 +3363,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
             currentPrompt = context + '\n\n' + currentPrompt;
           }
           currentProcessId = stepId || currentProcessId;
-          this.currentProcesses = [{
+          this.upsertCurrentProcess({
             pid: Date.now(),
             id: currentProcessId,
-            agent: step.agent,
+            agent: runtimeAgentName,
             step: streamStepName,
             stepId,
             startTime: new Date().toISOString(),
-          }];
+          });
           this.emit('step-start', {
             state: this.currentState,
             step: streamStepName,
-            agent: step.agent,
+            agent: runtimeAgentName,
           });
           this.emit('feedback-injected', {
             message: feedbackPrompt,
@@ -2966,6 +3398,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       lastRoundOutput = result.result || '';
       accumulatedCost += result.cost_usd || 0;
       accumulatedDuration += result.duration_ms || 0;
+      const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
+      accumulatedTokenUsage.inputTokens += resultTokenUsage.inputTokens;
+      accumulatedTokenUsage.outputTokens += resultTokenUsage.outputTokens;
+      accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
+      accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
 
       // Always capture session_id for reuse
       if (result.session_id) {
@@ -2987,14 +3424,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
         currentSessionId = sessionId;
         currentPrompt = `## 人工实时反馈\n以下是用户在你执行过程中提供的反馈意见，请基于这些反馈继续处理当前任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
         currentProcessId = stepId || currentProcessId;
-        this.currentProcesses = [{
+        this.upsertCurrentProcess({
           pid: Date.now(),
           id: currentProcessId,
-          agent: step.agent,
+          agent: runtimeAgentName,
           step: streamStepName,
           stepId,
           startTime: new Date().toISOString(),
-        }];
+        });
         this.emit('feedback-injected', {
           message: feedbackPrompt,
           timestamp: feedbackTimestamp,
@@ -3012,7 +3449,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
       throw new Error(`AI 服务中断：步骤 "${streamStepName}" 未产生任何输出`);
     }
 
-    return { output: accumulatedOutput, lastRoundOutput, costUsd: accumulatedCost, durationMs: accumulatedDuration, sessionId: currentSessionId };
+    return {
+      output: accumulatedOutput,
+      lastRoundOutput,
+      costUsd: accumulatedCost,
+      durationMs: accumulatedDuration,
+      sessionId: currentSessionId,
+      tokenUsage: accumulatedTokenUsage,
+    };
   }
 
   private async evaluateTransitions(
@@ -3264,6 +3708,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Restore state
     this.currentRunId = runId;
     this.currentConfigFile = runState.configFile;
+    this._creationSessionId = runState.creationSessionId;
     this.currentRequirements = runState.requirements || '';
     this.currentState = runState.currentState || null;
     this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
@@ -3283,6 +3728,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
+    this.deltaSpecMerged = runState.deltaSpecMerged || false;
+    this.deltaMergeState = runState.deltaMergeState;
+    this.workflowName = runState.workflowName || '';
+    // 持久化模式：如果 runSpecCoding 为空（未存入 YAML），从 delta 目录读取
+    if (!this.currentRunSpecCoding && runState.persistMode === 'repository') {
+      const workingDir = runState.workingDirectory;
+      if (workingDir) {
+        const specRootDir = getSpecRootDir(workingDir, runState.runSpecCoding?.specRoot);
+        const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, runId).catch(() => null);
+        if (deltaSpec) {
+          this.currentRunSpecCoding = deltaSpec;
+        }
+      }
+    }
 
     this.humanQuestionWaiters.clear();
 
@@ -3518,27 +3977,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.liveFeedback.push(message);
     this.emit('feedback-injected', entry);
 
-    // Interrupt the running process so feedback is delivered immediately via resume
+    // Interrupt the running processes so feedback is delivered immediately via resume
     if (this.status === 'running' && this.currentState) {
       this.interruptFlag = true;
       this.feedbackInterrupt = true; // non-urgent flag, different prompt tone
-
-      const currentProcId = this.currentProcesses?.[0]?.id;
-      const currentStepId = this.currentProcesses?.[0]?.stepId;
-      const allProcs = processManager.getAllProcesses();
-      const running = allProcs.find(
-        (p: any) => (p.status === 'running' || p.status === 'queued') && (
-          (currentStepId && p.stepId === currentStepId) ||
-          (currentProcId && p.id === currentProcId)
-        )
-      );
-      if (running) {
-        processManager.killProcess(running.id);
-      }
-      // For non-claude engines, also cancel via engine API
-      if (this.currentEngine) {
-        this.currentEngine.cancel();
-      }
+      this.cancelCurrentProcesses();
     }
   }
 
@@ -3559,29 +4002,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.liveFeedback.push(message);
     this.interruptFlag = true;
 
-    // Find and kill the running process by stepId (most reliable), then fall back to processId
-    const currentProcId = this.currentProcesses?.[0]?.id;
-    const currentStepId = this.currentProcesses?.[0]?.stepId;
-    const allProcs = processManager.getAllProcesses();
-    const running = allProcs.find(
-      (p: any) => (p.status === 'running' || p.status === 'queued') && (
-        (currentStepId && p.stepId === currentStepId) ||
-        (currentProcId && p.id === currentProcId)
-      )
-    );
-
-    if (running) {
-      const killed = processManager.killProcess(running.id);
-      // For non-claude engines, also cancel via engine API
-      if (!killed && this.currentEngine) {
-        this.currentEngine.cancel();
-        // Mark external process as killed so executeWithEngine can detect it
-        const rawProc = processManager.getProcessRaw(running.id);
-        if (rawProc) {
-          rawProc.status = 'killed';
-          rawProc.endTime = new Date();
-        }
-      }
+    // Find and kill all running processes tracked by this manager
+    const hadProcess = this.currentProcesses.length > 0;
+    this.cancelCurrentProcesses();
+    if (hadProcess) {
       this.emit('feedback-injected', { message, timestamp: new Date().toISOString() });
       return true;
     }
@@ -3594,15 +4018,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return null;
     }
 
-    // Find the running process by stepId (most reliable), then fall back to processId
-    const currentProcId = this.currentProcesses?.[0]?.id;
-    const currentStepId = this.currentProcesses?.[0]?.stepId;
+    // Find the first running process tracked by this manager
+    const processIds = new Set(this.currentProcesses.map((proc) => proc.id));
+    const stepIds = new Set(this.currentProcesses.map((proc) => proc.stepId).filter(Boolean) as string[]);
     const allProcs = processManager.getAllProcesses();
     const running = allProcs.find(
-      (p: any) => (p.status === 'running' || p.status === 'queued') && (
-        (currentStepId && p.stepId === currentStepId) ||
-        (currentProcId && p.id === currentProcId)
-      )
+      (p: any) => (p.status === 'running' || p.status === 'queued') && (processIds.has(p.id) || (p.stepId && stepIds.has(p.stepId)))
     );
 
     if (!running) return null;
@@ -3653,6 +4074,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Restore state up to that point
     this.currentRunId = runId;
     this.currentConfigFile = runState.configFile;
+    this._creationSessionId = runState.creationSessionId;
     this.currentRequirements = runState.requirements || '';
     this.currentState = stateName;
     this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
@@ -3669,6 +4091,21 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
+    this.deltaSpecMerged = runState.deltaSpecMerged || false;
+    this.deltaMergeState = runState.deltaMergeState;
+    this.workflowName = runState.workflowName || '';
+    // 持久化模式：如果 runSpecCoding 为空（未存入 YAML），从 delta 目录读取
+    if (!this.currentRunSpecCoding && runState.persistMode === 'repository') {
+      const workingDir = runState.workingDirectory;
+      if (workingDir) {
+        const specRootDir = getSpecRootDir(workingDir, runState.runSpecCoding?.specRoot);
+        const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, runId).catch(() => null);
+        if (deltaSpec) {
+          this.currentRunSpecCoding = deltaSpec;
+        }
+      }
+    }
+    this.deltaSpecMerged = runState.deltaSpecMerged || false;
     this.status = 'running';
     this.shouldStop = false;
 

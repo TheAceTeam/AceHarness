@@ -24,6 +24,26 @@ export interface EngineOptions {
   frontendSessionId?: string;
 }
 
+export interface EngineTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
+export interface EngineResultMetadata {
+  usage?: Partial<EngineTokenUsage>;
+  cost_usd?: number;
+  costUsd?: number;
+  duration_ms?: number;
+  durationMs?: number;
+  duration_api_ms?: number;
+  durationApiMs?: number;
+  num_turns?: number;
+  numTurns?: number;
+  [key: string]: any;
+}
+
 /** Unified execution result across all engines */
 export interface EngineJsonResult {
   result: string;
@@ -33,12 +53,7 @@ export interface EngineJsonResult {
   duration_api_ms: number;
   is_error: boolean;
   num_turns: number;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
-  };
+  usage: EngineTokenUsage;
 }
 
 export interface EngineResult {
@@ -47,7 +62,7 @@ export interface EngineResult {
   error?: string;
   sessionId?: string;
   stopReason?: string;
-  metadata?: any;
+  metadata?: EngineResultMetadata;
 }
 
 export interface EngineStreamEvent {

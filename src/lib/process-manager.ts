@@ -14,6 +14,15 @@ import { getWorkspaceRunsDir } from '@/lib/app-paths';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const DEBUG_DIR = resolve(RUNS_DIR, '.tmp');
+const MAX_STREAM_CONTENT_CHARS = 200_000;
+const MAX_OUTPUT_CHARS = 200_000;
+const MAX_ERROR_CHARS = 50_000;
+const MAX_LOG_LINES = 200;
+
+function trimToTail(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return value.slice(-maxChars);
+}
 
 function ts(): string { return new Date().toISOString(); }
 function fmtMs(ms: number): string {
@@ -101,12 +110,41 @@ class ProcessManager extends EventEmitter {
   getActiveStreamChatId(frontendSessionId: string): string | undefined {
     return this.activeStreams.get(frontendSessionId);
   }
+
+  appendStreamContent(id: string, chunk: string): string {
+    const proc = this.processes.get(id);
+    if (!proc) return '';
+    proc.streamContent = trimToTail(proc.streamContent + chunk, MAX_STREAM_CONTENT_CHARS);
+    return proc.streamContent;
+  }
+
+  setProcessOutput(id: string, output: string): void {
+    const proc = this.processes.get(id);
+    if (!proc) return;
+    proc.output = trimToTail(output, MAX_OUTPUT_CHARS);
+  }
+
+  setProcessError(id: string, error: string): void {
+    const proc = this.processes.get(id);
+    if (!proc) return;
+    proc.error = trimToTail(error, MAX_ERROR_CHARS);
+  }
+
+  appendLogLine(id: string, line: string): void {
+    const proc = this.processes.get(id);
+    if (!proc) return;
+    proc.logLines.push(line);
+    if (proc.logLines.length > MAX_LOG_LINES) {
+      proc.logLines = proc.logLines.slice(-MAX_LOG_LINES);
+    }
+  }
+
   killProcess(id: string): boolean {
     const proc = this.processes.get(id);
     if (!proc) return false;
     proc.status = 'killed';
     proc.endTime = new Date();
-    proc.logLines.push(`[${ts()}] 手动终止`);
+    this.appendLogLine(id, `[${ts()}] 手动终止`);
     // Kill child process if present (legacy)
     if (proc.childProcess) {
       try {

@@ -11,13 +11,20 @@ const RUNS_DIR = getWorkspaceRunsDir();
 /** Separator used to delimit output chunks in persisted stream files */
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
 
+export interface PersistedTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
+
 export interface PersistedAgentState {
   name: string;
   team: string;
   model: string;
   status: string;
   completedTasks: number;
-  tokenUsage: { inputTokens: number; outputTokens: number };
+  tokenUsage: PersistedTokenUsage;
   costUsd: number;
   sessionId: string | null;
   iterationCount: number;
@@ -42,6 +49,14 @@ export interface PersistedProcessInfo {
   startTime: string;
 }
 
+export interface PersistedActiveConcurrencyGroup {
+  id: string;
+  stateName: string;
+  steps: string[];
+  joinPolicy?: any;
+  status: 'running' | 'completed' | 'failed';
+}
+
 export interface PersistedStepLog {
   id: string; // UUID for this step execution
   stepName: string;
@@ -52,6 +67,9 @@ export interface PersistedStepLog {
   costUsd: number;
   durationMs: number;
   timestamp: string;
+  tokenUsage?: PersistedTokenUsage;
+  sessionId?: string | null;
+  engineName?: string;
 }
 
 export interface PersistedQualityCommandResult {
@@ -74,6 +92,21 @@ export interface PersistedQualityCheck {
   summary: string;
   createdAt: string;
   commands: PersistedQualityCommandResult[];
+}
+
+export interface DeltaMergeState {
+  status: 'not-applicable' | 'available' | 'previewing' | 'awaiting-confirmation' | 'applying' | 'merged' | 'failed';
+  requestedAt?: string;
+  previewedAt?: string;
+  appliedAt?: string;
+  appliedBy?: string;
+  error?: string;
+  baseHash?: string;
+  deltaHash?: string;
+  mergedHash?: string;
+  diff?: string;
+  aiSummary?: string;
+  previewPath?: string;
 }
 
 export interface HumanQuestionAnswerSchema {
@@ -137,6 +170,8 @@ export interface PersistedRunState {
   endTime: string | null;
   currentPhase: string | null;
   currentStep: string | null;
+  activeSteps?: string[];
+  activeConcurrencyGroups?: PersistedActiveConcurrencyGroup[];
   completedSteps: string[];
   failedSteps: string[];
   stepLogs: PersistedStepLog[];
@@ -232,8 +267,18 @@ export interface PersistedRunState {
   } | null;
   /** preCommands 收集到的结构化质量门禁结果 */
   qualityChecks?: PersistedQualityCheck[];
+  /** Explicit creation session bound to this run, only set when provided at start */
+  creationSessionId?: string;
   /** 当前 run 绑定的独立 SpecCoding 快照 */
   runSpecCoding?: SpecCodingDocument | null;
+  /** 持久化 spec 模式 */
+  persistMode?: 'none' | 'repository';
+  /** 工作流名称，持久化模式下用于定位 delta 目录 */
+  workflowName?: string;
+  /** delta spec 是否已合入 master */
+  deltaSpecMerged?: boolean;
+  /** delta spec 合入 master 的人工确认状态 */
+  deltaMergeState?: DeltaMergeState;
   /** 演练模式元数据 */
   rehearsal?: {
     enabled: boolean;
