@@ -64,6 +64,15 @@ function SortableStepRow({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{step.name}</div>
         <div className="text-xs text-gray-500 truncate">{step.agent}</div>
+        {(step.parallelGroup || step.concurrency?.branchId || step.agentInstanceId || step.channelIds?.length || step.specTaskBinding?.taskId) && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {step.parallelGroup ? <Badge variant="outline" className="text-[10px] py-0">group:{step.parallelGroup}</Badge> : null}
+            {step.concurrency?.branchId ? <Badge variant="outline" className="text-[10px] py-0">branch:{step.concurrency.branchId}</Badge> : null}
+            {step.agentInstanceId ? <Badge variant="outline" className="text-[10px] py-0">instance:{step.agentInstanceId}</Badge> : null}
+            {step.channelIds?.length ? <Badge variant="outline" className="text-[10px] py-0">channels:{step.channelIds.length}</Badge> : null}
+            {step.specTaskBinding?.taskId ? <Badge variant="outline" className="text-[10px] py-0">task:{step.specTaskBinding.taskId}</Badge> : null}
+          </div>
+        )}
       </div>
       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={onEdit}>
@@ -361,6 +370,12 @@ export default function StateMachineDesignPanel({
       role: data.role,
       constraints: normalizedConstraints,
       skills: data.skills,
+      enableReviewPanel: data.enableReviewPanel,
+      parallelGroup: data.parallelGroup,
+      concurrency: data.concurrency,
+      agentInstanceId: data.agentInstanceId,
+      channelIds: data.channelIds,
+      specTaskBinding: data.specTaskBinding,
     };
     const steps = [...selectedState.steps];
     if (editingStep.isNew) {
@@ -411,6 +426,12 @@ export default function StateMachineDesignPanel({
           role: s.role,
           constraints: s.constraints?.join('\n') ?? '',
           skills: s.skills ?? [],
+          enableReviewPanel: s.enableReviewPanel ?? false,
+          parallelGroup: s.parallelGroup,
+          concurrency: s.concurrency,
+          agentInstanceId: s.agentInstanceId,
+          channelIds: s.channelIds,
+          specTaskBinding: s.specTaskBinding,
         };
       })()
     : undefined;
@@ -602,7 +623,19 @@ export default function StateMachineDesignPanel({
         <EditNodeModal
           isOpen
           type="step"
-          data={editingStep.isNew ? { name: '', agent: availableAgents[0]?.name ?? '', task: '', role: 'defender', constraints: '', skills: [] } : editingStepData}
+          data={editingStep.isNew ? {
+            name: '',
+            agent: availableAgents[0]?.name ?? '',
+            task: '',
+            role: 'defender',
+            constraints: '',
+            skills: [],
+            parallelGroup: '',
+            concurrency: undefined,
+            agentInstanceId: '',
+            channelIds: [],
+            specTaskBinding: undefined,
+          } : editingStepData}
           roles={availableAgents}
           availableSkills={availableSkills}
           isNew={editingStep.isNew}

@@ -55,3 +55,10 @@
 ```bash
 node skills/aceharness-spec-coding/scripts/validate-spec-coding.mjs <spec-root>
 ```
+
+**持久化 Spec 模式：**
+当工作流配置 `specCoding.persistMode: 'repository'` 时：
+- spec 制品位于 `specCoding.specRoot` 目录（默认 `<workingDirectory>/.spec`）
+- 目录结构：`spec.md`（master 输入）、`checklist.md`（问题清单输入）、`specs/<workflowName>-<runId>/`（delta 制品目录）
+- 审查时检查 `checklist.md`，所有未回答问题（`- [ ]`）需要在审批时提出
+- 修订制品时直接更新 requirements/design/tasks artifacts 的正文，保持术语、范围和需求追溯一致

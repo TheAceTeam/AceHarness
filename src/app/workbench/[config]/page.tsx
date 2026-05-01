@@ -60,7 +60,7 @@ import {
 } from '@/lib/agent-conversations';
 import { getEngineMeta } from '@/lib/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent-draft';
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import styles from './page.module.css';
 
@@ -188,6 +188,28 @@ type WorkflowMemoryLayers = {
 
 type SpecCodingArtifactKey = 'requirements' | 'design' | 'tasks';
 
+type SpecMergePreview = {
+  masterBefore: string;
+  mergedContent: string;
+  diff: string;
+  aiSummary: string;
+  mergeState: DeltaMergeState;
+};
+
+const SPEC_MERGE_STATUS_LABELS: Record<DeltaMergeState['status'], string> = {
+  'not-applicable': '不适用',
+  available: '可合入',
+  previewing: '生成预览中',
+  'awaiting-confirmation': '等待确认',
+  applying: '合入中',
+  merged: '已合入',
+  failed: '失败',
+};
+
+function getSpecMergeStatusLabel(status?: DeltaMergeState['status']) {
+  return status ? SPEC_MERGE_STATUS_LABELS[status] || status : '未开始';
+}
+
 export default function WorkbenchPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -309,6 +331,14 @@ export default function WorkbenchPage() {
     round: number;
     timestamp: string;
   }[]>([]);
+  const [activeSteps, setActiveSteps] = useState<string[]>([]);
+  const [activeConcurrencyGroups, setActiveConcurrencyGroups] = useState<Array<{
+    id: string;
+    stateName: string;
+    steps: string[];
+    joinPolicy?: any;
+    status: 'running' | 'completed' | 'failed';
+  }>>([]);
   const [persistedStepLogs, setPersistedStepLogs] = useState<Array<{
     id: string;
     stepName: string;
@@ -469,13 +499,22 @@ export default function WorkbenchPage() {
   const [editingContextValue, setEditingContextValue] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
-  const [designTab, setDesignTab] = useState<'workflow' | 'spec-coding' | 'config'>('workflow');
+  const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'source'>('overview');
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
   const [specCodingSaveScope, setSpecCodingSaveScope] = useState<NotebookScope>('personal');
   const [specCodingSaveDirectory, setSpecCodingSaveDirectory] = useState('');
   const [savingSpecCodingArtifact, setSavingSpecCodingArtifact] = useState(false);
+  const [persistMode, setPersistMode] = useState<'none' | 'repository' | undefined>(undefined);
+  const [deltaSpecMerged, setDeltaSpecMerged] = useState(false);
+  const [deltaMergeState, setDeltaMergeState] = useState<DeltaMergeState | undefined>(undefined);
+  const [masterSpecPath, setMasterSpecPath] = useState<string | undefined>(undefined);
+  const [specMergeDialogOpen, setSpecMergeDialogOpen] = useState(false);
+  const [specMergePreview, setSpecMergePreview] = useState<SpecMergePreview | null>(null);
+  const [specMergeLoading, setSpecMergeLoading] = useState(false);
+  const [specMergeApplying, setSpecMergeApplying] = useState(false);
+  const [specMergeError, setSpecMergeError] = useState<string | null>(null);
   const liveStreamRef = useRef<EventSource | ReturnType<typeof setInterval> | null>(null);
   const liveStreamLenRef = useRef(0);
   const liveStreamRawRef = useRef('');
@@ -504,6 +543,9 @@ export default function WorkbenchPage() {
       setViewingHistoryRun(false);
     }
     dispatch({ type: 'SET_VIEW_MODE', payload: mode });
+    if (mode === 'design') {
+      setDesignTab('overview');
+    }
     if (mode === 'run') {
       updateUrl({ mode: 'run', run: runId || null });
     } else if (mode === 'design') {
@@ -567,6 +609,79 @@ export default function WorkbenchPage() {
       || null;
   }, [currentPhase, specCodingDetails, specCodingSummary?.progress?.activePhaseId]);
 
+  const specCodingTaskProgress = useMemo(() => {
+    const tasks = specCodingDetails?.tasks || [];
+    const total = tasks.length;
+    const completed = tasks.filter((task) => task.status === 'completed').length;
+    const inProgress = tasks.filter((task) => task.status === 'in-progress').length;
+    const blocked = tasks.filter((task) => task.status === 'blocked').length;
+    const pending = Math.max(0, total - completed - inProgress - blocked);
+    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const activeTasks = tasks.filter((task) => task.status === 'in-progress');
+    const blockedTasks = tasks.filter((task) => task.status === 'blocked');
+    const recentlyUpdatedTasks = [...tasks]
+      .filter((task) => task.updatedAt)
+      .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+      .slice(0, 5);
+
+    return {
+      total,
+      completed,
+      inProgress,
+      blocked,
+      pending,
+      percentage,
+      activeTasks,
+      blockedTasks,
+      recentlyUpdatedTasks,
+    };
+  }, [specCodingDetails?.tasks]);
+
+  const concurrencyDesignSummary = useMemo(() => {
+    const sourceConfig = editingConfig || workflowConfig;
+    const workflow = sourceConfig?.workflow as any;
+    const states = workflow?.mode === 'state-machine' ? (workflow.states || []) : [];
+    const steps = states.flatMap((state: any) =>
+      (state.steps || []).map((step: any) => ({ ...step, __stateName: state.name }))
+    );
+    const grouped = new Map<string, any[]>();
+    const agentInstanceIds = new Set<string>();
+    const channelIds = new Set<string>();
+    const specTaskIds = new Set<string>();
+    const joinPolicies: Array<{ scope: string; mode: string }> = [];
+
+    states.forEach((state: any) => {
+      (state.channels || []).forEach((id: string) => channelIds.add(id));
+      if (state.joinPolicy?.mode) joinPolicies.push({ scope: `state:${state.name}`, mode: state.joinPolicy.mode });
+    });
+
+    steps.forEach((step: any) => {
+      const groupId = step.concurrency?.groupId || step.parallelGroup;
+      if (groupId) grouped.set(groupId, [...(grouped.get(groupId) || []), step]);
+      if (step.agentInstanceId) agentInstanceIds.add(step.agentInstanceId);
+      (step.channelIds || []).forEach((id: string) => channelIds.add(id));
+      if (step.specTaskBinding?.taskId) specTaskIds.add(step.specTaskBinding.taskId);
+      if (step.concurrency?.joinPolicy?.mode) {
+        joinPolicies.push({ scope: `step:${step.name}`, mode: step.concurrency.joinPolicy.mode });
+      }
+    });
+
+    (workflow?.concurrency?.agentInstances || []).forEach((instance: any) => agentInstanceIds.add(instance.id));
+    (workflow?.concurrency?.channels || []).forEach((channel: any) => channelIds.add(channel.id));
+    Object.entries(workflow?.concurrency?.joinPolicies || {}).forEach(([id, policy]: [string, any]) => {
+      if (policy?.mode) joinPolicies.push({ scope: `workflow:${id}`, mode: policy.mode });
+    });
+
+    return {
+      groups: Array.from(grouped.entries()).map(([id, groupSteps]) => ({ id, steps: groupSteps })),
+      agentInstanceIds: Array.from(agentInstanceIds),
+      channelIds: Array.from(channelIds),
+      specTaskIds: Array.from(specTaskIds),
+      joinPolicies,
+      hasMetadata: grouped.size > 0 || agentInstanceIds.size > 0 || channelIds.size > 0 || specTaskIds.size > 0 || joinPolicies.length > 0,
+    };
+  }, [editingConfig, workflowConfig]);
+
   const structuredTasksMarkdown = useMemo(() => {
     const tasks = specCodingDetails?.tasks || [];
     if (tasks.length === 0) return '';
@@ -580,8 +695,18 @@ export default function WorkbenchPage() {
           ? '[x]'
           : task.status === 'in-progress'
             ? '[-]'
-            : '[ ]';
-        const lines = [`- ${checkbox} ${task.title}`];
+            : task.status === 'blocked'
+              ? '[!]'
+              : '[ ]';
+        const metadata = [
+          `status:${task.status}`,
+          task.phaseId ? `phase:${task.phaseId}` : null,
+          task.updatedBy ? `updatedBy:${task.updatedBy}` : null,
+        ].filter(Boolean).join(' ');
+        const lines = [
+          `<!-- spec-coding-task:${task.id} ${metadata} -->`,
+          `- ${checkbox} ${task.title}`,
+        ];
         if (task.detail?.trim()) {
           lines.push(...task.detail.trim().split(/\r?\n/));
         }
@@ -1245,6 +1370,8 @@ export default function WorkbenchPage() {
       }
       if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
+      setActiveSteps(Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []);
+      setActiveConcurrencyGroups(Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []);
 
       // Restore workingDirectory
       if (status.workingDirectory) {
@@ -1270,6 +1397,10 @@ export default function WorkbenchPage() {
       setSpecCodingSummary((status as any).specCodingSummary || null);
       setSpecCodingDetails((status as any).specCodingDetails || null);
       setSpecCodingSourceOfTruth((status as any).sourceOfTruth || null);
+      setPersistMode(status.persistMode);
+      setDeltaSpecMerged(Boolean(status.deltaSpecMerged));
+      setDeltaMergeState(status.deltaMergeState);
+      setMasterSpecPath(status.masterSpecPath);
       setFinalReview((status as any).finalReview || null);
       setQualityChecks((status as any).qualityChecks || []);
       setMemoryLayers((status as any).memoryLayers || null);
@@ -1646,6 +1777,8 @@ export default function WorkbenchPage() {
       dispatch({ type: 'SET_RUN_ID', payload: runId });
       dispatch({ type: 'SET_AGENTS', payload: agents });
       dispatch({ type: 'SET_COMPLETED_STEPS', payload: detail.completedSteps || [] });
+      setActiveSteps(Array.isArray(detail.activeSteps) ? detail.activeSteps : []);
+      setActiveConcurrencyGroups(Array.isArray(detail.activeConcurrencyGroups) ? detail.activeConcurrencyGroups : []);
       // Ensure the interrupted step is marked as failed for crashed runs
       const failed = [...(detail.failedSteps || [])];
       if ((detail.status === 'crashed' || detail.status === 'failed' || detail.status === 'stopped') && detail.currentStep
@@ -1809,6 +1942,8 @@ export default function WorkbenchPage() {
           dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.currentStep });
         }
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
+        if (Array.isArray(event.data.activeSteps)) setActiveSteps(event.data.activeSteps);
+        if (Array.isArray(event.data.activeConcurrencyGroups)) setActiveConcurrencyGroups(event.data.activeConcurrencyGroups);
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
         if (event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
@@ -2894,6 +3029,73 @@ export default function WorkbenchPage() {
     }
   };
 
+  const handlePreviewSpecMerge = useCallback(async (force = false) => {
+    const rid = runId || initialRunId || selectedRun?.id;
+    if (!rid) {
+      toast('error', '缺少 runId，无法生成 Spec 合入预览');
+      return;
+    }
+    if (!force && specMergePreview && deltaMergeState?.status === 'awaiting-confirmation') {
+      setSpecMergeDialogOpen(true);
+      return;
+    }
+
+    setSpecMergeDialogOpen(true);
+    setSpecMergeLoading(true);
+    setSpecMergeError(null);
+    try {
+      const preview = await workflowApi.previewSpecMerge({ runId: rid, configFile });
+      setSpecMergePreview(preview);
+      setDeltaMergeState(preview.mergeState);
+      setDeltaSpecMerged(false);
+    } catch (error: any) {
+      const message = error?.message || '生成 Spec 合入预览失败';
+      setSpecMergeError(message);
+      toast('error', message);
+      await fetchCurrentStatus();
+    } finally {
+      setSpecMergeLoading(false);
+    }
+  }, [configFile, deltaMergeState?.status, initialRunId, runId, selectedRun?.id, specMergePreview, toast]);
+
+  const handleOpenSpecMergeDialog = useCallback(() => {
+    setSpecMergeError(null);
+    if (deltaMergeState?.status === 'awaiting-confirmation') {
+      setSpecMergeDialogOpen(true);
+      if (!specMergePreview) void handlePreviewSpecMerge(false);
+      return;
+    }
+    void handlePreviewSpecMerge(true);
+  }, [deltaMergeState?.status, handlePreviewSpecMerge, specMergePreview]);
+
+  const handleApplySpecMerge = useCallback(async () => {
+    const rid = runId || initialRunId || selectedRun?.id;
+    const mergedHash = specMergePreview?.mergeState?.mergedHash || deltaMergeState?.mergedHash;
+    if (!rid || !mergedHash) {
+      setSpecMergeError('缺少合并候选校验信息，请重新生成预览');
+      return;
+    }
+
+    setSpecMergeApplying(true);
+    setSpecMergeError(null);
+    try {
+      const result = await workflowApi.applySpecMerge({ runId: rid, configFile, mergedHash });
+      setDeltaMergeState(result.mergeState);
+      setDeltaSpecMerged(true);
+      setSpecMergePreview((prev) => prev ? { ...prev, mergeState: result.mergeState } : prev);
+      toast('success', '已合入 Master Spec');
+      await fetchCurrentStatus();
+      setSpecMergeDialogOpen(false);
+    } catch (error: any) {
+      const message = error?.message || '确认合入 Spec 失败';
+      setSpecMergeError(message);
+      toast('error', message);
+      await fetchCurrentStatus();
+    } finally {
+      setSpecMergeApplying(false);
+    }
+  }, [configFile, deltaMergeState?.mergedHash, initialRunId, runId, selectedRun?.id, specMergePreview?.mergeState?.mergedHash, toast]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -3249,7 +3451,7 @@ export default function WorkbenchPage() {
               </div>
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="text-[10px]">
-                  {specCodingDetails?.tasks?.filter((task) => task.status === 'completed').length || 0}/{specCodingDetails?.tasks?.length || 0}
+                  {specCodingTaskProgress.completed}/{specCodingTaskProgress.total}
                 </Badge>
                 <Button
                   variant="outline"
@@ -3264,6 +3466,20 @@ export default function WorkbenchPage() {
                   查看当前 tasks.md
                 </Button>
               </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-4">
+              {[
+                { label: '已完成', value: specCodingTaskProgress.completed, tone: 'text-emerald-600' },
+                { label: '进行中', value: specCodingTaskProgress.inProgress, tone: 'text-blue-600' },
+                { label: '阻塞', value: specCodingTaskProgress.blocked, tone: 'text-red-600' },
+                { label: '未开始', value: specCodingTaskProgress.pending, tone: 'text-muted-foreground' },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">{item.label}</div>
+                  <div className={`mt-1 text-lg font-semibold ${item.tone}`}>{item.value}</div>
+                </div>
+              ))}
             </div>
 
             <div className="space-y-2">
@@ -3488,8 +3704,10 @@ export default function WorkbenchPage() {
   };
 
   const renderSpecCodingPanel = (options?: { className?: string }) => {
-    const completedTaskCount = specCodingDetails?.tasks?.filter((task) => task.status === 'completed').length || 0;
-    const totalTaskCount = specCodingDetails?.tasks?.length || 0;
+    const canMergeSpec = persistMode === 'repository'
+      && Boolean(runId || initialRunId || selectedRun?.id)
+      && !deltaSpecMerged
+      && ['available', 'failed', 'awaiting-confirmation'].includes(deltaMergeState?.status || '');
 
     return (
       <div className={options?.className || 'space-y-4'}>
@@ -3533,20 +3751,38 @@ export default function WorkbenchPage() {
 
           {specCodingSummary ? (
             <div className="space-y-3">
-              <div className="grid gap-2 sm:grid-cols-3">
-                <div className="rounded-xl border bg-muted/20 p-3">
-                  <div className="text-[10px] text-muted-foreground">任务</div>
-                  <div className="mt-1 text-lg font-semibold">{completedTaskCount}/{totalTaskCount || specCodingSummary.taskCount || 0}</div>
+              <div className="space-y-3">
+                <div className="grid gap-2 sm:grid-cols-4">
+                  {[
+                    { label: '已完成', value: specCodingTaskProgress.completed, tone: 'text-emerald-600' },
+                    { label: '进行中', value: specCodingTaskProgress.inProgress, tone: 'text-blue-600' },
+                    { label: '阻塞', value: specCodingTaskProgress.blocked, tone: 'text-red-600' },
+                    { label: '未开始', value: specCodingTaskProgress.pending, tone: 'text-muted-foreground' },
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-xl border bg-muted/20 p-3">
+                      <div className="text-[10px] text-muted-foreground">{item.label}</div>
+                      <div className={`mt-1 text-lg font-semibold ${item.tone}`}>{item.value}</div>
+                    </div>
+                  ))}
                 </div>
                 <div className="rounded-xl border bg-muted/20 p-3">
-                  <div className="text-[10px] text-muted-foreground">制品</div>
-                  <div className="mt-1 text-lg font-semibold">
-                    {specCodingArtifactEntries.filter((entry) => entry.content.trim()).length}/{specCodingArtifactEntries.length}
+                  <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
+                    <span>tasks.md 完成度</span>
+                    <span>{specCodingTaskProgress.completed}/{specCodingTaskProgress.total || specCodingSummary.taskCount || 0}</span>
                   </div>
+                  <Progress value={specCodingTaskProgress.percentage} className="mt-2 h-2" />
                 </div>
-                <div className="rounded-xl border bg-muted/20 p-3">
-                  <div className="text-[10px] text-muted-foreground">修订</div>
-                  <div className="mt-1 text-lg font-semibold">{specCodingDetails?.revisions?.length || 0}</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border bg-muted/20 p-3">
+                    <div className="text-[10px] text-muted-foreground">制品</div>
+                    <div className="mt-1 text-lg font-semibold">
+                      {specCodingArtifactEntries.filter((entry) => entry.content.trim()).length}/{specCodingArtifactEntries.length}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border bg-muted/20 p-3">
+                    <div className="text-[10px] text-muted-foreground">修订</div>
+                    <div className="mt-1 text-lg font-semibold">{specCodingDetails?.revisions?.length || 0}</div>
+                  </div>
                 </div>
               </div>
               {specCodingSummary.summary ? (
@@ -3554,9 +3790,60 @@ export default function WorkbenchPage() {
                   {specCodingSummary.summary}
                 </div>
               ) : null}
-              {specCodingSummary.progress?.summary ? (
+              {specCodingTaskProgress.blocked > 0 ? (
+                <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-medium text-red-600">
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>block</span>
+                    {specCodingTaskProgress.blocked} 个 tasks.md 任务阻塞
+                  </div>
+                  <div className="space-y-1.5">
+                    {specCodingTaskProgress.blockedTasks.slice(0, 3).map((task) => (
+                      <div key={`blocked-${task.id}`} className="text-[11px] leading-5 text-muted-foreground">
+                        <span className="font-medium text-foreground">{task.title}</span>
+                        {task.validation ? <span> · {task.validation}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {specCodingSummary?.progress?.summary ? (
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">
                   当前进度：{specCodingSummary.progress.summary}
+                </div>
+              ) : null}
+              {persistMode === 'repository' ? (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-foreground">
+                        <span>持久化 Spec</span>
+                        <Badge variant="outline" className="text-[10px]">
+                          {getSpecMergeStatusLabel(deltaMergeState?.status)}
+                        </Badge>
+                        {deltaSpecMerged ? <Badge variant="secondary" className="text-[10px]">已合入</Badge> : null}
+                      </div>
+                      {masterSpecPath ? (
+                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={masterSpecPath}>
+                          Master: {masterSpecPath}
+                        </div>
+                      ) : null}
+                      {deltaMergeState?.error ? (
+                        <div className="text-[11px] leading-5 text-destructive">{deltaMergeState.error}</div>
+                      ) : null}
+                    </div>
+                    {canMergeSpec ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={handleOpenSpecMergeDialog}
+                        disabled={specMergeLoading || specMergeApplying}
+                      >
+                        {specMergeLoading ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                        合入 Master Spec
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -3607,6 +3894,34 @@ export default function WorkbenchPage() {
             </div>
           </div>
         )}
+
+        {specCodingTaskProgress.recentlyUpdatedTasks.length ? (
+          <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold">tasks.md 状态事件</div>
+                <div className="text-xs text-muted-foreground">最近由 Agent 或系统回写的任务状态、验证信息和更新时间。</div>
+              </div>
+              <Badge variant="outline" className="text-[10px]">{specCodingTaskProgress.recentlyUpdatedTasks.length} 条</Badge>
+            </div>
+            <div className="space-y-2">
+              {specCodingTaskProgress.recentlyUpdatedTasks.map((task) => (
+                <div key={`task-event-${task.id}`} className="rounded-xl border bg-muted/10 p-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0 font-medium text-foreground">{task.title}</div>
+                    <Badge variant="outline" className="shrink-0 text-[10px]">{formatSpecCodingTaskStatus(task.status)}</Badge>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
+                    {task.updatedBy ? <span>来源：{task.updatedBy}</span> : null}
+                    {task.updatedAt ? <span>{new Date(task.updatedAt).toLocaleString()}</span> : null}
+                    {task.phaseId ? <span>phase：{task.phaseId}</span> : null}
+                  </div>
+                  {task.validation ? <div className="mt-1 leading-5">验证：{task.validation}</div> : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {specCodingDetails?.revisions?.length ? (
           <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
@@ -4044,21 +4359,15 @@ export default function WorkbenchPage() {
               <Tabs value={activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 overflow-hidden">
                 <TabsList className="w-full rounded-none border-b flex-shrink-0 px-1 !flex flex-wrap h-auto gap-0.5 py-1">
                   <TabsTrigger value="workflow" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>monitoring</span>工作流
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dashboard</span>总览
                   </TabsTrigger>
                   <TabsTrigger value="agents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smart_toy</span>Agents
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>route</span>执行追踪
                   </TabsTrigger>
                   <TabsTrigger value="spec-coding" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>history</span>事件回放
                   </TabsTrigger>
-        {(isDesignMode) && <TabsTrigger value="config" className="flex items-center justify-center gap-1 text-xs h-7 px-2"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span>配置</TabsTrigger>}
-                  <TabsTrigger value="documents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>description</span>文档
-                  </TabsTrigger>
-                  <TabsTrigger value="schedules" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>schedule</span>定时
-                  </TabsTrigger>
+                  {(isDesignMode) && <TabsTrigger value="config" className="flex items-center justify-center gap-1 text-xs h-7 px-2"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span>配置</TabsTrigger>}
                 </TabsList>
                 <div className="flex-1 overflow-hidden min-h-0">
                 <TabsContent value="workflow" className="mt-0 overflow-y-auto h-full p-4">
@@ -4203,27 +4512,57 @@ export default function WorkbenchPage() {
                   </div>
                 </div></TabsContent>
                 <TabsContent value="spec-coding" className="mt-0 overflow-y-auto h-full p-4">
-                  {renderSpecCodingPanel()}
+                  <div className="space-y-4">
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                        <div className="text-sm font-medium">Spec / tasks.md 事件</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          查看当前 run 的 Spec Coding 投影、任务状态变更、修订记录和制品快照。
+                        </div>
+                      </div>
+                      {renderSpecCodingPanel()}
+                    </div>
+
+                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>description</span>
+                        <div>
+                          <div className="text-sm font-medium">文档回放</div>
+                          <div className="text-xs text-muted-foreground">查看本次运行产生的文档与制品目录。</div>
+                        </div>
+                      </div>
+                      <div className="h-[420px] overflow-hidden rounded-xl border">
+                        <DocumentsPanel
+                          runId={runId || selectedRun?.id || null}
+                          openLatestTimestampedRequest={openLatestAiDocRequest}
+                          onOpenWorkspaceDirectory={(path) => openWorkspaceEditorAtPath(path, '文档目录')}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>schedule</span>
+                        <div>
+                          <div className="text-sm font-medium">定时记录</div>
+                          <div className="text-xs text-muted-foreground">查看与当前配置关联的定时运行安排。</div>
+                        </div>
+                      </div>
+                      <div className="h-[360px] overflow-hidden rounded-xl border">
+                        <SchedulesPanel configFile={configFile} />
+                      </div>
+                    </div>
+                  </div>
                 </TabsContent>
 {isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
           </div></TabsContent>}
-                <TabsContent value="documents" className="mt-0 h-full">
-                  <DocumentsPanel
-                    runId={runId || selectedRun?.id || null}
-                    openLatestTimestampedRequest={openLatestAiDocRequest}
-                    onOpenWorkspaceDirectory={(path) => openWorkspaceEditorAtPath(path, '文档目录')}
-                  />
-                </TabsContent>
-                <TabsContent value="schedules" className="mt-0 h-full">
-                  <SchedulesPanel configFile={configFile} />
-                </TabsContent>
               </div>
             </Tabs>
             </div>
             }
             centerPanel={
               <div className="flex flex-col h-full">
-                <div className="h-10 bg-muted border-b flex items-center px-4"><h2 className="text-sm font-semibold m-0">运行状态图</h2></div>
+                <div className="h-10 bg-muted border-b flex items-center px-4"><h2 className="text-sm font-semibold m-0">执行追踪</h2></div>
                 <div className="flex-1 min-h-0 overflow-auto">
                   {workflowConfig ? (
                     workflowConfig.workflow.mode === 'state-machine' ? (
@@ -4244,6 +4583,8 @@ export default function WorkbenchPage() {
                             states={workflowConfig.workflow.states || []}
                             currentState={currentPhase}
                             currentStep={currentStep}
+                            activeSteps={activeSteps}
+                            activeConcurrencyGroups={activeConcurrencyGroups}
                             completedSteps={completedSteps}
                             stateHistory={smStateHistory}
                             issueTracker={smIssueTracker}
@@ -4576,31 +4917,142 @@ export default function WorkbenchPage() {
               <div className="shrink-0 border-b bg-muted/30">
                 <div className="flex gap-0.5 px-2 pt-1">
                   <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'workflow' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('workflow')}
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'overview' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('overview')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">dashboard</span>
+                    概览
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'orchestration' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('orchestration')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">account_tree</span>
-                    工作流设计
+                    编排
                   </button>
                   <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'spec-coding' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('spec-coding')}
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'source' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('source')}
                   >
-                    <span className="material-symbols-outlined text-sm mr-1 align-middle">fact_check</span>
-                    SpecCoding
-                  </button>
-                  <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('config')}
-                  >
-                    <span className="material-symbols-outlined text-sm mr-1 align-middle">settings</span>
-                    配置
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">code</span>
+                    源码
                   </button>
                 </div>
               </div>
 
-              {/* Workflow Design Tab */}
-              {designTab === 'workflow' && editingConfig?.workflow && (
+              {/* Design Overview Tab */}
+              {designTab === 'overview' && editingConfig?.workflow && (
+                <div className="flex-1 overflow-auto bg-muted/20 p-6">
+                  <div className="mx-auto max-w-6xl space-y-4">
+                    <div className="rounded-2xl border bg-background/75 p-5 space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>dashboard</span>
+                            <h3 className="text-base font-semibold">工作流概览</h3>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            查看设计基线、模式、角色/状态数量和 Spec Coding 基线摘要。
+                          </p>
+                        </div>
+                        <Badge variant="outline" className="text-[10px]">
+                          {editingConfig.workflow.mode === 'state-machine' ? 'state-machine' : editingConfig.workflow.mode || 'phase-based'}
+                        </Badge>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium">{editingConfig.workflow.name || workflowConfig?.workflow?.name || configFile}</div>
+                        <div className="text-sm text-muted-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
+                          <Markdown>{editingConfig.workflow.description || workflowConfig?.workflow?.description || '暂无描述'}</Markdown>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-4">
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">模式</div>
+                          <div className="mt-1 text-sm font-semibold">{editingConfig.workflow.mode || 'phase-based'}</div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">{editingConfig.workflow.mode === 'state-machine' ? '状态' : '阶段'}</div>
+                          <div className="mt-1 text-lg font-semibold">
+                            {editingConfig.workflow.mode === 'state-machine' ? (editingConfig.workflow.states?.length ?? 0) : (editingConfig.workflow.phases?.length ?? 0)}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">步骤</div>
+                          <div className="mt-1 text-lg font-semibold">{totalSteps}</div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">Agent</div>
+                          <div className="mt-1 text-lg font-semibold">{agentConfigs.length}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {concurrencyDesignSummary.hasMetadata ? (
+                      <div className="rounded-2xl border bg-background/75 p-5 space-y-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>hub</span>
+                              <h3 className="text-base font-semibold">并发设计元数据</h3>
+                            </div>
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                              已保存到配置中；状态机运行时支持连续同组 step 的第一阶段并发执行。复杂 channel 协作、manual join 和超时策略仍按受限能力处理。
+                            </p>
+                          </div>
+                          <Badge variant="outline" className="text-[10px]">design metadata</Badge>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-4">
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Concurrency groups</div>
+                            <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.groups.length}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Agent instances</div>
+                            <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.agentInstanceIds.length}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Channels</div>
+                            <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.channelIds.length}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Spec tasks</div>
+                            <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.specTaskIds.length}</div>
+                          </div>
+                        </div>
+                        {concurrencyDesignSummary.groups.length ? (
+                          <div className="space-y-2">
+                            <div className="text-xs font-medium text-muted-foreground">Groups</div>
+                            <div className="space-y-2">
+                              {concurrencyDesignSummary.groups.map((group) => (
+                                <div key={group.id} className="rounded-xl border bg-muted/10 p-3 text-xs">
+                                  <div className="font-medium">{group.id}</div>
+                                  <div className="mt-1 text-muted-foreground">
+                                    {group.steps.map((step: any) => `${step.__stateName}/${step.name}${step.concurrency?.branchId ? ` (${step.concurrency.branchId})` : ''}`).join(' · ')}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        {concurrencyDesignSummary.joinPolicies.length ? (
+                          <div className="flex flex-wrap gap-2">
+                            {concurrencyDesignSummary.joinPolicies.map((policy) => (
+                              <Badge key={`${policy.scope}-${policy.mode}`} variant="outline" className="text-[10px]">{policy.scope}: {policy.mode}</Badge>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {renderSpecCodingPanel({ className: 'space-y-4' })}
+                  </div>
+                </div>
+              )}
+
+              {/* Orchestration Tab */}
+              {designTab === 'orchestration' && editingConfig?.workflow && (
                 <div className="flex-1 overflow-hidden">
                   {editingConfig.workflow.mode === 'state-machine' ? (
                     <StateMachineDesignPanel
@@ -4631,16 +5083,22 @@ export default function WorkbenchPage() {
                 </div>
               )}
 
-              {designTab === 'spec-coding' && (
+              {designTab === 'source' && (
                 <div className="flex-1 overflow-auto bg-muted/20 p-6">
-                  {renderSpecCodingPanel({ className: 'mx-auto max-w-5xl space-y-4' })}
-                </div>
-              )}
+                  <div className="mx-auto max-w-6xl space-y-4">
+                    <div className="rounded-2xl border bg-background/75 p-4">
+                      <div className="flex items-start gap-2">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>code</span>
+                        <div>
+                          <h3 className="text-base font-semibold">源码与配置</h3>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                            编辑工作流运行参数，并查看 requirements/design/tasks 等设计产物源文档入口。
+                          </p>
+                        </div>
+                      </div>
+                    </div>
 
-              {/* Config Tab */}
-              {designTab === 'config' && (
-                <div className="flex-1 overflow-auto bg-muted/20">
-                  <div className="max-w-xl mx-auto p-6">
+                    {renderSpecCodingPanel({ className: 'space-y-4' })}
                     <div className="bg-card border rounded-lg shadow-sm">
                       <div className="p-5 border-b">
                         <h3 className="text-base font-semibold">工作流配置</h3>
@@ -5243,6 +5701,78 @@ export default function WorkbenchPage() {
           {renderSpecCodingExplorer()}
         </DialogContent>
       </Dialog>
+      <Dialog open={specMergeDialogOpen} onOpenChange={setSpecMergeDialogOpen}>
+        <DialogContent className="max-w-5xl w-[90vw] h-[80vh] p-0 flex flex-col gap-0">
+          <div className="border-b px-4 py-3">
+            <DialogTitle className="text-base font-semibold">合入 Master Spec</DialogTitle>
+            <div className="mt-1 text-xs text-muted-foreground">
+              AI 会根据 Delta Spec 生成合并候选，确认前不会写入 master spec.md。
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="outline" className="text-[10px]">
+                  {getSpecMergeStatusLabel(specMergePreview?.mergeState.status || deltaMergeState?.status)}
+                </Badge>
+                {specMergePreview?.mergeState.mergedHash ? (
+                  <span className="font-mono text-[11px] text-muted-foreground">
+                    mergedHash: {specMergePreview.mergeState.mergedHash.slice(0, 12)}...
+                  </span>
+                ) : null}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => void handlePreviewSpecMerge(true)}
+                disabled={specMergeLoading || specMergeApplying}
+              >
+                {specMergeLoading ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                重新生成预览
+              </Button>
+            </div>
+            {specMergePreview?.aiSummary ? (
+              <div className="rounded-xl border bg-muted/20 p-3 text-xs leading-5 text-muted-foreground">
+                {specMergePreview.aiSummary}
+              </div>
+            ) : null}
+            {specMergeError ? (
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs leading-5 text-destructive">
+                {specMergeError}
+              </div>
+            ) : null}
+            <div className="h-[calc(100%-7rem)] min-h-[260px] overflow-auto rounded-xl border bg-muted/20 p-3">
+              {specMergeLoading ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  <ClipLoader color="currentColor" size={16} className="mr-2" />
+                  正在生成合并候选...
+                </div>
+              ) : specMergePreview?.diff ? (
+                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-5 text-foreground">
+                  {specMergePreview.diff}
+                </pre>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  暂无 diff。请生成预览。
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="border-t px-4 py-3 flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={() => setSpecMergeDialogOpen(false)} disabled={specMergeApplying}>
+              取消
+            </Button>
+            <Button
+              onClick={handleApplySpecMerge}
+              disabled={specMergeLoading || specMergeApplying || !specMergePreview?.mergeState.mergedHash}
+            >
+              {specMergeApplying ? <ClipLoader color="currentColor" size={14} className="mr-2" /> : null}
+              确认合入
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
       <AIAgentCreatorModal
         open={showRuntimeAgentCreator}
@@ -5359,7 +5889,7 @@ export default function WorkbenchPage() {
                       size="sm"
                       className="h-7 text-xs"
                       onClick={() => {
-                        dispatch({ type: 'SET_ACTIVE_TAB', payload: 'documents' });
+                        dispatch({ type: 'SET_ACTIVE_TAB', payload: 'spec-coding' });
                         setOpenLatestAiDocRequest((value) => value + 1);
                       }}
                     >

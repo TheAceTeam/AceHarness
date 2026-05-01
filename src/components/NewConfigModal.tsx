@@ -69,6 +69,16 @@ const WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT = [
   '系统会在你输出后自动解析 <result> 或 YAML 代码块，并使用服务端内建校验器判断 valid/invalid；校验失败时系统会把错误反馈给你继续修。',
   '你可以在心里做一致性自检，但对用户只展示草案、必要说明，以及最后的 <result> JSON。不要把“检查可用 Agent”“推断 schema”“本地校验”“运行 validateWorkflowDraft”写成任务列表。',
 ].join('\n');
+const PERSIST_SPEC_MODE_STORAGE_KEY = 'aceharness.newConfig.persistMode';
+const PERSIST_SPEC_ROOT_STORAGE_KEY = 'aceharness.newConfig.specRoot';
+
+function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: string }) {
+  const persistMode = values.persistMode === 'repository' ? 'repository' : 'none';
+  const specRoot = persistMode === 'repository'
+    ? ((values.specRoot || '').trim() || '.spec')
+    : undefined;
+  return { persistMode, specRoot };
+}
 
 type ModalAiMessage = { role: 'ai' | 'user' | 'thinking'; content: string };
 
@@ -1420,6 +1430,8 @@ export default function NewConfigModal({
   const restoreGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredPlanningSessionRef = useRef<string | null>(null);
   const reconnectingPlanningChatIdRef = useRef<string | null>(null);
+  const draftSessionCreatedInCurrentOpenRef = useRef(false);
+  const modalWasOpenRef = useRef(false);
 
   // Engine/model selection for AI mode
   const [aiEngine, setAiEngine] = useState('');
@@ -1432,8 +1444,8 @@ export default function NewConfigModal({
   const [creationRecommendations, setCreationRecommendations] = useState<WorkflowCreationRecommendations | null>(null);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
-  const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(frontendSessionId || null);
-  const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(resumeCreationSessionId || null);
+  const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
+  const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
   // Refs to always read latest engine/model in sendToAi
   const aiEngineRef = useRef('');
   const aiModelRef = useRef('');
@@ -1477,6 +1489,8 @@ export default function NewConfigModal({
       referenceWorkflow: '',
       workingDirectory: '',
       workspaceMode: 'in-place',
+      persistMode: 'none',
+      specRoot: '.spec',
     },
   });
   const workflowNameValue = watch('workflowName');
@@ -1486,6 +1500,8 @@ export default function NewConfigModal({
   const workspaceModeValue = watch('workspaceMode');
   const descriptionValue = watch('description');
   const requirementsValue = watch('requirements');
+  const persistModeValue = watch('persistMode') || 'none';
+  const specRootValue = watch('specRoot') || '.spec';
   const effectiveReferenceWorkflowValue = useMemo(() => {
     if (referenceWorkflowValue) return referenceWorkflowValue;
     if (creationRecommendations?.referenceWorkflow?.autoApply) {
@@ -1512,6 +1528,43 @@ export default function NewConfigModal({
     const rand = Math.random().toString(36).slice(2, 6);
     return `workflow-${y}${m}${d}-${hh}${mm}-${rand}.yaml`;
   }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      modalWasOpenRef.current = false;
+      return;
+    }
+    if (modalWasOpenRef.current) return;
+    modalWasOpenRef.current = true;
+    draftSessionCreatedInCurrentOpenRef.current = false;
+    if (!resumeCreationSessionId) {
+      setPreviewSession(null);
+      setPreviewConfigValidation(null);
+      setPlanningFrontendSessionId(null);
+      setDraftCreationSessionId(null);
+      setBackendSessionId(undefined);
+    }
+  }, [isOpen, resumeCreationSessionId]);
+
+  useEffect(() => {
+    if (!isOpen || resumeCreationSessionId) return;
+    if (typeof window === 'undefined') return;
+    const storedMode = localStorage.getItem(PERSIST_SPEC_MODE_STORAGE_KEY);
+    const storedRoot = localStorage.getItem(PERSIST_SPEC_ROOT_STORAGE_KEY);
+    if (storedMode === 'repository' || storedMode === 'none') {
+      setValue('persistMode', storedMode, { shouldDirty: false, shouldValidate: false });
+    }
+    if (storedRoot && storedRoot.trim()) {
+      setValue('specRoot', storedRoot.trim(), { shouldDirty: false, shouldValidate: false });
+    }
+  }, [isOpen, resumeCreationSessionId, setValue]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(PERSIST_SPEC_MODE_STORAGE_KEY, persistModeValue === 'repository' ? 'repository' : 'none');
+    localStorage.setItem(PERSIST_SPEC_ROOT_STORAGE_KEY, (specRootValue || '.spec').trim() || '.spec');
+  }, [isOpen, persistModeValue, specRootValue]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1562,6 +1615,10 @@ export default function NewConfigModal({
         setPreviewConfigValidation(null);
         setWorkflowMode(session.mode || 'ai-guided');
         setDraftCreationSessionId(session.id);
+        draftSessionCreatedInCurrentOpenRef.current = true;
+        if (session.backendSessionId) {
+          setBackendSessionId(session.backendSessionId);
+        }
         setValue('mode', session.mode || 'ai-guided', { shouldDirty: false, shouldValidate: false });
         setValue('workflowName', session.workflowName || '', { shouldDirty: false, shouldValidate: false });
         setValue('filename', session.filename || '', { shouldDirty: false, shouldValidate: false });
@@ -1570,6 +1627,8 @@ export default function NewConfigModal({
         setValue('workspaceMode', session.workspaceMode || 'in-place', { shouldDirty: false, shouldValidate: false });
         setValue('description', session.description || '', { shouldDirty: false, shouldValidate: false });
         setValue('requirements', session.requirements || '', { shouldDirty: false, shouldValidate: false });
+        setValue('persistMode', session.specCoding?.persistMode || 'none', { shouldDirty: false, shouldValidate: false });
+        setValue('specRoot', session.specCoding?.specRoot || '.spec', { shouldDirty: false, shouldValidate: false });
         setPlanningFrontendSessionId((prev) => session.chatSessionId || prev);
         if (session.uiState?.clarificationForm) {
           setClarificationForm(session.uiState.clarificationForm);
@@ -1584,41 +1643,6 @@ export default function NewConfigModal({
       cancelled = true;
     };
   }, [beginSessionRestoreGuard, isOpen, resolveFormStepFromSession, resumeCreationSessionId, setValue]);
-
-  useEffect(() => {
-    if (!isOpen || resumeCreationSessionId || previewSession || !frontendSessionId) return;
-    let cancelled = false;
-    modalSessionJsonFetch<any>(`/api/spec-coding/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`)
-      .then((data) => {
-        if (cancelled || !Array.isArray(data?.sessions) || data.sessions.length === 0) return;
-        const session = data.sessions[0];
-        if (!session) return;
-        beginSessionRestoreGuard();
-        setPreviewSession(session);
-        setDraftCreationSessionId(session.id);
-        setPlanningFrontendSessionId((prev) => session.chatSessionId || prev);
-        setWorkflowMode(session.mode || 'ai-guided');
-        setValue('mode', session.mode || 'ai-guided', { shouldDirty: false, shouldValidate: false });
-        setValue('workflowName', session.workflowName || '', { shouldDirty: false, shouldValidate: false });
-        setValue('filename', session.filename || '', { shouldDirty: false, shouldValidate: false });
-        setValue('referenceWorkflow', session.referenceWorkflow || '', { shouldDirty: false, shouldValidate: false });
-        setValue('workingDirectory', session.workingDirectory || '', { shouldDirty: false, shouldValidate: false });
-        setValue('workspaceMode', session.workspaceMode || 'in-place', { shouldDirty: false, shouldValidate: false });
-        setValue('description', session.description || '', { shouldDirty: false, shouldValidate: false });
-        setValue('requirements', session.requirements || '', { shouldDirty: false, shouldValidate: false });
-        if (session.uiState?.clarificationForm) {
-          setClarificationForm(session.uiState.clarificationForm);
-          setClarificationAnswers(session.uiState.clarificationAnswers || {});
-          setPlanningStage(session.uiState.planningStage || 'awaiting-answers');
-        }
-        setFormStep(session.uiState?.formStep || resolveFormStepFromSession(session));
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [beginSessionRestoreGuard, frontendSessionId, isOpen, previewSession, resolveFormStepFromSession, resumeCreationSessionId, setValue]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1730,6 +1754,8 @@ export default function NewConfigModal({
       || previewSession.workspaceMode !== workspaceModeValue
       || (previewSession.description || '') !== (descriptionValue || '')
       || (previewSession.requirements || '') !== (requirementsValue || '')
+      || (previewSession.specCoding?.persistMode || 'none') !== (persistModeValue || 'none')
+      || (previewSession.specCoding?.specRoot || '.spec') !== (specRootValue || '.spec')
       || previewSession.mode !== workflowMode;
     if (changed) {
       setPreviewSession(null);
@@ -1745,9 +1771,11 @@ export default function NewConfigModal({
     descriptionValue,
     filenameValue,
     formStep,
+    persistModeValue,
     previewSession,
     requirementsValue,
     effectiveReferenceWorkflowValue,
+    specRootValue,
     workflowMode,
     workflowNameValue,
     workingDirectoryValue,
@@ -1771,7 +1799,7 @@ export default function NewConfigModal({
   }, [previewSession?.artifactSnapshots, previewSession?.specCoding?.version]);
 
   const applySchemaIssues = useCallback((issues: Array<{ path?: (string | number)[]; message?: string }>) => {
-    const supported = ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode'];
+    const supported = ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'];
     clearErrors();
     const messages: string[] = [];
     for (const issue of issues) {
@@ -2132,10 +2160,11 @@ export default function NewConfigModal({
   }, [getValues, recommendedAgents, recommendedSupervisorAgent, referenceConfig?.config, workflowMode]);
 
   const bindDraftCreationSessionToChat = useCallback(async (session: any) => {
-    if (!frontendSessionId || !session?.id) return;
-    const sessionData = await modalSessionJsonFetch<any>(`/api/chat/sessions/${encodeURIComponent(frontendSessionId)}`);
+    const targetChatSessionId = session?.chatSessionId || planningFrontendSessionId;
+    if (!targetChatSessionId || !session?.id) return;
+    const sessionData = await modalSessionJsonFetch<any>(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`);
     if (!sessionData?.session) return;
-    await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(frontendSessionId)}`, {
+    await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`, {
       method: 'PUT',
       body: JSON.stringify({
         ...sessionData.session,
@@ -2150,12 +2179,13 @@ export default function NewConfigModal({
         },
       }),
     }).catch(() => {});
-  }, [frontendSessionId]);
+  }, [planningFrontendSessionId]);
 
   const createPreviewSession = useCallback(async (draft?: PlanDraftResult, chatSessionId?: string | null) => {
     const values = getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const previewConfig = buildPreviewConfigFromForm();
-    const targetChatSessionId = chatSessionId || frontendSessionId || undefined;
+    const targetChatSessionId = chatSessionId || undefined;
     const draftData = await modalSessionJsonFetch<any>('/api/spec-coding/ai-draft', {
       method: 'POST',
       body: JSON.stringify({
@@ -2186,9 +2216,15 @@ export default function NewConfigModal({
       workspaceMode: values.workspaceMode,
       description: values.description,
       requirements: values.requirements,
+      persistMode,
+      specRoot,
       clarification: draftData.clarification,
       config: previewConfig,
-      specCoding: draftData.specCoding,
+      specCoding: {
+        ...draftData.specCoding,
+        persistMode,
+        specRoot,
+      },
       uiState: {
         formStep: 4,
         planningStage: 'idle',
@@ -2196,8 +2232,9 @@ export default function NewConfigModal({
         clarificationAnswers,
       },
     };
-    const data = draftCreationSessionId
-      ? await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(draftCreationSessionId)}`, {
+    const shouldUpdateExistingSession = Boolean(draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current);
+    const data = shouldUpdateExistingSession
+      ? await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(draftCreationSessionId as string)}`, {
           method: 'PUT',
           body: JSON.stringify(sessionPayload),
         })
@@ -2210,9 +2247,10 @@ export default function NewConfigModal({
     }
     setPreviewSession(data.session);
     setDraftCreationSessionId(data.session.id);
+    draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
     return data.session;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
+  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
 
   const updatePreviewSessionFromPlanDraft = useCallback(async (draft: PlanDraftResult, revisionSummary: string) => {
     if (!previewSession?.id) {
@@ -2220,6 +2258,7 @@ export default function NewConfigModal({
     }
 
     const values = getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const previewConfig = buildPreviewConfigFromForm();
     const draftData = await modalSessionJsonFetch<any>('/api/spec-coding/ai-draft', {
       method: 'POST',
@@ -2243,7 +2282,7 @@ export default function NewConfigModal({
     const data = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(previewSession.id)}`, {
       method: 'PUT',
       body: JSON.stringify({
-        chatSessionId: planningFrontendSessionId || frontendSessionId || previewSession.chatSessionId,
+        chatSessionId: planningFrontendSessionId || previewSession.chatSessionId,
         status: 'draft',
         specCodingStatus: 'draft',
         filename: values.filename,
@@ -2254,9 +2293,15 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        persistMode,
+        specRoot,
         clarification: draftData.clarification,
         config: previewConfig,
-        specCoding: draftData.specCoding,
+        specCoding: {
+          ...draftData.specCoding,
+          persistMode,
+          specRoot,
+        },
         uiState: {
           formStep: 4,
           planningStage: 'idle',
@@ -2274,16 +2319,17 @@ export default function NewConfigModal({
     setDraftCreationSessionId(data.session.id);
     await bindDraftCreationSessionToChat(data.session);
     return data.session;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
+  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, getValues, planningFrontendSessionId, previewSession, workflowMode]);
 
   const ensureDraftCreationSession = useCallback(async (chatSessionId?: string | null) => {
-    if (draftCreationSessionId) return draftCreationSessionId;
+    if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) return draftCreationSessionId;
     const values = getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const config = buildPreviewConfigFromForm();
     const data = await modalSessionJsonFetch<any>('/api/spec-coding/sessions', {
       method: 'POST',
       body: JSON.stringify({
-        chatSessionId: chatSessionId || frontendSessionId || undefined,
+        chatSessionId: chatSessionId || undefined,
         status: 'draft',
         specCodingStatus: 'draft',
         filename: values.filename,
@@ -2294,6 +2340,8 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        persistMode,
+        specRoot,
         config,
         uiState: {
           formStep: 2,
@@ -2306,9 +2354,10 @@ export default function NewConfigModal({
       throw new Error(data?.error || '创建服务端澄清会话失败');
     }
     setDraftCreationSessionId(data.session.id);
+    draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
     return data.session.id as string;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
+  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
 
   const persistDraftUiState = useCallback(async (input: {
     formStep: 2 | 3 | 4 | 5;
@@ -2331,7 +2380,6 @@ export default function NewConfigModal({
   }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
   const ensurePlanningChatSession = useCallback(async () => {
-    if (frontendSessionId) return frontendSessionId;
     if (planningFrontendSessionId) return planningFrontendSessionId;
     const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
       method: 'POST',
@@ -2347,7 +2395,7 @@ export default function NewConfigModal({
     }
     setPlanningFrontendSessionId(data.session.id);
     return data.session.id as string;
-  }, [frontendSessionId, getValues, planningFrontendSessionId]);
+  }, [getValues, planningFrontendSessionId]);
 
   const buildClarificationSystemPrompt = useCallback((previewConfig: any) => {
     const data = getValues();
@@ -3443,6 +3491,8 @@ ${confirmedSpecPrompt}
       workspaceMode: draft.workspaceMode,
       description: draft.description,
       requirements: draft.requirements,
+      persistMode: draft.persistMode,
+      specRoot: draft.specRoot,
       mode: workflowMode,
     });
     if (!validation.success) {
@@ -3775,7 +3825,7 @@ ${confirmedSpecPrompt}
         if (details.length > 0) {
           for (const issue of details) {
             const field = issue?.path?.[0];
-            if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode'].includes(field)) {
+            if (typeof field === 'string' && ['filename', 'workflowName', 'referenceWorkflow', 'workingDirectory', 'workspaceMode', 'description', 'requirements', 'mode', 'persistMode', 'specRoot'].includes(field)) {
               setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
             }
           }
@@ -3807,6 +3857,8 @@ ${confirmedSpecPrompt}
       formErrors.referenceWorkflow?.message,
       formErrors.workingDirectory?.message,
       formErrors.workspaceMode?.message,
+      formErrors.persistMode?.message,
+      formErrors.specRoot?.message,
       formErrors.description?.message,
       formErrors.requirements?.message,
     ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
@@ -3866,6 +3918,7 @@ ${confirmedSpecPrompt}
     }
     const configResult = await configResponse.json();
     const values = getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const targetSessionId = previewSession?.id;
     const sessionResponse = await fetch(targetSessionId
       ? `/api/spec-coding/sessions/${encodeURIComponent(targetSessionId)}`
@@ -3876,7 +3929,7 @@ ${confirmedSpecPrompt}
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
-        chatSessionId: frontendSessionId || undefined,
+        chatSessionId: planningFrontendSessionId || previewSession?.chatSessionId || undefined,
         status: 'config-generated',
         specCodingStatus: 'confirmed',
         filename,
@@ -3887,6 +3940,8 @@ ${confirmedSpecPrompt}
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        persistMode,
+        specRoot,
         config: configResult.config,
         rebuildSpecCodingFromConfig: true,
       }),
@@ -4152,7 +4207,7 @@ ${confirmedSpecPrompt}
                     </div>
                   </div>
                 ) : (
-                  <div ref={streamContentRef} className="h-full space-y-3 overflow-auto">
+                  <div ref={streamContentRef} className="min-h-0 space-y-3 overflow-x-hidden">
                     <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
                       <div className="flex items-center gap-2 font-medium">
                         {isGeneratingPlan ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" /> : <span className="material-symbols-outlined text-base">help</span>}
@@ -4296,6 +4351,15 @@ ${confirmedSpecPrompt}
               系统正在结合你的补充回答生成正式计划制品。完成后会自动进入确认阶段。
             </div>
             <div ref={streamContentRef} className="mt-4 min-h-0 flex-1 space-y-3 overflow-auto rounded-xl border bg-background p-4">
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+                <div className="flex items-center gap-2 font-medium">
+                  {isGeneratingPlan ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" /> : <span className="material-symbols-outlined text-base">map</span>}
+                  {isGeneratingPlan ? 'AI 正在生成正式计划制品' : '等待生成正式计划制品'}
+                </div>
+                <div className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                  {isGeneratingPlan ? '下面会实时显示 AI 的分析过程；计划生成完成后，系统会自动进入确认阶段。' : '系统会基于补充问答生成可确认的正式计划制品。'}
+                </div>
+              </div>
               {aiMessages.map((msg, i) => (
                 <div key={`${msg.role}-${i}`}>
                   {msg.role === 'thinking' ? (
@@ -4617,7 +4681,7 @@ ${confirmedSpecPrompt}
     const creationTimeline = [
       {
         id: 'session-created',
-        title: '创建态会话建立',
+        title: '创建记录建立',
         time: previewSession.createdAt,
         detail: `开始围绕 ${previewSession.workflowName} 收集需求、约束和工作目录。`,
       },
@@ -4675,7 +4739,7 @@ ${confirmedSpecPrompt}
               <div className="rounded-xl border bg-muted/30 p-4 space-y-2">
                 <div className="flex flex-wrap gap-2">
                   <span className="text-sm font-medium">{previewSession.workflowName}</span>
-                  <span className="text-xs rounded-full border px-2 py-0.5">创建态 {previewSession.status}</span>
+                  <span className="text-xs rounded-full border px-2 py-0.5">创建进度 {previewSession.status}</span>
                   <span className="text-xs rounded-full border px-2 py-0.5">计划 {specCoding.status}</span>
                   <span className="text-xs rounded-full border px-2 py-0.5">v{specCoding.version}</span>
                 </div>
@@ -4739,7 +4803,7 @@ ${confirmedSpecPrompt}
                 </div>
 
                 <div className="rounded-xl border p-4 space-y-3">
-                  <div className="text-sm font-medium">创建态历史承接</div>
+                  <div className="text-sm font-medium">对话标签历史</div>
                   <div className="space-y-2">
                     {creationTimeline.map((entry) => (
                       <div key={entry.id} className="rounded-md border bg-muted/20 p-3">
@@ -4955,30 +5019,35 @@ ${confirmedSpecPrompt}
                           </SelectContent>
                         </Select>
                         {hasArtifactChanges ? <Badge variant="outline">未保存修改</Badge> : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={artifactViewMode === 'preview' ? 'default' : 'outline'}
-                          onClick={() => setArtifactViewMode('preview')}
-                        >
-                          原文
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={artifactViewMode === 'edit' ? 'default' : 'outline'}
-                          onClick={() => setArtifactViewMode('edit')}
-                        >
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={artifactViewMode === 'diff' ? 'default' : 'outline'}
-                          onClick={() => setArtifactViewMode('diff')}
-                        >
-                          差异
-                        </Button>
+                        <div className="inline-flex h-8 overflow-hidden rounded-md border bg-background">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={artifactViewMode === 'preview' ? 'secondary' : 'ghost'}
+                            className="h-8 rounded-none border-0 px-3"
+                            onClick={() => setArtifactViewMode('preview')}
+                          >
+                            原文
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={artifactViewMode === 'edit' ? 'secondary' : 'ghost'}
+                            className="h-8 rounded-none border-0 border-l px-3"
+                            onClick={() => setArtifactViewMode('edit')}
+                          >
+                            编辑
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={artifactViewMode === 'diff' ? 'secondary' : 'ghost'}
+                            className="h-8 rounded-none border-0 border-l px-3"
+                            onClick={() => setArtifactViewMode('diff')}
+                          >
+                            差异
+                          </Button>
+                        </div>
                       </div>
                     ) : null}
                   </div>
@@ -5090,7 +5159,7 @@ ${confirmedSpecPrompt}
               {planWorkspaceTab === 'nodes' ? (
                 <div className="space-y-4">
                   <div className="rounded-xl border bg-muted/20 p-4 space-y-2">
-                    <div className="text-sm font-medium">创建态历史承接</div>
+                    <div className="text-sm font-medium">对话标签历史</div>
                     <div className="space-y-2">
                       {creationTimeline.map((entry) => (
                         <div key={entry.id} className="rounded-md border bg-background/70 p-3">
@@ -5391,6 +5460,7 @@ ${confirmedSpecPrompt}
           <input type="hidden" {...register('referenceWorkflow')} />
           <input type="hidden" {...register('workingDirectory')} />
           <input type="hidden" {...register('workspaceMode')} />
+          <input type="hidden" {...register('persistMode')} />
 
           {!homepageCompact && (
             <>
@@ -5602,6 +5672,52 @@ ${confirmedSpecPrompt}
             <p className="text-xs text-muted-foreground">
               推荐默认直接在工作目录执行；只有需要隔离原工程时再选择创建副本
             </p>
+          </div>
+
+          <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
+            <div className="space-y-1">
+              <Label htmlFor="persistMode">Spec 持久化</Label>
+              <p className="text-xs text-muted-foreground">
+                可选择是否把正式计划制品同步保存到工作目录下，系统会记住本次选择。
+              </p>
+            </div>
+            <Select
+              value={persistModeValue}
+              onValueChange={(value: 'none' | 'repository') => {
+                setValue('persistMode', value, { shouldDirty: true, shouldValidate: true });
+                if (value === 'repository' && !(getValues('specRoot') || '').trim()) {
+                  setValue('specRoot', '.spec', { shouldDirty: true, shouldValidate: true });
+                }
+              }}
+            >
+              <SelectTrigger id="persistMode" className={errors.persistMode ? 'border-destructive' : ''}>
+                <SelectValue placeholder="选择 Spec 持久化模式" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">不启用持久化 Spec</SelectItem>
+                <SelectItem value="repository">启用仓库持久化 Spec</SelectItem>
+              </SelectContent>
+            </Select>
+            {errors.persistMode && (
+              <p className="text-sm text-destructive">{errors.persistMode.message}</p>
+            )}
+            {persistModeValue === 'repository' && (
+              <div className="space-y-2">
+                <Label htmlFor="specRoot">Spec 名称 / 目录</Label>
+                <Input
+                  id="specRoot"
+                  placeholder=".spec"
+                  {...register('specRoot')}
+                  className={errors.specRoot ? 'border-destructive' : ''}
+                />
+                {errors.specRoot && (
+                  <p className="text-sm text-destructive">{errors.specRoot.message}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  相对于工作目录保存，例如 `.spec`；留空时默认使用 `.spec`。
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2">

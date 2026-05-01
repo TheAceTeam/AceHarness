@@ -221,8 +221,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { filename, workflowName, referenceWorkflow, workingDirectory, workspaceMode, description, mode, requirements } = validationResult.data;
+    const { filename, workflowName, referenceWorkflow, workingDirectory, workspaceMode, description, mode, requirements, persistMode, specRoot } = validationResult.data;
     const workflowMode = mode || 'phase-based';
+    const normalizedPersistMode = persistMode === 'repository' ? 'repository' : 'none';
+    const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
 
     // 检查文件是否已存在
     await ensureRuntimeConfigsSeeded();
@@ -332,6 +334,8 @@ export async function POST(request: NextRequest) {
         specCoding: {
           ...creationSession.specCoding,
           status: creationSession.specCoding.status === 'draft' ? 'confirmed' : creationSession.specCoding.status,
+          persistMode: normalizedPersistMode,
+          specRoot: normalizedSpecRoot,
           confirmedAt: creationSession.specCoding.confirmedAt || new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         },
@@ -362,6 +366,8 @@ export async function POST(request: NextRequest) {
         description,
         requirements,
         referenceWorkflow,
+        persistMode: normalizedPersistMode,
+        specRoot: normalizedSpecRoot,
         config: defaultConfig,
       });
       await saveCreationSession(creationSession);

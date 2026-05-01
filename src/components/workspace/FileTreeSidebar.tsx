@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronRight, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2 } from "lucide-react"
+import { ChevronRight, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download } from "lucide-react"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/api"
 import {
   Collapsible,
@@ -107,6 +107,8 @@ const TreeContext = React.createContext<{
     cancelLabel?: string
     variant?: "default" | "destructive"
   }) => Promise<boolean>
+  onUpload: (targetPath: string, directory: boolean) => void
+  onDownload: (targetPath: string) => Promise<void>
 } | null>(null)
 
 function useTreeCtx() {
@@ -371,7 +373,12 @@ function TreeFileItem({
     requestCopyBetween,
     toast,
     confirm,
+    onDownload,
   } = useTreeCtx()
+
+  const handleDownload = async () => {
+    await onDownload(node.path)
+  }
 
   const handleRename = async (newName: string) => {
     const normalizedName = mode === "notebook" ? ensureNotebookFileName(newName) : newName
@@ -454,6 +461,7 @@ function TreeFileItem({
             {notebookScope === 'personal' ? '复制到团队空间' : '复制到个人空间'}
           </ContextMenuItem>
         )}
+        {mode === "default" && <ContextMenuItem onClick={handleDownload}><Download className="h-3.5 w-3.5 mr-2" />下载</ContextMenuItem>}
         <ContextMenuSeparator />
         <ContextMenuItem className="text-destructive" onClick={handleDelete}><Trash2 className="h-3.5 w-3.5 mr-2" />删除</ContextMenuItem>
       </ContextMenuContent>
@@ -487,6 +495,8 @@ function TreeDirItem({
     requestCopyBetween,
     toast,
     confirm,
+    onUpload,
+    onDownload,
   } = useTreeCtx()
   const isCreatingHere = creatingIn?.dir === node.path
   const [children, setChildren] = React.useState<TreeNode[] | undefined>(node.children)
@@ -510,12 +520,8 @@ function TreeDirItem({
           const data = await workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken })
           setChildren(data.tree || [])
         } else {
-          const params = new URLSearchParams({ path: workspacePath, sub: node.path, depth: "2" })
-          const res = await fetch(`/api/workspace/tree?${params}`)
-          if (res.ok) {
-            const data = await res.json()
-            setChildren(data.tree || [])
-          }
+          const data = await workspaceApi.getSubTree(workspacePath, node.path, 2)
+          setChildren(data.tree || [])
         }
       } catch (error) {
         toast("error", formatErrorMessage(error, `加载目录失败：${node.name}`))
@@ -590,6 +596,10 @@ function TreeDirItem({
     }
   }
 
+  const handleDownload = async () => {
+    await onDownload(node.path)
+  }
+
   const handleCreateConfirm = async (name: string) => {
     if (!creatingIn) return
     const finalName = mode === "notebook" && creatingIn.type === "file" ? ensureNotebookFileName(name) : name
@@ -650,7 +660,14 @@ function TreeDirItem({
             </ContextMenuItem>
           )}
           {clipboard && <ContextMenuItem onClick={handlePaste}><Clipboard className="h-3.5 w-3.5 mr-2" />粘贴</ContextMenuItem>}
-          <ContextMenuSeparator />
+          {mode === "default" && (
+            <>
+              <ContextMenuItem onClick={() => onUpload(node.path, false)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件</ContextMenuItem>
+              <ContextMenuItem onClick={() => onUpload(node.path, true)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件夹</ContextMenuItem>
+              <ContextMenuItem onClick={handleDownload}><Download className="h-3.5 w-3.5 mr-2" />下载文件夹</ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
           <ContextMenuItem className="text-destructive" onClick={handleDelete}><Trash2 className="h-3.5 w-3.5 mr-2" />删除</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -701,6 +718,61 @@ export function FileTreeSidebar({
   const [copyBetweenDirs, setCopyBetweenDirs] = React.useState<NotebookDirectoryOption[]>([{ path: "", label: "根目录 /" }])
   const [copyBetweenDirsLoading, setCopyBetweenDirsLoading] = React.useState(false)
   const [copyBetweenSaving, setCopyBetweenSaving] = React.useState(false)
+
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const folderInputRef = React.useRef<HTMLInputElement>(null)
+  const pendingUploadTargetRef = React.useRef("")
+  const [transferError, setTransferError] = React.useState<string | null>(null)
+  const [uploading, setUploading] = React.useState(false)
+  const [downloading, setDownloading] = React.useState(false)
+
+  const handleUploadFiles = React.useCallback(async (fileList: FileList | null, directory: boolean) => {
+    const files = Array.from(fileList || [])
+    if (files.length === 0) return
+    setUploading(true)
+    setTransferError(null)
+    try {
+      const relativePaths = files.map((file) => directory
+        ? ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name)
+        : file.name
+      )
+      const result = await workspaceApi.upload(workspacePath, pendingUploadTargetRef.current, files, { relativePaths })
+      toast("success", `已上传 ${result.count} 个文件`)
+      onRefresh()
+    } catch (error) {
+      const message = formatErrorMessage(error, "上传失败")
+      setTransferError(message)
+      toast("error", message)
+    } finally {
+      setUploading(false)
+    }
+  }, [onRefresh, toast, workspacePath])
+
+  const requestUpload = React.useCallback((targetPath: string, directory: boolean) => {
+    if (mode !== "default") return
+    pendingUploadTargetRef.current = targetPath
+    if (directory) {
+      folderInputRef.current?.click()
+    } else {
+      fileInputRef.current?.click()
+    }
+  }, [mode])
+
+  const handleDownload = React.useCallback(async (targetPath: string) => {
+    if (mode !== "default") return
+    setDownloading(true)
+    setTransferError(null)
+    try {
+      await workspaceApi.download(workspacePath, targetPath)
+    } catch (error) {
+      const message = formatErrorMessage(error, "下载失败")
+      setTransferError(message)
+      toast("error", message)
+      throw error
+    } finally {
+      setDownloading(false)
+    }
+  }, [mode, toast, workspacePath])
 
   const loadCopyBetweenDirectories = React.useCallback(async (scope: NotebookScope) => {
     setCopyBetweenDirsLoading(true)
@@ -807,11 +879,54 @@ export function FileTreeSidebar({
   const isCreatingAtRoot = creatingIn?.dir === ""
 
   return (
-    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, requestCopyBetween, toast, confirm }}>
+    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, requestCopyBetween, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
       <div className="flex flex-col h-full bg-card">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            void handleUploadFiles(event.currentTarget.files, false)
+            event.currentTarget.value = ""
+          }}
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          {...({ webkitdirectory: "", directory: "" } as React.InputHTMLAttributes<HTMLInputElement>)}
+          onChange={(event) => {
+            void handleUploadFiles(event.currentTarget.files, true)
+            event.currentTarget.value = ""
+          }}
+        />
         <div className="flex items-center gap-2 px-3 py-2 border-b shrink-0">
           <img src={`${FILE_TYPE_ICON_DIR}/folder.svg`} alt="" aria-hidden className="h-4 w-4 shrink-0" />
           <span className="text-sm font-semibold truncate flex-1">{workspaceName}</span>
+          {mode === "default" && (
+            <>
+              <button
+                type="button"
+                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
+                onClick={() => requestUpload("", false)}
+                title="上传文件"
+                disabled={uploading}
+              >
+                <Upload className="mr-1 h-3.5 w-3.5" />上传
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
+                onClick={() => requestUpload("", true)}
+                title="上传文件夹"
+                disabled={uploading}
+              >
+                文件夹
+              </button>
+            </>
+          )}
           {mode === "notebook" && (
             <button
               type="button"
@@ -825,6 +940,16 @@ export function FileTreeSidebar({
           )}
         </div>
         <ContextMenu>
+          {transferError && (
+            <div className="border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {transferError}
+            </div>
+          )}
+          {(uploading || downloading) && (
+            <div className="border-b px-3 py-2 text-xs text-muted-foreground">
+              {uploading ? "上传中..." : "下载中..."}
+            </div>
+          )}
           <ContextMenuTrigger asChild>
             <div className="flex-1 overflow-auto py-1">
               {loading ? (
@@ -858,6 +983,14 @@ export function FileTreeSidebar({
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={handleRootPaste}><Clipboard className="h-3.5 w-3.5 mr-2" />粘贴</ContextMenuItem>
+              </>
+            )}
+            {mode === "default" && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => requestUpload("", false)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件</ContextMenuItem>
+                <ContextMenuItem onClick={() => requestUpload("", true)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件夹</ContextMenuItem>
+                <ContextMenuItem onClick={() => { void handleDownload("") }}><Download className="h-3.5 w-3.5 mr-2" />下载根目录</ContextMenuItem>
               </>
             )}
           </ContextMenuContent>

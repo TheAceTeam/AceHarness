@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
@@ -115,6 +116,8 @@ function ChatPageContent() {
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
+  const [composerReady, setComposerReady] = useState(false);
+  const [composerShellFocused, setComposerShellFocused] = useState(false);
   const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
@@ -391,15 +394,17 @@ function ChatPageContent() {
   }, [activeSession?.messages, loading]);
 
   useEffect(() => {
+    if (!composerReady) return;
     editorRef.current?.focus();
-  }, [activeSession?.id]);
+  }, [activeSession?.id, composerReady]);
 
   useEffect(() => {
+    if (!composerReady) return;
     if (!editorLoaded && editorRef.current) {
       setEditorLoaded(true);
       editorLoadedRef.current = true;
     }
-  }, [editorLoaded, activeSession?.id, input]);
+  }, [editorLoaded, activeSession?.id, input, composerReady]);
 
   useEffect(() => {
     if (!editDialogOpen || !editEditorRef.current || !editingMessageId) return;
@@ -479,6 +484,7 @@ function ChatPageContent() {
 
     starterPromptRef.current = starterPrompt;
     setInput(starterPrompt);
+    setComposerReady(true);
     editorRef.current?.setContent(starterPrompt);
     editorRef.current?.focus();
 
@@ -496,7 +502,12 @@ function ChatPageContent() {
     editorRef.current.setContent(starterPromptRef.current);
     editorRef.current.focus();
     starterPromptRef.current = null;
-  }, [editorLoaded]);
+  }, [editorLoaded, composerReady]);
+
+  useEffect(() => {
+    if (!composerReady || !input || !editorRef.current) return;
+    editorRef.current.setContent(input);
+  }, [composerReady]);
 
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
@@ -694,6 +705,18 @@ function ChatPageContent() {
     editorRef.current?.focus();
   }, [deleteMessage, editingMessageId, loading, sendMessage, stopStreaming, unlockAutoScroll]);
 
+  const activateComposer = useCallback(() => {
+    setComposerReady(true);
+  }, []);
+
+  const handleShellKeyDown = useCallback(async (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    const text = input.trim();
+    if (!text) return;
+    await submitMessage(text);
+  }, [input, submitMessage]);
+
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
     if (!text) return;
@@ -743,6 +766,7 @@ function ChatPageContent() {
 
     if (prompt && prompt.includes('\n')) {
       setInput(prompt);
+      setComposerReady(true);
       editorRef.current?.setContent(prompt);
       editorRef.current?.focus();
       return;
@@ -1119,18 +1143,53 @@ function ChatPageContent() {
                   )}
                   <div className="flex items-stretch gap-2 max-w-4xl mx-auto">
                     <div className="flex-1">
-                      <RichTextEditor
-                        ref={editorRef}
-                        onEnter={handleEditorEnter}
-                        onChange={(markdown) => setInput(markdown)}
-                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                        minHeight={76}
-                        disabled={false}
-                        autoFocus={false}
-                        showFullscreenToggle={!isMobile}
-                        showToolbar={false}
-                        footerContent={(
-                          <>
+                      {composerReady ? (
+                        <RichTextEditor
+                          ref={editorRef}
+                          onEnter={handleEditorEnter}
+                          onChange={(markdown) => setInput(markdown)}
+                          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                          minHeight={76}
+                          disabled={false}
+                          autoFocus={composerShellFocused}
+                          showFullscreenToggle={!isMobile}
+                          showToolbar={false}
+                          footerContent={(
+                            <>
+                              <button
+                                onClick={() => handleDebugToggle(!debugMode)}
+                                className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
+                                title="调试模式：查看发送给 AI 的系统提示词"
+                              >
+                                <span className="material-symbols-outlined text-sm">bug_report</span>
+                                调试
+                              </button>
+                              <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
+                              <div className="w-24 shrink-0 sm:w-32">
+                                <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
+                              </div>
+                            </>
+                          )}
+                        />
+                      ) : (
+                        <div className="rounded-xl border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring">
+                          <Textarea
+                            value={input}
+                            onFocus={() => {
+                              setComposerShellFocused(true);
+                              activateComposer();
+                            }}
+                            onClick={activateComposer}
+                            onChange={(event) => {
+                              setInput(event.target.value);
+                              setComposerShellFocused(true);
+                              activateComposer();
+                            }}
+                            onKeyDown={handleShellKeyDown}
+                            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                            className="min-h-[76px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+                          />
+                          <div className="flex items-center gap-2 border-t px-3 py-1.5">
                             <button
                               onClick={() => handleDebugToggle(!debugMode)}
                               className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
@@ -1140,12 +1199,9 @@ function ChatPageContent() {
                               调试
                             </button>
                             <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
-                            <div className="w-24 shrink-0 sm:w-32">
-                              <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
-                            </div>
-                          </>
-                        )}
-                      />
+                          </div>
+                        </div>
+                      )}
                     </div>
                     {loading && (
                       <Button className="rounded-xl h-[76px] self-stretch px-3" variant="destructive" onClick={stopStreaming} title="停止生成">
@@ -1217,17 +1273,19 @@ function ChatPageContent() {
               <DialogTitle>编辑消息</DialogTitle>
             </DialogHeader>
             <div className="min-h-[200px]">
-              <RichTextEditor
-                ref={editEditorRef}
-                content={editContent}
-                onChange={(markdown) => setEditContent(markdown)}
-                placeholder="输入消息内容..."
-                minHeight={200}
-                maxHeight={400}
-                autoFocus
-                showFullscreenToggle={true}
-                showToolbar={false}
-              />
+              {editDialogOpen && (
+                <RichTextEditor
+                  ref={editEditorRef}
+                  content={editContent}
+                  onChange={(markdown) => setEditContent(markdown)}
+                  placeholder="输入消息内容..."
+                  minHeight={200}
+                  maxHeight={400}
+                  autoFocus
+                  showFullscreenToggle={true}
+                  showToolbar={false}
+                />
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={handleCancelEdit}>取消</Button>

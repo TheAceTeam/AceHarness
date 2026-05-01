@@ -17,7 +17,7 @@ import {
 import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
 import { loadChatSession } from '@/lib/chat-persistence';
-import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
+import { loadCreationSession } from '@/lib/spec-coding-store';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
@@ -95,8 +95,10 @@ async function buildBoundSessionContext(frontendSessionId?: string): Promise<str
     if (session.workflowBinding) {
       const manager = await workflowRegistry.getManager(session.workflowBinding.configFile);
       const status = manager.getStatus();
-      const creationRecord = await loadLatestCreationSessionByFilename(session.workflowBinding.configFile);
-      const specCoding = creationRecord?.specCoding;
+      const runState = session.workflowBinding.runId
+        ? await import('@/lib/run-state-persistence').then((mod) => mod.loadRunState(session.workflowBinding!.runId)).catch(() => null)
+        : null;
+      const specCoding = runState?.runSpecCoding || null;
       const latestRevision = specCoding?.revisions?.at(-1);
 
       sections.push([
@@ -237,7 +239,7 @@ export async function POST(request: NextRequest) {
       const onEngineStream = (evt: any) => {
         if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
-          if (proc) proc.streamContent += evt.content;
+          processManager.appendStreamContent(chatId, evt.content);
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
@@ -270,7 +272,7 @@ export async function POST(request: NextRequest) {
         if (proc) {
           proc.status = result.success ? 'completed' : 'failed';
           proc.endTime = new Date();
-          proc.output = output;
+          processManager.setProcessOutput(chatId, output);
         }
 
         if (!result.success && !output && result.error) {

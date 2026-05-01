@@ -121,30 +121,48 @@ function validateSpecDomain(domainDir) {
   validateTasks(tasks);
 }
 
+function validateMasterFiles(rootDir) {
+  const masterSpec = join(rootDir, 'spec.md');
+  const checklist = join(rootDir, 'checklist.md');
+
+  if (!isFile(masterSpec)) {
+    fail(`${masterSpec}: 缺少 master spec.md`);
+  }
+
+  if (isFile(checklist)) {
+    const content = read(checklist);
+    const questions = content.match(/^- \[[ xX]\] .+/gm) || [];
+    if (questions.length === 0) {
+      fail(`${checklist}: checklist.md 至少需要一个 \`- [ ] 问题内容\` 或 \`- [x] 问题内容\``);
+    }
+  } else {
+    info(`${checklist}: 未发现 checklist.md，跳过问题清单校验`);
+  }
+}
+
 function validateRoot(rootDir) {
   if (!isDirectory(rootDir)) {
     fail(`根目录不存在: ${rootDir}`);
     return;
   }
 
-  // 支持两种结构：
-  // 1. specs/<domain>/ 下有 requirements.md, design.md, tasks.md
-  // 2. 直接在 rootDir 下有 requirements.md, design.md, tasks.md
-  const specsRoot = join(rootDir, 'specs');
+  validateMasterFiles(rootDir);
 
-  if (isDirectory(specsRoot)) {
-    const domains = listDirs(specsRoot);
-    if (domains.length === 0) {
-      fail(`${specsRoot}: 至少需要一个 domain 目录`);
-    }
-    for (const domain of domains) {
-      info(`校验 domain: ${domain}`);
-      validateSpecDomain(join(specsRoot, domain));
-    }
-  } else {
-    // 直接校验 rootDir 下的制品
-    info(`校验目录: ${rootDir}`);
-    validateSpecDomain(rootDir);
+  const specsRoot = join(rootDir, 'specs');
+  if (!isDirectory(specsRoot)) {
+    fail(`${specsRoot}: 缺少 specs 目录`);
+    return;
+  }
+
+  const runs = listDirs(specsRoot);
+  if (runs.length === 0) {
+    fail(`${specsRoot}: 至少需要一个 <workflowName>-<runId> delta 目录`);
+    return;
+  }
+
+  for (const runDir of runs) {
+    info(`校验 delta spec: ${runDir}`);
+    validateSpecDomain(join(specsRoot, runDir));
   }
 }
 

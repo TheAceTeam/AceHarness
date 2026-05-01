@@ -9,7 +9,6 @@ import StateFlowVisualizer from './StateFlowVisualizer';
 import StateMachineRuntimePanel from './StateMachineRuntimePanel';
 import StateMachineDiagram from './StateMachineDiagram';
 import SupervisorFlowVisualizer from './SupervisorFlowVisualizer';
-import AgentFlowVisualizer from './AgentFlowVisualizer';
 import AgentFlowDiagram from './AgentFlowDiagram';
 import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/schemas';
 
@@ -35,6 +34,19 @@ interface AgentFlowRecord {
   timestamp: string;
 }
 
+interface ActiveConcurrencyGroupView {
+  id: string;
+  stateName: string;
+  steps: string[];
+  joinPolicy?: {
+    mode?: string;
+    quorum?: number;
+    timeoutMinutes?: number;
+    onTimeout?: string;
+  } | null;
+  status: 'running' | 'completed' | 'failed';
+}
+
 interface StateMachineExecutionViewProps {
   // 配置数据
   states: StateMachineState[];
@@ -42,6 +54,8 @@ interface StateMachineExecutionViewProps {
   // 运行时数据
   currentState: string | null;
   currentStep?: string | null;
+  activeSteps?: string[];
+  activeConcurrencyGroups?: ActiveConcurrencyGroupView[];
   completedSteps?: string[];
   stateHistory: StateTransitionRecord[];
   issueTracker: Issue[];
@@ -91,6 +105,8 @@ export default function StateMachineExecutionView({
   states,
   currentState,
   currentStep,
+  activeSteps = [],
+  activeConcurrencyGroups = [],
   completedSteps = [],
   stateHistory,
   issueTracker,
@@ -114,42 +130,46 @@ export default function StateMachineExecutionView({
 
   useEffect(() => {
     if (activeTabOverride) {
-      setActiveTab(activeTabOverride);
+      setActiveTab(activeTabOverride === 'overview' ? 'overview' : activeTabOverride === 'timeline' || activeTabOverride === 'supervisor' || activeTabOverride === 'agent-flow' ? 'replay' : 'trace');
     }
   }, [activeTabOverride]);
 
   const handleOverviewStateClick = (stateName: string) => {
-    setActiveTab('diagram');
+    setActiveTab('trace');
     onStateClick?.(stateName);
+  };
+
+  const visibleConcurrencyGroups = activeConcurrencyGroups.filter((group) => group.status === 'running');
+  const concurrencyGroupsToDisplay = visibleConcurrencyGroups.length > 0
+    ? visibleConcurrencyGroups
+    : activeConcurrencyGroups.slice(-3);
+
+  const formatJoinPolicy = (joinPolicy?: ActiveConcurrencyGroupView['joinPolicy']) => {
+    if (!joinPolicy?.mode) return 'all';
+    const details = [
+      joinPolicy.mode,
+      joinPolicy.mode === 'quorum' && joinPolicy.quorum ? `quorum=${joinPolicy.quorum}` : '',
+      joinPolicy.timeoutMinutes ? `timeout=${joinPolicy.timeoutMinutes}m` : '',
+      joinPolicy.onTimeout ? `onTimeout=${joinPolicy.onTimeout}` : '',
+    ].filter(Boolean);
+    return details.join(' · ');
   };
 
   return (
     <div className="h-full flex flex-col">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-        <TabsList className="grid w-full grid-cols-6 mb-4">
+        <TabsList className="grid w-full grid-cols-3 mb-4">
           <TabsTrigger value="overview" className="flex items-center gap-2">
             <Activity className="w-4 h-4" />
             <span>总览</span>
           </TabsTrigger>
-          <TabsTrigger value="timeline" className="flex items-center gap-2">
+          <TabsTrigger value="trace" className="flex items-center gap-2">
+            <GitBranch className="w-4 h-4" />
+            <span>执行追踪</span>
+          </TabsTrigger>
+          <TabsTrigger value="replay" className="flex items-center gap-2">
             <Clock className="w-4 h-4" />
-            <span>时序图</span>
-          </TabsTrigger>
-          <TabsTrigger value="flow" className="flex items-center gap-2">
-            <GitBranch className="w-4 h-4" />
-            <span>流转图</span>
-          </TabsTrigger>
-          <TabsTrigger value="supervisor" className="flex items-center gap-2">
-            <GitBranch className="w-4 h-4" />
-            <span>Supervisor</span>
-          </TabsTrigger>
-          <TabsTrigger value="agent-flow" className="flex items-center gap-2">
-            <Bot className="w-4 h-4" />
-            <span>Agent 流程</span>
-          </TabsTrigger>
-          <TabsTrigger value="diagram" className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" />
-            <span>状态图</span>
+            <span>事件回放</span>
           </TabsTrigger>
         </TabsList>
 
@@ -239,6 +259,49 @@ export default function StateMachineExecutionView({
               </div>
             )}
 
+            {concurrencyGroupsToDisplay.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold">并发组运行态</h3>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      连续同组 step 会并发执行；后续串行 step 接收并发组汇总上下文。
+                    </p>
+                  </div>
+                  {activeSteps.length > 0 ? (
+                    <Badge variant="secondary" className="text-[10px]">
+                      active {activeSteps.length}
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {concurrencyGroupsToDisplay.map((group) => (
+                    <div key={`${group.stateName}-${group.id}`} className="rounded-lg border p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium">{group.stateName} / {group.id}</div>
+                        <Badge
+                          variant={group.status === 'failed' ? 'destructive' : group.status === 'running' ? 'secondary' : 'outline'}
+                          className="text-[10px]"
+                        >
+                          {group.status}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-gray-600 dark:text-gray-400">
+                        Join: {formatJoinPolicy(group.joinPolicy)}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {group.steps.map((step) => (
+                          <Badge key={step} variant="outline" className="text-[10px]">
+                            {step}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* 实时统计面板 */}
             <StateMachineRuntimePanel
               currentState={currentState}
@@ -268,57 +331,82 @@ export default function StateMachineExecutionView({
           </div>
         </TabsContent>
 
-        {/* 时序图视图 */}
-        <TabsContent value="timeline" className="flex-1 overflow-auto">
-          <StateTransitionTimeline
-            stateHistory={stateHistory}
-            currentState={currentState}
-            status={status}
-          />
-        </TabsContent>
+        {/* 执行追踪视图 */}
+        <TabsContent value="trace" className="flex-1 overflow-auto">
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <BarChart3 className="w-4 h-4" />
+                <h3 className="font-semibold">状态图</h3>
+              </div>
+              <div className="h-[520px] min-h-[360px]">
+                <StateMachineDiagram
+                  states={states}
+                  currentState={currentState}
+                  currentStep={currentStep}
+                  completedSteps={completedSteps}
+                  stateHistory={stateHistory}
+                  isRunning={isRunning}
+                  focusedState={focusedState}
+                  supervisorFlow={supervisorFlow}
+                  onStateClick={onStateClick}
+                  onStepClick={onStepClick}
+                  onForceTransition={onForceTransition}
+                />
+              </div>
+            </div>
 
-        {/* 流转图视图 */}
-        <TabsContent value="flow" className="flex-1 overflow-auto">
-          <StateFlowVisualizer
-            stateHistory={stateHistory}
-            currentState={currentState}
-          />
-        </TabsContent>
-
-        {/* Supervisor 流转视图 */}
-        <TabsContent value="supervisor" className="flex-1 overflow-auto">
-          <SupervisorFlowVisualizer
-            flow={supervisorFlow}
-          />
-        </TabsContent>
-
-        {/* Agent 工作流视图 */}
-        <TabsContent value="agent-flow" className="flex-1 overflow-hidden">
-          <div className="h-full">
-            <AgentFlowDiagram
-              flow={agentFlow}
-              states={states}
-              currentStep={currentStep}
-            />
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <GitBranch className="w-4 h-4" />
+                <h3 className="font-semibold">流转图</h3>
+              </div>
+              <StateFlowVisualizer
+                stateHistory={stateHistory}
+                currentState={currentState}
+              />
+            </div>
           </div>
         </TabsContent>
 
-        {/* 状态图视图 */}
-        <TabsContent value="diagram" className="flex-1 overflow-hidden">
-          <div className="h-full">
-            <StateMachineDiagram
-              states={states}
-              currentState={currentState}
-              currentStep={currentStep}
-              completedSteps={completedSteps}
-              stateHistory={stateHistory}
-              isRunning={isRunning}
-              focusedState={focusedState}
-              supervisorFlow={supervisorFlow}
-              onStateClick={onStateClick}
-              onStepClick={onStepClick}
-              onForceTransition={onForceTransition}
-            />
+        {/* 事件回放视图 */}
+        <TabsContent value="replay" className="flex-1 overflow-auto">
+          <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <Clock className="w-4 h-4" />
+                <h3 className="font-semibold">状态时序</h3>
+              </div>
+              <StateTransitionTimeline
+                stateHistory={stateHistory}
+                currentState={currentState}
+                status={status}
+              />
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <GitBranch className="w-4 h-4" />
+                <h3 className="font-semibold">Supervisor 事件</h3>
+              </div>
+              <SupervisorFlowVisualizer
+                flow={supervisorFlow}
+              />
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <Bot className="w-4 h-4" />
+                <h3 className="font-semibold">Agent 事件</h3>
+              </div>
+              <div className="h-[520px] min-h-[360px]">
+                <AgentFlowDiagram
+                  flow={agentFlow}
+                  states={states}
+                  currentStep={currentStep}
+                />
+              </div>
+            </div>
           </div>
         </TabsContent>
       </Tabs>

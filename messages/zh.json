@@ -6,7 +6,20 @@
       "totalRuns": "总运行次数",
       "successRate": "成功率",
       "avgDuration": "平均耗时",
-      "activeProcesses": "活跃进程"
+      "activeProcesses": "活跃进程",
+      "activeWorkflows": "活跃工作流数",
+      "weeklyRuns": "周运行次数",
+      "tokenConsumption": "token消耗",
+      "weeklyTokenConsumption": "周token消耗"
+    },
+    "tokenRanking": {
+      "title": "Token 使用排行",
+      "byUser": "用户维度",
+      "byWorkflow": "工作流维度",
+      "totalTokens": "总 Token",
+      "runs": "运行次数",
+      "cost": "费用",
+      "breakdown": "输入 {input} / 输出 {output} / 缓存 {cache}"
     },
     "quickActions": {
       "title": "快速操作",

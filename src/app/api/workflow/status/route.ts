@@ -3,13 +3,15 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { loadRunState } from '@/lib/run-state-persistence';
-import { loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
+import { loadCreationSession } from '@/lib/spec-coding-store';
 import {
   findRelevantWorkflowExperiences,
   listWorkflowExperiences,
   loadWorkflowFinalReview,
 } from '@/lib/workflow-experience-store';
 import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
+import { getSpecRootDir } from '@/lib/spec-persistence';
+import { resolve } from 'path';
 import type { SpecCodingDocument } from '@/lib/schemas';
 import {
   listMemoryEntries,
@@ -95,6 +97,7 @@ async function loadWorkflowRuntimeMeta(configFile: string): Promise<{
   workflowName?: string;
   projectRoot?: string;
   requirements?: string;
+  specRoot?: string;
 }> {
   try {
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
@@ -104,6 +107,7 @@ async function loadWorkflowRuntimeMeta(configFile: string): Promise<{
       workflowName: typeof config?.workflow?.name === 'string' ? config.workflow.name : undefined,
       projectRoot: typeof config?.context?.projectRoot === 'string' ? config.context.projectRoot : undefined,
       requirements: typeof config?.context?.requirements === 'string' ? config.context.requirements : undefined,
+      specRoot: typeof config?.specCoding?.specRoot === 'string' ? config.specCoding.specRoot : undefined,
     };
   } catch {
     return {};
@@ -149,15 +153,38 @@ function buildSpecCodingPayload(specCoding: SpecCodingDocument, source: 'run' | 
   };
 }
 
+function enrichPersistentSpecStatus(status: any, runtimeMeta: WorkflowConfigMetaLike) {
+  const persistMode = status?.persistMode || status?.runSpecCoding?.persistMode;
+  const workingDirectory = status?.workingDirectory || runtimeMeta.projectRoot;
+  const specRoot = status?.runSpecCoding?.specRoot || runtimeMeta.specRoot;
+  const masterSpecPath = persistMode === 'repository' && workingDirectory
+    ? resolve(getSpecRootDir(workingDirectory, specRoot), 'spec.md')
+    : undefined;
+
+  return {
+    ...status,
+    persistMode,
+    deltaSpecMerged: status?.deltaSpecMerged,
+    deltaMergeState: status?.deltaMergeState,
+    masterSpecPath,
+  };
+}
+
+type WorkflowConfigMetaLike = {
+  projectRoot?: string;
+  specRoot?: string;
+};
+
 async function withCreationSession(status: any, requestedConfigFile?: string | null) {
   const configFile = requestedConfigFile || status?.currentConfigFile;
   if (!configFile) return status;
 
-  const creationSession = await loadLatestCreationSessionByFilename(configFile);
-  if (!creationSession) return status;
-
   const finalReview = status?.runId ? await loadWorkflowFinalReview(status.runId).catch(() => null) : null;
   const runtimeMeta = await loadWorkflowRuntimeMeta(configFile);
+  status = enrichPersistentSpecStatus(status, runtimeMeta);
+  const creationSession = status?.creationSessionId
+    ? await loadCreationSession(status.creationSessionId).catch(() => null)
+    : null;
   const historicalExperiences = configFile
     ? await listWorkflowExperiences({ configFile, limit: 5 }).catch(() => [])
     : [];
@@ -170,7 +197,7 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     limit: 5,
   }).catch(() => []);
   const runSpecCoding = status?.runSpecCoding || null;
-  const displaySpecCoding = runSpecCoding || creationSession.specCoding;
+  const displaySpecCoding = runSpecCoding || creationSession?.specCoding || null;
   const specCodingPayload = displaySpecCoding
     ? buildSpecCodingPayload(displaySpecCoding, runSpecCoding ? 'run' : 'creation')
     : {};
@@ -203,13 +230,13 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
 
   return {
     ...status,
-    creationSession: {
+    creationSession: creationSession ? {
       id: creationSession.id,
       workflowName: creationSession.workflowName,
       filename: creationSession.filename,
       status: creationSession.status,
       updatedAt: creationSession.updatedAt,
-    },
+    } : null,
     ...specCodingPayload,
     sourceOfTruth,
     finalReview,

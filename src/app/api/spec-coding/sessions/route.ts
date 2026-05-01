@@ -39,6 +39,8 @@ export async function POST(request: NextRequest) {
       uiState: body.uiState,
       config: body.config,
       specCoding: body.specCoding,
+      persistMode: body.persistMode,
+      specRoot: body.specRoot,
     });
     await saveCreationSession(session);
     return NextResponse.json({ session });

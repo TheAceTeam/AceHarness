@@ -78,6 +78,18 @@ workflow:
 - step 中的 agent 引用必须在运行时 `configs/agents/` 中存在
 - 如果用户坚持使用 phase-based，也应沿用“一个 phase 承载该阶段的多步骤协作”的思路，不要为了红蓝黄角色拆碎阶段
 
+## 并发设计元数据
+
+并发、多 Agent 多实例、channel、join policy 属于 workflow YAML / workflow 设计层。它们用于表达编排意图和未来运行调度元数据，不能在当前执行器尚未支持真实并发时承诺实际并行执行。
+
+当 workflow step 之间相互独立、没有共享写冲突、没有人工审批依赖时，可以在 workflow YAML 中表达并发设计：
+
+- workflow 级：`workflow.concurrency.agentInstances`、`workflow.concurrency.channels`、`workflow.concurrency.joinPolicies`
+- step 级：`step.parallelGroup`、`step.concurrency.groupId`、`step.concurrency.branchId`、`step.concurrency.joinPolicy`、`step.agentInstanceId`、`step.channelIds`
+- spec 追踪：`step.specTaskBinding` 仅用于把 workflow step 绑定到已有 spec task，便于运行态追踪和审查
+
+依赖关系不清晰、有共享写冲突、需要人工审批先后顺序，或任务之间存在明确产物依赖时，保持串行建模。
+
 ## 验证脚本
 
 ```bash

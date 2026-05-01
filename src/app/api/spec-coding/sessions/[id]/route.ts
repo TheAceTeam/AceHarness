@@ -41,6 +41,30 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
     const body = await request.json();
     const patch = { ...body } as Record<string, any>;
+    const rawPersistMode = patch.persistMode ?? patch.specCoding?.persistMode;
+    const incomingPersistMode = rawPersistMode === 'repository'
+      ? 'repository'
+      : rawPersistMode === 'none'
+        ? 'none'
+        : undefined;
+    const rawSpecRoot = patch.specRoot ?? patch.specCoding?.specRoot;
+    const incomingSpecRoot = typeof rawSpecRoot === 'string' ? rawSpecRoot.trim() : undefined;
+    if (incomingPersistMode || incomingSpecRoot !== undefined) {
+      const nextPersistMode = incomingPersistMode
+        || patch.specCoding?.persistMode
+        || existing.specCoding?.persistMode
+        || 'none';
+      patch.specCoding = {
+        ...(existing.specCoding || {}),
+        ...(patch.specCoding || {}),
+        persistMode: nextPersistMode,
+        specRoot: nextPersistMode === 'repository'
+          ? (incomingSpecRoot || patch.specCoding?.specRoot || existing.specCoding?.specRoot || '.spec')
+          : undefined,
+      };
+      delete patch.persistMode;
+      delete patch.specRoot;
+    }
     if (patch.rebuildSpecCodingFromConfig && patch.config) {
       patch.specCoding = existing.specCoding
         ? rebuildSpecCodingPreservingArtifacts({
@@ -79,6 +103,20 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         confirmedAt: patch.specCodingStatus === 'confirmed'
           ? (patch.specCoding.confirmedAt || new Date().toISOString())
           : patch.specCoding.confirmedAt,
+      };
+    }
+
+    if (patch.specCoding && (incomingPersistMode || incomingSpecRoot !== undefined)) {
+      const nextPersistMode = incomingPersistMode
+        || patch.specCoding.persistMode
+        || existing.specCoding?.persistMode
+        || 'none';
+      patch.specCoding = {
+        ...patch.specCoding,
+        persistMode: nextPersistMode,
+        specRoot: nextPersistMode === 'repository'
+          ? (incomingSpecRoot || patch.specCoding.specRoot || existing.specCoding?.specRoot || '.spec')
+          : undefined,
       };
     }
 

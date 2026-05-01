@@ -8,19 +8,16 @@ import { parse } from 'yaml';
 import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
 import { createRun } from '@/lib/run-store';
 import { saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
-import { loadLatestCreationSessionByFilename, cloneSpecCodingForRun } from '@/lib/spec-coding-store';
+import { loadCreationSession, cloneSpecCodingForRun } from '@/lib/spec-coding-store';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
+import { countWorkflowSteps } from '@/lib/workflow-step-counter';
 
-function countWorkflowSteps(config: any): number {
-  const phases = Array.isArray(config?.workflow?.phases) ? config.workflow.phases : [];
-  const states = Array.isArray(config?.workflow?.states) ? config.workflow.states : [];
-  const items = phases.length > 0 ? phases : states;
-  return items.reduce((sum: number, item: any) => sum + (Array.isArray(item?.steps) ? item.steps.length : 0), 0);
-}
+export { countWorkflowSteps } from '@/lib/workflow-step-counter';
 
 async function startRehearsalRun(input: {
   configFile: string;
   frontendSessionId?: string;
+  creationSessionId?: string;
   userId: string;
   preflightChecks: any[];
 }) {
@@ -30,7 +27,9 @@ async function startRehearsalRun(input: {
   const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const now = new Date().toISOString();
   const totalSteps = countWorkflowSteps(config);
-  const creationSession = await loadLatestCreationSessionByFilename(input.configFile).catch(() => null);
+  const creationSession = input.creationSessionId
+    ? await loadCreationSession(input.creationSessionId).catch(() => null)
+    : null;
   const runSpecCoding = creationSession?.specCoding
     ? cloneSpecCodingForRun(creationSession.specCoding, { runId, filename: input.configFile })
     : null;
@@ -91,6 +90,7 @@ async function startRehearsalRun(input: {
         summary,
       },
     } : null,
+    creationSessionId: creationSession?.id,
     rehearsal: {
       enabled: true,
       summary,
@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { configFile, frontendSessionId, skipPreflight, rehearsal, preflightChecks: inputPreflightChecks } = body;
+    const { configFile, frontendSessionId, creationSessionId, skipPreflight, rehearsal, preflightChecks: inputPreflightChecks } = body;
 
     if (!configFile) {
       return NextResponse.json(
@@ -151,6 +151,7 @@ export async function POST(request: NextRequest) {
       const result = await startRehearsalRun({
         configFile,
         frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
+        creationSessionId: typeof creationSessionId === 'string' ? creationSessionId : undefined,
         userId: user.id,
         preflightChecks: preflightChecks || [],
       });
@@ -181,6 +182,7 @@ export async function POST(request: NextRequest) {
     (manager as any)._createdBy = user.id;
     (manager as any)._userPersonalDir = user.personalDir;
     (manager as any)._frontendSessionId = typeof frontendSessionId === 'string' ? frontendSessionId : undefined;
+    (manager as any)._creationSessionId = typeof creationSessionId === 'string' ? creationSessionId : undefined;
     (manager as any).start(configFile, undefined, preflightChecks).catch((err: any) => {
       console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
       // Ensure status reflects the failure so frontend can detect it

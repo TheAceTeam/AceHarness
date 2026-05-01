@@ -146,3 +146,18 @@ node skills/aceharness-spec-coding/scripts/validate-spec-coding.mjs <spec-root>
 - `requirements.md` 包含需求标题和 WHEN/THEN 验收标准
 - `design.md` 包含架构图、组件接口和关键决策
 - `tasks.md` 包含多级嵌套 checkbox 和需求引用
+
+## 持久化 Spec 模式
+
+当工作流配置 `specCoding.persistMode: 'repository'` 时，spec 制品持久化到仓库 `specCoding.specRoot` 指定的目录（默认 `<workingDirectory>/.spec`）。
+
+### 目录结构
+- `<specRoot>/spec.md` — 总 spec（master，输入文件）
+- `<specRoot>/checklist.md` — 预存问题清单（输入文件）
+- `<specRoot>/specs/<workflowName>-<runId>/` — 每次运行的 delta 快照（requirements.md、design.md、tasks.md）
+
+### AI 规则
+
+- **审查时**：检查 `<specRoot>/checklist.md`，所有未回答问题（`- [ ]`）需要在人工审批或 supervisor 审查时提出；已回答的问题以 `- [x]` 表示
+- **修订制品时**：直接更新 requirements/design/tasks 对应 artifacts 的正文，保持三份制品之间的术语、范围和需求追溯一致
+- **制品格式**：checklist.md 使用 `- [ ] 问题内容` 格式，每行一个问题

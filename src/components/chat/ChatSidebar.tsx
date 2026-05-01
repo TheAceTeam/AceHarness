@@ -8,8 +8,6 @@ import { Input } from '@/components/ui/input';
 import {
   buildWorkflowConversationDirectory,
   getConversationSessionStatusLabel,
-  getWorkbenchSessionKind,
-  listWorkbenchSessions,
   type ChatSessionSummaryLike,
 } from '@/lib/agent-conversations';
 import { RobotLogo } from './ChatMessage';
@@ -39,10 +37,6 @@ export default function ChatSidebar() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
 
   const enabledCount = discoveredSkills.filter(s => !!skillSettings[s.name]).length;
-  const workflowSessions = useMemo(
-    () => listWorkbenchSessions(sessions as ChatSessionSummaryLike[]).slice(0, 6),
-    [sessions]
-  );
   const workflowDirectory = useMemo(
     () => buildWorkflowConversationDirectory(activeSession?.workflowBinding),
     [activeSession?.workflowBinding]
@@ -135,25 +129,6 @@ export default function ChatSidebar() {
                     {entry.sessionId || getConversationSessionStatusLabel(entry)}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {workflowSessions.length > 0 && (
-          <div className="border-b border-border/40 px-3 py-3">
-            <div className="mb-2 text-xs font-semibold text-foreground">已沉淀的工作流会话</div>
-            <div className="space-y-1">
-              {workflowSessions.map(session => (
-                <SessionItem
-                  key={`workflow-${session.id}`}
-                  session={session}
-                  active={session.id === activeSessionId}
-                  compact
-                  onClick={() => setActiveSessionId(session.id)}
-                  onDelete={() => deleteSession(session.id)}
-                  onRename={(title) => renameSession(session.id, title)}
-                />
               ))}
             </div>
           </div>
@@ -372,11 +347,10 @@ function SessionItem({ session, active, compact = false, onClick, onDelete, onRe
 }) {
   void onRename;
   const summary = session.lastMessage?.slice(0, 40) || '空会话';
-  const kind = getWorkbenchSessionKind(session);
   const statusBadge = session.workflowBinding
-    ? { label: '运行态', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
+    ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
     : session.creationSession
-      ? { label: '创建态', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
+      ? { label: '创建', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
       : session.agentBinding
         ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
       : null;
@@ -391,11 +365,7 @@ function SessionItem({ session, active, compact = false, onClick, onDelete, onRe
         <div className="flex items-center gap-1.5">
           <div className="text-sm font-medium truncate">{session.title}</div>
           {statusBadge ? (
-            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${
-              kind === 'run'
-                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                : 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
-            }`}>
+            <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${statusBadge.tone}`}>
               {statusBadge.label}
             </span>
           ) : null}

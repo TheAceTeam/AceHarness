@@ -7,6 +7,7 @@ import { getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime
 import { findRelevantWorkflowExperiences } from '@/lib/workflow-experience-store';
 import { listAgentRelationships } from '@/lib/agent-relationship-store';
 import { DEFAULT_SUPERVISOR_NAME } from '@/lib/default-supervisor';
+import { buildRecommendedAgents } from '@/lib/config-recommendations';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -72,42 +73,6 @@ function collectWorkflowAgents(referenceConfig: any): string[] {
 function collectReferenceSupervisorAgent(referenceConfig: any): string | undefined {
   const agent = referenceConfig?.workflow?.supervisor?.agent;
   return typeof agent === 'string' && agent.trim() ? agent.trim() : undefined;
-}
-
-function buildRecommendedAgents(input: {
-  availableAgents: Set<string>;
-  referenceAgents: string[];
-  relationshipHints: Array<{
-    agent: string;
-    counterpart: string;
-    synergyScore: number;
-  }>;
-}): string[] {
-  const lineup: string[] = [];
-  const fallback = ['architect', 'developer', 'tester'];
-
-  const add = (name?: string) => {
-    const normalized = typeof name === 'string' ? name.trim() : '';
-    if (!normalized) return;
-    if (input.availableAgents.size > 0 && !input.availableAgents.has(normalized)) return;
-    if (!lineup.includes(normalized) && normalized !== DEFAULT_SUPERVISOR_NAME) {
-      lineup.push(normalized);
-    }
-  };
-
-  input.referenceAgents.forEach(add);
-
-  input.relationshipHints
-    .filter((item) => item.synergyScore > 0)
-    .sort((a, b) => b.synergyScore - a.synergyScore)
-    .forEach((item) => {
-      add(item.agent);
-      add(item.counterpart);
-    });
-
-  fallback.forEach(add);
-
-  return lineup.slice(0, 6);
 }
 
 export async function POST(request: NextRequest) {

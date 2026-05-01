@@ -39,10 +39,29 @@ const stepSchema = z.object({
   constraints: z.string().optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
+  parallelGroup: z.string().optional(),
+  concurrencyGroupId: z.string().optional(),
+  branchId: z.string().optional(),
+  joinPolicyMode: z.enum(['', 'all', 'any', 'quorum', 'manual']).optional(),
+  joinPolicyQuorum: z.number().optional(),
+  joinPolicyTimeoutMinutes: z.number().optional(),
+  joinPolicyOnTimeout: z.enum(['', 'continue', 'fail', 'manual-review']).optional(),
+  agentInstanceId: z.string().optional(),
+  channelIds: z.string().optional(),
+  specTaskId: z.string().optional(),
+  requirementIds: z.string().optional(),
+  artifactKeys: z.string().optional(),
 });
 
 type PhaseForm = z.infer<typeof phaseSchema>;
 type StepForm = z.infer<typeof stepSchema>;
+
+const listToInput = (value: unknown) => Array.isArray(value) ? value.join(', ') : '';
+const inputToList = (value: unknown) => typeof value === 'string'
+  ? value.split(',').map((item) => item.trim()).filter(Boolean)
+  : [];
+const cleanString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+const numberOrUndefined = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 
 interface RoleOption {
   name: string;
@@ -121,6 +140,18 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: data?.skills || [],
+          parallelGroup: data?.parallelGroup || data?.concurrency?.groupId || '',
+          concurrencyGroupId: data?.concurrency?.groupId || data?.parallelGroup || '',
+          branchId: data?.concurrency?.branchId || '',
+          joinPolicyMode: data?.concurrency?.joinPolicy?.mode || '',
+          joinPolicyQuorum: data?.concurrency?.joinPolicy?.quorum,
+          joinPolicyTimeoutMinutes: data?.concurrency?.joinPolicy?.timeoutMinutes,
+          joinPolicyOnTimeout: data?.concurrency?.joinPolicy?.onTimeout || '',
+          agentInstanceId: data?.agentInstanceId || '',
+          channelIds: listToInput(data?.channelIds),
+          specTaskId: data?.specTaskBinding?.taskId || '',
+          requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
+          artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
         },
   });
 
@@ -164,6 +195,18 @@ export default function EditNodeModal({
         constraints: source.constraints?.join('\n') || '',
         enableReviewPanel: source.enableReviewPanel || false,
         skills: source.skills || [],
+        parallelGroup: source.parallelGroup || source.concurrency?.groupId || '',
+        concurrencyGroupId: source.concurrency?.groupId || source.parallelGroup || '',
+        branchId: source.concurrency?.branchId || '',
+        joinPolicyMode: source.concurrency?.joinPolicy?.mode || '',
+        joinPolicyQuorum: source.concurrency?.joinPolicy?.quorum,
+        joinPolicyTimeoutMinutes: source.concurrency?.joinPolicy?.timeoutMinutes,
+        joinPolicyOnTimeout: source.concurrency?.joinPolicy?.onTimeout || '',
+        agentInstanceId: source.agentInstanceId || '',
+        channelIds: listToInput(source.channelIds),
+        specTaskId: source.specTaskBinding?.taskId || '',
+        requirementIds: listToInput(source.specTaskBinding?.requirementIds),
+        artifactKeys: listToInput(source.specTaskBinding?.artifactKeys),
       });
     }
   };
@@ -210,6 +253,39 @@ export default function EditNodeModal({
       }
       if (formData.skills && formData.skills.length > 0) {
         stepData.skills = formData.skills;
+      }
+
+      const parallelGroup = cleanString(formData.parallelGroup) || cleanString(formData.concurrencyGroupId);
+      const concurrencyGroupId = cleanString(formData.concurrencyGroupId) || parallelGroup;
+      if (parallelGroup) {
+        stepData.parallelGroup = parallelGroup;
+      }
+      const joinPolicy: any = {};
+      if (formData.joinPolicyMode) joinPolicy.mode = formData.joinPolicyMode;
+      const quorum = numberOrUndefined(formData.joinPolicyQuorum);
+      if (quorum) joinPolicy.quorum = quorum;
+      const timeoutMinutes = numberOrUndefined(formData.joinPolicyTimeoutMinutes);
+      if (timeoutMinutes) joinPolicy.timeoutMinutes = timeoutMinutes;
+      if (formData.joinPolicyOnTimeout) joinPolicy.onTimeout = formData.joinPolicyOnTimeout;
+      const concurrency: any = {};
+      if (concurrencyGroupId) concurrency.groupId = concurrencyGroupId;
+      const branchId = cleanString(formData.branchId);
+      if (branchId) concurrency.branchId = branchId;
+      if (Object.keys(joinPolicy).length > 0) concurrency.joinPolicy = joinPolicy;
+      if (Object.keys(concurrency).length > 0) {
+        stepData.concurrency = concurrency;
+      }
+      const agentInstanceId = cleanString(formData.agentInstanceId);
+      if (agentInstanceId) stepData.agentInstanceId = agentInstanceId;
+      const channelIds = inputToList(formData.channelIds);
+      if (channelIds.length > 0) stepData.channelIds = channelIds;
+      const specTaskId = cleanString(formData.specTaskId);
+      if (specTaskId) {
+        stepData.specTaskBinding = {
+          taskId: specTaskId,
+          requirementIds: inputToList(formData.requirementIds),
+          artifactKeys: inputToList(formData.artifactKeys),
+        };
       }
       onSave(stepData);
     }
@@ -433,6 +509,88 @@ export default function EditNodeModal({
                   />
                 </div>
               )}
+
+              <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                <div>
+                  <div className="text-sm font-semibold">高级 / 并发设计元数据</div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    这些字段会保存到配置中，用于表达并发分支、多实例 Agent、channel 和 Spec task 绑定；状态机运行时支持连续同组 step 的第一阶段并发执行，复杂 channel 协作和 manual join 仍按受限能力处理。
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="parallelGroup">Parallel group</Label>
+                    <Input id="parallelGroup" {...register('parallelGroup')} placeholder="frontend-backend" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="concurrencyGroupId">Concurrency group</Label>
+                    <Input id="concurrencyGroupId" {...register('concurrencyGroupId')} placeholder="frontend-backend" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="branchId">Branch id</Label>
+                    <Input id="branchId" {...register('branchId')} placeholder="frontend" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="agentInstanceId">Agent instance id</Label>
+                    <Input id="agentInstanceId" {...register('agentInstanceId')} placeholder="frontend-dev-1" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Join policy</Label>
+                    <SingleCombobox
+                      value={watch('joinPolicyMode') || ''}
+                      onValueChange={(v) => setValue('joinPolicyMode', v as any)}
+                      options={[
+                        { value: '', label: '未设置' },
+                        { value: 'all', label: 'all' },
+                        { value: 'any', label: 'any' },
+                        { value: 'quorum', label: 'quorum' },
+                        { value: 'manual', label: 'manual' },
+                      ]}
+                      searchable={false}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="joinPolicyQuorum">Quorum</Label>
+                    <Input id="joinPolicyQuorum" type="number" min={1} {...register('joinPolicyQuorum', { valueAsNumber: true })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="joinPolicyTimeoutMinutes">Timeout minutes</Label>
+                    <Input id="joinPolicyTimeoutMinutes" type="number" min={1} {...register('joinPolicyTimeoutMinutes', { valueAsNumber: true })} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Timeout behavior</Label>
+                    <SingleCombobox
+                      value={watch('joinPolicyOnTimeout') || ''}
+                      onValueChange={(v) => setValue('joinPolicyOnTimeout', v as any)}
+                      options={[
+                        { value: '', label: '未设置' },
+                        { value: 'continue', label: 'continue' },
+                        { value: 'fail', label: 'fail' },
+                        { value: 'manual-review', label: 'manual-review' },
+                      ]}
+                      searchable={false}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="channelIds">Channel ids（逗号分隔）</Label>
+                  <Input id="channelIds" {...register('channelIds')} placeholder="impl-shared, supervisor" />
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label htmlFor="specTaskId">Spec task id</Label>
+                    <Input id="specTaskId" {...register('specTaskId')} placeholder="task-3" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="requirementIds">Requirement ids</Label>
+                    <Input id="requirementIds" {...register('requirementIds')} placeholder="req-1, req-2" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="artifactKeys">Artifact keys</Label>
+                    <Input id="artifactKeys" {...register('artifactKeys')} placeholder="design, tasks" />
+                  </div>
+                </div>
+              </div>
             </>
           )}
 

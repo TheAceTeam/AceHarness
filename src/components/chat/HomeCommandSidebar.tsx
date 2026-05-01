@@ -234,11 +234,16 @@ export default function HomeCommandSidebar({
   const creationBinding = activeSession?.creationSession;
   const boundWorkflow = binding?.configFile || '';
   const boundCommander = binding?.supervisorAgent || 'default-supervisor';
+  const effectiveWorkflowTarget = selectedWorkflow || boundWorkflow || '';
+  const runCreationSessionId = currentCreationSession?.filename === effectiveWorkflowTarget
+    ? currentCreationSession.creationSessionId
+    : creationBinding?.filename === effectiveWorkflowTarget
+      ? creationBinding.creationSessionId
+      : undefined;
   const workflowDirectory = useMemo(
     () => buildWorkflowConversationDirectory(binding),
     [binding]
   );
-  const effectiveWorkflowTarget = selectedWorkflow || boundWorkflow || '';
   const persistedPreflight = sessionWorkbenchState?.latestPreflight;
   const recentConversation = useMemo(() => {
     return (activeSession?.messages || [])
@@ -533,6 +538,7 @@ export default function HomeCommandSidebar({
         }
       }
       await workflowApi.start(targetWorkflow, sessionId || undefined, {
+        creationSessionId: runCreationSessionId,
         skipPreflight: true,
         preflightChecks: preflight.checks || [],
       });
@@ -543,7 +549,7 @@ export default function HomeCommandSidebar({
     } finally {
       setStartingWorkflow(false);
     }
-  }, [activeSessionId, boundWorkflow, ensureSessionId, router, selectedWorkflow, setSessionWorkbenchState, toast]);
+  }, [activeSessionId, boundWorkflow, ensureSessionId, router, selectedWorkflow, runCreationSessionId, setSessionWorkbenchState, toast]);
 
   const handleCreateAgent = useCallback(async () => {
     const displayName = agentDraft.displayName.trim();
@@ -783,7 +789,7 @@ export default function HomeCommandSidebar({
                     <div>候选配置：{effectiveWorkflowTarget || '未选择'}</div>
                     <div>指挥官：{boundCommander}</div>
                     {currentCreationSession ? (
-                      <div>创建态：{currentCreationSession.workflowName} / {getCreationSessionStatusLabel(currentCreationSession.status)}</div>
+                      <div>创建进度：{currentCreationSession.workflowName} / {getCreationSessionStatusLabel(currentCreationSession.status)}</div>
                     ) : null}
                   </div>
                 </details>
@@ -966,11 +972,11 @@ export default function HomeCommandSidebar({
               <div className="rounded-2xl border p-4">
                 <h3 className="text-sm font-medium">AI 引导创建工作流</h3>
                 <p className="mt-2 text-xs text-muted-foreground leading-5">
-                  从首页直接进入结构化引导流程，而不是把所有创建逻辑都塞进聊天气泡里。
+                  从首页打开工作流创建面板，关键进度会以标签追加在当前对话下，方便回到原对话继续查看和恢复。
                 </p>
                 {currentCreationSession ? (
                   <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">当前创建态</div>
+                    <div className="font-medium text-foreground">当前创建进度</div>
                     <div>工作流：{currentCreationSession.workflowName}</div>
                     <div>配置文件：{currentCreationSession.filename}</div>
                     <div>状态：{currentCreationSession.status}</div>
@@ -1054,7 +1060,7 @@ export default function HomeCommandSidebar({
                 <div className="text-xs text-muted-foreground leading-5">
                   {effectiveWorkflowTarget
                     ? `当前会以 ${effectiveWorkflowTarget} 作为运行目标。`
-                    : '当前还没有选中的运行目标，可从下方已有工作流中挑一个，也可以先走右侧的创建态。'}
+                    : '当前还没有选中的运行目标，可从下方已有工作流中挑一个，也可以先创建工作流。'}
                 </div>
                 <details className="rounded-xl border bg-muted/10 p-3">
                   <summary className="cursor-pointer text-xs font-medium text-foreground">展开已有工作流列表</summary>

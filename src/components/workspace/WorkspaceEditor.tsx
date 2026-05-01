@@ -22,6 +22,7 @@ import { FileSearchCommand } from "./FileSearchCommand"
 import AiAssistantSheet from "@/components/chat/AiAssistantSheet"
 import * as VisuallyHidden from "@radix-ui/react-visually-hidden"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+import { useToast } from "@/components/ui/toast"
 
 interface WorkspaceEditorProps {
   open: boolean
@@ -178,6 +179,12 @@ function splitSuggestionIntoLineHunks(payload: {
   return suggestions
 }
 
+function formatErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  return fallback
+}
+
 export function WorkspaceEditor({
   open,
   onOpenChange,
@@ -191,10 +198,12 @@ export function WorkspaceEditor({
 }: WorkspaceEditorProps) {
   const [tree, setTree] = React.useState<TreeNode[]>([])
   const [treeLoading, setTreeLoading] = React.useState(false)
+  const [treeError, setTreeError] = React.useState<string | null>(null)
   const [selectedFile, setSelectedFile] = React.useState<string | null>(null)
   const [fileContent, setFileContent] = React.useState<string | null>(null)
   const [fileSize, setFileSize] = React.useState<number | null>(null)
   const [fileLoading, setFileLoading] = React.useState(false)
+  const [fileError, setFileError] = React.useState<string | null>(null)
   const [oversize, setOversize] = React.useState(false)
   const [fileBlob, setFileBlob] = React.useState<Blob | null>(null)
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -256,6 +265,7 @@ export function WorkspaceEditor({
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const { toast } = useToast()
   const fileParamKey = mode === "notebook" ? "notebookFile" : "workspaceFile"
   const panelParamKey = mode === "notebook" ? "notebook" : "workspace"
   const scopeParamKey = mode === "notebook" ? "notebookScope" : "workspaceScope"
@@ -422,10 +432,18 @@ export function WorkspaceEditor({
       ? workspaceApi.getNotebookTree(2, { scope: notebookScope, shareToken: notebookShareToken })
       : workspaceApi.getTree(workspacePath)
     loadTree
-      .then((data) => setTree(data.tree))
-      .catch(() => setTree([]))
+      .then((data) => {
+        setTree(data.tree)
+        setTreeError(null)
+      })
+      .catch((error) => {
+        const message = formatErrorMessage(error, "加载文件树失败")
+        setTree([])
+        setTreeError(message)
+        toast("error", message)
+      })
       .finally(() => setTreeLoading(false))
-  }, [mode, notebookScope, notebookShareToken, open, workspacePath])
+  }, [mode, notebookScope, notebookShareToken, open, toast, workspacePath])
 
   React.useEffect(() => {
     if (!open) return
@@ -456,6 +474,7 @@ export function WorkspaceEditor({
     setOversize(false)
     setFileBlob(null)
     setFileContent(null)
+    setFileError(null)
 
     if (isPreviewFile(selectedFile)) {
       const loadBlob = mode === "notebook"
@@ -464,9 +483,13 @@ export function WorkspaceEditor({
       loadBlob
         .then((blob) => {
           setFileBlob(blob)
+          setFileError(null)
         })
-        .catch(() => {
+        .catch((error) => {
+          const message = formatErrorMessage(error, "预览文件失败")
           setFileBlob(null)
+          setFileError(message)
+          toast("error", message)
         })
         .finally(() => setFileLoading(false))
       return
@@ -479,15 +502,21 @@ export function WorkspaceEditor({
       .then((data) => {
         setFileContent(data.content)
         setFileSize(data.size)
+        setFileError(null)
       })
       .catch((err: Error & { size?: number }) => {
         if (err.message?.includes("KB 限制")) {
           setOversize(true)
           if (err.size != null) setFileSize(err.size)
+          setFileError(null)
+          return
         }
+        const message = formatErrorMessage(err, "读取文件失败")
+        setFileError(message)
+        toast("error", message)
       })
       .finally(() => setFileLoading(false))
-  }, [mode, notebookScope, notebookShareToken, selectedFile, workspacePath])
+  }, [mode, notebookScope, notebookShareToken, selectedFile, toast, workspacePath])
 
   React.useEffect(() => {
     if (!open) return
@@ -528,6 +557,7 @@ export function WorkspaceEditor({
     setSelectedFile(null)
     setFileContent(null)
     setFileSize(null)
+    setFileError(null)
     setOversize(false)
     setFileBlob(null)
     updateUrlFileState(null)
@@ -540,10 +570,18 @@ export function WorkspaceEditor({
       ? workspaceApi.getNotebookTree(2, { scope: notebookScope, shareToken: notebookShareToken })
       : workspaceApi.getTree(workspacePath)
     loadTree
-      .then((data) => setTree(data.tree))
-      .catch(() => setTree([]))
+      .then((data) => {
+        setTree(data.tree)
+        setTreeError(null)
+      })
+      .catch((error) => {
+        const message = formatErrorMessage(error, "刷新文件树失败")
+        setTree([])
+        setTreeError(message)
+        toast("error", message)
+      })
       .finally(() => setTreeLoading(false))
-  }, [mode, notebookScope, notebookShareToken, workspacePath])
+  }, [mode, notebookScope, notebookShareToken, toast, workspacePath])
 
   const handleOpenChange = React.useCallback(
     (newOpen: boolean) => {
@@ -551,9 +589,11 @@ export function WorkspaceEditor({
         setSelectedFile(null)
         setFileContent(null)
         setFileSize(null)
+        setFileError(null)
         setOversize(false)
         setFileBlob(null)
         setTree([])
+        setTreeError(null)
         setAiSheetOpen(false)
         setAiContext("")
         setAiAutoTask(null)
@@ -641,6 +681,11 @@ export function WorkspaceEditor({
                 collapsedSize="0%"
                 onResize={() => setTreeCollapsed(treePanelRef.current?.isCollapsed() ?? false)}
               >
+                {treeError && (
+                  <div className="border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {treeError}
+                  </div>
+                )}
                 <FileTreeSidebar
                   workspacePath={workspacePath}
                   tree={tree}
@@ -675,6 +720,7 @@ export function WorkspaceEditor({
                   onSave={handleSave}
                   oversize={oversize}
                   fileBlob={fileBlob}
+                  error={fileError}
                   fileType={selectedFile ? getFileType(selectedFile) : undefined}
                   mode={mode}
                   notebookScope={notebookScope}

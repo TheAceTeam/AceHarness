@@ -10,8 +10,6 @@ import type { RoleConfig } from '@/lib/schemas';
 import { existsSync, readFileSync } from 'fs';
 import {
   appendSpecCodingRevision,
-  loadLatestCreationSessionByFilename,
-  updateCreationSession,
 } from '@/lib/spec-coding-store';
 import {
   appendMemoryEntries,
@@ -89,25 +87,10 @@ async function applySupervisorSpecCodingRevision(input: {
     input.command.impact?.length ? `影响范围: ${input.command.impact.join('；')}` : '',
   ].filter(Boolean).join('\n');
 
-  let target: 'creation' | 'run' | 'both' = 'creation';
+  let target: 'run' = 'run';
   let applied = false;
 
   const configFile = typeof input.workflowContext.configFile === 'string' ? input.workflowContext.configFile : '';
-  if (configFile) {
-    const creationSession = await loadLatestCreationSessionByFilename(configFile);
-    if (creationSession?.specCoding) {
-      await updateCreationSession(creationSession.id, {
-        specCoding: appendSpecCodingRevision(creationSession.specCoding, {
-          summary,
-          createdBy: input.supervisorAgent,
-          status: creationSession.specCoding.status,
-          progressSummary: summary,
-        }),
-      });
-      applied = true;
-    }
-  }
-
   const runId = typeof input.workflowContext.runId === 'string' ? input.workflowContext.runId : '';
   if (runId) {
     const manager = await workflowRegistry.getRunningManager(configFile);
@@ -120,7 +103,7 @@ async function applySupervisorSpecCodingRevision(input: {
         affectedArtifacts: input.command.affectedArtifacts || [],
         impact: input.command.impact || [],
       });
-      target = applied ? 'both' : 'run';
+      target = 'run';
       applied = true;
     } else {
       const runState = await loadRunState(runId);
@@ -140,7 +123,7 @@ async function applySupervisorSpecCodingRevision(input: {
           impact: input.command.impact || [],
         };
         await saveRunState(runState);
-        target = applied ? 'both' : 'run';
+        target = 'run';
         applied = true;
       }
     }
