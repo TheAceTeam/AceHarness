@@ -1492,6 +1492,11 @@ export default function WorkbenchPage() {
     if (detail?.mode !== 'state-machine' || detail?.currentState !== '__human_approval__') {
       return false;
     }
+    // 已停止的工作流不恢复人工审查弹框
+    const detailStatus = detail?.status || detail?.workflowStatus;
+    if (detailStatus && detailStatus !== 'running' && detailStatus !== 'paused') {
+      return false;
+    }
 
     const approvalTransition = (detail.stateHistory || []).findLast?.((item: any) => item.to === '__human_approval__');
     const currentStateName = approvalTransition?.from || '未知状态';
