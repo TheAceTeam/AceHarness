@@ -56,6 +56,41 @@ function augmentPathForSpawn(existingPath: string | undefined): string {
     process.platform === 'win32' ? [] : ['/root/.local/bin', '/usr/local/bin'];
   return [existingPath || '', ...extra].filter(Boolean).join(pathDelimiter);
 }
+
+/** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
+function escapeWinCmdToken(s: string): string {
+  if (s === '') return '""';
+  if (/[\s"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/**
+ * Spawn ACP CLI. On Windows, plain `spawn('codegenie', …)` often fails to resolve npm `.cmd` shims;
+ * use `shell: true` so `codegenie.cmd` / PATH behave like an interactive terminal.
+ */
+function spawnAcpCli(
+  engineType: string,
+  command: string,
+  argv: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv },
+): ChildProcess {
+  if (process.platform !== 'win32') {
+    return spawn(command, argv, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+  const line = [command, ...argv].map(escapeWinCmdToken).join(' ');
+  console.log(`[${engineType}] win32 shell spawn (cmd): ${line}`);
+  return spawn(line, {
+    shell: true,
+    windowsHide: true,
+    cwd: opts.cwd,
+    env: opts.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
 // ============================================================================
 // Unified ACP Engine
 // ============================================================================
@@ -79,14 +114,15 @@ export class ACPEngine extends EventEmitter {
     const args = this.buildCommandArgs();
     console.log(`[${this.config.engineType}] spawning: ${this.config.command} ${args.join(' ')}`);
 
-    this.process = spawn(this.config.command, args, {
+    const childEnv = {
+      ...process.env,
+      PATH: augmentPathForSpawn(process.env.PATH),
+      ...this.config.env,
+    };
+
+    this.process = spawnAcpCli(this.config.engineType, this.config.command, args, {
       cwd: this.config.workingDirectory,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: augmentPathForSpawn(process.env.PATH),
-        ...this.config.env,
-      },
+      env: childEnv,
     });
 
     if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
