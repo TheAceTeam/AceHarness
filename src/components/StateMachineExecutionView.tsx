@@ -112,6 +112,7 @@ interface StateMachineExecutionViewProps {
   overviewFooter?: ReactNode;
   supervisorInteractionPanel?: ReactNode;
   activeTabOverride?: string | null;
+  hasPendingHumanQuestion?: boolean;
 
   // 回调
   onStateClick?: (stateName: string) => void;
@@ -140,6 +141,7 @@ export default function StateMachineExecutionView({
   overviewFooter,
   supervisorInteractionPanel,
   activeTabOverride,
+  hasPendingHumanQuestion,
   onStateClick,
   onStepClick,
   onForceTransition,
@@ -431,9 +433,12 @@ export default function StateMachineExecutionView({
             <GitBranch className="w-4 h-4" />
             <span>状态图</span>
           </TabsTrigger>
-          <TabsTrigger value="supervisor" className="flex items-center gap-2">
+          <TabsTrigger value="supervisor" className={`flex items-center gap-2 ${hasPendingHumanQuestion ? 'text-orange-500 animate-pulse' : ''}`}>
             <MessageSquare className="w-4 h-4" />
             <span>Supervisor</span>
+            {hasPendingHumanQuestion && (
+              <span className="h-2 w-2 rounded-full bg-orange-500" />
+            )}
           </TabsTrigger>
         </TabsList>
 
