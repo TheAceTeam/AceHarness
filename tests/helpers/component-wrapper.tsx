@@ -1,5 +1,6 @@
 import React, { type ReactNode } from 'react';
 import { render, type RenderResult } from '@testing-library/react';
+import { vi } from 'vitest';
 
 /**
  * Default mock return value for useChat().

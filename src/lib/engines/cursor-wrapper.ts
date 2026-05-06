@@ -13,7 +13,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
@@ -203,7 +203,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         output += `\n💻 执行命令: \`${cmd}\`\n`;
       } else {
         output += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-        output += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+        output += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
       }
     } else if (rawInput.pattern && rawInput.path) {
       output += `\n🔍 搜索: \`${rawInput.pattern}\` in \`${rawInput.path}\`\n`;

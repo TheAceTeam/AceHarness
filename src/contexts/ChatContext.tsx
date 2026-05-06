@@ -428,7 +428,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         ...s,
         messages: s.messages.filter(m => !(m.role === 'assistant' && !m.content && !m.actions?.length && !m.cards?.length)),
       };
-      setActiveSession(reparseSession(cleaned));
+      const reparsedSession = reparseSession(cleaned);
+      setActiveSession(reparsedSession);
+      setSessions((list) => {
+        const summary: SessionSummary = {
+          id: reparsedSession.id,
+          title: reparsedSession.title,
+          model: reparsedSession.model,
+          createdAt: reparsedSession.createdAt,
+          updatedAt: reparsedSession.updatedAt,
+          messageCount: reparsedSession.messages.length,
+          lastMessage: reparsedSession.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+          creationSession: reparsedSession.creationSession,
+          workflowBinding: reparsedSession.workflowBinding,
+          agentBinding: reparsedSession.agentBinding,
+          sessionWorkbenchState: reparsedSession.sessionWorkbenchState,
+        };
+        const exists = list.some((item) => item.id === reparsedSession.id);
+        return exists
+          ? list.map((item) => item.id === reparsedSession.id ? { ...item, ...summary } : item)
+          : [summary, ...list];
+      });
       // Restore per-session engine & model selections
       if (cleaned.engine) {
         setEngineState(cleaned.engine);
@@ -552,6 +572,59 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       } catch { /* recovery is best-effort */ }
     });
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionId || !activeSession?.workflowBinding) return;
+
+    let cancelled = false;
+    const refreshWorkflowSession = async () => {
+      if (activeEventSourceRef.current || activeChatIdRef.current) return;
+      const latest = await apiLoadSession(activeSessionId).catch(() => null);
+      if (cancelled || !latest) return;
+
+      const current = activeSessionRef.current;
+      if (
+        current?.id === latest.id
+        && latest.updatedAt <= current.updatedAt
+        && (latest.messages?.length || 0) <= current.messages.length
+      ) {
+        return;
+      }
+
+      const cleaned = {
+        ...latest,
+        messages: latest.messages.filter(m => !(m.role === 'assistant' && !m.content && !m.actions?.length && !m.cards?.length)),
+      };
+      const reparsed = reparseSession(cleaned);
+      setActiveSession(reparsed);
+      setSessions((list) => {
+        const summary: SessionSummary = {
+          id: reparsed.id,
+          title: reparsed.title,
+          model: reparsed.model,
+          createdAt: reparsed.createdAt,
+          updatedAt: reparsed.updatedAt,
+          messageCount: reparsed.messages.length,
+          lastMessage: reparsed.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+          creationSession: reparsed.creationSession,
+          workflowBinding: reparsed.workflowBinding,
+          agentBinding: reparsed.agentBinding,
+          sessionWorkbenchState: reparsed.sessionWorkbenchState,
+        };
+        const exists = list.some((item) => item.id === reparsed.id);
+        return exists
+          ? list.map((item) => item.id === reparsed.id ? { ...item, ...summary } : item)
+          : [summary, ...list];
+      });
+    };
+
+    refreshWorkflowSession();
+    const timer = window.setInterval(refreshWorkflowSession, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeSession?.workflowBinding?.configFile, activeSession?.workflowBinding?.runId, activeSessionId, reparseSession]);
 
   // Debounced persist to server
   const pendingSessionRef = useRef<ChatSession | null>(null);
@@ -1059,6 +1132,78 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 ...m,
                 role: result.isError ? 'error' as const : 'assistant' as const,
                 content: result.isError ? (result.error || result.output || 'Agent 对话失败') : (result.output || ''),
+                engine: result.engine || m.engine,
+                model: result.model || m.model,
+              }
+            : m),
+        }));
+        setLoading(false);
+        setStreamingMessageId(null);
+        return;
+      }
+
+      const workflowBinding = previousSession?.workflowBinding;
+      if (workflowBinding?.supervisorAgent) {
+        const result = await fetch(`/api/agents/${encodeURIComponent(workflowBinding.supervisorAgent)}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({
+            message: text,
+            mode: 'workflow-chat',
+            sessionId: shouldStartFresh ? undefined : (activeSessionRef.current?.backendSessionId || workflowBinding.supervisorSessionId || undefined),
+            workingDirectory: workingDirectory || undefined,
+            workflowContext: {
+              configFile: workflowBinding.configFile,
+              runId: workflowBinding.runId,
+              supervisorAgent: workflowBinding.supervisorAgent,
+              supervisorSessionId: workflowBinding.supervisorSessionId || null,
+            },
+          }),
+        }).then(async (response) => {
+          const data = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(data?.error || 'Supervisor 对话失败');
+          }
+          return data as {
+            output: string;
+            sessionId?: string | null;
+            engine?: string;
+            model?: string;
+            isError?: boolean;
+            error?: string | null;
+            specCodingRevision?: {
+              applied: boolean;
+              summary: string;
+            } | null;
+          };
+        });
+
+        const responseContent = result.specCodingRevision?.applied
+          ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 Spec：${result.specCodingRevision.summary}`
+          : (result.output || result.error || '无输出');
+        const parsed = result.isError ? { text: responseContent, cards: [] as any[], sidebarHints: [] as HomeSidebarHint[] } : parseActions(responseContent);
+        const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+
+        updateActiveSession((s) => ({
+          ...s,
+          backendSessionId: result.sessionId || s.backendSessionId,
+          workflowBinding: s.workflowBinding ? {
+            ...s.workflowBinding,
+            supervisorSessionId: result.sessionId || s.workflowBinding.supervisorSessionId || null,
+            updatedAt: Date.now(),
+          } : s.workflowBinding,
+          sessionWorkbenchState: latestSidebarHint ? {
+            ...(s.sessionWorkbenchState || {}),
+            homeSidebar: latestSidebarHint,
+          } : s.sessionWorkbenchState,
+          updatedAt: Date.now(),
+          messages: s.messages.map((m) => m.id === assistantMsgId
+            ? {
+                ...m,
+                role: result.isError ? 'error' as const : 'assistant' as const,
+                content: parsed.text,
+                rawContent: parsed.cards.length > 0 ? responseContent : m.rawContent,
+                cards: parsed.cards.length > 0 ? parsed.cards : undefined,
                 engine: result.engine || m.engine,
                 model: result.model || m.model,
               }

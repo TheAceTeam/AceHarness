@@ -45,7 +45,7 @@ import type { EngineStreamEvent } from './engines/engine-interface';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from './runtime-configs';
 import { getRuntimeSkillsDirPath } from './runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from './app-paths';
-import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
+import { appendChatSessionMessage, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
 import {
   DEFAULT_SUPERVISOR_NAME,
   ensureDefaultSupervisorConfig,
@@ -741,6 +741,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       workingDirectory: this.getWorkingDirectory(),
       supervisorAgent: this.currentSupervisorAgent,
       supervisorSessionId: supervisorAgent?.sessionId || null,
+      workflowFrontendSessionId: this._frontendSessionId || null,
       attachedAgentSessions: Object.fromEntries(
         this.agents
           .filter((agent) => Boolean(agent.sessionId))
@@ -1105,6 +1106,34 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return parts.filter(Boolean).join('\n') || '已确认';
   }
 
+  private async appendSupervisorChatEvent(input: {
+    type: string;
+    title: string;
+    body?: string;
+    tags?: string[];
+    dedupeKey?: string;
+  }): Promise<void> {
+    if (!this._frontendSessionId) return;
+    const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
+    const tags = ['supervisor', ...(input.tags || [])].filter(Boolean);
+    await appendChatSessionMessage(this._frontendSessionId, {
+      role: 'assistant',
+      content: [
+        `<workflow-event type="${input.type}" tags="${tags.join(',')}">`,
+        input.title,
+        this.currentRunId ? `- Run ID: ${this.currentRunId}` : '',
+        this.currentConfigFile ? `- 配置文件: ${this.currentConfigFile}` : '',
+        `- Supervisor: ${this.currentSupervisorAgent}`,
+        supervisorAgent?.sessionId ? `- Supervisor Session: ${supervisorAgent.sessionId}` : '',
+        input.body || '',
+        '</workflow-event>',
+      ].filter(Boolean).join('\n'),
+    }, {
+      backendSessionId: supervisorAgent?.sessionId || undefined,
+      dedupeKey: input.dedupeKey,
+    }).catch(() => {});
+  }
+
   async createHumanQuestion(input: Partial<HumanQuestion> & {
     title: string;
     message: string;
@@ -1132,6 +1161,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       createdAt: input.createdAt || new Date().toISOString(),
       supervisorAgent: input.supervisorAgent || this.currentSupervisorAgent,
       supervisorSessionId: input.supervisorSessionId ?? supervisorAgent?.sessionId ?? null,
+      workflowFrontendSessionId: input.workflowFrontendSessionId ?? this._frontendSessionId ?? null,
       currentState: input.currentState ?? this.currentState,
       previousState: input.previousState,
       suggestedNextState: input.suggestedNextState,
@@ -1153,6 +1183,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       timestamp: question.createdAt,
     };
     await this.persistState();
+    await this.appendSupervisorChatEvent({
+      type: 'human-question',
+      title: `等待人工回复：${question.title}`,
+      body: question.message,
+      tags: ['human', 'approval', question.kind],
+      dedupeKey: `workflow-human-question-${question.id}`,
+    });
     this.emit('human-question-required', { question, humanQuestions: this.humanQuestions });
     this.emit('status', { status: this.status, pendingHumanQuestion: question, currentConfigFile: this.currentConfigFile });
     return question;
@@ -1197,6 +1234,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     await this.persistState();
+    await this.appendSupervisorChatEvent({
+      type: 'human-answer',
+      title: `人工已回复：${existing.title}`,
+      body: answerText,
+      tags: ['human', 'answered'],
+      dedupeKey: `workflow-human-answer-${questionId}-${now}`,
+    });
     this.emit('human-question-answered', { question: updated, answer });
     this.emit('status', { status: this.status, pendingHumanQuestion: null, currentConfigFile: this.currentConfigFile });
     const waiter = this.humanQuestionWaiters.get(questionId);
@@ -1420,6 +1464,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         supervisorAgent: this.currentSupervisorAgent,
         supervisorSessionId,
         attachedAgentSessions,
+        workflowFrontendSessionId: this._frontendSessionId || null,
         latestSupervisorReview: this.latestSupervisorReview,
         humanQuestions: this.humanQuestions,
         pendingHumanQuestionId: this.pendingHumanQuestionId,
@@ -1952,6 +1997,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       round: this.transitionCount,
       timestamp,
       stateName: state.name,
+    });
+    await this.appendSupervisorChatEvent({
+      type,
+      title: type === 'checkpoint-advice'
+        ? `Supervisor 检查点建议：${state.name}`
+        : `Supervisor 阶段审阅：${state.name}`,
+      body: response,
+      tags: [type, state.name],
+      dedupeKey: `workflow-supervisor-review-${this.currentRunId}-${state.name}-${type}-${timestamp}`,
     });
     this.emit('supervisor-review', this.latestSupervisorReview);
     if (this.currentRunSpecCoding) {
@@ -2599,6 +2653,21 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const updated = this.applyRunSpecCodingTaskUpdatesFromOutput(`<spec-tasks>${block}</spec-tasks>`, updatedBy);
     if (updated <= 0) return 0;
 
+    // Inject visible alert into stream so user sees task progress update
+    const taskSummary = this.currentRunSpecCoding?.tasks
+      .filter(t => t.status === 'in-progress' || t.status === 'completed')
+      .slice(-updated)
+      .map(t => `${t.status === 'completed' ? '✅' : '🔄'} ${t.title}`)
+      .join(', ') || `${updated} 项`;
+    const alertMsg = `\n\n> 📋 **tasks.md 已更新**: ${taskSummary}\n\n`;
+    processManager.appendStreamContent(processId, alertMsg);
+    processManager.emit('stream', {
+      id: processId,
+      step: '',
+      delta: alertMsg,
+      total: '',
+    });
+
     await this.persistState();
     this.emit('status', {
       status: this.status,
@@ -2654,6 +2723,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       state: state.name,
       step: step.name,
       agent: step.agent,
+    });
+    await this.appendSupervisorChatEvent({
+      type: 'step-start',
+      title: `步骤开始：${state.name} / ${step.name}`,
+      body: `- Agent: ${runtimeAgentName}`,
+      tags: ['task', 'running', runtimeAgentName],
+      dedupeKey: `workflow-step-start-${stepId}`,
     });
 
     try {
@@ -2729,6 +2805,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
         costUsd: stepResult.costUsd,
         durationMs: stepResult.durationMs,
       });
+      await this.appendSupervisorChatEvent({
+        type: 'step-complete',
+        title: `步骤完成：${state.name} / ${step.name}`,
+        body: [
+          `- Agent: ${runtimeAgentName}`,
+          conclusion ? `- 结论: ${conclusion.slice(0, 1200)}` : '',
+        ].filter(Boolean).join('\n'),
+        tags: ['task', 'completed', runtimeAgentName],
+        dedupeKey: `workflow-step-complete-${stepId}`,
+      });
 
       // 记录步骤完成的流转线
       const currentStepIndex = state.steps.findIndex(s => s.name === step.name);
@@ -2795,6 +2881,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       this.emit('agents', { agents: this.agents });
       await this.persistState();
+      await this.appendSupervisorChatEvent({
+        type: 'step-failed',
+        title: `步骤失败：${state.name} / ${step.name}`,
+        body: [
+          `- Agent: ${runtimeAgentName}`,
+          `- 错误: ${errorMsg}`,
+        ].join('\n'),
+        tags: ['task', 'failed', runtimeAgentName],
+        dedupeKey: `workflow-step-failed-${stepId}`,
+      });
 
       // Save error output
       if (this.currentRunId) {

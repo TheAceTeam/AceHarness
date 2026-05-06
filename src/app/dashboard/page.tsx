@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs } from 'lucide-react';
 
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -267,6 +267,68 @@ export default function DashboardPage() {
     </div>
   );
 
+  const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
+
+  const UserTokenPieChart = ({ title, items }: { title: string; items: TokenRankingItem[] }) => {
+    const pieData = items.map((item) => ({
+      name: item.name || item.configFile || '-',
+      value: item.totalTokens,
+      cost: item.cost,
+      runs: item.runs,
+    }));
+    const total = pieData.reduce((sum, d) => sum + d.value, 0);
+
+    return (
+      <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <Cpu className="w-5 h-5 text-primary" />
+          {title}
+        </h3>
+        {items.length > 0 ? (
+          <div className="flex items-center gap-4">
+            <div className="w-[180px] h-[180px] shrink-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={80}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {pieData.map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value: any) => formatTokens(Number(value))}
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex-1 min-w-0 space-y-1.5">
+              {pieData.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                  <span className="truncate flex-1">{d.name}</span>
+                  <span className="shrink-0 font-medium">{formatTokens(d.value)}</span>
+                  <span className="shrink-0 text-muted-foreground">{total > 0 ? Math.round((d.value / total) * 100) : 0}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
+            {t('common.noData')}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       {/* Animated background */}
@@ -345,27 +407,11 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* Token Ranking */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
-          >
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-primary" />
-              {t('dashboard.tokenRanking.title')}
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <TokenRankingList title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
-              <TokenRankingList title={t('dashboard.tokenRanking.byWorkflow')} items={tokenRankingByWorkflow} />
-            </div>
-          </motion.div>
-
           {/* Quick Actions */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
+            transition={{ delay: 0.15 }}
           >
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Zap className="w-5 h-5 text-primary" />
@@ -442,6 +488,22 @@ export default function DashboardPage() {
                   onClick={() => router.push('/api-docs')}
                   color="from-green-500 to-green-600"
                 />
+            </div>
+          </motion.div>
+
+          {/* Token Ranking */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-primary" />
+              {t('dashboard.tokenRanking.title')}
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
+              <TokenRankingList title={t('dashboard.tokenRanking.byWorkflow')} items={tokenRankingByWorkflow} />
             </div>
           </motion.div>
 

@@ -9,10 +9,49 @@ import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
 import { createRun } from '@/lib/run-store';
 import { saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
 import { loadCreationSession, cloneSpecCodingForRun } from '@/lib/spec-coding-store';
-import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
+import { appendChatSessionMessage, loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
 import { countWorkflowSteps } from '@/lib/workflow-step-counter';
 
 export { countWorkflowSteps } from '@/lib/workflow-step-counter';
+
+async function ensureWorkflowChatSession(input: {
+  frontendSessionId?: string;
+  configFile: string;
+  workflowName?: string;
+  supervisorAgent?: string;
+  userId: string;
+}): Promise<string> {
+  if (input.frontendSessionId) {
+    const existing = await loadChatSession(input.frontendSessionId).catch(() => null);
+    if (existing) return input.frontendSessionId;
+  }
+
+  const now = Date.now();
+  const id = `workflow-${now}-${randomUUID().slice(0, 8)}`;
+  const title = `${input.workflowName || input.configFile} · Supervisor`;
+  await saveChatSession({
+    id,
+    title,
+    model: 'claude-sonnet-4-6',
+    messages: [{
+      id: `${now}-workflow-run-created`,
+      role: 'assistant',
+      content: [
+        '<workflow-event type="run-created" tags="workflow,supervisor">',
+        `工作流运行会话已创建。`,
+        `- 配置文件: ${input.configFile}`,
+        `- Supervisor: ${input.supervisorAgent || 'default-supervisor'}`,
+        '</workflow-event>',
+      ].join('\n'),
+      timestamp: now,
+    }],
+    createdAt: now,
+    updatedAt: now,
+    createdBy: input.userId,
+    visibility: 'public',
+  });
+  return id;
+}
 
 async function startRehearsalRun(input: {
   configFile: string;
@@ -72,6 +111,7 @@ async function startRehearsalRun(input: {
     supervisorAgent: config?.workflow?.supervisor?.agent || 'default-supervisor',
     supervisorSessionId: null,
     attachedAgentSessions: {},
+    workflowFrontendSessionId: input.frontendSessionId || null,
     qualityChecks: input.preflightChecks,
     latestSupervisorReview: {
       type: 'state-review',
@@ -147,10 +187,21 @@ export async function POST(request: NextRequest) {
       preflightChecks = preflight.checks;
     }
 
+    const configPath = await getRuntimeWorkflowConfigPath(configFile);
+    const config = parse(await readFile(configPath, 'utf-8')) as any;
+    const supervisorAgent = config?.workflow?.supervisor?.agent || 'default-supervisor';
+    const workflowChatSessionId = await ensureWorkflowChatSession({
+      frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
+      configFile,
+      workflowName: config?.workflow?.name,
+      supervisorAgent,
+      userId: user.id,
+    });
+
     if (rehearsal) {
       const result = await startRehearsalRun({
         configFile,
-        frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
+        frontendSessionId: workflowChatSessionId,
         creationSessionId: typeof creationSessionId === 'string' ? creationSessionId : undefined,
         userId: user.id,
         preflightChecks: preflightChecks || [],
@@ -158,6 +209,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: '演练模式已完成',
+        frontendSessionId: workflowChatSessionId,
         rehearsal: {
           enabled: true,
           runId: result.runId,
@@ -181,8 +233,18 @@ export async function POST(request: NextRequest) {
     // Pass userId for createdBy tracking
     (manager as any)._createdBy = user.id;
     (manager as any)._userPersonalDir = user.personalDir;
-    (manager as any)._frontendSessionId = typeof frontendSessionId === 'string' ? frontendSessionId : undefined;
+    (manager as any)._frontendSessionId = workflowChatSessionId;
     (manager as any)._creationSessionId = typeof creationSessionId === 'string' ? creationSessionId : undefined;
+    await appendChatSessionMessage(workflowChatSessionId, {
+      role: 'assistant',
+      content: [
+        '<workflow-event type="run-starting" tags="workflow,run,supervisor">',
+        `工作流开始启动。`,
+        `- 配置文件: ${configFile}`,
+        `- Supervisor: ${supervisorAgent}`,
+        '</workflow-event>',
+      ].join('\n'),
+    }, { dedupeKey: `${Date.now()}-workflow-run-starting` }).catch(() => {});
     (manager as any).start(configFile, undefined, preflightChecks).catch((err: any) => {
       console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
       // Ensure status reflects the failure so frontend can detect it
@@ -196,6 +258,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: '工作流已启动',
+      frontendSessionId: workflowChatSessionId,
     });
   } catch (error: any) {
     return NextResponse.json(

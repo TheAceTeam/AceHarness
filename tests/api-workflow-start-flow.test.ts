@@ -30,8 +30,11 @@ vi.mock('@/lib/spec-coding-store', () => ({
 }));
 
 vi.mock('@/lib/chat-persistence', () => ({
-  updateChatSessionCreationBinding: vi.fn(),
-  updateChatSessionWorkflowBinding: vi.fn(),
+  appendChatSessionMessage: vi.fn().mockResolvedValue(undefined),
+  loadChatSession: vi.fn().mockResolvedValue(null),
+  saveChatSession: vi.fn().mockResolvedValue(undefined),
+  updateChatSessionCreationBinding: vi.fn().mockResolvedValue(undefined),
+  updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/runtime-configs', () => ({

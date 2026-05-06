@@ -777,6 +777,7 @@ export class WorkflowManager extends EventEmitter {
         phaseContexts: this.phaseContexts.size > 0 ? Object.fromEntries(this.phaseContexts) : undefined,
         workingDirectory: this.getWorkingDirectory() || undefined,
         attachedAgentSessions,
+        workflowFrontendSessionId: this._frontendSessionId || null,
       };
       await saveRunState(state);
       if (this._frontendSessionId) {
@@ -2817,6 +2818,7 @@ export class WorkflowManager extends EventEmitter {
       workflow: this.currentWorkflow,
       iterationStates: Object.fromEntries(this.iterationStates),
       workingDirectory: this.getWorkingDirectory(),
+      workflowFrontendSessionId: this._frontendSessionId || null,
     };
   }
 

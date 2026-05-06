@@ -141,7 +141,7 @@ describe('isSafeAction', () => {
     const destructiveActions: ActionBlock[] = [
       { type: 'config.delete', params: {}, description: 'Delete config' },
       { type: 'agent.delete', params: {}, description: 'Delete agent' },
-      { type: 'run.delete', params: {}, description: 'Delete run' },
+      { type: 'schedule.delete', params: {}, description: 'Delete schedule' },
     ];
 
     for (const action of destructiveActions) {

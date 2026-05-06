@@ -22,6 +22,11 @@ import 'reactflow/dist/style.css';
 import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/schemas';
 import { Badge } from './ui/badge';
 
+// 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，
+// 进而触发 useMemo 重算与 setNodes 写入新对象 → Maximum update depth exceeded
+const EMPTY_COMPLETED_STEPS: string[] = [];
+const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
+
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {
   if (name === '__origin__') return '开始';
@@ -30,7 +35,7 @@ function formatStateName(name: string): string {
 }
 
 interface SupervisorFlowRecord {
-  type: 'question' | 'decision';
+  type: string;
   from: string;
   to: string;
   question?: string;
@@ -38,6 +43,8 @@ interface SupervisorFlowRecord {
   round: number;
   timestamp: string;
 }
+
+const EMPTY_SUPERVISOR_FLOW: SupervisorFlowRecord[] = [];
 
 interface StateMachineDiagramProps {
   states: StateMachineState[];
@@ -178,14 +185,63 @@ function calculateNodeLayout(states: StateMachineState[], useAutoLayout: boolean
 }
 
 // 自定义状态节点组件
+const stateDiagramJoinPolicyLabels: Record<string, string> = {
+  all: '等待全部',
+  any: '任一完成',
+  quorum: '达到数量',
+  manual: '人工确认',
+};
+
+function getStateDiagramParallelGroup(step: any) {
+  return step?.parallelGroup || step?.concurrency?.groupId || '';
+}
+
+function buildStateDiagramStepGroups(steps: any[]) {
+  const groups: Array<{ id?: string; steps: any[] }> = [];
+  steps.forEach((step) => {
+    const groupId = getStateDiagramParallelGroup(step);
+    const last = groups[groups.length - 1];
+    if (groupId && last?.id === groupId) {
+      last.steps.push(step);
+      return;
+    }
+    groups.push({ id: groupId || undefined, steps: [step] });
+  });
+  return groups;
+}
+
 function StateNode({ data }: any) {
   const { state, isInitial, isFinal, isCurrent, currentStep, completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
+  const getStepStatus = (step: any) => {
+    const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
+    const isRunningStep = currentStep === step.name || currentStep === `${state.name}-${step.name}`;
+    return { isDone, isRunningStep };
+  };
+  const renderStepPill = (step: any, idx: number, compact = false) => {
+    const { isDone, isRunningStep } = getStepStatus(step);
+    return (
+      <div
+        key={`${step.name}-${idx}`}
+        onClick={(e) => { e.stopPropagation(); onStepClick?.(step); }}
+        className={`
+          flex items-center gap-1 rounded cursor-pointer transition-colors
+          ${compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
+          ${isRunningStep ? 'bg-blue-500 text-white' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
+        `}
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
+          {isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : step.role === 'attacker' ? 'swords' : step.role === 'judge' ? 'gavel' : 'shield'}
+        </span>
+        <span className="truncate flex-1">{step.name}</span>
+      </div>
+    );
+  };
 
   return (
     <div
       className={`
-        px-3 py-2 rounded-lg border-2 min-w-[200px] transition-all
+        px-3 py-2 rounded-lg border-2 min-w-[220px] max-w-[320px] transition-all
         ${isCurrent ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg' : isHumanCheckpoint ? 'border-orange-400 bg-orange-50 dark:bg-orange-950' : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800'}
         ${isInitial ? 'ring-2 ring-green-400' : ''}
         ${isFinal ? 'ring-2 ring-red-400' : ''}
@@ -220,22 +276,31 @@ function StateNode({ data }: any) {
 
       {/* 步骤列表 */}
       <div className="space-y-0.5 mt-1.5">
-        {(state.steps || []).map((step: any, idx: number) => {
-          const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
-          const isRunningStep = currentStep === step.name || currentStep === `${state.name}-${step.name}`;
+        {buildStateDiagramStepGroups(state.steps || []).map((group, groupIndex) => {
+          const isParallel = !!group.id && group.steps.length > 1;
+          if (!isParallel) {
+            return renderStepPill(group.steps[0], groupIndex);
+          }
+          const mode = group.steps[0]?.concurrency?.joinPolicy?.mode || 'all';
+          const hasRunningStep = group.steps.some((step) => getStepStatus(step).isRunningStep);
           return (
             <div
-              key={idx}
-              onClick={(e) => { e.stopPropagation(); onStepClick?.(step); }}
+              key={`${group.id}-${groupIndex}`}
               className={`
-                flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors
-                ${isRunningStep ? 'bg-blue-500 text-white' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
+                rounded-md border p-1
+                ${hasRunningStep ? 'border-blue-400 bg-blue-500/10 shadow-sm' : 'border-cyan-300 bg-cyan-500/10 dark:border-cyan-800'}
               `}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: 11 }}>
-                {isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : step.role === 'attacker' ? 'swords' : step.role === 'judge' ? 'gavel' : 'shield'}
-              </span>
-              <span className="truncate flex-1">{step.name}</span>
+              <div className="mb-1 flex items-center justify-between gap-1 text-[9px] font-medium text-cyan-700 dark:text-cyan-300">
+                <span className="flex items-center gap-0.5">
+                  <span className="material-symbols-outlined" style={{ fontSize: 10 }}>lan</span>
+                  并发
+                </span>
+                <span className="truncate text-muted-foreground">{stateDiagramJoinPolicyLabels[mode] || mode}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-0.5">
+                {group.steps.map((step, idx) => renderStepPill(step, idx, true))}
+              </div>
             </div>
           );
         })}
@@ -354,11 +419,11 @@ function StateMachineDiagramInner({
   onForceTransition,
   currentState,
   currentStep,
-  completedSteps = [],
-  stateHistory = [],
+  completedSteps = EMPTY_COMPLETED_STEPS,
+  stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
   focusedState,
-  supervisorFlow = [],
+  supervisorFlow = EMPTY_SUPERVISOR_FLOW,
 }: StateMachineDiagramProps) {
   const [showAllEdges, setShowAllEdges] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);

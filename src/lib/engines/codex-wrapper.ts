@@ -10,7 +10,7 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { extname, join } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { commandExists } from '../command-exists';
-import { fenced, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -131,7 +131,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     const summary = cmdLines.length <= 1
       ? '💻 执行命令'
       : `💻 执行命令 (${cmdLines.length} 行)`;
-    return `\n\n**🔧 bash**\n\n<details><summary>${summary}</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+    return `\n\n**🔧 bash**\n\n<details><summary>${summary}</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
   }
 
   private formatCommandResult(output: string, exitCode?: number): string {

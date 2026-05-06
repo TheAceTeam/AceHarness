@@ -28,7 +28,7 @@ interface StateMachineRuntimePanelProps {
   issueTracker: Issue[];
   transitionCount: number;
   maxTransitions: number;
-  status: 'idle' | 'running' | 'completed' | 'failed';
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'waiting' | 'stopped';
   startTime?: string | null;
   endTime?: string | null;
   onStateClick?: (stateName: string) => void;

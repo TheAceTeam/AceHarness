@@ -3,7 +3,7 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { loadRunState } from '@/lib/run-state-persistence';
-import { loadCreationSession } from '@/lib/spec-coding-store';
+import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
 import {
   findRelevantWorkflowExperiences,
   listWorkflowExperiences,
@@ -184,7 +184,7 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
   status = enrichPersistentSpecStatus(status, runtimeMeta);
   const creationSession = status?.creationSessionId
     ? await loadCreationSession(status.creationSessionId).catch(() => null)
-    : null;
+    : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
   const historicalExperiences = configFile
     ? await listWorkflowExperiences({ configFile, limit: 5 }).catch(() => [])
     : [];
@@ -326,6 +326,12 @@ export async function GET(request: NextRequest) {
           const pendingHumanQuestion = runState.pendingHumanQuestionId
             ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
             : runState.pendingCheckpoint?.humanQuestion || null;
+          const pendingQuestionWithSession = pendingHumanQuestion
+            ? {
+                ...pendingHumanQuestion,
+                workflowFrontendSessionId: pendingHumanQuestion.workflowFrontendSessionId ?? runState.workflowFrontendSessionId ?? null,
+              }
+            : null;
           const restoredStatus = {
             ...runState,
             runId: runState.runId,
@@ -338,7 +344,7 @@ export async function GET(request: NextRequest) {
             completedSteps: runState.completedSteps || [],
             failedSteps: runState.failedSteps || [],
             workingDirectory: runState.workingDirectory || null,
-            pendingHumanQuestion,
+            pendingHumanQuestion: pendingQuestionWithSession,
           };
           return NextResponse.json(await withCreationSession(restoredStatus, configFile));
         }

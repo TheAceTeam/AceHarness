@@ -21,7 +21,10 @@ async function listPersistedQuestions(filters: {
     const state = await loadRunState(entry.name);
     if (!state?.humanQuestions?.length) continue;
     if (filters.configFile && state.configFile !== filters.configFile) continue;
-    questions.push(...state.humanQuestions);
+    questions.push(...state.humanQuestions.map((question) => ({
+      ...question,
+      workflowFrontendSessionId: question.workflowFrontendSessionId ?? state.workflowFrontendSessionId ?? null,
+    })));
   }
   return questions;
 }
@@ -49,8 +52,12 @@ export async function GET(request: NextRequest) {
 
     for (const { manager } of workflowRegistry.getRunningManagers()) {
       if (!isStateMachineManagerLike(manager)) continue;
+      const managerStatus = manager.getStatus();
       for (const question of manager.getHumanQuestions()) {
-        byId.set(question.id, question);
+        byId.set(question.id, {
+          ...question,
+          workflowFrontendSessionId: question.workflowFrontendSessionId ?? managerStatus.workflowFrontendSessionId ?? null,
+        });
       }
     }
 

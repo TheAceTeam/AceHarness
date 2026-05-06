@@ -1,6 +1,6 @@
 'use client';
 
-import type { HumanQuestion } from '@/lib/run-state-persistence';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 
 interface HumanQuestionInboxProps {
@@ -8,7 +8,9 @@ interface HumanQuestionInboxProps {
   title?: string;
   emptyText?: string;
   compact?: boolean;
-  onNavigate: (question: HumanQuestion) => void;
+  submittingQuestionId?: string | null;
+  onNavigate?: (question: HumanQuestion) => void;
+  onSubmit?: (question: HumanQuestion, answer: HumanQuestionAnswer) => Promise<void> | void;
 }
 
 export default function HumanQuestionInbox({
@@ -16,7 +18,9 @@ export default function HumanQuestionInbox({
   title = 'Supervisor 消息 / 待回答',
   emptyText = '暂无待回答的 Supervisor 消息。',
   compact = true,
+  submittingQuestionId,
   onNavigate,
+  onSubmit,
 }: HumanQuestionInboxProps) {
   return (
     <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
@@ -40,6 +44,8 @@ export default function HumanQuestionInbox({
               question={question}
               compact={compact}
               onNavigate={onNavigate}
+              submitting={submittingQuestionId === question.id}
+              onSubmit={onSubmit ? (answer) => onSubmit(question, answer) : undefined}
             />
           ))}
         </div>

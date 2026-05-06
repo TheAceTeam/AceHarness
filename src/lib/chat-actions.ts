@@ -251,11 +251,40 @@ function extractBalancedJson(str: string, start: number): string | null {
   return null;
 }
 
+/** Collect byte ranges of all fenced code blocks (``` or ~~~, 3+ chars) */
+function getFencedCodeBlockRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const fenceRegex = /^(`{3,}|~{3,})/gm;
+  let openFence: { marker: string; start: number } | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = fenceRegex.exec(markdown)) !== null) {
+    const marker = match[1];
+    if (!openFence) {
+      openFence = { marker: marker[0].repeat(marker.length), start: match.index };
+    } else if (marker[0] === openFence.marker[0] && marker.length >= openFence.marker.length) {
+      // Find end of closing fence line
+      const lineEnd = markdown.indexOf('\n', match.index + marker.length);
+      ranges.push([openFence.start, lineEnd === -1 ? markdown.length : lineEnd + 1]);
+      openFence = null;
+    }
+  }
+  // Unclosed fence extends to end
+  if (openFence) ranges.push([openFence.start, markdown.length]);
+  return ranges;
+}
+
+function isInsideCodeBlock(pos: number, ranges: Array<[number, number]>): boolean {
+  return ranges.some(([start, end]) => pos >= start && pos < end);
+}
+
 function getResultSections(markdown: string): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
   const sections: Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> = [];
+  const codeBlockRanges = getFencedCodeBlockRanges(markdown);
   const resultRegex = /<result>([\s\S]*?)<\/result>/g;
   let match: RegExpExecArray | null;
   while ((match = resultRegex.exec(markdown)) !== null) {
+    // Skip <result> tags that are inside fenced code blocks
+    if (isInsideCodeBlock(match.index, codeBlockRanges)) continue;
     const start = match.index;
     const end = start + match[0].length;
     const contentStart = start + '<result>'.length;

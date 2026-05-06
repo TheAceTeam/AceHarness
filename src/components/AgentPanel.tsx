@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Textarea } from '@/components/ui/textarea';
 import Markdown from '@/components/Markdown';
 import styles from '@/app/workbench/[config]/page.module.css';
 import { copyText } from '@/lib/clipboard';
@@ -66,15 +65,6 @@ interface AgentPanelProps {
   currentStepName?: string | null;
   onSelectPersistedStep?: (stepName: string) => void;
   onViewPersistedStepOutput?: (log: PersistedStepLog) => void;
-  chatMessages?: Array<{
-    id: string;
-    role: 'user' | 'assistant' | 'error';
-    content: string;
-    mode: 'standalone-chat' | 'workflow-chat';
-    timestamp: number;
-  }>;
-  chatLoading?: boolean;
-  onSendChat?: (input: { message: string; mode: 'workflow-chat' }) => Promise<void>;
   systemPrompt?: string;
   iterationPrompt?: string;
 }
@@ -92,15 +82,10 @@ export default function AgentPanel({
   currentStepName,
   onSelectPersistedStep,
   onViewPersistedStepOutput,
-  chatMessages = [],
-  chatLoading = false,
-  onSendChat,
   systemPrompt,
   iterationPrompt,
 }: AgentPanelProps) {
   const logsContainerRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
-  const [chatDraft, setChatDraft] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
   const agentLogs = logs.filter((log) => log.agent === agent.name);
   const relevantPersistedLogs = (selectedStepName
@@ -123,16 +108,6 @@ export default function AgentPanel({
     }
   }, [agentLogs.length]);
 
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [chatMessages.length]);
-
-  useEffect(() => {
-    setChatDraft('');
-  }, [agent.name]);
-
   const getTeamLabel = (team: string) => {
     const labels: Record<string, string> = { blue: 'Blue Team', red: 'Red Team', judge: 'Judge Team' };
     return labels[team] || team;
@@ -145,19 +120,6 @@ export default function AgentPanel({
 
   const copyOutput = async () => {
     if (agent.output) await copyText(agent.output);
-  };
-
-  const chatDisabledReason = agent.status === 'running'
-    ? 'Agent 正在执行中，当前不支持插入对话。'
-    : runStatus === 'preparing'
-      ? '工作流准备中，暂不能与 Agent 对话。'
-      : null;
-
-  const sendChat = async () => {
-    const message = chatDraft.trim();
-    if (!message || !onSendChat || chatLoading || chatDisabledReason) return;
-    await onSendChat({ message, mode: 'workflow-chat' });
-    setChatDraft('');
   };
 
   const formatTokens = (n: number) => {
@@ -259,64 +221,6 @@ export default function AgentPanel({
           <div className={`${styles.markdownContent} text-sm bg-muted p-3 rounded-md`}><Markdown>{stepSummary || agent.summary!}</Markdown></div>
         </div>
       )}
-
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-muted-foreground uppercase">角色对话</span>
-          <Badge variant="outline" className="text-[10px]">workflow-chat</Badge>
-        </div>
-        <div className="mb-2 rounded-md border bg-muted/30 p-2 text-[11px] text-muted-foreground">
-          对这个 Agent 的对话始终带当前 workflow、步骤、运行态与 SpecCoding 上下文，适合直接追问当前阶段、风险、下一步和具体执行判断。
-        </div>
-        {chatDisabledReason ? (
-          <div className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-300">
-            {chatDisabledReason}
-          </div>
-        ) : null}
-        <div ref={chatContainerRef} className="max-h-64 space-y-2 overflow-y-auto rounded-md border bg-background p-2">
-          {chatMessages.length === 0 ? (
-            <div className="py-6 text-center text-xs text-muted-foreground">
-              还没有对话记录
-            </div>
-          ) : chatMessages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`rounded-md p-2 text-xs ${
-                msg.role === 'user'
-                  ? 'ml-6 bg-primary/10'
-                  : msg.role === 'error'
-                    ? 'mr-6 border border-red-500/30 bg-red-500/10 text-red-200'
-                    : 'mr-6 bg-muted'
-              }`}
-            >
-              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-                <span>{msg.role === 'user' ? '你' : msg.role === 'assistant' ? agent.name : '错误'}</span>
-                <span>{msg.mode}</span>
-              </div>
-              <div className={`${styles.markdownContent} break-words`}>
-                <Markdown>{msg.content}</Markdown>
-              </div>
-            </div>
-          ))}
-          {chatLoading ? (
-            <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
-              {agent.name} 正在回复...
-            </div>
-          ) : null}
-        </div>
-        <div className="mt-2 space-y-2">
-          <Textarea
-            value={chatDraft}
-            onChange={(e) => setChatDraft(e.target.value)}
-            placeholder={chatDisabledReason || '询问当前工作流相关问题...'}
-            rows={3}
-            disabled={Boolean(chatDisabledReason)}
-          />
-          <Button className="w-full" size="sm" onClick={sendChat} disabled={chatLoading || Boolean(chatDisabledReason) || !chatDraft.trim() || !onSendChat}>
-            {chatLoading ? '发送中...' : '发送消息'}
-          </Button>
-        </div>
-      </div>
 
       {showRunStatusReason && (
         <div>

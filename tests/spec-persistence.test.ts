@@ -259,9 +259,10 @@ describe('spec-persistence', () => {
       const deltaReq = classifyPersistedSpecFile(tmpDir, '.spec/specs/MyWorkflow-run-abc/requirements.md');
       expect(deltaReq).not.toBeNull();
       expect(deltaReq!.kind).toBe('delta');
-      expect(deltaReq!.artifact).toBe('requirements');
-      expect(deltaReq!.workflowName).toBe('MyWorkflow');
-      expect(deltaReq!.runId).toBe('run-abc');
+      if (deltaReq?.kind !== 'delta') throw new Error('Expected delta spec classification');
+      expect(deltaReq.artifact).toBe('requirements');
+      expect(deltaReq.workflowName).toBe('MyWorkflow');
+      expect(deltaReq.runId).toBe('run-abc');
 
       // Delta design
       const deltaDesign = classifyPersistedSpecFile(tmpDir, '.spec/specs/WF-run-1/design.md');

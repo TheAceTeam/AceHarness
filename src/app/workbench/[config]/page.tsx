@@ -49,13 +49,13 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { RobotLogo } from '@/components/chat/ChatMessage';
+import WorkflowSupervisorChatPanel from '@/components/workflow/WorkflowSupervisorChatPanel';
 import { resolveAgentSelection } from '@/lib/agent-engine-selection';
 import {
   buildWorkflowConversationDirectory,
   getConversationSessionStatusLabel,
   listSessionsForAgent,
   listSessionsForWorkflow,
-  resolveAgentConversationSession,
   type ChatSessionSummaryLike,
 } from '@/lib/agent-conversations';
 import { getEngineMeta } from '@/lib/engine-metadata';
@@ -284,6 +284,7 @@ export default function WorkbenchPage() {
   const [pendingHumanQuestion, setPendingHumanQuestion] = useState<HumanQuestion | null>(null);
   const [submittingHumanQuestion, setSubmittingHumanQuestion] = useState(false);
   const humanQuestionSignatureRef = useRef<string | null>(null);
+  const pendingApprovalRedirectRef = useRef<string | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
@@ -303,7 +304,7 @@ export default function WorkbenchPage() {
   const [showAllSkills, setShowAllSkills] = useState(false);
   const [iterationFeedback, setIterationFeedback] = useState('');
   const [supervisorFlow, setSupervisorFlow] = useState<{
-    type: 'question' | 'decision';
+    type: string;
     from: string;
     to: string;
     question?: string;
@@ -475,15 +476,7 @@ export default function WorkbenchPage() {
   const [preflightChecks, setPreflightChecks] = useState<QualityCheckRecord[]>([]);
   const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
   const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
-  const [agentChatSessions, setAgentChatSessions] = useState<Record<string, string | null>>({});
-  const [agentChatLoading, setAgentChatLoading] = useState<Record<string, boolean>>({});
-  const [agentChatMessages, setAgentChatMessages] = useState<Record<string, Array<{
-    id: string;
-    role: 'user' | 'assistant' | 'error';
-    content: string;
-    mode: 'workflow-chat';
-    timestamp: number;
-  }>>>({});
+  const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
   const liveStreamFeedbackRef = useRef<HTMLInputElement>(null);
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
@@ -499,7 +492,7 @@ export default function WorkbenchPage() {
   const [editingContextValue, setEditingContextValue] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
-  const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'source'>('overview');
+  const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'config'>('overview');
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
@@ -969,122 +962,6 @@ export default function WorkbenchPage() {
     return [...configuredWithRuntime, ...runtimeRemainder];
   }, [agents, configuredWorkflowAgents]);
 
-  const appendAgentChatMessage = useCallback((agentName: string, message: {
-    id: string;
-    role: 'user' | 'assistant' | 'error';
-    content: string;
-    mode: 'workflow-chat';
-    timestamp: number;
-  }) => {
-    setAgentChatMessages((prev) => ({
-      ...prev,
-      [agentName]: [...(prev[agentName] || []), message],
-    }));
-  }, []);
-
-  const handleAgentChat = useCallback(async (input: { message: string; mode: 'workflow-chat' }) => {
-    if (!selectedAgent?.name) return;
-
-    const agentName = selectedAgent.name;
-    const timestamp = Date.now();
-    appendAgentChatMessage(agentName, {
-      id: `${timestamp}-user`,
-      role: 'user',
-      content: input.message,
-      mode: 'workflow-chat',
-      timestamp,
-    });
-    setAgentChatLoading((prev) => ({ ...prev, [agentName]: true }));
-
-    try {
-      const result = await agentApi.chat(agentName, {
-        message: input.message,
-        mode: 'workflow-chat',
-        sessionId: resolveAgentConversationSession({
-          mode: 'workflow-chat',
-          agentName,
-          runtimeSessionId: agentChatSessions[agentName] || null,
-          workflowBinding: {
-            configFile,
-            runId: runId || selectedRun?.id || 'pending',
-            supervisorAgent: finalReview?.supervisorAgent || workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name || 'default-supervisor',
-            supervisorSessionId: displayWorkflowAgents.find((agent) => agent.name === (finalReview?.supervisorAgent || workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((role: any) => role?.roleType === 'supervisor')?.name || 'default-supervisor'))?.sessionId || null,
-            attachedAgentSessions: Object.fromEntries(displayWorkflowAgents.map((agent) => [agent.name, agent.sessionId || ''])),
-            createdAt: 0,
-            updatedAt: 0,
-          },
-          agentSessionId: selectedAgent.sessionId || null,
-        }).sessionId,
-        workingDirectory: state.workingDirectory || resolvedProjectRoot || undefined,
-        workflowContext: {
-          workflowName: workflowConfig?.workflow?.name,
-          configFile,
-          runId,
-          status: workflowStatus || null,
-          currentPhase,
-          currentStep,
-          selectedStepName: selectedStep?.name || null,
-          requirements,
-          specCodingSummary,
-          specCodingDetails,
-          latestSupervisorReview: {
-            content: supervisorFlow.at(-1)?.question || null,
-            type: supervisorFlow.at(-1)?.type || null,
-            stateName: supervisorFlow.at(-1)?.stateName || null,
-          },
-        },
-      });
-
-      setAgentChatSessions((prev) => ({
-        ...prev,
-        [agentName]: result.sessionId || prev[agentName] || selectedAgent.sessionId || null,
-      }));
-      appendAgentChatMessage(agentName, {
-        id: `${Date.now()}-assistant`,
-        role: result.isError ? 'error' : 'assistant',
-        content: result.specCodingRevision?.applied
-          ? `${result.output || result.error || '无输出'}\n\n---\n已由 Supervisor 刷新 Spec Coding：${result.specCodingRevision.summary}`
-          : (result.output || result.error || '无输出'),
-        mode: 'workflow-chat',
-        timestamp: Date.now(),
-      });
-      if (result.specCodingRevision?.applied) {
-        await fetchCurrentStatus();
-      }
-    } catch (error: any) {
-      appendAgentChatMessage(agentName, {
-        id: `${Date.now()}-error`,
-        role: 'error',
-        content: error?.message || 'Agent 对话失败',
-        mode: 'workflow-chat',
-        timestamp: Date.now(),
-      });
-    } finally {
-      setAgentChatLoading((prev) => ({ ...prev, [agentName]: false }));
-    }
-  }, [
-    agentChatSessions,
-    appendAgentChatMessage,
-    configFile,
-    currentPhase,
-    currentStep,
-    specCodingSummary,
-    requirements,
-    resolvedProjectRoot,
-    runId,
-    selectedRun?.id,
-    selectedAgent,
-    selectedStep,
-    state.workingDirectory,
-    supervisorFlow,
-    finalReview?.supervisorAgent,
-    displayWorkflowAgents,
-    agentConfigs,
-    workflowConfig,
-    workflowConfig?.workflow?.name,
-    workflowStatus,
-  ]);
-
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
   const canStartWorkflow = isRunMode && !starting && (!isRunning || workspaceMode === 'isolated-copy');
   const preparingProgress = useMemo(() => {
@@ -1149,6 +1026,15 @@ export default function WorkbenchPage() {
       updatedAt: 0,
     });
   }, [agentConfigs, configFile, displayWorkflowAgents, finalReview?.supervisorAgent, runId, selectedRun?.id, workflowConfig?.workflow?.supervisor?.agent]);
+  const runtimeSupervisorAgent = useMemo(() => {
+    return finalReview?.supervisorAgent
+      || workflowConfig?.workflow?.supervisor?.agent
+      || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name
+      || 'default-supervisor';
+  }, [agentConfigs, finalReview?.supervisorAgent, workflowConfig?.workflow?.supervisor?.agent]);
+  const runtimeSupervisorSessionId = useMemo(() => {
+    return displayWorkflowAgents.find((agent) => agent.name === runtimeSupervisorAgent)?.sessionId || null;
+  }, [displayWorkflowAgents, runtimeSupervisorAgent]);
   const orderedWorkflowAgents = useMemo(() => {
     const agentMap = new Map(displayWorkflowAgents.map((agent) => [agent.name, agent]));
     const ordered = workflowDirectory
@@ -1353,21 +1239,12 @@ export default function WorkbenchPage() {
         addLog('system', 'error', `工作流启动失败: ${status.statusReason}`);
       }
       if (status.runId) dispatch({ type: 'SET_RUN_ID', payload: status.runId });
+      setWorkflowFrontendSessionId((status as any).workflowFrontendSessionId || null);
       if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
       if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
-      if (status.agents?.length) {
-        setAgentChatSessions((prev) => ({
-          ...Object.fromEntries(
-            status.agents
-              .filter((agent: any) => agent?.name)
-              .map((agent: any) => [agent.name, agent.sessionId || null])
-          ),
-          ...prev,
-        }));
-      }
       if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
       setActiveSteps(Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []);
@@ -1596,6 +1473,14 @@ export default function WorkbenchPage() {
   }, [focusTarget, focusQuestionId]);
 
   useEffect(() => {
+    if (!pendingHumanQuestion) return;
+    // 已停止的工作流不再跳转人工审查
+    if (workflowStatus !== 'running' && workflowStatus !== 'paused') return;
+    // 跳转到 workbench supervisor tab 而不是首页
+    setExecutionViewTabOverride('supervisor');
+  }, [pendingHumanQuestion, workflowStatus]);
+
+  useEffect(() => {
     if (!humanApprovalMinimizedPulse) return;
     const timer = window.setTimeout(() => {
       setHumanApprovalMinimizedPulse(false);
@@ -1643,6 +1528,9 @@ export default function WorkbenchPage() {
   useEffect(() => {
     loadWorkflowConfig();
     loadContexts(); // Load contexts on page load
+    if (isDesignMode) {
+      fetchCurrentStatus();
+    }
     if (isRunMode) {
       // 如果正在查看历史运行，不连接实时事件流
       if (viewingHistoryRun) {
@@ -1774,6 +1662,7 @@ export default function WorkbenchPage() {
       // Restore all state into the run view
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: detail.status === 'crashed' ? 'failed' : detail.status });
       setRunStatusReason(detail.statusReason || null);
+      setWorkflowFrontendSessionId(detail.workflowFrontendSessionId || null);
       dispatch({ type: 'SET_RUN_ID', payload: runId });
       dispatch({ type: 'SET_AGENTS', payload: agents });
       dispatch({ type: 'SET_COMPLETED_STEPS', payload: detail.completedSteps || [] });
@@ -1837,16 +1726,6 @@ export default function WorkbenchPage() {
       setFinalReview(detail.finalReview || null);
       setQualityChecks((detail as any).qualityChecks || []);
       setMemoryLayers((detail as any).memoryLayers || null);
-      if (detail.agents?.length) {
-        setAgentChatSessions((prev) => ({
-          ...Object.fromEntries(
-            detail.agents
-              .filter((agent: any) => agent?.name)
-              .map((agent: any) => [agent.name, agent.sessionId || null])
-          ),
-          ...prev,
-        }));
-      }
       if (detail.issueTracker) {
         setSmIssueTracker(detail.issueTracker);
       }
@@ -1942,6 +1821,7 @@ export default function WorkbenchPage() {
           dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.currentStep });
         }
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
+        if (event.data.workflowFrontendSessionId) setWorkflowFrontendSessionId(event.data.workflowFrontendSessionId);
         if (Array.isArray(event.data.activeSteps)) setActiveSteps(event.data.activeSteps);
         if (Array.isArray(event.data.activeConcurrencyGroups)) setActiveConcurrencyGroups(event.data.activeConcurrencyGroups);
         if (event.data.startTime) setRunStartTime(event.data.startTime);
@@ -2228,12 +2108,14 @@ export default function WorkbenchPage() {
       setSmTransitionCount(0);
       setSupervisorFlow([]);
       setAgentFlow([]);
+      setWorkflowFrontendSessionId(null);
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
       const startResult = await workflowApi.start(configFile, undefined, {
         skipPreflight: true,
         rehearsal: isRehearsalStart,
         preflightChecks: preflight.checks || [],
       });
+      setWorkflowFrontendSessionId(startResult.frontendSessionId || null);
       if (isRehearsalStart && (startResult as any).rehearsal) {
         setRehearsalInfo((startResult as any).rehearsal);
         setRehearsalResultDialogOpen(true);
@@ -3568,7 +3450,7 @@ export default function WorkbenchPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-3 xl:grid-cols-2">
+        <div className={`grid gap-3 ${hasQualityChecks && memoryLayers ? 'xl:grid-cols-2' : ''}`}>
         {hasQualityChecks ? (
           <div className="rounded-2xl border bg-background/70 p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -3716,7 +3598,7 @@ export default function WorkbenchPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
-                <h3 className="text-base font-semibold">Spec Coding 草案</h3>
+                <h3 className="text-base font-semibold">Spec 计划</h3>
               </div>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
                 查看创建期确认的 requirements、design、tasks；运行后这里会展示当前 run 的快照与进度投影。
@@ -3742,7 +3624,7 @@ export default function WorkbenchPage() {
                 className="h-7 text-xs"
                 disabled={!specCodingSummary}
                 onClick={() => setSpecCodingModalOpen(true)}
-                title="弹出 Spec Coding 文件管理器"
+                title="弹出 Spec 计划文件管理器"
               >
                 <span className="material-symbols-outlined text-sm">open_in_new</span>
               </Button>
@@ -3767,7 +3649,7 @@ export default function WorkbenchPage() {
                 </div>
                 <div className="rounded-xl border bg-muted/20 p-3">
                   <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
-                    <span>tasks.md 完成度</span>
+                    <span>Spec Task 状态跟踪</span>
                     <span>{specCodingTaskProgress.completed}/{specCodingTaskProgress.total || specCodingSummary.taskCount || 0}</span>
                   </div>
                   <Progress value={specCodingTaskProgress.percentage} className="mt-2 h-2" />
@@ -3849,7 +3731,7 @@ export default function WorkbenchPage() {
             </div>
           ) : (
             <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-              当前工作流没有绑定创建期 Spec Coding 制品。通过首页 AI 创建工作流并确认 Spec Coding 后，这里会显示完整草案。
+              当前工作流没有绑定创建期 Spec 计划制品。通过首页 AI 创建工作流并确认 Spec 计划后，这里会显示完整计划。
             </div>
           )}
         </div>
@@ -3899,7 +3781,7 @@ export default function WorkbenchPage() {
           <div className="rounded-2xl border bg-background/75 p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold">tasks.md 状态事件</div>
+                <div className="text-sm font-semibold">Spec Task 状态事件</div>
                 <div className="text-xs text-muted-foreground">最近由 Agent 或系统回写的任务状态、验证信息和更新时间。</div>
               </div>
               <Badge variant="outline" className="text-[10px]">{specCodingTaskProgress.recentlyUpdatedTasks.length} 条</Badge>
@@ -3953,7 +3835,7 @@ export default function WorkbenchPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
-                <div className="truncate text-sm font-semibold">Spec Coding 文件管理器</div>
+                <div className="truncate text-sm font-semibold">Spec 计划文件管理器</div>
             </div>
             <div className="mt-0.5 truncate text-xs text-muted-foreground">
               {specCodingSummary?.id || workflowConfig?.workflow?.name || configFile}
@@ -4063,7 +3945,7 @@ export default function WorkbenchPage() {
               </div>
             ) : (
               <div className="flex h-full items-center justify-center rounded-xl border border-dashed text-sm text-muted-foreground">
-                这份 Spec Coding 制品还没有内容。
+                这份 Spec 计划制品还没有内容。
               </div>
             )}
           </div>
@@ -4356,16 +4238,22 @@ export default function WorkbenchPage() {
                   </div>
                 )}
               </div>
-              <Tabs value={activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 overflow-hidden">
+              <Tabs value={activeTab === 'spec-coding' ? 'spec' : activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 overflow-hidden">
                 <TabsList className="w-full rounded-none border-b flex-shrink-0 px-1 !flex flex-wrap h-auto gap-0.5 py-1">
                   <TabsTrigger value="workflow" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dashboard</span>总览
                   </TabsTrigger>
                   <TabsTrigger value="agents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>route</span>执行追踪
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>groups</span>Agent
                   </TabsTrigger>
-                  <TabsTrigger value="spec-coding" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>history</span>事件回放
+                  <TabsTrigger value="spec" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>fact_check</span>Spec
+                  </TabsTrigger>
+                  <TabsTrigger value="documents" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>description</span>文档
+                  </TabsTrigger>
+                  <TabsTrigger value="schedules" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>schedule</span>定时任务
                   </TabsTrigger>
                   {(isDesignMode) && <TabsTrigger value="config" className="flex items-center justify-center gap-1 text-xs h-7 px-2"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span>配置</TabsTrigger>}
                 </TabsList>
@@ -4440,117 +4328,122 @@ export default function WorkbenchPage() {
                   )}
                 </TabsContent>
                 <TabsContent value="agents" className="mt-0 overflow-y-auto h-full p-4"><div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
-                    <div>
-                      <div className="text-sm font-medium">运行通讯录</div>
-                      <div className="text-xs text-muted-foreground">查看当前 run 中的 Agent，并补充新的角色草案。</div>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setRuntimeAgentDraft(createInitialAgentDraft({
-                          workingDirectory: resolvedProjectRoot || '',
-                          referenceWorkflow: configFile,
-                        }));
-                        setShowRuntimeAgentCreator(true);
-                      }}
-                    >
-                      <span className="material-symbols-outlined text-sm mr-1">person_add</span>
-                      新增角色
-                    </Button>
+                  <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                    <div className="text-sm font-medium">运行通讯录</div>
+                    <div className="text-xs text-muted-foreground">查看当前 run 中的 Agent 状态。</div>
                   </div>
-                  <div className="flex flex-col gap-2">
-                  {orderedWorkflowAgents.map((agent) => {
-                    const roleConfig = agentConfigs.find((role: any) => role.name === agent.name);
-                    const entry = workflowDirectory.find((item) => item.label === agent.name);
-                    const relatedSession = listSessionsForAgent(workflowRelatedSessions, agent.name)[0];
-                    return (
-                      <div key={agent.name} className="space-y-1">
-                        <AgentHeroCard
-                          compact
-                          selected={selectedAgent?.name === agent.name}
-                          onClick={() => dispatch({ type: 'SET_SELECTED_AGENT', payload: agent })}
-                          agent={{
-                            name: agent.name,
-                            team: (roleConfig?.team || agent.team) as any,
-                            roleType: roleConfig?.roleType,
-                            avatar: roleConfig?.avatar,
-                            category: roleConfig?.category,
-                            tags: roleConfig?.tags,
-                            description: roleConfig?.description,
-                            capabilities: roleConfig?.capabilities,
-                            alwaysAvailableForChat: roleConfig?.alwaysAvailableForChat,
-                          }}
-                        />
-                        <div className="px-2 text-xs text-muted-foreground flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${agent.status === 'running' ? 'bg-blue-500 animate-pulse' : agent.status === 'completed' ? 'bg-green-500' : agent.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`} />
-                          <span>{agent.status}</span>
-                          <span>{agent.model}</span>
-                          {entry ? (
-                            <span className="truncate" title={entry.sessionId || getConversationSessionStatusLabel(entry)}>
-                              {entry.sessionId || getConversationSessionStatusLabel(entry)}
-                            </span>
-                          ) : null}
-                        </div>
-                        {relatedSession ? (
-                          <div className="px-2 pb-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-[11px]"
-                              onClick={() => router.push(`/?sessionId=${encodeURIComponent(relatedSession.id)}&sidebarTab=${encodeURIComponent(agent.name === (finalReview?.supervisorAgent || 'default-supervisor') ? 'commander' : 'agent')}`)}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b text-left text-muted-foreground">
+                          <th className="pb-2 pr-2 font-medium">角色</th>
+                          <th className="pb-2 pr-2 font-medium">状态</th>
+                          <th className="pb-2 pr-2 font-medium">模型</th>
+                          <th className="pb-2 font-medium">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {orderedWorkflowAgents.map((agent) => {
+                          const roleConfig = agentConfigs.find((role: any) => role.name === agent.name);
+                          const entry = workflowDirectory.find((item) => item.label === agent.name);
+                          const relatedSession = listSessionsForAgent(workflowRelatedSessions, agent.name)[0];
+                          return (
+                            <tr
+                              key={agent.name}
+                              className={`cursor-pointer transition-colors hover:bg-muted/30 ${selectedAgent?.name === agent.name ? 'bg-primary/5' : ''}`}
+                              onClick={() => dispatch({ type: 'SET_SELECTED_AGENT', payload: agent })}
                             >
-                              <span className="material-symbols-outlined text-sm mr-1">history</span>
-                              继续最近会话
-                            </Button>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                              <td className="py-2 pr-2">
+                                <div className="flex items-center gap-2">
+                                  {roleConfig?.avatar ? (
+                                    <span className="text-base">{roleConfig.avatar}</span>
+                                  ) : (
+                                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                                      {agent.name.charAt(0).toUpperCase()}
+                                    </span>
+                                  )}
+                                  <div className="min-w-0">
+                                    <div className="font-medium text-foreground truncate max-w-[140px]">{agent.name}</div>
+                                    {roleConfig?.roleType && (
+                                      <div className="text-[10px] text-muted-foreground">{roleConfig.roleType}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-2 pr-2">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`h-2 w-2 shrink-0 rounded-full ${agent.status === 'running' ? 'bg-blue-500 animate-pulse' : agent.status === 'completed' ? 'bg-green-500' : agent.status === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`} />
+                                  <span className="text-muted-foreground">{agent.status}</span>
+                                </div>
+                              </td>
+                              <td className="py-2 pr-2 text-muted-foreground truncate max-w-[80px]">{agent.model || '—'}</td>
+                              <td className="py-2">
+                                {relatedSession && workflowStatus === 'running' ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-2 text-[10px] relative z-10"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      router.push(`/?sessionId=${encodeURIComponent(relatedSession.id)}&sidebarTab=${encodeURIComponent(agent.name === (finalReview?.supervisorAgent || 'default-supervisor') ? 'commander' : 'agent')}`);
+                                    }}
+                                  >
+                                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>message</span>
+                                  </Button>
+                                ) : (
+                                  <div className="cursor-not-allowed">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-2 text-[10px] pointer-events-none opacity-40"
+                                    >
+                                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>message</span>
+                                    </Button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div></TabsContent>
-                <TabsContent value="spec-coding" className="mt-0 overflow-y-auto h-full p-4">
-                  <div className="space-y-4">
-                    <div className="space-y-3">
-                      <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
-                        <div className="text-sm font-medium">Spec / tasks.md 事件</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          查看当前 run 的 Spec Coding 投影、任务状态变更、修订记录和制品快照。
-                        </div>
-                      </div>
-                      {renderSpecCodingPanel()}
-                    </div>
-
-                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>description</span>
-                        <div>
-                          <div className="text-sm font-medium">文档回放</div>
-                          <div className="text-xs text-muted-foreground">查看本次运行产生的文档与制品目录。</div>
-                        </div>
-                      </div>
-                      <div className="h-[420px] overflow-hidden rounded-xl border">
-                        <DocumentsPanel
-                          runId={runId || selectedRun?.id || null}
-                          openLatestTimestampedRequest={openLatestAiDocRequest}
-                          onOpenWorkspaceDirectory={(path) => openWorkspaceEditorAtPath(path, '文档目录')}
-                        />
+                <TabsContent value="spec" className="mt-0 overflow-y-auto h-full p-4">
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                      <div className="text-sm font-medium">Spec 计划与任务状态</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        查看当前 run 的 Spec 计划、tasks.md 状态跟踪、修订记录和制品列表。
                       </div>
                     </div>
-
-                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>schedule</span>
-                        <div>
-                          <div className="text-sm font-medium">定时记录</div>
-                          <div className="text-xs text-muted-foreground">查看与当前配置关联的定时运行安排。</div>
-                        </div>
-                      </div>
-                      <div className="h-[360px] overflow-hidden rounded-xl border">
-                        <SchedulesPanel configFile={configFile} />
-                      </div>
+                    {renderSpecCodingPanel()}
+                  </div>
+                </TabsContent>
+                <TabsContent value="documents" className="mt-0 overflow-y-auto h-full p-4">
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                      <div className="text-sm font-medium">文档</div>
+                      <div className="mt-1 text-xs text-muted-foreground">查看本次运行产生的文档与制品目录。</div>
+                    </div>
+                    <div className="h-[calc(100vh-220px)] min-h-[420px] overflow-hidden rounded-xl border">
+                      <DocumentsPanel
+                        runId={runId || selectedRun?.id || null}
+                        openLatestTimestampedRequest={openLatestAiDocRequest}
+                        onOpenWorkspaceDirectory={(path) => openWorkspaceEditorAtPath(path, '文档目录')}
+                      />
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value="schedules" className="mt-0 overflow-y-auto h-full p-4">
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
+                      <div className="text-sm font-medium">定时任务</div>
+                      <div className="mt-1 text-xs text-muted-foreground">查看与当前配置关联的定时运行安排。</div>
+                    </div>
+                    <div className="h-[calc(100vh-220px)] min-h-[360px] overflow-hidden rounded-xl border">
+                      <SchedulesPanel configFile={configFile} />
                     </div>
                   </div>
                 </TabsContent>
@@ -4599,6 +4492,22 @@ export default function WorkbenchPage() {
                             agentFlow={agentFlow}
                             executionTrace={executionTrace}
                             overviewFooter={renderRuntimeInsightPanels()}
+                            supervisorInteractionPanel={(
+                              <WorkflowSupervisorChatPanel
+                                sessionId={workflowFrontendSessionId}
+                                configFile={configFile}
+                                runId={runId || selectedRun?.id || null}
+                                supervisorAgent={runtimeSupervisorAgent}
+                                supervisorSessionId={runtimeSupervisorSessionId}
+                                pendingHumanQuestion={pendingHumanQuestion}
+                                submittingHumanQuestion={submittingHumanQuestion}
+                                onSubmitHumanQuestion={handleSubmitHumanQuestion}
+                                onOpenHome={() => {
+                                  if (!workflowFrontendSessionId) return;
+                                  router.push(`/?sessionId=${encodeURIComponent(workflowFrontendSessionId)}&sidebarTab=commander`);
+                                }}
+                              />
+                            )}
                             activeTabOverride={executionViewTabOverride}
                             onStateClick={(s) => setFocusedState(s)}
                             onStepClick={(step) => selectStep(step)}
@@ -4897,11 +4806,8 @@ export default function WorkbenchPage() {
                 currentStepName={currentStep || null}
                 onSelectPersistedStep={selectStepByLogName}
                 onViewPersistedStepOutput={openPersistedStepLogModal}
-                chatMessages={agentChatMessages[selectedAgent.name] || []}
-                chatLoading={!!agentChatLoading[selectedAgent.name]}
                 systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
-                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
-                onSendChat={handleAgentChat} />
+                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt} />
               ) : (<div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
             </div>
                   </>);
@@ -4931,11 +4837,11 @@ export default function WorkbenchPage() {
                     编排
                   </button>
                   <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'source' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('source')}
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setDesignTab('config')}
                   >
-                    <span className="material-symbols-outlined text-sm mr-1 align-middle">code</span>
-                    源码
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">settings</span>
+                    配置
                   </button>
                 </div>
               </div>
@@ -4952,7 +4858,7 @@ export default function WorkbenchPage() {
                             <h3 className="text-base font-semibold">工作流概览</h3>
                           </div>
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            查看设计基线、模式、角色/状态数量和 Spec Coding 基线摘要。
+                            查看设计基线、模式、角色/状态数量和 Spec 计划基线摘要。
                           </p>
                         </div>
                         <Badge variant="outline" className="text-[10px]">
@@ -4995,41 +4901,41 @@ export default function WorkbenchPage() {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>hub</span>
-                              <h3 className="text-base font-semibold">并发设计元数据</h3>
+                              <h3 className="text-base font-semibold">并发设计</h3>
                             </div>
                             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                              已保存到配置中；状态机运行时支持连续同组 step 的第一阶段并发执行。复杂 channel 协作、manual join 和超时策略仍按受限能力处理。
+                              已保存到配置中；状态机运行时会把同一并发组内的连续 step 作为并发分支展示和调度。
                             </p>
                           </div>
-                          <Badge variant="outline" className="text-[10px]">design metadata</Badge>
+                          <Badge variant="outline" className="text-[10px]">自动生成</Badge>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-4">
                           <div className="rounded-xl border bg-muted/20 p-3">
-                            <div className="text-[10px] text-muted-foreground">Concurrency groups</div>
+                            <div className="text-[10px] text-muted-foreground">并发组</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.groups.length}</div>
                           </div>
                           <div className="rounded-xl border bg-muted/20 p-3">
-                            <div className="text-[10px] text-muted-foreground">Agent instances</div>
+                            <div className="text-[10px] text-muted-foreground">Agent 实例</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.agentInstanceIds.length}</div>
                           </div>
                           <div className="rounded-xl border bg-muted/20 p-3">
-                            <div className="text-[10px] text-muted-foreground">Channels</div>
+                            <div className="text-[10px] text-muted-foreground">通讯通道</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.channelIds.length}</div>
                           </div>
                           <div className="rounded-xl border bg-muted/20 p-3">
-                            <div className="text-[10px] text-muted-foreground">Spec tasks</div>
+                            <div className="text-[10px] text-muted-foreground">Spec 任务</div>
                             <div className="mt-1 text-lg font-semibold">{concurrencyDesignSummary.specTaskIds.length}</div>
                           </div>
                         </div>
                         {concurrencyDesignSummary.groups.length ? (
                           <div className="space-y-2">
-                            <div className="text-xs font-medium text-muted-foreground">Groups</div>
+                            <div className="text-xs font-medium text-muted-foreground">并发组</div>
                             <div className="space-y-2">
-                              {concurrencyDesignSummary.groups.map((group) => (
+                              {concurrencyDesignSummary.groups.map((group, groupIndex) => (
                                 <div key={group.id} className="rounded-xl border bg-muted/10 p-3 text-xs">
-                                  <div className="font-medium">{group.id}</div>
+                                  <div className="font-medium">并发组 {groupIndex + 1}</div>
                                   <div className="mt-1 text-muted-foreground">
-                                    {group.steps.map((step: any) => `${step.__stateName}/${step.name}${step.concurrency?.branchId ? ` (${step.concurrency.branchId})` : ''}`).join(' · ')}
+                                    {group.steps.map((step: any) => `${step.__stateName}/${step.name}`).join(' · ')}
                                   </div>
                                 </div>
                               ))}
@@ -5038,9 +4944,19 @@ export default function WorkbenchPage() {
                         ) : null}
                         {concurrencyDesignSummary.joinPolicies.length ? (
                           <div className="flex flex-wrap gap-2">
-                            {concurrencyDesignSummary.joinPolicies.map((policy) => (
-                              <Badge key={`${policy.scope}-${policy.mode}`} variant="outline" className="text-[10px]">{policy.scope}: {policy.mode}</Badge>
-                            ))}
+                            {concurrencyDesignSummary.joinPolicies.map((policy, policyIndex) => {
+                              const labelMap: Record<string, string> = {
+                                all: '等待全部完成',
+                                any: '任一完成即可',
+                                quorum: '达到指定数量',
+                                manual: '人工确认',
+                              };
+                              return (
+                                <Badge key={`${policy.scope}-${policy.mode}`} variant="outline" className="text-[10px]">
+                                  策略 {policyIndex + 1}: {labelMap[policy.mode] || policy.mode}
+                                </Badge>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </div>
@@ -5083,16 +4999,16 @@ export default function WorkbenchPage() {
                 </div>
               )}
 
-              {designTab === 'source' && (
+              {designTab === 'config' && (
                 <div className="flex-1 overflow-auto bg-muted/20 p-6">
                   <div className="mx-auto max-w-6xl space-y-4">
                     <div className="rounded-2xl border bg-background/75 p-4">
                       <div className="flex items-start gap-2">
-                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>code</span>
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>settings</span>
                         <div>
-                          <h3 className="text-base font-semibold">源码与配置</h3>
+                          <h3 className="text-base font-semibold">工作流配置</h3>
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            编辑工作流运行参数，并查看 requirements/design/tasks 等设计产物源文档入口。
+                            编辑工作流运行参数，并查看 requirements/design/tasks 等 Spec 计划制品入口。
                           </p>
                         </div>
                       </div>
@@ -5889,7 +5805,7 @@ export default function WorkbenchPage() {
                       size="sm"
                       className="h-7 text-xs"
                       onClick={() => {
-                        dispatch({ type: 'SET_ACTIVE_TAB', payload: 'spec-coding' });
+                        dispatch({ type: 'SET_ACTIVE_TAB', payload: 'documents' });
                         setOpenLatestAiDocRequest((value) => value + 1);
                       }}
                     >

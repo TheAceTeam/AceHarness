@@ -9,7 +9,7 @@
 import { EventEmitter } from 'events';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
-import { fenced, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -294,7 +294,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
             header += `\n💻 执行命令: \`${cmd}\`\n`;
           } else {
             header += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-            header += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+            header += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
           }
         }
         break;

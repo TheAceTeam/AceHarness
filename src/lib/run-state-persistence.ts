@@ -138,6 +138,7 @@ export interface HumanQuestion {
   answeredAt?: string;
   supervisorAgent?: string;
   supervisorSessionId?: string | null;
+  workflowFrontendSessionId?: string | null;
   currentState?: string | null;
   previousState?: string | null;
   suggestedNextState?: string;
@@ -256,6 +257,8 @@ export interface PersistedRunState {
   supervisorSessionId?: string | null;
   /** 当前运行中各 agent 的会话绑定 */
   attachedAgentSessions?: Record<string, string>;
+  /** 首页/运行页共享的前端聊天会话 ID */
+  workflowFrontendSessionId?: string | null;
   /** 最近一次 supervisor 审阅/建议 */
   latestSupervisorReview?: {
     type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';

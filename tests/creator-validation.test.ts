@@ -128,7 +128,7 @@ describe('validateWorkflowDraft', () => {
   test('missing supervisor is a warning', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
     const config = validPhaseBasedConfig(tmpDir);
-    config.workflow.supervisor = undefined;
+    delete (config.workflow as any).supervisor;
     const result = validateWorkflowDraft(config);
     expect(result.ok).toBe(true); // warning, not error
     expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);

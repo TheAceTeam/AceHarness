@@ -926,22 +926,47 @@ function ChatPageContent() {
           </div>
         );
       }
+      // 非 streaming 的 assistant 消息：如果有 <result>，只显示 result 内的内容
+      const isStreaming = msg.id === streamingMessageId;
+      let displayMsg = msg;
+      let hasSidebarHint = false;
+      if (msg.role === 'assistant' && !isStreaming) {
+        const raw = msg.rawContent || msg.content || '';
+        const hasResult = /<result>[\s\S]*?<\/result>/i.test(raw);
+        hasSidebarHint = /"type"\s*:\s*"home_sidebar"/.test(raw);
+        if (hasResult) {
+          const cleaned = (msg.content || '')
+            .replace(/```(?:json|card)\s*\n[\s\S]*?```/g, '')
+            .replace(/\{[\s\S]*?"type"\s*:\s*"home_sidebar"[\s\S]*?\}/g, '')
+            .trim();
+          displayMsg = { ...msg, content: cleaned };
+        }
+      }
       return (
-        <ChatMessage
-          key={msg.id}
-          message={msg}
-          isStreaming={msg.id === streamingMessageId}
-          onConfirmAction={messageCallbacks[msg.id]?.onConfirmAction}
-          onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
-          onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
-          onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
-          onAction={handleQuickAction}
-          onDelete={deleteMessage}
-          onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
-          onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
-          onContinue={msg.role === 'error' ? continueFromMessage : undefined}
-          onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
-        />
+        <div key={msg.id}>
+          <ChatMessage
+            message={displayMsg}
+            isStreaming={isStreaming}
+            onConfirmAction={messageCallbacks[msg.id]?.onConfirmAction}
+            onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
+            onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
+            onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
+            onAction={handleQuickAction}
+            onDelete={deleteMessage}
+            onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
+            onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
+            onContinue={msg.role === 'error' ? continueFromMessage : undefined}
+            onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+          />
+          {hasSidebarHint && (
+            <div className="ml-10 -mt-2 mb-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-medium text-primary">
+                <span className="material-symbols-outlined" style={{ fontSize: 12 }}>side_navigation</span>
+                已推送侧边栏
+              </span>
+            </div>
+          )}
+        </div>
       );
     });
   }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
@@ -1199,6 +1224,9 @@ function ChatPageContent() {
                               调试
                             </button>
                             <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
+                            <div className="w-24 shrink-0 sm:w-32">
+                              <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
+                            </div>
                           </div>
                         </div>
                       )}
@@ -1252,11 +1280,11 @@ function ChatPageContent() {
               <div className="hidden lg:flex items-start border-l bg-card/20">
                 <button
                   type="button"
-                  className="m-2 flex min-h-24 w-12 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-3 text-[11px] text-muted-foreground transition hover:text-foreground"
+                  className="m-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-4 text-[12px] text-muted-foreground transition hover:text-foreground"
                   onClick={() => openHomeSidebar(homeSidebarTab)}
                   title="展开首页动态侧边栏"
                 >
-                  <span className="material-symbols-outlined text-base">right_panel_open</span>
+                  <span className="material-symbols-outlined text-3xl">right_panel_open</span>
                   <span className="[writing-mode:vertical-rl] rotate-180 tracking-[0.2em]">
                     {homeSidebarTab === 'commander' ? '指挥官' : homeSidebarTab === 'workflow' ? '工作流' : 'Agent'}
                   </span>

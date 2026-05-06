@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { agentApi, configApi, workflowApi } from '@/lib/api';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/home-sidebar-state';
-import type { HumanQuestion } from '@/lib/run-state-persistence';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 import HumanQuestionInbox from '@/components/workflow/HumanQuestionInbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -115,9 +115,9 @@ function formatSidebarStage(stage?: string | null): string {
     case 'clarifying':
       return '需求澄清';
     case 'spec-draft':
-      return 'Spec Coding 草案';
+      return 'Spec 计划';
     case 'spec-review':
-      return 'Spec Coding 评审';
+      return 'Spec 计划评审';
     case 'workflow-draft':
       return '工作流草案';
     case 'agent-draft':
@@ -217,6 +217,7 @@ export default function HomeCommandSidebar({
   const [inspectedWorkflow, setInspectedWorkflow] = useState<WorkflowSummary | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<any>(null);
   const [unansweredHumanQuestions, setUnansweredHumanQuestions] = useState<HumanQuestion[]>([]);
+  const [submittingHumanQuestionId, setSubmittingHumanQuestionId] = useState<string | null>(null);
   const [currentCreationSession, setCurrentCreationSession] = useState<CreationSessionBinding | null>(activeSession?.creationSession || null);
   const [reports, setReports] = useState<ProgressReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -228,6 +229,7 @@ export default function HomeCommandSidebar({
   const [agentDraftRaw, setAgentDraftRaw] = useState('');
   const lastStatusSignatureRef = useRef('');
   const lastAppliedSidebarHintRef = useRef<string>('');
+  const pendingQuestionRedirectRef = useRef<string>('');
   const [agentDraft, setAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
 
   const binding = activeSession?.workflowBinding;
@@ -235,6 +237,17 @@ export default function HomeCommandSidebar({
   const boundWorkflow = binding?.configFile || '';
   const boundCommander = binding?.supervisorAgent || 'default-supervisor';
   const effectiveWorkflowTarget = selectedWorkflow || boundWorkflow || '';
+  const boundHumanQuestions = useMemo(() => {
+    if (!binding) return [];
+    return unansweredHumanQuestions.filter((question) => (
+      question.configFile === binding.configFile
+      && (!binding.runId || question.runId === binding.runId)
+    ));
+  }, [binding, unansweredHumanQuestions]);
+  const otherHumanQuestions = useMemo(() => {
+    const boundIds = new Set(boundHumanQuestions.map((question) => question.id));
+    return unansweredHumanQuestions.filter((question) => !boundIds.has(question.id));
+  }, [boundHumanQuestions, unansweredHumanQuestions]);
   const runCreationSessionId = currentCreationSession?.filename === effectiveWorkflowTarget
     ? currentCreationSession.creationSessionId
     : creationBinding?.filename === effectiveWorkflowTarget
@@ -428,9 +441,43 @@ export default function HomeCommandSidebar({
     };
   }, []);
 
+  useEffect(() => {
+    const target = unansweredHumanQuestions.find((question) => (
+      question.workflowFrontendSessionId
+      && question.workflowFrontendSessionId !== activeSessionId
+    ));
+    if (!target?.workflowFrontendSessionId) return;
+    const key = `${target.workflowFrontendSessionId}:${target.id}`;
+    if (pendingQuestionRedirectRef.current === key) return;
+    pendingQuestionRedirectRef.current = key;
+    router.push(`/?sessionId=${encodeURIComponent(target.workflowFrontendSessionId)}&sidebarTab=commander`);
+  }, [activeSessionId, router, unansweredHumanQuestions]);
+
   const navigateToHumanQuestion = useCallback((question: HumanQuestion) => {
+    if (question.workflowFrontendSessionId) {
+      router.push(`/?sessionId=${encodeURIComponent(question.workflowFrontendSessionId)}&sidebarTab=commander`);
+      return;
+    }
     router.push(`/workbench/${encodeURIComponent(question.configFile)}?mode=run&focus=human-question&questionId=${encodeURIComponent(question.id)}&runId=${encodeURIComponent(question.runId)}`);
   }, [router]);
+
+  const answerHumanQuestion = useCallback(async (question: HumanQuestion, answer: HumanQuestionAnswer) => {
+    setSubmittingHumanQuestionId(question.id);
+    try {
+      await workflowApi.answerHumanQuestion({
+        questionId: question.id,
+        runId: question.runId,
+        configFile: question.configFile,
+        answer,
+      });
+      setUnansweredHumanQuestions((items) => items.filter((item) => item.id !== question.id));
+      toast('success', '已提交 Supervisor 回复');
+    } catch (error: any) {
+      toast('error', error?.message || '提交回复失败');
+    } finally {
+      setSubmittingHumanQuestionId(null);
+    }
+  }, [toast]);
 
   useEffect(() => {
     if (!boundWorkflow) {
@@ -636,8 +683,8 @@ export default function HomeCommandSidebar({
               <Badge variant="outline" className="border-amber-500/40 text-amber-600 dark:text-amber-300">
                 指挥官
               </Badge>
-              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={expanded ? onCollapse : onExpand}>
-                <span className="material-symbols-outlined text-base">{expanded ? 'right_panel_close' : 'right_panel_open'}</span>
+              <Button size="icon" variant="ghost" className="h-11 w-11" onClick={expanded ? onCollapse : onExpand}>
+                <span className="material-symbols-outlined" style={{ fontSize: '28px' }}>{expanded ? 'right_panel_close' : 'right_panel_open'}</span>
               </Button>
             </div>
           </div>
@@ -656,7 +703,7 @@ export default function HomeCommandSidebar({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="flex-1 overflow-y-auto px-4 py-4 pb-16">
           {(sidebarHint?.summary || sidebarHint?.reason || recentConversation.length > 0 || sidebarHint?.knownFacts?.length || sidebarHint?.missingFields?.length || sidebarHint?.questions?.length || sidebarHint?.recommendedNextAction) && (
             <div className="mb-4 space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4">
               <div className="flex items-center justify-between gap-3">
@@ -746,8 +793,19 @@ export default function HomeCommandSidebar({
 
           {availableTabs.includes('commander') && activeTab === 'commander' && (
             <div className="space-y-4">
+              {boundHumanQuestions.length > 0 ? (
+                <HumanQuestionInbox
+                  questions={boundHumanQuestions}
+                  title="当前工作流待审批"
+                  emptyText="当前绑定工作流暂无待审批消息。"
+                  compact={false}
+                  submittingQuestionId={submittingHumanQuestionId}
+                  onSubmit={answerHumanQuestion}
+                />
+              ) : null}
+
               <HumanQuestionInbox
-                questions={unansweredHumanQuestions}
+                questions={binding ? otherHumanQuestions : unansweredHumanQuestions}
                 onNavigate={navigateToHumanQuestion}
               />
 
@@ -1252,6 +1310,21 @@ export default function HomeCommandSidebar({
               ) : null}
             </div>
           )}
+        </div>
+
+        <div className="shrink-0 border-t bg-background/80 px-3 py-2 flex items-center justify-center">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-10 w-full gap-2"
+            onClick={expanded ? onCollapse : onExpand}
+            title={expanded ? '收起首页指挥区' : '展开首页指挥区'}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>
+              {expanded ? 'right_panel_close' : 'right_panel_open'}
+            </span>
+            <span className="text-xs">{expanded ? '收起侧边栏' : '展开侧边栏'}</span>
+          </Button>
         </div>
       </aside>
 

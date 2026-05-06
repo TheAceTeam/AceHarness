@@ -9,7 +9,7 @@
 import { EventEmitter } from 'events';
 import { existsSync, readFileSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
-import { fenced, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 
 // ============================================================================
@@ -153,7 +153,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (!cmd) return '\n💻 执行命令\n';
     const cmdLines = cmd.split('\n');
     if (cmdLines.length <= 1 && cmd.length <= 120) return `\n💻 执行命令: \`${cmd}\`\n`;
-    return `\n💻 执行命令 (${cmdLines.length} 行)\n\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+    return `\n💻 执行命令 (${cmdLines.length} 行)\n\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
   }
   if (toolName === 'read') {
     const content = toolText(rawInput, ['content', 'result', 'text']) || readToolFileContent(p);
@@ -201,7 +201,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (subagentType) out += `\n类型: \`${subagentType}\`\n`;
     if (prompt) {
       const lines = prompt.split('\n').length;
-      out += `\n<details><summary>查看提示词 (${lines} 行)</summary>\n\n${fenced(prompt)}\n\n</details>\n`;
+      out += `\n<details><summary>查看提示词 (${lines} 行)</summary>\n\n${htmlCodeBlock(prompt)}\n\n</details>\n`;
     }
     return out;
   }
@@ -249,7 +249,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
   }
   if (inputJson.trim()) {
     const lines = inputJson.split('\n').length;
-    return `\n<details><summary>查看输入 (${lines} 行)</summary>\n\n${fenced(inputJson, 'json')}\n\n</details>\n`;
+    return `\n<details><summary>查看输入 (${lines} 行)</summary>\n\n${htmlCodeBlock(inputJson, 'json')}\n\n</details>\n`;
   }
   return '';
 }

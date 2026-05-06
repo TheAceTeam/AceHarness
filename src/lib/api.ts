@@ -86,6 +86,7 @@ interface WorkflowStatusResponse {
   statusReason?: string;
   runId: string | null;
   currentConfigFile: string | null;
+  workflowFrontendSessionId?: string | null;
   logs: any[];
   agents: any[];
   currentPhase: string | null;
@@ -871,7 +872,7 @@ export const workflowApi = {
         errorText?: string | null;
       }>;
     }>;
-  }): Promise<ApiResponse> {
+  }): Promise<ApiResponse & { frontendSessionId?: string | null }> {
     const response = await authFetch(`${API_BASE}/workflow/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

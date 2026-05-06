@@ -7,7 +7,7 @@ interface AuthResult {
   user: { id: string };
 }
 
-async function createAuthToken(role = 'user'): Promise<AuthResult> {
+async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthResult> {
   vi.resetModules();
   const { createUser, storeToken } = await import('@/lib/user-store');
   const suffix = `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

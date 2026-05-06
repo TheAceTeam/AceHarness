@@ -221,6 +221,38 @@ export async function updateChatSessionWorkflowBinding(
   await saveChatSession(session);
 }
 
+export async function appendChatSessionMessage(
+  sessionId: string,
+  message: Omit<PersistedMessage, 'id' | 'timestamp'> & Partial<Pick<PersistedMessage, 'id' | 'timestamp'>>,
+  options?: { backendSessionId?: string | null; dedupeKey?: string }
+): Promise<void> {
+  const session = await loadChatSession(sessionId);
+  if (!session) return;
+
+  const content = (message.content || '').trim();
+  if (!content) return;
+
+  if (options?.dedupeKey) {
+    const exists = session.messages.some((item) => item.id === options.dedupeKey);
+    if (exists) return;
+  } else {
+    const exists = session.messages.some((item) => item.role === message.role && item.content.trim() === content);
+    if (exists) return;
+  }
+
+  const now = message.timestamp || Date.now();
+  session.messages.push({
+    ...message,
+    id: options?.dedupeKey || message.id || `${now}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: now,
+  });
+  if (options?.backendSessionId) {
+    session.backendSessionId = options.backendSessionId;
+  }
+  session.updatedAt = now;
+  await saveChatSession(session);
+}
+
 export async function updateChatSessionCreationBinding(
   sessionId: string,
   patch: Partial<Omit<WorkflowCreationBinding, 'createdAt' | 'updatedAt'>> & { updatedAt?: number }

@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
+import { useDefaultLayout, usePanelRef } from 'react-resizable-panels';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
@@ -25,8 +27,9 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Trash2, GripVertical, ChevronDown, ChevronRight, ArrowRight, Info } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ChevronDown, ChevronLeft, ChevronRight, ArrowRight, Info } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
+import StateMachineDiagram from './StateMachineDiagram';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/schemas';
 
 interface StateMachineDesignPanelProps {
@@ -36,14 +39,102 @@ interface StateMachineDesignPanelProps {
   availableSkills?: { name: string; description: string }[];
 }
 
+type StepGroup = {
+  id?: string;
+  startIndex: number;
+  steps: Array<{ step: WorkflowStep; index: number }>;
+};
+
+const joinPolicyLabels: Record<string, string> = {
+  all: '等待全部完成',
+  any: '任一完成即可',
+  quorum: '达到指定数量',
+  manual: '人工确认',
+};
+
+const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
+
+const getStepJoinPolicyMode = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.mode || 'all';
+
+const slugifyId = (value: string, fallback: string) => {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || fallback;
+};
+
+const makeParallelGroupId = (stateName: string, startIndex: number) =>
+  slugifyId(`parallel-${stateName}-${startIndex + 1}`, `parallel-${startIndex + 1}`);
+
+const makeBranchId = (step: WorkflowStep, index: number) =>
+  slugifyId(step.name || step.agent || `branch-${index + 1}`, `branch-${index + 1}`);
+
+const withParallelGroup = (step: WorkflowStep, groupId: string, index: number): WorkflowStep => ({
+  ...step,
+  parallelGroup: groupId,
+  concurrency: {
+    ...(step.concurrency || {}),
+    groupId,
+    branchId: step.concurrency?.branchId || makeBranchId(step, index),
+    joinPolicy: step.concurrency?.joinPolicy || { mode: 'all' },
+  },
+});
+
+const withoutParallelGroup = (step: WorkflowStep): WorkflowStep => {
+  const nextConcurrency = { ...(step.concurrency || {}) } as any;
+  delete nextConcurrency.groupId;
+  delete nextConcurrency.branchId;
+  delete nextConcurrency.joinPolicy;
+  return {
+    ...step,
+    parallelGroup: undefined,
+    concurrency: Object.keys(nextConcurrency).length ? nextConcurrency : undefined,
+    agentInstanceId: undefined,
+    channelIds: undefined,
+  };
+};
+
+const buildStepGroups = (steps: WorkflowStep[]): StepGroup[] => {
+  const groups: StepGroup[] = [];
+  steps.forEach((step, index) => {
+    const groupId = getStepParallelGroup(step);
+    const last = groups[groups.length - 1];
+    if (groupId && last?.id === groupId) {
+      last.steps.push({ step, index });
+      return;
+    }
+    groups.push({ id: groupId || undefined, startIndex: index, steps: [{ step, index }] });
+  });
+  return groups;
+};
+
+const getGroupRange = (steps: WorkflowStep[], index: number) => {
+  const groupId = getStepParallelGroup(steps[index]);
+  if (!groupId) return { start: index, end: index };
+  let start = index;
+  let end = index;
+  while (start > 0 && getStepParallelGroup(steps[start - 1]) === groupId) start -= 1;
+  while (end < steps.length - 1 && getStepParallelGroup(steps[end + 1]) === groupId) end += 1;
+  return { start, end };
+};
+
 // 可拖拽的步骤行
 function SortableStepRow({
-  step, index, onEdit, onDelete,
+  step, index, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup,
 }: {
   step: WorkflowStep;
   index: number;
+  isParallel?: boolean;
+  canGroupPrevious?: boolean;
+  canGroupNext?: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  onGroupWithPrevious?: () => void;
+  onGroupWithNext?: () => void;
+  onUngroup?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -64,17 +155,29 @@ function SortableStepRow({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{step.name}</div>
         <div className="text-xs text-gray-500 truncate">{step.agent}</div>
-        {(step.parallelGroup || step.concurrency?.branchId || step.agentInstanceId || step.channelIds?.length || step.specTaskBinding?.taskId) && (
+        {(isParallel || step.specTaskBinding?.taskId) && (
           <div className="mt-1 flex flex-wrap gap-1">
-            {step.parallelGroup ? <Badge variant="outline" className="text-[10px] py-0">group:{step.parallelGroup}</Badge> : null}
-            {step.concurrency?.branchId ? <Badge variant="outline" className="text-[10px] py-0">branch:{step.concurrency.branchId}</Badge> : null}
-            {step.agentInstanceId ? <Badge variant="outline" className="text-[10px] py-0">instance:{step.agentInstanceId}</Badge> : null}
-            {step.channelIds?.length ? <Badge variant="outline" className="text-[10px] py-0">channels:{step.channelIds.length}</Badge> : null}
-            {step.specTaskBinding?.taskId ? <Badge variant="outline" className="text-[10px] py-0">task:{step.specTaskBinding.taskId}</Badge> : null}
+            {isParallel ? <Badge variant="outline" className="text-[10px] py-0">并发分支</Badge> : null}
+            {step.specTaskBinding?.taskId ? <Badge variant="outline" className="text-[10px] py-0">Spec 任务</Badge> : null}
           </div>
         )}
       </div>
-      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex flex-wrap justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        {canGroupPrevious && (
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+            与上一并发
+          </Button>
+        )}
+        {canGroupNext && (
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+            与下一并发
+          </Button>
+        )}
+        {isParallel && (
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+            拆分
+          </Button>
+        )}
         <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={onEdit}>
           <span className="material-symbols-outlined text-sm">edit</span>
         </Button>
@@ -313,6 +416,15 @@ export default function StateMachineDesignPanel({
   const [editingStateInfo, setEditingStateInfo] = useState(false);
   const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean } | null>(null);
 
+  // Resizable panel for editor ↔ diagram split
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'design-editor-diagram' });
+  const diagramPanelRef = usePanelRef();
+  const [diagramCollapsed, setDiagramCollapsed] = useState(false);
+
+  useEffect(() => {
+    setDiagramCollapsed(diagramPanelRef.current?.isCollapsed() ?? false);
+  }, [diagramPanelRef]);
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -320,6 +432,22 @@ export default function StateMachineDesignPanel({
 
   const selectedState = states.find(s => s.name === selectedStateName) ?? null;
   const selectedStateIndex = states.findIndex(s => s.name === selectedStateName);
+  const flowSummary = useMemo(() => {
+    const transitionCount = states.reduce((sum, state) => sum + (state.transitions?.length ?? 0), 0);
+    const stepCount = states.reduce((sum, state) => sum + (state.steps?.length ?? 0), 0);
+    const parallelGroupIds = new Set<string>();
+    states.forEach((state) => {
+      (state.steps || []).forEach((step) => {
+        const groupId = getStepParallelGroup(step);
+        if (groupId) parallelGroupIds.add(groupId);
+      });
+    });
+    return {
+      transitionCount,
+      stepCount,
+      parallelGroupCount: parallelGroupIds.size,
+    };
+  }, [states]);
 
   const updateState = useCallback((updated: StateMachineState) => {
     onStatesChange(states.map((s, i) => i === selectedStateIndex ? updated : s));
@@ -391,6 +519,88 @@ export default function StateMachineDesignPanel({
     if (!selectedState) return;
     updateState({ ...selectedState, steps: (selectedState.steps || []).filter((_, i) => i !== index) });
     setEditingStep(null);
+  };
+
+  const handleDiagramStepClick = useCallback((step: WorkflowStep) => {
+    for (const state of states) {
+      const index = (state.steps || []).findIndex((candidate) => candidate === step || (
+        candidate.name === step.name && candidate.agent === step.agent
+      ));
+      if (index >= 0) {
+        setSelectedStateName(state.name);
+        setEditingStep({ index, isNew: false });
+        return;
+      }
+    }
+  }, [states]);
+
+  const handleGroupSteps = (start: number, end: number, groupId?: string) => {
+    if (!selectedState) return;
+    const nextGroupId = groupId || makeParallelGroupId(selectedState.name, start);
+    const steps = (selectedState.steps || []).map((step, index) => (
+      index >= start && index <= end ? withParallelGroup(step, nextGroupId, index - start) : step
+    ));
+    updateState({ ...selectedState, steps });
+  };
+
+  const handleGroupWithNext = (index: number) => {
+    if (!selectedState || index >= (selectedState.steps?.length ?? 0) - 1) return;
+    const steps = selectedState.steps || [];
+    const left = getGroupRange(steps, index);
+    const right = getGroupRange(steps, left.end + 1);
+    const existingGroupId = getStepParallelGroup(steps[left.start]) || getStepParallelGroup(steps[right.start]);
+    handleGroupSteps(left.start, right.end, existingGroupId || makeParallelGroupId(selectedState.name, left.start));
+  };
+
+  const handleGroupWithPrevious = (index: number) => {
+    if (!selectedState || index <= 0) return;
+    const steps = selectedState.steps || [];
+    const right = getGroupRange(steps, index);
+    const left = getGroupRange(steps, right.start - 1);
+    const existingGroupId = getStepParallelGroup(steps[left.start]) || getStepParallelGroup(steps[right.start]);
+    handleGroupSteps(left.start, right.end, existingGroupId || makeParallelGroupId(selectedState.name, left.start));
+  };
+
+  const handleUngroup = (index: number) => {
+    if (!selectedState) return;
+    const steps = selectedState.steps || [];
+    const range = getGroupRange(steps, index);
+    updateState({
+      ...selectedState,
+      steps: steps.map((step, stepIndex) => (
+        stepIndex >= range.start && stepIndex <= range.end ? withoutParallelGroup(step) : step
+      )),
+    });
+  };
+
+  const handleSetJoinPolicy = (groupId: string, mode: 'all' | 'any' | 'quorum' | 'manual') => {
+    if (!selectedState) return;
+    const groupSteps = (selectedState.steps || []).filter((step) => getStepParallelGroup(step) === groupId);
+    const defaultQuorum = Math.max(1, Math.min(2, groupSteps.length));
+    updateState({
+      ...selectedState,
+      steps: (selectedState.steps || []).map((step) => {
+        if (getStepParallelGroup(step) !== groupId) return step;
+        const currentPolicy = step.concurrency?.joinPolicy || { mode: 'all' as const };
+        const nextPolicy: any = {
+          ...currentPolicy,
+          mode,
+        };
+        if (mode === 'quorum') {
+          nextPolicy.quorum = currentPolicy.quorum || defaultQuorum;
+        } else {
+          delete nextPolicy.quorum;
+        }
+        return {
+          ...step,
+          concurrency: {
+            ...(step.concurrency || {}),
+            groupId,
+            joinPolicy: nextPolicy,
+          },
+        };
+      }),
+    });
   };
 
   const handleAddTransition = () => {
@@ -479,7 +689,17 @@ export default function StateMachineDesignPanel({
         </div>
       </div>
 
-      {/* 右侧：状态详情 */}
+      {/* 中间 + 右侧：可拖拽分栏 */}
+      <ResizablePanelGroup
+        id="design-editor-diagram"
+        orientation="horizontal"
+        className="flex-1 min-w-0"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+      >
+      <ResizablePanel id="design-editor" defaultSize={50} minSize={25}>
+      <div className="h-full flex flex-col">
+
       {selectedState ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
           {/* 状态基本信息 */}
@@ -562,15 +782,74 @@ export default function StateMachineDesignPanel({
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={(selectedState.steps || []).map((_, i) => String(i))} strategy={verticalListSortingStrategy}>
                 <div className="space-y-1.5">
-                  {(selectedState.steps || []).map((step, index) => (
-                    <SortableStepRow
-                      key={index}
-                      step={step}
-                      index={index}
-                      onEdit={() => setEditingStep({ index, isNew: false })}
-                      onDelete={() => handleDeleteStep(index)}
-                    />
-                  ))}
+                  {buildStepGroups(selectedState.steps || []).map((group) => {
+                    const isParallelGroup = !!group.id && group.steps.length > 1;
+                    const firstStep = group.steps[0]?.step;
+                    const joinMode = getStepJoinPolicyMode(firstStep);
+                    if (isParallelGroup) {
+                      return (
+                        <div key={`${group.id}-${group.startIndex}`} className="rounded-2xl border border-cyan-300/70 bg-cyan-500/5 p-2.5 shadow-sm dark:border-cyan-800/80">
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-cyan-600" style={{ fontSize: 16 }}>lan</span>
+                              <div>
+                                <div className="text-xs font-semibold text-cyan-700 dark:text-cyan-300">并发组</div>
+                                <div className="text-[11px] text-muted-foreground">{joinPolicyLabels[joinMode] || joinMode} · {group.steps.length} 个步骤</div>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {(['all', 'any', 'quorum', 'manual'] as const).map((mode) => (
+                                <Button
+                                  key={mode}
+                                  type="button"
+                                  size="sm"
+                                  variant={joinMode === mode ? 'default' : 'outline'}
+                                  className="h-6 px-2 text-[10px]"
+                                  onClick={() => group.id && handleSetJoinPolicy(group.id, mode)}
+                                >
+                                  {joinPolicyLabels[mode]}
+                                </Button>
+                              ))}
+                              <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleUngroup(group.startIndex)}>
+                                拆分
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            {group.steps.map(({ step, index }) => (
+                              <SortableStepRow
+                                key={index}
+                                step={step}
+                                index={index}
+                                isParallel
+                                canGroupPrevious={index > 0 && getStepParallelGroup((selectedState.steps || [])[index - 1]) !== getStepParallelGroup(step)}
+                                canGroupNext={index < (selectedState.steps?.length ?? 0) - 1 && getStepParallelGroup((selectedState.steps || [])[index + 1]) !== getStepParallelGroup(step)}
+                                onGroupWithPrevious={() => handleGroupWithPrevious(index)}
+                                onGroupWithNext={() => handleGroupWithNext(index)}
+                                onUngroup={() => handleUngroup(index)}
+                                onEdit={() => setEditingStep({ index, isNew: false })}
+                                onDelete={() => handleDeleteStep(index)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                    const { step, index } = group.steps[0];
+                    return (
+                      <SortableStepRow
+                        key={index}
+                        step={step}
+                        index={index}
+                        canGroupPrevious={index > 0}
+                        canGroupNext={index < (selectedState.steps?.length ?? 0) - 1}
+                        onGroupWithPrevious={() => handleGroupWithPrevious(index)}
+                        onGroupWithNext={() => handleGroupWithNext(index)}
+                        onEdit={() => setEditingStep({ index, isNew: false })}
+                        onDelete={() => handleDeleteStep(index)}
+                      />
+                    );
+                  })}
                 </div>
               </SortableContext>
             </DndContext>
@@ -617,6 +896,68 @@ export default function StateMachineDesignPanel({
           请选择一个状态进行编辑
         </div>
       )}
+      </div>
+      </ResizablePanel>
+
+      <ResizableHandle
+        withHandle
+        collapsed={diagramCollapsed}
+        onClickHandle={() => {
+          const panel = diagramPanelRef.current;
+          if (!panel) return;
+          panel.isCollapsed() ? panel.expand() : panel.collapse();
+        }}
+        handleIcon={diagramCollapsed
+          ? <ChevronLeft className="h-2.5 w-2.5" />
+          : <ChevronRight className="h-2.5 w-2.5" />
+        }
+      />
+
+      <ResizablePanel
+        id="design-diagram"
+        panelRef={diagramPanelRef}
+        defaultSize={50}
+        minSize={20}
+        collapsible
+        collapsedSize={0}
+        onResize={() => setDiagramCollapsed(diagramPanelRef.current?.isCollapsed() ?? false)}
+      >
+        <div className="h-full flex flex-col bg-muted/10">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+            <span className="flex items-center gap-2 text-xs font-medium">
+              <span className="material-symbols-outlined text-primary" style={{ fontSize: 17 }}>account_tree</span>
+              整体流程图
+            </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline" className="text-[10px]">{states.length} 状态</Badge>
+              <Badge variant="outline" className="text-[10px]">{flowSummary.stepCount} 步骤</Badge>
+              <Badge variant="outline" className="text-[10px]">{flowSummary.transitionCount} 转移</Badge>
+              {flowSummary.parallelGroupCount > 0 ? (
+                <Badge variant="outline" className="text-[10px]">{flowSummary.parallelGroupCount} 并发组</Badge>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 p-2">
+            {states.length > 0 ? (
+              <StateMachineDiagram
+                states={states}
+                focusedState={selectedStateName}
+                onStateClick={(stateName) => {
+                  if (states.some((state) => state.name === stateName)) {
+                    setSelectedStateName(stateName);
+                  }
+                }}
+                onStepClick={handleDiagramStepClick}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+                暂无状态，先从左侧添加状态。
+              </div>
+            )}
+          </div>
+        </div>
+      </ResizablePanel>
+      </ResizablePanelGroup>
 
       {/* 步骤编辑弹窗（复用 EditNodeModal） */}
       {editingStep !== null && (

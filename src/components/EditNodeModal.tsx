@@ -7,9 +7,7 @@ import { z } from 'zod';
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,8 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { SingleCombobox, MultiCombobox, ComboboxPortalProvider, type ComboboxOption } from '@/components/ui/combobox';
-import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
+import { SingleCombobox, MultiCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -39,15 +36,6 @@ const stepSchema = z.object({
   constraints: z.string().optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
-  parallelGroup: z.string().optional(),
-  concurrencyGroupId: z.string().optional(),
-  branchId: z.string().optional(),
-  joinPolicyMode: z.enum(['', 'all', 'any', 'quorum', 'manual']).optional(),
-  joinPolicyQuorum: z.number().optional(),
-  joinPolicyTimeoutMinutes: z.number().optional(),
-  joinPolicyOnTimeout: z.enum(['', 'continue', 'fail', 'manual-review']).optional(),
-  agentInstanceId: z.string().optional(),
-  channelIds: z.string().optional(),
   specTaskId: z.string().optional(),
   requirementIds: z.string().optional(),
   artifactKeys: z.string().optional(),
@@ -61,7 +49,6 @@ const inputToList = (value: unknown) => typeof value === 'string'
   ? value.split(',').map((item) => item.trim()).filter(Boolean)
   : [];
 const cleanString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
-const numberOrUndefined = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 
 interface RoleOption {
   name: string;
@@ -110,7 +97,7 @@ export default function EditNodeModal({
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
-  const [agentSearch, setAgentSearch] = useState('');
+  const [showAdvancedBindings, setShowAdvancedBindings] = useState(false);
 
   const {
     register,
@@ -140,15 +127,6 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: data?.skills || [],
-          parallelGroup: data?.parallelGroup || data?.concurrency?.groupId || '',
-          concurrencyGroupId: data?.concurrency?.groupId || data?.parallelGroup || '',
-          branchId: data?.concurrency?.branchId || '',
-          joinPolicyMode: data?.concurrency?.joinPolicy?.mode || '',
-          joinPolicyQuorum: data?.concurrency?.joinPolicy?.quorum,
-          joinPolicyTimeoutMinutes: data?.concurrency?.joinPolicy?.timeoutMinutes,
-          joinPolicyOnTimeout: data?.concurrency?.joinPolicy?.onTimeout || '',
-          agentInstanceId: data?.agentInstanceId || '',
-          channelIds: listToInput(data?.channelIds),
           specTaskId: data?.specTaskBinding?.taskId || '',
           requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
           artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
@@ -158,15 +136,19 @@ export default function EditNodeModal({
   const checkpointEnabled = watch('checkpointEnabled');
   const iterationEnabled = watch('iterationEnabled');
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
-  const filteredRoles = roles.filter((role) => {
-    const query = agentSearch.trim().toLowerCase();
-    if (!query) return true;
-    return (
-      role.name.toLowerCase().includes(query) ||
-      role.category?.toLowerCase().includes(query) ||
-      role.description?.toLowerCase().includes(query) ||
-      role.tags?.some((tag) => tag.toLowerCase().includes(query))
-    );
+  const selectedAgent = roles.find((role) => role.name === selectedAgentName);
+  const agentOptions = roles.map((role) => {
+    const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean);
+    return {
+      value: role.name,
+      label: role.name,
+      description: role.description || meta.join(' · '),
+      icon: (
+        <span className="material-symbols-outlined text-sm">
+          {role.roleType === 'supervisor' ? 'supervisor_account' : 'smart_toy'}
+        </span>
+      ),
+    };
   });
 
   const handleCopyFrom = (sourceName: string) => {
@@ -192,21 +174,12 @@ export default function EditNodeModal({
         name: source.name + ' (副本)',
         agent: source.agent || '',
         task: source.task || '',
-        constraints: source.constraints?.join('\n') || '',
+        constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
         enableReviewPanel: source.enableReviewPanel || false,
         skills: source.skills || [],
-        parallelGroup: source.parallelGroup || source.concurrency?.groupId || '',
-        concurrencyGroupId: source.concurrency?.groupId || source.parallelGroup || '',
-        branchId: source.concurrency?.branchId || '',
-        joinPolicyMode: source.concurrency?.joinPolicy?.mode || '',
-        joinPolicyQuorum: source.concurrency?.joinPolicy?.quorum,
-        joinPolicyTimeoutMinutes: source.concurrency?.joinPolicy?.timeoutMinutes,
-        joinPolicyOnTimeout: source.concurrency?.joinPolicy?.onTimeout || '',
-        agentInstanceId: source.agentInstanceId || '',
-        channelIds: listToInput(source.channelIds),
-        specTaskId: source.specTaskBinding?.taskId || '',
-        requirementIds: listToInput(source.specTaskBinding?.requirementIds),
-        artifactKeys: listToInput(source.specTaskBinding?.artifactKeys),
+        specTaskId: '',
+        requirementIds: '',
+        artifactKeys: '',
       });
     }
   };
@@ -255,30 +228,10 @@ export default function EditNodeModal({
         stepData.skills = formData.skills;
       }
 
-      const parallelGroup = cleanString(formData.parallelGroup) || cleanString(formData.concurrencyGroupId);
-      const concurrencyGroupId = cleanString(formData.concurrencyGroupId) || parallelGroup;
-      if (parallelGroup) {
-        stepData.parallelGroup = parallelGroup;
-      }
-      const joinPolicy: any = {};
-      if (formData.joinPolicyMode) joinPolicy.mode = formData.joinPolicyMode;
-      const quorum = numberOrUndefined(formData.joinPolicyQuorum);
-      if (quorum) joinPolicy.quorum = quorum;
-      const timeoutMinutes = numberOrUndefined(formData.joinPolicyTimeoutMinutes);
-      if (timeoutMinutes) joinPolicy.timeoutMinutes = timeoutMinutes;
-      if (formData.joinPolicyOnTimeout) joinPolicy.onTimeout = formData.joinPolicyOnTimeout;
-      const concurrency: any = {};
-      if (concurrencyGroupId) concurrency.groupId = concurrencyGroupId;
-      const branchId = cleanString(formData.branchId);
-      if (branchId) concurrency.branchId = branchId;
-      if (Object.keys(joinPolicy).length > 0) concurrency.joinPolicy = joinPolicy;
-      if (Object.keys(concurrency).length > 0) {
-        stepData.concurrency = concurrency;
-      }
-      const agentInstanceId = cleanString(formData.agentInstanceId);
-      if (agentInstanceId) stepData.agentInstanceId = agentInstanceId;
-      const channelIds = inputToList(formData.channelIds);
-      if (channelIds.length > 0) stepData.channelIds = channelIds;
+      if (data?.parallelGroup) stepData.parallelGroup = data.parallelGroup;
+      if (data?.concurrency) stepData.concurrency = data.concurrency;
+      if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
+      if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
       const specTaskId = cleanString(formData.specTaskId);
       if (specTaskId) {
         stepData.specTaskBinding = {
@@ -418,38 +371,36 @@ export default function EditNodeModal({
                 <Label htmlFor="agent">
                   Agent <span className="text-destructive">*</span>
                 </Label>
-                <Input
-                  value={agentSearch}
-                  onChange={(e) => setAgentSearch(e.target.value)}
-                  placeholder="搜索角色..."
-                  className={errors.agent ? 'border-destructive' : ''}
+                <SingleCombobox
+                  value={selectedAgentName}
+                  onValueChange={(v) => setValue('agent', v)}
+                  options={agentOptions}
+                  placeholder="选择 Agent..."
+                  triggerClassName={errors.agent ? 'border-destructive' : ''}
                 />
-                <div className="grid max-h-[360px] grid-cols-1 gap-3 overflow-auto rounded-2xl border bg-muted/20 p-3 md:grid-cols-2">
-                  {filteredRoles.map((role) => (
-                    <AgentHeroCard
-                      key={role.name}
-                      compact
-                      selected={selectedAgentName === role.name}
-                      onClick={() => setValue('agent', role.name)}
-                      agent={{
-                        name: role.name,
-                        team: role.team as any,
-                        roleType: role.roleType,
-                        avatar: role.avatar,
-                        category: role.category,
-                        tags: role.tags,
-                        description: role.description,
-                        capabilities: role.capabilities,
-                        alwaysAvailableForChat: role.alwaysAvailableForChat,
-                      }}
-                    />
-                  ))}
-                  {filteredRoles.length === 0 && (
-                    <div className="col-span-full rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                      没有找到匹配的 Agent
+                {selectedAgent ? (
+                  <div className="rounded-xl border bg-muted/20 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {selectedAgent.roleType === 'supervisor' ? <Badge variant="outline" className="text-[10px]">Supervisor</Badge> : null}
+                      {selectedAgent.team ? <Badge variant="outline" className="text-[10px]">{selectedAgent.team}</Badge> : null}
+                      {selectedAgent.category ? <Badge variant="outline" className="text-[10px]">{selectedAgent.category}</Badge> : null}
                     </div>
-                  )}
-                </div>
+                    {selectedAgent.description ? (
+                      <p className="mt-2 leading-5 text-muted-foreground">{selectedAgent.description}</p>
+                    ) : (
+                      <p className="mt-2 leading-5 text-muted-foreground">暂无能力描述，请在 Agent 配置中补充 description。</p>
+                    )}
+                    {selectedAgent.capabilities?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {selectedAgent.capabilities.slice(0, 6).map((capability) => (
+                          <Badge key={capability} variant="secondary" className="text-[10px] font-normal">
+                            {capability}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {errors.agent && (
                   <p className="text-sm text-destructive">{errors.agent.message as string}</p>
                 )}
@@ -510,87 +461,48 @@ export default function EditNodeModal({
                 </div>
               )}
 
-              <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
-                <div>
-                  <div className="text-sm font-semibold">高级 / 并发设计元数据</div>
-                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    这些字段会保存到配置中，用于表达并发分支、多实例 Agent、channel 和 Spec task 绑定；状态机运行时支持连续同组 step 的第一阶段并发执行，复杂 channel 协作和 manual join 仍按受限能力处理。
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="parallelGroup">Parallel group</Label>
-                    <Input id="parallelGroup" {...register('parallelGroup')} placeholder="frontend-backend" />
+              {(watch('specTaskId') || showAdvancedBindings) && (
+                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                  <div>
+                    <div className="text-sm font-semibold">Spec 计划绑定</div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      由系统根据 OpenSpec tasks.md 生成，只在这里查看；任务状态由运行态回传更新。
+                    </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="concurrencyGroupId">Concurrency group</Label>
-                    <Input id="concurrencyGroupId" {...register('concurrencyGroupId')} placeholder="frontend-backend" />
+                  <div className="rounded-xl border bg-background/60 p-3">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between text-left text-xs font-medium text-muted-foreground"
+                      onClick={() => setShowAdvancedBindings((v) => !v)}
+                    >
+                      <span>{watch('specTaskId') ? `已绑定 Spec 计划任务：${watch('specTaskId')}` : '查看系统绑定信息'}</span>
+                      <span className="material-symbols-outlined text-sm">{showAdvancedBindings ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                    {showAdvancedBindings && (
+                      <div className="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
+                        <div>
+                          <div className="text-muted-foreground">Spec 任务</div>
+                          <div className="mt-1 truncate font-medium">{watch('specTaskId') || '未绑定'}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">关联需求</div>
+                          <div className="mt-1 truncate font-medium">{watch('requirementIds') || '系统推导'}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">产物类型</div>
+                          <div className="mt-1 truncate font-medium">{watch('artifactKeys') || '系统推导'}</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="branchId">Branch id</Label>
-                    <Input id="branchId" {...register('branchId')} placeholder="frontend" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="agentInstanceId">Agent instance id</Label>
-                    <Input id="agentInstanceId" {...register('agentInstanceId')} placeholder="frontend-dev-1" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Join policy</Label>
-                    <SingleCombobox
-                      value={watch('joinPolicyMode') || ''}
-                      onValueChange={(v) => setValue('joinPolicyMode', v as any)}
-                      options={[
-                        { value: '', label: '未设置' },
-                        { value: 'all', label: 'all' },
-                        { value: 'any', label: 'any' },
-                        { value: 'quorum', label: 'quorum' },
-                        { value: 'manual', label: 'manual' },
-                      ]}
-                      searchable={false}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="joinPolicyQuorum">Quorum</Label>
-                    <Input id="joinPolicyQuorum" type="number" min={1} {...register('joinPolicyQuorum', { valueAsNumber: true })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="joinPolicyTimeoutMinutes">Timeout minutes</Label>
-                    <Input id="joinPolicyTimeoutMinutes" type="number" min={1} {...register('joinPolicyTimeoutMinutes', { valueAsNumber: true })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Timeout behavior</Label>
-                    <SingleCombobox
-                      value={watch('joinPolicyOnTimeout') || ''}
-                      onValueChange={(v) => setValue('joinPolicyOnTimeout', v as any)}
-                      options={[
-                        { value: '', label: '未设置' },
-                        { value: 'continue', label: 'continue' },
-                        { value: 'fail', label: 'fail' },
-                        { value: 'manual-review', label: 'manual-review' },
-                      ]}
-                      searchable={false}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="channelIds">Channel ids（逗号分隔）</Label>
-                  <Input id="channelIds" {...register('channelIds')} placeholder="impl-shared, supervisor" />
-                </div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="specTaskId">Spec task id</Label>
-                    <Input id="specTaskId" {...register('specTaskId')} placeholder="task-3" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="requirementIds">Requirement ids</Label>
-                    <Input id="requirementIds" {...register('requirementIds')} placeholder="req-1, req-2" />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="artifactKeys">Artifact keys</Label>
-                    <Input id="artifactKeys" {...register('artifactKeys')} placeholder="design, tasks" />
-                  </div>
+
+                <div className="hidden">
+                  <input {...register('specTaskId')} />
+                  <input {...register('requirementIds')} />
+                  <input {...register('artifactKeys')} />
                 </div>
               </div>
+              )}
             </>
           )}
 
