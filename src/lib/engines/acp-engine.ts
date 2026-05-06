@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { delimiter as pathDelimiter } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import {
@@ -48,6 +49,13 @@ export interface ACPEngineConfig {
 
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
+
+/** Extra bin dirs for spawned CLI (POSIX servers); Windows uses native PATH only — wrong delimiter breaks child env. */
+function augmentPathForSpawn(existingPath: string | undefined): string {
+  const extra =
+    process.platform === 'win32' ? [] : ['/root/.local/bin', '/usr/local/bin'];
+  return [existingPath || '', ...extra].filter(Boolean).join(pathDelimiter);
+}
 // ============================================================================
 // Unified ACP Engine
 // ============================================================================
@@ -76,7 +84,7 @@ export class ACPEngine extends EventEmitter {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        PATH: `${process.env.PATH}:/root/.local/bin:/usr/local/bin`,
+        PATH: augmentPathForSpawn(process.env.PATH),
         ...this.config.env,
       },
     });
@@ -93,6 +101,11 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('exit', (code, signal) => {
+      if (code !== 0 || signal) {
+        console.warn(
+          `[${this.config.engineType}] child exited early code=${code} signal=${signal}; stderr tail: ${this.lastStderrChunk?.slice(0, 500) || '<empty>'}`
+        );
+      }
       this.emit('exit', { code, signal });
       this.cleanup(`${this.config.engineType} process exited (code=${code}, signal=${signal})`);
     });

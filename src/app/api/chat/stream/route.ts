@@ -218,6 +218,9 @@ export async function POST(request: NextRequest) {
         },
       };
       activeChats.set(chatId, entry);
+      void execPromise.catch((err) => {
+        console.error(`[chat/stream] engine execute failed chatId=${chatId}`, err);
+      });
       execPromise
         .then(() => { entry.settled = true; setEngineStreamStatus(chatId, 'completed'); })
         .catch(() => { entry.settled = true; setEngineStreamStatus(chatId, 'failed'); })
