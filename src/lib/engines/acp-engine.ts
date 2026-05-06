@@ -120,41 +120,60 @@ export class ACPEngine extends EventEmitter {
     const stream = ndJsonStream(output, input);
 
     const engine = this; // capture for closure
+    // SDK calls notification/request handlers without awaiting the inner Promise in all paths;
+    // any rejection becomes process unhandledRejection — handlers must never throw.
     this.connection = new ClientSideConnection((_agent: Agent): Client => ({
       async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-        // Auto-approve: pick first option (usually 'allow-always')
-        const optionId = params.options[0]?.optionId ?? 'always';
-        engine.emit('permission', params);
-        return { outcome: { outcome: 'selected', optionId } };
+        try {
+          const optionId = params.options[0]?.optionId ?? 'always';
+          engine.emit('permission', params);
+          return { outcome: { outcome: 'selected', optionId } };
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] requestPermission error`, e);
+          return { outcome: { outcome: 'selected', optionId: 'always' } };
+        }
       },
 
       async sessionUpdate(params: SessionNotification): Promise<void> {
-        engine.handleSessionUpdate(params.update);
+        try {
+          engine.handleSessionUpdate(params.update);
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] sessionUpdate error`, e);
+        }
       },
 
       // Cursor extensions
       async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
-        switch (method) {
-          case 'cursor/ask_question':
-          case 'cursor/create_plan':
-          case 'cursor/update_todos':
-            engine.emit('cursor-ext', { method, params });
-            return {};
-          case 'cursor/task':
-            engine.emit('subtask', params);
-            return {};
-          case 'cursor/generate_image':
-            return {};
-          default:
-            console.log(`[${engine.config.engineType}] unhandled extMethod: ${method}`);
-            return {};
+        try {
+          switch (method) {
+            case 'cursor/ask_question':
+            case 'cursor/create_plan':
+            case 'cursor/update_todos':
+              engine.emit('cursor-ext', { method, params });
+              return {};
+            case 'cursor/task':
+              engine.emit('subtask', params);
+              return {};
+            case 'cursor/generate_image':
+              return {};
+            default:
+              console.log(`[${engine.config.engineType}] unhandled extMethod: ${method}`);
+              return {};
+          }
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] extMethod error`, method, e);
+          return {};
         }
       },
 
       // Kiro extensions
       async extNotification(method: string, params: Record<string, unknown>): Promise<void> {
-        if (method.startsWith('_kiro.dev/')) {
-          engine.emit('kiro-ext', { method, params });
+        try {
+          if (method.startsWith('_kiro.dev/')) {
+            engine.emit('kiro-ext', { method, params });
+          }
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] extNotification error`, method, e);
         }
       },
     }), stream);
