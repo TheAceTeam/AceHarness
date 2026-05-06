@@ -69,7 +69,12 @@ export async function POST(request: Request) {
       }
       const skillsLink = path.join(configDir, 'skills');
       if (existsSync(skillsDir) && !existsSync(skillsLink)) {
-        symlinkSync(skillsDir, skillsLink);
+        // Windows: directory symlinks often need admin; junction usually works without elevation.
+        if (process.platform === 'win32') {
+          symlinkSync(skillsDir, skillsLink, 'junction');
+        } else {
+          symlinkSync(skillsDir, skillsLink);
+        }
         console.log(`[Engine] Linked ${engineConfigDir}/skills -> skills/`);
       }
     } catch (e) {
