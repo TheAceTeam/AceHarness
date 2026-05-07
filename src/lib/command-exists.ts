@@ -35,7 +35,7 @@ export function commandExists(name: string, extraDirs?: string[]): boolean {
     try {
       execSync(`where.exe ${name}`, {
         stdio: 'ignore',
-        shell: process.env.ComSpec || true,
+        shell: process.env.ComSpec,
       });
       return true;
     } catch {

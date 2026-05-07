@@ -8,6 +8,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
+import { commandExists } from '../command-exists';
 
 export class OpenCodeEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -26,21 +27,6 @@ export class OpenCodeEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    try {
-      const { execSync } = require('child_process');
-      execSync('command -v opencode', { stdio: 'ignore', shell: '/bin/bash' });
-      return true;
-    } catch (e) {
-      const fs = require('fs');
-      const commonPaths = [
-        '/root/.local/bin/opencode',
-        '/usr/local/bin/opencode',
-        '/usr/bin/opencode',
-      ];
-      for (const p of commonPaths) {
-        if (fs.existsSync(p)) return true;
-      }
-      return false;
-    }
+    return commandExists('opencode');
   }
 }

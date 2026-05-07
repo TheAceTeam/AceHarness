@@ -7,7 +7,7 @@
  *   node scripts/check-engine-availability.mjs --engine nga
  *   node scripts/check-engine-availability.mjs --base-url http://127.0.0.1:3000
  *
- * Windows: commandExists 已与仓库一致使用 where.exe；POSIX 仍依赖 bash。请在与 npm run dev 相同环境中运行。
+ * Windows: commandExists 使用 where.exe；POSIX 使用 bash command -v。请在与 npm run dev 相同环境中运行。
  */
 
 import { execSync, spawnSync } from 'child_process';
@@ -211,10 +211,10 @@ async function main() {
   printHeader('环境与 PATH');
   console.log(`platform: ${process.platform}`);
   console.log(`cwd: ${process.cwd()}`);
-  console.log(`bash 可用 (bash -lc): ${bashAvailable() ? '是' : '否'} —— ACEHarness 的 commandExists 依赖 Git Bash 等提供的 bash`);
+  console.log(`bash 可用 (bash -lc): ${bashAvailable() ? '是' : '否'} —— POSIX 检测会使用 bash；Windows 检测使用 where.exe`);
   if (isWin) {
     console.log(
-      '\n提示: Windows 上若 bash=false，服务端可能与「where 能找到」不一致；请安装 Git for Windows 或将 bash 加入 PATH。',
+      '\n提示: Windows 上服务端优先使用 where.exe 检测 CLI；若服务端与当前终端不一致，请检查启动 Node 的 PATH。',
     );
   }
   const pathPreview = (process.env.PATH || '').slice(0, 400);
