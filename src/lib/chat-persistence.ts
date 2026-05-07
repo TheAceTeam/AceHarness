@@ -54,7 +54,7 @@ export interface WorkflowCreationBinding {
 
 export interface AgentChatBinding {
   agentName: string;
-  team?: 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+  team?: 'blue' | 'red' | 'judge' | 'black-gold';
   roleType?: 'normal' | 'supervisor';
   createdAt: number;
   updatedAt: number;

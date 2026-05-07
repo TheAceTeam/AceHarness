@@ -1,13 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Folder, Loader2, FolderOpen, LocateFixed } from 'lucide-react';
+import { ArrowUp, ChevronRight, Folder, FolderOpen, HardDrive, House, Loader2, LocateFixed } from 'lucide-react';
 import type { TreeNode } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+
+type PathResolution = string | { root?: string; path: string };
 
 interface DirectoryTreePickerProps {
   value: string;
@@ -15,8 +17,17 @@ interface DirectoryTreePickerProps {
   loadRoot: () => Promise<TreeNode[]>;
   loadChildren: (path: string) => Promise<TreeNode[]>;
   rootLabel?: string;
+  homeLabel?: string;
+  quickAccessRoots?: string[];
   disabled?: boolean;
   className?: string;
+  onResolvePath?: (input: string) => Promise<PathResolution> | PathResolution;
+  onNavigateUp?: (currentPath: string) => Promise<PathResolution> | PathResolution;
+  onNavigateHome?: () => Promise<PathResolution> | PathResolution;
+}
+
+function normalizePickerPath(rawPath: string): string {
+  return (rawPath || '').replace(/^\/+|\/+$/g, '');
 }
 
 function sortTree(nodes: TreeNode[]): TreeNode[] {
@@ -40,14 +51,29 @@ function replaceNodeChildren(nodes: TreeNode[], targetPath: string, children: Tr
   });
 }
 
+async function normalizeResolution(
+  input: string,
+  resolver?: (input: string) => Promise<PathResolution> | PathResolution,
+): Promise<{ root?: string; path: string }> {
+  const resolved = await Promise.resolve(resolver ? resolver(input) : input);
+  if (typeof resolved === 'string') {
+    return { path: resolved };
+  }
+  return resolved;
+}
+
 export default function DirectoryTreePicker({
   value,
   onChange,
   loadRoot,
   loadChildren,
   rootLabel = '根目录 /',
+  quickAccessRoots = [],
   disabled = false,
   className,
+  onResolvePath,
+  onNavigateUp,
+  onNavigateHome,
 }: DirectoryTreePickerProps) {
   const [open, setOpen] = useState(false);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -77,8 +103,24 @@ export default function DirectoryTreePicker({
     }
   }, [loadChildren]);
 
+  const refreshRoot = useCallback(async () => {
+    setLoadingRoot(true);
+    try {
+      const nodes = await loadRoot();
+      setLoadError(null);
+      setTree(sortTree(nodes || []));
+      setExpanded(new Set(['']));
+    } catch (error: any) {
+      setTree([]);
+      setExpanded(new Set(['']));
+      setLoadError(error?.message || '加载目录失败');
+    } finally {
+      setLoadingRoot(false);
+    }
+  }, [loadRoot]);
+
   const expandPath = useCallback(async (rawPath: string) => {
-    const normalized = rawPath.replace(/^\/+|\/+$/g, '');
+    const normalized = normalizePickerPath(rawPath);
     setLocatingPath(true);
     try {
       if (!normalized) {
@@ -99,21 +141,18 @@ export default function DirectoryTreePicker({
     }
   }, [handleLoadChildren]);
 
-  const refreshRoot = useCallback(async () => {
-    setLoadingRoot(true);
-    try {
-      const nodes = await loadRoot();
-      setLoadError(null);
-      setTree(sortTree(nodes || []));
+  const applyPath = useCallback(async (input: string, resolver?: (input: string) => Promise<PathResolution> | PathResolution) => {
+    const resolved = await normalizeResolution(input, resolver);
+    const normalizedPath = normalizePickerPath(resolved.path || '');
+    setDraftValue(normalizedPath);
+    setPathInput(resolved.root ? `${resolved.root}${normalizedPath ? `/${normalizedPath}` : ''}` : (resolved.path || ''));
+    await refreshRoot();
+    if (normalizedPath) {
+      await expandPath(normalizedPath);
+    } else {
       setExpanded(new Set(['']));
-    } catch (error: any) {
-      setTree([]);
-      setExpanded(new Set(['']));
-      setLoadError(error?.message || '加载目录失败');
-    } finally {
-      setLoadingRoot(false);
     }
-  }, [loadRoot]);
+  }, [expandPath, refreshRoot]);
 
   useEffect(() => {
     void refreshRoot();
@@ -137,9 +176,6 @@ export default function DirectoryTreePicker({
         await expandPath(value);
       } else {
         setExpanded(new Set(['']));
-      }
-      if (!cancelled) {
-        setLocatingPath(false);
       }
     };
 
@@ -172,24 +208,8 @@ export default function DirectoryTreePicker({
     if (loadingRoot) return;
     const target = nodeRefs.current.get(draftValue || '');
     if (!target) return;
-
-    target.scrollIntoView({
-      block: 'center',
-      inline: 'nearest',
-      behavior: 'smooth',
-    });
+    target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
   }, [draftValue, expanded, loadingPaths, loadingRoot, tree]);
-
-  const expandAndSelectPath = useCallback(async (rawPath: string) => {
-    const normalized = rawPath.replace(/^\/+|\/+$/g, '');
-    if (!normalized) {
-      setDraftValue('');
-      setExpanded(new Set(['']));
-      return;
-    }
-    await expandPath(normalized);
-    setDraftValue(normalized);
-  }, [expandPath]);
 
   const toggleExpand = useCallback((path: string, hasLoadedChildren: boolean | undefined) => {
     setExpanded((prev) => {
@@ -214,7 +234,7 @@ export default function DirectoryTreePicker({
         const isSelected = draftValue === node.path;
         const isLoading = loadingPaths.has(node.path);
         const hasLoadedChildren = Array.isArray(node.children);
-        const children: TreeNode[] = Array.isArray(node.children) ? node.children : [];
+        const children = Array.isArray(node.children) ? node.children : [];
         const canExpand = isLoading || (hasLoadedChildren ? children.length > 0 : true);
 
         return (
@@ -222,15 +242,12 @@ export default function DirectoryTreePicker({
             <button
               type="button"
               ref={(element) => {
-                if (element) {
-                  nodeRefs.current.set(node.path, element);
-                } else {
-                  nodeRefs.current.delete(node.path);
-                }
+                if (element) nodeRefs.current.set(node.path, element);
+                else nodeRefs.current.delete(node.path);
               }}
               className={cn(
                 'inline-flex h-7 w-full min-w-0 items-center gap-1 overflow-hidden rounded px-1 text-left text-sm hover:bg-accent',
-                isSelected && 'bg-accent text-accent-foreground ring-2 ring-primary/35 outline outline-1 outline-primary/60 outline-offset-[-1px]'
+                isSelected && 'bg-accent text-accent-foreground ring-2 ring-primary/35 outline outline-1 outline-primary/60 outline-offset-[-1px]',
               )}
               style={{ paddingLeft: `${8 + depth * 14}px` }}
               disabled={disabled}
@@ -238,8 +255,7 @@ export default function DirectoryTreePicker({
               onDoubleClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (!canExpand) return;
-                toggleExpand(node.path, hasLoadedChildren);
+                if (canExpand) toggleExpand(node.path, hasLoadedChildren);
               }}
             >
               <span
@@ -247,8 +263,7 @@ export default function DirectoryTreePicker({
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  if (!canExpand) return;
-                  toggleExpand(node.path, hasLoadedChildren);
+                  if (canExpand) toggleExpand(node.path, hasLoadedChildren);
                 }}
               >
                 {isLoading ? (
@@ -259,12 +274,14 @@ export default function DirectoryTreePicker({
                   <ChevronRight className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', isExpanded && 'rotate-90')} />
                 )}
               </span>
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              {isExpanded ? (
+                <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              ) : (
+                <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
               <span className="min-w-0 flex-1 truncate">{node.name}</span>
             </button>
-            {isExpanded && hasLoadedChildren && children.length > 0 ? (
-              <div>{renderTree(children, depth + 1)}</div>
-            ) : null}
+            {isExpanded && hasLoadedChildren && children.length > 0 ? <div>{renderTree(children, depth + 1)}</div> : null}
           </div>
         );
       });
@@ -277,13 +294,7 @@ export default function DirectoryTreePicker({
     <>
       <div className={cn('flex min-w-0 items-center gap-2', className)}>
         <Input value={displayValue} readOnly disabled={disabled} className="flex-1" />
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-          className="shrink-0"
-        >
+        <Button type="button" variant="outline" disabled={disabled} onClick={() => setOpen(true)} className="shrink-0">
           选择目录
         </Button>
       </div>
@@ -298,31 +309,55 @@ export default function DirectoryTreePicker({
             <ResizablePanelGroup direction="horizontal" className="h-full rounded-lg border">
               <ResizablePanel defaultSize={72} minSize={45}>
                 <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-                  <div className="flex items-center gap-2 border-b p-3">
+                  <div className="flex flex-wrap items-center gap-2 border-b p-3">
                     <Input
                       value={pathInput}
                       onChange={(event) => setPathInput(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter') {
                           event.preventDefault();
-                          void expandAndSelectPath(pathInput);
+                          void applyPath(pathInput, onResolvePath);
                         }
                       }}
-                      placeholder="输入目录路径并回车定位"
+                      placeholder="输入目录路径后回车定位，支持绝对路径"
                       disabled={disabled}
-                      className="h-9 flex-1"
+                      className="h-9 min-w-[240px] flex-1"
                     />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={disabled}
-                      onClick={() => void expandAndSelectPath(pathInput)}
-                      className="shrink-0"
-                    >
+                    <Button type="button" variant="outline" disabled={disabled} onClick={() => void applyPath(pathInput, onResolvePath)}>
                       <LocateFixed className="mr-1 h-4 w-4" />
                       定位
                     </Button>
+                    {onNavigateUp ? (
+                      <Button type="button" variant="outline" disabled={disabled} onClick={() => void applyPath(draftValue, onNavigateUp)}>
+                        <ArrowUp className="mr-1 h-4 w-4" />
+                        上一级
+                      </Button>
+                    ) : null}
+                    {onNavigateHome ? (
+                      <Button type="button" variant="outline" disabled={disabled} onClick={() => void applyPath('', () => onNavigateHome())}>
+                        <House className="mr-1 h-4 w-4" />
+                        回到起点
+                      </Button>
+                    ) : null}
+                    {quickAccessRoots.length > 0 ? (
+                      <div className="flex w-full flex-wrap items-center gap-2 pt-1">
+                        {quickAccessRoots.map((root) => (
+                          <Button
+                            key={root}
+                            type="button"
+                            variant={pathInput === root || rootLabel === root ? 'default' : 'outline'}
+                            size="sm"
+                            disabled={disabled}
+                            onClick={() => void applyPath(root, onResolvePath)}
+                          >
+                            <HardDrive className="mr-1 h-3.5 w-3.5" />
+                            {root}
+                          </Button>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
+
                   {locatingPath ? (
                     <div className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -333,15 +368,12 @@ export default function DirectoryTreePicker({
                   <button
                     type="button"
                     ref={(element) => {
-                      if (element) {
-                        nodeRefs.current.set('', element);
-                      } else {
-                        nodeRefs.current.delete('');
-                      }
+                      if (element) nodeRefs.current.set('', element);
+                      else nodeRefs.current.delete('');
                     }}
                     className={cn(
                       'flex h-10 w-full min-w-0 items-center gap-2 border-b px-3 text-left text-sm hover:bg-accent',
-                      draftValue === '' && 'bg-accent text-accent-foreground ring-2 ring-primary/35 outline outline-1 outline-primary/60 outline-offset-[-1px]'
+                      draftValue === '' && 'bg-accent text-accent-foreground ring-2 ring-primary/35 outline outline-1 outline-primary/60 outline-offset-[-1px]',
                     )}
                     disabled={disabled}
                     onClick={() => setDraftValue('')}
@@ -357,13 +389,9 @@ export default function DirectoryTreePicker({
                         正在加载目录...
                       </div>
                     ) : loadError ? (
-                      <div className="px-2 py-3 text-sm text-muted-foreground">
-                        {loadError}
-                      </div>
+                      <div className="px-2 py-3 text-sm text-muted-foreground">{loadError}</div>
                     ) : tree.length === 0 ? (
-                      <div className="px-2 py-3 text-sm text-muted-foreground">
-                        暂无可用目录
-                      </div>
+                      <div className="px-2 py-3 text-sm text-muted-foreground">暂无可用目录</div>
                     ) : (
                       renderTree(tree, 0)
                     )}
@@ -388,8 +416,8 @@ export default function DirectoryTreePicker({
                     <div className="mt-3 space-y-2 leading-6">
                       <div>单击目录即可选中。</div>
                       <div>双击目录名或点击箭头可以展开子目录。</div>
-                      <div>目录较深时可以直接输入路径后点击“定位”。</div>
-                      <div>左右区域支持拖拽调整宽度。</div>
+                      <div>支持直接输入绝对路径，比如 `C:/`、`D:/work`、`/home/user`。</div>
+                      <div>“上一级”会向父目录切换，“回到起点”会回到页面提供的默认起点。</div>
                     </div>
                   </div>
                 </div>

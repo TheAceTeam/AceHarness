@@ -1,13 +1,20 @@
 "use client"
 
 import * as React from "react"
-import { ChevronRight, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download } from "lucide-react"
+import { ChevronDown, ChevronRight, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp } from "lucide-react"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/api"
+import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@radix-ui/react-collapsible"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -906,26 +913,32 @@ export function FileTreeSidebar({
           <img src={`${FILE_TYPE_ICON_DIR}/folder.svg`} alt="" aria-hidden className="h-4 w-4 shrink-0" />
           <span className="text-sm font-semibold truncate flex-1">{workspaceName}</span>
           {mode === "default" && (
-            <>
-              <button
-                type="button"
-                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
-                onClick={() => requestUpload("", false)}
-                title="上传文件"
-                disabled={uploading}
-              >
-                <Upload className="mr-1 h-3.5 w-3.5" />上传
-              </button>
-              <button
-                type="button"
-                className="inline-flex h-7 items-center rounded-md border px-2 text-xs hover:bg-accent disabled:opacity-50"
-                onClick={() => requestUpload("", true)}
-                title="上传文件夹"
-                disabled={uploading}
-              >
-                文件夹
-              </button>
-            </>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  title="上传"
+                  disabled={uploading}
+                >
+                  <Upload className="mr-1 h-3.5 w-3.5" />
+                  上传
+                  <ChevronDown className="ml-1 h-3 w-3 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-36">
+                <DropdownMenuItem onClick={() => requestUpload("", false)}>
+                  <Upload className="mr-2 h-3.5 w-3.5" />
+                  上传文件
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => requestUpload("", true)}>
+                  <FolderUp className="mr-2 h-3.5 w-3.5" />
+                  上传文件夹
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           {mode === "notebook" && (
             <button

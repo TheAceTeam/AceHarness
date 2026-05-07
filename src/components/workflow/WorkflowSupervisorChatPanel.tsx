@@ -18,7 +18,6 @@ interface WorkflowSupervisorChatPanelProps {
   pendingHumanQuestion?: HumanQuestion | null;
   submittingHumanQuestion?: boolean;
   onSubmitHumanQuestion?: (answer: HumanQuestionAnswer) => Promise<void> | void;
-  onOpenHome?: () => void;
 }
 
 const noop = () => {};
@@ -32,7 +31,6 @@ export default function WorkflowSupervisorChatPanel({
   pendingHumanQuestion,
   submittingHumanQuestion,
   onSubmitHumanQuestion,
-  onOpenHome,
 }: WorkflowSupervisorChatPanelProps) {
   const {
     activeSessionId,
@@ -90,11 +88,6 @@ export default function WorkflowSupervisorChatPanel({
             {supervisorSessionId ? <span>Session: {supervisorSessionId}</span> : null}
           </div>
         </div>
-        {onOpenHome ? (
-          <Button size="sm" variant="outline" onClick={onOpenHome}>
-            打开首页对话
-          </Button>
-        ) : null}
       </div>
 
       {pendingHumanQuestion && onSubmitHumanQuestion ? (

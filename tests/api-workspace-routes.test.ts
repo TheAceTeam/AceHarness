@@ -1,8 +1,8 @@
 import { File } from 'node:buffer';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { withTempWorkspace } from './helpers/module-helpers';
+import { canCreateFileSymlink, createFileSymlink, withTempWorkspace } from './helpers/module-helpers';
 import { assertErrorResponse, makeRequest, responseJson } from './helpers/route-helpers';
 
 type TreeNode = { name: string; path: string; type: string; children?: TreeNode[] };
@@ -28,13 +28,17 @@ function flattenTree(nodes: TreeNode[]): TreeNode[] {
 }
 
 describe('workspace API routes', () => {
-  test('workspace tree lists safe files while hiding dotfiles and symlinks', async () => {
+  test('workspace tree lists safe files while hiding dotfiles and symlinks', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
     await withTempWorkspace(async ({ workspace, base }) => {
       await mkdir(path.join(workspace, 'src'), { recursive: true });
       await writeFile(path.join(workspace, 'src', 'app.ts'), 'export const ok = true;');
       await writeFile(path.join(workspace, '.env'), 'SECRET=value');
       await writeFile(path.join(base, 'outside.txt'), 'outside');
-      await symlink(path.join(base, 'outside.txt'), path.join(workspace, 'src', 'outside-link.txt'));
+      await createFileSymlink(path.join(base, 'outside.txt'), path.join(workspace, 'src', 'outside-link.txt'));
 
       const { tree } = await loadWorkspaceRoutes();
       const response = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&depth=3`));
@@ -49,12 +53,16 @@ describe('workspace API routes', () => {
     });
   });
 
-  test('workspace file route reads, writes, and rejects traversal or symlink escapes', async () => {
+  test('workspace file route reads, writes, and rejects traversal or symlink escapes', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
     await withTempWorkspace(async ({ workspace, base }) => {
       await mkdir(path.join(workspace, 'docs'), { recursive: true });
       await writeFile(path.join(workspace, 'docs', 'note.md'), 'old');
       await writeFile(path.join(base, 'secret.txt'), 'secret');
-      await symlink(path.join(base, 'secret.txt'), path.join(workspace, 'docs', 'secret-link.txt'));
+      await createFileSymlink(path.join(base, 'secret.txt'), path.join(workspace, 'docs', 'secret-link.txt'));
 
       const { file } = await loadWorkspaceRoutes();
 
@@ -118,11 +126,15 @@ describe('workspace API routes', () => {
     });
   });
 
-  test('workspace download route returns bytes with safe headers and rejects symlink escapes', async () => {
+  test('workspace download route returns bytes with safe headers and rejects symlink escapes', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
     await withTempWorkspace(async ({ workspace, base }) => {
       await writeFile(path.join(workspace, 'report.txt'), 'download me');
       await writeFile(path.join(base, 'secret.txt'), 'secret');
-      await symlink(path.join(base, 'secret.txt'), path.join(workspace, 'secret-link.txt'));
+      await createFileSymlink(path.join(base, 'secret.txt'), path.join(workspace, 'secret-link.txt'));
 
       const { download } = await loadWorkspaceRoutes();
       const response = await download.GET(makeRequest(`/api/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent('report.txt')}`));

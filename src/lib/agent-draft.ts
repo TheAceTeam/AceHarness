@@ -1,6 +1,6 @@
 import { createDeterministicAvatarConfig } from '@/lib/agent-personas';
 
-export type AgentDraftTeam = 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+export type AgentDraftTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
 export type AgentDraftState = {
   displayName: string;
@@ -24,7 +24,7 @@ type AgentDraftPreviewInput = {
 export function createInitialAgentDraft(overrides?: Partial<AgentDraftState>): AgentDraftState {
   return {
     displayName: '',
-    team: 'blue',
+    team: 'red',
     mission: '',
     style: '理性、可靠、执行力强',
     specialties: '',
@@ -39,7 +39,7 @@ export function createInitialAgentDraft(overrides?: Partial<AgentDraftState>): A
 export function normalizeAgentDraft(input?: Partial<AgentDraftState> | null): AgentDraftState {
   return createInitialAgentDraft({
     displayName: input?.displayName || '',
-    team: input?.team || 'blue',
+    team: input?.team || 'red',
     mission: input?.mission || '',
     style: input?.style || '理性、可靠、执行力强',
     specialties: input?.specialties || '',

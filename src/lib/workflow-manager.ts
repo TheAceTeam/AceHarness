@@ -27,6 +27,7 @@ import type { EngineStreamEvent } from './engines/engine-interface';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from './runtime-configs';
 import { getRuntimeSkillsDirPath } from './runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from './app-paths';
+import { createDirectoryLinkSync } from './directory-links';
 import { resolveAgentSelection } from './agent-engine-selection';
 import { ensureDefaultSupervisorConfig } from './default-supervisor';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
@@ -186,6 +187,8 @@ export class WorkflowManager extends EventEmitter {
   private workspaceSkillNames: Set<string> = new Set();
   /** Multi-user: createdBy userId, set by workflow start route */
   public _createdBy?: string;
+  /** Multi-user: display name for the user who started the run */
+  public _createdByName?: string;
   /** Multi-user: user's personal directory for isolation */
   public _userPersonalDir?: string;
   /** Optional frontend chat session to auto-bind with this run */
@@ -323,8 +326,7 @@ export class WorkflowManager extends EventEmitter {
       // 没有指定 skills，symlink 整个 skills 目录（像 chat 一样）
       if (!existsSync(workspaceSkillsDir)) {
         try {
-          const { symlinkSync } = await import('fs');
-          symlinkSync(serverSkillsDir, workspaceSkillsDir);
+          createDirectoryLinkSync(serverSkillsDir, workspaceSkillsDir);
         } catch { /* ignore */ }
       }
       return;
@@ -340,8 +342,7 @@ export class WorkflowManager extends EventEmitter {
       if (!existsSync(src)) continue;
       if (existsSync(dst)) continue; // already exists (symlink or real dir)
       try {
-        const { symlinkSync } = await import('fs');
-        symlinkSync(src, dst);
+        createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
         console.log(`[WF-Skills] 已链接 skill "${skillName}" → ${dst}`);
       } catch (e) {
@@ -748,6 +749,10 @@ export class WorkflowManager extends EventEmitter {
       const state: PersistedRunState = {
         runId: this.currentRunId,
         configFile: this.currentConfigFile || '',
+        runOwnerId: this._createdBy,
+        runOwnerName: this._createdByName,
+        createdBy: this._createdBy,
+        createdByName: this._createdByName,
         status: (this.status === 'idle' ? (this.shouldStop ? 'stopped' : 'completed') : this.status) as PersistedRunState['status'],
         statusReason: this.statusReason || undefined,
         startTime: this.runStartTime || new Date().toISOString(),
@@ -1033,7 +1038,7 @@ export class WorkflowManager extends EventEmitter {
         || workflowConfig.roles?.find((r) => r.name === agentName);
       return {
         name: agentName,
-        team: roleConfig?.team || 'blue',
+        team: roleConfig?.team || 'red',
         model: resolveAgentModel(roleConfig, workflowConfig.context),
         status: 'waiting',
         currentTask: null,
@@ -2413,6 +2418,8 @@ export class WorkflowManager extends EventEmitter {
     this.currentWorkflow = workflowConfig;
     this.currentRunId = runId;
     this.currentConfigFile = runState.configFile;
+    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
+    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
     this.status = 'running';
     this.shouldStop = false;
     this.logs = [];

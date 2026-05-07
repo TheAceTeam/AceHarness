@@ -10,6 +10,8 @@ import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runt
 import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
 import { updateChatSessionCreationBinding } from '@/lib/chat-persistence';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
+import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
+import { compileStepTaskBindings } from '@/lib/spec-task-binding';
 
 function createDefaultWorkflowGovernance() {
   return {
@@ -62,7 +64,7 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
       states: [
         {
           name: '设计',
-          description: '执行设计任务，蓝队实施、红队挑战、裁判评审',
+          description: '执行设计任务，红队实施、蓝队挑战、裁判评审',
           isInitial: true,
           isFinal: false,
           maxSelfTransitions: 3,
@@ -70,7 +72,7 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
           steps: [
             { name: '方案设计', agent: 'architect', role: 'defender', task: '根据需求设计技术方案，输出设计文档' },
             { name: '方案挑战', agent: 'design-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
-            { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合蓝队方案和红队意见，给出评审结论和 verdict' },
+            { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合红队方案和蓝队意见，给出评审结论和 verdict' },
           ],
           transitions: [
             { to: '实施', condition: { verdict: 'pass' }, priority: 1, label: '设计通过' },
@@ -80,7 +82,7 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
         },
         {
           name: '实施',
-          description: '执行实施任务，蓝队编码、红队审查、裁判验收',
+          description: '执行实施任务，红队编码、蓝队审查、裁判验收',
           isInitial: false,
           isFinal: false,
           maxSelfTransitions: 3,
@@ -98,7 +100,7 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
         },
         {
           name: '测试',
-          description: '执行测试验证，蓝队测试、红队攻击、裁判判定',
+          description: '执行测试验证，红队测试、蓝队攻击、裁判判定',
           isInitial: false,
           isFinal: false,
           maxSelfTransitions: 3,
@@ -225,6 +227,9 @@ export async function POST(request: NextRequest) {
     const workflowMode = mode || 'phase-based';
     const normalizedPersistMode = persistMode === 'repository' ? 'repository' : 'none';
     const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
+    if (normalizedPersistMode === 'repository') {
+      assertPersistedSpecRootReady(workingDirectory, normalizedSpecRoot);
+    }
 
     // 检查文件是否已存在
     await ensureRuntimeConfigsSeeded();
@@ -375,6 +380,12 @@ export async function POST(request: NextRequest) {
     if (!creationSession) {
       throw new Error('创建态会话生成失败');
     }
+    const bindingCompilation = compileStepTaskBindings(defaultConfig, creationSession.specCoding);
+    defaultConfig = bindingCompilation.config;
+    await writeFile(filepath, stringify(defaultConfig), 'utf-8');
+    creationSession = await updateCreationSession(creationSession.id, {
+      bindingValidation: bindingCompilation.validation as any,
+    }) || creationSession;
     if (frontendSessionId) {
       await updateChatSessionCreationBinding(frontendSessionId, {
         creationSessionId: creationSession.id,

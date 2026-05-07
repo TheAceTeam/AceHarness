@@ -84,6 +84,10 @@ git clone <repository-url> && cd aceharness
 npm install 
 
 # 本地调试（无需run build)
+ACE_HOST=0.0.0.0
+ACE_PORT=3000
+# $env:ACE_HOST=0.0.0.0
+# $env:ACE_PORT=3001
 npm run dev  # 自定义端口：npm run dev -- -p 8080
 
 # 应用于生产环境（首次或更新后需要重新run build）

@@ -112,8 +112,8 @@ node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workf
 
 ## Agent 团队
 
-- **defender（蓝队）** — 建设者：设计、实现、测试、文档
-- **attacker（红队）** — 挑战者：攻击方案、寻找缺陷、压力测试
+- **defender（红队）** — 建设者：设计、实现、测试、文档
+- **attacker（蓝队）** — 挑战者：攻击方案、寻找缺陷、压力测试
 - **judge（裁判）** — 仲裁者：评审和判定
 
 ## 红蓝对抗（默认优先）

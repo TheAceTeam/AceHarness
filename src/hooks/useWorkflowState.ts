@@ -153,6 +153,24 @@ function createInitialState(initialViewMode: ViewMode = 'run'): WorkflowState {
   };
 }
 
+function stripIterationSuffix(stepName: string): string {
+  stepName = stepName.replace(/-\D+\d+$/, '');
+  return stepName.replace(/-迭代\d+$/, '').replace(/-杩唬\d+$/, '');
+}
+
+function isSameWorkflowStep(candidate: string, target: string): boolean {
+  if (!candidate || !target) return false;
+  if (candidate === target) return true;
+
+  const candidateBase = stripIterationSuffix(candidate);
+  const targetBase = stripIterationSuffix(target);
+  return (
+    candidateBase === targetBase ||
+    candidateBase.endsWith(`-${targetBase}`) ||
+    targetBase.endsWith(`-${candidateBase}`)
+  );
+}
+
 function workflowReducer(state: WorkflowState, action: WorkflowAction): WorkflowState {
   switch (action.type) {
     case 'SET_VIEW_MODE': return { ...state, viewMode: action.payload };
@@ -166,9 +184,20 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'ADD_LOG': return { ...state, logs: [...state.logs, action.payload] };
     case 'CLEAR_AGENT_LOGS': return { ...state, logs: state.logs.filter((l) => l.agent !== action.payload) };
     case 'SET_COMPLETED_STEPS': return { ...state, completedSteps: action.payload };
-    case 'ADD_COMPLETED_STEP': return { ...state, completedSteps: [...state.completedSteps, action.payload] };
+    case 'ADD_COMPLETED_STEP': {
+      const completedSteps = state.completedSteps.some((step) => isSameWorkflowStep(step, action.payload))
+        ? state.completedSteps
+        : [...state.completedSteps, action.payload];
+      const failedSteps = state.failedSteps.filter((step) => !isSameWorkflowStep(step, action.payload));
+      return { ...state, completedSteps, failedSteps };
+    }
     case 'SET_FAILED_STEPS': return { ...state, failedSteps: action.payload };
-    case 'ADD_FAILED_STEP': return { ...state, failedSteps: [...state.failedSteps, action.payload] };
+    case 'ADD_FAILED_STEP': return {
+      ...state,
+      failedSteps: state.failedSteps.some((step) => isSameWorkflowStep(step, action.payload))
+        ? state.failedSteps
+        : [...state.failedSteps, action.payload],
+    };
     case 'SET_STEP_RESULT': return { ...state, stepResults: { ...state.stepResults, [action.payload.step]: action.payload.result } };
     case 'SET_STEP_RESULTS': return { ...state, stepResults: action.payload };
     case 'MERGE_STEP_RESULTS': return { ...state, stepResults: { ...state.stepResults, ...action.payload } };

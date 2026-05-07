@@ -26,7 +26,9 @@ vi.mock('@/lib/run-state-persistence', () => ({
 
 vi.mock('@/lib/spec-coding-store', () => ({
   loadCreationSession: vi.fn(),
+  loadLatestCreationSessionByFilename: vi.fn().mockResolvedValue(null),
   cloneSpecCodingForRun: vi.fn(),
+  updateCreationSession: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('@/lib/chat-persistence', () => ({
@@ -43,6 +45,7 @@ vi.mock('@/lib/runtime-configs', () => ({
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockResolvedValue('workflow:\n  name: Test\n'),
+  writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('yaml', () => ({

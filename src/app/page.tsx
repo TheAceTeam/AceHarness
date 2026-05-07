@@ -7,7 +7,6 @@ import dynamic from 'next/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
@@ -57,17 +56,16 @@ const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 const MOBILE_BREAKPOINT = 768;
-type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
-  const normalized = team === 'yellow' ? 'judge' : team;
-  switch (normalized) {
+  switch (team) {
     case 'blue':
       return '蓝队';
     case 'red':
       return '红队';
     case 'judge':
-      return '黄队';
+      return '裁定席';
     case 'black-gold':
       return '指挥官';
     default:
@@ -76,8 +74,7 @@ function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
 }
 
 function getAgentBindingBadgeClass(team?: AgentBindingTeam) {
-  const normalized = team === 'yellow' ? 'judge' : team;
-  switch (normalized) {
+  switch (team) {
     case 'blue':
       return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-200';
     case 'red':
@@ -116,8 +113,6 @@ function ChatPageContent() {
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
-  const [composerReady, setComposerReady] = useState(false);
-  const [composerShellFocused, setComposerShellFocused] = useState(false);
   const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
@@ -127,7 +122,6 @@ function ChatPageContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
-  const [editorLoaded, setEditorLoaded] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editContent, setEditContent] = useState('');
@@ -138,7 +132,6 @@ function ChatPageContent() {
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
-  const editorLoadedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
   const editEditorRef = useRef<RichTextEditorHandle | null>(null);
@@ -155,7 +148,6 @@ function ChatPageContent() {
   const [homeSidebarTab, setHomeSidebarTab] = useState<HomeSidebarTab>('commander');
   const [homeSidebarMode, setHomeSidebarMode] = useState<HomeSidebarMode>('hidden');
   const starterHandledRef = useRef(false);
-  const starterPromptRef = useRef<string | null>(null);
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
     // 已有持久化状态时跳过昂贵的 parseActions 解析
@@ -394,19 +386,6 @@ function ChatPageContent() {
   }, [activeSession?.messages, loading]);
 
   useEffect(() => {
-    if (!composerReady) return;
-    editorRef.current?.focus();
-  }, [activeSession?.id, composerReady]);
-
-  useEffect(() => {
-    if (!composerReady) return;
-    if (!editorLoaded && editorRef.current) {
-      setEditorLoaded(true);
-      editorLoadedRef.current = true;
-    }
-  }, [editorLoaded, activeSession?.id, input, composerReady]);
-
-  useEffect(() => {
     if (!editDialogOpen || !editEditorRef.current || !editingMessageId) return;
     if (lastEditSeedRef.current === editingMessageId) return;
     editEditorRef.current.setContent(editContent);
@@ -445,7 +424,7 @@ function ChatPageContent() {
       title: sessionTitle?.trim() || `${starterAgent} 对话`,
       agentBinding: {
         agentName: starterAgent,
-        team: (team === 'blue' || team === 'red' || team === 'judge' || team === 'black-gold' || team === 'yellow') ? team : undefined,
+        team: (team === 'blue' || team === 'red' || team === 'judge' || team === 'black-gold') ? team : undefined,
         roleType: roleType === 'supervisor' ? 'supervisor' : roleType === 'normal' ? 'normal' : undefined,
       },
     });
@@ -482,9 +461,7 @@ function ChatPageContent() {
       openHomeSidebar(sidebarTab);
     }
 
-    starterPromptRef.current = starterPrompt;
     setInput(starterPrompt);
-    setComposerReady(true);
     editorRef.current?.setContent(starterPrompt);
     editorRef.current?.focus();
 
@@ -496,18 +473,6 @@ function ChatPageContent() {
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
   }, [createSession, pathname, router, searchParams, setActiveSessionId]);
-
-  useEffect(() => {
-    if (!starterPromptRef.current || !editorRef.current) return;
-    editorRef.current.setContent(starterPromptRef.current);
-    editorRef.current.focus();
-    starterPromptRef.current = null;
-  }, [editorLoaded, composerReady]);
-
-  useEffect(() => {
-    if (!composerReady || !input || !editorRef.current) return;
-    editorRef.current.setContent(input);
-  }, [composerReady]);
 
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
@@ -705,18 +670,6 @@ function ChatPageContent() {
     editorRef.current?.focus();
   }, [deleteMessage, editingMessageId, loading, sendMessage, stopStreaming, unlockAutoScroll]);
 
-  const activateComposer = useCallback(() => {
-    setComposerReady(true);
-  }, []);
-
-  const handleShellKeyDown = useCallback(async (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    const text = input.trim();
-    if (!text) return;
-    await submitMessage(text);
-  }, [input, submitMessage]);
-
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
     if (!text) return;
@@ -766,7 +719,6 @@ function ChatPageContent() {
 
     if (prompt && prompt.includes('\n')) {
       setInput(prompt);
-      setComposerReady(true);
       editorRef.current?.setContent(prompt);
       editorRef.current?.focus();
       return;
@@ -926,20 +878,19 @@ function ChatPageContent() {
           </div>
         );
       }
-      // 非 streaming 的 assistant 消息：如果有 <result>，只显示 result 内的内容
+      // 非 streaming 的 assistant 消息：隐藏 <result> 机器通道，只展示普通正文和解析后的卡片/侧边栏提示
       const isStreaming = msg.id === streamingMessageId;
       let displayMsg = msg;
       let hasSidebarHint = false;
       if (msg.role === 'assistant' && !isStreaming) {
         const raw = msg.rawContent || msg.content || '';
         const hasResult = /<result>[\s\S]*?<\/result>/i.test(raw);
-        hasSidebarHint = /"type"\s*:\s*"home_sidebar"/.test(raw);
+        const parsedResult = hasResult ? parseActions(raw) : null;
+        hasSidebarHint = parsedResult
+          ? parsedResult.sidebarHints.length > 0
+          : /"type"\s*:\s*"home_sidebar"/.test(raw);
         if (hasResult) {
-          const cleaned = (msg.content || '')
-            .replace(/```(?:json|card)\s*\n[\s\S]*?```/g, '')
-            .replace(/\{[\s\S]*?"type"\s*:\s*"home_sidebar"[\s\S]*?\}/g, '')
-            .trim();
-          displayMsg = { ...msg, content: cleaned };
+          displayMsg = { ...msg, content: parsedResult?.text || '' };
         }
       }
       return (
@@ -957,6 +908,7 @@ function ChatPageContent() {
             onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
             onContinue={msg.role === 'error' ? continueFromMessage : undefined}
             onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+            currentUser={currentUser}
           />
           {hasSidebarHint && (
             <div className="ml-10 -mt-2 mb-2">
@@ -1002,7 +954,7 @@ function ChatPageContent() {
   const activeAgentBinding = activeSession?.agentBinding;
   const activeAgentAvatarSrc = activeAgentBinding
     ? resolveAgentAvatarSrc(undefined, activeAgentBinding.agentName, {
-        team: (activeAgentBinding.team === 'yellow' ? 'judge' : activeAgentBinding.team) || 'blue',
+        team: activeAgentBinding.team || 'red',
         roleType: activeAgentBinding.roleType || 'normal',
       })
     : null;
@@ -1079,9 +1031,6 @@ function ChatPageContent() {
             >
               <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
               <span className="hidden sm:inline">保存为 Notebook</span>
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => createSession()} title="新建会话">
-              <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add</span>
             </Button>
             <ThemeToggle />
             <Button size="sm" variant="outline" onClick={() => router.push('/dashboard')} title="切换到控制台">
@@ -1168,53 +1117,20 @@ function ChatPageContent() {
                   )}
                   <div className="flex items-stretch gap-2 max-w-4xl mx-auto">
                     <div className="flex-1">
-                      {composerReady ? (
-                        <RichTextEditor
-                          ref={editorRef}
-                          onEnter={handleEditorEnter}
-                          onChange={(markdown) => setInput(markdown)}
-                          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                          minHeight={76}
-                          disabled={false}
-                          autoFocus={composerShellFocused}
-                          showFullscreenToggle={!isMobile}
-                          showToolbar={false}
-                          footerContent={(
-                            <>
-                              <button
-                                onClick={() => handleDebugToggle(!debugMode)}
-                                className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
-                                title="调试模式：查看发送给 AI 的系统提示词"
-                              >
-                                <span className="material-symbols-outlined text-sm">bug_report</span>
-                                调试
-                              </button>
-                              <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
-                              <div className="w-24 shrink-0 sm:w-32">
-                                <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
-                              </div>
-                            </>
-                          )}
-                        />
-                      ) : (
-                        <div className="rounded-xl border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring">
-                          <Textarea
-                            value={input}
-                            onFocus={() => {
-                              setComposerShellFocused(true);
-                              activateComposer();
-                            }}
-                            onClick={activateComposer}
-                            onChange={(event) => {
-                              setInput(event.target.value);
-                              setComposerShellFocused(true);
-                              activateComposer();
-                            }}
-                            onKeyDown={handleShellKeyDown}
-                            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                            className="min-h-[76px] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
-                          />
-                          <div className="flex items-center gap-2 border-t px-3 py-1.5">
+                      <RichTextEditor
+                        ref={editorRef}
+                        content={input}
+                        onEnter={handleEditorEnter}
+                        onChange={(markdown) => setInput(markdown)}
+                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                        minHeight={76}
+                        disabled={false}
+                        autoFocus={false}
+                        showFullscreenToggle={!isMobile}
+                        showToolbar={false}
+                        trimPastedTrailingNewlines
+                        footerContent={(
+                          <>
                             <button
                               onClick={() => handleDebugToggle(!debugMode)}
                               className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
@@ -1227,9 +1143,9 @@ function ChatPageContent() {
                             <div className="w-24 shrink-0 sm:w-32">
                               <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
                             </div>
-                          </div>
-                        </div>
-                      )}
+                          </>
+                        )}
+                      />
                     </div>
                     {loading && (
                       <Button className="rounded-xl h-[76px] self-stretch px-3" variant="destructive" onClick={stopStreaming} title="停止生成">
@@ -1285,7 +1201,7 @@ function ChatPageContent() {
                   title="展开首页动态侧边栏"
                 >
                   <span className="material-symbols-outlined text-3xl">right_panel_open</span>
-                  <span className="[writing-mode:vertical-rl] rotate-180 tracking-[0.2em]">
+                  <span className="[writing-mode:vertical-rl] tracking-[0.2em]">
                     {homeSidebarTab === 'commander' ? '指挥官' : homeSidebarTab === 'workflow' ? '工作流' : 'Agent'}
                   </span>
                 </button>

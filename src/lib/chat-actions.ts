@@ -277,6 +277,44 @@ function isInsideCodeBlock(pos: number, ranges: Array<[number, number]>): boolea
   return ranges.some(([start, end]) => pos >= start && pos < end);
 }
 
+function stripDanglingTrailingFence(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let lastContentLine = lines.length - 1;
+  while (lastContentLine >= 0 && lines[lastContentLine].trim() === '') {
+    lastContentLine -= 1;
+  }
+  if (lastContentLine < 0) return content;
+
+  const trailingFence = lines[lastContentLine].match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+  if (!trailingFence) return content;
+
+  let inCodeBlock = false;
+  let fenceWidth = 0;
+  let fenceChar: '`' | '~' | null = null;
+  for (let index = 0; index < lastContentLine; index += 1) {
+    const line = lines[index];
+    if (!inCodeBlock) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open) {
+        inCodeBlock = true;
+        fenceWidth = open[1].length;
+        fenceChar = open[1][0] as '`' | '~';
+      }
+      continue;
+    }
+
+    const closeRe = fenceChar === '~' ? /^\s{0,3}(~{3,})\s*$/ : /^\s{0,3}(`{3,})\s*$/;
+    const close = line.match(closeRe);
+    if (close && close[1].length >= fenceWidth) {
+      inCodeBlock = false;
+      fenceChar = null;
+    }
+  }
+
+  if (inCodeBlock) return content;
+  return lines.slice(0, lastContentLine).join('\n').trimEnd();
+}
+
 function getResultSections(markdown: string): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
   const sections: Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> = [];
   const codeBlockRanges = getFencedCodeBlockRanges(markdown);
@@ -388,8 +426,11 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
 
   const resultSections = getResultSections(markdown);
   for (const section of resultSections) {
-    removals.push([section.start, section.contentStart]);
-    removals.push([section.contentEnd, section.end]);
+    // <result> is reserved for machine-readable side-channel output.
+    // Parse any structured payloads inside it, but never leak the block into
+    // the visible chat transcript. This also hides malformed/plain result
+    // payloads from older prompts.
+    removals.push([section.start, section.end]);
 
     const codeBlockRegex = /```(card|json)\s*\n/g;
     let match: RegExpExecArray | null;
@@ -453,6 +494,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
   for (const [start, end] of removals.sort((a, b) => b[0] - a[0])) {
     text = text.substring(0, start) + text.substring(end);
   }
+  text = stripDanglingTrailingFence(text);
 
   const effectiveCards = sidebarHints.some((hint) => shouldSuppressCardsForSidebarHint(hint)) ? [] : cards;
 

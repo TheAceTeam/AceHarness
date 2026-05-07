@@ -21,7 +21,7 @@ import {
 
 type AgentConfig = {
   name: string;
-  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  team: 'blue' | 'red' | 'judge' | 'black-gold';
   roleType?: 'normal' | 'supervisor';
   avatar?: any;
   category?: string;
@@ -130,10 +130,7 @@ export default function AIAgentCreatorModal({
     }
   }, [initialDraft, open]);
 
-  const capabilities = useMemo(
-    () => extractAgentDraftCapabilities(draftInput.specialties),
-    [draftInput.specialties]
-  );
+  const capabilities = useMemo(() => extractAgentDraftCapabilities(draftInput.specialties), [draftInput.specialties]);
 
   const previewAgent = useMemo<AgentConfig | null>(() => {
     return buildAgentDraftPreview({
@@ -287,9 +284,8 @@ export default function AIAgentCreatorModal({
                       value={draftInput.team}
                       onValueChange={(value) => setDraftInput((prev) => ({ ...prev, team: value as AgentConfig['team'] }))}
                       options={[
-                        { value: 'blue', label: '蓝队' },
-                        { value: 'red', label: '红队' },
-                        { value: 'yellow', label: '黄队' },
+                        { value: 'blue', label: '蓝队（攻击）' },
+                        { value: 'red', label: '红队（防守）' },
                         { value: 'judge', label: '裁定席' },
                         { value: 'black-gold', label: '黑金指挥官' },
                       ]}
@@ -516,7 +512,7 @@ export default function AIAgentCreatorModal({
               <div>
                 <div className="text-xs text-muted-foreground">能力标签</div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {(previewAgent?.capabilities || []).slice(0, 8).map((item) => (
+                  {(previewAgent?.capabilities || capabilities).slice(0, 8).map((item) => (
                     <Badge key={item} variant="outline">{item}</Badge>
                   ))}
                 </div>
@@ -532,11 +528,7 @@ export default function AIAgentCreatorModal({
 
             <DialogFooter className="mt-auto gap-2 border-t border-border/70 pt-5">
               <Button variant="outline" onClick={onClose}>取消</Button>
-              <Button
-                variant="outline"
-                onClick={() => previewAgent && onContinueEdit(previewAgent)}
-                disabled={!previewAgent}
-              >
+              <Button variant="outline" onClick={() => previewAgent && onContinueEdit(previewAgent)} disabled={!previewAgent}>
                 打开完整编辑
               </Button>
               <Button onClick={handleCreate} disabled={!draftResult || creating}>

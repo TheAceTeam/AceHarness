@@ -46,6 +46,16 @@ vi.mock('@/lib/chat-system-prompt', () => ({
   buildDashboardSystemPrompt: vi.fn().mockResolvedValue('system prompt'),
 }));
 
+vi.mock('@/lib/auth-middleware', () => ({
+  requireAuth: vi.fn().mockResolvedValue({
+    id: 'user-1',
+    username: 'tester',
+    email: 'tester@example.com',
+    role: 'user',
+    personalDir: '/home/tester',
+  }),
+}));
+
 vi.mock('@/lib/app-paths', () => ({
   getRepoRoot: vi.fn().mockReturnValue('/tmp/repo'),
   getWorkspaceDataFile: vi.fn().mockReturnValue('/tmp/workspace-data'),
@@ -119,6 +129,54 @@ describe('chat stream flow', () => {
     expect(response.status).toBe(200);
     const json = await responseJson(response);
     expect(json.chatId).toMatch(/^chat-/);
+  });
+
+  test('POST registers scoped streams separately from the visible frontend session', async () => {
+    const engine = new MockEngine({ success: true, output: 'Planning only' });
+    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
+    const { registerEngineStream } = await import('@/lib/chat-stream-state');
+    const { processManager } = await import('@/lib/process-manager');
+    (getOrCreateEngine as any).mockResolvedValue(engine);
+
+    const { POST } = await import('@/app/api/chat/stream/route');
+    const response = await POST(makeRequest('/api/chat/stream', {
+      json: {
+        message: 'Create workflow plan',
+        mode: 'dashboard',
+        frontendSessionId: 'front-1',
+        streamScope: 'workflow-planning',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    const json = await responseJson(response);
+    expect(getOrCreateEngine).toHaveBeenCalledWith('mock-engine', 'front-1:workflow-planning');
+    expect(registerEngineStream).toHaveBeenCalledWith(json.chatId, 'front-1:workflow-planning', 'mock-engine', '');
+    expect(processManager.registerActiveStream).toHaveBeenCalledWith('front-1:workflow-planning', json.chatId);
+  });
+
+  test('GET checks active streams by scoped recovery key', async () => {
+    const { getEngineStreamByFrontendSessionId } = await import('@/lib/chat-stream-state');
+    (getEngineStreamByFrontendSessionId as any).mockReturnValueOnce({
+      chatId: 'chat-scoped',
+      frontendSessionId: 'front-1:workflow-planning',
+      status: 'running',
+      streamContent: 'planning output',
+      engine: 'mock-engine',
+      model: '',
+    });
+
+    const { GET } = await import('@/app/api/chat/stream/route');
+    const response = await GET(makeRequest('/api/chat/stream?checkActive=front-1&streamScope=workflow-planning'));
+
+    expect(response.status).toBe(200);
+    expect(getEngineStreamByFrontendSessionId).toHaveBeenCalledWith('front-1:workflow-planning');
+    const json = await responseJson(response);
+    expect(json).toMatchObject({
+      active: true,
+      chatId: 'chat-scoped',
+      streamContent: 'planning output',
+    });
   });
 
   test('DELETE cancels engine and returns killed=true', async () => {

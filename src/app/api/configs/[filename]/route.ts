@@ -6,6 +6,8 @@ import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/runtime-configs';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
+import { loadCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
+import { compileStepTaskBindings } from '@/lib/spec-task-binding';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -116,13 +118,27 @@ export async function POST(
       );
     }
 
+    let normalizedConfig = validationResult.normalized;
+    let bindingValidation: any = undefined;
+    const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
+    const session = creationSessionId ? await loadCreationSession(creationSessionId).catch(() => null) : null;
+    const specCoding = body.specCoding || session?.specCoding;
+    if (specCoding) {
+      const bindingCompilation = compileStepTaskBindings(normalizedConfig, specCoding);
+      normalizedConfig = bindingCompilation.config;
+      bindingValidation = bindingCompilation.validation;
+      if (session) {
+        await updateCreationSession(session.id, { bindingValidation: bindingValidation as any });
+      }
+    }
+
     const filepath = await getRuntimeWorkflowConfigPath(filename);
-    const yamlContent = stringify(validationResult.normalized);
+    const yamlContent = stringify(normalizedConfig);
     await writeFile(filepath, yamlContent, 'utf-8');
     const configsDir = await getRuntimeConfigsDirPath();
     await unmarkConfigDeleted(configsDir, filename);
 
-    return NextResponse.json({ success: true, message: '配置已保存' });
+    return NextResponse.json({ success: true, message: '配置已保存', bindingValidation });
   } catch (error: any) {
     return NextResponse.json(
       { error: '保存配置失败', message: error.message },

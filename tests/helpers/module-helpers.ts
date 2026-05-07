@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+let fileSymlinkCapability: Promise<boolean> | undefined;
 
 export async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), prefix));
@@ -32,4 +34,31 @@ export async function withTempWorkspace<T>(
     await mkdir(workspace, { recursive: true });
     return fn({ base, workspace });
   });
+}
+
+export async function canCreateFileSymlink(): Promise<boolean> {
+  fileSymlinkCapability ??= withTempDir('aceharness-test-symlink-', async (base) => {
+    const target = path.join(base, 'target.txt');
+    const link = path.join(base, 'link.txt');
+    await writeFile(target, 'ok');
+    try {
+      await symlink(target, link, process.platform === 'win32' ? 'file' : undefined);
+      return true;
+    } catch (error: any) {
+      if (error?.code === 'EPERM' || error?.code === 'EACCES' || error?.code === 'UNKNOWN') {
+        return false;
+      }
+      throw error;
+    }
+  });
+
+  return fileSymlinkCapability;
+}
+
+export async function createFileSymlink(target: string, linkPath: string): Promise<void> {
+  await symlink(target, linkPath, process.platform === 'win32' ? 'file' : undefined);
+}
+
+export async function createDirectorySymlink(target: string, linkPath: string): Promise<void> {
+  await symlink(target, linkPath, process.platform === 'win32' ? 'junction' : undefined);
 }

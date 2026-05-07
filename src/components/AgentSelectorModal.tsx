@@ -8,7 +8,7 @@ import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 
 interface AgentConfig {
   name: string;
-  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  team: 'blue' | 'red' | 'judge' | 'black-gold';
   roleType?: 'normal' | 'supervisor';
   avatar?: any;
   category?: string;
@@ -99,28 +99,21 @@ export default function AgentSelectorModal({ agents, onSelect, onClose }: AgentS
                 variant={selectedTeam === 'blue' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('blue')}
               >
-                蓝队
+                蓝队（攻击）
               </Button>
               <Button
                 size="sm"
                 variant={selectedTeam === 'red' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('red')}
               >
-                红队
+                红队（防守）
               </Button>
               <Button
                 size="sm"
                 variant={selectedTeam === 'judge' ? 'default' : 'outline'}
                 onClick={() => setSelectedTeam('judge')}
               >
-                裁判
-              </Button>
-              <Button
-                size="sm"
-                variant={selectedTeam === 'yellow' ? 'default' : 'outline'}
-                onClick={() => setSelectedTeam('yellow')}
-              >
-                黄队
+                裁定席
               </Button>
               <Button
                 size="sm"

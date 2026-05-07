@@ -20,10 +20,17 @@ export class WorkspacePathError extends Error {
   }
 }
 
+function normalizePathForComparison(input: string): string {
+  const resolved = path.resolve(input);
+  const parsed = path.parse(resolved);
+  return resolved === parsed.root ? resolved : resolved.replace(/[\\/]+$/, '');
+}
+
 export function isInsidePath(root: string, target: string): boolean {
-  const normalizedRoot = path.resolve(root);
-  const normalizedTarget = path.resolve(target);
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
+  const normalizedRoot = normalizePathForComparison(root);
+  const normalizedTarget = normalizePathForComparison(target);
+  const prefix = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(prefix);
 }
 
 function hasControlChars(value: string): boolean {
@@ -88,8 +95,10 @@ export async function resolveWorkspaceRoot(workspace: string): Promise<string> {
 }
 
 export async function resolveExistingInsideWorkspace(root: string, relPath: string): Promise<string> {
-  const safeRelPath = assertSafeRelativePath(relPath);
-  const lexicalPath = path.resolve(root, safeRelPath);
+  const normalizedInput = typeof relPath === 'string' ? relPath.trim() : '';
+  const lexicalPath = path.isAbsolute(normalizedInput) || /^[a-zA-Z]:/.test(normalizedInput)
+    ? path.resolve(normalizedInput)
+    : path.resolve(root, assertSafeRelativePath(relPath));
   if (!isInsidePath(root, lexicalPath)) {
     throw new WorkspacePathError('路径不合法', 403);
   }

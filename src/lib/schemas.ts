@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'yellow', 'black-gold']);
+const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'black-gold']);
 const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
 const agentAvatarConfigSchema = z.object({
   mode: z.enum(['deterministic', 'generated', 'uploaded', 'preset']),
@@ -56,9 +56,32 @@ export const agentInstanceSchema = z.object({
 });
 
 export const specTaskBindingSchema = z.object({
-  taskId: z.string().min(1),
+  taskId: z.string().min(1).optional(),
+  taskIds: z.array(z.string().min(1)).default([]).optional(),
   requirementIds: z.array(z.string()).default([]),
   artifactKeys: z.array(z.string()).default([]),
+});
+
+export const stepTaskBindingSnapshotSchema = z.object({
+  stepKey: z.string(),
+  containerName: z.string(),
+  stepName: z.string(),
+  agent: z.string(),
+  taskIds: z.array(z.string()).default([]),
+  requirementIds: z.array(z.string()).default([]),
+  artifactKeys: z.array(z.string()).default([]),
+  source: z.enum(['explicit', 'auto-title', 'auto-index', 'auto-container', 'missing']),
+});
+
+export const stepTaskBindingValidationSchema = z.object({
+  ok: z.boolean(),
+  errors: z.array(z.string()).default([]),
+  warnings: z.array(z.string()).default([]),
+  bindings: z.array(stepTaskBindingSnapshotSchema).default([]),
+  uncoveredTaskIds: z.array(z.string()).default([]),
+  unboundStepKeys: z.array(z.string()).default([]),
+  invalidTaskIds: z.array(z.string()).default([]),
+  checkedAt: z.string(),
 });
 
 export const stepConcurrencySchema = z.object({
@@ -76,6 +99,7 @@ export const workflowConcurrencySchema = z.object({
 
 // 工作流步骤 Schema
 export const workflowStepSchema = z.object({
+  id: z.string().min(1).optional(),
   name: z.string().min(1, '步骤名称不能为空'),
   agent: z.string().min(1, 'Agent 名称不能为空'),
   task: z.string().min(1, '任务描述不能为空'),
@@ -183,6 +207,8 @@ export type JoinPolicy = z.infer<typeof joinPolicySchema>;
 export type ChannelBinding = z.infer<typeof channelBindingSchema>;
 export type AgentInstance = z.infer<typeof agentInstanceSchema>;
 export type SpecTaskBinding = z.infer<typeof specTaskBindingSchema>;
+export type StepTaskBindingSnapshot = z.infer<typeof stepTaskBindingSnapshotSchema>;
+export type StepTaskBindingValidation = z.infer<typeof stepTaskBindingValidationSchema>;
 export type StepConcurrency = z.infer<typeof stepConcurrencySchema>;
 export type WorkflowConcurrency = z.infer<typeof workflowConcurrencySchema>;
 export type IterationConfig = z.infer<typeof iterationConfigSchema>;
@@ -416,6 +442,7 @@ export const creationSessionSchema = z.object({
     createdBy: z.string().optional(),
     artifacts: specCodingArtifactsSchema,
   })).default([]),
+  bindingValidation: stepTaskBindingValidationSchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });

@@ -45,6 +45,10 @@ export interface SessionPreflightCheckSummary {
   origin?: 'workflow' | 'inferred';
   summary: string;
   command?: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  errorText?: string | null;
 }
 
 export interface SessionPreflightSnapshot {

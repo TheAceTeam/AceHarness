@@ -16,9 +16,11 @@ import {
 } from '@/lib/chat-stream-state';
 import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
+import { ensureDirectoryLinkSync } from '@/lib/directory-links';
 import { loadChatSession } from '@/lib/chat-persistence';
 import { loadCreationSession } from '@/lib/spec-coding-store';
 import { workflowRegistry } from '@/lib/workflow-registry';
+import { requireAuth } from '@/lib/auth-middleware';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { EventEmitter } from 'events';
@@ -29,6 +31,12 @@ const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
 
 const SESSIONS_DIR = getWorkspaceDataFile('chat-sessions');
 const MAX_HISTORY_CHARS = 6000;
+
+function resolveStreamRecoveryKey(frontendSessionId?: string, streamScope?: string): string | undefined {
+  if (!frontendSessionId) return undefined;
+  const normalizedScope = typeof streamScope === 'string' ? streamScope.trim().replace(/[^a-zA-Z0-9_-]/g, '-') : '';
+  return normalizedScope ? `${frontendSessionId}:${normalizedScope}` : frontendSessionId;
+}
 
 /**
  * Load chat history from a frontend session file and format as context summary.
@@ -139,6 +147,9 @@ const engineStreamEvents = new EventEmitter();
 engineStreamEvents.setMaxListeners(200);
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const {
       message,
@@ -146,6 +157,7 @@ export async function POST(request: NextRequest) {
       engine: perChatEngine,
       sessionId,
       frontendSessionId,
+      streamScope,
       mode,
       workingDirectory,
       extraSystemPrompt,
@@ -177,7 +189,7 @@ export async function POST(request: NextRequest) {
         for (const s of requiredSkills) {
           if (!merged.includes(s)) merged.push(s);
         }
-        systemPrompt = await buildDashboardSystemPrompt(merged);
+        systemPrompt = await buildDashboardSystemPrompt(merged, { personalDir: auth.personalDir });
       }
     } else if (!isResume) {
       systemPrompt = DEFAULT_PROMPT;
@@ -198,7 +210,8 @@ export async function POST(request: NextRequest) {
     const runtimeEnvPrompt = [
       '## 运行目录信息',
       `ACEFlow 安装目录: ${getRepoRoot()}`,
-      `ACEHarness 运行时根目录: ${engineRuntimeDirectory}`,
+      `系统数据保存目录: ${engineRuntimeDirectory}`,
+      '系统数据保存目录中包含 ACEHarness 的全局安装技能、工作流与对话的历史记录、Agent 配置等运行时数据。',
       `当前工作目录(用户语义目录): ${resolvedWorkingDirectory}`,
       `AI 运行目录(实际 cwd): ${engineRuntimeDirectory}`,
       '执行文件读写/命令时，请优先基于“当前工作目录(用户语义目录)”使用绝对路径。',
@@ -206,34 +219,33 @@ export async function POST(request: NextRequest) {
     const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
     systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${typeof extraSystemPrompt === 'string' && extraSystemPrompt.trim() ? `\n\n${extraSystemPrompt.trim()}` : ''}`.trim();
     const configuredEngine = perChatEngine || await getConfiguredEngine();
-    const engine = await getOrCreateEngine(configuredEngine, frontendSessionId);
+    const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
+    const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId);
 
     // Ensure engine config dir + skills symlink exists in working directory
     if (engine) {
       const workDir = engineRuntimeDirectory;
       try {
-        const { existsSync, mkdirSync, symlinkSync } = await import('fs');
+        const { existsSync, mkdirSync } = await import('fs');
         const { join, resolve } = await import('path');
         const engineConfigDir = getEngineConfigDir(configuredEngine);
         const configDir = join(resolve(workDir), engineConfigDir);
         const skillsDir = await getRuntimeSkillsDirPath();
         if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
         const skillsLink = join(configDir, 'skills');
-        if (existsSync(skillsDir) && !existsSync(skillsLink)) {
-          symlinkSync(skillsDir, skillsLink);
-        }
+        if (existsSync(skillsDir)) ensureDirectoryLinkSync(skillsDir, skillsLink);
       } catch { /* ignore */ }
     }
 
     // Non-Claude engines: stream through Engine wrapper events
     if (engine) {
-      registerEngineStream(chatId, frontendSessionId, configuredEngine, useModel);
+      registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
 
       // Register in processManager so recovery endpoint can find it
       const proc = processManager.registerExternalProcess(chatId, 'chat', 'chat');
-      if (frontendSessionId) {
-        proc.frontendSessionId = frontendSessionId;
-        processManager.registerActiveStream(frontendSessionId, chatId);
+      if (streamRecoveryKey) {
+        proc.frontendSessionId = streamRecoveryKey;
+        processManager.registerActiveStream(streamRecoveryKey, chatId);
       }
 
       const onEngineStream = (evt: any) => {
@@ -312,7 +324,7 @@ export async function POST(request: NextRequest) {
           setTimeout(() => {
             activeChats.delete(chatId);
             removeEngineStream(chatId);
-            if (frontendSessionId) processManager.removeActiveStream(frontendSessionId);
+            if (streamRecoveryKey) processManager.removeActiveStream(streamRecoveryKey);
           }, 30000);
         });
 
@@ -329,10 +341,12 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const chatId = request.nextUrl.searchParams.get('id');
   const checkSession = request.nextUrl.searchParams.get('checkActive');
+  const streamScope = request.nextUrl.searchParams.get('streamScope') || undefined;
 
   // Check if a frontend session has an active stream
   if (checkSession) {
-    const engineState = getEngineStreamByFrontendSessionId(checkSession);
+    const recoveryKey = resolveStreamRecoveryKey(checkSession, streamScope);
+    const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
     if (engineState && engineState.status === 'running') {
       return NextResponse.json({
         active: true,
@@ -344,7 +358,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const activeChatId = processManager.getActiveStreamChatId(checkSession);
+    const activeChatId = recoveryKey ? processManager.getActiveStreamChatId(recoveryKey) : undefined;
     if (activeChatId && activeChats.has(activeChatId)) {
       const proc = processManager.getProcess(activeChatId);
       return NextResponse.json({
@@ -454,6 +468,10 @@ export async function DELETE(request: NextRequest) {
     entry.cancel();
   }
   activeChats.delete(chatId);
+  const state = getEngineStream(chatId);
+  if (state?.frontendSessionId) {
+    processManager.removeActiveStream(state.frontendSessionId);
+  }
   removeEngineStream(chatId);
   processManager.killProcess(chatId);
   return NextResponse.json({ killed: true });

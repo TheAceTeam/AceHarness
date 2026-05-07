@@ -39,6 +39,11 @@ interface RichTextEditorProps {
   showFullscreenToggle?: boolean;
   showToolbar?: boolean;
   footerContent?: React.ReactNode;
+  trimPastedTrailingNewlines?: boolean;
+}
+
+function trimTrailingNewlines(value: string): string {
+  return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
 }
 
 const SingleLineEnter = Extension.create({
@@ -132,6 +137,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   showFullscreenToggle = false,
   showToolbar = false,
   footerContent,
+  trimPastedTrailingNewlines = false,
 }, ref) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
@@ -227,12 +233,28 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
         const files = Array.from(clipboard.files || []).filter((file) => file.type?.startsWith('image/'));
-        if (files.length === 0) return false;
-        event.preventDefault();
-        files.forEach((file) => {
-          void insertUploadedImage(file);
-        });
-        return true;
+        if (files.length > 0) {
+          event.preventDefault();
+          files.forEach((file) => {
+            void insertUploadedImage(file);
+          });
+          return true;
+        }
+
+        if (trimPastedTrailingNewlines) {
+          const text = clipboard.getData('text/plain');
+          const trimmed = trimTrailingNewlines(text);
+          if (text && trimmed !== text) {
+            event.preventDefault();
+            const targetEditor = editorRuntimeRef.current;
+            if (trimmed) {
+              targetEditor?.chain().focus().insertContent(trimmed, { contentType: 'markdown' }).run();
+            }
+            return true;
+          }
+        }
+
+        return false;
       },
       handleDrop: (_view, event, _slice, moved) => {
         if (moved) return false;

@@ -70,6 +70,18 @@ export function hasPersistedSpec(specRootDir: string): boolean {
   return existsSync(specRootDir) && existsSync(resolve(specRootDir, 'spec.md'));
 }
 
+export function assertPersistedSpecRootReady(workingDirectory: string, specRoot?: string): string {
+  const specRootDir = getSpecRootDir(workingDirectory, specRoot);
+  if (!existsSync(specRootDir)) {
+    throw new Error(`持久化 Spec 目录不存在: ${specRootDir}`);
+  }
+  const masterSpecPath = resolve(specRootDir, 'spec.md');
+  if (!existsSync(masterSpecPath)) {
+    throw new Error(`持久化 Spec 基线不存在: ${masterSpecPath}`);
+  }
+  return specRootDir;
+}
+
 /**
  * 读取 master spec.md，返回一个 SpecCodingDocument（artifacts.spec = spec.md 内容）。
  */

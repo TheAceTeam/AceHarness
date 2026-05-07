@@ -45,7 +45,7 @@ export interface ChatSession {
   };
   agentBinding?: {
     agentName: string;
-    team?: 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+    team?: 'blue' | 'red' | 'judge' | 'black-gold';
     roleType?: 'normal' | 'supervisor';
     createdAt: number;
     updatedAt: number;
@@ -84,7 +84,7 @@ interface DashboardChatContextType {
     title?: string;
     agentBinding?: {
       agentName: string;
-      team?: 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+      team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
   }) => string;
@@ -786,7 +786,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     title?: string;
     agentBinding?: {
       agentName: string;
-      team?: 'blue' | 'red' | 'judge' | 'black-gold' | 'yellow';
+      team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
   }) => {
@@ -918,7 +918,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const frontendSid = activeSessionRef.current?.id;
         const startRes = await fetch('/api/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({ message: followUpPrompt, model, engine: followUpEngine || undefined, sessionId: backendSid || undefined, frontendSessionId: frontendSid || undefined, mode: 'dashboard', workingDirectory: workingDirectory || undefined }),
         });
         const { chatId } = await startRes.json();
@@ -1072,7 +1072,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     updateActiveSession(s => ({
       ...s,
       updatedAt: Date.now(),
-      title: s.messages.length === 0 ? text.slice(0, 30) : s.title,
+      title: s.messages.length === 0 ? userMsg.content.slice(0, 30) : s.title,
       messages: [...s.messages, userMsg],
     }));
 
@@ -1218,7 +1218,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const frontendSid = activeSessionRef.current?.id;
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ message: text, model: currentModel, engine: resolvedEngine || undefined, sessionId: backendSid || undefined, frontendSessionId: frontendSid || undefined, mode: 'dashboard', workingDirectory: workingDirectory || undefined }),
       });
       const startData = await startRes.json();

@@ -1,6 +1,6 @@
 export type AgentDraftIntent = {
   displayName: string;
-  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  team: 'blue' | 'red' | 'judge' | 'black-gold';
   mission: string;
   style: string;
   specialties: string;
@@ -12,7 +12,7 @@ export type AgentDraftIntent = {
 
 export const DEFAULT_AGENT_DRAFT_INTENT: AgentDraftIntent = {
   displayName: '',
-  team: 'blue',
+  team: 'red',
   mission: '',
   style: '理性、可靠、执行力强',
   specialties: '',
@@ -29,7 +29,7 @@ export function normalizeAgentDraftIntent(
     ...DEFAULT_AGENT_DRAFT_INTENT,
     ...input,
     displayName: String(input?.displayName || '').trim(),
-    team: (['blue', 'red', 'judge', 'yellow', 'black-gold'].includes(String(input?.team || ''))
+    team: (['blue', 'red', 'judge', 'black-gold'].includes(String(input?.team || ''))
       ? input?.team
       : DEFAULT_AGENT_DRAFT_INTENT.team) as AgentDraftIntent['team'],
     mission: String(input?.mission || '').trim(),

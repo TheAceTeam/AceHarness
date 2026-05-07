@@ -45,8 +45,8 @@ html {
     --flow-warning: 25 95% 53%;
     --flow-info: 217 91% 60%;
     --flow-judge: 43 96% 56%;
-    --flow-defender: 207 44% 57%;
-    --flow-attacker: 25 60% 50%;
+    --flow-defender: 0 72% 51%;
+    --flow-attacker: 217 91% 60%;
     --flow-node-bg: 0 0% 98%;
     --flow-node-border: 214 32% 91%;
     --flow-step-bg: 0 0% 100%;
@@ -94,8 +94,8 @@ html {
     --flow-warning: 25 60% 50%;
     --flow-info: 213 53% 53%;
     --flow-judge: 43 100% 71%;
-    --flow-defender: 207 44% 57%;
-    --flow-attacker: 25 60% 50%;
+    --flow-defender: 1 52% 55%;
+    --flow-attacker: 213 53% 53%;
     --flow-node-bg: 220 13% 24%;
     --flow-node-border: 220 7% 32%;
     --flow-step-bg: 220 10% 20%;

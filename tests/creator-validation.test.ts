@@ -139,7 +139,7 @@ describe('validateAgentDraft', () => {
   test('valid agent draft passes validation', () => {
     const result = validateAgentDraft({
       name: 'test-agent',
-      team: 'blue',
+      team: 'red',
       activeEngine: '',
       engineModels: {},
       capabilities: ['code'],
@@ -165,7 +165,7 @@ describe('validateAgentDraft', () => {
   test('activeEngine not in engineModels is an error', () => {
     const result = validateAgentDraft({
       name: 'test-agent',
-      team: 'blue',
+      team: 'red',
       activeEngine: 'kiro-cli',
       engineModels: { 'claude-code': 'opus' },
       capabilities: ['code'],
@@ -178,7 +178,7 @@ describe('validateAgentDraft', () => {
   test('engineModels with empty activeEngine is a warning', () => {
     const result = validateAgentDraft({
       name: 'test-agent',
-      team: 'blue',
+      team: 'red',
       activeEngine: '',
       engineModels: { 'claude-code': 'opus' },
       capabilities: ['code'],
@@ -193,7 +193,7 @@ describe('buildDefaultAgentDraft', () => {
   test('returns default values when called without input', () => {
     const draft = buildDefaultAgentDraft();
     expect(draft.name).toBe('example-agent');
-    expect(draft.team).toBe('blue');
+    expect(draft.team).toBe('red');
     expect(draft.roleType).toBe('normal');
     expect(draft.capabilities).toEqual(['通用协作']);
   });

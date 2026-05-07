@@ -253,6 +253,11 @@ export default function HomeCommandSidebar({
     : creationBinding?.filename === effectiveWorkflowTarget
       ? creationBinding.creationSessionId
       : undefined;
+  const effectiveCreationSession = currentCreationSession || creationBinding || null;
+  const isWorkflowCreationCompleted = Boolean(
+    effectiveCreationSession
+    && ['config-generated', 'run-bound', 'archived'].includes(effectiveCreationSession.status)
+  );
   const workflowDirectory = useMemo(
     () => buildWorkflowConversationDirectory(binding),
     [binding]
@@ -564,6 +569,10 @@ export default function HomeCommandSidebar({
             origin: check.origin,
             summary: check.summary,
             command: check.commands?.[0]?.command || '',
+            exitCode: check.commands?.[0]?.exitCode ?? null,
+            stdout: check.commands?.[0]?.stdout || '',
+            stderr: check.commands?.[0]?.stderr || '',
+            errorText: check.commands?.[0]?.errorText || '',
           })),
         },
       }));
@@ -972,11 +981,50 @@ export default function HomeCommandSidebar({
                           </Badge>
                         </div>
                         {check.origin === 'inferred' ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">来源：项目默认推断</div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">来源：项目默认推断。说明当前 workflow 没显式配置 preflight，系统按项目类型自动补了检查命令。</div>
                         ) : null}
                         <div className="mt-1 truncate text-[11px]" title={check.commands[0]?.command || ''}>
                           {check.commands[0]?.command || ''}
                         </div>
+                        {check.commands[0]?.exitCode !== undefined && check.commands[0]?.exitCode !== null ? (
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            退出码：{check.commands[0]?.exitCode}
+                          </div>
+                        ) : null}
+                        {check.status !== 'passed' ? (
+                          <details className="mt-2 rounded-md border bg-muted/30 px-2.5 py-2">
+                            <summary className="cursor-pointer text-[11px] font-medium text-foreground">
+                              查看失败原因与处理建议
+                            </summary>
+                            <div className="mt-2 space-y-2 text-[11px] text-muted-foreground">
+                              {check.commands[0]?.errorText ? (
+                                <div>
+                                  <div className="font-medium text-foreground">错误摘要</div>
+                                  <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.errorText}</pre>
+                                </div>
+                              ) : null}
+                              {check.commands[0]?.stderr ? (
+                                <div>
+                                  <div className="font-medium text-foreground">标准错误</div>
+                                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.stderr}</pre>
+                                </div>
+                              ) : null}
+                              {check.commands[0]?.stdout ? (
+                                <div>
+                                  <div className="font-medium text-foreground">标准输出</div>
+                                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.stdout}</pre>
+                                </div>
+                              ) : null}
+                              <div className="rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-300">
+                                {check.category === 'compile'
+                                  ? '先确认当前工作目录能否手动执行这条编译命令；如果是推断出来的命令不适合你的项目，可以在 workflow 里显式配置 preCommands 覆盖它。'
+                                  : check.category === 'test'
+                                    ? '先手动执行这条测试命令确认失败原因，再决定是否修复环境、依赖或用更准确的预检查命令替换。'
+                                    : '先手动执行这条命令确认环境与路径是否正确，再决定是否调整 workflow 的预检查命令。'}
+                              </div>
+                            </div>
+                          </details>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1028,86 +1076,122 @@ export default function HomeCommandSidebar({
           {availableTabs.includes('workflow') && activeTab === 'workflow' && (
             <div className="space-y-4">
               <div className="rounded-2xl border p-4">
-                <h3 className="text-sm font-medium">AI 引导创建工作流</h3>
-                <p className="mt-2 text-xs text-muted-foreground leading-5">
-                  从首页打开工作流创建面板，关键进度会以标签追加在当前对话下，方便回到原对话继续查看和恢复。
-                </p>
-                {currentCreationSession ? (
-                  <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">当前创建进度</div>
-                    <div>工作流：{currentCreationSession.workflowName}</div>
-                    <div>配置文件：{currentCreationSession.filename}</div>
-                    <div>状态：{currentCreationSession.status}</div>
-                    <div>Spec Coding：{currentCreationSession.specCodingId}</div>
-                  </div>
-                ) : null}
-                {workflowDraft.workingDirectory ? (
-                  <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">当前识别到的工作目录上下文</div>
-                    <div className="whitespace-normal break-all">目录：{workflowDraft.workingDirectory}</div>
-                    <div>模式：{workflowDraft.workspaceMode === 'isolated-copy' ? '创建副本工程后执行' : '直接在工作目录执行'}</div>
-                  </div>
-                ) : null}
-                <div className="mt-4 space-y-3">
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">工作流名称</label>
-                    <Input
-                      value={workflowDraft.name}
-                      onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, name: e.target.value }))}
-                      placeholder="例如：移动端重构流程"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">需求概述</label>
-                    <Textarea
-                      value={workflowDraft.requirements}
-                      onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, requirements: e.target.value }))}
-                      placeholder="例如：围绕首页重构、状态机工作流改造、Agent 角色化做一套协作流程"
-                      rows={4}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">补充说明</label>
-                    <Textarea
-                      value={workflowDraft.description}
-                      onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, description: e.target.value }))}
-                      placeholder="可选：约束、目标目录、验收标准"
-                      rows={3}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">参考工作流</label>
-                    <SingleCombobox
-                      value={workflowDraft.referenceWorkflow || '__none__'}
-                      onValueChange={(value) => setWorkflowDraft((prev) => ({ ...prev, referenceWorkflow: value === '__none__' ? '' : value }))}
-                      options={[
-                        { value: '__none__', label: '不使用参考工作流' },
-                        ...workflows.map((workflow) => ({
-                          value: workflow.filename,
-                          label: `${workflow.name} (${workflow.filename})`,
-                        })),
-                      ]}
-                      placeholder={loading ? '加载中...' : '选择参考工作流'}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      会沿用参考工作流的结构和 Agent 选用，只更新需求与任务分配。
+                {isWorkflowCreationCompleted && effectiveCreationSession ? (
+                  <>
+                    <h3 className="text-sm font-medium">工作流已创建</h3>
+                    <p className="mt-2 text-xs text-muted-foreground leading-5">
+                      当前对话已经完成工作流创建。这里保留基础信息和快捷入口，后续编辑直接进入工作流设计页。
                     </p>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs text-muted-foreground">工作目录</label>
-                    <Input
-                      value={workflowDraft.workingDirectory}
-                      onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, workingDirectory: e.target.value }))}
-                      placeholder="例如：/workspace/project"
-                    />
-                  </div>
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <Button size="sm" onClick={() => setWorkflowModalOpen(true)}>创建工作流</Button>
-                  <Button size="sm" variant="outline" onClick={() => router.push('/workflows')}>
-                    打开工作流页
-                  </Button>
-                </div>
+                    <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                      <div className="font-medium text-foreground">创建结果</div>
+                      <div>工作流：{effectiveCreationSession.workflowName}</div>
+                      <div>配置文件：{effectiveCreationSession.filename}</div>
+                      <div>状态：{getCreationSessionStatusLabel(effectiveCreationSession.status)}</div>
+                      <div>Spec Coding：{effectiveCreationSession.specCodingId}</div>
+                    </div>
+                    {workflowDraft.workingDirectory ? (
+                      <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
+                        <div className="font-medium text-foreground">工作目录</div>
+                        <div className="whitespace-normal break-all">目录：{workflowDraft.workingDirectory}</div>
+                        <div>模式：{workflowDraft.workspaceMode === 'isolated-copy' ? '创建副本工程后执行' : '直接在工作目录执行'}</div>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => router.push(`/workbench/${encodeURIComponent(effectiveCreationSession.filename)}?mode=design`)}
+                      >
+                        打开工作流设计页
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => router.push('/workflows')}>
+                        打开工作流页
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-sm font-medium">AI 引导创建工作流</h3>
+                    <p className="mt-2 text-xs text-muted-foreground leading-5">
+                      从首页打开工作流创建面板，关键上下文会挂在当前对话下，方便回到原对话继续查看和恢复。
+                    </p>
+                    {currentCreationSession ? (
+                      <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                        <div className="font-medium text-foreground">当前创建进度</div>
+                        <div>工作流：{currentCreationSession.workflowName}</div>
+                        <div>配置文件：{currentCreationSession.filename}</div>
+                        <div>状态：{getCreationSessionStatusLabel(currentCreationSession.status)}</div>
+                        <div>Spec Coding：{currentCreationSession.specCodingId}</div>
+                      </div>
+                    ) : null}
+                    {workflowDraft.workingDirectory ? (
+                      <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
+                        <div className="font-medium text-foreground">当前识别到的工作目录上下文</div>
+                        <div className="whitespace-normal break-all">目录：{workflowDraft.workingDirectory}</div>
+                        <div>模式：{workflowDraft.workspaceMode === 'isolated-copy' ? '创建副本工程后执行' : '直接在工作目录执行'}</div>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 space-y-3">
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">工作流名称</label>
+                        <Input
+                          value={workflowDraft.name}
+                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, name: e.target.value }))}
+                          placeholder="例如：移动端重构流程"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">需求概述</label>
+                        <Textarea
+                          value={workflowDraft.requirements}
+                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, requirements: e.target.value }))}
+                          placeholder="例如：围绕首页重构、状态机工作流改造、Agent 角色化做一套协作流程"
+                          rows={4}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">补充说明</label>
+                        <Textarea
+                          value={workflowDraft.description}
+                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, description: e.target.value }))}
+                          placeholder="可选：约束、目标目录、验收标准"
+                          rows={3}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">参考工作流</label>
+                        <SingleCombobox
+                          value={workflowDraft.referenceWorkflow || '__none__'}
+                          onValueChange={(value) => setWorkflowDraft((prev) => ({ ...prev, referenceWorkflow: value === '__none__' ? '' : value }))}
+                          options={[
+                            { value: '__none__', label: '不使用参考工作流' },
+                            ...workflows.map((workflow) => ({
+                              value: workflow.filename,
+                              label: `${workflow.name} (${workflow.filename})`,
+                            })),
+                          ]}
+                          placeholder={loading ? '加载中...' : '选择参考工作流'}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          会沿用参考工作流的结构和 Agent 选用，只更新需求与任务分配。
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs text-muted-foreground">工作目录</label>
+                        <Input
+                          value={workflowDraft.workingDirectory}
+                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, workingDirectory: e.target.value }))}
+                          placeholder="例如：/workspace/project"
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4 flex gap-2">
+                      <Button size="sm" onClick={() => setWorkflowModalOpen(true)}>创建工作流</Button>
+                      <Button size="sm" variant="outline" onClick={() => router.push('/workflows')}>
+                        打开工作流页
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="rounded-2xl border p-4 space-y-3">
@@ -1202,9 +1286,8 @@ export default function HomeCommandSidebar({
                     value={agentDraft.team}
                     onValueChange={(value) => setAgentDraft((prev) => ({ ...prev, team: value as AgentDraftState['team'] }))}
                     options={[
-                      { value: 'blue', label: '蓝队' },
-                      { value: 'red', label: '红队' },
-                      { value: 'yellow', label: '黄队' },
+                      { value: 'blue', label: '蓝队（攻击）' },
+                      { value: 'red', label: '红队（防守）' },
                       { value: 'judge', label: '裁定席' },
                     ]}
                     searchable={false}

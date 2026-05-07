@@ -1,4 +1,4 @@
-export type AgentTeam = 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+export type AgentTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export type AgentRoleType = 'normal' | 'supervisor';
 export type AgentAvatarMode = 'deterministic' | 'generated' | 'uploaded' | 'preset';
 export type AgentAvatarStyle = 'personas' | 'adventurer' | 'pixel-art';
@@ -133,21 +133,6 @@ function getAvatarPalette(team: AgentTeam, roleType: AgentRoleType = 'normal'): 
       skin: ['#f5d2bd', '#e7b193', '#cd8c6c'],
       hair: ['#2a0d0d', '#6b1527', '#d94b68', '#ffcabd'],
       eyes: ['#ffe5ea', '#ffd0da', '#fff6f6'],
-    };
-  }
-
-  if (visualTeam === 'yellow') {
-    return {
-      background: '#211403',
-      backgroundSecondary: '#8a5a10',
-      aura: '#fde68a',
-      coat: '#7c4d0a',
-      coatSecondary: '#facc15',
-      metal: '#fff2b3',
-      accent: '#fef08a',
-      skin: ['#f5d1ad', '#eab98d', '#cb9566'],
-      hair: ['#3b2a08', '#7c5a10', '#f3d36f', '#fff3bf'],
-      eyes: ['#fff5d4', '#fde68a', '#ffffff'],
     };
   }
 
@@ -333,16 +318,6 @@ export function getAgentTheme(team: AgentTeam, roleType: AgentRoleType = 'normal
     };
   }
 
-  if (team === 'yellow') {
-    return {
-      label: '黄队',
-      accent: 'from-lime-200 via-yellow-400 to-amber-700',
-      surface: 'border-yellow-300/25 bg-[radial-gradient(circle_at_top,_rgba(250,204,21,0.18),_transparent_45%),linear-gradient(135deg,rgba(68,64,60,0.96),rgba(120,53,15,0.84))]',
-      badge: 'bg-yellow-500/15 text-yellow-100 border-yellow-300/30',
-      halo: 'bg-yellow-300/20',
-    };
-  }
-
   return {
     label: '裁定席',
     accent: 'from-stone-100 via-amber-200 to-slate-500',
@@ -355,6 +330,5 @@ export function getAgentTheme(team: AgentTeam, roleType: AgentRoleType = 'normal
 export function getAgentRarity(team: AgentTeam, roleType: AgentRoleType = 'normal') {
   if (roleType === 'supervisor' || team === 'black-gold') return '传说';
   if (team === 'judge') return '史诗';
-  if (team === 'yellow') return '稀有';
   return '标准';
 }

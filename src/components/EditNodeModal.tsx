@@ -127,7 +127,10 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: data?.skills || [],
-          specTaskId: data?.specTaskBinding?.taskId || '',
+          specTaskId: [
+            ...((data?.specTaskBinding?.taskIds || []) as string[]),
+            data?.specTaskBinding?.taskId,
+          ].filter(Boolean).join(', '),
           requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
           artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
         },
@@ -207,7 +210,7 @@ export default function EditNodeModal({
       onSave(phaseData);
     } else {
       const selectedRole = roles.find((r) => r.name === formData.agent);
-      const teamToRole: Record<string, string> = { blue: 'defender', red: 'attacker', judge: 'judge', yellow: 'defender' };
+      const teamToRole: Record<string, string> = { blue: 'attacker', red: 'defender', judge: 'judge' };
       const stepData: any = {
         name: formData.name,
         agent: formData.agent,
@@ -232,10 +235,11 @@ export default function EditNodeModal({
       if (data?.concurrency) stepData.concurrency = data.concurrency;
       if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
       if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
-      const specTaskId = cleanString(formData.specTaskId);
-      if (specTaskId) {
+      const specTaskIds = inputToList(formData.specTaskId);
+      if (specTaskIds.length > 0) {
         stepData.specTaskBinding = {
-          taskId: specTaskId,
+          taskId: specTaskIds[0],
+          taskIds: specTaskIds,
           requirementIds: inputToList(formData.requirementIds),
           artifactKeys: inputToList(formData.artifactKeys),
         };
@@ -466,7 +470,7 @@ export default function EditNodeModal({
                   <div>
                     <div className="text-sm font-semibold">Spec 计划绑定</div>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      由系统根据 OpenSpec tasks.md 生成，只在这里查看；任务状态由运行态回传更新。
+                      由系统根据 OpenSpec tasks.md 生成，只在这里查看；任务状态由工作流调度器自动更新。
                     </p>
                   </div>
                   <div className="rounded-xl border bg-background/60 p-3">

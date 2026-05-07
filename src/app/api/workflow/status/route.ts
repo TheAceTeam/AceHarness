@@ -157,8 +157,8 @@ function enrichPersistentSpecStatus(status: any, runtimeMeta: WorkflowConfigMeta
   const persistMode = status?.persistMode || status?.runSpecCoding?.persistMode;
   const workingDirectory = status?.workingDirectory || runtimeMeta.projectRoot;
   const specRoot = status?.runSpecCoding?.specRoot || runtimeMeta.specRoot;
-  const masterSpecPath = persistMode === 'repository' && workingDirectory
-    ? resolve(getSpecRootDir(workingDirectory, specRoot), 'spec.md')
+  const masterSpecPath = persistMode === 'repository' && (status?.specRootDir || workingDirectory)
+    ? resolve(status?.specRootDir || getSpecRootDir(workingDirectory, specRoot), 'spec.md')
     : undefined;
 
   return {
@@ -236,6 +236,7 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
       filename: creationSession.filename,
       status: creationSession.status,
       updatedAt: creationSession.updatedAt,
+      bindingValidation: creationSession.bindingValidation,
     } : null,
     ...specCodingPayload,
     sourceOfTruth,

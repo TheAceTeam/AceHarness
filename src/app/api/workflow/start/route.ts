@@ -4,13 +4,15 @@ import { requireAuth } from '@/lib/auth-middleware';
 import { runWorkflowPreflight } from '@/lib/workflow-preflight';
 import { readFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
 import { createRun } from '@/lib/run-store';
 import { saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
-import { loadCreationSession, cloneSpecCodingForRun } from '@/lib/spec-coding-store';
+import { loadCreationSession, loadLatestCreationSessionByFilename, cloneSpecCodingForRun, updateCreationSession } from '@/lib/spec-coding-store';
 import { appendChatSessionMessage, loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
 import { countWorkflowSteps } from '@/lib/workflow-step-counter';
+import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { writeFile } from 'fs/promises';
 
 export { countWorkflowSteps } from '@/lib/workflow-step-counter';
 
@@ -58,6 +60,7 @@ async function startRehearsalRun(input: {
   frontendSessionId?: string;
   creationSessionId?: string;
   userId: string;
+  username: string;
   preflightChecks: any[];
 }) {
   const configPath = await getRuntimeWorkflowConfigPath(input.configFile);
@@ -72,6 +75,9 @@ async function startRehearsalRun(input: {
   const runSpecCoding = creationSession?.specCoding
     ? cloneSpecCodingForRun(creationSession.specCoding, { runId, filename: input.configFile })
     : null;
+  const bindingValidation = runSpecCoding
+    ? compileStepTaskBindings(config, runSpecCoding).validation
+    : undefined;
   const summary = '演练模式未执行真实项目改动，仅生成 SpecCoding / workflow 编排推演与风险提示。';
   const recommendedNextSteps = [
     '检查 SpecCoding 阶段拆分与 Agent 编队是否合理',
@@ -94,6 +100,10 @@ async function startRehearsalRun(input: {
   const state: PersistedRunState = {
     runId,
     configFile: input.configFile,
+    runOwnerId: input.userId,
+    runOwnerName: input.username,
+    createdBy: input.userId,
+    createdByName: input.username,
     status: 'completed',
     startTime: now,
     endTime: now,
@@ -113,6 +123,8 @@ async function startRehearsalRun(input: {
     attachedAgentSessions: {},
     workflowFrontendSessionId: input.frontendSessionId || null,
     qualityChecks: input.preflightChecks,
+    stepTaskBindingsSnapshot: bindingValidation?.bindings,
+    bindingValidation: bindingValidation as any,
     latestSupervisorReview: {
       type: 'state-review',
       stateName: '演练模式',
@@ -188,7 +200,27 @@ export async function POST(request: NextRequest) {
     }
 
     const configPath = await getRuntimeWorkflowConfigPath(configFile);
-    const config = parse(await readFile(configPath, 'utf-8')) as any;
+    let config = parse(await readFile(configPath, 'utf-8')) as any;
+    const boundCreationSession = typeof creationSessionId === 'string'
+      ? await loadCreationSession(creationSessionId).catch(() => null)
+      : await loadLatestCreationSessionByFilename(configFile).catch(() => null);
+    let bindingValidation: any = undefined;
+    if (boundCreationSession?.specCoding) {
+      const bindingCompilation = compileStepTaskBindings(config, boundCreationSession.specCoding);
+      config = bindingCompilation.config;
+      bindingValidation = bindingCompilation.validation;
+      if (!bindingValidation.ok) {
+        return NextResponse.json(
+          {
+            error: 'Spec task 绑定校验失败',
+            bindingValidation,
+          },
+          { status: 400 }
+        );
+      }
+      await writeFile(configPath, stringify(config), 'utf-8');
+      await updateCreationSession(boundCreationSession.id, { bindingValidation });
+    }
     const supervisorAgent = config?.workflow?.supervisor?.agent || 'default-supervisor';
     const workflowChatSessionId = await ensureWorkflowChatSession({
       frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
@@ -204,6 +236,7 @@ export async function POST(request: NextRequest) {
         frontendSessionId: workflowChatSessionId,
         creationSessionId: typeof creationSessionId === 'string' ? creationSessionId : undefined,
         userId: user.id,
+        username: user.username,
         preflightChecks: preflightChecks || [],
       });
       return NextResponse.json({
@@ -232,9 +265,10 @@ export async function POST(request: NextRequest) {
 
     // Pass userId for createdBy tracking
     (manager as any)._createdBy = user.id;
+    (manager as any)._createdByName = user.username;
     (manager as any)._userPersonalDir = user.personalDir;
     (manager as any)._frontendSessionId = workflowChatSessionId;
-    (manager as any)._creationSessionId = typeof creationSessionId === 'string' ? creationSessionId : undefined;
+    (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
     await appendChatSessionMessage(workflowChatSessionId, {
       role: 'assistant',
       content: [

@@ -17,6 +17,12 @@ import { readMasterSpec, getSpecRootDir, hasPersistedSpec } from '@/lib/spec-per
 
 const CREATION_SESSIONS_DIR = getWorkspaceDataFile('workflow-creation-sessions');
 
+const TASK_NUMBER_PATTERN = /^(([A-Za-z]+\d+(?:\.\d+)*|\d+(?:\.\d+)*)\b)\s+(.+)$/;
+
+function isSyntheticTaskId(id?: string | null): boolean {
+  return typeof id === 'string' && /^task-\d+$/.test(id);
+}
+
 function sessionPath(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
   return resolve(CREATION_SESSIONS_DIR, `${safeId}.yaml`);
@@ -101,7 +107,7 @@ function parseSpecCodingTasksFromMarkdown(
     const level = Math.floor(indent / 2); // 0=顶层, 1=子任务, 2=子子任务
     const marker = match[2];
     const rawTitle = stripSpecCodingTaskComment(match[4]);
-    const numbered = rawTitle.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
+    const numbered = rawTitle.match(TASK_NUMBER_PATTERN);
     const id = numbered?.[1] || null;
     const title = (numbered?.[2] || rawTitle).trim();
     return { level, marker, id, title, indent };
@@ -174,7 +180,9 @@ function parseSpecCodingTasksFromMarkdown(
       .filter((l) => !/_需求[：:]/.test(l))
       .join('\n').trim() || undefined;
 
-    const id = commentMeta.id || parsed.id || `task-${lineIndex + 1}`;
+    const id = parsed.id && isSyntheticTaskId(commentMeta.id)
+      ? parsed.id
+      : (commentMeta.id || parsed.id || `task-${lineIndex + 1}`);
 
     rawNodes.push({
       level: parsed.level,
@@ -353,8 +361,11 @@ function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): s
 
     const commentMeta = parseTaskComment(line);
     const body = stripSpecCodingTaskComment(taskLine[4]);
-    const numbered = body.match(/^((?:\d+\.)+\d+|\d+)\s+(.+)$/);
-    const id = commentMeta.id || numbered?.[1] || `task-${lineIndex + 1}`;
+    const numbered = body.match(TASK_NUMBER_PATTERN);
+    const parsedId = numbered?.[1];
+    const id = parsedId && isSyntheticTaskId(commentMeta.id)
+      ? parsedId
+      : (commentMeta.id || parsedId || `task-${lineIndex + 1}`);
     const task = byId.get(id);
     if (!task) return line;
 

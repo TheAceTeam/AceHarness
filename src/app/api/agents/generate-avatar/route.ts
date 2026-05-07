@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const displayName = String(body.displayName || '').trim();
-    const team = String(body.team || 'blue').trim() as any;
+    const team = String(body.team || 'red').trim() as any;
     const mission = String(body.mission || '').trim();
     const style = String(body.style || '').trim();
     const variant = String(body.variant || '').trim();

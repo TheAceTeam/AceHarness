@@ -58,7 +58,7 @@ function getAvailableAgents(): string[] {
 export function buildDefaultAgentDraft(input?: Partial<any>) {
   return {
     name: typeof input?.name === 'string' ? input.name : 'example-agent',
-    team: typeof input?.team === 'string' ? input.team : 'blue',
+    team: typeof input?.team === 'string' ? input.team : 'red',
     roleType: typeof input?.roleType === 'string' ? input.roleType : (input?.team === 'black-gold' ? 'supervisor' : 'normal'),
     engineModels: input?.engineModels && typeof input.engineModels === 'object' ? input.engineModels : {},
     activeEngine: typeof input?.activeEngine === 'string' ? input.activeEngine : '',

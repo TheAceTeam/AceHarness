@@ -35,6 +35,12 @@ export async function requireAuth(req: NextRequest): Promise<AuthenticatedUser |
   if (!user) {
     return NextResponse.json({ error: '用户不存在' }, { status: 401 });
   }
+  if (user.status === 'pending') {
+    return NextResponse.json({ error: '账号等待管理员审核' }, { status: 403 });
+  }
+  if (user.status === 'rejected') {
+    return NextResponse.json({ error: '账号注册申请未通过' }, { status: 403 });
+  }
   return {
     id: user.id,
     username: user.username,

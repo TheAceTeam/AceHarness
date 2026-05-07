@@ -604,8 +604,46 @@ function normalizeMarkdownInput(content: unknown): string {
   return typeof content === 'string' ? content : '';
 }
 
+function stripDanglingTrailingFence(content: string): string {
+  const lines = content.split('\n');
+  let lastContentLine = lines.length - 1;
+  while (lastContentLine >= 0 && lines[lastContentLine].trim() === '') {
+    lastContentLine -= 1;
+  }
+  if (lastContentLine < 0) return content;
+
+  const trailingFence = lines[lastContentLine].match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+  if (!trailingFence) return content;
+
+  let inCodeBlock = false;
+  let fenceWidth = 0;
+  let fenceChar: '`' | '~' | null = null;
+  for (let index = 0; index < lastContentLine; index += 1) {
+    const line = lines[index];
+    if (!inCodeBlock) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open) {
+        inCodeBlock = true;
+        fenceWidth = open[1].length;
+        fenceChar = open[1][0] as '`' | '~';
+      }
+      continue;
+    }
+
+    const closeRe = fenceChar === '~' ? /^\s{0,3}(~{3,})\s*$/ : /^\s{0,3}(`{3,})\s*$/;
+    const close = line.match(closeRe);
+    if (close && close[1].length >= fenceWidth) {
+      inCodeBlock = false;
+      fenceChar = null;
+    }
+  }
+
+  if (inCodeBlock) return content;
+  return lines.slice(0, lastContentLine).join('\n').trimEnd();
+}
+
 function closeUnterminatedFences(content: unknown): string {
-  const safeContent = normalizeMarkdownInput(content);
+  const safeContent = stripDanglingTrailingFence(normalizeMarkdownInput(content));
   const lines = safeContent.split('\n');
   let inCodeBlock = false;
   let fenceWidth = 0;

@@ -7,10 +7,12 @@
  */
 
 import { EventEmitter } from 'events';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
 import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import { repairWindowsMojibake } from '../mojibake-repair';
+import { readTextFileBestEffort } from '../text-decoding';
 
 // ============================================================================
 // Helpers
@@ -31,6 +33,24 @@ const ZERO_USAGE_METADATA: EngineResultMetadata = {
 
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function delayWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new Error('Aborted'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function metadataFromClaudeResult(result: Record<string, unknown>, resolvedModel?: string): EngineResultMetadata {
@@ -89,13 +109,13 @@ function toolText(rawInput: Record<string, unknown>, keys: string[]): string {
 function readToolFileContent(filePath: string): string {
   if (!filePath || !existsSync(filePath)) return '';
   try {
-    return readFileSync(filePath, 'utf-8');
+    return readTextFileBestEffort(filePath);
   } catch {
     return '';
   }
 }
 function formatCommandOutput(output: string, exitCode?: number | null): string {
-  const trimmed = output.trim();
+  const trimmed = repairWindowsMojibake(output.trim());
   if (!trimmed) {
     return exitCode != null && exitCode !== 0 ? `\n(exit code: ${exitCode})\n` : '';
   }
@@ -453,7 +473,8 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     }, timeoutMs);
 
     let accumulated = '';
-    const MAX_API_RETRY_ATTEMPTS = 5;
+    const MAX_API_RETRY_ATTEMPTS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_ATTEMPTS', 12);
+    const MIN_API_RETRY_DELAY_MS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_MIN_DELAY_MS', 10_000);
     const execStartedAt = Date.now();
     let firstDeltaAt = 0;
     let lastDeltaAt = 0;
@@ -481,6 +502,9 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         const userEnv = buildEnvObject(userEnvVars);
         Object.assign(spawnEnv, userEnv);
       } catch {}
+      if (!spawnEnv.CLAUDE_CODE_MAX_RETRIES) {
+        spawnEnv.CLAUDE_CODE_MAX_RETRIES = String(MAX_API_RETRY_ATTEMPTS);
+      }
 
       // SDK query options
       const sdkOptions: Record<string, unknown> = {
@@ -641,7 +665,12 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             const attempt = Number(retry.attempt || 0);
             if (attempt >= MAX_API_RETRY_ATTEMPTS) {
               this.abortWithReason('retry_limit');
-              throw new Error(`SDK API 重试已达上限（${MAX_API_RETRY_ATTEMPTS} 次），已终止请求`);
+              throw new Error(`SDK API retry limit reached (${MAX_API_RETRY_ATTEMPTS} attempts), request aborted`);
+            }
+            const sdkDelayMs = Number(retry.retry_delay_ms || 0);
+            const extraDelayMs = Math.max(0, MIN_API_RETRY_DELAY_MS - sdkDelayMs);
+            if (extraDelayMs > 0) {
+              await delayWithAbort(extraDelayMs, this._abortController?.signal);
             }
             // Hide SDK retry noise from end-user stream output.
             continue;

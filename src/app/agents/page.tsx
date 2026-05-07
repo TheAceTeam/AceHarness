@@ -41,7 +41,7 @@ import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 
 interface AgentConfig {
   name: string;
-  team: 'blue' | 'red' | 'judge' | 'yellow' | 'black-gold';
+  team: 'blue' | 'red' | 'judge' | 'black-gold';
   roleType?: 'normal' | 'supervisor';
   avatar?: any;
   category?: string;
@@ -181,7 +181,7 @@ export default function AgentsPage() {
   const handleCreateAgent = () => {
       setEditingAgent({
         name: '',
-        team: 'blue',
+        team: 'red',
         roleType: 'normal',
         engineModels: {},
         activeEngine: '',
@@ -196,7 +196,7 @@ export default function AgentsPage() {
     setShowAICreateModal(false);
     setEditingAgent({
       ...agent,
-      team: agent.team || 'blue',
+      team: agent.team || 'red',
       roleType: agent.roleType || 'normal',
       engineModels: agent.engineModels || {},
       activeEngine: agent.activeEngine || '',
@@ -357,8 +357,7 @@ export default function AgentsPage() {
     }];
   })();
 
-  const normalizeTeam = (team: AgentConfig['team']): DisplayTeam =>
-    team === 'yellow' ? 'judge' : (team as DisplayTeam);
+  const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
 
   // Filter agents
   const filteredAgents = agents.filter(agent => {
@@ -402,12 +401,12 @@ export default function AgentsPage() {
     'black-gold': '指挥官',
     blue: '蓝队',
     red: '红队',
-    judge: '黄队',
+    judge: '裁定席',
   };
   const teamDescriptions: Record<string, string> = {
     'black-gold': '统筹、评估、给出阶段指导',
-    blue: '实施、防守、稳定推进主任务',
-    red: '攻击、挑战、寻找风险与反例',
+    blue: '攻击、挑战、寻找风险与反例',
+    red: '实施、防守、稳定推进主任务',
     judge: '裁定、复核、形成结论与分歧意见',
   };
   const teamPanelClass: Record<DisplayTeam, string> = {

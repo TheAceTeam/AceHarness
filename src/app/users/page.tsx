@@ -27,10 +27,16 @@ interface UserInfo {
   username: string;
   email: string;
   role: 'admin' | 'user';
+  status: 'pending' | 'active' | 'rejected';
   personalDir: string;
   avatar?: string;
   createdAt: number;
   createdBy?: string;
+  approvedAt?: number;
+  approvedBy?: string;
+  rejectedAt?: number;
+  rejectedBy?: string;
+  reviewNote?: string;
 }
 
 function UsersContent() {
@@ -145,6 +151,36 @@ function UsersContent() {
     setResetOpen(false); setResetPwd('');
   };
 
+  const handleReview = async (user: UserInfo, reviewAction: 'approve' | 'reject') => {
+    const ok = await confirm({
+      title: reviewAction === 'approve' ? '通过注册申请' : '拒绝注册申请',
+      description: reviewAction === 'approve'
+        ? `确定通过 ${user.username} 的注册申请吗？`
+        : `确定拒绝 ${user.username} 的注册申请吗？`,
+      confirmLabel: reviewAction === 'approve' ? '通过' : '拒绝',
+      variant: reviewAction === 'approve' ? 'default' : 'destructive',
+    });
+    if (!ok) return;
+    await fetch(`/api/users/${user.id}`, {
+      method: 'PUT',
+      headers: jsonHeaders,
+      body: JSON.stringify({ reviewAction }),
+    });
+    loadUsers();
+  };
+
+  const statusLabel = (status: UserInfo['status']) => {
+    if (status === 'pending') return '待审核';
+    if (status === 'rejected') return '已拒绝';
+    return '已启用';
+  };
+
+  const statusVariant = (status: UserInfo['status']) => {
+    if (status === 'pending') return 'outline' as const;
+    if (status === 'rejected') return 'destructive' as const;
+    return 'secondary' as const;
+  };
+
   /* RENDER */
   return (
     <div className="min-h-screen bg-background">
@@ -160,7 +196,9 @@ function UsersContent() {
               <p className="text-xs text-muted-foreground">{users.length} 个用户</p>
             </div>
           </div>
-          <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" />新建用户</Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" />新建用户</Button>
+          </div>
         </div>
       </header>
 
@@ -181,6 +219,7 @@ function UsersContent() {
                   <TableHead>用户名</TableHead>
                   <TableHead>邮箱</TableHead>
                   <TableHead>角色</TableHead>
+                  <TableHead>状态</TableHead>
                   <TableHead>个人目录</TableHead>
                   <TableHead>创建时间</TableHead>
                   <TableHead className="w-12">操作</TableHead>
@@ -202,6 +241,11 @@ function UsersContent() {
                         {user.role === 'admin' ? '管理员' : '用户'}
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <Badge variant={statusVariant(user.status)}>
+                        {statusLabel(user.status)}
+                      </Badge>
+                    </TableCell>
                     <TableCell><code className="text-xs">{user.personalDir || '-'}</code></TableCell>
                     <TableCell className="text-muted-foreground text-sm">{new Date(user.createdAt).toLocaleDateString()}</TableCell>
                     <TableCell>
@@ -210,6 +254,13 @@ function UsersContent() {
                           <Button variant="ghost" size="sm"><MoreHorizontal className="w-4 h-4" /></Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {user.status === 'pending' && (
+                            <>
+                              <DropdownMenuItem onClick={() => handleReview(user, 'approve')}>通过申请</DropdownMenuItem>
+                              <DropdownMenuItem className="text-destructive" onClick={() => handleReview(user, 'reject')}>拒绝申请</DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                            </>
+                          )}
                           <DropdownMenuItem onClick={() => openEdit(user)}>编辑</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => { setResetUserId(user.id); setResetPwd(''); setResetError(''); setResetOpen(true); }}>重置密码</DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -220,7 +271,7 @@ function UsersContent() {
                   </TableRow>
                 ))}
                 {filteredUsers.length === 0 && (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">暂无用户</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">暂无用户</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>

@@ -115,7 +115,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: '初始化已取消',
     welcome: '[ACE] 本地配置检查',
     statusLabel: '[ACE] 当前状态',
-    runtimeHome: '运行目录',
+    runtimeHome: '系统数据保存目录',
     localeStatus: (value: string) => `语言: ${value}`,
     engineStatus: (value: string) => `默认引擎: ${value}`,
     adminStatus: (configured: boolean) => `管理员: ${configured ? '已配置' : '未配置'}`,
@@ -156,7 +156,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: 'Setup cancelled',
     welcome: '[ACE] Local configuration check',
     statusLabel: '[ACE] Current status',
-    runtimeHome: 'Runtime home',
+    runtimeHome: 'System data directory',
     localeStatus: (value: string) => `Language: ${value}`,
     engineStatus: (value: string) => `Default engine: ${value}`,
     adminStatus: (configured: boolean) => `Admin: ${configured ? 'configured' : 'missing'}`,
@@ -592,13 +592,10 @@ async function runFirstLaunchWizard() {
 
   console.log(messages.welcome);
   console.log(messages.statusLabel);
+  console.log(`  ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   console.log(`  ${messages.localeStatus(formatLocaleLabel(settings.locale ? initialLocale : undefined))}`);
   console.log(`  ${messages.engineStatus(configuredEngine.engine ? formatEngineLabel(configuredEngine.engine) : '未设置')}`);
   console.log(`  ${messages.adminStatus(adminExists)}`);
-  const { verbose } = parseArgs(process.argv);
-  if (verbose) {
-    console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
-  }
 
   let selectedEngine = configuredEngine.engine;
   if (!selectedEngine) {
@@ -770,6 +767,7 @@ async function start() {
   }, 1200);
 
   console.log(messages.startingServer(url));
+  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   require('../server.js');
 }
 

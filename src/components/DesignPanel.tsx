@@ -63,13 +63,13 @@ interface DesignPanelProps {
 
 const roleIcon: Record<string, string> = { attacker: 'swords', defender: 'shield', judge: 'balance' };
 const roleColor: Record<string, string> = {
-  attacker: 'border-l-orange-500',
-  defender: 'border-l-blue-500',
+  attacker: 'border-l-blue-500',
+  defender: 'border-l-red-500',
   judge: 'border-l-yellow-500',
 };
 const roleBadge: Record<string, string> = {
-  attacker: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
-  defender: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  attacker: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  defender: 'bg-red-500/15 text-red-600 dark:text-red-400',
   judge: 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400',
 };
 

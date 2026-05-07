@@ -71,6 +71,40 @@ function isAbsoluteProjectPath(path: string) {
   return path.startsWith('/') || WINDOWS_DRIVE_ABSOLUTE_PATH.test(path) || UNC_ABSOLUTE_PATH.test(path);
 }
 
+type RuntimeSpecTask = {
+  id: string;
+  title: string;
+  detail?: string;
+  status: 'pending' | 'in-progress' | 'completed' | 'blocked';
+  phaseId?: string;
+  ownerAgents?: string[];
+  updatedAt?: string;
+  updatedBy?: string;
+  validation?: string;
+  children?: RuntimeSpecTask[];
+};
+
+function flattenRuntimeSpecTasks(tasks: RuntimeSpecTask[]): RuntimeSpecTask[] {
+  return tasks.flatMap((task) => [task, ...flattenRuntimeSpecTasks(task.children || [])]);
+}
+
+function flattenRuntimeSpecTasksWithDepth(tasks: RuntimeSpecTask[], depth = 0): Array<RuntimeSpecTask & { depth: number }> {
+  return tasks.flatMap((task) => [
+    { ...task, depth },
+    ...flattenRuntimeSpecTasksWithDepth(task.children || [], depth + 1),
+  ]);
+}
+
+function mapRuntimeSpecTasks(
+  tasks: RuntimeSpecTask[],
+  mapper: (task: RuntimeSpecTask) => RuntimeSpecTask,
+): RuntimeSpecTask[] {
+  return tasks.map((task) => mapper({
+    ...task,
+    children: mapRuntimeSpecTasks(task.children || [], mapper),
+  }));
+}
+
 type QualityCheckRecord = {
   id: string;
   stateName: string;
@@ -396,6 +430,9 @@ export default function WorkbenchPage() {
     summary: string;
     recommendedNextSteps: string[];
   } | null>(null);
+  const [startupProgressMode, setStartupProgressMode] = useState<'rehearsal' | 'real'>('rehearsal');
+  const [rehearsalProgressDialogOpen, setRehearsalProgressDialogOpen] = useState(false);
+  const [rehearsalProgressSteps, setRehearsalProgressSteps] = useState<string[]>([]);
   const [rehearsalResultDialogOpen, setRehearsalResultDialogOpen] = useState(false);
   const [specCodingDetails, setSpecCodingDetails] = useState<{
     phases: Array<{
@@ -477,6 +514,7 @@ export default function WorkbenchPage() {
   const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
   const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
   const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
+  const [workbenchConversationSessionId, setWorkbenchConversationSessionId] = useState<string | null>(null);
   const liveStreamFeedbackRef = useRef<HTMLInputElement>(null);
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
@@ -492,6 +530,19 @@ export default function WorkbenchPage() {
   const [editingContextValue, setEditingContextValue] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
+  const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
+    const targetSessionId = sessionId || workflowFrontendSessionId;
+    if (!targetSessionId) return;
+
+    setWorkbenchConversationSessionId(targetSessionId);
+    setExecutionViewTabOverride('supervisor');
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'workflow' });
+
+    if (agent) {
+      dispatch({ type: 'SET_SELECTED_AGENT', payload: agent });
+    }
+  }, [dispatch, workflowFrontendSessionId]);
+
   const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'config'>('overview');
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
@@ -508,6 +559,7 @@ export default function WorkbenchPage() {
   const [specMergeLoading, setSpecMergeLoading] = useState(false);
   const [specMergeApplying, setSpecMergeApplying] = useState(false);
   const [specMergeError, setSpecMergeError] = useState<string | null>(null);
+  const [specImporting, setSpecImporting] = useState(false);
   const liveStreamRef = useRef<EventSource | ReturnType<typeof setInterval> | null>(null);
   const liveStreamLenRef = useRef(0);
   const liveStreamRawRef = useRef('');
@@ -602,8 +654,86 @@ export default function WorkbenchPage() {
       || null;
   }, [currentPhase, specCodingDetails, specCodingSummary?.progress?.activePhaseId]);
 
+  const effectiveSpecCodingTasks = useMemo(() => {
+    const tasks = (specCodingDetails?.tasks || []) as RuntimeSpecTask[];
+    const workflow = workflowConfig?.workflow as any;
+    if (!tasks.length || !workflow) return tasks;
+
+    const runningStepKeys = new Set<string>([...activeSteps, currentStep].filter(Boolean));
+    const completedStepKeys = new Set<string>(completedSteps || []);
+    const failedStepKeys = new Set<string>(failedSteps || []);
+    const derivedStatusByTaskId = new Map<string, 'pending' | 'in-progress' | 'completed' | 'blocked'>();
+
+    const stepMatchesKey = (stepName: string, scopeName: string | null | undefined, key: string) => {
+      const variants = [stepName, scopeName ? `${scopeName}-${stepName}` : ''].filter(Boolean);
+      return variants.some((variant) =>
+        key === variant
+        || key.startsWith(`${variant}-迭代`)
+        || key.endsWith(`-${variant}`)
+      );
+    };
+
+    const applyDerivedStatus = (taskId: string, status: 'pending' | 'in-progress' | 'completed' | 'blocked') => {
+      const previous = derivedStatusByTaskId.get(taskId);
+      const priority = { pending: 0, 'in-progress': 1, blocked: 2, completed: 3 } as const;
+      if (!previous || priority[status] > priority[previous]) {
+        derivedStatusByTaskId.set(taskId, status);
+      }
+    };
+
+    const getStepTaskIds = (step: any): string[] => {
+      const ids = [
+        ...((step?.specTaskBinding?.taskIds || []) as string[]),
+        step?.specTaskBinding?.taskId,
+      ];
+      return Array.from(new Set(ids.map((id) => typeof id === 'string' ? id.trim() : '').filter(Boolean)));
+    };
+
+    const bindStepStatus = (step: any, scopeName?: string) => {
+      const taskIds = getStepTaskIds(step);
+      if (taskIds.length === 0) return;
+
+      for (const key of runningStepKeys) {
+        if (stepMatchesKey(step.name, scopeName, key)) {
+          taskIds.forEach((taskId) => applyDerivedStatus(taskId, 'in-progress'));
+          return;
+        }
+      }
+      for (const key of failedStepKeys) {
+        if (stepMatchesKey(step.name, scopeName, key)) {
+          taskIds.forEach((taskId) => applyDerivedStatus(taskId, 'blocked'));
+          return;
+        }
+      }
+      for (const key of completedStepKeys) {
+        if (stepMatchesKey(step.name, scopeName, key)) {
+          taskIds.forEach((taskId) => applyDerivedStatus(taskId, 'completed'));
+          return;
+        }
+      }
+    };
+
+    if (workflow.mode === 'state-machine') {
+      (workflow.states || []).forEach((state: any) => {
+        (state.steps || []).forEach((step: any) => bindStepStatus(step, state.name));
+      });
+    } else {
+      (workflow.phases || []).forEach((phase: any) => {
+        (phase.steps || []).forEach((step: any) => bindStepStatus(step, phase.name));
+      });
+    }
+
+    return mapRuntimeSpecTasks(tasks, (task) => {
+      if (task.status === 'completed' || task.status === 'blocked') return task;
+      const derivedStatus = derivedStatusByTaskId.get(task.id);
+      return derivedStatus && derivedStatus !== task.status
+        ? { ...task, status: derivedStatus }
+        : task;
+    });
+  }, [activeSteps, completedSteps, currentStep, failedSteps, specCodingDetails?.tasks, workflowConfig]);
+
   const specCodingTaskProgress = useMemo(() => {
-    const tasks = specCodingDetails?.tasks || [];
+    const tasks = flattenRuntimeSpecTasks((effectiveSpecCodingTasks || []) as RuntimeSpecTask[]);
     const total = tasks.length;
     const completed = tasks.filter((task) => task.status === 'completed').length;
     const inProgress = tasks.filter((task) => task.status === 'in-progress').length;
@@ -628,7 +758,7 @@ export default function WorkbenchPage() {
       blockedTasks,
       recentlyUpdatedTasks,
     };
-  }, [specCodingDetails?.tasks]);
+  }, [effectiveSpecCodingTasks]);
 
   const concurrencyDesignSummary = useMemo(() => {
     const sourceConfig = editingConfig || workflowConfig;
@@ -653,7 +783,10 @@ export default function WorkbenchPage() {
       if (groupId) grouped.set(groupId, [...(grouped.get(groupId) || []), step]);
       if (step.agentInstanceId) agentInstanceIds.add(step.agentInstanceId);
       (step.channelIds || []).forEach((id: string) => channelIds.add(id));
-      if (step.specTaskBinding?.taskId) specTaskIds.add(step.specTaskBinding.taskId);
+      [
+        ...((step.specTaskBinding?.taskIds || []) as string[]),
+        step.specTaskBinding?.taskId,
+      ].filter(Boolean).forEach((taskId: string) => specTaskIds.add(taskId));
       if (step.concurrency?.joinPolicy?.mode) {
         joinPolicies.push({ scope: `step:${step.name}`, mode: step.concurrency.joinPolicy.mode });
       }
@@ -676,37 +809,42 @@ export default function WorkbenchPage() {
   }, [editingConfig, workflowConfig]);
 
   const structuredTasksMarkdown = useMemo(() => {
-    const tasks = specCodingDetails?.tasks || [];
+    const tasks = effectiveSpecCodingTasks || [];
     if (tasks.length === 0) return '';
+    const renderTask = (task: RuntimeSpecTask, depth = 0): string[] => {
+      const checkbox = task.status === 'completed'
+        ? '[x]'
+        : task.status === 'in-progress'
+          ? '[-]'
+          : task.status === 'blocked'
+            ? '[!]'
+            : '[ ]';
+      const metadata = [
+        `status:${task.status}`,
+        task.phaseId ? `phase:${task.phaseId}` : null,
+        task.updatedBy ? `updatedBy:${task.updatedBy}` : null,
+      ].filter(Boolean).join(' ');
+      const indent = '  '.repeat(depth);
+      const lines = [
+        `${indent}<!-- spec-coding-task:${task.id} ${metadata} -->`,
+        `${indent}- ${checkbox} ${task.id} ${task.title}`,
+      ];
+      if (task.detail?.trim()) {
+        lines.push(...task.detail.trim().split(/\r?\n/).map((line) => `${indent}  ${line}`));
+      }
+      for (const child of task.children || []) {
+        lines.push(...renderTask(child, depth + 1));
+      }
+      return [...lines, ''];
+    };
     return [
       '# tasks.md',
       '',
       '## 任务列表',
       '',
-      ...tasks.flatMap((task) => {
-        const checkbox = task.status === 'completed'
-          ? '[x]'
-          : task.status === 'in-progress'
-            ? '[-]'
-            : task.status === 'blocked'
-              ? '[!]'
-              : '[ ]';
-        const metadata = [
-          `status:${task.status}`,
-          task.phaseId ? `phase:${task.phaseId}` : null,
-          task.updatedBy ? `updatedBy:${task.updatedBy}` : null,
-        ].filter(Boolean).join(' ');
-        const lines = [
-          `<!-- spec-coding-task:${task.id} ${metadata} -->`,
-          `- ${checkbox} ${task.title}`,
-        ];
-        if (task.detail?.trim()) {
-          lines.push(...task.detail.trim().split(/\r?\n/));
-        }
-        return [...lines, ''];
-      }),
+      ...tasks.flatMap((task) => renderTask(task)),
     ].join('\n').trim();
-  }, [specCodingDetails?.tasks]);
+  }, [effectiveSpecCodingTasks]);
 
   const specCodingArtifactEntries = useMemo<Array<{
     key: SpecCodingArtifactKey;
@@ -1135,7 +1273,7 @@ export default function WorkbenchPage() {
     };
   }, [displayQualityChecks, preflightChecks]);
   const overviewTasks = useMemo(() => {
-    const tasks = specCodingDetails?.tasks || [];
+    const tasks = flattenRuntimeSpecTasksWithDepth(effectiveSpecCodingTasks);
     if (tasks.length <= 8) return tasks;
     const firstActiveIndex = tasks.findIndex((task) => task.status !== 'completed');
     if (firstActiveIndex === -1) {
@@ -1143,7 +1281,7 @@ export default function WorkbenchPage() {
     }
     const startIndex = Math.max(0, firstActiveIndex - 2);
     return tasks.slice(startIndex, startIndex + 8);
-  }, [specCodingDetails?.tasks]);
+  }, [effectiveSpecCodingTasks]);
   const focusTaskOnDiagram = useCallback((task: { phaseId?: string }) => {
     const phaseTitle = getSpecCodingTaskPhaseTitle(task);
     if (!phaseTitle) return;
@@ -1474,6 +1612,10 @@ export default function WorkbenchPage() {
     setHumanApprovalMinimized(false);
     setHumanApprovalMinimizedPulse(false);
   }, [focusTarget, focusQuestionId]);
+
+  useEffect(() => {
+    setWorkbenchConversationSessionId(null);
+  }, [runId, workflowFrontendSessionId]);
 
   useEffect(() => {
     if (!pendingHumanQuestion) return;
@@ -1831,6 +1973,8 @@ export default function WorkbenchPage() {
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
         if (event.data.workflowFrontendSessionId) setWorkflowFrontendSessionId(event.data.workflowFrontendSessionId);
         if (Array.isArray(event.data.activeSteps)) setActiveSteps(event.data.activeSteps);
+        if (Array.isArray(event.data.completedSteps)) dispatch({ type: 'SET_COMPLETED_STEPS', payload: event.data.completedSteps });
+        if (Array.isArray(event.data.failedSteps)) dispatch({ type: 'SET_FAILED_STEPS', payload: event.data.failedSteps });
         if (Array.isArray(event.data.activeConcurrencyGroups)) setActiveConcurrencyGroups(event.data.activeConcurrencyGroups);
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
@@ -1854,6 +1998,10 @@ export default function WorkbenchPage() {
         const resultKey = event.data.id || event.data.step;
         if (event.data.error) {
           addLog(event.data.agent, 'error', event.data.output);
+          dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
+          setRunStatusReason(event.data.errorDetail || event.data.output || '步骤执行失败');
+          setActiveSteps([]);
+          setActiveConcurrencyGroups([]);
           dispatch({ type: 'ADD_FAILED_STEP', payload: event.data.step });
           dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
           dispatch({ type: 'SET_STEP_RESULT', payload: {
@@ -2059,8 +2207,15 @@ export default function WorkbenchPage() {
     setEditingName(false);
   };
 
-  const startWorkflow = async (mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real')) => {
+  const startWorkflow = async (
+    mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
+    options?: {
+      skipPreflight?: boolean;
+      preflightChecks?: QualityCheckRecord[];
+    },
+  ) => {
     const isRehearsalStart = mode === 'rehearsal';
+    const skipPreflight = !!options?.skipPreflight;
     const normalizedProjectRoot = (projectRoot || '').trim();
     if (!normalizedProjectRoot) {
       toast('error', '项目根目录不能为空');
@@ -2075,12 +2230,33 @@ export default function WorkbenchPage() {
 
     setStarting(true);
     try {
+      setStartupProgressMode(mode);
+      setRehearsalProgressSteps([
+        isRehearsalStart
+          ? (skipPreflight ? '已进入演练模式，跳过启动前检查并准备执行' : '已进入演练模式，准备执行启动前检查')
+          : (skipPreflight ? '正在正式启动，已跳过启动前检查' : '正在正式启动，准备执行启动前检查'),
+      ]);
+      setRehearsalProgressDialogOpen(true);
       if (!isRehearsalStart) {
         setRehearsalResultDialogOpen(false);
       }
-      const preflight = await workflowApi.preflight(configFile);
+      let preflight = {
+        ok: true,
+        failedCount: 0,
+        warningCount: 0,
+        checks: options?.preflightChecks || [],
+      };
+      if (!skipPreflight) {
+        preflight = await workflowApi.preflight(configFile);
+      }
       setPreflightChecks(preflight.checks || []);
+      if (!skipPreflight) {
+        setRehearsalProgressSteps((prev) => [...prev, `启动前检查完成：${preflight.failedCount > 0 ? `${preflight.failedCount} 项失败` : preflight.warningCount > 0 ? `${preflight.warningCount} 项警告` : '全部通过'}`]);
+      } else {
+        setRehearsalProgressSteps((prev) => [...prev, '已跳过启动前检查']);
+      }
       if (!preflight.ok) {
+        setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '演练已停止，请先处理启动前检查失败项' : '正式启动已停止，请先处理启动前检查失败项']);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
         addLog('system', 'error', `启动前检查未通过: ${preflight.failedCount} 项失败`);
         toast('error', `启动前检查未通过：${preflight.failedCount} 项失败`);
@@ -2100,6 +2276,7 @@ export default function WorkbenchPage() {
           variant: 'default',
         });
         if (!confirmed) {
+          setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '已取消演练，等待处理 preflight 警告' : '已取消正式启动，等待处理 preflight 警告']);
           addLog('system', 'warning', '已取消启动，等待处理 preflight 警告');
           toast('warning', '已取消启动，可先处理 preflight 警告');
           return;
@@ -2118,6 +2295,7 @@ export default function WorkbenchPage() {
       setAgentFlow([]);
       setWorkflowFrontendSessionId(null);
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
+      setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '已通过检查，正在创建演练运行并等待结果' : '已通过检查，正在创建正式运行']);
       const startResult = await workflowApi.start(configFile, undefined, {
         skipPreflight: true,
         rehearsal: isRehearsalStart,
@@ -2125,13 +2303,22 @@ export default function WorkbenchPage() {
       });
       setWorkflowFrontendSessionId(startResult.frontendSessionId || null);
       if (isRehearsalStart && (startResult as any).rehearsal) {
+        setRehearsalProgressSteps((prev) => [...prev, '演练执行完成，正在整理结果']);
+        setRehearsalProgressDialogOpen(false);
         setRehearsalInfo((startResult as any).rehearsal);
         setRehearsalResultDialogOpen(true);
+      } else {
+        setRehearsalProgressSteps((prev) => [...prev, '正式运行已创建，正在进入执行界面']);
+        setRehearsalProgressDialogOpen(false);
+        startLiveStream();
       }
       addLog('system', 'success', isRehearsalStart ? '演练模式执行完成' : '工作流启动成功，等待执行...');
       // Fetch status shortly after start to catch initial state
       setTimeout(fetchCurrentStatus, 500);
     } catch (error: any) {
+      if (isRehearsalStart) {
+        setRehearsalProgressSteps((prev) => [...prev, `演练启动失败：${error.message}`]);
+      }
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
       addLog('system', 'error', `启动失败: ${error.message}`);
     } finally {
@@ -2627,7 +2814,6 @@ export default function WorkbenchPage() {
   const sanitizeProtocolBlocksForDisplay = (text: string): string => {
     if (!text) return text;
     return text
-      .replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '')
       .replace(/<step-conclusion>\s*([\s\S]*?)\s*<\/step-conclusion>/gi, '$1')
       .trim();
   };
@@ -2985,6 +3171,36 @@ export default function WorkbenchPage() {
       setSpecMergeApplying(false);
     }
   }, [configFile, deltaMergeState?.mergedHash, initialRunId, runId, selectedRun?.id, specMergePreview?.mergeState?.mergedHash, toast]);
+
+  const handleImportWorkspaceDeltaSpec = useCallback(async () => {
+    const rid = runId || initialRunId || selectedRun?.id;
+    if (!rid) {
+      toast('error', '缺少 runId，无法导入 workspace delta spec');
+      return;
+    }
+
+    setSpecImporting(true);
+    try {
+      const result = await workflowApi.importWorkspaceDeltaSpec({
+        runId: rid,
+        configFile,
+        summary: '用户从 workspace delta spec 导入修订',
+      });
+      if (result.specCodingSummary) setSpecCodingSummary(result.specCodingSummary);
+      if (result.specCodingDetails) setSpecCodingDetails(result.specCodingDetails);
+      setDeltaMergeState(result.deltaMergeState);
+      setDeltaSpecMerged(Boolean(result.deltaSpecMerged));
+      setSpecMergePreview(null);
+      toast('success', '已导入 workspace delta spec');
+      await fetchCurrentStatus();
+    } catch (error: any) {
+      const message = error?.message || '导入 workspace delta spec 失败';
+      toast('error', message);
+      await fetchCurrentStatus();
+    } finally {
+      setSpecImporting(false);
+    }
+  }, [configFile, fetchCurrentStatus, initialRunId, runId, selectedRun?.id, toast]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -3387,13 +3603,19 @@ export default function WorkbenchPage() {
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0" style={{ marginLeft: `${Math.min((task.depth || 0) * 18, 72)}px` }}>
                       <div className="flex items-center gap-2">
+                        {task.depth ? (
+                          <span className="material-symbols-outlined text-sm text-muted-foreground">subdirectory_arrow_right</span>
+                        ) : null}
                         {task.status === 'in-progress' ? (
                           <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
                             <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
                             进行中
                           </span>
+                        ) : null}
+                        {task.depth ? (
+                          <span className="rounded-full border px-1.5 py-0.5 text-[10px] text-muted-foreground">子任务</span>
                         ) : null}
                         <div className={`text-sm font-medium leading-6 ${
                           task.status === 'completed'
@@ -3528,7 +3750,12 @@ export default function WorkbenchPage() {
                 <div className="text-[11px] font-medium text-foreground">复盘记忆</div>
                 <div className="text-[11px] leading-5 text-muted-foreground">{memoryLayers.review.summary}</div>
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-1">
+                <div className="text-[11px] font-medium text-foreground">复盘记忆</div>
+                <div className="text-[11px] leading-5 text-muted-foreground">暂无复盘内容</div>
+              </div>
+            )}
             {memoryLayers.role?.memories?.length ? (
               <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
                 <div className="text-[11px] font-medium text-foreground">角色长期记忆 · {memoryLayers.role.agent}</div>
@@ -3539,7 +3766,12 @@ export default function WorkbenchPage() {
                   </div>
                 ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">角色长期记忆</div>
+                <div className="text-[11px] leading-5 text-muted-foreground">暂无角色长期记忆</div>
+              </div>
+            )}
             {memoryLayers.project?.memories?.length ? (
               <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
                 <div className="text-[11px] font-medium text-foreground">项目级共享记忆</div>
@@ -3550,7 +3782,12 @@ export default function WorkbenchPage() {
                   </div>
                 ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">项目级共享记忆</div>
+                <div className="text-[11px] leading-5 text-muted-foreground">暂无项目共享记忆</div>
+              </div>
+            )}
             {memoryLayers.workflow?.memories?.length ? (
               <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
                 <div className="text-[11px] font-medium text-foreground">Workflow 记忆</div>
@@ -3561,7 +3798,12 @@ export default function WorkbenchPage() {
                   </div>
                 ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                <div className="text-[11px] font-medium text-foreground">Workflow 记忆</div>
+                <div className="text-[11px] leading-5 text-muted-foreground">暂无 workflow 记忆</div>
+              </div>
+            )}
             {(memoryLayers.history?.length || memoryLayers.recalledExperiences?.length) ? (
               <div className="grid gap-2 md:grid-cols-2">
                 {memoryLayers.history?.length ? (
@@ -3721,18 +3963,30 @@ export default function WorkbenchPage() {
                         <div className="text-[11px] leading-5 text-destructive">{deltaMergeState.error}</div>
                       ) : null}
                     </div>
-                    {canMergeSpec ? (
+                    <div className="flex flex-wrap justify-end gap-2">
                       <Button
-                        variant="default"
+                        variant="outline"
                         size="sm"
                         className="h-8 text-xs"
-                        onClick={handleOpenSpecMergeDialog}
-                        disabled={specMergeLoading || specMergeApplying}
+                        onClick={() => void handleImportWorkspaceDeltaSpec()}
+                        disabled={specImporting || !Boolean(runId || initialRunId || selectedRun?.id)}
                       >
-                        {specMergeLoading ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
-                        合入 Master Spec
+                        {specImporting ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                        导入 Delta 修改
                       </Button>
-                    ) : null}
+                      {canMergeSpec ? (
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={handleOpenSpecMergeDialog}
+                          disabled={specMergeLoading || specMergeApplying}
+                        >
+                          {specMergeLoading ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                          合入 Master Spec
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -4073,6 +4327,20 @@ export default function WorkbenchPage() {
               <span className="hidden sm:inline">{starting ? '启动中...' : rehearsalMode ? '开始演练' : '启动工作流'}</span>
               <span className="sm:hidden">{starting ? '...' : '启动'}</span>
             </Button>
+            {!rehearsalMode ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => void startWorkflow('real', { skipPreflight: true })}
+                disabled={!canStartWorkflow}
+                title="跳过启动前检查，直接创建正式运行"
+              >
+                <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>fast_forward</span>
+                <span className="hidden sm:inline">跳过检查启动</span>
+                <span className="sm:hidden">跳过</span>
+              </Button>
+            ) : null}
             <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={requestStopWorkflow} disabled={!isRunning && workflowStatus !== 'running'}>
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>stop</span><span className="hidden sm:inline">停止</span>
             </Button>
@@ -4269,10 +4537,39 @@ export default function WorkbenchPage() {
                 <TabsContent value="workflow" className="mt-0 overflow-y-auto h-full p-4">
                   {workflowConfig && (
                     <div>
+                      {(() => {
+                        const isStepRunningInNode = (step: any, nodeName?: string) => {
+                          const candidates = [step?.name, nodeName ? `${nodeName}-${step?.name}` : ''].filter(Boolean);
+                          return [...activeSteps, currentStep].filter(Boolean).some((key) =>
+                            candidates.some((candidate) =>
+                              key === candidate
+                              || key.startsWith(`${candidate}-迭代`)
+                              || key.endsWith(`-${candidate}`)
+                            )
+                          );
+                        };
+
+                        const isStepCompletedInNode = (step: any, nodeName?: string) => {
+                          const candidates = [step?.name, nodeName ? `${nodeName}-${step?.name}` : ''].filter(Boolean);
+                          return completedSteps?.some((key) =>
+                            candidates.some((candidate) =>
+                              key === candidate
+                              || key.startsWith(`${candidate}-迭代`)
+                              || key.endsWith(`-${candidate}`)
+                            )
+                          );
+                        };
+
+                        return (
+                          <>
                       <div>
                         <h3 className="text-base font-semibold mb-2">{workflowConfig.workflow.name}</h3>
                         <div className="text-sm text-muted-foreground mb-4 leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
-                          <Markdown>{workflowConfig.workflow.description}</Markdown>
+                          {workflowConfig.workflow.description?.trim() ? (
+                            <Markdown>{workflowConfig.workflow.description}</Markdown>
+                          ) : (
+                            <div className="text-sm text-muted-foreground">暂无工作流描述</div>
+                          )}
                         </div>
                         <div className="flex gap-3">
                           <div className="flex-1 bg-muted p-3 rounded-md text-center"><span className="block text-xs text-muted-foreground mb-1">{workflowConfig.workflow.mode === 'state-machine' ? '状态' : '阶段'}</span><span className="block text-xl font-semibold">{workflowConfig.workflow.mode === 'state-machine' ? (workflowConfig.workflow.states?.length ?? 0) : (workflowConfig.workflow.phases?.length ?? 0)}</span></div>
@@ -4288,17 +4585,27 @@ export default function WorkbenchPage() {
                           const phaseAgents = phase.steps 
                             ? phase.steps.map((s: any) => {
                                 const role = agentConfigs.find((r: any) => r.name === s.agent);
-                                return { name: s.agent, team: role?.team || 'blue', role: s.role };
+                                return { name: s.agent, team: role?.team || 'red', role: s.role };
                               })
-                            : [{ name: phase.agent, team: 'blue', role: undefined }];
+                            : [{ name: phase.agent, team: 'red', role: undefined }];
                           const iterState = iterationStates[phase.name];
                           const isActive = currentPhase === phase.name;
+                          const hasRunningStep = (phase.steps || []).some((step: any) => isStepRunningInNode(step, phase.name));
                           const isDone = phase.steps 
-                            ? phase.steps.every((s: any) => completedSteps?.includes(s.name))
+                            ? phase.steps.every((s: any) => isStepCompletedInNode(s, phase.name))
                             : completedSteps?.includes(phase.name);
+                          const nodeStatus = hasRunningStep || (isActive && workflowStatus === 'running')
+                            ? 'running'
+                            : isDone
+                              ? 'completed'
+                              : 'pending';
                           return (<div key={idx}
                             className={`bg-muted rounded-md p-2.5 cursor-pointer transition-colors hover:bg-accent border-l-[3px] ${
-                              isActive ? 'border-l-primary bg-accent' : isDone ? 'border-l-green-500' : 'border-transparent'
+                              nodeStatus === 'running'
+                                ? 'border-l-primary bg-accent'
+                                : nodeStatus === 'completed'
+                                  ? 'border-l-green-500'
+                                  : 'border-transparent'
                             }`}
                             onClick={() => {
                               // 触发流程图跳转到该节点
@@ -4311,6 +4618,18 @@ export default function WorkbenchPage() {
                             <div className="flex justify-between items-center mb-2">
                               <span className="text-sm font-medium">{phase.name}</span>
                               <div className="flex items-center gap-1">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[10px] ${
+                                    nodeStatus === 'running'
+                                      ? 'border-blue-500/30 bg-blue-500/10 text-blue-600'
+                                      : nodeStatus === 'completed'
+                                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                                        : 'text-muted-foreground'
+                                  }`}
+                                >
+                                  {nodeStatus === 'running' ? '运行中' : nodeStatus === 'completed' ? '已完成' : '未开始'}
+                                </Badge>
                                 {phaseContexts[phase.name] && (
                                   <Badge variant="outline" className="text-[10px]"><span className="material-symbols-outlined" style={{ fontSize: 10 }}>edit_note</span></Badge>
                                 )}
@@ -4332,6 +4651,9 @@ export default function WorkbenchPage() {
                           </div>);
                         })}
                       </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </TabsContent>
@@ -4394,7 +4716,7 @@ export default function WorkbenchPage() {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       e.preventDefault();
-                                      router.push(`/?sessionId=${encodeURIComponent(relatedSession.id)}&sidebarTab=${encodeURIComponent(agent.name === (finalReview?.supervisorAgent || 'default-supervisor') ? 'commander' : 'agent')}`);
+                                      openWorkbenchConversation(relatedSession.id, agent);
                                     }}
                                   >
                                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>message</span>
@@ -4502,7 +4824,7 @@ export default function WorkbenchPage() {
                             overviewFooter={renderRuntimeInsightPanels()}
                             supervisorInteractionPanel={(
                               <WorkflowSupervisorChatPanel
-                                sessionId={workflowFrontendSessionId}
+                                sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
                                 configFile={configFile}
                                 runId={runId || selectedRun?.id || null}
                                 supervisorAgent={runtimeSupervisorAgent}
@@ -4510,10 +4832,6 @@ export default function WorkbenchPage() {
                                 pendingHumanQuestion={pendingHumanQuestion}
                                 submittingHumanQuestion={submittingHumanQuestion}
                                 onSubmitHumanQuestion={handleSubmitHumanQuestion}
-                                onOpenHome={() => {
-                                  if (!workflowFrontendSessionId) return;
-                                  router.push(`/?sessionId=${encodeURIComponent(workflowFrontendSessionId)}&sidebarTab=commander`);
-                                }}
                               />
                             )}
                             activeTabOverride={executionViewTabOverride}
@@ -4544,7 +4862,7 @@ export default function WorkbenchPage() {
                 {(() => {
                   // Resolve the latest iteration key for the selected step
                   const stepKey = selectedStep ? getLatestStepKey(selectedStep.name) : '';
-                  const stepResult = selectedStep ? stepResults[stepKey] : null;
+                  const rawStepResult = selectedStep ? stepResults[stepKey] : null;
                   const isCurrentStepRunning = selectedStep && isRunning && (
                     currentStep === selectedStep.name || currentStep?.startsWith(selectedStep.name + '-迭代')
                     || currentStep?.endsWith('-' + selectedStep.name)
@@ -4555,15 +4873,26 @@ export default function WorkbenchPage() {
                   const stepBaseName = selectedStep?.name.match(/^(.+)-迭代\d+$/)
                     ? selectedStep.name.replace(/-迭代\d+$/, '')
                     : selectedStep?.name;
+                  const matchesSelectedStepName = (name: string) => !!selectedStep && (
+                    name === selectedStep.name ||
+                    (!!stepBaseName && (
+                      name === stepBaseName ||
+                      name.startsWith(stepBaseName + '-') ||
+                      name.endsWith('-' + stepBaseName)
+                    ))
+                  );
                   const isStepDone = selectedStep && (
                     completedSteps.includes(selectedStep.name) ||
                     (stepBaseName && completedSteps.some(s => s === stepBaseName || s.startsWith(stepBaseName + '-迭代'))) ||
-                    !!stepResult
+                    !!rawStepResult
                   );
                   const isStepFailed = selectedStep && (
                     failedSteps.includes(selectedStep.name) ||
+                    failedSteps.some(matchesSelectedStepName) ||
                     (stepBaseName && failedSteps.some(s => s === stepBaseName || s.startsWith(stepBaseName + '-迭代')))
                   );
+                  const shouldShowStepError = !!rawStepResult?.error && !!isStepFailed && !isRunning && workflowStatus !== 'completed';
+                  const stepResult = rawStepResult?.error && !shouldShowStepError ? null : rawStepResult;
                   return (<>
                 <div className="h-10 bg-muted border-b flex items-center px-4"><h2 className="text-sm font-semibold m-0">{selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : 'Agent 详情'}</h2></div>
                 <div className="flex-1 min-h-0 overflow-auto">
@@ -5877,11 +6206,54 @@ export default function WorkbenchPage() {
                 onClick={() => {
                   setRehearsalResultDialogOpen(false);
                   setRehearsalMode(false);
-                  void startWorkflow('real');
+                  void startWorkflow('real', {
+                    skipPreflight: true,
+                    preflightChecks: preflightChecks.length > 0 ? preflightChecks : displayQualityChecks.filter((check) => check.stateName === '__preflight__'),
+                  });
                 }}
                 disabled={!canStartWorkflow}
               >
                 基于演练结果正式启动
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={rehearsalProgressDialogOpen} onOpenChange={(open) => {
+        if (!starting) setRehearsalProgressDialogOpen(open);
+      }}>
+        <DialogContent className="sm:max-w-lg p-0 overflow-hidden">
+          <div className="flex flex-col">
+            <div className="border-b px-6 py-4">
+              <DialogTitle className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary">pending_actions</span>
+                {startupProgressMode === 'rehearsal' ? '演练进行中' : '正式启动中'}
+              </DialogTitle>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {startupProgressMode === 'rehearsal'
+                  ? '正在执行演练模式，下面会显示当前启动与执行阶段。'
+                  : '正在执行正式启动流程，下面会显示当前检查与启动阶段。'}
+              </div>
+            </div>
+            <div className="px-6 py-4 space-y-3">
+              {rehearsalProgressSteps.map((item, index) => (
+                <div key={`${index}-${item}`} className="flex items-start gap-3 rounded-lg border bg-muted/20 px-3 py-2">
+                  <span className={`material-symbols-outlined mt-0.5 text-sm ${index === rehearsalProgressSteps.length - 1 && starting ? 'animate-spin text-primary' : 'text-emerald-500'}`}>
+                    {index === rehearsalProgressSteps.length - 1 && starting ? 'progress_activity' : 'check_circle'}
+                  </span>
+                  <div className="text-sm text-foreground leading-6">{item}</div>
+                </div>
+              ))}
+              {rehearsalProgressSteps.length === 0 ? (
+                <div className="rounded-lg border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                  {startupProgressMode === 'rehearsal' ? '正在准备演练...' : '正在准备正式启动...'}
+                </div>
+              ) : null}
+            </div>
+            <div className="border-t px-6 py-4 flex justify-end">
+              <Button variant="outline" onClick={() => setRehearsalProgressDialogOpen(false)} disabled={starting}>
+                {starting ? (startupProgressMode === 'rehearsal' ? '演练进行中...' : '正式启动中...') : '关闭'}
               </Button>
             </div>
           </div>

@@ -1131,6 +1131,26 @@ export const workflowApi = {
     return data;
   },
 
+  async importWorkspaceDeltaSpec(input: { runId: string; configFile: string; summary?: string }): Promise<{
+    success: boolean;
+    bindingValidation?: any;
+    deltaMergeState?: DeltaMergeState;
+    deltaSpecMerged?: boolean;
+    specCodingSummary?: any;
+    specCodingDetails?: any;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'import-delta', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '导入 workspace delta spec 失败');
+    }
+    return data;
+  },
+
   connectEventStream(onMessage: (data: any) => void): EventSource {
     const eventSource = new EventSource(`${API_BASE}/workflow/events`);
 
@@ -1383,6 +1403,13 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
+export interface WorkspaceTreeResponse {
+  tree: TreeNode[];
+  workspaceRoot?: string;
+  targetPath?: string;
+  availableRoots?: string[];
+}
+
 export type WorkspaceMode = 'default' | 'notebook';
 export type NotebookScope = 'personal' | 'global';
 export type NotebookSharePermission = 'read' | 'write';
@@ -1575,7 +1602,7 @@ export const workspaceApi = {
     }
     return data;
   },
-  async getTree(workspacePath: string, depth = 2): Promise<{ tree: TreeNode[] }> {
+  async getTree(workspacePath: string, depth = 2): Promise<WorkspaceTreeResponse> {
     const res = await authFetch(`${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&depth=${depth}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -1583,7 +1610,7 @@ export const workspaceApi = {
     }
     return res.json();
   },
-  async getSubTree(workspacePath: string, subPath: string, depth = 2): Promise<{ tree: TreeNode[] }> {
+  async getSubTree(workspacePath: string, subPath: string, depth = 2): Promise<WorkspaceTreeResponse> {
     const res = await authFetch(
       `${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&sub=${encodeURIComponent(subPath)}&depth=${depth}`
     );

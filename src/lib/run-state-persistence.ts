@@ -3,7 +3,7 @@ import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import type { SpecCodingDocument } from '@/lib/schemas';
+import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValidation } from '@/lib/schemas';
 import { normalizeSpecCodingDocument } from '@/lib/spec-coding-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -165,6 +165,12 @@ export interface HumanAnswerContext {
 export interface PersistedRunState {
   runId: string;
   configFile: string;
+  /** Authenticated user who owns/started this run. */
+  runOwnerId?: string;
+  runOwnerName?: string;
+  /** Backward-compatible aliases used by older dashboard readers. */
+  createdBy?: string;
+  createdByName?: string;
   status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'pending';
   statusReason?: string;
   startTime: string;
@@ -274,8 +280,14 @@ export interface PersistedRunState {
   creationSessionId?: string;
   /** 当前 run 绑定的独立 SpecCoding 快照 */
   runSpecCoding?: SpecCodingDocument | null;
+  /** Startup snapshot of workflow step -> tasks.md task bindings. */
+  stepTaskBindingsSnapshot?: StepTaskBindingSnapshot[];
+  /** Last system validation result for workflow step -> tasks.md bindings. */
+  bindingValidation?: StepTaskBindingValidation;
   /** 持久化 spec 模式 */
   persistMode?: 'none' | 'repository';
+  /** 持久化 spec 的仓库根目录（repository 模式下写入 delta spec 的目标目录） */
+  specRootDir?: string;
   /** 工作流名称，持久化模式下用于定位 delta 目录 */
   workflowName?: string;
   /** delta spec 是否已合入 master */

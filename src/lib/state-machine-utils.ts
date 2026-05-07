@@ -17,14 +17,6 @@ export function extractTaggedBlock(text: string, tag: string): string | null {
   return text.match(pattern)?.[1]?.trim() || null;
 }
 
-export function extractSpecTasksBlock(text: string): string | null {
-  return extractTaggedBlock(text, 'spec-tasks');
-}
-
-export function stripSpecTasksBlocks(text: string): string {
-  return text.replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '');
-}
-
 export function stripJsonFence(text: string): string {
   return text
     .replace(/^```(?:json)?\s*/i, '')
@@ -36,8 +28,7 @@ export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
 
-  const text = stripSpecTasksBlocks(stripNonAiStreamArtifacts(raw))
-    .trim();
+  const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;

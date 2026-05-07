@@ -6,11 +6,14 @@
  */
 
 import { EventEmitter } from 'events';
-import { existsSync, readFileSync, statSync } from 'fs';
-import { extname, join } from 'path';
+import { existsSync, statSync } from 'fs';
+import { createRequire } from 'module';
+import { dirname, extname, join } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
-import { commandExists } from '../command-exists';
+import { commandExists, findCommand } from '../command-exists';
 import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { repairWindowsMojibake } from '../mojibake-repair';
+import { readTextFileBestEffort } from '../text-decoding';
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -71,7 +74,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     try {
       await import('@openai/codex-sdk');
     } catch { return false; }
-    return commandExists('codex', this.getCodexSearchPaths());
+    return !!this.findBundledCodexPath() || commandExists('codex', this.getCodexSearchPaths());
   }
 
   private getCodexSearchPaths(): string[] {
@@ -89,28 +92,79 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return candidates.filter(Boolean);
   }
 
+  private findBundledCodexPath(): string | null {
+    const targetTriple = (() => {
+      if (process.platform === 'win32') {
+        if (process.arch === 'x64') return 'x86_64-pc-windows-msvc';
+        if (process.arch === 'arm64') return 'aarch64-pc-windows-msvc';
+      }
+      if (process.platform === 'darwin') {
+        if (process.arch === 'x64') return 'x86_64-apple-darwin';
+        if (process.arch === 'arm64') return 'aarch64-apple-darwin';
+      }
+      if (process.platform === 'linux' || process.platform === 'android') {
+        if (process.arch === 'x64') return 'x86_64-unknown-linux-musl';
+        if (process.arch === 'arm64') return 'aarch64-unknown-linux-musl';
+      }
+      return null;
+    })();
+
+    if (!targetTriple) {
+      return null;
+    }
+
+    const platformPackage = {
+      'x86_64-unknown-linux-musl': '@openai/codex-linux-x64',
+      'aarch64-unknown-linux-musl': '@openai/codex-linux-arm64',
+      'x86_64-apple-darwin': '@openai/codex-darwin-x64',
+      'aarch64-apple-darwin': '@openai/codex-darwin-arm64',
+      'x86_64-pc-windows-msvc': '@openai/codex-win32-x64',
+      'aarch64-pc-windows-msvc': '@openai/codex-win32-arm64',
+    }[targetTriple];
+
+    if (!platformPackage) {
+      return null;
+    }
+
+    try {
+      const rootRequire = createRequire(join(process.cwd(), 'package.json'));
+      const codexPackageJsonPath = rootRequire.resolve('@openai/codex/package.json');
+      const codexRequire = createRequire(codexPackageJsonPath);
+      const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
+      const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+      const binaryPath = join(dirname(platformPackageJsonPath), 'vendor', targetTriple, 'codex', binaryName);
+      return existsSync(binaryPath) ? binaryPath : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Locate the codex CLI binary — cross-platform PATH + common install locations. */
   private findCodexPath(): string | null {
-    const pathValue = process.env.PATH || '';
-    const pathDirs = pathValue
-      .split(process.platform === 'win32' ? ';' : ':')
-      .filter(Boolean);
-    const pathext = process.platform === 'win32'
-      ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM')
-        .split(';')
-        .map((ext) => ext.trim())
-        .filter(Boolean)
-      : [''];
-    const names = process.platform === 'win32'
-      ? ['codex', ...pathext.map((ext) => `codex${ext}`)]
-      : ['codex'];
-
-    for (const dir of [...this.getCodexSearchPaths(), ...pathDirs]) {
-      for (const name of names) {
-        const fullPath = join(dir, name);
-        if (existsSync(fullPath)) return fullPath;
-      }
+    const bundledPath = this.findBundledCodexPath();
+    if (bundledPath) {
+      return bundledPath;
     }
+
+    const resolved = findCommand('codex', this.getCodexSearchPaths());
+    if (!resolved) {
+      return null;
+    }
+
+    if (process.platform !== 'win32') {
+      return resolved;
+    }
+
+    const lowerResolved = resolved.toLowerCase();
+    if (lowerResolved.endsWith('.exe') || lowerResolved.endsWith('.com')) {
+      return resolved;
+    }
+
+    const exeCandidate = `${resolved}.exe`;
+    if (existsSync(exeCandidate)) {
+      return exeCandidate;
+    }
+
     return null;
   }
 
@@ -135,7 +189,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   }
 
   private formatCommandResult(output: string, exitCode?: number): string {
-    let resultText = (output || '').trim();
+    let resultText = repairWindowsMojibake((output || '').trim());
     if (exitCode !== 0 && exitCode != null) {
       resultText += resultText ? `\n(exit code: ${exitCode})` : `(exit code: ${exitCode})`;
     }
@@ -199,7 +253,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       if (stats.size > CodexEngineWrapper.MAX_INLINE_FILE_BYTES) {
         return `\n📎 文件较大，点击打开查看: [${path}](${path})\n`;
       }
-      const content = readFileSync(path, 'utf-8');
+      const content = readTextFileBestEffort(path);
       if (content.includes('\u0000')) {
         return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
       }

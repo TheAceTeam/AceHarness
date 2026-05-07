@@ -55,6 +55,7 @@ const MonacoEditor = dynamic(
 
 const MAX_PLAN_DRAFT_REPAIR_ATTEMPTS = 2;
 const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = 2;
+const PLANNING_STREAM_SCOPE = 'workflow-planning';
 const CREATION_SESSION_TAG_PREFIX = '创建工作流 ·';
 const SPEC_LANGUAGE_RULE = [
   '语言一致性规则：先判断用户原始需求、补充说明和澄清回答的主语言；所有 summary、clarification、requirements.md、design.md、tasks.md 必须统一使用该主语言。',
@@ -424,6 +425,12 @@ function stripUnclosedResultTail(markdown: string) {
     return markdown.slice(0, lastOpen).trimEnd();
   }
   return markdown;
+}
+
+function stripResultBlocksForDisplay(markdown: string) {
+  return stripUnclosedResultTail(markdown)
+    .replace(/<result>[\s\S]*?<\/result>/gi, '')
+    .trim();
 }
 
 function formatWorkflowCondition(condition: any): string {
@@ -1382,7 +1389,7 @@ export default function NewConfigModal({
   hideAiGuided = false,
 }: NewConfigModalProps) {
   const { toast } = useToast();
-  const { appendVisibleSessionTag, appendSessionMessage } = useChat();
+  const { appendSessionMessage } = useChat();
   const { resolvedTheme } = useTheme();
   const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>('phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
@@ -1963,14 +1970,18 @@ export default function NewConfigModal({
     const workflowDraftAttempt = options?.workflowDraftAttempt || 0;
 
     try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+      const targetFrontendSessionId = planningFrontendSessionId || frontendSessionId || undefined;
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
           message,
           model: aiModelRef.current,
           engine: aiEngineRef.current,
           sessionId: sessionId || undefined,
+          frontendSessionId: targetFrontendSessionId,
+          streamScope: targetFrontendSessionId ? PLANNING_STREAM_SCOPE : undefined,
           mode: 'dashboard',
           workingDirectory: getValues('workingDirectory') || undefined,
           extraSystemPrompt: formStep === 5 ? WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT : undefined,
@@ -2124,7 +2135,7 @@ export default function NewConfigModal({
       toast('error', 'AI 请求失败: ' + err.message);
       setAiPhase('waiting');
     }
-  }, [checkExistingWorkflowFile, formStep, getValues, toast, validateWorkflowDraftConfig]);
+  }, [checkExistingWorkflowFile, formStep, frontendSessionId, getValues, planningFrontendSessionId, toast, validateWorkflowDraftConfig]);
 
   // PLACEHOLDER_SUBMIT_AND_RENDER
 
@@ -2158,6 +2169,32 @@ export default function NewConfigModal({
       recommendedSupervisorAgent
     );
   }, [getValues, recommendedAgents, recommendedSupervisorAgent, referenceConfig?.config, workflowMode]);
+
+  const validatePersistedSpecSelection = useCallback(async (values?: Partial<NewConfigForm>) => {
+    const draftValues = values || getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(draftValues);
+    if (persistMode !== 'repository') {
+      clearErrors('specRoot');
+      return;
+    }
+
+    try {
+      await modalSessionJsonFetch('/api/spec-coding/validate-persisted-root', {
+        method: 'POST',
+        body: JSON.stringify({
+          workingDirectory: draftValues.workingDirectory,
+          persistMode,
+          specRoot,
+        }),
+      });
+      clearErrors('specRoot');
+    } catch (error: any) {
+      const message = error?.message || '持久化 Spec 目录或 spec.md 校验失败';
+      setError('specRoot', { type: 'validate', message });
+      toast('error', message);
+      throw error;
+    }
+  }, [clearErrors, getValues, setError, toast]);
 
   const bindDraftCreationSessionToChat = useCallback(async (session: any) => {
     const targetChatSessionId = session?.chatSessionId || planningFrontendSessionId;
@@ -2196,6 +2233,8 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        persistMode,
+        specRoot,
         config: previewConfig,
         draft,
       }),
@@ -2270,6 +2309,8 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode,
         description: values.description,
         requirements: values.requirements,
+        persistMode,
+        specRoot,
         config: previewConfig,
         draft,
       }),
@@ -2380,6 +2421,10 @@ export default function NewConfigModal({
   }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
   const ensurePlanningChatSession = useCallback(async () => {
+    if (frontendSessionId) {
+      setPlanningFrontendSessionId(frontendSessionId);
+      return frontendSessionId;
+    }
     if (planningFrontendSessionId) return planningFrontendSessionId;
     const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
       method: 'POST',
@@ -2395,7 +2440,7 @@ export default function NewConfigModal({
     }
     setPlanningFrontendSessionId(data.session.id);
     return data.session.id as string;
-  }, [getValues, planningFrontendSessionId]);
+  }, [frontendSessionId, getValues, planningFrontendSessionId]);
 
   const buildClarificationSystemPrompt = useCallback((previewConfig: any) => {
     const data = getValues();
@@ -2701,12 +2746,6 @@ export default function NewConfigModal({
       setAiPhase('streaming');
       setCurrentStream('');
       setCurrentThinking('');
-
-      await appendVisibleSessionTag(
-        targetFrontendSessionId,
-        `创建工作流 · AI修订计划 · ${values.workflowName}`
-      );
-
       const revisionRequestMessage = [
         '请基于当前已生成的正式计划制品和用户修订说明，重新生成完整计划草案。',
         '这不是普通总结，也不是只改一份文档；你必须输出完整 plan_draft JSON，并同步刷新 requirements.md、design.md、tasks.md。',
@@ -2763,15 +2802,17 @@ export default function NewConfigModal({
         setCurrentStream('');
         setCurrentThinking('');
 
-        const startRes = await fetch('/api/chat/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+      const startRes = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify({
             message,
             model: aiModelRef.current,
             engine: aiEngineRef.current,
             sessionId: activeBackendSessionId || undefined,
             frontendSessionId: targetFrontendSessionId,
+            streamScope: PLANNING_STREAM_SCOPE,
             mode: 'dashboard',
             workingDirectory: values.workingDirectory,
             extraSystemPrompt: planningSystemPrompt,
@@ -2872,7 +2913,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [appendPlanningAssistantMessage, appendVisibleSessionTag, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, toast, updatePreviewSessionFromPlanDraft]);
+  }, [appendPlanningAssistantMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, toast, updatePreviewSessionFromPlanDraft]);
 
   const saveArtifactEdits = useCallback(async () => {
     if (!previewSession?.id || !previewSession?.specCoding) return;
@@ -3049,22 +3090,19 @@ ${confirmedSpecPrompt}
     setCurrentThinking('');
     setClarificationForm(null);
     setClarificationAnswers({});
-
-    await appendVisibleSessionTag(
-      targetFrontendSessionId,
-      `创建工作流 · 生成澄清问题 · ${values.workflowName}`
-    );
     await ensureDraftCreationSession(targetFrontendSessionId);
 
-    const startRes = await fetch('/api/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+      const startRes = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({
         message: clarificationRequestMessage,
         model: aiModelRef.current,
         engine: aiEngineRef.current,
         sessionId: backendSessionId || undefined,
         frontendSessionId: targetFrontendSessionId,
+        streamScope: PLANNING_STREAM_SCOPE,
         mode: 'dashboard',
         workingDirectory: values.workingDirectory,
         extraSystemPrompt: clarificationSystemPrompt,
@@ -3170,7 +3208,7 @@ ${confirmedSpecPrompt}
         reject(new Error('计划生成流中断'));
       });
     });
-  }, [appendPlanningAssistantMessage, appendVisibleSessionTag, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
+  }, [appendPlanningAssistantMessage, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
 
   const generatePlanWithChatSession = useCallback(async () => {
     const values = getValues();
@@ -3195,11 +3233,6 @@ ${confirmedSpecPrompt}
     setAiMessages([]);
     setCurrentStream('');
     setCurrentThinking('');
-
-    await appendVisibleSessionTag(
-      targetFrontendSessionId,
-      `创建工作流 · 生成计划草案 · ${values.workflowName}`
-    );
     await persistDraftUiState({
       formStep: 3,
       planningStage: 'generating-plan',
@@ -3213,15 +3246,17 @@ ${confirmedSpecPrompt}
       setCurrentStream('');
       setCurrentThinking('');
 
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({
           message,
           model: aiModelRef.current,
           engine: aiEngineRef.current,
           sessionId: activeBackendSessionId || undefined,
           frontendSessionId: targetFrontendSessionId,
+          streamScope: PLANNING_STREAM_SCOPE,
           mode: 'dashboard',
           workingDirectory: values.workingDirectory,
           extraSystemPrompt: planningSystemPrompt,
@@ -3338,7 +3373,7 @@ ${confirmedSpecPrompt}
     };
 
     await runPlanDraftStream(planningRequestMessage, 0);
-  }, [appendPlanningAssistantMessage, appendVisibleSessionTag, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, createPreviewSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
+  }, [appendPlanningAssistantMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, createPreviewSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
 
   useEffect(() => {
     if (!isOpen || !planningFrontendSessionId) return;
@@ -3349,6 +3384,9 @@ ${confirmedSpecPrompt}
       .then((data) => {
         if (cancelled || !data?.session) return;
         restoredPlanningSessionRef.current = planningFrontendSessionId;
+        if (frontendSessionId && planningFrontendSessionId === frontendSessionId) {
+          return;
+        }
         if (data.session.backendSessionId) {
           setBackendSessionId(data.session.backendSessionId);
         }
@@ -3362,7 +3400,7 @@ ${confirmedSpecPrompt}
     return () => {
       cancelled = true;
     };
-  }, [isOpen, planningFrontendSessionId]);
+  }, [frontendSessionId, isOpen, planningFrontendSessionId]);
 
   useEffect(() => {
     if (!isOpen || !planningFrontendSessionId || planningStage !== 'generating-plan') return;
@@ -3370,7 +3408,7 @@ ${confirmedSpecPrompt}
     let cancelled = false;
 
     const reconnect = async () => {
-      const checkRes = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(planningFrontendSessionId)}`);
+      const checkRes = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(planningFrontendSessionId)}&streamScope=${encodeURIComponent(PLANNING_STREAM_SCOPE)}`);
       const checkData = await checkRes.json().catch(() => null);
       if (cancelled || !checkData?.active || !checkData.chatId) return;
       if (reconnectingPlanningChatIdRef.current === checkData.chatId) return;
@@ -3500,6 +3538,12 @@ ${confirmedSpecPrompt}
       return;
     }
 
+    try {
+      await validatePersistedSpecSelection(draft);
+    } catch {
+      return;
+    }
+
     const reqs = getValues('requirements') || '';
     if (reqs.trim().length < 5) {
       toast('error', '请提供需求描述（至少5个字符）');
@@ -3553,12 +3597,6 @@ ${confirmedSpecPrompt}
 	      const confirmedSession = await confirmPreviewSession(session);
 	      const values = getValues();
 	      if (workflowMode === 'ai-guided') {
-	        if (frontendSessionId) {
-          await appendVisibleSessionTag(
-            frontendSessionId,
-	            `创建工作流 · 进入 Workflow 草案 · ${values.workflowName}`
-	          );
-	        }
 	        setFormStep(5);
 	        setAiMessages([]);
 	        setCurrentStream('');
@@ -3578,12 +3616,6 @@ ${confirmedSpecPrompt}
 	        await startAiStream(confirmedSession);
 	        return;
 	      }
-      if (frontendSessionId) {
-        await appendVisibleSessionTag(
-          frontendSessionId,
-          `创建工作流 · 确认计划并创建配置 · ${values.workflowName}`
-        );
-      }
       await onSubmit({
         ...values,
         mode: workflowMode,
@@ -3724,12 +3756,6 @@ ${confirmedSpecPrompt}
         content: `工作流配置 configs/${createdFilename} 已创建并通过系统校验。是否打开工作流设计页面？`,
       }]);
       toast('success', '工作流配置已创建并通过校验');
-      if (frontendSessionId) {
-        await appendVisibleSessionTag(
-          frontendSessionId,
-          `创建工作流 · 配置已创建 · ${values.workflowName || createdFilename}`
-        );
-      }
       return true;
     } catch (error: any) {
       const errorMsg = error?.message || '保存 workflow 草案失败';
@@ -3750,7 +3776,6 @@ ${confirmedSpecPrompt}
       setIsSavingWorkflowDraft(false);
     }
   }, [
-    appendVisibleSessionTag,
     backendSessionId,
     checkExistingWorkflowFile,
     frontendSessionId,
@@ -3781,12 +3806,6 @@ ${confirmedSpecPrompt}
     if (await createWorkflowFromValidatedDraft()) return;
     const text = '确认，请基于已校验结果继续生成可保存的 workflow_draft';
     const workflowName = getValues('workflowName') || '新工作流';
-    if (frontendSessionId) {
-      await appendVisibleSessionTag(
-        frontendSessionId,
-        `创建工作流 · AI确认创建文件 · ${workflowName}`
-      );
-    }
     setAiMessages(prev => [...prev, { role: 'user', content: text }]);
     await sendToAi(text, backendSessionId, { workflowDraftAttempt: 1 });
   };
@@ -3797,6 +3816,12 @@ ${confirmedSpecPrompt}
     const validation = newConfigFormSchema.safeParse({ ...data, mode: workflowMode });
     if (!validation.success) {
       applySchemaIssues(validation.error.issues as any);
+      return;
+    }
+
+    try {
+      await validatePersistedSpecSelection(data);
+    } catch {
       return;
     }
 
@@ -3836,12 +3861,6 @@ ${confirmedSpecPrompt}
         return;
       }
       toast('success', result.message || '配置文件已创建');
-      if (frontendSessionId) {
-        await appendVisibleSessionTag(
-          frontendSessionId,
-          `创建工作流 · 配置已创建 · ${data.workflowName}`
-        );
-      }
       reset();
       onSuccess(data.filename, { creationSession: result.creationSession });
       onClose();
@@ -3992,12 +4011,6 @@ ${confirmedSpecPrompt}
       } catch (error: any) {
         toast('error', error?.message || '创建态会话回写失败');
       }
-    }
-    if (frontendSessionId && filename) {
-      await appendVisibleSessionTag(
-        frontendSessionId,
-        `创建工作流 · 配置已创建 · ${workflowName}`
-      );
     }
     resetAll();
     reset();
@@ -4230,7 +4243,7 @@ ${confirmedSpecPrompt}
                           </div>
                         ) : msg.role === 'user' ? null : (
                           (() => {
-                            const { text, cards } = parseActions(msg.content);
+                            const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
                             return (
                               <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                                 {text ? <Markdown>{text}</Markdown> : null}
@@ -4256,7 +4269,7 @@ ${confirmedSpecPrompt}
 
                     {currentStream ? (
                       (() => {
-                        const { text, cards } = parseActions(currentStream);
+                        const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
                         return (
                           <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                             {text ? <Markdown>{text}</Markdown> : null}
@@ -4372,7 +4385,7 @@ ${confirmedSpecPrompt}
                     </div>
                   ) : msg.role === 'user' ? null : (
                     (() => {
-                      const { text, cards } = parseActions(msg.content);
+                      const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
                       return (
                         <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                           {text ? <Markdown>{text}</Markdown> : null}
@@ -4398,7 +4411,7 @@ ${confirmedSpecPrompt}
 
               {currentStream ? (
                 (() => {
-                  const { text, cards } = parseActions(currentStream);
+                  const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
                   return (
                     <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                       {text ? <Markdown>{text}</Markdown> : null}
@@ -4507,7 +4520,7 @@ ${confirmedSpecPrompt}
                   </div>
                 ) : (
                   (() => {
-                    const { text, cards } = parseActions(stripUnclosedResultTail(msg.content));
+                    const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
                     return (
                       <div className="bg-muted/50 rounded-lg p-4 border space-y-3">
                         {text && <Markdown>{text}</Markdown>}
@@ -4533,7 +4546,7 @@ ${confirmedSpecPrompt}
 
             {currentStream && (
               (() => {
-                const { text, cards } = parseActions(stripUnclosedResultTail(currentStream));
+                const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
                 return (
                   <div className="bg-muted/50 rounded-lg p-4 border space-y-3">
                     {text && <Markdown>{text}</Markdown>}
@@ -5397,7 +5410,7 @@ ${confirmedSpecPrompt}
                         ) : null}
                         {currentStream ? (
                           (() => {
-                            const { text, cards } = parseActions(currentStream);
+                            const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
                             return (
                               <div className="space-y-3 rounded-md border bg-background p-3">
                                 {text ? <Markdown>{text}</Markdown> : null}

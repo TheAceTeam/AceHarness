@@ -65,12 +65,14 @@ function fallbackDraft(input: {
     .map((item) => item.trim())
     .filter(Boolean);
 
+  const normalizedTeam = ['blue', 'red', 'judge', 'black-gold'].includes(input.team || '') ? input.team : 'red';
+
   return {
     name: slugify(input.displayName),
-    team: ['blue', 'red', 'judge', 'yellow', 'black-gold'].includes(input.team || '') ? input.team : 'blue',
+    team: normalizedTeam,
     roleType: input.team === 'black-gold' ? 'supervisor' : 'normal',
     avatar: createDeterministicAvatarConfig(input.displayName, {
-      team: (['blue', 'red', 'judge', 'yellow', 'black-gold'].includes(input.team || '') ? input.team : 'blue') as any,
+      team: normalizedTeam as any,
       roleType: input.team === 'black-gold' ? 'supervisor' : 'normal',
     }),
     engineModels: input.engine && input.model ? { [input.engine]: input.model } : {},
@@ -206,7 +208,7 @@ export async function POST(request: NextRequest) {
     const mission = String(body.mission || '').trim();
     const style = String(body.style || '').trim();
     const specialties = String(body.specialties || '').trim();
-    const team = String(body.team || 'blue').trim();
+    const team = String(body.team || 'red').trim();
     const workingDirectory = String(body.workingDirectory || '').trim();
     const referenceWorkflow = String(body.referenceWorkflow || '').trim();
     const requestedEngine = (body.engine || '') as EngineType | '';
@@ -220,7 +222,9 @@ export async function POST(request: NextRequest) {
     const enabledSkills = Object.entries(settings.skills || {})
       .filter(([, enabled]) => enabled)
       .map(([name]) => name);
-    const systemPrompt = await buildDashboardSystemPrompt(enabledSkills);
+    const systemPrompt = await buildDashboardSystemPrompt(enabledSkills, {
+      personalDir: workingDirectory || undefined,
+    });
     const relatedExperiences = await findRelevantWorkflowExperiences({
       requirements: [mission, specialties].filter(Boolean).join('\n'),
       projectRoot: workingDirectory || undefined,
@@ -294,7 +298,7 @@ export async function POST(request: NextRequest) {
       '请严格只输出一个 JSON 对象，不要输出解释。',
       'JSON 字段要求：',
       '- name: kebab-case，适合作为文件名',
-      '- team: blue/red/judge/yellow/black-gold',
+      '- team: blue/red/judge/black-gold',
       '- roleType: normal/supervisor',
       '- avatar: 使用 AgentAvatarConfig 结构；默认 mode=deterministic，并填写 seed/style',
       '- engineModels: object',
@@ -307,7 +311,7 @@ export async function POST(request: NextRequest) {
       '- category: string',
       '',
       '注意：',
-      '- 阵营视觉按 blue/red/yellow/black-gold 四个阵营理解；judge 仅表示裁定席职责位',
+      '- 阵营语义已调整：red=防守/实施方，blue=攻击/挑战方；black-gold 保持原义，judge 仅表示裁定席职责位',
       '- 如果没有明确指定模型，可让 engineModels 为空对象，activeEngine 为空字符串',
       '- capabilities 至少一个',
       '- systemPrompt 要完整可用',
@@ -359,7 +363,7 @@ export async function POST(request: NextRequest) {
     if (!draft.name) draft.name = slugify(displayName);
     if (!draft.avatar || typeof draft.avatar !== 'object') {
       draft.avatar = createDeterministicAvatarConfig(displayName, {
-        team: draft.team || 'blue',
+        team: draft.team || 'red',
         roleType: draft.roleType || 'normal',
       });
     }

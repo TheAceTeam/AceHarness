@@ -61,6 +61,13 @@ import {
   updateSpecCodingTaskStatuses,
 } from './spec-coding-store';
 import {
+  compileStepTaskBindings,
+  getSpecTaskBindingIds,
+  getWorkflowStepRefs,
+  type StepTaskBindingSnapshot,
+  type StepTaskBindingValidation,
+} from './spec-task-binding';
+import {
   ensureSpecDirStructure,
   getSpecRootDir,
   writeDeltaSpec,
@@ -68,6 +75,7 @@ import {
   readChecklist,
   type ChecklistQuestion,
 } from './spec-persistence';
+import { importWorkspaceArtifactsIntoRunSpecCoding } from './runtime-spec-import';
 import { appendMemoryEntries } from './workflow-memory-store';
 import { upsertRelationshipSignal } from './agent-relationship-store';
 
@@ -165,27 +173,11 @@ export function extractTaggedBlock(text: string, tag: string): string | null {
   return text.match(pattern)?.[1]?.trim() || null;
 }
 
-export function extractSpecTasksBlock(text: string): string | null {
-  return extractTaggedBlock(text, 'spec-tasks');
-}
-
-export function stripSpecTasksBlocks(text: string): string {
-  return text.replace(/<spec-tasks>[\s\S]*?<\/spec-tasks>/gi, '');
-}
-
-export function stripJsonFence(text: string): string {
-  return text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim();
-}
-
 export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
 
-  const text = stripSpecTasksBlocks(stripNonAiStreamArtifacts(raw))
-    .trim();
+  const text = stripNonAiStreamArtifacts(raw).trim();
   const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   const tail = lines.slice(-30).join('\n').trim();
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
@@ -320,10 +312,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private humanAnswersContext: HumanAnswerContext[] = [];
   private humanQuestionWaiters = new Map<string, (question: HumanQuestion | null) => void>();
   private currentRunSpecCoding: SpecCodingDocument | null = null;
+  private currentWorkflowConfig: StateMachineWorkflowConfig | null = null;
+  private currentSpecRootDir: string | null = null;
   private deltaSpecMerged: boolean = false;
   private deltaMergeState: DeltaMergeState | undefined;
   private workflowName: string = '';
-  private liveSpecCodingTaskBlocksByProcess: Map<string, string> = new Map();
+  private stepTaskBindingsByStepKey: Map<string, StepTaskBindingSnapshot> = new Map();
+  private stepTaskBindingsSnapshot: StepTaskBindingSnapshot[] = [];
+  private bindingValidation: StepTaskBindingValidation | undefined;
   private supervisorFlow: { type: string; from: string; to: string; question?: string; method?: string; round: number; timestamp: string; stateName?: string }[] = [];
   /** Agent 工作流：追踪 Agent 之间的信息传递 */
   private agentFlow: {
@@ -754,10 +750,25 @@ export class StateMachineWorkflowManager extends EventEmitter {
       humanAnswersContext: this.humanAnswersContext,
       qualityChecks: this.qualityChecks,
       runSpecCoding,
+      stepTaskBindingsSnapshot: this.stepTaskBindingsSnapshot,
+      bindingValidation: this.bindingValidation,
       persistMode: this.currentRunSpecCoding?.persistMode,
+      specRootDir: this.currentSpecRootDir,
       deltaSpecMerged: this.deltaSpecMerged,
       deltaMergeState: this.deltaMergeState,
     };
+  }
+
+  private async syncRunSpecCodingDelta(): Promise<void> {
+    if (!this.currentRunSpecCoding || this.currentRunSpecCoding.persistMode !== 'repository' || !this.currentRunId) {
+      return;
+    }
+    const specRootDir = this.currentSpecRootDir
+      || (this.getWorkingDirectory() ? getSpecRootDir(this.getWorkingDirectory()!, this.currentRunSpecCoding.specRoot) : null);
+    if (!specRootDir) return;
+    this.currentSpecRootDir = specRootDir;
+    await ensureSpecDirStructure(specRootDir);
+    await writeDeltaSpec(specRootDir, this.workflowName, this.currentRunId, this.currentRunSpecCoding);
   }
 
   async applySupervisorChatSpecCodingRevision(input: {
@@ -784,15 +795,77 @@ export class StateMachineWorkflowManager extends EventEmitter {
       impact: input.impact || [],
     };
     await this.persistState();
-    // 持久化模式：同步写入 delta 目录
-    if (this.currentRunSpecCoding.persistMode === 'repository') {
-      const workingDir = this.getWorkingDirectory();
-      if (workingDir && this.currentRunId) {
-        const specRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
-        await writeDeltaSpec(specRootDir, this.workflowName, this.currentRunId, this.currentRunSpecCoding).catch(() => {});
-      }
-    }
+    await this.syncRunSpecCodingDelta().catch(() => {});
     this.emit('supervisor-review', this.latestSupervisorReview);
+    return this.currentRunSpecCoding;
+  }
+
+  async importWorkspaceDeltaSpecRevision(input?: {
+    summary?: string;
+    createdBy?: string;
+  }): Promise<SpecCodingDocument | null> {
+    if (!this.currentRunId || !this.currentRunSpecCoding || this.currentRunSpecCoding.persistMode !== 'repository') {
+      return null;
+    }
+    const specRootDir = this.currentSpecRootDir
+      || (this.getWorkingDirectory() ? getSpecRootDir(this.getWorkingDirectory()!, this.currentRunSpecCoding.specRoot) : null);
+    if (!specRootDir) {
+      throw new Error('缺少 Spec 根目录，无法导入 workspace delta spec');
+    }
+
+    const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, this.currentRunId);
+    if (!deltaSpec) {
+      throw new Error('Delta spec 不存在，无法导入 workspace 修改');
+    }
+
+    const nextSpecCoding = importWorkspaceArtifactsIntoRunSpecCoding({
+      current: this.currentRunSpecCoding,
+      artifacts: deltaSpec.artifacts,
+      summary: input?.summary || '用户从 workspace delta spec 导入修订',
+      createdBy: input?.createdBy,
+    });
+
+    if (this.currentWorkflowConfig) {
+      const compiled = compileStepTaskBindings(this.currentWorkflowConfig, nextSpecCoding);
+      if (!compiled.validation.ok) {
+        throw Object.assign(new Error('导入后的 Spec task 与 workflow step 绑定不一致'), {
+          bindingValidation: compiled.validation,
+        });
+      }
+      this.currentWorkflowConfig = compiled.config as StateMachineWorkflowConfig;
+      this.bindingValidation = compiled.validation;
+      this.stepTaskBindingsSnapshot = compiled.validation.bindings;
+      this.stepTaskBindingsByStepKey = new Map(
+        this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+      );
+    }
+
+    this.currentSpecRootDir = specRootDir;
+    this.currentRunSpecCoding = nextSpecCoding;
+    this.deltaSpecMerged = false;
+    this.deltaMergeState = {
+      ...(this.deltaMergeState || {}),
+      status: 'available',
+      requestedAt: this.deltaMergeState?.requestedAt || new Date().toISOString(),
+      error: undefined,
+    };
+    await this.persistState();
+    await this.syncRunSpecCodingDelta();
+    this.emit('status', {
+      status: this.status,
+      message: '已从 workspace delta spec 导入用户修订',
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      completedSteps: this.completedSteps,
+      currentConfigFile: this.currentConfigFile,
+      deltaSpecMerged: this.deltaSpecMerged,
+      deltaMergeState: this.deltaMergeState,
+      ...this.buildRunSpecCodingStatusPayload(),
+    });
     return this.currentRunSpecCoding;
   }
 
@@ -829,6 +902,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
       this.latestSupervisorReview = null;
       this.currentRunSpecCoding = null;
+      this.currentSpecRootDir = null;
+      this.stepTaskBindingsByStepKey.clear();
+      this.stepTaskBindingsSnapshot = [];
+      this.bindingValidation = undefined;
       this.runStartTime = new Date().toISOString();
       this.currentConfigFile = configFile;
       this.isolatedDir = null;
@@ -849,7 +926,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // Load config
       const configPath = await getRuntimeWorkflowConfigPath(configFile);
       const configContent = await readFile(configPath, 'utf-8');
-      const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      let workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+      this.currentWorkflowConfig = workflowConfig;
       this.workflowName = workflowConfig.workflow.name || '';
       this.currentRequirements = requirements || workflowConfig.context?.requirements || '';
       this.currentSupervisorAgent = resolveWorkflowSupervisorAgent(workflowConfig);
@@ -901,13 +979,23 @@ export class StateMachineWorkflowManager extends EventEmitter {
           runId,
           filename: configFile,
         });
+        const compiled = compileStepTaskBindings(workflowConfig, this.currentRunSpecCoding);
+        workflowConfig = compiled.config as StateMachineWorkflowConfig;
+        this.currentWorkflowConfig = workflowConfig;
+        this.bindingValidation = compiled.validation;
+        this.stepTaskBindingsSnapshot = compiled.validation.bindings;
+        this.stepTaskBindingsByStepKey = new Map(
+          this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+        );
+        if (!compiled.validation.ok) {
+          throw new Error(`Spec task 绑定校验失败: ${compiled.validation.errors.join('; ')}`);
+        }
         // 持久化 spec 模式：初始化 delta 目录并写入初始快照
         if (this.currentRunSpecCoding.persistMode === 'repository') {
-          const workingDir = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || '';
+          const workingDir = this.currentProjectRoot || this.getWorkingDirectory() || workflowConfig.context?.projectRoot || '';
           if (workingDir) {
-            const specRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
-            await ensureSpecDirStructure(specRootDir);
-            await writeDeltaSpec(specRootDir, this.workflowName, runId, this.currentRunSpecCoding);
+            this.currentSpecRootDir = getSpecRootDir(workingDir, this.currentRunSpecCoding.specRoot);
+            await this.syncRunSpecCodingDelta();
           }
         }
         await this.persistState();
@@ -994,6 +1082,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.currentRunSpecCoding = existingState.runSpecCoding
           ? normalizeSpecCodingDocument(existingState.runSpecCoding)
           : this.currentRunSpecCoding;
+        this.currentSpecRootDir = existingState.specRootDir || this.currentSpecRootDir;
+        this.bindingValidation = existingState.bindingValidation || this.bindingValidation;
+        this.stepTaskBindingsSnapshot = existingState.stepTaskBindingsSnapshot || this.stepTaskBindingsSnapshot;
+        this.stepTaskBindingsByStepKey = new Map(
+          this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+        );
       }
 
       // === Switch to running ===
@@ -1471,13 +1565,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
         humanAnswersContext: this.humanAnswersContext,
         qualityChecks: this.qualityChecks,
         creationSessionId: this._creationSessionId,
-        // 持久化模式下不将 spec 存入 YAML，而是从 delta 目录读取
-        runSpecCoding: this.currentRunSpecCoding?.persistMode === 'repository' ? null : this.currentRunSpecCoding,
+        runSpecCoding: this.currentRunSpecCoding,
+        stepTaskBindingsSnapshot: this.stepTaskBindingsSnapshot,
+        bindingValidation: this.bindingValidation,
         persistMode: this.currentRunSpecCoding?.persistMode,
+        specRootDir: this.currentSpecRootDir || undefined,
         workflowName: this.workflowName || undefined,
         deltaSpecMerged: this.deltaSpecMerged,
         deltaMergeState: this.deltaMergeState,
       });
+      await this.syncRunSpecCodingDelta().catch(() => {});
       if (this._frontendSessionId) {
         await updateChatSessionWorkflowBinding(this._frontendSessionId, {
           configFile: this.currentConfigFile,
@@ -1772,7 +1869,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       fullStreamContent += event.content;
       const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
-      void this.applyLiveSpecCodingTaskUpdatesFromStream(fullStreamContent, agent, processId);
       processManager.emit('stream', {
         id: processId,
         step: displayStep,
@@ -1835,7 +1931,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         usage,
       };
     } finally {
-      this.liveSpecCodingTaskBlocksByProcess.delete(processId);
       this.currentEngine.off('stream', streamHandler);
     }
   }
@@ -2572,48 +2667,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
   }
 
-  private applyRunSpecCodingTaskUpdatesFromOutput(output: string, updatedBy: string): number {
-    if (!this.currentRunSpecCoding) return 0;
-    const block = extractSpecTasksBlock(output);
-    if (!block) return 0;
-
-    const normalizeStatus = (value: unknown): 'pending' | 'in-progress' | 'completed' | 'blocked' | '' => {
-      if (typeof value !== 'string') return '';
-      const normalized = value.trim().toLowerCase();
-      if (normalized === '[ ]' || normalized === 'todo' || normalized === 'pending') return 'pending';
-      if (normalized === '[-]' || normalized === '-' || normalized === 'doing' || normalized === 'in_progress' || normalized === 'in-progress') return 'in-progress';
-      if (normalized === '[x]' || normalized === 'x' || normalized === 'done' || normalized === 'completed' || normalized === 'complete') return 'completed';
-      if (normalized === '[!]' || normalized === 'blocked' || normalized === 'block') return 'blocked';
-      return '';
-    };
-    try {
-      const parsed = JSON.parse(stripJsonFence(block));
-      const rawUpdates = Array.isArray(parsed) ? parsed : parsed?.updates;
-      if (!Array.isArray(rawUpdates)) return 0;
-      const updates = rawUpdates.flatMap((item: any) => {
-        const id = typeof item?.id === 'string' ? item.id.trim() : '';
-        const status = normalizeStatus(item?.status);
-        if (!id || !status) return [];
-        return [{
-          id,
-          status,
-          validation: typeof item?.validation === 'string' ? item.validation.trim().slice(0, 300) : undefined,
-        }];
-      });
-
-      if (updates.length === 0) return 0;
-      this.currentRunSpecCoding = updateSpecCodingTaskStatuses(this.currentRunSpecCoding, {
-        updates,
-        updatedBy,
-      });
-      this.emit('log', { message: `Spec Coding tasks.md 已刷新 ${updates.length} 项` });
-      return updates.length;
-    } catch {
-      this.emit('log', { message: 'Spec Coding tasks.md 状态回传解析失败，已忽略本次状态块' });
-      return 0;
-    }
-  }
-
   private buildRunSpecCodingStatusPayload() {
     if (!this.currentRunSpecCoding) return {};
     return {
@@ -2642,45 +2695,55 @@ export class StateMachineWorkflowManager extends EventEmitter {
     };
   }
 
-  private async applyLiveSpecCodingTaskUpdatesFromStream(output: string, updatedBy: string, processId: string): Promise<number> {
-    const block = extractSpecTasksBlock(output);
-    if (!block) return 0;
+  private getRuntimeStepKey(stateName: string, step: WorkflowStep): string {
+    if ((step as any).id) return String((step as any).id);
+    return `state:${stateName}#${this.getStateStepIndex(stateName, step) + 1}:${step.name}`;
+  }
 
-    const previousBlock = this.liveSpecCodingTaskBlocksByProcess.get(processId);
-    if (previousBlock === block) return 0;
-    this.liveSpecCodingTaskBlocksByProcess.set(processId, block);
+  private getStateStepIndex(stateName: string, step: WorkflowStep): number {
+    const state = this.currentWorkflowConfig?.workflow?.states?.find((item: any) => item.name === stateName);
+    const index = state?.steps?.findIndex((item: any) => item === step || item.name === step.name);
+    return typeof index === 'number' && index >= 0 ? index : 0;
+  }
 
-    const updated = this.applyRunSpecCodingTaskUpdatesFromOutput(`<spec-tasks>${block}</spec-tasks>`, updatedBy);
-    if (updated <= 0) return 0;
+  private getStepSpecTaskIds(step: WorkflowStep, stateName: string): string[] {
+    const snapshotIds = this.stepTaskBindingsByStepKey.get(this.getRuntimeStepKey(stateName, step))?.taskIds || [];
+    const configIds = getSpecTaskBindingIds(step.specTaskBinding);
+    return Array.from(new Set([...snapshotIds, ...configIds]));
+  }
 
-    // Inject visible alert into stream so user sees task progress update
-    const taskSummary = this.currentRunSpecCoding?.tasks
-      .filter(t => t.status === 'in-progress' || t.status === 'completed')
-      .slice(-updated)
-      .map(t => `${t.status === 'completed' ? '✅' : '🔄'} ${t.title}`)
-      .join(', ') || `${updated} 项`;
-    const alertMsg = `\n\n> 📋 **tasks.md 已更新**: ${taskSummary}\n\n`;
-    processManager.appendStreamContent(processId, alertMsg);
-    processManager.emit('stream', {
-      id: processId,
-      step: '',
-      delta: alertMsg,
-      total: '',
+  private markBoundSpecTasksForStep(input: {
+    step: WorkflowStep;
+    stateName: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'blocked';
+    updatedBy: string;
+    validation: string;
+  }): number {
+    if (!this.currentRunSpecCoding) return 0;
+    const taskIds = this.getStepSpecTaskIds(input.step, input.stateName);
+    if (taskIds.length === 0) return 0;
+    this.currentRunSpecCoding = updateSpecCodingTaskStatuses(this.currentRunSpecCoding, {
+      updates: taskIds.map((id) => ({
+        id,
+        status: input.status,
+        validation: input.validation,
+      })),
+      updatedBy: input.updatedBy,
     });
-
-    await this.persistState();
     this.emit('status', {
       status: this.status,
-      message: `Spec Coding tasks.md 已实时刷新 ${updated} 项`,
+      message: `Spec Coding tasks.md 已由系统更新 ${taskIds.length} 项`,
       runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
-      currentPhase: this.currentState,
+      currentPhase: input.stateName,
       currentStep: this.currentStep,
+      activeSteps: Array.from(this.activeStepKeys),
+      completedSteps: this.completedSteps,
       currentConfigFile: this.currentConfigFile,
       ...this.buildRunSpecCodingStatusPayload(),
     });
-    return updated;
+    return taskIds.length;
   }
 
   private async executeStep(
@@ -2702,6 +2765,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     agent.status = 'running';
     agent.currentTask = step.name;
     this.markStepActive(stepKey);
+    this.markBoundSpecTasksForStep({
+      step,
+      stateName: state.name,
+      status: 'in-progress',
+      updatedBy: `system:${runtimeAgentName}`,
+      validation: `Step started: ${state.name} / ${step.name}`,
+    });
     this.emit('agents', { agents: this.agents });
     
     this.agentFlow.push({
@@ -2775,7 +2845,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.markStepInactive(stepKey);
       this.completedSteps.push(stepKey);
       this.removeCurrentProcess(stepId);
-      this.applyRunSpecCodingTaskUpdatesFromOutput(output, runtimeAgentName);
+      this.markBoundSpecTasksForStep({
+        step,
+        stateName: state.name,
+        status: 'completed',
+        updatedBy: `system:${runtimeAgentName}`,
+        validation: `Step completed: ${state.name} / ${step.name}`,
+      });
 
       // Record step log for persistence
       this.stepLogs.push({
@@ -2864,6 +2940,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       // Record failed step log
       const errorMsg = error.message || String(error);
+      this.markBoundSpecTasksForStep({
+        step,
+        stateName: state.name,
+        status: 'blocked',
+        updatedBy: `system:${runtimeAgentName}`,
+        validation: `Step failed: ${state.name} / ${step.name}: ${errorMsg}`,
+      });
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
@@ -2938,15 +3021,39 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     if (this.currentRunSpecCoding) {
       const relevantPhase = this.currentRunSpecCoding.phases.find((phase) => phase.title === state.name);
+      const flattenTasksForPrompt = (
+        tasks: SpecCodingDocument['tasks'],
+        depth = 0,
+      ): Array<SpecCodingDocument['tasks'][number] & { depth: number }> => {
+        return (tasks || []).flatMap((task) => [
+          { ...task, depth },
+          ...flattenTasksForPrompt(task.children || [], depth + 1),
+        ]);
+      };
+      const allPromptTasks = flattenTasksForPrompt(this.currentRunSpecCoding.tasks || []);
+      const boundTaskIds = this.getStepSpecTaskIds(step, state.name);
+      const boundTasks = boundTaskIds
+        .map((taskId) => allPromptTasks.find((task) => task.id === taskId))
+        .filter(Boolean) as Array<SpecCodingDocument['tasks'][number] & { depth: number }>;
       const relevantTasks = relevantPhase
-        ? (this.currentRunSpecCoding.tasks || []).filter((task) => task.phaseId === relevantPhase.id)
+        ? allPromptTasks.filter((task) => task.phaseId === relevantPhase.id)
         : [];
       const taskContext = relevantTasks.length > 0
         ? relevantTasks
-        : (this.currentRunSpecCoding.tasks || []).filter((task) => task.status !== 'completed').slice(0, 12);
+        : allPromptTasks.filter((task) => task.status !== 'completed').slice(0, 12);
+      if (boundTaskIds.length > 0) {
+        parts.push([
+          '\n# 当前绑定的 tasks.md 任务',
+          `本步骤绑定 taskId: ${boundTaskIds.join(', ')}`,
+          boundTasks.length > 0
+            ? `绑定任务: ${boundTasks.map((task) => `${task.id} ${task.title}`).join('；')}`
+            : '绑定任务未在当前投影列表中找到；继续按步骤目标执行，系统会记录绑定异常。',
+          '任务状态由工作流调度器根据步骤开始、完成、失败自动维护；普通执行 Agent 不需要也不应该输出任务状态标签。',
+        ].join('\n'));
+      }
       parts.push(`\n# 当前 Run Spec Coding 投影`);
       parts.push(`Spec Coding 版本: v${this.currentRunSpecCoding.version}`);
-      parts.push('说明: 当前 Run Spec Coding 投影是本次运行绑定的正式规范制品投影。即使工作目录内没有 requirements.md / design.md / tasks.md 文件实体，也必须以这里注入的规范投影和 tasks.md 条目作为执行与进度回传依据。不要改用旧基线文档替代它。');
+      parts.push('说明: 当前 Run Spec Coding 投影是本次运行绑定的正式规范制品投影。即使工作目录内没有 requirements.md / design.md / tasks.md 文件实体，也必须以这里注入的规范投影和 tasks.md 条目作为执行依据。不要改用旧基线文档替代它。');
       if (this.currentRunSpecCoding.summary) {
         parts.push(`Spec Coding 摘要: ${this.currentRunSpecCoding.summary}`);
       }
@@ -2963,21 +3070,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
         parts.push(relevantTasks.length > 0 ? '\n## 当前阶段 tasks.md 条目' : '\n## 相关未完成 tasks.md 条目');
         for (const task of taskContext) {
           const marker = task.status === 'completed' ? 'x' : task.status === 'in-progress' ? '-' : ' ';
-          parts.push(`- [${marker}] ${task.id} ${task.title} <!-- status:${task.status} -->`);
+          const indent = '  '.repeat(task.depth || 0);
+          parts.push(`${indent}- [${marker}] ${task.id} ${task.title} <!-- status:${task.status} -->`);
         }
       }
       parts.push([
-        '权限规则: 你只能更新状态类变化；不能修改目标、约束、阶段定义、分工或其他非状态内容，非状态修订由 Supervisor 负责。',
+        '权限规则: 不能修改目标、约束、阶段定义、分工或其他非状态内容；非状态修订由 Supervisor 负责。',
         'tasks.md 状态标记: [ ]=未开始，[-]=进行中，[x]=已完成，blocked=阻塞。',
-        '首要任务: 在你开始读取资料、执行命令、输出分析之前，先立即输出一次 <spec-tasks>，把你当前负责的 task 标记为 in-progress。',
-        '只有先输出这次 in-progress 状态回传，本步骤才算真正开始。',
-        '完成后再输出一次 <spec-tasks>，把对应 task 更新为 completed 或 blocked；不要等到整步结束才第一次回传状态。',
-        '如果本步骤推进了 tasks.md，请输出 <spec-tasks> JSON 块，系统会解析并同步到当前 run 的正式 tasks.md 投影；该状态块可以先于最终结论单独出现，便于前端实时刷新。',
-        '这不是系统自动推断，必须由你显式声明。',
-        '格式示例:',
-        '<spec-tasks>',
-        '{"updates":[{"id":"1.1","status":"in-progress","validation":"已开始定位入口"},{"id":"1.2","status":"completed","validation":"已完成并产出证据"}]}',
-        '</spec-tasks>',
+        '任务状态是系统维护字段，普通执行 Agent 不输出任务状态协议。',
       ].join('\n'));
     }
 
@@ -3036,7 +3136,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         '\n# 步骤结论归档协议',
         '步骤成果详细总结与步骤结论是两种不同输出。',
         '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论只需要放在回复末尾的 <step-conclusion> 中。',
-        '如果你要先汇报进行中状态，可以在过程里提前单独输出一次 <spec-tasks>；最终收尾时，如还需输出流程裁决 JSON 或 <spec-tasks>，顺序必须是：裁决 JSON -> <spec-tasks> -> <step-conclusion>。',
+        '最终收尾时，如还需输出流程裁决 JSON，顺序必须是：裁决 JSON -> <step-conclusion>。',
         '请在回复末尾单独输出 <step-conclusion>，里面只写可被下一步 agent 直接复用的步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
         '步骤结论必须自包含：下一步 agent 不读完整对话时，也能知道本步骤做了什么、改了哪里、验证到什么程度、还剩什么风险。',
         '建议结构:',
@@ -3059,7 +3159,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     // Add structured JSON output requirement for attacker/judge roles
     if (step.role === 'attacker' || step.role === 'judge') {
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <spec-tasks> 或 <step-conclusion>，该 JSON 块必须放在它们之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进 <step-conclusion> 的“后续建议”或“附加观察”，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；如果本轮还要输出 <step-conclusion>，该 JSON 块必须放在它之前：\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进 <step-conclusion> 的“后续建议”或“附加观察”，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
     // Add workspace skills (index summary + absolute path for AI to read details)
@@ -3824,6 +3924,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
+    this.currentSpecRootDir = runState.specRootDir || null;
+    this.bindingValidation = runState.bindingValidation;
+    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
+    this.stepTaskBindingsByStepKey = new Map(
+      this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+    );
     this.deltaSpecMerged = runState.deltaSpecMerged || false;
     this.deltaMergeState = runState.deltaMergeState;
     this.workflowName = runState.workflowName || '';
@@ -3876,6 +3982,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.currentWorkflowConfig = workflowConfig;
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
@@ -4187,6 +4294,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
+    this.currentSpecRootDir = runState.specRootDir || null;
+    this.bindingValidation = runState.bindingValidation;
+    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
+    this.stepTaskBindingsByStepKey = new Map(
+      this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+    );
     this.deltaSpecMerged = runState.deltaSpecMerged || false;
     this.deltaMergeState = runState.deltaMergeState;
     this.workflowName = runState.workflowName || '';
@@ -4228,6 +4341,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.currentWorkflowConfig = workflowConfig;
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents

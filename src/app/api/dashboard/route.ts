@@ -7,6 +7,7 @@ import { requireAuth } from '@/lib/auth-middleware';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
 import { listConfigsWithMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
+import { loadUsers } from '@/lib/user-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -281,8 +282,19 @@ function finalizeRanking(items: Record<string, TokenRankingItem>): TokenRankingI
     .slice(0, 10);
 }
 
-function getRunOwnerName(state: any): string {
-  return state?.runOwnerName || state?.createdByName || state?.createdBy || state?.runOwnerId || '未知用户';
+function stringValue(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function getRunOwnerName(state: any, ownerNameById: Record<string, string>, legacyDefaultOwnerName = ''): string {
+  const explicitName = stringValue(state?.runOwnerName) || stringValue(state?.createdByName);
+  if (explicitName) return explicitName;
+
+  const ownerId = stringValue(state?.runOwnerId) || stringValue(state?.createdBy);
+  if (ownerId && ownerNameById[ownerId]) return ownerNameById[ownerId];
+
+  const legacyOwner = stringValue(state?.createdBy) || stringValue(state?.runOwnerId);
+  return legacyOwner || legacyDefaultOwnerName || '未知用户';
 }
 
 function getRunTokenUsage(state: any): { usage: TokenUsageSummary; cost: number } {
@@ -312,6 +324,9 @@ async function readAllRunsSummary() {
   const agentUsage: Record<string, { calls: number; cost: number }> = {};
   const tokenRankingByUserMap: Record<string, TokenRankingItem> = {};
   const tokenRankingByWorkflowMap: Record<string, TokenRankingItem> = {};
+  const users = await loadUsers().catch(() => []);
+  const ownerNameById = Object.fromEntries(users.map((user) => [user.id, user.username]));
+  const legacyDefaultOwnerName = users.length === 1 ? users[0]?.username || '' : '';
   if (!existsSync(RUNS_DIR)) {
     return {
       runs,
@@ -344,7 +359,7 @@ async function readAllRunsSummary() {
   for (const { state } of valid) {
     const { usage, cost } = getRunTokenUsage(state);
     const runTotalTokens = totalTokens(usage);
-    const ownerName = getRunOwnerName(state);
+    const ownerName = getRunOwnerName(state, ownerNameById, legacyDefaultOwnerName);
     const configFile = state.configFile || '';
     const workflowKey = configFile || '(unknown)';
 

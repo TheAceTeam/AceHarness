@@ -6,6 +6,7 @@ import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/engine-metadata';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
@@ -92,6 +93,10 @@ interface ChatMessageProps {
   onEditMessage?: (messageId: string) => void;
   onContinue?: (messageId: string) => void; // For timeout recovery
   onSaveAsNotebook?: (messageId: string) => void;
+  currentUser?: {
+    username?: string;
+    avatar?: string;
+  } | null;
 }
 
 function ThinkingBot() {
@@ -227,7 +232,29 @@ export function RobotLogo({ size = 32, className = '' }: { size?: number; classN
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook }: ChatMessageProps) {
+function AssistantAvatar() {
+  return (
+    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-background shadow-sm">
+      <RobotLogo size={24} className="animate-none" />
+    </div>
+  );
+}
+
+function UserAvatar({ user }: { user?: ChatMessageProps['currentUser'] }) {
+  const username = user?.username?.trim() || '用户';
+  const initials = username.slice(0, 2).toUpperCase();
+
+  return (
+    <Avatar className="mt-0.5 h-8 w-8 shrink-0 border border-primary/25 shadow-sm">
+      {user?.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={username} /> : null}
+      <AvatarFallback className="bg-primary text-[11px] font-semibold text-primary-foreground">
+        {initials}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, currentUser }: ChatMessageProps) {
   const [modelLabel, setModelLabel] = useState(message.model || '');
   const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
   const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
@@ -277,7 +304,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
       );
     }
     return (
-      <div className="group flex justify-end mb-4 items-start gap-1">
+      <div className="group flex justify-end mb-4 items-start gap-2">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
           {onEditMessage && (
             <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
@@ -295,11 +322,12 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             </button>
           )}
         </div>
-        <div className="max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
+        <div className="max-w-[78%] rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
           <div className="[&_a]:text-white [&_a]:underline [&_a:hover]:text-blue-200 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-white/25 [&_img]:object-contain">
             <Markdown>{message.content}</Markdown>
           </div>
         </div>
+        <UserAvatar user={currentUser} />
       </div>
     );
   }
@@ -368,7 +396,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
 
   // Assistant message
   return (
-    <div className="group flex mb-4 items-start gap-1">
+    <div className="group flex mb-4 items-start gap-2">
+      <AssistantAvatar />
       <div className="max-w-[85%] space-y-1">
         {isStreaming && !message.content && <ThinkingBot />}
         {message.content && (

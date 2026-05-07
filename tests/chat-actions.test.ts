@@ -67,7 +67,58 @@ describe('parseActions', () => {
     expect(result.cards[0].blocks).toHaveLength(1);
     // Card should be removed from visible text
     expect(result.text).not.toContain('```card');
+    expect(result.text).not.toContain('<result>');
     expect(result.text).toContain('Here is the result');
+  });
+
+  test('hides plain result sections from visible text', () => {
+    const markdown = [
+      'Visible summary.',
+      '<result>Internal workflow draft summary that should only drive UI state.</result>',
+      '```',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.text).toContain('Visible summary.');
+    expect(result.text).not.toContain('<result>');
+    expect(result.text).not.toContain('Internal workflow draft summary');
+  });
+
+  test('removes an orphan trailing fence left after hidden result content', () => {
+    const markdown = [
+      '我会整理上下文并打开创建面板。',
+      '',
+      '**🔧 bash**',
+      '',
+      '<result>',
+      '```json',
+      '{"type":"home_sidebar","mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft","shouldOpenModal":true}',
+      '```',
+      '</result>',
+      '   ```',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.sidebarHints).toHaveLength(1);
+    expect(result.text).toContain('我会整理上下文');
+    expect(result.text).toContain('🔧 bash');
+    expect(result.text).not.toMatch(/```\s*$/);
+  });
+
+  test('keeps a legitimate closed code block at the end', () => {
+    const markdown = [
+      'Example:',
+      '',
+      '```ts',
+      'const ok = true;',
+      '```',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.text).toBe(markdown);
   });
 
   test('handles markdown with no action or card blocks', () => {

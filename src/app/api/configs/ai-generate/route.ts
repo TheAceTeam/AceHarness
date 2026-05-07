@@ -137,7 +137,7 @@ function generatePhaseBasedConfig(requirements: string, workflowName: string, wo
 }
 
 /**
- * 生成状态机模式配置（每个状态包含蓝队/红队/裁判三个步骤）
+ * 生成状态机模式配置（每个状态包含红队/蓝队/裁判三个步骤）
  */
 function generateStateMachineConfig(requirements: string, workflowName: string, workspaceMode: 'isolated-copy' | 'in-place' = 'in-place') {
   const req = requirements.toLowerCase();
@@ -150,7 +150,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
   if (isSecurityAudit) {
     states = [
       {
-        name: '安全扫描', description: '蓝队扫描、红队渗透、裁判评估', isInitial: true, isFinal: false,
+        name: '安全扫描', description: '红队扫描、蓝队渗透、裁判评估', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 2,
         steps: [
           { name: '自动化扫描', agent: 'code-hunter', task: '执行安全扫描，发现潜在漏洞' },
@@ -163,7 +163,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '漏洞分析', description: '蓝队分析、红队验证、裁判判定', isInitial: false, isFinal: false,
+        name: '漏洞分析', description: '红队分析、蓝队验证、裁判判定', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '漏洞分析', agent: 'code-auditor', task: '深入分析安全漏洞，评估影响范围' },
@@ -176,7 +176,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '修复验证', description: '蓝队修复、红队回测、裁判验收', isInitial: false, isFinal: false,
+        name: '修复验证', description: '红队修复、蓝队回测、裁判验收', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '实施修复', agent: 'developer', task: '实施安全修复方案' },
@@ -202,7 +202,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
   } else if (isBugFix) {
     states = [
       {
-        name: '复现确认', description: '蓝队复现、红队验证、裁判确认', isInitial: true, isFinal: false,
+        name: '复现确认', description: '红队复现、蓝队验证、裁判确认', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '构造复现用例', agent: 'developer', task: '构造最小可复现用例，确认问题可稳定触发' },
@@ -215,7 +215,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '根因分析', description: '蓝队定位、红队挑战、裁判判定', isInitial: false, isFinal: false,
+        name: '根因分析', description: '红队定位、蓝队挑战、裁判判定', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '根因定位', agent: 'architect', task: '分析问题根本原因，定位关键代码' },
@@ -228,7 +228,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '修复实施', description: '蓝队修复、红队审查、裁判验收', isInitial: false, isFinal: false,
+        name: '修复实施', description: '红队修复、蓝队审查、裁判验收', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '编写修复', agent: 'developer', task: '实施修复方案' },
@@ -241,7 +241,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '回归验证', description: '蓝队测试、红队压测、裁判判定', isInitial: false, isFinal: false,
+        name: '回归验证', description: '红队测试、蓝队压测、裁判判定', isInitial: false, isFinal: false,
         position: { x: 1000, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '回归测试', agent: 'tester', task: '验证修复效果并进行回归测试' },
@@ -268,7 +268,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
     // 通用状态机：设计 → 实施 → 测试 → 完成
     states = [
       {
-        name: '设计', description: '蓝队设计、红队挑战、裁判评审', isInitial: true, isFinal: false,
+        name: '设计', description: '红队设计、蓝队挑战、裁判评审', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '方案设计', agent: 'architect', task: requirements || '根据需求设计技术方案' },
@@ -281,7 +281,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '实施', description: '蓝队编码、红队审查、裁判验收', isInitial: false, isFinal: false,
+        name: '实施', description: '红队编码、蓝队审查、裁判验收', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '编码实施', agent: 'developer', task: '根据设计方案进行编码实施' },
@@ -294,7 +294,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '测试', description: '蓝队测试、红队攻击、裁判判定', isInitial: false, isFinal: false,
+        name: '测试', description: '红队测试、蓝队攻击、裁判判定', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '功能测试', agent: 'tester', task: '编写并执行测试用例' },

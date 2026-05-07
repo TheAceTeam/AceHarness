@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
+import { canCreateFileSymlink, createDirectorySymlink, createFileSymlink } from './helpers/module-helpers';
 import {
   WORKSPACE_RELATIVE_PATH_LENGTH_LIMIT,
   WorkspacePathError,
@@ -70,12 +71,16 @@ describe('workspace path safety', () => {
     expect(isInsidePath(root, path.dirname(root))).toBe(false);
   });
 
-  test('resolveExistingInsideWorkspace resolves normal files and rejects symlink escapes', async () => {
+  test('resolveExistingInsideWorkspace resolves normal files and rejects symlink escapes', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
     await withWorkspace(async ({ workspace, outside }) => {
       await mkdir(path.join(workspace, 'src'));
       await writeFile(path.join(workspace, 'src', 'safe.txt'), 'ok');
       await writeFile(path.join(outside, 'secret.txt'), 'secret');
-      await symlink(path.join(outside, 'secret.txt'), path.join(workspace, 'src', 'escape.txt'));
+      await createFileSymlink(path.join(outside, 'secret.txt'), path.join(workspace, 'src', 'escape.txt'));
 
       await expect(resolveExistingInsideWorkspace(workspace, 'src/safe.txt')).resolves.toBe(await realpath(path.join(workspace, 'src', 'safe.txt')));
       await expectRejectsWorkspacePathError(() => resolveExistingInsideWorkspace(workspace, 'src/escape.txt'), 403);
@@ -86,7 +91,7 @@ describe('workspace path safety', () => {
   test('resolveCreatableInsideWorkspace rejects root writes and symlinked parent escapes', async () => {
     await withWorkspace(async ({ workspace, outside }) => {
       await mkdir(path.join(workspace, 'safe'));
-      await symlink(outside, path.join(workspace, 'escape-dir'));
+      await createDirectorySymlink(outside, path.join(workspace, 'escape-dir'));
 
       const creatable = await resolveCreatableInsideWorkspace(workspace, 'safe/new.txt');
       expect(creatable.fullPath).toBe(path.join(workspace, 'safe', 'new.txt'));
@@ -98,11 +103,15 @@ describe('workspace path safety', () => {
     });
   });
 
-  test('assertNoSymlinkEscape rejects links pointing outside the workspace', async () => {
+  test('assertNoSymlinkEscape rejects links pointing outside the workspace', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
     await withWorkspace(async ({ workspace, outside }) => {
       await writeFile(path.join(workspace, 'inside.txt'), 'ok');
       await writeFile(path.join(outside, 'outside.txt'), 'secret');
-      await symlink(path.join(outside, 'outside.txt'), path.join(workspace, 'outside-link.txt'));
+      await createFileSymlink(path.join(outside, 'outside.txt'), path.join(workspace, 'outside-link.txt'));
 
       await expect(assertNoSymlinkEscape(workspace, path.join(workspace, 'inside.txt'))).resolves.toBeUndefined();
       await expectRejectsWorkspacePathError(() => assertNoSymlinkEscape(workspace, path.join(workspace, 'outside-link.txt')), 403);

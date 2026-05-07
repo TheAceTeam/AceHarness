@@ -15,6 +15,28 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
+function toPortablePath(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+async function getAvailableDriveRoots(): Promise<string[]> {
+  if (process.platform !== 'win32') return [];
+
+  const checks = await Promise.all(
+    Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index)).map(async (letter) => {
+      const drivePath = `${letter}:\\`;
+      try {
+        const stat = await fs.stat(drivePath);
+        return stat.isDirectory() ? `${letter}:/` : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return checks.filter((item): item is string => Boolean(item));
+}
+
 async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, visited?: Set<string>): Promise<TreeNode[]> {
   const seen = visited || new Set<string>();
   const realDir = await fs.realpath(dirPath);
@@ -32,16 +54,24 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
 
   for (const entry of filtered) {
     const fullPath = path.join(realDir, entry.name);
-    const relativePath = path.relative(rootPath, fullPath);
+    const relativePath = toPortablePath(path.relative(rootPath, fullPath));
 
     if (entry.isSymbolicLink()) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      const children = depth < maxDepth
-        ? await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen)
-        : undefined;
+      let children: TreeNode[] | undefined;
+      if (depth < maxDepth) {
+        try {
+          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen);
+        } catch (error: any) {
+          if (!['EPERM', 'EACCES', 'ENOENT'].includes(error?.code)) {
+            throw error;
+          }
+          children = [];
+        }
+      }
       dirs.push({
         name: entry.name,
         path: relativePath,
@@ -83,7 +113,12 @@ export async function GET(request: NextRequest) {
     }
 
     const tree = await buildTree(targetPath, rootPath, 0, maxDepth);
-    return NextResponse.json({ tree });
+    return NextResponse.json({
+      tree,
+      workspaceRoot: toPortablePath(rootPath),
+      targetPath: toPortablePath(targetPath),
+      availableRoots: await getAvailableDriveRoots(),
+    });
   } catch (error: any) {
     const { message, status } = workspaceErrorResponse(error);
     return NextResponse.json({ error: message, message }, { status });
