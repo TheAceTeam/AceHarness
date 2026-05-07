@@ -1,7 +1,7 @@
 // 模型配置 - 从 configs/models.yaml 读取
 import fs from 'fs/promises';
 import { parse } from 'yaml';
-import { getRuntimeModelsConfigPath } from '@/lib/runtime-configs';
+import { getRuntimeModelsConfigPath } from './runtime-configs';
 
 export interface ModelOption {
   value: string;

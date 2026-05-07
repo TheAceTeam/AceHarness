@@ -6,6 +6,7 @@
     "build:cli": "node scripts/build-cli.js",
     "dev": "npm run build:cli && node server.js dev",
     "build": "npm run build:cli && next build",
+    "prune:package-maps": "node scripts/prune-package-maps.js",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist','.next','dist-build']) fs.rmSync(p,{recursive:true,force:true});\"",
     "start": "node server.js start",
     "lint": "next lint",
@@ -14,7 +15,7 @@
     "ace": "node ./bin/ace.js",
     "check:engines": "node ./scripts/check-engine-availability.mjs",
     "prepare": "node scripts/build-cli.js",
-    "prepack": "npm run build",
+    "prepack": "npm run build && npm run prune:package-maps",
     "publish:npm": "npm run build && npm publish",
     "publish:beta": "npm run build && npm publish --tag beta"
   },
@@ -185,7 +186,7 @@
     "messages"
   ],
   "bin": {
-    "ace": "./bin/ace.js"
+    "ace": "bin/ace.js"
   },
   "directories": {
     "doc": "docs"

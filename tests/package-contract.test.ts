@@ -19,7 +19,7 @@ describe('package contract', () => {
   test('package exposes the intended global install entrypoints', async () => {
     expect(packageJson.name).toBe('@cangjielang/aceharness');
     expect(packageJson.main).toBe('server.js');
-    expect(packageJson.bin?.ace).toBe('./bin/ace.js');
+    expect(packageJson.bin?.ace).toBe('bin/ace.js');
 
     await expect(projectPathExists(packageJson.main)).resolves.toBe(true);
     await expect(projectPathExists(packageJson.bin.ace)).resolves.toBe(true);

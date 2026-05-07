@@ -7,7 +7,7 @@ import {
   getWorkspaceAgentsDir,
   getWorkspaceConfigPath,
   getWorkspaceConfigsDir,
-} from '@/lib/app-paths';
+} from './app-paths';
 
 const DELETED_MARKER = '.deleted.json';
 
