@@ -28,7 +28,7 @@ interface StateMachineRuntimePanelProps {
   issueTracker: Issue[];
   transitionCount: number;
   maxTransitions: number;
-  status: 'idle' | 'running' | 'completed' | 'failed';
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'waiting' | 'stopped';
   startTime?: string | null;
   endTime?: string | null;
   onStateClick?: (stateName: string) => void;
@@ -178,9 +178,17 @@ export default function StateMachineRuntimePanel({
               </div>
             ) : (
               recentTransitions.map((record, idx) => (
-                <button
+                <div
                   key={idx}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedTransition(record)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedTransition(record);
+                    }
+                  }}
                   className={`
                     w-full p-3 rounded-lg border text-left transition-all
                     ${selectedTransition === record
@@ -244,7 +252,7 @@ export default function StateMachineRuntimePanel({
                       )}
                     </div>
                   )}
-                </button>
+                </div>
               ))
             )}
           </div>

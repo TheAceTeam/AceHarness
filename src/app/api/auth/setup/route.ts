@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isSetup, setupFirstAdmin } from '@/lib/user-store';
 import { saveChatSettings, discoverSkills } from '@/lib/chat-settings';
+import { getWorkspaceRoot } from '@/lib/app-paths';
+import { homedir } from 'os';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,7 +11,12 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET() {
   const setup = await isSetup();
-  return NextResponse.json({ isSetup: setup });
+  return NextResponse.json({
+    isSetup: setup,
+    runtimeRoot: getWorkspaceRoot(),
+    platform: process.platform,
+    userHome: homedir(),
+  });
 }
 
 /**
@@ -31,7 +38,7 @@ export async function POST(request: NextRequest) {
 
     // Initialize skills settings
     const discovered = await discoverSkills();
-    const DEFAULT_ENABLED = ['power-gitcode', 'aceharness-chat-card', 'aceharness-workflow-creator'];
+    const DEFAULT_ENABLED = ['aceharness-chat-card'];
     const skills: Record<string, boolean> = {};
     for (const s of discovered) {
       skills[s.name] = DEFAULT_ENABLED.includes(s.name);

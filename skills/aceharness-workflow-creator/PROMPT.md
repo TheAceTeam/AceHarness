@@ -11,6 +11,7 @@
 - 绝对不要在展示方案的同一条回复中创建文件，必须等用户确认
 - 写入后必须运行验证：优先用脚本绝对路径执行，例如 `node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`；这里的 `configs/...` 应按运行时根目录解析
 - 必须明确 `context.workspaceMode`：`in-place` 表示直接在设置的工作目录执行，`isolated-copy` 表示先创建副本工程再执行；如果用户没有明确要求隔离，优先使用 `in-place`
+- 如需表达并行任务、多 Agent 实例、channel 或 join policy，应按 workflow creator skill 的“并发设计元数据”规则写入 workflow YAML；依赖不清晰时保持串行，且不要承诺当前执行器一定真实并发执行
 
 ### 核心流程（按顺序执行）
 
@@ -23,8 +24,8 @@
 5. **写入 + 验证** — 必须运行验证脚本
 
 ### Agent 团队
-- **defender（蓝队）** — 建设者：设计、实现、测试、文档
-- **attacker（红队）** — 挑战者：攻击方案、寻找缺陷
+- **defender（红队）** — 建设者：设计、实现、测试、文档
+- **attacker（蓝队）** — 挑战者：攻击方案、寻找缺陷
 - **judge（裁判）** — 仲裁者：评审和判定
 
 详细 YAML 格式规范、验证规则、设计原则，见 `*/skills/aceharness-workflow-creator/SKILL.md`。需要时主动查阅该文件。

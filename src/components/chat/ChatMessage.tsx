@@ -6,9 +6,42 @@ import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/engine-metadata';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
+const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
+const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
+
+function parseWorkflowEvent(content: string) {
+  const match = content.trim().match(WORKFLOW_EVENT_PATTERN);
+  if (!match) return null;
+
+  const attrs = new Map<string, string>();
+  match[1].replace(/([a-zA-Z0-9_-]+)="([^"]*)"/g, (_, key: string, value: string) => {
+    attrs.set(key, value);
+    return '';
+  });
+
+  const bodyLines = match[2].split('\n').map((line) => line.trim()).filter(Boolean);
+  const title = bodyLines[0] || 'Workflow 事件';
+  const body = bodyLines.slice(1).join('\n');
+  return {
+    type: attrs.get('type') || 'event',
+    tags: (attrs.get('tags') || '').split(',').map((tag) => tag.trim()).filter(Boolean),
+    title,
+    body,
+  };
+}
+
+function getWorkflowEventIcon(type: string) {
+  if (type.includes('human') || type.includes('approval')) return 'person_alert';
+  if (type.includes('failed')) return 'error';
+  if (type.includes('complete')) return 'task_alt';
+  if (type.includes('step')) return 'footprint';
+  if (type.includes('review')) return 'rate_review';
+  return 'account_tree';
+}
 
 async function loadModelLabels(): Promise<Map<string, string>> {
   if (modelLabelCache) return modelLabelCache;
@@ -60,6 +93,10 @@ interface ChatMessageProps {
   onEditMessage?: (messageId: string) => void;
   onContinue?: (messageId: string) => void; // For timeout recovery
   onSaveAsNotebook?: (messageId: string) => void;
+  currentUser?: {
+    username?: string;
+    avatar?: string;
+  } | null;
 }
 
 function ThinkingBot() {
@@ -195,8 +232,37 @@ export function RobotLogo({ size = 32, className = '' }: { size?: number; classN
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook }: ChatMessageProps) {
+function AssistantAvatar() {
+  return (
+    <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-background shadow-sm">
+      <RobotLogo size={24} className="animate-none" />
+    </div>
+  );
+}
+
+function UserAvatar({ user }: { user?: ChatMessageProps['currentUser'] }) {
+  const username = user?.username?.trim() || '用户';
+  const initials = username.slice(0, 2).toUpperCase();
+
+  return (
+    <Avatar className="mt-0.5 h-8 w-8 shrink-0 border border-primary/25 shadow-sm">
+      {user?.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={username} /> : null}
+      <AvatarFallback className="bg-primary text-[11px] font-semibold text-primary-foreground">
+        {initials}
+      </AvatarFallback>
+    </Avatar>
+  );
+}
+
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, currentUser }: ChatMessageProps) {
   const [modelLabel, setModelLabel] = useState(message.model || '');
+  const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
+  const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
+  const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
+  const actionTagClassName = isWorkflowActionTag
+    ? 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300'
+    : 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300';
+  const actionTagIcon = isWorkflowActionTag ? 'account_tree' : 'smart_toy';
 
   useEffect(() => {
     let cancelled = false;
@@ -220,8 +286,25 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   }, [message.model]);
 
   if (message.role === 'user') {
+    if (isActionTagMessage) {
+      return (
+        <div className="group mb-4 flex justify-center">
+          <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs ${actionTagClassName}`}>
+            <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
+            <span className="whitespace-normal break-all">{message.content}</span>
+          </div>
+          <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+            {onDelete && (
+              <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="group flex justify-end mb-4 items-start gap-1">
+      <div className="group flex justify-end mb-4 items-start gap-2">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
           {onEditMessage && (
             <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
@@ -239,10 +322,46 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             </button>
           )}
         </div>
-        <div className="max-w-[80%] rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
+        <div className="max-w-[78%] rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
           <div className="[&_a]:text-white [&_a]:underline [&_a:hover]:text-blue-200 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-white/25 [&_img]:object-contain">
             <Markdown>{message.content}</Markdown>
           </div>
+        </div>
+        <UserAvatar user={currentUser} />
+      </div>
+    );
+  }
+
+  if (workflowEvent) {
+    return (
+      <div className="group mb-4 flex justify-center">
+        <div className="max-w-[86%] rounded-2xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-xs text-amber-900 shadow-sm dark:text-amber-100">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '17px' }}>
+              {getWorkflowEventIcon(workflowEvent.type)}
+            </span>
+            <span className="font-medium">{workflowEvent.title}</span>
+            <span className="rounded-full border border-amber-500/25 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-300">
+              {workflowEvent.type}
+            </span>
+            {workflowEvent.tags.slice(0, 4).map((tag) => (
+              <span key={tag} className="rounded-full bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+                {tag}
+              </span>
+            ))}
+          </div>
+          {workflowEvent.body ? (
+            <div className="mt-2 whitespace-pre-line leading-5 text-muted-foreground">
+              {workflowEvent.body}
+            </div>
+          ) : null}
+        </div>
+        <div className="ml-2 flex items-start gap-0.5 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
+          {onDelete && (
+            <button onClick={() => onDelete(message.id)} className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="删除">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+            </button>
+          )}
         </div>
       </div>
     );
@@ -277,7 +396,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
 
   // Assistant message
   return (
-    <div className="group flex mb-4 items-start gap-1">
+    <div className="group flex mb-4 items-start gap-2">
+      <AssistantAvatar />
       <div className="max-w-[85%] space-y-1">
         {isStreaming && !message.content && <ThinkingBot />}
         {message.content && (

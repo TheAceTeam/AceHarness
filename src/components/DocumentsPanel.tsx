@@ -31,6 +31,7 @@ interface DocFile {
 interface DocumentsPanelProps {
   runId: string | null;
   openLatestTimestampedRequest?: number;
+  onOpenWorkspaceDirectory?: (path: string) => void;
 }
 
 type SortField = 'name' | 'time' | 'size';
@@ -43,6 +44,24 @@ function hasTimestamp(filename: string): boolean {
   return TIMESTAMP_RE.test(filename);
 }
 
+function stripTimestampPrefix(filename: string): string {
+  return filename.replace(TIMESTAMP_RE, '');
+}
+
+function getDisplayFileName(file: DocFile): string {
+  return stripTimestampPrefix(file.baseName || file.filename);
+}
+
+function getDocumentIcon(file: DocFile): string {
+  return hasTimestamp(file.filename) ? 'article' : 'fact_check';
+}
+
+function getDocumentIconClass(file: DocFile): string {
+  return hasTimestamp(file.filename)
+    ? 'text-blue-500'
+    : 'text-emerald-600 dark:text-emerald-400';
+}
+
 /** Parse timestamp prefix: "2026-03-30T11-06-14-" → "03-30 11:06" */
 function parseTimestamp(filename: string): string {
   const m = filename.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/);
@@ -51,8 +70,8 @@ function parseTimestamp(filename: string): string {
 }
 
 const roleBadge: Record<string, string> = {
-  attacker: 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
-  defender: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  attacker: 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+  defender: 'bg-red-500/15 text-red-600 dark:text-red-400',
   judge: 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400',
 };
 const roleIcon: Record<string, string> = { attacker: 'swords', defender: 'shield', judge: 'gavel' };
@@ -68,9 +87,10 @@ function getFileGroup(filename: string): string {
   return stripped || '其他';
 }
 
-export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0 }: DocumentsPanelProps) {
+export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
   const { toast } = useToast();
   const [files, setFiles] = useState<DocFile[]>([]);
+  const [documentDirectory, setDocumentDirectory] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -112,9 +132,9 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const FOLDER_TREE_DEFAULT = 192;
   const FOLDER_TREE_MIN = 120;
   const FOLDER_TREE_MAX = 320;
-  const FILE_LIST_DEFAULT = 300;
+  const FILE_LIST_DEFAULT = 360;
   const FILE_LIST_MIN = 180;
-  const FILE_LIST_MAX = 500;
+  const FILE_LIST_MAX = 760;
 
   const [folderTreeVisible, setFolderTreeVisible] = useState(true);
   const [fileListVisible, setFileListVisible] = useState(true);
@@ -190,7 +210,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     try {
       const data = await runsApi.listDocuments(runId);
       setFiles(data.files || []);
-    } catch { setFiles([]); }
+      setDocumentDirectory(data.documentDirectory || null);
+    } catch {
+      setFiles([]);
+      setDocumentDirectory(null);
+    }
     setLoading(false);
   }, [runId]);
 
@@ -487,6 +511,18 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       <div className="flex-1" />
+      {documentDirectory && onOpenWorkspaceDirectory && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+          title="使用工作区查看文档目录"
+        >
+          <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
+          工作区查看目录
+        </Button>
+      )}
       {selected.size > 0 && (
         <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => setDeleteTarget(Array.from(selected))}>
           <span className="material-symbols-outlined text-sm mr-1">delete</span>删除 ({selected.size})
@@ -533,8 +569,8 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30"
           onClick={() => { setModalOpen(true); selectFile(file); }}
         >
-          <span className="material-symbols-outlined text-sm text-muted-foreground shrink-0">description</span>
-          <span className="truncate flex-1" title={file.filename}>{file.baseName}</span>
+          <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
+          <span className="truncate flex-1" title={file.filename}>{getDisplayFileName(file)}</span>
         </div>
       );
     }
@@ -546,7 +582,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         onClick={() => !isRenaming && selectFile(file)}
       >
         <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(file.filename)} onClick={e => e.stopPropagation()} className="h-3.5 w-3.5" />
-        <span className="material-symbols-outlined text-sm text-muted-foreground shrink-0">description</span>
+        <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
         {isRenaming ? (
           <Input
             autoFocus
@@ -558,7 +594,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
             onClick={e => e.stopPropagation()}
           />
         ) : (
-          <span className="truncate flex-1 min-w-0" title={file.filename}>{file.baseName}</span>
+          <span className="truncate flex-1 min-w-0" title={file.filename}>{getDisplayFileName(file)}</span>
         )}
         {file.role && (
           <Badge variant="secondary" className={`text-[9px] h-4 px-1 shrink-0 ${roleBadge[file.role] || ''}`}>
@@ -651,8 +687,20 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       {previewFile ? (
         <>
           <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/20 shrink-0">
-            <span className="material-symbols-outlined text-sm">description</span>
-            <span className="text-xs font-medium truncate flex-1">{previewFile.filename}</span>
+            <span className={`material-symbols-outlined text-sm ${getDocumentIconClass(previewFile)}`}>{getDocumentIcon(previewFile)}</span>
+            <span className="text-xs font-medium truncate flex-1" title={previewFile.filename}>{getDisplayFileName(previewFile)}</span>
+            {documentDirectory && onOpenWorkspaceDirectory && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                onClick={() => onOpenWorkspaceDirectory(documentDirectory)}
+                title="使用工作区查看文档目录"
+              >
+                <span className="material-symbols-outlined text-sm mr-1">folder_open</span>
+                目录
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => downloadFile(previewFile)}>
               <span className="material-symbols-outlined text-sm">download</span>
             </Button>

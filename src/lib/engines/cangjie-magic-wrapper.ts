@@ -9,9 +9,22 @@ import { EventEmitter } from 'events';
 import { CangjieMagicEngine } from './cangjie-magic';
 import { detectCangjieHome, isCjpmAvailable, buildCangjieSpawnEnv } from '../cangjie-env';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 
 const DEFAULT_COMMAND = 'cjpm run --name magic.examples.mcp_server';
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
 
 /**
  * Resolve CANGJIE_MAGIC_PATH from env-vars.yaml > process.env.
@@ -88,6 +101,7 @@ export class CangjieMagicEngineWrapper extends EventEmitter implements Engine {
         success: true,
         output,
         stopReason: 'end_turn',
+        metadata: ZERO_USAGE_METADATA,
       };
     } catch (error: any) {
       console.error(`[CangjieMagicWrapper] execute() error:`, error.message || error);
@@ -95,6 +109,7 @@ export class CangjieMagicEngineWrapper extends EventEmitter implements Engine {
         success: false,
         output: '',
         error: error.message || String(error),
+        metadata: ZERO_USAGE_METADATA,
       };
     } finally {
       // Clean up — CangjieMagic engine is stateless per execution

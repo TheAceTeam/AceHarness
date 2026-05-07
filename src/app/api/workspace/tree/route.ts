@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import {
+  isInsidePath,
+  resolveExistingInsideWorkspace,
+  resolveWorkspaceRoot,
+  workspaceErrorResponse,
+} from '@/lib/workspace-path-safety';
 
 interface TreeNode {
   name: string;
@@ -9,47 +15,69 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
+function toPortablePath(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+async function getAvailableDriveRoots(): Promise<string[]> {
+  if (process.platform !== 'win32') return [];
+
+  const checks = await Promise.all(
+    Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index)).map(async (letter) => {
+      const drivePath = `${letter}:\\`;
+      try {
+        const stat = await fs.stat(drivePath);
+        return stat.isDirectory() ? `${letter}:/` : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return checks.filter((item): item is string => Boolean(item));
+}
+
 async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, visited?: Set<string>): Promise<TreeNode[]> {
-  // Track visited real paths to avoid symlink cycles
   const seen = visited || new Set<string>();
-  let realDir: string;
-  try {
-    realDir = await fs.realpath(dirPath);
-  } catch {
-    return [];
+  const realDir = await fs.realpath(dirPath);
+  if (!isInsidePath(rootPath, realDir)) {
+    throw new Error('目录路径不合法');
   }
   if (seen.has(realDir)) return [];
   seen.add(realDir);
 
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
+  const entries = await fs.readdir(realDir, { withFileTypes: true });
   const filtered = entries.filter(e => !e.name.startsWith('.'));
 
   const dirs: TreeNode[] = [];
   const files: TreeNode[] = [];
 
   for (const entry of filtered) {
-    const fullPath = path.join(dirPath, entry.name);
-    const relativePath = path.relative(rootPath, fullPath);
+    const fullPath = path.join(realDir, entry.name);
+    const relativePath = toPortablePath(path.relative(rootPath, fullPath));
 
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      try {
-        const stat = await fs.stat(fullPath);
-        if (stat.isDirectory()) {
-          // Only recurse if within depth limit
-          const children = depth < maxDepth
-            ? await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen)
-            : undefined;
-          dirs.push({
-            name: entry.name,
-            path: relativePath,
-            type: 'directory',
-            children,
-          });
-        } else if (stat.isFile()) {
-          files.push({ name: entry.name, path: relativePath, type: 'file' });
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      let children: TreeNode[] | undefined;
+      if (depth < maxDepth) {
+        try {
+          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen);
+        } catch (error: any) {
+          if (!['EPERM', 'EACCES', 'ENOENT'].includes(error?.code)) {
+            throw error;
+          }
+          children = [];
         }
-      } catch { /* broken symlink or permission error */ }
+      }
+      dirs.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'directory',
+        children,
+      });
     } else if (entry.isFile()) {
       files.push({
         name: entry.name,
@@ -75,23 +103,24 @@ export async function GET(request: NextRequest) {
     }
 
     const maxDepth = Math.min(parseInt(searchParams.get('depth') || '2', 10), 10);
-    // Support loading a subtree from a subpath
     const subPath = searchParams.get('sub') || '';
 
-    const resolvedPath = path.resolve(workspacePath);
-    const realPath = await fs.realpath(resolvedPath);
-    const stat = await fs.stat(realPath);
+    const rootPath = await resolveWorkspaceRoot(workspacePath);
+    const targetPath = subPath ? await resolveExistingInsideWorkspace(rootPath, subPath) : rootPath;
+    const stat = await fs.stat(targetPath);
     if (!stat.isDirectory()) {
       return NextResponse.json({ error: '路径不是目录' }, { status: 400 });
     }
 
-    const targetPath = subPath ? path.join(realPath, subPath) : realPath;
-    const tree = await buildTree(targetPath, realPath, 0, maxDepth);
-    return NextResponse.json({ tree });
+    const tree = await buildTree(targetPath, rootPath, 0, maxDepth);
+    return NextResponse.json({
+      tree,
+      workspaceRoot: toPortablePath(rootPath),
+      targetPath: toPortablePath(targetPath),
+      availableRoots: await getAvailableDriveRoots(),
+    });
   } catch (error: any) {
-    if (error.code === 'ENOENT') {
-      return NextResponse.json({ error: '目录不存在' }, { status: 404 });
-    }
-    return NextResponse.json({ error: '读取目录失败', message: error.message }, { status: 500 });
+    const { message, status } = workspaceErrorResponse(error);
+    return NextResponse.json({ error: message, message }, { status });
   }
 }

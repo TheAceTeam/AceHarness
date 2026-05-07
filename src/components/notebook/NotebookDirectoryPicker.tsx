@@ -22,13 +22,27 @@ export default function NotebookDirectoryPicker({
   className,
 }: NotebookDirectoryPickerProps) {
   const loadRoot = useCallback(async (): Promise<TreeNode[]> => {
-    const result = await workspaceApi.getNotebookTree(2, { scope, shareToken });
-    return result.tree || [];
+    try {
+      const result = await workspaceApi.getNotebookTree(2, { scope, shareToken });
+      return result.tree || [];
+    } catch (error: any) {
+      if (scope === 'personal' && error?.message?.includes('用户未配置个人目录')) {
+        throw new Error('未配置个人目录，请先在账号设置中配置个人目录');
+      }
+      throw error;
+    }
   }, [scope, shareToken]);
 
   const loadChildren = useCallback(async (path: string): Promise<TreeNode[]> => {
-    const result = await workspaceApi.getNotebookSubTree(path, 2, { scope, shareToken });
-    return result.tree || [];
+    try {
+      const result = await workspaceApi.getNotebookSubTree(path, 2, { scope, shareToken });
+      return result.tree || [];
+    } catch (error: any) {
+      if (scope === 'personal' && error?.message?.includes('用户未配置个人目录')) {
+        throw new Error('未配置个人目录，请先在账号设置中配置个人目录');
+      }
+      throw error;
+    }
   }, [scope, shareToken]);
 
   return (
@@ -43,4 +57,3 @@ export default function NotebookDirectoryPicker({
     />
   );
 }
-

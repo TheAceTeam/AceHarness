@@ -1,6 +1,6 @@
 import { existsSync } from 'fs';
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'fs/promises';
-import { homedir } from 'os';
+import { mkdtemp, rm, unlink, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
 import { resolve, join } from 'path';
 import { spawn } from 'child_process';
 import { NextRequest, NextResponse } from 'next/server';
@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth instanceof NextResponse) return auth;
 
+  let baseTmpDir: string | null = null;
   let tempDir: string | null = null;
   let outputPath: string | null = null;
 
@@ -130,9 +131,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `未找到 envsetup.sh: ${setupScript}` }, { status: 400 });
     }
 
-    const baseTmpDir = resolve(homedir(), 'tmp');
-    await mkdir(baseTmpDir, { recursive: true });
-    tempDir = await mkdtemp(join(baseTmpDir, 'cangjie-run-'));
+    baseTmpDir = await mkdtemp(join(tmpdir(), 'aceharness-cangjie-'));
+    tempDir = await mkdtemp(join(baseTmpDir, 'run-'));
 
     const sourceName = sanitizeSourceName(body.sourceName);
     const sourcePath = resolve(tempDir, sourceName);
@@ -203,6 +203,9 @@ export async function POST(req: NextRequest) {
     }
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+    if (baseTmpDir) {
+      await rm(baseTmpDir, { recursive: true, force: true }).catch(() => {});
     }
   }
 }

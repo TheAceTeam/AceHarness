@@ -166,7 +166,7 @@ function RoleEditForm({
     resolver: zodResolver(roleConfigSchema),
     defaultValues: role || {
       name: '',
-      team: 'blue',
+      team: 'red',
       engineModels: {},
       activeEngine: '',
       capabilities: [],

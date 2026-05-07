@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
+import { commandExists } from './lib/command-exists';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from './lib/models';
 import { ACPEngine } from './lib/engines/acp-engine';
@@ -114,7 +115,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: '初始化已取消',
     welcome: '[ACE] 本地配置检查',
     statusLabel: '[ACE] 当前状态',
-    runtimeHome: '运行目录',
+    runtimeHome: '系统数据保存目录',
     localeStatus: (value: string) => `语言: ${value}`,
     engineStatus: (value: string) => `默认引擎: ${value}`,
     adminStatus: (configured: boolean) => `管理员: ${configured ? '已配置' : '未配置'}`,
@@ -155,7 +156,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     setupCancelled: 'Setup cancelled',
     welcome: '[ACE] Local configuration check',
     statusLabel: '[ACE] Current status',
-    runtimeHome: 'Runtime home',
+    runtimeHome: 'System data directory',
     localeStatus: (value: string) => `Language: ${value}`,
     engineStatus: (value: string) => `Default engine: ${value}`,
     adminStatus: (configured: boolean) => `Admin: ${configured ? 'configured' : 'missing'}`,
@@ -337,25 +338,6 @@ async function setupFirstAdmin(data: {
 
   await mkdir(getWorkspaceDataDir(), { recursive: true });
   await writeFile(USERS_FILE, JSON.stringify([user], null, 2), 'utf-8');
-}
-
-function commandExists(command: string): boolean {
-  const envPath = process.env.PATH || '';
-  const paths = envPath.split(process.platform === 'win32' ? ';' : ':').filter(Boolean);
-  const exts = process.platform === 'win32'
-    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
-    : [''];
-
-  for (const dir of paths) {
-    for (const ext of exts) {
-      const fullPath = `${dir}/${command}${ext}`;
-      if (existsSync(fullPath)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 async function moduleExists(moduleName: string): Promise<boolean> {
@@ -610,13 +592,10 @@ async function runFirstLaunchWizard() {
 
   console.log(messages.welcome);
   console.log(messages.statusLabel);
+  console.log(`  ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   console.log(`  ${messages.localeStatus(formatLocaleLabel(settings.locale ? initialLocale : undefined))}`);
   console.log(`  ${messages.engineStatus(configuredEngine.engine ? formatEngineLabel(configuredEngine.engine) : '未设置')}`);
   console.log(`  ${messages.adminStatus(adminExists)}`);
-  const { verbose } = parseArgs(process.argv);
-  if (verbose) {
-    console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
-  }
 
   let selectedEngine = configuredEngine.engine;
   if (!selectedEngine) {
@@ -730,16 +709,16 @@ function tryOpenBrowser(url: string): boolean {
   const commands: Array<[string, string[]]> = process.platform === 'darwin'
     ? [['open', [url]]]
     : process.platform === 'win32'
-      ? [['cmd', ['/c', 'start', '', url]]]
+      ? [[process.env.ComSpec || 'cmd.exe', ['/c', 'start', '', url]]]
       : [['xdg-open', [url]]];
 
   for (const [command, args] of commands) {
-    if (!commandExists(command)) {
+    if (process.platform !== 'win32' && !commandExists(command)) {
       continue;
     }
 
     try {
-      const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+      const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
       child.on('error', () => {
         // ignore launcher failures and fall back to printing the URL
       });
@@ -788,6 +767,7 @@ async function start() {
   }, 1200);
 
   console.log(messages.startingServer(url));
+  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
   require('../server.js');
 }
 

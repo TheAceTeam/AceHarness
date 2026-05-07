@@ -9,6 +9,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { delimiter as pathDelimiter } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
+import { findCommand, getCommonCliSearchPaths } from '../command-exists';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -49,13 +50,6 @@ export interface ACPEngineConfig {
 
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
-
-/** Extra bin dirs for spawned CLI (POSIX servers); Windows uses native PATH only — wrong delimiter breaks child env. */
-function augmentPathForSpawn(existingPath: string | undefined): string {
-  const extra =
-    process.platform === 'win32' ? [] : ['/root/.local/bin', '/usr/local/bin'];
-  return [existingPath || '', ...extra].filter(Boolean).join(pathDelimiter);
-}
 
 /** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
 function escapeWinCmdToken(s: string): string {
@@ -112,15 +106,24 @@ export class ACPEngine extends EventEmitter {
    */
   async start(): Promise<void> {
     const args = this.buildCommandArgs();
-    console.log(`[${this.config.engineType}] spawning: ${this.config.command} ${args.join(' ')}`);
+    const commonCliPaths = getCommonCliSearchPaths();
+    const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
+    const envPath = [
+      process.env.PATH || '',
+      ...commonCliPaths,
+      this.config.env?.PATH || this.config.env?.Path || '',
+    ].filter(Boolean).join(pathDelimiter);
 
     const childEnv = {
       ...process.env,
-      PATH: augmentPathForSpawn(process.env.PATH),
       ...this.config.env,
+      PATH: envPath,
+      Path: envPath,
     };
 
-    this.process = spawnAcpCli(this.config.engineType, this.config.command, args, {
+    console.log(`[${this.config.engineType}] spawning: ${resolvedCommand} ${args.join(' ')}`);
+
+    this.process = spawnAcpCli(this.config.engineType, resolvedCommand, args, {
       cwd: this.config.workingDirectory,
       env: childEnv,
     });

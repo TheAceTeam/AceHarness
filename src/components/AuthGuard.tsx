@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useChat } from '@/contexts/ChatContext';
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -10,7 +9,6 @@ interface AuthGuardProps {
 
 export default function AuthGuard({ children }: AuthGuardProps) {
   const router = useRouter();
-  const { skillSettings } = useChat();
   const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {

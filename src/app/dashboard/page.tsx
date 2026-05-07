@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs } from 'lucide-react';
 
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -21,8 +21,33 @@ interface DashboardStats {
   successRate: number;
   avgDuration: number;
   activeWorkflows: number;
+  weeklyRuns: number;
+  totalTokenUsage: number;
+  weeklyTokenUsage: number;
   totalAgents: number;
   runningProcesses: number;
+}
+
+interface TokenRankingItem {
+  name: string;
+  configFile?: string;
+  runs: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  cost: number;
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value || 0);
+}
+
+function formatMoney(value: number): string {
+  return `$${(value || 0).toFixed(4)}`;
 }
 
 function formatStateName(name: string): string {
@@ -40,6 +65,9 @@ export default function DashboardPage() {
     successRate: 0,
     avgDuration: 0,
     activeWorkflows: 0,
+    weeklyRuns: 0,
+    totalTokenUsage: 0,
+    weeklyTokenUsage: 0,
     totalAgents: 0,
     runningProcesses: 0,
   });
@@ -50,6 +78,8 @@ export default function DashboardPage() {
   const [agentUsageData, setAgentUsageData] = useState<any[]>([]);
   const [activityData, setActivityData] = useState<any[]>([]);
   const [runningRuns, setRunningRuns] = useState<any[]>([]);
+  const [tokenRankingByUser, setTokenRankingByUser] = useState<TokenRankingItem[]>([]);
+  const [tokenRankingByWorkflow, setTokenRankingByWorkflow] = useState<TokenRankingItem[]>([]);
   const [currentUser, setCurrentUser] = useState<{ username: string; email: string; role: 'admin' | 'user'; avatar?: string } | null>(null);
 
   useEffect(() => {
@@ -73,8 +103,10 @@ export default function DashboardPage() {
           setConfigs(cached.configs);
           setRecentRuns(cached.recentRuns);
           setRunningRuns(cached.runningRuns);
-          setAgentUsageData(cached.agentUsageData);
-          setActivityData(cached.activityData);
+          setAgentUsageData(cached.agentUsageData || []);
+          setActivityData(cached.activityData || []);
+          setTokenRankingByUser(cached.tokenRankingByUser || []);
+          setTokenRankingByWorkflow(cached.tokenRankingByWorkflow || []);
           setLoading(false);
         }
       }
@@ -110,6 +142,8 @@ export default function DashboardPage() {
       setRecentRuns(data.recentRuns || []);
       setRunningRuns(data.runningRuns || []);
       setAgentUsageData(data.agentUsageData || []);
+      setTokenRankingByUser(data.tokenRankingByUser || []);
+      setTokenRankingByWorkflow(data.tokenRankingByWorkflow || []);
 
       // Map server dayOfWeek to localized weekday names
       const actData = (data.activityData || []).map((d: any) => ({
@@ -127,6 +161,8 @@ export default function DashboardPage() {
           recentRuns: data.recentRuns || [],
           runningRuns: data.runningRuns || [],
           agentUsageData: data.agentUsageData || [],
+          tokenRankingByUser: data.tokenRankingByUser || [],
+          tokenRankingByWorkflow: data.tokenRankingByWorkflow || [],
           activityData: actData,
         }));
       } catch {}
@@ -184,6 +220,115 @@ export default function DashboardPage() {
     </motion.button>
   );
 
+  const TokenRankingList = ({ title, items }: { title: string; items: TokenRankingItem[] }) => (
+    <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
+      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+        <Cpu className="w-5 h-5 text-primary" />
+        {title}
+      </h3>
+      {items.length > 0 ? (
+        <div className="space-y-3">
+          {items.map((item, index) => {
+            const cacheTokens = (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0);
+            return (
+              <div key={`${item.configFile || item.name}-${index}`} className="rounded-lg border border-border/30 bg-muted/40 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {index + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{item.name || item.configFile || '-'}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {t('dashboard.tokenRanking.runs')}: {item.runs} · {t('dashboard.tokenRanking.cost')}: {formatMoney(item.cost)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="text-sm font-semibold">{formatTokens(item.totalTokens)}</div>
+                    <div className="text-xs text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
+                  </div>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {t('dashboard.tokenRanking.breakdown')
+                    .replace('{input}', formatTokens(item.inputTokens))
+                    .replace('{output}', formatTokens(item.outputTokens))
+                    .replace('{cache}', formatTokens(cacheTokens))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
+          {t('common.noData')}
+        </div>
+      )}
+    </div>
+  );
+
+  const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
+
+  const UserTokenPieChart = ({ title, items }: { title: string; items: TokenRankingItem[] }) => {
+    const pieData = items.map((item) => ({
+      name: item.name || item.configFile || '-',
+      value: item.totalTokens,
+      cost: item.cost,
+      runs: item.runs,
+    }));
+    const total = pieData.reduce((sum, d) => sum + d.value, 0);
+
+    return (
+      <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+          <Cpu className="w-5 h-5 text-primary" />
+          {title}
+        </h3>
+        {items.length > 0 ? (
+          <div className="flex items-center gap-4">
+            <div className="w-[180px] h-[180px] shrink-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={pieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={80}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {pieData.map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value: any) => formatTokens(Number(value))}
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex-1 min-w-0 space-y-1.5">
+              {pieData.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                  <span className="truncate flex-1">{d.name}</span>
+                  <span className="shrink-0 font-medium">{formatTokens(d.value)}</span>
+                  <span className="shrink-0 text-muted-foreground">{total > 0 ? Math.round((d.value / total) * 100) : 0}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
+            {t('common.noData')}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       {/* Animated background */}
@@ -237,30 +382,27 @@ export default function DashboardPage() {
           {/* Stats Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatCard
-              icon={Activity}
-              label={t('dashboard.stats.totalRuns')}
-              value={stats.totalRuns}
-              trend="+12%"
+              icon={Workflow}
+              label={t('dashboard.stats.activeWorkflows')}
+              value={stats.activeWorkflows}
               color="from-blue-500 to-blue-600"
             />
             <StatCard
-              icon={CheckCircle2}
-              label={t('dashboard.stats.successRate')}
-              value={`${stats.successRate}%`}
-              trend="+5%"
+              icon={Activity}
+              label={t('dashboard.stats.weeklyRuns')}
+              value={stats.weeklyRuns}
               color="from-green-500 to-green-600"
             />
             <StatCard
-              icon={Clock}
-              label={t('dashboard.stats.avgDuration')}
-              value={`${stats.avgDuration}m`}
-              trend="-8%"
+              icon={Cpu}
+              label={t('dashboard.stats.tokenConsumption')}
+              value={formatTokens(stats.totalTokenUsage)}
               color="from-purple-500 to-purple-600"
             />
             <StatCard
-              icon={Cpu}
-              label={t('dashboard.stats.activeProcesses')}
-              value={stats.runningProcesses}
+              icon={TrendingUp}
+              label={t('dashboard.stats.weeklyTokenConsumption')}
+              value={formatTokens(stats.weeklyTokenUsage)}
               color="from-orange-500 to-orange-600"
             />
           </div>
@@ -269,7 +411,7 @@ export default function DashboardPage() {
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
+            transition={{ delay: 0.15 }}
           >
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Zap className="w-5 h-5 text-primary" />
@@ -346,6 +488,22 @@ export default function DashboardPage() {
                   onClick={() => router.push('/api-docs')}
                   color="from-green-500 to-green-600"
                 />
+            </div>
+          </motion.div>
+
+          {/* Token Ranking */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-primary" />
+              {t('dashboard.tokenRanking.title')}
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
+              <TokenRankingList title={t('dashboard.tokenRanking.byWorkflow')} items={tokenRankingByWorkflow} />
             </div>
           </motion.div>
 

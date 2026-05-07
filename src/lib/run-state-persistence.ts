@@ -3,11 +3,20 @@ import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
+import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValidation } from '@/lib/schemas';
+import { normalizeSpecCodingDocument } from '@/lib/spec-coding-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
 /** Separator used to delimit output chunks in persisted stream files */
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
+
+export interface PersistedTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+}
 
 export interface PersistedAgentState {
   name: string;
@@ -15,7 +24,7 @@ export interface PersistedAgentState {
   model: string;
   status: string;
   completedTasks: number;
-  tokenUsage: { inputTokens: number; outputTokens: number };
+  tokenUsage: PersistedTokenUsage;
   costUsd: number;
   sessionId: string | null;
   iterationCount: number;
@@ -40,6 +49,14 @@ export interface PersistedProcessInfo {
   startTime: string;
 }
 
+export interface PersistedActiveConcurrencyGroup {
+  id: string;
+  stateName: string;
+  steps: string[];
+  joinPolicy?: any;
+  status: 'running' | 'completed' | 'failed';
+}
+
 export interface PersistedStepLog {
   id: string; // UUID for this step execution
   stepName: string;
@@ -50,17 +67,118 @@ export interface PersistedStepLog {
   costUsd: number;
   durationMs: number;
   timestamp: string;
+  tokenUsage?: PersistedTokenUsage;
+  sessionId?: string | null;
+  engineName?: string;
+}
+
+export interface PersistedQualityCommandResult {
+  command: string;
+  exitCode: number | null;
+  status: 'passed' | 'failed' | 'warning';
+  stdout?: string;
+  stderr?: string;
+  errorText?: string | null;
+}
+
+export interface PersistedQualityCheck {
+  id: string;
+  stateName: string;
+  stepName: string;
+  agent: string;
+  category: 'lint' | 'compile' | 'test' | 'custom';
+  status: 'passed' | 'failed' | 'warning';
+  origin?: 'workflow' | 'inferred';
+  summary: string;
+  createdAt: string;
+  commands: PersistedQualityCommandResult[];
+}
+
+export interface DeltaMergeState {
+  status: 'not-applicable' | 'available' | 'previewing' | 'awaiting-confirmation' | 'applying' | 'merged' | 'failed';
+  requestedAt?: string;
+  previewedAt?: string;
+  appliedAt?: string;
+  appliedBy?: string;
+  error?: string;
+  baseHash?: string;
+  deltaHash?: string;
+  mergedHash?: string;
+  diff?: string;
+  aiSummary?: string;
+  previewPath?: string;
+}
+
+export interface HumanQuestionAnswerSchema {
+  type: 'text' | 'single-choice' | 'multi-choice' | 'approval-transition';
+  required?: boolean;
+  placeholder?: string;
+  options?: Array<{ label: string; value: string; description?: string }>;
+}
+
+export interface HumanQuestionAnswer {
+  text?: string;
+  selectedOption?: string;
+  selectedOptions?: string[];
+  selectedState?: string;
+  instruction?: string;
+  raw?: any;
+}
+
+export interface HumanQuestion {
+  id: string;
+  runId: string;
+  configFile: string;
+  status: 'unanswered' | 'answered' | 'dismissed';
+  kind: 'approval' | 'clarification' | 'choice' | 'confirmation' | 'freeform';
+  title: string;
+  message: string;
+  supervisorAdvice?: string;
+  createdAt: string;
+  answeredAt?: string;
+  supervisorAgent?: string;
+  supervisorSessionId?: string | null;
+  workflowFrontendSessionId?: string | null;
+  currentState?: string | null;
+  previousState?: string | null;
+  suggestedNextState?: string;
+  availableStates?: string[];
+  result?: any;
+  requiresWorkflowPause?: boolean;
+  answerSchema: HumanQuestionAnswerSchema;
+  answer?: HumanQuestionAnswer;
+  source?: {
+    type: 'human-approval' | 'checkpoint-advice' | 'supervisor-chat' | 'manual' | string;
+    [key: string]: any;
+  };
+}
+
+export interface HumanAnswerContext {
+  questionId: string;
+  title: string;
+  question: string;
+  answer: string;
+  instruction?: string;
+  answeredAt: string;
 }
 
 export interface PersistedRunState {
   runId: string;
   configFile: string;
+  /** Authenticated user who owns/started this run. */
+  runOwnerId?: string;
+  runOwnerName?: string;
+  /** Backward-compatible aliases used by older dashboard readers. */
+  createdBy?: string;
+  createdByName?: string;
   status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'pending';
   statusReason?: string;
   startTime: string;
   endTime: string | null;
   currentPhase: string | null;
   currentStep: string | null;
+  activeSteps?: string[];
+  activeConcurrencyGroups?: PersistedActiveConcurrencyGroup[];
   completedSteps: string[];
   failedSteps: string[];
   stepLogs: PersistedStepLog[];
@@ -77,7 +195,22 @@ export interface PersistedRunState {
     suggestedNextState?: string;
     /** State machine: available states to choose from */
     availableStates?: string[];
+    /** State machine: supervisor advice for human checkpoint */
+    supervisorAdvice?: string;
+    /** State machine: full approval result for UI restore */
+    result?: {
+      verdict?: string;
+      issues?: any[];
+      summary?: string;
+      stepOutputs?: string[];
+    };
+    /** State machine: linked supervisor question for restored approval UI */
+    humanQuestionId?: string;
+    humanQuestion?: HumanQuestion;
   };
+  humanQuestions?: HumanQuestion[];
+  pendingHumanQuestionId?: string | null;
+  humanAnswersContext?: HumanAnswerContext[];
   globalContext?: string;
   phaseContexts?: Record<string, string>;
 
@@ -122,16 +255,51 @@ export interface PersistedRunState {
     round: number;
     timestamp: string;
   }>;
-  /** 若 SDK Plan 步骤正在等待审批，保存待审批内容以便页面刷新后恢复弹窗 */
-  pendingPlanReview?: {
-    planContent: string;
-    stepKey: string;
-    agent: string;
-    stateName: string;
-    stepName: string;
-  } | null;
   /** 实际工作目录（隔离的 run-xxx 目录或原始 projectRoot） */
   workingDirectory?: string;
+  /** 运行绑定的 supervisor agent 名称 */
+  supervisorAgent?: string;
+  /** 运行绑定的 supervisor sessionId */
+  supervisorSessionId?: string | null;
+  /** 当前运行中各 agent 的会话绑定 */
+  attachedAgentSessions?: Record<string, string>;
+  /** 首页/运行页共享的前端聊天会话 ID */
+  workflowFrontendSessionId?: string | null;
+  /** 最近一次 supervisor 审阅/建议 */
+  latestSupervisorReview?: {
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null;
+  /** preCommands 收集到的结构化质量门禁结果 */
+  qualityChecks?: PersistedQualityCheck[];
+  /** Explicit creation session bound to this run, only set when provided at start */
+  creationSessionId?: string;
+  /** 当前 run 绑定的独立 SpecCoding 快照 */
+  runSpecCoding?: SpecCodingDocument | null;
+  /** Startup snapshot of workflow step -> tasks.md task bindings. */
+  stepTaskBindingsSnapshot?: StepTaskBindingSnapshot[];
+  /** Last system validation result for workflow step -> tasks.md bindings. */
+  bindingValidation?: StepTaskBindingValidation;
+  /** 持久化 spec 模式 */
+  persistMode?: 'none' | 'repository';
+  /** 持久化 spec 的仓库根目录（repository 模式下写入 delta spec 的目标目录） */
+  specRootDir?: string;
+  /** 工作流名称，持久化模式下用于定位 delta 目录 */
+  workflowName?: string;
+  /** delta spec 是否已合入 master */
+  deltaSpecMerged?: boolean;
+  /** delta spec 合入 master 的人工确认状态 */
+  deltaMergeState?: DeltaMergeState;
+  /** 演练模式元数据 */
+  rehearsal?: {
+    enabled: boolean;
+    summary: string;
+    recommendedNextSteps: string[];
+  } | null;
 }
 
 function runDir(runId: string): string {
@@ -158,7 +326,11 @@ export async function saveRunState(state: PersistedRunState): Promise<void> {
 export async function loadRunState(runId: string): Promise<PersistedRunState | null> {
   try {
     const content = await readFile(stateFilePath(runId), 'utf-8');
-    return parse(content) as PersistedRunState;
+    const state = parse(content) as PersistedRunState;
+    if (state?.runSpecCoding) {
+      state.runSpecCoding = normalizeSpecCodingDocument(state.runSpecCoding);
+    }
+    return state;
   } catch {
     return null;
   }
@@ -170,26 +342,6 @@ export async function saveProcessOutput(
   output: string
 ): Promise<string> {
   const dir = outputsDir(runId);
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-  const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-  const filepath = resolve(dir, `${safeName}.md`);
-  await writeFile(filepath, output, 'utf-8');
-  return filepath;
-}
-
-/**
- * Save step output to the workspace directory so AI agents can read it.
- * Saves to {projectRoot}/.ace-outputs/{runId}/{stepName}.md
- */
-export async function saveOutputToWorkspace(
-  projectRoot: string,
-  runId: string,
-  stepName: string,
-  output: string
-): Promise<string> {
-  const dir = resolve(projectRoot, '.ace-outputs', runId);
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }

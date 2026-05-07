@@ -49,8 +49,10 @@ export async function GET(
     const aceDirExists = Boolean(aceDir && existsSync(aceDir));
     const runsDirExists = existsSync(runsDir);
 
+    const documentDirectory = runsDirExists ? runsDir : (aceDirExists ? aceDir : null);
+
     if (!aceDirExists && !runsDirExists) {
-      return NextResponse.json({ error: '文档目录不存在', files: [] }, { status: 200 });
+      return NextResponse.json({ error: '文档目录不存在', files: [], documentDirectory }, { status: 200 });
     }
 
     // If requesting a specific file's content — check runsDir first, then aceDir
@@ -164,7 +166,7 @@ export async function GET(
     // Sort: by modifiedTime
     files.sort((a, b) => new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime());
 
-    return NextResponse.json({ files, aceDir });
+    return NextResponse.json({ files, aceDir, documentDirectory });
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取文档失败', message: error.message },

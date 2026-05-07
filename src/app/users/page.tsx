@@ -14,23 +14,30 @@ import {
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AvatarPicker from '@/components/AvatarPicker';
 import AuthGuard from '@/components/AuthGuard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { ArrowLeft, Plus, Search, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, Plus, Search, MoreHorizontal, Check, X } from 'lucide-react';
 
 interface UserInfo {
   id: string;
   username: string;
   email: string;
   role: 'admin' | 'user';
+  status: 'pending' | 'active' | 'rejected';
   personalDir: string;
   avatar?: string;
   createdAt: number;
   createdBy?: string;
+  approvedAt?: number;
+  approvedBy?: string;
+  rejectedAt?: number;
+  rejectedBy?: string;
+  reviewNote?: string;
 }
 
 function UsersContent() {
@@ -40,6 +47,7 @@ function UsersContent() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null);
+  const [activeTab, setActiveTab] = useState<'pending' | 'regular'>('regular');
 
   // Create/Edit dialog
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -63,7 +71,11 @@ function UsersContent() {
       const res = await fetch('/api/users', { headers });
       if (res.status === 403) { router.push('/'); return; }
       const data = await res.json();
-      setUsers(data.users || []);
+      const nextUsers = data.users || [];
+      setUsers(nextUsers);
+      window.dispatchEvent(new CustomEvent('aceharness:pending-users-changed', {
+        detail: nextUsers.filter((user: UserInfo) => user.status === 'pending').length,
+      }));
     } catch {} finally { setLoading(false); }
   };
 
@@ -80,6 +92,11 @@ function UsersContent() {
     const q = searchQuery.toLowerCase();
     return users.filter(u => u.username.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
   }, [users, searchQuery]);
+
+  const pendingUsers = useMemo(() => users.filter((user) => user.status === 'pending'), [users]);
+  const regularUsers = useMemo(() => users.filter((user) => user.status !== 'pending'), [users]);
+  const filteredPendingUsers = useMemo(() => filteredUsers.filter((user) => user.status === 'pending'), [filteredUsers]);
+  const filteredRegularUsers = useMemo(() => filteredUsers.filter((user) => user.status !== 'pending'), [filteredUsers]);
 
   const openCreate = () => {
     setEditingUser(null);
@@ -145,6 +162,119 @@ function UsersContent() {
     setResetOpen(false); setResetPwd('');
   };
 
+  const handleReview = async (user: UserInfo, reviewAction: 'approve' | 'reject') => {
+    const ok = await confirm({
+      title: reviewAction === 'approve' ? '通过注册申请' : '拒绝注册申请',
+      description: reviewAction === 'approve'
+        ? `确定通过 ${user.username} 的注册申请吗？`
+        : `确定拒绝 ${user.username} 的注册申请吗？`,
+      confirmLabel: reviewAction === 'approve' ? '通过' : '拒绝',
+      variant: reviewAction === 'approve' ? 'default' : 'destructive',
+    });
+    if (!ok) return;
+    await fetch(`/api/users/${user.id}`, {
+      method: 'PUT',
+      headers: jsonHeaders,
+      body: JSON.stringify({ reviewAction }),
+    });
+    loadUsers();
+  };
+
+  const statusLabel = (status: UserInfo['status']) => {
+    if (status === 'pending') return '待审核';
+    if (status === 'rejected') return '已拒绝';
+    return '已启用';
+  };
+
+  const statusVariant = (status: UserInfo['status']) => {
+    if (status === 'pending') return 'outline' as const;
+    if (status === 'rejected') return 'destructive' as const;
+    return 'secondary' as const;
+  };
+
+  const renderUsersTable = (items: UserInfo[], emptyText: string, showReviewActions = false) => (
+    <div className="rounded-xl border bg-card">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-12">头像</TableHead>
+            <TableHead>用户名</TableHead>
+            <TableHead>邮箱</TableHead>
+            <TableHead>角色</TableHead>
+            <TableHead>状态</TableHead>
+            <TableHead>个人目录</TableHead>
+            <TableHead>创建时间</TableHead>
+            <TableHead className={showReviewActions ? 'w-44' : 'w-12'}>操作</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map(user => (
+            <TableRow key={user.id}>
+              <TableCell>
+                <Avatar className="h-8 w-8">
+                  {user.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={user.username} /> : null}
+                  <AvatarFallback className="text-xs">{user.username.charAt(0).toUpperCase()}</AvatarFallback>
+                </Avatar>
+              </TableCell>
+              <TableCell className="font-medium">{user.username}</TableCell>
+              <TableCell>{user.email}</TableCell>
+              <TableCell>
+                <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+                  {user.role === 'admin' ? '管理员' : '用户'}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <Badge variant={statusVariant(user.status)}>
+                  {statusLabel(user.status)}
+                </Badge>
+              </TableCell>
+              <TableCell><code className="text-xs">{user.personalDir || '-'}</code></TableCell>
+              <TableCell className="text-muted-foreground text-sm">{new Date(user.createdAt).toLocaleDateString()}</TableCell>
+              <TableCell>
+                <div className="flex items-center justify-end gap-1.5">
+                  {showReviewActions && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-900/70 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+                        onClick={() => handleReview(user, 'approve')}
+                      >
+                        <Check className="h-3.5 w-3.5" />通过
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 border-destructive/30 text-destructive hover:bg-destructive/10"
+                        onClick={() => handleReview(user, 'reject')}
+                      >
+                        <X className="h-3.5 w-3.5" />拒绝
+                      </Button>
+                    </>
+                  )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0"><MoreHorizontal className="w-4 h-4" /></Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => openEdit(user)}>编辑</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => { setResetUserId(user.id); setResetPwd(''); setResetError(''); setResetOpen(true); }}>重置密码</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(user.id)} disabled={user.id === currentUser?.id}>删除</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+          {items.length === 0 && (
+            <TableRow><TableCell colSpan={8} className="text-center py-8 text-muted-foreground">{emptyText}</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+
   /* RENDER */
   return (
     <div className="min-h-screen bg-background">
@@ -157,10 +287,15 @@ function UsersContent() {
             <div className="h-6 w-px bg-border" />
             <div>
               <h1 className="text-2xl font-bold">用户管理</h1>
-              <p className="text-xs text-muted-foreground">{users.length} 个用户</p>
+              <p className="text-xs text-muted-foreground">
+                {users.length} 个用户
+                {pendingUsers.length > 0 ? ` · ${pendingUsers.length} 个待审核` : ''}
+              </p>
             </div>
           </div>
-          <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" />新建用户</Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" />新建用户</Button>
+          </div>
         </div>
       </header>
 
@@ -173,58 +308,28 @@ function UsersContent() {
         {loading ? (
           <p className="text-muted-foreground text-center py-12">加载中...</p>
         ) : (
-          <div className="rounded-xl border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">头像</TableHead>
-                  <TableHead>用户名</TableHead>
-                  <TableHead>邮箱</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead>个人目录</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead className="w-12">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredUsers.map(user => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <Avatar className="h-8 w-8">
-                        {user.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={user.username} /> : null}
-                        <AvatarFallback className="text-xs">{user.username.charAt(0).toUpperCase()}</AvatarFallback>
-                      </Avatar>
-                    </TableCell>
-                    <TableCell className="font-medium">{user.username}</TableCell>
-                    <TableCell>{user.email}</TableCell>
-                    <TableCell>
-                      <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                        {user.role === 'admin' ? '管理员' : '用户'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell><code className="text-xs">{user.personalDir || '-'}</code></TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{new Date(user.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm"><MoreHorizontal className="w-4 h-4" /></Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => openEdit(user)}>编辑</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => { setResetUserId(user.id); setResetPwd(''); setResetError(''); setResetOpen(true); }}>重置密码</DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(user.id)} disabled={user.id === currentUser?.id}>删除</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {filteredUsers.length === 0 && (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">暂无用户</TableCell></TableRow>
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'pending' | 'regular')} className="space-y-4">
+            <TabsList>
+              <TabsTrigger value="regular" className="gap-2">
+                普通用户
+                <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 text-[10px]">{regularUsers.length}</Badge>
+              </TabsTrigger>
+              <TabsTrigger value="pending" className="gap-2">
+                待审核
+                {pendingUsers.length > 0 ? (
+                  <Badge variant="destructive" className="h-5 min-w-5 justify-center px-1.5 text-[10px]">{pendingUsers.length}</Badge>
+                ) : (
+                  <Badge variant="secondary" className="h-5 min-w-5 justify-center px-1.5 text-[10px]">0</Badge>
                 )}
-              </TableBody>
-            </Table>
-          </div>
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="regular" className="mt-0">
+              {renderUsersTable(filteredRegularUsers, searchQuery ? '没有匹配的普通用户' : '暂无普通用户')}
+            </TabsContent>
+            <TabsContent value="pending" className="mt-0">
+              {renderUsersTable(filteredPendingUsers, searchQuery ? '没有匹配的待审核用户' : '暂无待审核用户', true)}
+            </TabsContent>
+          </Tabs>
         )}
       </div>
 
@@ -254,7 +359,6 @@ function UsersContent() {
               workspaceRoot="/"
               value={form.personalDir}
               onChange={(path) => setForm((f) => ({ ...f, personalDir: path }))}
-              className="h-64"
             />
             <div>
               <label className="text-sm mb-2 block">选择头像：</label>

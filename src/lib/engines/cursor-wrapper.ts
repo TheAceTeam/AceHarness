@@ -13,8 +13,9 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
+import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */
@@ -47,24 +48,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    try {
-      const { execSync } = require('child_process');
-      execSync('command -v agent', { stdio: 'ignore', shell: '/bin/bash' });
-      return true;
-    } catch (e) {
-      const commonPaths = [
-        process.env.HOME + '/.local/bin/agent',
-        '/usr/local/bin/agent',
-        '/usr/bin/agent',
-      ];
-      for (const p of commonPaths) {
-        try {
-          require('fs').accessSync(p, require('fs').constants.X_OK);
-          return true;
-        } catch (e) { /* continue */ }
-      }
-      return false;
-    }
+    return commandExists('agent', getCommonCliSearchPaths());
   }
 
   /**
@@ -219,7 +203,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         output += `\n💻 执行命令: \`${cmd}\`\n`;
       } else {
         output += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-        output += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+        output += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
       }
     } else if (rawInput.pattern && rawInput.path) {
       output += `\n🔍 搜索: \`${rawInput.pattern}\` in \`${rawInput.path}\`\n`;
@@ -286,10 +270,8 @@ export class CursorEngineWrapper extends ACPWrapperBase {
           if (inner.type === 'text' && inner.text) {
             const text = inner.text.trim();
             const lines = text.split('\n');
-            if (lines.length > 15) {
-              parts.push(`\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`);
-            } else if (text) {
-              parts.push(`\n${fenced(text)}\n`);
+            if (text) {
+              parts.push(formatLargeContent(text, { summaryLabel: '查看内容' }));
             }
           }
         }
@@ -315,13 +297,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if ('output' in raw && typeof raw.output === 'string') {
         const text = raw.output.trim();
         if (!text) return raw.exit !== undefined && raw.exit !== 0 ? `\n(exit code: ${raw.exit})\n` : '';
-        const lines = text.split('\n');
-        let result = '';
-        if (lines.length > 15) {
-          result = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
-        } else {
-          result = `\n${fenced(text)}\n`;
-        }
+        let result = formatLargeContent(text, { summaryLabel: '查看输出' });
         if (raw.exit !== undefined && raw.exit !== 0) result += `(exit code: ${raw.exit})\n`;
         return result;
       }
@@ -330,7 +306,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (raw.content && typeof raw.content === 'string') {
         const lines = raw.content.split('\n');
         if (lines.length > 15) {
-          return `\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(raw.content)}\n\n</details>\n`;
+          return formatLargeContent(raw.content, { summaryLabel: '查看内容' });
         }
         if (lines.length > 0) {
           return `\n${fenced(raw.content)}\n`;

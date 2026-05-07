@@ -25,22 +25,30 @@ export default function SupervisorFlowVisualizer({
   currentRound,
 }: SupervisorFlowVisualizerProps) {
   const sortedFlow = useMemo(() => {
-    return [...flow].sort((a, b) => 
+    const deduped = flow.filter((record, index, list) => {
+      const key = `${record.type}::${record.from}::${record.to}::${record.stateName || ''}::${record.timestamp}::${record.question || ''}`;
+      return list.findIndex((item) => (
+        `${item.type}::${item.from}::${item.to}::${item.stateName || ''}::${item.timestamp}::${item.question || ''}` === key
+      )) === index;
+    });
+    return deduped.sort((a, b) =>
       new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
   }, [flow]);
 
   if (flow.length === 0) {
     return (
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+      <div className="h-full bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 flex flex-col">
         <div className="flex items-center gap-2 mb-4">
           <GitBranch className="w-5 h-5 text-purple-500" />
           <h3 className="font-semibold">Supervisor 流转</h3>
         </div>
-        <div className="text-center text-gray-500 py-8">
+        <div className="flex-1 min-h-0 flex items-center justify-center text-center text-gray-500 py-8">
+          <div>
           <HelpCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
           <p className="text-sm">暂无 Supervisor 流转记录</p>
           <p className="text-xs mt-1">当 Agent 请求信息时，将显示路由路径</p>
+          </div>
         </div>
         {currentRound !== undefined && (
           <Badge className="bg-purple-100 text-purple-700 border-purple-200">
@@ -62,7 +70,7 @@ export default function SupervisorFlowVisualizer({
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
+    <div className="h-full bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700 flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <GitBranch className="w-5 h-5 text-purple-500" />
@@ -76,7 +84,8 @@ export default function SupervisorFlowVisualizer({
         )}
       </div>
 
-      <div className="space-y-3 max-h-[400px] overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1">
+        <div className="space-y-3">
         {sortedFlow.map((record, idx) => (
           <div key={idx} className="relative pl-8">
             {/* 时间轴线 */}
@@ -143,6 +152,7 @@ export default function SupervisorFlowVisualizer({
             </div>
           </div>
         ))}
+        </div>
       </div>
 
       <div className="mt-4 pt-3 border-t border-gray-100 dark:border-gray-700">

@@ -38,6 +38,12 @@ interface RichTextEditorProps {
   autoFocus?: boolean;
   showFullscreenToggle?: boolean;
   showToolbar?: boolean;
+  footerContent?: React.ReactNode;
+  trimPastedTrailingNewlines?: boolean;
+}
+
+function trimTrailingNewlines(value: string): string {
+  return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
 }
 
 const SingleLineEnter = Extension.create({
@@ -59,7 +65,7 @@ const SingleLineEnter = Extension.create({
         return true;
       },
       'Shift-Enter': ({ editor }) => {
-        editor.commands.insertContent('\n', { contentType: 'markdown' });
+        editor.commands.setHardBreak();
         return true;
       },
     };
@@ -130,11 +136,15 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   autoFocus = false,
   showFullscreenToggle = false,
   showToolbar = false,
+  footerContent,
+  trimPastedTrailingNewlines = false,
 }, ref) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
   const onEnterRef = useRef(onEnter);
   onEnterRef.current = onEnter;
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(0);
 
@@ -223,12 +233,28 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
         const files = Array.from(clipboard.files || []).filter((file) => file.type?.startsWith('image/'));
-        if (files.length === 0) return false;
-        event.preventDefault();
-        files.forEach((file) => {
-          void insertUploadedImage(file);
-        });
-        return true;
+        if (files.length > 0) {
+          event.preventDefault();
+          files.forEach((file) => {
+            void insertUploadedImage(file);
+          });
+          return true;
+        }
+
+        if (trimPastedTrailingNewlines) {
+          const text = clipboard.getData('text/plain');
+          const trimmed = trimTrailingNewlines(text);
+          if (text && trimmed !== text) {
+            event.preventDefault();
+            const targetEditor = editorRuntimeRef.current;
+            if (trimmed) {
+              targetEditor?.chain().focus().insertContent(trimmed, { contentType: 'markdown' }).run();
+            }
+            return true;
+          }
+        }
+
+        return false;
       },
       handleDrop: (_view, event, _slice, moved) => {
         if (moved) return false;
@@ -321,9 +347,27 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     if (!editor || !editorWrapperRef.current) return;
 
     const wrapper = editorWrapperRef.current;
+    const shouldTreatEnterAsImeConfirm = (event: KeyboardEvent) => {
+      const keyCode = event.keyCode || (event as any).which || 0;
+      if (event.isComposing) return true;
+      if (isComposingRef.current) return true;
+      if (keyCode === 229) return true;
+      // Some macOS IMEs dispatch Enter right after compositionend.
+      if (Date.now() - lastCompositionEndAtRef.current < 80) return true;
+      return false;
+    };
+
+    const handleCompositionStart = () => {
+      isComposingRef.current = true;
+    };
+
+    const handleCompositionEnd = () => {
+      isComposingRef.current = false;
+      lastCompositionEndAtRef.current = Date.now();
+    };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.isComposing) return;
+      if (shouldTreatEnterAsImeConfirm(event)) return;
       if (event.key === 'Enter') {
         event.preventDefault();
 
@@ -335,7 +379,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
               onEnterRef.current(markdownWithPaths);
             }
           } else {
-            editor.commands.insertContent('\n', { contentType: 'markdown' });
+            editor.commands.setHardBreak();
           }
         } else {
           if (!event.shiftKey) {
@@ -344,15 +388,21 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
               onEnterRef.current(markdownWithPaths);
             }
           } else {
-            editor.commands.insertContent('\n', { contentType: 'markdown' });
+            editor.commands.setHardBreak();
           }
         }
         return false;
       }
     };
 
+    wrapper.addEventListener('compositionstart', handleCompositionStart);
+    wrapper.addEventListener('compositionend', handleCompositionEnd);
     wrapper.addEventListener('keydown', handleKeyDown);
-    return () => wrapper.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      wrapper.removeEventListener('compositionstart', handleCompositionStart);
+      wrapper.removeEventListener('compositionend', handleCompositionEnd);
+      wrapper.removeEventListener('keydown', handleKeyDown);
+    };
   }, [editor, getMarkdownWithImageLocalPaths, isFullscreen]);
 
   useEffect(() => {
@@ -430,15 +480,22 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
           )}
         </div>
       </div>
-      <div className="flex items-center justify-end mt-0.5 px-1">
-        {uploadingImages > 0 && (
-          <span className="mr-auto text-[10px] text-muted-foreground">图片上传中...</span>
-        )}
+      <div className="flex items-center justify-between gap-2 mt-0.5 px-1">
+        <div className="min-w-0 flex items-center gap-2">
+          {uploadingImages > 0 ? (
+            <span className="text-[10px] text-muted-foreground">图片上传中...</span>
+          ) : (
+            <span className="text-[10px] text-muted-foreground">Shift+Enter 换行</span>
+          )}
+        </div>
+        <div className="min-w-0 flex items-center justify-end gap-2">
+          {footerContent}
         {maxLength < 50000 && (
           <span className={`text-[10px] ${isNearLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
             {charCount}/{maxLength}
           </span>
         )}
+        </div>
       </div>
     </div>
   );

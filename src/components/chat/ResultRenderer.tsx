@@ -307,40 +307,6 @@ function resultToCard(type: string, result: any): CardSchema | null {
     };
   }
 
-  // GitCode PR
-  if ((type === 'gitcode.get_pr' || type === 'gitcode.create_pr' || type === 'gitcode.check_pr_mergeable') && result && (result.title || result.number)) {
-    const pr = result;
-    const state = pr.state || 'open';
-    const stateColor = state === 'open' ? 'green' : state === 'merged' ? 'purple' : 'red';
-    return {
-      header: { icon: 'merge_type', title: pr.title || `PR #${pr.number}`, subtitle: pr.user?.login || pr.user?.name, gradient: 'from-blue-500 to-indigo-500', badges: [{ text: state, color: stateColor }] },
-      blocks: [
-        { type: 'info', rows: [
-          ...(pr.head?.ref ? [{ label: '源分支', value: pr.head.ref }] : []),
-          ...(pr.base?.ref ? [{ label: '目标分支', value: pr.base.ref }] : []),
-          ...(pr.user ? [{ label: '作者', value: pr.user.login || pr.user.name, icon: 'person' }] : []),
-        ]},
-        ...(pr.labels?.length ? [{ type: 'badges' as const, items: pr.labels.map((l: any) => ({ text: l.name || l, color: 'blue' })) }] : []),
-        ...(pr.mergeable !== undefined ? [{ type: 'list' as const, items: [{ icon: pr.mergeable ? 'check_circle' : 'warning', color: pr.mergeable ? 'text-green-400' : 'text-yellow-400', text: pr.mergeable ? '可合并' : '存在冲突' }] }] : []),
-        ...(pr.body ? [{ type: 'text' as const, content: pr.body, maxLines: 4 }] : []),
-      ],
-    };
-  }
-
-  // GitCode Issue
-  if ((type === 'gitcode.get_issue' || type === 'gitcode.create_issue') && result && (result.title || result.number)) {
-    const issue = result;
-    const state = issue.state || 'open';
-    const stateColor = state === 'open' ? 'green' : state === 'progressing' ? 'blue' : state === 'closed' ? 'gray' : 'red';
-    return {
-      header: { icon: 'bug_report', title: issue.title || `Issue #${issue.number}`, subtitle: issue.user?.login || issue.user?.name, gradient: 'from-orange-500 to-red-500', badges: [{ text: state, color: stateColor }] },
-      blocks: [
-        ...(issue.labels?.length ? [{ type: 'badges' as const, items: issue.labels.map((l: any) => ({ text: l.name || l, color: 'orange' })) }] : []),
-        ...(issue.body ? [{ type: 'text' as const, content: issue.body, maxLines: 5 }] : []),
-      ],
-    };
-  }
-
   // Generic fallback for other action types - show a basic card with "View Details" action
   if (type && result && typeof result === 'object' && !result.success) {
     const actionName = type.split('.').pop() || type;

@@ -7,9 +7,7 @@ import { z } from 'zod';
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { SingleCombobox, MultiCombobox, ComboboxPortalProvider, type ComboboxOption } from '@/components/ui/combobox';
+import { SingleCombobox, MultiCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -38,14 +36,30 @@ const stepSchema = z.object({
   constraints: z.string().optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
+  specTaskId: z.string().optional(),
+  requirementIds: z.string().optional(),
+  artifactKeys: z.string().optional(),
 });
 
 type PhaseForm = z.infer<typeof phaseSchema>;
 type StepForm = z.infer<typeof stepSchema>;
 
+const listToInput = (value: unknown) => Array.isArray(value) ? value.join(', ') : '';
+const inputToList = (value: unknown) => typeof value === 'string'
+  ? value.split(',').map((item) => item.trim()).filter(Boolean)
+  : [];
+const cleanString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
+
 interface RoleOption {
   name: string;
   team: string;
+  roleType?: 'normal' | 'supervisor';
+  avatar?: any;
+  category?: string;
+  tags?: string[];
+  description?: string;
+  capabilities?: string[];
+  alwaysAvailableForChat?: boolean;
 }
 
 interface SkillOption {
@@ -83,6 +97,7 @@ export default function EditNodeModal({
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
+  const [showAdvancedBindings, setShowAdvancedBindings] = useState(false);
 
   const {
     register,
@@ -112,11 +127,32 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: data?.skills || [],
+          specTaskId: [
+            ...((data?.specTaskBinding?.taskIds || []) as string[]),
+            data?.specTaskBinding?.taskId,
+          ].filter(Boolean).join(', '),
+          requirementIds: listToInput(data?.specTaskBinding?.requirementIds),
+          artifactKeys: listToInput(data?.specTaskBinding?.artifactKeys),
         },
   });
 
   const checkpointEnabled = watch('checkpointEnabled');
   const iterationEnabled = watch('iterationEnabled');
+  const selectedAgentName = (watch('agent') || data?.agent || '') as string;
+  const selectedAgent = roles.find((role) => role.name === selectedAgentName);
+  const agentOptions = roles.map((role) => {
+    const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean);
+    return {
+      value: role.name,
+      label: role.name,
+      description: role.description || meta.join(' · '),
+      icon: (
+        <span className="material-symbols-outlined text-sm">
+          {role.roleType === 'supervisor' ? 'supervisor_account' : 'smart_toy'}
+        </span>
+      ),
+    };
+  });
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
@@ -141,9 +177,12 @@ export default function EditNodeModal({
         name: source.name + ' (副本)',
         agent: source.agent || '',
         task: source.task || '',
-        constraints: source.constraints?.join('\n') || '',
+        constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
         enableReviewPanel: source.enableReviewPanel || false,
         skills: source.skills || [],
+        specTaskId: '',
+        requirementIds: '',
+        artifactKeys: '',
       });
     }
   };
@@ -171,7 +210,7 @@ export default function EditNodeModal({
       onSave(phaseData);
     } else {
       const selectedRole = roles.find((r) => r.name === formData.agent);
-      const teamToRole: Record<string, string> = { blue: 'defender', red: 'attacker', judge: 'judge' };
+      const teamToRole: Record<string, string> = { blue: 'attacker', red: 'defender', judge: 'judge' };
       const stepData: any = {
         name: formData.name,
         agent: formData.agent,
@@ -190,6 +229,20 @@ export default function EditNodeModal({
       }
       if (formData.skills && formData.skills.length > 0) {
         stepData.skills = formData.skills;
+      }
+
+      if (data?.parallelGroup) stepData.parallelGroup = data.parallelGroup;
+      if (data?.concurrency) stepData.concurrency = data.concurrency;
+      if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
+      if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
+      const specTaskIds = inputToList(formData.specTaskId);
+      if (specTaskIds.length > 0) {
+        stepData.specTaskBinding = {
+          taskId: specTaskIds[0],
+          taskIds: specTaskIds,
+          requirementIds: inputToList(formData.requirementIds),
+          artifactKeys: inputToList(formData.artifactKeys),
+        };
       }
       onSave(stepData);
     }
@@ -323,19 +376,35 @@ export default function EditNodeModal({
                   Agent <span className="text-destructive">*</span>
                 </Label>
                 <SingleCombobox
-                  value={watch('agent') || data?.agent || ''}
+                  value={selectedAgentName}
                   onValueChange={(v) => setValue('agent', v)}
-                  options={roles.map((r) => ({
-                    value: r.name,
-                    label: r.name,
-                    description: r.team === 'red' ? '红队 (攻击方)' : r.team === 'judge' ? '裁判' : '蓝队 (防守方)',
-                    icon: <span className="material-symbols-outlined text-sm">
-                      {r.team === 'red' ? 'swords' : r.team === 'judge' ? 'balance' : 'shield'}
-                    </span>,
-                  }))}
-                  placeholder="请选择 Agent"
+                  options={agentOptions}
+                  placeholder="选择 Agent..."
                   triggerClassName={errors.agent ? 'border-destructive' : ''}
                 />
+                {selectedAgent ? (
+                  <div className="rounded-xl border bg-muted/20 p-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {selectedAgent.roleType === 'supervisor' ? <Badge variant="outline" className="text-[10px]">Supervisor</Badge> : null}
+                      {selectedAgent.team ? <Badge variant="outline" className="text-[10px]">{selectedAgent.team}</Badge> : null}
+                      {selectedAgent.category ? <Badge variant="outline" className="text-[10px]">{selectedAgent.category}</Badge> : null}
+                    </div>
+                    {selectedAgent.description ? (
+                      <p className="mt-2 leading-5 text-muted-foreground">{selectedAgent.description}</p>
+                    ) : (
+                      <p className="mt-2 leading-5 text-muted-foreground">暂无能力描述，请在 Agent 配置中补充 description。</p>
+                    )}
+                    {selectedAgent.capabilities?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {selectedAgent.capabilities.slice(0, 6).map((capability) => (
+                          <Badge key={capability} variant="secondary" className="text-[10px] font-normal">
+                            {capability}
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {errors.agent && (
                   <p className="text-sm text-destructive">{errors.agent.message as string}</p>
                 )}
@@ -394,6 +463,49 @@ export default function EditNodeModal({
                     placeholder="选择 Skills..."
                   />
                 </div>
+              )}
+
+              {(watch('specTaskId') || showAdvancedBindings) && (
+                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                  <div>
+                    <div className="text-sm font-semibold">Spec 计划绑定</div>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      由系统根据 OpenSpec tasks.md 生成，只在这里查看；任务状态由工作流调度器自动更新。
+                    </p>
+                  </div>
+                  <div className="rounded-xl border bg-background/60 p-3">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between text-left text-xs font-medium text-muted-foreground"
+                      onClick={() => setShowAdvancedBindings((v) => !v)}
+                    >
+                      <span>{watch('specTaskId') ? `已绑定 Spec 计划任务：${watch('specTaskId')}` : '查看系统绑定信息'}</span>
+                      <span className="material-symbols-outlined text-sm">{showAdvancedBindings ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                    {showAdvancedBindings && (
+                      <div className="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
+                        <div>
+                          <div className="text-muted-foreground">Spec 任务</div>
+                          <div className="mt-1 truncate font-medium">{watch('specTaskId') || '未绑定'}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">关联需求</div>
+                          <div className="mt-1 truncate font-medium">{watch('requirementIds') || '系统推导'}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">产物类型</div>
+                          <div className="mt-1 truncate font-medium">{watch('artifactKeys') || '系统推导'}</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                <div className="hidden">
+                  <input {...register('specTaskId')} />
+                  <input {...register('requirementIds')} />
+                  <input {...register('artifactKeys')} />
+                </div>
+              </div>
               )}
             </>
           )}

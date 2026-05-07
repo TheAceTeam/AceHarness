@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile, readdir, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { unifiedWorkflowConfigSchema } from '@/lib/schemas';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/runtime-configs';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
+import { loadCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
+import { compileStepTaskBindings } from '@/lib/spec-task-binding';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -39,6 +41,7 @@ export async function GET(
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     const content = await readFile(filepath, 'utf-8');
     const config = parse(content);
+    const validation = validateWorkflowDraft(config);
 
     // Load agents from configs/agents/*.yaml
     const agents: any[] = [];
@@ -54,7 +57,15 @@ export async function GET(
       }
     } catch { /* agents dir may not exist */ }
 
-    return NextResponse.json({ config, raw: content, agents });
+    return NextResponse.json({
+      config,
+      raw: content,
+      agents,
+      validation: {
+        ...formatValidationIssuesForResponse(validation),
+        normalized: validation.normalized,
+      },
+    });
   } catch (error: any) {
     // List available configs to help AI self-correct
     let available: string[] = [];
@@ -96,22 +107,38 @@ export async function POST(
     const { roles, ...configWithoutRoles } = config;
 
     // Validate config (roles is optional now)
-    const validationResult = unifiedWorkflowConfigSchema.safeParse(configWithoutRoles);
-    if (!validationResult.success) {
+    const validationResult = validateWorkflowDraft(configWithoutRoles);
+    if (!validationResult.ok || !validationResult.normalized) {
       return NextResponse.json(
         {
           error: '配置验证失败',
-          details: validationResult.error,
+          details: formatValidationIssuesForResponse(validationResult),
         },
         { status: 400 }
       );
     }
 
-    const filepath = await getRuntimeWorkflowConfigPath(filename);
-    const yamlContent = stringify(configWithoutRoles);
-    await writeFile(filepath, yamlContent, 'utf-8');
+    let normalizedConfig = validationResult.normalized;
+    let bindingValidation: any = undefined;
+    const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
+    const session = creationSessionId ? await loadCreationSession(creationSessionId).catch(() => null) : null;
+    const specCoding = body.specCoding || session?.specCoding;
+    if (specCoding) {
+      const bindingCompilation = compileStepTaskBindings(normalizedConfig, specCoding);
+      normalizedConfig = bindingCompilation.config;
+      bindingValidation = bindingCompilation.validation;
+      if (session) {
+        await updateCreationSession(session.id, { bindingValidation: bindingValidation as any });
+      }
+    }
 
-    return NextResponse.json({ success: true, message: '配置已保存' });
+    const filepath = await getRuntimeWorkflowConfigPath(filename);
+    const yamlContent = stringify(normalizedConfig);
+    await writeFile(filepath, yamlContent, 'utf-8');
+    const configsDir = await getRuntimeConfigsDirPath();
+    await unmarkConfigDeleted(configsDir, filename);
+
+    return NextResponse.json({ success: true, message: '配置已保存', bindingValidation });
   } catch (error: any) {
     return NextResponse.json(
       { error: '保存配置失败', message: error.message },
@@ -135,6 +162,8 @@ export async function DELETE(
     }
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     await unlink(filepath);
+    const configsDir = await getRuntimeConfigsDirPath();
+    await markConfigDeleted(configsDir, filename);
     await deleteConfigMeta(filename, 'workflow');
     return NextResponse.json({ success: true, message: '配置已删除' });
   } catch (error: any) {

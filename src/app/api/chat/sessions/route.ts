@@ -25,6 +25,16 @@ export async function POST(request: NextRequest) {
       id: body.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       title: body.title || '新对话',
       model: body.model || 'claude-sonnet-4-6',
+      engine: typeof body.engine === 'string' ? body.engine : undefined,
+      agentBinding: body.agentBinding && typeof body.agentBinding.agentName === 'string'
+        ? {
+            agentName: body.agentBinding.agentName,
+            team: typeof body.agentBinding.team === 'string' ? body.agentBinding.team : undefined,
+            roleType: typeof body.agentBinding.roleType === 'string' ? body.agentBinding.roleType : undefined,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }
+        : undefined,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       messages: [],

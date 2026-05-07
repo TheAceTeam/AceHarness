@@ -6,7 +6,20 @@
       "totalRuns": "Total Runs",
       "successRate": "Success Rate",
       "avgDuration": "Avg Duration",
-      "activeProcesses": "Active Processes"
+      "activeProcesses": "Active Processes",
+      "activeWorkflows": "Active workflows",
+      "weeklyRuns": "Weekly runs",
+      "tokenConsumption": "Token consumption",
+      "weeklyTokenConsumption": "Weekly token consumption"
+    },
+    "tokenRanking": {
+      "title": "Token Usage Ranking",
+      "byUser": "By User",
+      "byWorkflow": "By Workflow",
+      "totalTokens": "Total Tokens",
+      "runs": "Runs",
+      "cost": "Cost",
+      "breakdown": "Input {input} / Output {output} / Cache {cache}"
     },
     "quickActions": {
       "title": "Quick Actions",

@@ -6,10 +6,51 @@
  */
 
 import { EventEmitter } from 'events';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
-import { fenced } from '../markdown-utils';
+import { existsSync, statSync } from 'fs';
+import { createRequire } from 'module';
+import { dirname, extname, join } from 'path';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import { commandExists, findCommand } from '../command-exists';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { repairWindowsMojibake } from '../mojibake-repair';
+import { readTextFileBestEffort } from '../text-decoding';
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function metadataFromCodexEvent(event: Record<string, unknown> | null): EngineResultMetadata {
+  const usage = event?.usage && typeof event.usage === 'object' ? event.usage as Record<string, unknown> : {};
+  return {
+    usage: {
+      input_tokens: numberOrZero(usage.input_tokens),
+      output_tokens: numberOrZero(usage.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage.cache_read_input_tokens),
+    },
+    cost_usd: numberOrZero(event?.cost_usd),
+    duration_ms: numberOrZero(event?.duration_ms),
+    duration_api_ms: numberOrZero(event?.duration_api_ms),
+    num_turns: numberOrZero(event?.num_turns),
+  };
+}
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
+  private static readonly MAX_INLINE_FILE_BYTES = 64 * 1024;
+  private static readonly MAX_INLINE_FILE_LINES = 400;
   private currentThread: any = null;
   private codexInstance: any = null;
   private _abortController: AbortController | null = null;
@@ -33,25 +74,97 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     try {
       await import('@openai/codex-sdk');
     } catch { return false; }
-    // Also verify we can locate the codex binary
-    return this.findCodexPath() !== null;
+    return !!this.findBundledCodexPath() || commandExists('codex', this.getCodexSearchPaths());
   }
 
-  /** Locate the codex CLI binary — check PATH first, then common locations. */
-  private findCodexPath(): string | null {
-    try {
-      const { execSync } = require('child_process');
-      return execSync('command -v codex', { encoding: 'utf-8', shell: '/bin/bash' }).trim();
-    } catch {}
-    const fs = require('fs');
-    const commonPaths = [
-      (process.env.HOME || '') + '/.local/bin/codex',
-      '/usr/local/bin/codex',
-      '/usr/bin/codex',
-    ];
-    for (const p of commonPaths) {
-      try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+  private getCodexSearchPaths(): string[] {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const candidates = process.platform === 'win32'
+      ? [
+          home ? join(home, 'AppData', 'Roaming', 'npm') : '',
+          home ? join(home, '.local', 'bin') : '',
+        ]
+      : [
+          home ? join(home, '.local', 'bin') : '',
+          '/usr/local/bin',
+          '/usr/bin',
+        ];
+    return candidates.filter(Boolean);
+  }
+
+  private findBundledCodexPath(): string | null {
+    const targetTriple = (() => {
+      if (process.platform === 'win32') {
+        if (process.arch === 'x64') return 'x86_64-pc-windows-msvc';
+        if (process.arch === 'arm64') return 'aarch64-pc-windows-msvc';
+      }
+      if (process.platform === 'darwin') {
+        if (process.arch === 'x64') return 'x86_64-apple-darwin';
+        if (process.arch === 'arm64') return 'aarch64-apple-darwin';
+      }
+      if (process.platform === 'linux' || process.platform === 'android') {
+        if (process.arch === 'x64') return 'x86_64-unknown-linux-musl';
+        if (process.arch === 'arm64') return 'aarch64-unknown-linux-musl';
+      }
+      return null;
+    })();
+
+    if (!targetTriple) {
+      return null;
     }
+
+    const platformPackage = {
+      'x86_64-unknown-linux-musl': '@openai/codex-linux-x64',
+      'aarch64-unknown-linux-musl': '@openai/codex-linux-arm64',
+      'x86_64-apple-darwin': '@openai/codex-darwin-x64',
+      'aarch64-apple-darwin': '@openai/codex-darwin-arm64',
+      'x86_64-pc-windows-msvc': '@openai/codex-win32-x64',
+      'aarch64-pc-windows-msvc': '@openai/codex-win32-arm64',
+    }[targetTriple];
+
+    if (!platformPackage) {
+      return null;
+    }
+
+    try {
+      const rootRequire = createRequire(join(process.cwd(), 'package.json'));
+      const codexPackageJsonPath = rootRequire.resolve('@openai/codex/package.json');
+      const codexRequire = createRequire(codexPackageJsonPath);
+      const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
+      const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+      const binaryPath = join(dirname(platformPackageJsonPath), 'vendor', targetTriple, 'codex', binaryName);
+      return existsSync(binaryPath) ? binaryPath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Locate the codex CLI binary — cross-platform PATH + common install locations. */
+  private findCodexPath(): string | null {
+    const bundledPath = this.findBundledCodexPath();
+    if (bundledPath) {
+      return bundledPath;
+    }
+
+    const resolved = findCommand('codex', this.getCodexSearchPaths());
+    if (!resolved) {
+      return null;
+    }
+
+    if (process.platform !== 'win32') {
+      return resolved;
+    }
+
+    const lowerResolved = resolved.toLowerCase();
+    if (lowerResolved.endsWith('.exe') || lowerResolved.endsWith('.com')) {
+      return resolved;
+    }
+
+    const exeCandidate = `${resolved}.exe`;
+    if (existsSync(exeCandidate)) {
+      return exeCandidate;
+    }
+
     return null;
   }
 
@@ -69,33 +182,129 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
     const cmdLines = cmd.split('\n');
-    let content = `\n\n**🔧 bash**\n`;
-    if (cmdLines.length <= 1 && cmd.length <= 120) {
-      content += `\n💻 执行命令: \`${cmd}\`\n`;
-    } else {
-      content += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-      content += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
-    }
-    return content;
+    const summary = cmdLines.length <= 1
+      ? '💻 执行命令'
+      : `💻 执行命令 (${cmdLines.length} 行)`;
+    return `\n\n**🔧 bash**\n\n<details><summary>${summary}</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
   }
 
   private formatCommandResult(output: string, exitCode?: number): string {
-    let resultText = (output || '').trim();
+    let resultText = repairWindowsMojibake((output || '').trim());
     if (exitCode !== 0 && exitCode != null) {
       resultText += resultText ? `\n(exit code: ${exitCode})` : `(exit code: ${exitCode})`;
     }
     if (!resultText) return '';
-    const lines = resultText.split('\n');
-    if (lines.length <= 15) {
-      return `\n${fenced(resultText)}\n`;
+    return formatLargeContent(resultText, { summaryLabel: '查看输出' });
+  }
+
+  private getStringField(source: any, keys: string[]): string {
+    for (const key of keys) {
+      if (typeof source?.[key] === 'string' && source[key].length > 0) {
+        return source[key];
+      }
     }
-    return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(resultText)}\n\n</details>\n`;
+    return '';
+  }
+
+  private buildUnifiedDiff(oldText: string, newText: string): string {
+    const removed = oldText
+      ? oldText.split('\n').map((line) => `- ${line}`).join('\n') + '\n'
+      : '';
+    const added = newText
+      ? newText.split('\n').map((line) => `+ ${line}`).join('\n') + '\n'
+      : '';
+    return `${removed}${added}`.trimEnd();
+  }
+
+  private inferFenceLanguage(path: string): string {
+    const ext = extname(path).toLowerCase();
+    const map: Record<string, string> = {
+      '.ts': 'ts',
+      '.tsx': 'tsx',
+      '.js': 'js',
+      '.jsx': 'jsx',
+      '.json': 'json',
+      '.md': 'md',
+      '.yaml': 'yaml',
+      '.yml': 'yaml',
+      '.css': 'css',
+      '.html': 'html',
+      '.sh': 'bash',
+      '.bash': 'bash',
+      '.zsh': 'bash',
+      '.cj': 'text',
+      '.c': 'c',
+      '.cc': 'cpp',
+      '.cpp': 'cpp',
+      '.h': 'c',
+      '.hpp': 'cpp',
+      '.py': 'python',
+      '.toml': 'toml',
+      '.xml': 'xml',
+    };
+    return map[ext] || 'text';
+  }
+
+  private readAddedFilePreview(path: string): string {
+    try {
+      if (!existsSync(path)) return '';
+      const stats = statSync(path);
+      if (!stats.isFile()) return '';
+      if (stats.size > CodexEngineWrapper.MAX_INLINE_FILE_BYTES) {
+        return `\n📎 文件较大，点击打开查看: [${path}](${path})\n`;
+      }
+      const content = readTextFileBestEffort(path);
+      if (content.includes('\u0000')) {
+        return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
+      }
+      return formatLargeContent(content, { filePath: path, lang: this.inferFenceLanguage(path), summaryLabel: '查看文件内容' });
+    } catch {
+      return '';
+    }
+  }
+
+  private formatSingleFileChange(change: any): string {
+    const path = this.getStringField(change, ['path', 'filePath', 'file_path']) || '(未知路径)';
+    const kind = this.getStringField(change, ['kind', 'type', 'action']) || 'update';
+    const oldText = this.getStringField(change, ['oldText', 'old_text', 'oldString', 'old_string', 'before']);
+    const newText = this.getStringField(change, ['newText', 'new_text', 'newString', 'new_string', 'after']);
+
+    if (newText && !oldText) {
+      const lines = newText.split('\n').length;
+      let out = `\n📝 写入文件: \`${path}\` (${lines} 行)\n`;
+      out += formatLargeContent(this.buildUnifiedDiff('', newText), { filePath: path, lang: 'diff', summaryLabel: '查看变更' });
+      return out;
+    }
+
+    if (oldText || newText) {
+      const oldLines = oldText ? oldText.split('\n').length : 0;
+      const newLines = newText ? newText.split('\n').length : 0;
+      const added = Math.max(0, newLines - oldLines);
+      const removed = Math.max(0, oldLines - newLines);
+      let stats = `${Math.min(oldLines, newLines)} 行修改`;
+      if (added > 0) stats += `, +${added} 行`;
+      if (removed > 0) stats += `, -${removed} 行`;
+      let out = `\n✏️ 编辑文件: \`${path}\` (${stats})\n`;
+      out += formatLargeContent(this.buildUnifiedDiff(oldText, newText), { filePath: path, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
+      return out;
+    }
+
+    if (kind === 'add') {
+      let out = `\n📝 文件变更: \`${path}\` (${kind})\n`;
+      out += this.readAddedFilePreview(path);
+      return out;
+    }
+
+    return `\n📝 文件变更: \`${path}\` (${kind})\n`;
   }
 
   private formatFileChanges(changes: any[]): string {
-    const summary = (changes || []).map((c: any) => `  ${c.kind}: ${c.path}`).join('\n');
-    if (!summary) return '';
-    return `\n\n**📝 文件变更**\n\n${fenced(summary)}\n`;
+    if (!Array.isArray(changes) || changes.length === 0) return '';
+    const parts = changes
+      .map((change) => this.formatSingleFileChange(change))
+      .filter(Boolean);
+    if (parts.length === 0) return '';
+    return `\n\n**📝 文件变更**\n${parts.join('')}`;
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {
@@ -132,6 +341,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         signal: this._abortController!.signal,
       });
 
+      let completionMetadata: EngineResultMetadata = ZERO_USAGE_METADATA;
       for await (const event of events) {
         switch (event.type) {
           case 'item.started': {
@@ -194,6 +404,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
             break;
           }
           case 'turn.completed': {
+            completionMetadata = metadataFromCodexEvent(event as Record<string, unknown>);
             break;
           }
           case 'turn.failed': {
@@ -206,6 +417,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
               success: false,
               output: this.collectedOutput,
               error: errMsg,
+              metadata: ZERO_USAGE_METADATA,
             };
           }
         }
@@ -215,6 +427,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         success: true,
         output: this.collectedOutput,
         sessionId: this.currentThread?.id,
+        metadata: completionMetadata,
       };
     } catch (error: any) {
       // Abort is expected when cancel() is called
@@ -223,6 +436,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
           success: true,
           output: this.collectedOutput || '',
           stopReason: 'cancelled',
+          metadata: ZERO_USAGE_METADATA,
         };
       }
       const errMsg = error.message || String(error);
@@ -234,6 +448,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         success: false,
         output: '',
         error: errMsg,
+        metadata: ZERO_USAGE_METADATA,
       };
     }
   }

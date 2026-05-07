@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
-import { existsSync, symlinkSync, mkdirSync, lstatSync, readlinkSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/app-paths';
+import { ensureDirectoryLinkSync } from '@/lib/directory-links';
 import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
 
 const ENGINE_CONFIG_FILE = getEngineConfigPath();
@@ -68,13 +69,7 @@ export async function POST(request: Request) {
         mkdirSync(configDir, { recursive: true });
       }
       const skillsLink = path.join(configDir, 'skills');
-      if (existsSync(skillsDir) && !existsSync(skillsLink)) {
-        // Windows: directory symlinks often need admin; junction usually works without elevation.
-        if (process.platform === 'win32') {
-          symlinkSync(skillsDir, skillsLink, 'junction');
-        } else {
-          symlinkSync(skillsDir, skillsLink);
-        }
+      if (existsSync(skillsDir) && ensureDirectoryLinkSync(skillsDir, skillsLink) === 'created') {
         console.log(`[Engine] Linked ${engineConfigDir}/skills -> skills/`);
       }
     } catch (e) {

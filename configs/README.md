@@ -143,8 +143,6 @@ workflow:
           role: defender/attacker/judge
           task: 任务描述
           skills: [技能列表]
-          enablePlanLoop: true/false
-          maxPlanRounds: 最大规划轮次
       transitions:
         - to: 目标状态
           condition:

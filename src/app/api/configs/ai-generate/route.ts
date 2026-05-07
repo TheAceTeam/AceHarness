@@ -1,4 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  buildWorkflowExperiencePromptBlock,
+  findRelevantWorkflowExperiences,
+} from '@/lib/workflow-experience-store';
+import {
+  buildMemoryPromptBlock,
+  listMemoryEntries,
+} from '@/lib/workflow-memory-store';
 
 interface PhaseTemplate {
   name: string;
@@ -14,6 +22,19 @@ interface StateMachineStateTemplate {
   maxSelfTransitions?: number;
   steps: Array<{ name: string; agent: string; task: string }>;
   transitions: Array<{ to: string; condition: { verdict?: string }; priority: number; label: string }>;
+}
+
+function createDefaultWorkflowGovernance() {
+  return {
+    supervisor: {
+      enabled: true,
+      agent: 'default-supervisor',
+      stageReviewEnabled: true,
+      checkpointAdviceEnabled: true,
+      scoringEnabled: true,
+      experienceEnabled: true,
+    },
+  };
 }
 
 /**
@@ -104,6 +125,7 @@ function generatePhaseBasedConfig(requirements: string, workflowName: string, wo
     workflow: {
       name: workflowName,
       description: requirements,
+      ...createDefaultWorkflowGovernance(),
       phases,
     },
     context: {
@@ -115,7 +137,7 @@ function generatePhaseBasedConfig(requirements: string, workflowName: string, wo
 }
 
 /**
- * 生成状态机模式配置（每个状态包含蓝队/红队/裁判三个步骤）
+ * 生成状态机模式配置（每个状态包含红队/蓝队/裁判三个步骤）
  */
 function generateStateMachineConfig(requirements: string, workflowName: string, workspaceMode: 'isolated-copy' | 'in-place' = 'in-place') {
   const req = requirements.toLowerCase();
@@ -128,7 +150,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
   if (isSecurityAudit) {
     states = [
       {
-        name: '安全扫描', description: '蓝队扫描、红队渗透、裁判评估', isInitial: true, isFinal: false,
+        name: '安全扫描', description: '红队扫描、蓝队渗透、裁判评估', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 2,
         steps: [
           { name: '自动化扫描', agent: 'code-hunter', task: '执行安全扫描，发现潜在漏洞' },
@@ -141,7 +163,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '漏洞分析', description: '蓝队分析、红队验证、裁判判定', isInitial: false, isFinal: false,
+        name: '漏洞分析', description: '红队分析、蓝队验证、裁判判定', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '漏洞分析', agent: 'code-auditor', task: '深入分析安全漏洞，评估影响范围' },
@@ -154,7 +176,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '修复验证', description: '蓝队修复、红队回测、裁判验收', isInitial: false, isFinal: false,
+        name: '修复验证', description: '红队修复、蓝队回测、裁判验收', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '实施修复', agent: 'developer', task: '实施安全修复方案' },
@@ -180,7 +202,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
   } else if (isBugFix) {
     states = [
       {
-        name: '复现确认', description: '蓝队复现、红队验证、裁判确认', isInitial: true, isFinal: false,
+        name: '复现确认', description: '红队复现、蓝队验证、裁判确认', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '构造复现用例', agent: 'developer', task: '构造最小可复现用例，确认问题可稳定触发' },
@@ -193,7 +215,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '根因分析', description: '蓝队定位、红队挑战、裁判判定', isInitial: false, isFinal: false,
+        name: '根因分析', description: '红队定位、蓝队挑战、裁判判定', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '根因定位', agent: 'architect', task: '分析问题根本原因，定位关键代码' },
@@ -206,7 +228,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '修复实施', description: '蓝队修复、红队审查、裁判验收', isInitial: false, isFinal: false,
+        name: '修复实施', description: '红队修复、蓝队审查、裁判验收', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '编写修复', agent: 'developer', task: '实施修复方案' },
@@ -219,7 +241,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '回归验证', description: '蓝队测试、红队压测、裁判判定', isInitial: false, isFinal: false,
+        name: '回归验证', description: '红队测试、蓝队压测、裁判判定', isInitial: false, isFinal: false,
         position: { x: 1000, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '回归测试', agent: 'tester', task: '验证修复效果并进行回归测试' },
@@ -246,7 +268,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
     // 通用状态机：设计 → 实施 → 测试 → 完成
     states = [
       {
-        name: '设计', description: '蓝队设计、红队挑战、裁判评审', isInitial: true, isFinal: false,
+        name: '设计', description: '红队设计、蓝队挑战、裁判评审', isInitial: true, isFinal: false,
         position: { x: 100, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '方案设计', agent: 'architect', task: requirements || '根据需求设计技术方案' },
@@ -259,7 +281,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '实施', description: '蓝队编码、红队审查、裁判验收', isInitial: false, isFinal: false,
+        name: '实施', description: '红队编码、蓝队审查、裁判验收', isInitial: false, isFinal: false,
         position: { x: 400, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '编码实施', agent: 'developer', task: '根据设计方案进行编码实施' },
@@ -272,7 +294,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
         ],
       },
       {
-        name: '测试', description: '蓝队测试、红队攻击、裁判判定', isInitial: false, isFinal: false,
+        name: '测试', description: '红队测试、蓝队攻击、裁判判定', isInitial: false, isFinal: false,
         position: { x: 700, y: 200 }, maxSelfTransitions: 3,
         steps: [
           { name: '功能测试', agent: 'tester', task: '编写并执行测试用例' },
@@ -304,6 +326,7 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
       description: requirements,
       mode: 'state-machine' as const,
       maxTransitions: 30,
+      ...createDefaultWorkflowGovernance(),
       states,
     },
     context: {
@@ -325,10 +348,31 @@ function generateWorkflowFromRequirements(requirements: string, workflowName: st
   return generatePhaseBasedConfig(requirements, workflowName, workspaceMode);
 }
 
+function applyExperienceHintsToConfig(config: any, hints: string[]) {
+  if (!Array.isArray(hints) || hints.length === 0) return config;
+  const note = `参考历史经验：${hints.slice(0, 2).join('；')}`;
+
+  if (Array.isArray(config?.workflow?.phases)) {
+    const firstStep = config.workflow.phases[0]?.steps?.[0];
+    if (firstStep?.task && !String(firstStep.task).includes('参考历史经验')) {
+      firstStep.task = `${firstStep.task}\n${note}`;
+    }
+  }
+
+  if (Array.isArray(config?.workflow?.states)) {
+    const firstStep = config.workflow.states[0]?.steps?.[0];
+    if (firstStep?.task && !String(firstStep.task).includes('参考历史经验')) {
+      firstStep.task = `${firstStep.task}\n${note}`;
+    }
+  }
+
+  return config;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { requirements, workflowName, workspaceMode } = body;
+    const { requirements, workflowName, workspaceMode, workingDirectory } = body;
     const normalizedWorkspaceMode = workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place';
 
     if (!requirements || requirements.trim().length < 10) {
@@ -338,14 +382,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const relatedExperiences = await findRelevantWorkflowExperiences({
+      workflowName: String(workflowName || ''),
+      requirements: String(requirements || ''),
+      projectRoot: typeof workingDirectory === 'string' ? workingDirectory : undefined,
+      limit: 3,
+    }).catch(() => []);
+    const projectMemories = typeof workingDirectory === 'string' && workingDirectory.trim()
+      ? await listMemoryEntries({
+          scope: 'project',
+          key: workingDirectory.trim(),
+          limit: 3,
+        }).catch(() => [])
+      : [];
+
     // 生成工作流配置
-    const config = generateWorkflowFromRequirements(requirements, workflowName || 'AI生成工作流', normalizedWorkspaceMode);
+    const config = applyExperienceHintsToConfig(
+      generateWorkflowFromRequirements(requirements, workflowName || 'AI生成工作流', normalizedWorkspaceMode),
+      relatedExperiences.flatMap((item) => [...item.experience.slice(0, 1), ...item.nextFocus.slice(0, 1)]).filter(Boolean)
+    );
     const mode = 'mode' in config.workflow ? config.workflow.mode : 'phase-based';
 
     return NextResponse.json({
       success: true,
       config,
       mode,
+      experienceHints: relatedExperiences,
+      experienceSummary: [
+        buildWorkflowExperiencePromptBlock(relatedExperiences, '相关历史经验'),
+        buildMemoryPromptBlock('项目级共享记忆', projectMemories, { maxItems: 3 }),
+      ].filter(Boolean).join('\n\n'),
       message: mode === 'state-machine'
         ? '根据需求描述，已生成状态机工作流模板。你可以在设计页面进一步调整状态和转移。'
         : '已根据需求描述生成阶段工作流模板。你可以在设计页面进一步调整阶段和步骤。',

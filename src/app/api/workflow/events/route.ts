@@ -19,12 +19,11 @@ export async function GET(request: NextRequest) {
         'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
         'iteration', 'iteration-complete', 'escalation', 'token-usage',
         'feedback-injected', 'feedback-recalled', 'context-updated',
-        'plan-question', 'plan-round', 'route-decision',
-        'sdk-plan-question', 'sdk-plan-captured', 'sdk-plan-subtask',
-        'sdk-plan-review',
+        'route-decision',
         // State machine events forwarded with normalized type names
         'state-change', 'step-start', 'step-complete', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
+        'human-question-required', 'human-question-answered', 'human-question-updated',
         'agent-flow',
       ];
 
