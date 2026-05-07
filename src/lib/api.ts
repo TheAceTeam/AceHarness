@@ -31,9 +31,11 @@ interface ConfigListResponse {
     filename: string;
     name: string;
     description: string;
+    mode?: 'phase-based' | 'state-machine';
     phaseCount: number;
     stepCount: number;
     agentCount: number;
+    createdAt?: number;
   }[];
 }
 

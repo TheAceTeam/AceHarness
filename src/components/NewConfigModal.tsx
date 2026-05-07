@@ -81,6 +81,28 @@ function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: s
   return { persistMode, specRoot };
 }
 
+function normalizeNewConfigFormValues(
+  values: Partial<NewConfigForm>,
+  mode: 'phase-based' | 'state-machine' | 'ai-guided'
+) {
+  const { persistMode, specRoot } = normalizePersistSpecValues(values);
+  return {
+    ...values,
+    mode,
+    workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
+    persistMode,
+    specRoot,
+  };
+}
+
+function getReferenceWorkflowMode(mode: 'phase-based' | 'state-machine' | 'ai-guided') {
+  return mode === 'state-machine' || mode === 'ai-guided' ? 'state-machine' : 'phase-based';
+}
+
+function normalizeReferenceWorkflowMode(mode?: string) {
+  return mode === 'state-machine' ? 'state-machine' : 'phase-based';
+}
+
 type ModalAiMessage = { role: 'ai' | 'user' | 'thinking'; content: string };
 
 function mapPlanningChatMessages(messages: any[]): ModalAiMessage[] {
@@ -1509,13 +1531,21 @@ export default function NewConfigModal({
   const requirementsValue = watch('requirements');
   const persistModeValue = watch('persistMode') || 'none';
   const specRootValue = watch('specRoot') || '.spec';
+  const showReferenceWorkflowOptions = workflowMode === 'ai-guided' && !hideAiGuided;
+  const referenceWorkflowMode = getReferenceWorkflowMode(workflowMode);
+  const filteredReferenceWorkflows = useMemo(() => (
+    referenceWorkflows.filter((workflow) => normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode)
+  ), [referenceWorkflowMode, referenceWorkflows]);
   const effectiveReferenceWorkflowValue = useMemo(() => {
     if (referenceWorkflowValue) return referenceWorkflowValue;
-    if (creationRecommendations?.referenceWorkflow?.autoApply) {
+    if (
+      creationRecommendations?.referenceWorkflow?.autoApply
+      && normalizeReferenceWorkflowMode(creationRecommendations.referenceWorkflow.mode) === referenceWorkflowMode
+    ) {
       return creationRecommendations.referenceWorkflow.filename;
     }
     return '';
-  }, [creationRecommendations?.referenceWorkflow, referenceWorkflowValue]);
+  }, [creationRecommendations?.referenceWorkflow, referenceWorkflowMode, referenceWorkflowValue]);
   const recommendedAgents = creationRecommendations?.recommendedAgents || [];
   const recommendedSupervisorAgent = creationRecommendations?.recommendedSupervisorAgent || 'default-supervisor';
   const creationDialogClassName = creationFullscreen
@@ -1524,6 +1554,9 @@ export default function NewConfigModal({
   const planWorkspaceDialogClassName = planWorkspaceFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
     : 'flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[96vw] flex-col p-0';
+  const preventCreationDialogOutsideClose = useCallback((event: Event) => {
+    event.preventDefault();
+  }, []);
 
   const generateDefaultFilename = useCallback(() => {
     const now = new Date();
@@ -1572,6 +1605,12 @@ export default function NewConfigModal({
     localStorage.setItem(PERSIST_SPEC_MODE_STORAGE_KEY, persistModeValue === 'repository' ? 'repository' : 'none');
     localStorage.setItem(PERSIST_SPEC_ROOT_STORAGE_KEY, (specRootValue || '.spec').trim() || '.spec');
   }, [isOpen, persistModeValue, specRootValue]);
+
+  useEffect(() => {
+    if (!isOpen || showReferenceWorkflowOptions) return;
+    setValue('referenceWorkflow', '', { shouldDirty: false, shouldValidate: false });
+    setReferenceConfig(null);
+  }, [isOpen, setValue, showReferenceWorkflowOptions]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -1676,6 +1715,16 @@ export default function NewConfigModal({
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen || !referenceWorkflowValue) return;
+    const selectedWorkflow = referenceWorkflows.find((workflow) => workflow.filename === referenceWorkflowValue);
+    if (!selectedWorkflow) return;
+    if (normalizeReferenceWorkflowMode(selectedWorkflow.mode) !== referenceWorkflowMode) {
+      setValue('referenceWorkflow', '', { shouldDirty: true, shouldValidate: true });
+      setReferenceConfig(null);
+    }
+  }, [isOpen, referenceWorkflowMode, referenceWorkflowValue, referenceWorkflows, setValue]);
+
+  useEffect(() => {
     if (!isOpen || !effectiveReferenceWorkflowValue) {
       setReferenceConfig(null);
       return;
@@ -1725,6 +1774,7 @@ export default function NewConfigModal({
           requirements: requirementsValue || descriptionValue || '',
           workingDirectory: workingDirectoryValue || '',
           referenceWorkflow: referenceWorkflowValue || '',
+          workflowMode: referenceWorkflowMode,
         }),
       })
         .then((result) => {
@@ -1748,7 +1798,7 @@ export default function NewConfigModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [descriptionValue, isOpen, referenceWorkflowValue, requirementsValue, workflowNameValue, workingDirectoryValue]);
+  }, [descriptionValue, isOpen, referenceWorkflowMode, referenceWorkflowValue, requirementsValue, workflowNameValue, workingDirectoryValue]);
 
   useEffect(() => {
     if (restoringSessionRef.current) return;
@@ -3521,7 +3571,7 @@ ${confirmedSpecPrompt}
   // Handle "下一步": validate form then enter plan preview
   const handleNextStep = async () => {
     const draft = getValues();
-    const validation = newConfigFormSchema.safeParse({
+    const normalizedDraft = normalizeNewConfigFormValues({
       filename: draft.filename,
       workflowName: draft.workflowName,
       referenceWorkflow: draft.referenceWorkflow,
@@ -3531,15 +3581,15 @@ ${confirmedSpecPrompt}
       requirements: draft.requirements,
       persistMode: draft.persistMode,
       specRoot: draft.specRoot,
-      mode: workflowMode,
-    });
+    }, workflowMode);
+    const validation = newConfigFormSchema.safeParse(normalizedDraft);
     if (!validation.success) {
       applySchemaIssues(validation.error.issues as any);
       return;
     }
 
     try {
-      await validatePersistedSpecSelection(draft);
+      await validatePersistedSpecSelection(validation.data);
     } catch {
       return;
     }
@@ -3547,6 +3597,11 @@ ${confirmedSpecPrompt}
     const reqs = getValues('requirements') || '';
     if (reqs.trim().length < 5) {
       toast('error', '请提供需求描述（至少5个字符）');
+      return;
+    }
+
+    if (workflowMode !== 'ai-guided') {
+      await onSubmit(validation.data as NewConfigForm);
       return;
     }
 
@@ -3813,14 +3868,16 @@ ${confirmedSpecPrompt}
   const onSubmit = async (data: NewConfigForm) => {
     // AI-guided mode uses preview + AI flow, not direct submit
     if (workflowMode === 'ai-guided') return;
-    const validation = newConfigFormSchema.safeParse({ ...data, mode: workflowMode });
+    const normalizedData = normalizeNewConfigFormValues(data, workflowMode);
+    const validation = newConfigFormSchema.safeParse(normalizedData);
     if (!validation.success) {
       applySchemaIssues(validation.error.issues as any);
       return;
     }
+    const values = validation.data;
 
     try {
-      await validatePersistedSpecSelection(data);
+      await validatePersistedSpecSelection(values);
     } catch {
       return;
     }
@@ -3834,8 +3891,7 @@ ${confirmedSpecPrompt}
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          ...data,
-          mode: workflowMode,
+          ...values,
           frontendSessionId,
           creationSessionId: previewSession?.id,
         }),
@@ -3862,7 +3918,7 @@ ${confirmedSpecPrompt}
       }
       toast('success', result.message || '配置文件已创建');
       reset();
-      onSuccess(data.filename, { creationSession: result.creationSession });
+      onSuccess(values.filename, { creationSession: result.creationSession });
       onClose();
     } catch (error: any) {
       toast('error', '创建失败: ' + error.message);
@@ -4039,7 +4095,10 @@ ${confirmedSpecPrompt}
   if (formStep === 2) {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-        <DialogContent className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}>
+        <DialogContent
+          onInteractOutside={preventCreationDialogOutsideClose}
+          className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}
+        >
           <div className="px-6 pt-6">
             <CreationStageStepper currentStep={2} />
           </div>
@@ -4317,7 +4376,10 @@ ${confirmedSpecPrompt}
   if (formStep === 3) {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-        <DialogContent className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}>
+        <DialogContent
+          onInteractOutside={preventCreationDialogOutsideClose}
+          className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}
+        >
           <div className="px-6 pt-6">
             <CreationStageStepper currentStep={3} />
           </div>
@@ -4444,7 +4506,10 @@ ${confirmedSpecPrompt}
   if (formStep === 5 && workflowMode === 'ai-guided') {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-        <DialogContent className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}>
+        <DialogContent
+          onInteractOutside={preventCreationDialogOutsideClose}
+          className={`${creationDialogClassName} ${creationFullscreen ? '' : 'h-[80vh]'}`}
+        >
           <ComboboxPortalProvider>
           <div className="px-6 pt-6">
             <CreationStageStepper currentStep={4} />
@@ -4720,7 +4785,10 @@ ${confirmedSpecPrompt}
     return (
       <>
         <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-          <DialogContent className={creationDialogClassName}>
+          <DialogContent
+            onInteractOutside={preventCreationDialogOutsideClose}
+            className={creationDialogClassName}
+          >
             <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <Button type="button" variant="ghost" size="icon" onClick={() => setFormStep(1)} disabled={isRevisingPlan} title="返回修改需求">
@@ -4974,7 +5042,10 @@ ${confirmedSpecPrompt}
         </Dialog>
 
         <Dialog open={planWorkspaceOpen} onOpenChange={setPlanWorkspaceOpen}>
-          <DialogContent className={planWorkspaceDialogClassName}>
+          <DialogContent
+            onInteractOutside={preventCreationDialogOutsideClose}
+            className={planWorkspaceDialogClassName}
+          >
             <div className="flex items-center justify-between border-b p-6 pb-4 flex-shrink-0">
               <div>
                 <DialogTitle>正式计划工作台</DialogTitle>
@@ -5442,7 +5513,10 @@ ${confirmedSpecPrompt}
   // Step 1: Form view (all modes)
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className={creationDialogClassName}>
+      <DialogContent
+        onInteractOutside={preventCreationDialogOutsideClose}
+        className={creationDialogClassName}
+      >
         <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
           <DialogTitle>新建工作流配置</DialogTitle>
           <div className="flex items-center gap-2">
@@ -5463,11 +5537,15 @@ ${confirmedSpecPrompt}
           </div>
         </div>
         <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
-          <CreationStageStepper currentStep={1} />
+          {workflowMode === 'ai-guided' && !hideAiGuided ? (
+            <>
+              <CreationStageStepper currentStep={1} />
 
-          <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
-            当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
-          </div>
+              <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
+                当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
+              </div>
+            </>
+          ) : null}
 
           <input type="hidden" {...register('mode')} />
           <input type="hidden" {...register('referenceWorkflow')} />
@@ -5537,49 +5615,73 @@ ${confirmedSpecPrompt}
             )}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="referenceWorkflow">参考工作流（可选）</Label>
-            <Select
-              value={referenceWorkflowValue || '__none__'}
-              onValueChange={(value) => {
-                setValue('referenceWorkflow', value === '__none__' ? '' : value, { shouldDirty: true, shouldValidate: true });
-              }}
-            >
-              <SelectTrigger id="referenceWorkflow">
-                <SelectValue placeholder={referenceLoading ? '加载参考工作流中...' : '选择一个已有工作流作为结构参考'} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">不使用参考工作流</SelectItem>
-                {referenceWorkflows.map((workflow) => (
-                  <SelectItem key={workflow.filename} value={workflow.filename}>
-                    {workflow.name} ({workflow.filename})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {referenceConfigLoading ? (
-              <p className="text-xs text-muted-foreground">正在读取参考工作流结构...</p>
-            ) : effectiveReferenceWorkflowValue && referenceConfig ? (
-              <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                <div className="font-medium text-foreground">
-                  {referenceWorkflowValue ? '已选择参考工作流' : '系统自动采用参考工作流'}
+          {workflowMode !== 'ai-guided' ? (
+            <div className="space-y-2">
+              <Label htmlFor="requirements">
+                需求描述 <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                {...register('requirements')}
+                id="requirements"
+                placeholder="描述这个工作流要解决的问题、目标产物和验收标准..."
+                rows={5}
+                className={errors.requirements ? 'border-destructive' : ''}
+              />
+              {errors.requirements && (
+                <p className="text-sm text-destructive">{errors.requirements.message}</p>
+              )}
+            </div>
+          ) : null}
+
+          {showReferenceWorkflowOptions ? (
+            <div className="space-y-2">
+              <Label htmlFor="referenceWorkflow">参考工作流（可选）</Label>
+              <Select
+                value={referenceWorkflowValue || '__none__'}
+                onValueChange={(value) => {
+                  setValue('referenceWorkflow', value === '__none__' ? '' : value, { shouldDirty: true, shouldValidate: true });
+                }}
+              >
+                <SelectTrigger id="referenceWorkflow">
+                  <SelectValue placeholder={referenceLoading ? '加载参考工作流中...' : '选择一个同类型工作流作为结构参考'} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">不使用参考工作流</SelectItem>
+                  {filteredReferenceWorkflows.length === 0 && !referenceLoading ? (
+                    <SelectItem value="__empty__" disabled>
+                      暂无同类型参考工作流
+                    </SelectItem>
+                  ) : null}
+                  {filteredReferenceWorkflows.map((workflow) => (
+                    <SelectItem key={workflow.filename} value={workflow.filename}>
+                      {workflow.name} ({workflow.filename})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {referenceConfigLoading ? (
+                <p className="text-xs text-muted-foreground">正在读取参考工作流结构...</p>
+              ) : effectiveReferenceWorkflowValue && referenceConfig ? (
+                <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+                  <div className="font-medium text-foreground">
+                    {referenceWorkflowValue ? '已选择参考工作流' : '系统自动采用参考工作流'}
+                  </div>
+                  <div>文件：{effectiveReferenceWorkflowValue}</div>
+                  <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
+                  <div>
+                    说明：将继承它的结构和 Agent 选用，只更新需求与任务说明。
+                    {!referenceWorkflowValue && creationRecommendations?.referenceWorkflow?.source === 'recommended-experience'
+                      ? ' 当前未手动指定参考工作流，系统已按相关历史经验自动采用这份骨架。'
+                      : ''}
+                  </div>
                 </div>
-                <div>文件：{effectiveReferenceWorkflowValue}</div>
-                <div>模式：{referenceConfig.config?.workflow?.mode === 'state-machine' ? '状态机' : '阶段式'}</div>
-                <div>
-                  说明：将继承它的结构和 Agent 选用，只更新需求与任务说明。
-                  {!referenceWorkflowValue && creationRecommendations?.referenceWorkflow?.source === 'recommended-experience'
-                    ? ' 当前未手动指定参考工作流，系统已按相关历史经验自动采用这份骨架。'
-                    : ''}
-                </div>
-              </div>
-            ) : null}
-            <p className="text-xs text-muted-foreground">
-              选择后会优先沿用参考工作流的阶段/状态结构和 Agent 选用，替代原有的“复制工作流”模式。
-            </p>
-            {recommendationsLoading ? (
-              <p className="text-xs text-muted-foreground">正在整理经验库和编队推荐...</p>
-            ) : creationRecommendations ? (
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                只能选择同类型工作流；阶段式参考阶段式，状态机参考状态机。
+              </p>
+              {recommendationsLoading ? (
+                <p className="text-xs text-muted-foreground">正在整理经验库和编队推荐...</p>
+              ) : creationRecommendations ? (
               <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium">编排推荐</div>
@@ -5640,8 +5742,9 @@ ${confirmedSpecPrompt}
                   </div>
                 ) : null}
               </div>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="workingDirectory">
@@ -5651,6 +5754,7 @@ ${confirmedSpecPrompt}
               workspaceRoot="/"
               value={workingDirectoryValue || ''}
               onChange={(path) => setValue('workingDirectory', path, { shouldDirty: true, shouldValidate: true })}
+              autoSelectRootWhenEmpty
               className={errors.workingDirectory ? 'rounded-md border border-destructive p-1' : undefined}
             />
             {errors.workingDirectory && (
@@ -5773,7 +5877,9 @@ ${confirmedSpecPrompt}
             onClick={handleNextStep}
             disabled={isSubmitting || isGeneratingPlan}
           >
-            {isGeneratingPlan ? '生成计划中...' : '下一步'}
+            {workflowMode === 'ai-guided'
+              ? (isGeneratingPlan ? '生成计划中...' : '下一步')
+              : (isSubmitting ? '创建中...' : '创建')}
           </Button>
         </div>
       </DialogContent>

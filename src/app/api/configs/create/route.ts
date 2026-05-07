@@ -151,6 +151,16 @@ function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
+function getWorkflowMode(config: any): 'phase-based' | 'state-machine' {
+  if (config?.workflow?.mode === 'state-machine') return 'state-machine';
+  if (Array.isArray(config?.workflow?.states) && !Array.isArray(config?.workflow?.phases)) return 'state-machine';
+  return 'phase-based';
+}
+
+function getReferenceWorkflowMode(mode: string): 'phase-based' | 'state-machine' {
+  return mode === 'state-machine' || mode === 'ai-guided' ? 'state-machine' : 'phase-based';
+}
+
 function updatePhaseSteps(phases: any[], requirements?: string) {
   return (phases || []).map((phase: any, phaseIndex: number) => ({
     ...phase,
@@ -258,6 +268,19 @@ export async function POST(request: NextRequest) {
       const referencePath = resolve(await getRuntimeConfigsDirPath(), normalizeConfigFilename(referenceWorkflow));
       const referenceRaw = await readFile(referencePath, 'utf-8');
       const referenceConfig = parse(referenceRaw);
+      const referenceMode = getWorkflowMode(referenceConfig);
+      const expectedReferenceMode = getReferenceWorkflowMode(workflowMode);
+      if (referenceMode !== expectedReferenceMode) {
+        return NextResponse.json(
+          {
+            error: '参考工作流类型不匹配',
+            message: expectedReferenceMode === 'state-machine'
+              ? '状态机工作流只能参考状态机工作流'
+              : '阶段式工作流只能参考阶段式工作流',
+          },
+          { status: 400 }
+        );
+      }
       defaultConfig = createConfigFromReference(referenceConfig, {
         workflowName,
         workingDirectory,

@@ -17,6 +17,16 @@ function normalizeConfigFilename(filename: string): string {
   return normalized;
 }
 
+function getWorkflowMode(config: any): 'phase-based' | 'state-machine' {
+  if (config?.workflow?.mode === 'state-machine') return 'state-machine';
+  if (Array.isArray(config?.workflow?.states) && !Array.isArray(config?.workflow?.phases)) return 'state-machine';
+  return 'phase-based';
+}
+
+function normalizeRequestedWorkflowMode(mode?: string): 'phase-based' | 'state-machine' {
+  return mode === 'state-machine' || mode === 'ai-guided' ? 'state-machine' : 'phase-based';
+}
+
 async function loadReferenceWorkflowConfig(filename: string): Promise<any | null> {
   try {
     const referencePath = resolve(await getRuntimeConfigsDirPath(), normalizeConfigFilename(filename));
@@ -85,6 +95,7 @@ export async function POST(request: NextRequest) {
     const requirements = String(body?.requirements || '').trim();
     const workingDirectory = String(body?.workingDirectory || '').trim();
     const referenceWorkflow = String(body?.referenceWorkflow || '').trim();
+    const workflowMode = normalizeRequestedWorkflowMode(String(body?.workflowMode || '').trim());
 
     const explicitReferenceWorkflow = referenceWorkflow || undefined;
 
@@ -96,15 +107,26 @@ export async function POST(request: NextRequest) {
       limit: 4,
     }).catch(() => []);
 
-    const inferredReferenceWorkflow = explicitReferenceWorkflow
-      ? explicitReferenceWorkflow
-      : relatedExperiences
-          .map((entry) => entry.configFile)
-          .find((filename) => typeof filename === 'string' && filename.trim().length > 0);
-
-    const referenceConfig = inferredReferenceWorkflow
-      ? await loadReferenceWorkflowConfig(inferredReferenceWorkflow)
-      : null;
+    let inferredReferenceWorkflow: string | undefined;
+    let referenceConfig: any | null = null;
+    if (explicitReferenceWorkflow) {
+      const explicitConfig = await loadReferenceWorkflowConfig(explicitReferenceWorkflow);
+      if (explicitConfig && getWorkflowMode(explicitConfig) === workflowMode) {
+        inferredReferenceWorkflow = explicitReferenceWorkflow;
+        referenceConfig = explicitConfig;
+      }
+    } else {
+      for (const entry of relatedExperiences) {
+        const candidate = typeof entry.configFile === 'string' ? entry.configFile.trim() : '';
+        if (!candidate) continue;
+        const candidateConfig = await loadReferenceWorkflowConfig(candidate);
+        if (candidateConfig && getWorkflowMode(candidateConfig) === workflowMode) {
+          inferredReferenceWorkflow = candidate;
+          referenceConfig = candidateConfig;
+          break;
+        }
+      }
+    }
     const availableAgents = await listAvailableAgents();
 
     const referenceAgents = referenceConfig ? collectWorkflowAgents(referenceConfig).slice(0, 8) : [];
@@ -152,7 +174,7 @@ export async function POST(request: NextRequest) {
           filename: inferredReferenceWorkflow,
           name: referenceConfig?.workflow?.name,
           description: referenceConfig?.workflow?.description,
-          mode: referenceConfig?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based',
+          mode: getWorkflowMode(referenceConfig),
           agents: referenceAgents,
           supervisorAgent: collectReferenceSupervisorAgent(referenceConfig),
           source: explicitReferenceWorkflow ? 'manual' : 'recommended-experience',

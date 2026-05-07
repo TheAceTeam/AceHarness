@@ -96,6 +96,7 @@ export async function GET(request: NextRequest) {
           phaseCount,
           stepCount,
           agentCount,
+          createdAt: metaMap[file]?.createdAt || (await stat(filePath)).birthtimeMs,
         });
       } catch {
         // skip malformed or non-workflow yaml files

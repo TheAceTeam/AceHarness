@@ -10,6 +10,7 @@ interface WorkspaceDirectoryPickerProps {
   onChange: (path: string) => void;
   disabled?: boolean;
   className?: string;
+  autoSelectRootWhenEmpty?: boolean;
 }
 
 function normalizeSlashes(input: string): string {
@@ -130,6 +131,7 @@ export default function WorkspaceDirectoryPicker({
   onChange,
   disabled = false,
   className,
+  autoSelectRootWhenEmpty = false,
 }: WorkspaceDirectoryPickerProps) {
   const defaultRoot = useMemo(() => getDefaultRoot(workspaceRoot, value), [value, workspaceRoot]);
   const [currentRoot, setCurrentRoot] = useState(() => deriveRootFromValue(defaultRoot, value));
@@ -157,11 +159,15 @@ export default function WorkspaceDirectoryPicker({
     }
     if (!result.workspaceRoot) return;
     const normalized = normalizeRoot(result.workspaceRoot);
-    if (normalized && normalized !== currentRootRef.current) {
+    if (!normalized) return;
+    if (autoSelectRootWhenEmpty && !value) {
+      onChange(normalized);
+    }
+    if (normalized !== currentRootRef.current) {
       currentRootRef.current = normalized;
       setCurrentRoot(normalized);
     }
-  }, []);
+  }, [autoSelectRootWhenEmpty, onChange, value]);
 
   const loadRoot = useCallback(async (): Promise<TreeNode[]> => {
     const result = await workspaceApi.getTree(currentRootRef.current, 2);

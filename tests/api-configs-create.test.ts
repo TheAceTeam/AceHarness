@@ -146,6 +146,68 @@ describe('configs create route', () => {
     });
   });
 
+  test('rejects reference workflows with a different mode', async () => {
+    await withIsolatedAceHome(async () => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        vi.resetModules();
+        const { POST } = await import('@/app/api/configs/create/route');
+
+        const stateReference = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'state-reference.yaml',
+            workflowName: 'State Reference',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+          },
+        }));
+        expect(stateReference.status).toBe(200);
+
+        const phaseFromState = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'phase-from-state.yaml',
+            workflowName: 'Phase From State',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'phase-based',
+            referenceWorkflow: 'state-reference.yaml',
+          },
+        }));
+        expect(phaseFromState.status).toBe(400);
+        expect((await responseJson<any>(phaseFromState)).message).toContain('阶段式工作流只能参考阶段式工作流');
+
+        const phaseReference = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'phase-reference.yaml',
+            workflowName: 'Phase Reference',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'phase-based',
+          },
+        }));
+        expect(phaseReference.status).toBe(200);
+
+        const stateFromPhase = await POST(makeRequest('/api/configs/create', {
+          token,
+          json: {
+            filename: 'state-from-phase.yaml',
+            workflowName: 'State From Phase',
+            workingDirectory: workspace,
+            workspaceMode: 'in-place',
+            mode: 'state-machine',
+            referenceWorkflow: 'phase-reference.yaml',
+          },
+        }));
+        expect(stateFromPhase.status).toBe(400);
+        expect((await responseJson<any>(stateFromPhase)).message).toContain('状态机工作流只能参考状态机工作流');
+      });
+    });
+  });
+
   test('rejects unauthenticated requests', async () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();

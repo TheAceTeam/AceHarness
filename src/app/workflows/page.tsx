@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -20,7 +21,7 @@ import {
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useTranslations } from '@/hooks/useTranslations';
-import { Search, Plus, LogIn, Edit, Copy, Trash2, ArrowLeft, FileText, History } from 'lucide-react';
+import { Search, Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -45,7 +46,11 @@ interface WorkflowConfig {
   agentCount?: number;
   phases?: number;
   steps?: number;
+  createdAt?: number | string;
 }
+
+type WorkflowSortKey = 'name' | 'createdAt';
+type SortDirection = 'asc' | 'desc';
 
 const VIEW_MODE_KEY = 'aceharness:workflows:view-mode';
 
@@ -58,9 +63,10 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMode, setSelectedMode] = useState<string>('all');
+  const [sortKey, setSortKey] = useState<WorkflowSortKey>('createdAt');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [showNewModal, setShowNewModal] = useState(false);
   const [showAIGuide, setShowAIGuide] = useState(false);
-  const [referenceWorkflow, setReferenceWorkflow] = useState<string>('');
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(new Set());
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
@@ -182,11 +188,58 @@ export default function WorkflowsPage() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedWorkflows.size === filteredWorkflows.length) {
-      setSelectedWorkflows(new Set());
+    const allDisplayedSelected = displayedWorkflows.length > 0
+      && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
+    if (allDisplayedSelected) {
+      setSelectedWorkflows((prev) => {
+        const next = new Set(prev);
+        displayedWorkflows.forEach((workflow) => next.delete(workflow.filename));
+        return next;
+      });
     } else {
-      setSelectedWorkflows(new Set(filteredWorkflows.map((wf) => wf.filename)));
+      setSelectedWorkflows((prev) => {
+        const next = new Set(prev);
+        displayedWorkflows.forEach((workflow) => next.add(workflow.filename));
+        return next;
+      });
     }
+  };
+
+  const getWorkflowCreatedAtTime = (value?: number | string) => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+
+  const formatWorkflowCreatedAt = (value?: number | string) => {
+    const timestamp = getWorkflowCreatedAtTime(value);
+    if (!timestamp) return '-';
+    return new Date(timestamp).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const handleSort = (key: WorkflowSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((prev) => prev === 'asc' ? 'desc' : 'asc');
+      return;
+    }
+    setSortKey(key);
+    setSortDirection(key === 'createdAt' ? 'desc' : 'asc');
+  };
+
+  const SortIcon = ({ column }: { column: WorkflowSortKey }) => {
+    if (sortKey !== column) return <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />;
+    return sortDirection === 'asc'
+      ? <ArrowUp className="h-3.5 w-3.5 text-primary" />
+      : <ArrowDown className="h-3.5 w-3.5 text-primary" />;
   };
 
   const filteredWorkflows = workflows.filter((wf) => {
@@ -197,6 +250,22 @@ export default function WorkflowsPage() {
     const matchesMode = selectedMode === 'all' || wf.mode === selectedMode;
     return matchesSearch && matchesMode;
   });
+
+  const displayedWorkflows = useMemo(() => {
+    return [...filteredWorkflows].sort((a, b) => {
+      const direction = sortDirection === 'asc' ? 1 : -1;
+      if (sortKey === 'createdAt') {
+        const diff = getWorkflowCreatedAtTime(a.createdAt) - getWorkflowCreatedAtTime(b.createdAt);
+        if (diff !== 0) return diff * direction;
+        return a.name.localeCompare(b.name, 'zh-CN');
+      }
+      const diff = a.name.localeCompare(b.name, 'zh-CN');
+      if (diff !== 0) return diff * direction;
+      return a.filename.localeCompare(b.filename, 'zh-CN') * direction;
+    });
+  }, [filteredWorkflows, sortDirection, sortKey]);
+  const allDisplayedWorkflowsSelected = displayedWorkflows.length > 0
+    && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
 
   const modeLabel = (mode?: string) => mode === 'state-machine' ? '状态机' : '阶段模式';
   const modeBadgeClass = (mode?: string) =>
@@ -219,7 +288,7 @@ export default function WorkflowsPage() {
               <div className="h-6 w-px bg-border" />
               <div>
                 <h1 className="text-2xl font-bold">工作流管理</h1>
-                <p className="text-xs text-muted-foreground">管理和配置工作流</p>
+                <p className="text-xs text-muted-foreground">管理和配置工作流 · 代码生产黑灯车间</p>
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -262,23 +331,25 @@ export default function WorkflowsPage() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="h-11 w-full max-w-sm"
                   />
-                  <div className="flex flex-wrap gap-2">
-                    {(['all', 'state-machine', 'phase-based'] as const).map((mode) => (
-                      <Button
-                        key={mode}
-                        size="sm"
-                        variant={selectedMode === mode ? 'default' : 'outline'}
-                        className={cn(
-                          'rounded-full',
-                          selectedMode === mode && mode === 'state-machine' && 'bg-sky-500 text-white hover:bg-sky-400',
-                          selectedMode === mode && mode === 'phase-based' && 'bg-amber-500 text-white hover:bg-amber-400',
-                        )}
-                        onClick={() => setSelectedMode(mode)}
-                      >
-                        {mode === 'all' ? '全部' : mode === 'state-machine' ? '状态机' : '阶段模式'}
-                      </Button>
-                    ))}
-                  </div>
+                  {viewMode === 'gallery' ? (
+                    <div className="flex flex-wrap gap-2">
+                      {(['all', 'state-machine', 'phase-based'] as const).map((mode) => (
+                        <Button
+                          key={mode}
+                          size="sm"
+                          variant={selectedMode === mode ? 'default' : 'outline'}
+                          className={cn(
+                            'rounded-full',
+                            selectedMode === mode && mode === 'state-machine' && 'bg-sky-500 text-white hover:bg-sky-400',
+                            selectedMode === mode && mode === 'phase-based' && 'bg-amber-500 text-white hover:bg-amber-400',
+                          )}
+                          onClick={() => setSelectedMode(mode)}
+                        >
+                          {mode === 'all' ? '全部' : mode === 'state-machine' ? '状态机' : '阶段模式'}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -357,20 +428,57 @@ export default function WorkflowsPage() {
                 <TableRow>
                   <TableHead className="w-12">
                     <Checkbox
-                      checked={selectedWorkflows.size === filteredWorkflows.length && filteredWorkflows.length > 0}
+                      checked={allDisplayedWorkflowsSelected}
                       onCheckedChange={toggleSelectAll}
                     />
                   </TableHead>
-                  <TableHead>名称</TableHead>
+                  <TableHead className="min-w-[220px]">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="-ml-3 h-8 gap-1.5 px-2"
+                      onClick={() => handleSort('name')}
+                    >
+                      名称
+                      <SortIcon column="name" />
+                    </Button>
+                  </TableHead>
                   <TableHead>文件名</TableHead>
-                  <TableHead>模式</TableHead>
-                  <TableHead>阶段/状态</TableHead>
+                  <TableHead className="min-w-[132px] whitespace-nowrap">
+                    <div className="flex items-center gap-2">
+                      <span>模式</span>
+                      <Select value={selectedMode} onValueChange={setSelectedMode}>
+                        <SelectTrigger className="h-8 w-[96px] bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">全部</SelectItem>
+                          <SelectItem value="state-machine">状态机</SelectItem>
+                          <SelectItem value="phase-based">阶段模式</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </TableHead>
+                  <TableHead className="min-w-[72px] whitespace-normal leading-tight">阶段/状态</TableHead>
                   <TableHead>步骤</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead className="min-w-[160px] whitespace-nowrap">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="-ml-3 h-8 gap-1.5 px-2"
+                      onClick={() => handleSort('createdAt')}
+                    >
+                      创建时间
+                      <SortIcon column="createdAt" />
+                    </Button>
+                  </TableHead>
+                  <TableHead>操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredWorkflows.map((wf) => (
+                {displayedWorkflows.map((wf) => (
                   <TableRow key={wf.filename} data-state={selectedWorkflows.has(wf.filename) ? 'selected' : undefined}>
                     <TableCell>
                       <Checkbox
@@ -385,13 +493,16 @@ export default function WorkflowsPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground font-mono">{wf.filename}</TableCell>
-                    <TableCell>
-                      <Badge className={modeBadgeClass(wf.mode)}>{modeLabel(wf.mode)}</Badge>
+                    <TableCell className="min-w-[92px] whitespace-nowrap">
+                      <Badge className={cn('min-w-[72px] justify-center whitespace-nowrap', modeBadgeClass(wf.mode))}>{modeLabel(wf.mode)}</Badge>
                     </TableCell>
-                    <TableCell>{wf.phaseCount ?? 0}</TableCell>
+                    <TableCell className="min-w-[72px] whitespace-nowrap">{wf.phaseCount ?? 0}</TableCell>
                     <TableCell>{wf.stepCount ?? 0}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                      {formatWorkflowCreatedAt(wf.createdAt)}
+                    </TableCell>
                     <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex justify-start gap-2">
                         <Button size="sm" variant="outline" asChild>
                           <Link href={`/workbench/${encodeURIComponent(wf.filename)}`}>
                             <LogIn className="w-3 h-3 mr-1" />
@@ -402,13 +513,6 @@ export default function WorkflowsPage() {
                           <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
                             <Edit className="w-3 h-3" />
                           </Link>
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => { setReferenceWorkflow(wf.filename); setShowNewModal(true); }}
-                        >
-                          <Copy className="w-3 h-3" />
                         </Button>
                         <Button size="sm" variant="outline" onClick={() => handleDelete(wf.filename)}>
                           <Trash2 className="w-3 h-3" />
@@ -476,14 +580,6 @@ export default function WorkflowsPage() {
                         <Edit className="w-3 h-3" />
                       </Link>
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => { setReferenceWorkflow(workflow.filename); setShowNewModal(true); }}
-                      title="基于该工作流创建新的工作流"
-                    >
-                      <Copy className="w-3 h-3" />
-                    </Button>
                     <Button size="sm" variant="outline" onClick={() => handleDelete(workflow.filename)}>
                       <Trash2 className="w-3 h-3" />
                     </Button>
@@ -498,12 +594,10 @@ export default function WorkflowsPage() {
       {showNewModal && (
         <NewConfigModal
           isOpen={showNewModal}
-          onClose={() => { setShowNewModal(false); setReferenceWorkflow(''); }}
-          initialReferenceWorkflow={referenceWorkflow || undefined}
+          onClose={() => setShowNewModal(false)}
           hideAiGuided
           onSuccess={(filename) => {
             setShowNewModal(false);
-            setReferenceWorkflow('');
             loadWorkflows();
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }}
