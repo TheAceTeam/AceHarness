@@ -25,8 +25,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     return (model: ModelOption, engineId: string): boolean => {
       if (!model.engines || model.engines.length === 0) return true;
       if (model.engines.includes(engineId)) return true;
-      // nga 是 opencode 套壳：复用 opencode 的模型声明
-      if (engineId === 'nga' && model.engines.includes('opencode')) return true;
+      // nga / codegenie 与 OpenCode 内核兼容：复用 opencode 的模型声明
+      if ((engineId === 'nga' || engineId === 'codegenie') && model.engines.includes('opencode')) return true;
       return false;
     };
   }, []);

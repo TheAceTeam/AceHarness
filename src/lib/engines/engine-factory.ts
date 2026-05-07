@@ -16,8 +16,9 @@ import { CursorEngineWrapper } from './cursor-wrapper';
 import { ClaudeCodeEngineWrapper } from './claude-code-wrapper';
 import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
+import { CodegenieEngineWrapper } from './codegenie-wrapper';
 
-export type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'trae-cli';
+export type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli';
 
 interface EngineConfig {
   engine: EngineType;
@@ -154,6 +155,14 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       }
       return ngaEngine;
 
+    case 'codegenie':
+      const codegenieEngine = new CodegenieEngineWrapper();
+      if (!(await codegenieEngine.isAvailable())) {
+        console.warn('[EngineFactory] CodeGenie is not available, falling back to Claude Code');
+        return null;
+      }
+      return codegenieEngine;
+
     case 'trae-cli':
       const traeEngine = new TraeCliEngineWrapper();
       if (!(await traeEngine.isAvailable())) {
@@ -192,6 +201,10 @@ export async function isEngineAvailable(type: EngineType): Promise<boolean> {
     case 'nga':
       const ngaCheck = new NgaEngineWrapper();
       return await ngaCheck.isAvailable();
+
+    case 'codegenie':
+      const codegenieCheck = new CodegenieEngineWrapper();
+      return await codegenieCheck.isAvailable();
 
     case 'codex':
       const codexCheck = new CodexEngineWrapper();

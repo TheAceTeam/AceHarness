@@ -89,7 +89,7 @@ export default function SetupPage() {
       setLoadingModels(true);
       setError('');
       try {
-        if (['opencode', 'nga', 'kiro-cli', 'cursor', 'trae-cli'].includes(engine)) {
+        if (['opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor', 'trae-cli'].includes(engine)) {
           const res = await fetch(`/api/engine/models?engine=${encodeURIComponent(engine)}`);
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || '模型探测失败');

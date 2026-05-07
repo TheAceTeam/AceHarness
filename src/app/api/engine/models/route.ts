@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
     'kiro-cli': 'kiro-cli',
     'cursor': 'agent',
     'trae-cli': 'trae-cli',
+    'codegenie': 'codegenie',
   };
 
   const command = commandMap[engineType];

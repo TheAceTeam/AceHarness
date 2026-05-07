@@ -48,6 +48,7 @@ models:
       - claude-code
       - opencode
       - nga
+      - codegenie
       - kiro-cli
   - value: qwen3.5-plus
     label: Qwen 3.5 Plus
@@ -57,6 +58,7 @@ models:
     engines:
       - opencode
       - nga
+      - codegenie
   - value: kimi-k2.5
     label: Kimi K2.5
     costMultiplier: 0.02
@@ -67,6 +69,7 @@ models:
       - claude-code
       - opencode
       - nga
+      - codegenie
       - cursor
   - value: MiniMax-M2.7
     label: Minimax M2.7
@@ -78,6 +81,7 @@ models:
       - claude-code
       - opencode
       - nga
+      - codegenie
   - value: gpt-5.3-codex
     label: GPT-5.3 Codex
     costMultiplier: 0.05
@@ -87,6 +91,7 @@ models:
       - codex
       - opencode
       - nga
+      - codegenie
   - value: grok-4-20[thinking=true]
     label: Grok 4.20
     costMultiplier: 0.1
@@ -102,6 +107,7 @@ models:
     engines:
       - opencode
       - nga
+      - codegenie
   - value: deepseek-3.2
     label: deepseek-3.2
     costMultiplier: 0.1
@@ -262,6 +268,7 @@ models:
       - codex
       - opencode
       - nga
+      - codegenie
   - value: csi-provider/GLM-4.7
     label: csi.ai/GLM-4.7
     costMultiplier: 0.1
@@ -269,3 +276,37 @@ models:
     engines:
       - opencode
       - nga
+      - codegenie
+  - value: glm-5.1
+    label: GLM-5.1
+    costMultiplier: 0.02
+    endpoints:
+      - openai
+    engines:
+      - opencode
+      - nga
+      - codegenie
+  - value: big-pickle
+    label: Big Pickle
+    costMultiplier: 0.02
+    endpoints: []
+    engines:
+      - opencode
+      - nga
+      - codegenie
+  - value: MiniMax-M2.5-Free
+    label: MiniMax M2.5 Free
+    costMultiplier: 0.02
+    endpoints: []
+    engines:
+      - opencode
+      - nga
+      - codegenie
+  - value: Nemotron-3-Super-Free
+    label: Nemotron 3 Super Free
+    costMultiplier: 0.02
+    endpoints: []
+    engines:
+      - opencode
+      - nga
+      - codegenie

@@ -95,6 +95,14 @@ const engines: Engine[] = [
     endpoints: ['anthropic', 'openai'],
   },
   {
+    id: 'codegenie',
+    name: 'CodeGenie',
+    description: 'OpenCode 内核的 CodeGenie CLI，通过 `codegenie acp` 走 ACP stdio，与 OpenCode 参数一致',
+    status: 'available',
+    features: ['ACP 协议', 'OpenCode 内核', '流式输出', 'codegenie acp'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  {
     id: 'codex',
     name: 'Codex',
     description: 'OpenAI Codex 引擎，专注于代码生成和理解，基于 Codex SDK',
@@ -215,6 +223,7 @@ export default function EnginesPage() {
         'cangjie-magic': '请在环境变量中配置 CANGJIE_HOME、CANGJIE_MAGIC_PATH、OPENSSL_PATH、CANGJIE_STDX_PATH',
         'opencode': '安装方法：npm install -g opencode-ai',
         'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
+        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH（参见 CodeGenie 官方安装说明）',
         'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
       };
       const hint = hints[engineId] || '请确保已安装相应的命令行工具';

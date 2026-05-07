@@ -10,6 +10,7 @@ const ENGINE_CONFIG_DIRS: Record<string, string> = {
   'kiro-cli': '.kiro',
   'opencode': '.opencode',
   'nga': '.opencode',
+  'codegenie': '.opencode',
   'codex': '.codex',
   'cursor': '.cursor',
   'cangjie-magic': '.claude',

@@ -318,7 +318,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                 size="sm"
                 onClick={() => {
                   const usedEngines = Object.keys(formData.engineModels);
-                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codex', 'cursor', 'cangjie-magic', 'trae-cli'];
+                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codegenie', 'codex', 'cursor', 'cangjie-magic', 'trae-cli'];
                   const available = allEngines.find(e => !usedEngines.includes(e));
                   if (available === undefined) return;
                   const defaultModel = Object.values(formData.engineModels)[0] || '';

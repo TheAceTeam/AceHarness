@@ -33,8 +33,8 @@ export function ModelSelect({ value, onChange, className = '', engine }: ModelSe
     ? allModels.filter((m) => {
       if (!m.engines || m.engines.length === 0) return true;
       if (m.engines.includes(engine)) return true;
-      // nga 是 opencode 套壳：兼容 opencode 的模型配置
-      if (engine === 'nga' && m.engines.includes('opencode')) return true;
+      // nga / codegenie 与 OpenCode 内核兼容：可复用 opencode 的模型声明
+      if ((engine === 'nga' || engine === 'codegenie') && m.engines.includes('opencode')) return true;
       return false;
     })
     : allModels;

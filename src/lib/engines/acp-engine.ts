@@ -6,6 +6,7 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
+import { delimiter as pathDelimiter } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import {
@@ -28,9 +29,9 @@ import type {
 // ============================================================================
 
 export interface ACPEngineConfig {
-  /** Engine type: 'opencode', 'nga', 'kiro-cli', 'cursor', ... */
+  /** Engine type: 'opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor', ... */
   engineType: string;
-  /** Command to execute (e.g., 'opencode', 'nga', 'kiro-cli', 'cursor') */
+  /** Command to execute (e.g., 'opencode', 'nga', 'codegenie', 'kiro-cli', 'cursor') */
   command: string;
   /** Working directory */
   workingDirectory: string;
@@ -48,6 +49,48 @@ export interface ACPEngineConfig {
 
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
+
+/** Extra bin dirs for spawned CLI (POSIX servers); Windows uses native PATH only — wrong delimiter breaks child env. */
+function augmentPathForSpawn(existingPath: string | undefined): string {
+  const extra =
+    process.platform === 'win32' ? [] : ['/root/.local/bin', '/usr/local/bin'];
+  return [existingPath || '', ...extra].filter(Boolean).join(pathDelimiter);
+}
+
+/** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
+function escapeWinCmdToken(s: string): string {
+  if (s === '') return '""';
+  if (/[\s"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/**
+ * Spawn ACP CLI. On Windows, plain `spawn('codegenie', …)` often fails to resolve npm `.cmd` shims;
+ * use `shell: true` so `codegenie.cmd` / PATH behave like an interactive terminal.
+ */
+function spawnAcpCli(
+  engineType: string,
+  command: string,
+  argv: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv },
+): ChildProcess {
+  if (process.platform !== 'win32') {
+    return spawn(command, argv, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  }
+  const line = [command, ...argv].map(escapeWinCmdToken).join(' ');
+  console.log(`[${engineType}] win32 shell spawn (cmd): ${line}`);
+  return spawn(line, {
+    shell: true,
+    windowsHide: true,
+    cwd: opts.cwd,
+    env: opts.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+}
 // ============================================================================
 // Unified ACP Engine
 // ============================================================================
@@ -71,14 +114,15 @@ export class ACPEngine extends EventEmitter {
     const args = this.buildCommandArgs();
     console.log(`[${this.config.engineType}] spawning: ${this.config.command} ${args.join(' ')}`);
 
-    this.process = spawn(this.config.command, args, {
+    const childEnv = {
+      ...process.env,
+      PATH: augmentPathForSpawn(process.env.PATH),
+      ...this.config.env,
+    };
+
+    this.process = spawnAcpCli(this.config.engineType, this.config.command, args, {
       cwd: this.config.workingDirectory,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: `${process.env.PATH}:/root/.local/bin:/usr/local/bin`,
-        ...this.config.env,
-      },
+      env: childEnv,
     });
 
     if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
@@ -93,6 +137,11 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('exit', (code, signal) => {
+      if (code !== 0 || signal) {
+        console.warn(
+          `[${this.config.engineType}] child exited early code=${code} signal=${signal}; stderr tail: ${this.lastStderrChunk?.slice(0, 500) || '<empty>'}`
+        );
+      }
       this.emit('exit', { code, signal });
       this.cleanup(`${this.config.engineType} process exited (code=${code}, signal=${signal})`);
     });
@@ -107,41 +156,60 @@ export class ACPEngine extends EventEmitter {
     const stream = ndJsonStream(output, input);
 
     const engine = this; // capture for closure
+    // SDK calls notification/request handlers without awaiting the inner Promise in all paths;
+    // any rejection becomes process unhandledRejection — handlers must never throw.
     this.connection = new ClientSideConnection((_agent: Agent): Client => ({
       async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
-        // Auto-approve: pick first option (usually 'allow-always')
-        const optionId = params.options[0]?.optionId ?? 'always';
-        engine.emit('permission', params);
-        return { outcome: { outcome: 'selected', optionId } };
+        try {
+          const optionId = params.options[0]?.optionId ?? 'always';
+          engine.emit('permission', params);
+          return { outcome: { outcome: 'selected', optionId } };
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] requestPermission error`, e);
+          return { outcome: { outcome: 'selected', optionId: 'always' } };
+        }
       },
 
       async sessionUpdate(params: SessionNotification): Promise<void> {
-        engine.handleSessionUpdate(params.update);
+        try {
+          engine.handleSessionUpdate(params.update);
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] sessionUpdate error`, e);
+        }
       },
 
       // Cursor extensions
       async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
-        switch (method) {
-          case 'cursor/ask_question':
-          case 'cursor/create_plan':
-          case 'cursor/update_todos':
-            engine.emit('cursor-ext', { method, params });
-            return {};
-          case 'cursor/task':
-            engine.emit('subtask', params);
-            return {};
-          case 'cursor/generate_image':
-            return {};
-          default:
-            console.log(`[${engine.config.engineType}] unhandled extMethod: ${method}`);
-            return {};
+        try {
+          switch (method) {
+            case 'cursor/ask_question':
+            case 'cursor/create_plan':
+            case 'cursor/update_todos':
+              engine.emit('cursor-ext', { method, params });
+              return {};
+            case 'cursor/task':
+              engine.emit('subtask', params);
+              return {};
+            case 'cursor/generate_image':
+              return {};
+            default:
+              console.log(`[${engine.config.engineType}] unhandled extMethod: ${method}`);
+              return {};
+          }
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] extMethod error`, method, e);
+          return {};
         }
       },
 
       // Kiro extensions
       async extNotification(method: string, params: Record<string, unknown>): Promise<void> {
-        if (method.startsWith('_kiro.dev/')) {
-          engine.emit('kiro-ext', { method, params });
+        try {
+          if (method.startsWith('_kiro.dev/')) {
+            engine.emit('kiro-ext', { method, params });
+          }
+        } catch (e) {
+          console.error(`[${engine.config.engineType}] extNotification error`, method, e);
         }
       },
     }), stream);
@@ -158,6 +226,10 @@ export class ACPEngine extends EventEmitter {
     const args: string[] = [];
     switch (this.config.engineType) {
       case 'opencode':
+        args.push('acp', '--cwd', this.config.workingDirectory);
+        break;
+      case 'codegenie':
+        // OpenCode-kernel CLI: same ACP argv as opencode
         args.push('acp', '--cwd', this.config.workingDirectory);
         break;
       case 'nga':

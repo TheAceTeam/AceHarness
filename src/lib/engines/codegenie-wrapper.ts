@@ -1,7 +1,7 @@
 /**
- * NGA / ngagent Engine Wrapper
+ * CodeGenie Engine Wrapper
  *
- * OpenCode-compatible CLI (`nga`): ACP 启动参数与 opencode 一致，进程级默认附带 `--disable-update`（见 acp-engine buildCommandArgs）。
+ * OpenCode-kernel CLI: `codegenie acp --cwd <dir>` for ACP stdio (same argv shape as opencode).
  */
 
 import { commandExists } from '../command-exists';
@@ -9,21 +9,15 @@ import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 
-export class NgaEngineWrapper extends ACPWrapperBase {
-  private resolveCommand(): string {
-    if (commandExists('ngagent')) return 'ngagent';
-    return 'nga';
-  }
-
+export class CodegenieEngineWrapper extends ACPWrapperBase {
   getName(): string {
-    return 'nga';
+    return 'codegenie';
   }
 
   protected getACPConfig(options: EngineOptions): ACPEngineConfig {
-    const command = this.resolveCommand();
     return {
-      engineType: 'nga',
-      command,
+      engineType: 'codegenie',
+      command: 'codegenie',
       workingDirectory: options.workingDirectory,
       agentName: options.agent,
       model: options.model,
@@ -32,6 +26,6 @@ export class NgaEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('ngagent') || commandExists('nga');
+    return commandExists('codegenie');
   }
 }

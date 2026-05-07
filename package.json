@@ -10,6 +10,7 @@
     "start": "NODE_ENV=production node server.js",
     "lint": "next lint",
     "ace": "node ./bin/ace.js",
+    "check:engines": "node ./scripts/check-engine-availability.mjs",
     "prepare": "node scripts/build-cli.js",
     "prepack": "npm run build",
     "publish:npm": "npm run build && npm publish",
