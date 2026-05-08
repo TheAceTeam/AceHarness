@@ -30,7 +30,21 @@ function getExecutableCandidates(command: string): string[] {
     .map((ext) => ext.trim())
     .filter(Boolean);
 
-  return [command, ...pathext.map((ext) => `${command}${ext}`)];
+  return [...pathext.map((ext) => `${command}${ext}`), command];
+}
+
+function pickPreferredWindowsCommand(candidates: string[]): string | null {
+  if (candidates.length === 0) return null;
+  const rank = (filePath: string): number => {
+    const p = filePath.toLowerCase();
+    if (p.endsWith('.cmd')) return 0;
+    if (p.endsWith('.exe')) return 1;
+    if (p.endsWith('.bat')) return 2;
+    if (p.endsWith('.com')) return 3;
+    return 9;
+  };
+  const sorted = [...candidates].sort((a, b) => rank(a) - rank(b));
+  return sorted[0] || null;
 }
 
 export function getCommonCliSearchPaths(): string[] {
@@ -65,8 +79,9 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
         stdio: ['ignore', 'pipe', 'ignore'],
         shell: process.env.ComSpec,
       }).trim();
-      const first = output.split(/\r?\n/).find(Boolean);
-      if (first) return first;
+      const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      const preferred = pickPreferredWindowsCommand(lines);
+      if (preferred) return preferred;
     } catch {
       /* fall through to PATH scanning */
     }
