@@ -190,7 +190,9 @@ function buildWorkflowDraftRepairMessage(previousOutput: string, validation: any
     '5. config 必须是完整 AceHarness workflow 配置对象，包含 workflow 和 context。',
     '6. workflow.supervisor.agent 以及所有 step.agent 必须引用当前可用 Agent。',
     '7. context.projectRoot 必须是用户提供的绝对工作目录。',
-    '8. 输出 </result> 后不要再追加任何文字。',
+    '8. AI-guided 创建阶段必须为每个 workflow step 显式提供 specTaskBinding.taskIds；taskIds 必须来自已确认 SpecCoding 的结构化 tasks，不要编造 ID，也不要依赖系统自动推断。',
+    '9. 每个 step 建议提供稳定 id；specTaskBinding 可同时包含 requirementIds 和 artifactKeys，其中 artifactKeys 可从 requirements/design/tasks 中选择。',
+    '10. 输出 </result> 后不要再追加任何文字。',
     '',
     '内建校验结果：',
     formatValidationIssuesForPrompt(validation),
@@ -3066,6 +3068,7 @@ ${JSON.stringify({
   phases: specCoding.phases || [],
   assignments: specCoding.assignments || [],
   checkpoints: specCoding.checkpoints || [],
+  tasks: specCoding.tasks || [],
   workflowDraftSummary: workflowDraftSummary || null,
 }, null, 2)}
 \`\`\`
@@ -3105,12 +3108,14 @@ ${confirmedSpecPrompt}
 2. 直接读取上面的已确认 SpecCoding、tasks、design、阶段/分工投影和参考工作流，生成 workflow YAML 草案。
 3. 草案必须明确 workflow mode、context、supervisor、roles、phases/states、steps、agent 分配、checkpoint 和必要的 preCommands。
 4. 如果引用 Agent，请优先使用已确认 SpecCoding assignments、推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
-5. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
-6. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
-7. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 \`\`\`json 代码块。
-8. JSON 顶层必须是 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}}，config 必须是完整 AceHarness workflow 配置对象。
-9. 输出 </result> 后不要再追加任何文字。
-10. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
+5. 每个 workflow step 必须提供稳定 id，并显式设置 specTaskBinding。specTaskBinding.taskIds 必须直接引用上方 SpecCoding.tasks 中已有的叶子 task id；一个 step 可绑定多个 taskIds，但不能编造新的 task id。
+6. specTaskBinding.requirementIds 应引用该 step 覆盖的需求编号；specTaskBinding.artifactKeys 用 requirements/design/tasks 标识该 step 主要依赖或产出的制品。
+7. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
+8. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
+9. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 \`\`\`json 代码块。
+10. JSON 顶层必须是 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}}，config 必须是完整 AceHarness workflow 配置对象。
+11. 输出 </result> 后不要再追加任何文字。
+12. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
 
 请现在直接开始生成 workflow YAML 草案。系统会校验 <result> 内的 config；如有问题，系统会把校验错误直接反馈给你继续修正。`;
 
@@ -3786,7 +3791,21 @@ ${confirmedSpecPrompt}
           toast('success', '系统已确认配置文件存在且校验通过');
           return true;
         }
-        throw new Error(message);
+        const bindingErrors = Array.isArray(result?.bindingValidation?.errors)
+          ? result.bindingValidation.errors
+          : [];
+        throw Object.assign(new Error(message), {
+          validation: bindingErrors.length > 0
+            ? {
+                ok: false,
+                issues: bindingErrors.map((bindingError: string) => ({
+                  severity: 'error',
+                  path: ['workflow', 'steps', 'specTaskBinding'],
+                  message: bindingError,
+                })),
+              }
+            : undefined,
+        });
       }
 
       const createdFilename = result?.filename || filename;
@@ -3817,7 +3836,7 @@ ${confirmedSpecPrompt}
       // 将错误自动发回 AI 进行修复，而不是只显示 toast
       const repairPrompt = buildWorkflowDraftRepairMessage(
         JSON.stringify(workflowDraftConfig, null, 2),
-        { ok: false, message: errorMsg },
+        error?.validation || { ok: false, message: errorMsg },
         filename
       );
       setWorkflowDraftConfig(null);

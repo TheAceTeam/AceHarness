@@ -326,14 +326,6 @@ export async function POST(request: NextRequest) {
     }
     defaultConfig = configValidation.normalized;
 
-    const yamlContent = stringify(defaultConfig);
-    await writeFile(filepath, yamlContent, 'utf-8');
-    await setConfigMeta(filename, {
-      createdBy: auth.id,
-      visibility: 'private',
-      createdAt: Date.now(),
-    }, 'workflow');
-
     // Determine the generated mode for the response message
     const generatedMode = defaultConfig?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
     let message = '配置文件已创建';
@@ -403,9 +395,29 @@ export async function POST(request: NextRequest) {
     if (!creationSession) {
       throw new Error('创建态会话生成失败');
     }
-    const bindingCompilation = compileStepTaskBindings(defaultConfig, creationSession.specCoding);
+    const bindingCompilation = compileStepTaskBindings(defaultConfig, creationSession.specCoding, {
+      requireExplicit: Boolean(configDraft && workflowMode === 'ai-guided'),
+    });
+    if (!bindingCompilation.validation.ok) {
+      await updateCreationSession(creationSession.id, {
+        bindingValidation: bindingCompilation.validation as any,
+      });
+      return NextResponse.json(
+        {
+          error: 'Spec task 绑定校验失败',
+          message: 'AI 生成的 workflow_draft 必须为每个 step 显式提供有效的 specTaskBinding.taskIds',
+          bindingValidation: bindingCompilation.validation,
+        },
+        { status: 400 }
+      );
+    }
     defaultConfig = bindingCompilation.config;
     await writeFile(filepath, stringify(defaultConfig), 'utf-8');
+    await setConfigMeta(filename, {
+      createdBy: auth.id,
+      visibility: 'private',
+      createdAt: Date.now(),
+    }, 'workflow');
     creationSession = await updateCreationSession(creationSession.id, {
       bindingValidation: bindingCompilation.validation as any,
     }) || creationSession;

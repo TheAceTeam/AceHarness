@@ -50,6 +50,15 @@ export interface StepTaskBindingValidation {
   checkedAt: string;
 }
 
+export interface CompileStepTaskBindingOptions {
+  /**
+   * When true, every workflow step must provide a valid specTaskBinding in the
+   * input config. The compiler may still populate fallback bindings for preview,
+   * but validation will fail so the creator can ask the draft author to repair it.
+   */
+  requireExplicit?: boolean;
+}
+
 export function getSpecTaskBindingIds(binding?: SpecTaskBinding | null): string[] {
   if (!binding) return [];
   const ids = [
@@ -173,6 +182,7 @@ function chooseAutoBinding(
 export function compileStepTaskBindings(
   config: UnifiedWorkflowConfig | Record<string, any>,
   specCoding?: SpecCodingDocument | null,
+  options: CompileStepTaskBindingOptions = {},
 ): { config: any; validation: StepTaskBindingValidation } {
   const cloned = JSON.parse(JSON.stringify(config || {}));
   const refs = getWorkflowStepRefs(cloned);
@@ -196,7 +206,9 @@ export function compileStepTaskBindings(
     const invalidExistingIds = existingIds.filter((id) => !validTaskIds.has(id));
     if (invalidExistingIds.length > 0) {
       invalidTaskIds.push(...invalidExistingIds);
-      warnings.push(`${ref.stepKey} 绑定了不存在的 tasks.md taskId: ${invalidExistingIds.join(', ')}`);
+      const message = `${ref.stepKey} 绑定了不存在的 tasks.md taskId: ${invalidExistingIds.join(', ')}`;
+      if (options.requireExplicit) errors.push(message);
+      else warnings.push(message);
     }
 
     const chosen = validExistingIds.length > 0
@@ -206,6 +218,9 @@ export function compileStepTaskBindings(
     if (chosen.taskIds.length === 0) {
       unboundStepKeys.push(ref.stepKey);
       errors.push(`${ref.stepKey} 没有可绑定的 tasks.md 任务`);
+    } else if (options.requireExplicit && validExistingIds.length === 0) {
+      unboundStepKeys.push(ref.stepKey);
+      errors.push(`${ref.stepKey} 必须在 workflow_draft.config 中显式提供 specTaskBinding.taskIds，不能依赖系统自动推断`);
     } else if (chosen.source !== 'explicit') {
       warnings.push(`${ref.stepKey} 已由系统自动绑定 tasks.md taskId: ${chosen.taskIds.join(', ')}`);
     }
