@@ -75,6 +75,7 @@ ACP 全链路联通性诊断
   --cwd          工作目录（默认: 当前目录）
   --command, --binary
                  可执行文件路径（覆盖 PATH，用于测试某目录下的 agent 二进制）
+                 与 --engine nga 联用时，不再自动加 --disable-update，与 opencode 相同: acp --cwd
   --model        指定模型（不传则跳过 setModel 阶段）
   --prompt       最小测试提示词（默认: ping）
   --timeout-ms   每阶段超时（默认: 30000）
@@ -160,12 +161,18 @@ function resolveEngineCommand(engine) {
   return engine;
 }
 
-function buildArgs(engine, cwd) {
+/**
+ * @param {boolean} [explicitBinary] 为 true 时，nga 不附加 --disable-update（自定义路径下的二进制往往与官方 nga 参数集不一致）
+ */
+function buildArgs(engine, cwd, explicitBinary = false) {
   switch (engine) {
     case 'opencode':
     case 'codegenie':
       return ['acp', '--cwd', cwd];
     case 'nga':
+      if (explicitBinary) {
+        return ['acp', '--cwd', cwd];
+      }
       return ['--disable-update', 'acp', '--cwd', cwd];
     case 'kiro-cli':
       return ['acp'];
@@ -296,7 +303,7 @@ async function run() {
   }
   const explicitBinary = (opts.commandPath || '').trim();
   const command = explicitBinary || resolveEngineCommand(engine);
-  const argv = buildArgs(engine, opts.cwd);
+  const argv = buildArgs(engine, opts.cwd, Boolean(explicitBinary));
 
   const report = {
     ok: false,
