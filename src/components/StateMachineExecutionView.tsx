@@ -437,7 +437,7 @@ export default function StateMachineExecutionView({
           </TabsTrigger>
           <TabsTrigger value="history" className="flex items-center gap-2">
             <GitBranch className="w-4 h-4" />
-            <span>{'\u6d41\u8f6c\u5386\u53f2'}</span>
+            <span>流转历史</span>
           </TabsTrigger>
           <TabsTrigger value="supervisor" className={`flex items-center gap-2 ${hasPendingHumanQuestion ? 'text-orange-500 animate-pulse' : ''}`}>
             <MessageSquare className="w-4 h-4" />
@@ -557,17 +557,17 @@ export default function StateMachineExecutionView({
           <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h3 className="font-semibold">{'\u6d41\u8f6c\u5386\u53f2'}</h3>
+                <h3 className="font-semibold">流转历史</h3>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {'Supervisor \u51b3\u7b56\u3001Agent \u534f\u4f5c\u3001\u4eba\u5de5\u4ea4\u4e92\u4e0e\u5e76\u53d1/\u8def\u7531\u4e8b\u4ef6\u7684\u5b8c\u6574\u94fe\u8def\u3002'}
+                  Supervisor 决策、Agent 协作、人工交互与并发/路由事件的完整链路。
                 </p>
               </div>
-              <Badge variant="outline" className="text-[10px]">{filteredFlowHistory.length}/{flowHistory.length} {'\u6761'}</Badge>
+              <Badge variant="outline" className="text-[10px]">{filteredFlowHistory.length}/{flowHistory.length} 条</Badge>
             </div>
 
             <div className="mb-4 flex flex-wrap gap-1.5">
               {(['all', 'supervisor', 'agent', 'state', 'concurrency'] as const).map((kind) => {
-                const labels: Record<string, string> = { all: '\u5168\u90e8', supervisor: 'Supervisor', agent: 'Agent', state: '\u72b6\u6001\u673a', concurrency: '\u5e76\u53d1' };
+                const labels: Record<string, string> = { all: '全部', supervisor: 'Supervisor', agent: 'Agent', state: '状态机', concurrency: '并发' };
                 return (
                   <button
                     key={kind}
@@ -587,7 +587,7 @@ export default function StateMachineExecutionView({
 
             <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
               <div className="rounded-2xl border bg-muted/20 p-3">
-                <div className="mb-3 text-xs font-medium text-muted-foreground">{'\u53c2\u4e0e\u8005\u6d41'}</div>
+                <div className="mb-3 text-xs font-medium text-muted-foreground">参与者流程</div>
                 {flowRoutes.length ? (
                   <div className="space-y-2">
                     {flowRoutes.map((route) => (
@@ -609,7 +609,7 @@ export default function StateMachineExecutionView({
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">
-                    {'\u53c2\u4e0e\u8005\u6d41'}???
+                    暂无参与者流程数据
                   </div>
                 )}
               </div>
@@ -635,7 +635,7 @@ export default function StateMachineExecutionView({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <Badge variant="outline" className="text-[10px]">
-                          {item.kind === 'supervisor' ? 'Supervisor' : item.kind === 'agent' ? 'Agent' : item.kind === 'concurrency' ? '\u5e76\u53d1' : '\u72b6\u6001\u673a'}
+                          {item.kind === 'supervisor' ? 'Supervisor' : item.kind === 'agent' ? 'Agent' : item.kind === 'concurrency' ? '并发' : '状态机'}
                         </Badge>
                         <span className="truncate text-sm font-medium">{item.title}</span>
                         <span className="text-xs text-muted-foreground">{item.actor} {'->'} {item.target}</span>
@@ -664,7 +664,7 @@ export default function StateMachineExecutionView({
                   </div>
                 )) : (
                   <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                    {'\u53c2\u4e0e\u8005\u6d41'}???
+                    暂无参与者流程数据
                   </div>
                 )}
               </div>
