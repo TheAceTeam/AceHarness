@@ -32,6 +32,8 @@ function parseArgs(argv) {
     model: '',
     /** 可执行文件绝对/相对路径（覆盖 PATH 解析） */
     commandPath: '',
+    /** 仅注入子进程（ACP CLI）的 LD_LIBRARY_PATH，勿用于污染 Node 本身 */
+    ldLibraryPath: '',
     prompt: 'ping',
     timeoutMs: 30000,
     json: false,
@@ -42,6 +44,8 @@ function parseArgs(argv) {
       options.engine = argv[++i];
     } else if ((a === '--command' || a === '--binary') && argv[i + 1]) {
       options.commandPath = argv[++i];
+    } else if ((a === '--ld-library-path' || a === '--ld-path') && argv[i + 1]) {
+      options.ldLibraryPath = argv[++i];
     } else if (a === '--cwd' && argv[i + 1]) {
       options.cwd = argv[++i];
     } else if (a === '--model' && argv[i + 1]) {
@@ -76,6 +80,9 @@ ACP 全链路联通性诊断
   --command, --binary
                  可执行文件路径（覆盖 PATH，用于测试某目录下的 agent 二进制）
                  与 --engine nga 联用时，不再自动加 --disable-update，与 opencode 相同: acp --cwd
+  --ld-library-path, --ld-path
+                 (Unix) 仅写给子进程 CLI 的 LD_LIBRARY_PATH（前置拼接）；勿在 npm/node 前 export 整个 LD_LIBRARY_PATH，
+                 否则会拖垮 Node。也可用环境变量 ACEH_ACP_LD_LIBRARY_PATH（同样只作用于子进程）。
   --model        指定模型（不传则跳过 setModel 阶段）
   --prompt       最小测试提示词（默认: ping）
   --timeout-ms   每阶段超时（默认: 30000）
@@ -85,7 +92,14 @@ ACP 全链路联通性诊断
   node scripts/check-acp-connectivity.mjs --engine codegenie --model codegenie/glm-4.7
   node scripts/check-acp-connectivity.mjs --engine nga --cwd /tmp/ws --timeout-ms 45000
   node scripts/check-acp-connectivity.mjs --engine cursor --command /opt/sdk/agent
+  node scripts/check-acp-connectivity.mjs --engine nga --command ./bin/codeagent --ld-library-path ~/OCHOME/bun-musl-dir/musl-lib
 `);
+}
+
+/** 仅子进程：前置 extra，再接现有 LD_LIBRARY_PATH（使用 OS 路径分隔符，Unix 上即冒号） */
+function mergeChildLdLibraryPath(extra, inherited) {
+  const parts = [extra?.trim(), inherited].filter(Boolean);
+  return parts.join(pathDelimiter);
 }
 
 function defaultWindowsScanDirs() {
@@ -312,6 +326,8 @@ async function run() {
     commandOverride: explicitBinary || null,
     argv,
     cwd: opts.cwd,
+    /** 实际注入子进程的 LD_LIBRARY_PATH 前缀（Unix）；勿给 Node 进程设置同名全局变量 */
+    childLdLibraryPathPrefix: null,
     phases: [],
     availableModels: [],
     modelRequested: opts.model || null,
@@ -355,10 +371,18 @@ async function run() {
     }
     pushPhase('preflight', 'ok', { commandFound: true, explicitBinary: Boolean(explicitBinary) });
 
+    const ldFromCli = (opts.ldLibraryPath || '').trim();
+    const ldFromEnv = (process.env.ACEH_ACP_LD_LIBRARY_PATH || '').trim();
+    const ldExtra = ldFromCli || ldFromEnv;
+    report.childLdLibraryPathPrefix = !isWin && ldExtra ? ldExtra : null;
+
     const childEnv = {
       ...process.env,
       PATH: augmentPathForSpawn(process.env.PATH),
     };
+    if (!isWin && ldExtra) {
+      childEnv.LD_LIBRARY_PATH = mergeChildLdLibraryPath(ldExtra, process.env.LD_LIBRARY_PATH);
+    }
 
     child = spawnAcp(engine, command, argv, opts.cwd, childEnv);
     if (!child.stdin || !child.stdout || !child.stderr) {
@@ -525,6 +549,9 @@ async function run() {
     if (report.commandOverride) console.log(`  (由 --command/--binary 指定，不经 PATH 解析)`);
     console.log(`argv: ${report.argv.join(' ')}`);
     console.log(`cwd: ${report.cwd}`);
+    if (report.childLdLibraryPathPrefix) {
+      console.log(`子进程 LD_LIBRARY_PATH 前缀: ${report.childLdLibraryPathPrefix}`);
+    }
     for (const p of report.phases) {
       console.log(`- [${p.status}] ${p.phase}`);
       if (p.message) console.log(`    message: ${p.message}`);
