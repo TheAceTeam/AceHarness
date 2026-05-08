@@ -338,6 +338,24 @@ function getResultSections(markdown: string): Array<{ start: number; end: number
   return sections;
 }
 
+function getDanglingResultRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const codeBlockRanges = getFencedCodeBlockRanges(markdown);
+  const openRegex = /<result>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = openRegex.exec(markdown)) !== null) {
+    if (isInsideCodeBlock(match.index, codeBlockRanges)) continue;
+    const contentStart = match.index + match[0].length;
+    const closeIndex = markdown.toLowerCase().indexOf('</result>', contentStart);
+    if (closeIndex === -1) {
+      ranges.push([match.index, markdown.length]);
+      break;
+    }
+    openRegex.lastIndex = closeIndex + '</result>'.length;
+  }
+  return ranges;
+}
+
 function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
   if (!obj || typeof obj !== 'object') return false;
   if (obj.type !== 'home_sidebar') return false;
@@ -432,6 +450,23 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     // payloads from older prompts.
     removals.push([section.start, section.end]);
 
+    const firstNonWhitespace = section.content.search(/\S/);
+    if (firstNonWhitespace !== -1 && section.content[firstNonWhitespace] === '{') {
+      const jsonStr = extractBalancedJson(section.content, firstNonWhitespace);
+      if (jsonStr) {
+        try {
+          const parsed = JSON.parse(jsonStr);
+          if (isCardLike(parsed)) {
+            cards.push(validateCard(parsed));
+          } else if (isHomeSidebarHintLike(parsed)) {
+            sidebarHints.push(parsed);
+          }
+        } catch {
+          // Malformed machine-readable JSON remains hidden with the result block.
+        }
+      }
+    }
+
     const codeBlockRegex = /```(card|json)\s*\n/g;
     let match: RegExpExecArray | null;
     while ((match = codeBlockRegex.exec(section.content)) !== null) {
@@ -487,6 +522,10 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
         codeBlockRegex.lastIndex = localBlockEnd;
       }
     }
+  }
+
+  for (const range of getDanglingResultRanges(markdown)) {
+    removals.push(range);
   }
 
   // Remove matched blocks from text (in reverse order to preserve indices)

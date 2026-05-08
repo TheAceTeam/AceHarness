@@ -28,6 +28,8 @@ const ZERO_USAGE_METADATA: EngineResultMetadata = {
   num_turns: 0,
 };
 
+const moduleRequire = createRequire(import.meta.url);
+
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -127,8 +129,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     }
 
     try {
-      const rootRequire = createRequire(join(process.cwd(), 'package.json'));
-      const codexPackageJsonPath = rootRequire.resolve('@openai/codex/package.json');
+      const codexPackageJsonPath = moduleRequire.resolve('@openai/codex/package.json');
       const codexRequire = createRequire(codexPackageJsonPath);
       const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
       const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';

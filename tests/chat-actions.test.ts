@@ -85,6 +85,37 @@ describe('parseActions', () => {
     expect(result.text).not.toContain('Internal workflow draft summary');
   });
 
+  test('extracts plain home sidebar JSON from result sections', () => {
+    const markdown = [
+      '我会打开工作流创建面板。',
+      '<result>',
+      '{"type":"home_sidebar","mode":"active","tabs":["workflow"],"activeTab":"workflow","intent":"create-workflow","stage":"spec-draft","summary":"创建工作流","shouldOpenModal":true}',
+      '</result>',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.sidebarHints).toHaveLength(1);
+    expect(result.sidebarHints[0].shouldOpenModal).toBe(true);
+    expect(result.text).toBe('我会打开工作流创建面板。');
+    expect(result.text).not.toContain('home_sidebar');
+  });
+
+  test('hides dangling result sections while streaming', () => {
+    const markdown = [
+      '我会打开工作流创建面板。',
+      '<result>',
+      '{"type":"home_sidebar","shouldOpenModal":true,"summary":"partial","missingFields"',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.sidebarHints).toHaveLength(0);
+    expect(result.text).toBe('我会打开工作流创建面板。');
+    expect(result.text).not.toContain('<result>');
+    expect(result.text).not.toContain('home_sidebar');
+  });
+
   test('removes an orphan trailing fence left after hidden result content', () => {
     const markdown = [
       '我会整理上下文并打开创建面板。',
