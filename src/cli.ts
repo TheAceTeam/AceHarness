@@ -64,6 +64,9 @@ interface CliMessages {
   resetRequiresForce: string;
   resetDone: string;
   resetTarget: string;
+  usage: string;
+  unknownCommand: (command: string) => string;
+  unknownOption: (option: string) => string;
   languagePrompt: string;
   languageChoices: Array<{ title: string; value: Locale }>;
   detectEngines: string;
@@ -122,6 +125,15 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     resetRequiresForce: '[ACE] 请使用 `ace reset --force` 确认重置本地 ACE 配置。',
     resetDone: '[ACE] 重置完成。下次运行 `ace` 时会重新初始化。',
     resetTarget: '[ACE] 已清理',
+    usage: [
+      '用法:',
+      '  ace              启动 ACEHarness',
+      '  ace start        启动 ACEHarness',
+      '  ace reset --force 重置本地 ACE 配置',
+      '  ace --help       查看帮助',
+    ].join('\n'),
+    unknownCommand: (command: string) => `[ACE] 无效命令：${command}`,
+    unknownOption: (option: string) => `[ACE] 无效选项：${option}`,
     languagePrompt: '请选择语言',
     languageChoices: [
       { title: '中文', value: 'zh' },
@@ -163,6 +175,15 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     resetRequiresForce: '[ACE] Re-run with `ace reset --force` to confirm resetting local ACE state.',
     resetDone: '[ACE] Reset complete. The next `ace` run will initialize again.',
     resetTarget: '[ACE] Removed',
+    usage: [
+      'Usage:',
+      '  ace               Start ACEHarness',
+      '  ace start         Start ACEHarness',
+      '  ace reset --force Reset local ACE state',
+      '  ace --help        Show help',
+    ].join('\n'),
+    unknownCommand: (command: string) => `[ACE] Unknown command: ${command}`,
+    unknownOption: (option: string) => `[ACE] Unknown option: ${option}`,
     languagePrompt: 'Choose your language',
     languageChoices: [
       { title: 'English', value: 'en' },
@@ -216,13 +237,30 @@ function resolveCliLocale(): Locale {
   return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
+type CliCommand = '' | 'start' | 'reset' | 'help';
+
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
+  const help = args.includes('--help') || args.includes('-h');
+  const positionals = args.filter((arg) => !arg.startsWith('-'));
+  const command = help ? 'help' : (positionals[0] || '');
+  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help']);
+  const commandIsValid = validCommands.has(command as CliCommand);
+  const allowedOptions = command === 'reset'
+    ? new Set(['--force', '--help', '-h'])
+    : new Set(['--help', '-h']);
+  const unknownOption = args.find((arg) => arg.startsWith('-') && !allowedOptions.has(arg));
   return {
-    command: args[0] || '',
+    command: command as CliCommand | string,
     force: args.includes('--force'),
     verbose: args.includes('-V') || args.includes('--verbose'),
+    unknownCommand: commandIsValid ? '' : command,
+    unknownOption: unknownOption || '',
   };
+}
+
+function printUsage(locale = resolveCliLocale(), stream: NodeJS.WriteStream = process.stdout) {
+  stream.write(`${getLocaleMessages(locale).usage}\n`);
 }
 
 async function resetAceState(force: boolean) {
@@ -772,7 +810,24 @@ async function start() {
 }
 
 async function main() {
-  const { command, force } = parseArgs(process.argv);
+  const { command, force, unknownCommand, unknownOption } = parseArgs(process.argv);
+  const locale = resolveCliLocale();
+  const messages = getLocaleMessages(locale);
+
+  if (command === 'help') {
+    printUsage(locale);
+    return;
+  }
+  if (unknownCommand) {
+    console.error(messages.unknownCommand(unknownCommand));
+    printUsage(locale, process.stderr);
+    process.exit(1);
+  }
+  if (unknownOption) {
+    console.error(messages.unknownOption(unknownOption));
+    printUsage(locale, process.stderr);
+    process.exit(1);
+  }
   if (command === 'reset') {
     await resetAceState(force);
     return;
