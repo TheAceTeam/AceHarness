@@ -1,6 +1,7 @@
 import { cp, mkdir, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, relative, resolve } from 'path';
+import { parse, stringify } from 'yaml';
 import {
   getInstallConfigPath,
   getInstallConfigsDir,
@@ -12,6 +13,16 @@ import {
 const DELETED_MARKER = '.deleted.json';
 
 let seedPromise: Promise<void> | null = null;
+
+interface ModelConfigEntry {
+  value?: string;
+  [key: string]: unknown;
+}
+
+interface ModelsConfig {
+  models?: ModelConfigEntry[];
+  [key: string]: unknown;
+}
 
 async function loadDeletedSet(configsDir: string): Promise<Set<string>> {
   const markerPath = resolve(configsDir, DELETED_MARKER);
@@ -62,6 +73,40 @@ async function copyMissingRecursive(src: string, dst: string, deletedSet: Set<st
   await cp(src, dst, { force: false });
 }
 
+async function mergeBundledModelsIntoRuntime(installConfigsDir: string, runtimeConfigsDir: string): Promise<void> {
+  const installModelsPath = resolve(installConfigsDir, 'models', 'models.yaml');
+  const runtimeModelsPath = resolve(runtimeConfigsDir, 'models', 'models.yaml');
+  if (!existsSync(installModelsPath) || !existsSync(runtimeModelsPath)) return;
+
+  try {
+    const [installContent, runtimeContent] = await Promise.all([
+      readFile(installModelsPath, 'utf-8'),
+      readFile(runtimeModelsPath, 'utf-8'),
+    ]);
+    const installCfg = (parse(installContent) as ModelsConfig) || {};
+    const runtimeCfg = (parse(runtimeContent) as ModelsConfig) || {};
+    const bundledModels = Array.isArray(installCfg.models) ? installCfg.models : [];
+    const runtimeModels = Array.isArray(runtimeCfg.models) ? runtimeCfg.models : [];
+    if (bundledModels.length === 0) return;
+
+    const existing = new Set(
+      runtimeModels
+        .map((model) => String(model?.value || '').trim())
+        .filter(Boolean),
+    );
+    const missing = bundledModels.filter((model) => {
+      const value = String(model?.value || '').trim();
+      return value && !existing.has(value);
+    });
+    if (missing.length === 0) return;
+
+    runtimeCfg.models = [...runtimeModels, ...missing];
+    await writeFile(runtimeModelsPath, stringify(runtimeCfg), 'utf-8');
+  } catch {
+    // Keep seeding resilient: parsing/merge errors must not block startup.
+  }
+}
+
 export async function ensureRuntimeConfigsSeeded(): Promise<void> {
   if (seedPromise) return seedPromise;
 
@@ -86,6 +131,7 @@ export async function ensureRuntimeConfigsSeeded(): Promise<void> {
     }
 
     await copyMissingRecursive(installConfigsDir, runtimeConfigsDir, deletedSet, runtimeConfigsDir);
+    await mergeBundledModelsIntoRuntime(installConfigsDir, runtimeConfigsDir);
   })().finally(() => {
     seedPromise = null;
   });

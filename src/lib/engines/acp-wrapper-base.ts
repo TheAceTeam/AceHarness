@@ -49,15 +49,16 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         if (this.engine) {
           try { await this.engine.stop(); } catch {}
         }
-        const config = this.getACPConfig(options);
-        this.engine = new ACPEngine(config);
-        this.setupEngineEvents();
-        await this.engine.start();
+        await this.startNewEngine(options);
+        const startedEngine = this.engine;
+        if (!startedEngine) {
+          throw new Error(`[${this.getName()}] engine not initialized`);
+        }
 
         if (options.sessionId) {
-          this.currentSessionId = await this.engine.resumeSession(options.sessionId);
+          this.currentSessionId = await startedEngine.resumeSession(options.sessionId);
         } else {
-          this.currentSessionId = await this.engine.createSession();
+          this.currentSessionId = await startedEngine.createSession();
         }
       }
 
@@ -133,6 +134,13 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       this.engine.stop();
       this.engine = null;
     }
+  }
+
+  protected async startNewEngine(options: EngineOptions): Promise<void> {
+    const config = this.getACPConfig(options);
+    this.engine = new ACPEngine(config);
+    this.setupEngineEvents();
+    await this.engine.start();
   }
 
   // ---------------------------------------------------------------------------

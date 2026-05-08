@@ -42,6 +42,8 @@ export interface ACPEngineConfig {
   model?: string;
   /** Additional arguments */
   args?: string[];
+  /** NGA-compatible commands such as codeagent use OpenCode-style args without --disable-update */
+  skipNgaDisableUpdate?: boolean;
   /** Field name for prompt content in session/prompt (default: 'prompt', kiro uses 'content') */
   promptField?: string;
   /** Environment variables */
@@ -236,8 +238,13 @@ export class ACPEngine extends EventEmitter {
         args.push('acp', '--cwd', this.config.workingDirectory);
         break;
       case 'nga':
-        // ngagent 套壳 OpenCode：默认关闭更新检查，cwd 与 opencode 一致
-        args.push('--disable-update', 'acp', '--cwd', this.config.workingDirectory);
+        if (this.config.skipNgaDisableUpdate) {
+          // Some NGA-compatible binaries (for example codeagent) support OpenCode-style ACP args only.
+          args.push('acp', '--cwd', this.config.workingDirectory);
+        } else {
+          // ngagent 套壳 OpenCode：默认关闭更新检查，cwd 与 opencode 一致
+          args.push('--disable-update', 'acp', '--cwd', this.config.workingDirectory);
+        }
         break;
       case 'kiro-cli':
         args.push('acp');
