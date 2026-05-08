@@ -1,0 +1,64 @@
+<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="620" rx="28" fill="#F8FAFC"/>
+  <rect x="34" y="34" width="1132" height="552" rx="24" fill="white" stroke="#D8DEE8"/>
+  <text x="70" y="86" fill="#111827" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="30" font-weight="700">ACEHarness 产品界面总览</text>
+  <text x="70" y="118" fill="#5B6472" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="15">从对话创建到工作台运行、从资产管理到团队知识沉淀，所有入口围绕工程任务闭环组织。</text>
+
+  <rect x="68" y="158" width="240" height="326" rx="18" fill="#EFF6FF" stroke="#BFDBFE"/>
+  <text x="96" y="202" fill="#1D4ED8" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">入口层</text>
+  <circle cx="102" cy="242" r="6" fill="#2563EB"/>
+  <text x="122" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">对话页 /</text>
+  <text x="122" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">自然语言创建、动作确认、会话管理</text>
+  <circle cx="102" cy="324" r="6" fill="#2563EB"/>
+  <text x="122" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">仪表盘 /dashboard</text>
+  <text x="122" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">运行趋势、成本、最近记录</text>
+  <circle cx="102" cy="406" r="6" fill="#2563EB"/>
+  <text x="122" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">工作流管理 /workflows</text>
+  <text x="122" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">搜索、筛选、排序、复制、新建</text>
+
+  <rect x="348" y="158" width="240" height="326" rx="18" fill="#F0FDF4" stroke="#BBF7D0"/>
+  <text x="376" y="202" fill="#15803D" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">运行层</text>
+  <circle cx="382" cy="242" r="6" fill="#16A34A"/>
+  <text x="402" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">工作台运行视图</text>
+  <text x="402" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">实时流、步骤输出、人工检查点</text>
+  <circle cx="382" cy="324" r="6" fill="#16A34A"/>
+  <text x="402" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">状态机可视化</text>
+  <text x="402" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">总览、时序图、流转图、状态图</text>
+  <circle cx="382" cy="406" r="6" fill="#16A34A"/>
+  <text x="402" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">历史与恢复</text>
+  <text x="402" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">运行记录、文档、日志、失败恢复</text>
+
+  <rect x="628" y="158" width="240" height="326" rx="18" fill="#FFF7ED" stroke="#FED7AA"/>
+  <text x="656" y="202" fill="#C2410C" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">协作层</text>
+  <circle cx="662" cy="242" r="6" fill="#EA580C"/>
+  <text x="682" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Spec Coding</text>
+  <text x="682" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">需求、设计、任务、步骤绑定</text>
+  <circle cx="662" cy="324" r="6" fill="#EA580C"/>
+  <text x="682" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Agent / 模型 / 引擎</text>
+  <text x="682" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">角色配置、模型费率、CLI 后端</text>
+  <circle cx="662" cy="406" r="6" fill="#EA580C"/>
+  <text x="682" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">定时任务与 API</text>
+  <text x="682" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">Cron 调度、交互式 API 文档</text>
+
+  <rect x="908" y="158" width="224" height="326" rx="18" fill="#F5F3FF" stroke="#DDD6FE"/>
+  <text x="936" y="202" fill="#6D28D9" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">资产层</text>
+  <circle cx="942" cy="242" r="6" fill="#7C3AED"/>
+  <text x="962" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Workspace</text>
+  <text x="962" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">文件浏览、编辑、上传</text>
+  <circle cx="942" cy="324" r="6" fill="#7C3AED"/>
+  <text x="962" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Notebook / Skills</text>
+  <text x="962" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">知识沉淀、能力复用</text>
+  <circle cx="942" cy="406" r="6" fill="#7C3AED"/>
+  <text x="962" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">用户与账号</text>
+  <text x="962" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">注册、审核、权限管理</text>
+
+  <path d="M308 320H348" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M588 320H628" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M868 320H908" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M336 314L348 320L336 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M616 314L628 320L616 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M896 314L908 320L896 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="70" y="520" width="1062" height="38" rx="19" fill="#F1F5F9"/>
+  <text x="600" y="545" text-anchor="middle" fill="#334155" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="15">进入控制台后，可通过 Onboarding 查看完整使用路径和模块引导</text>
+</svg>

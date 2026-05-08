@@ -1,0 +1,64 @@
+<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="620" rx="28" fill="#F8FAFC"/>
+  <rect x="34" y="34" width="1132" height="552" rx="24" fill="white" stroke="#D8DEE8"/>
+  <text x="70" y="86" fill="#111827" font-family="Arial, sans-serif" font-size="30" font-weight="700">ACEHarness Interface Overview</text>
+  <text x="70" y="118" fill="#5B6472" font-family="Arial, sans-serif" font-size="15">From conversational creation to workbench execution, every surface is organized around the engineering task loop.</text>
+
+  <rect x="68" y="158" width="240" height="326" rx="18" fill="#EFF6FF" stroke="#BFDBFE"/>
+  <text x="96" y="202" fill="#1D4ED8" font-family="Arial, sans-serif" font-size="22" font-weight="700">Entry Layer</text>
+  <circle cx="102" cy="242" r="6" fill="#2563EB"/>
+  <text x="122" y="248" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Chat /</text>
+  <text x="122" y="278" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Creation, actions, sessions</text>
+  <circle cx="102" cy="324" r="6" fill="#2563EB"/>
+  <text x="122" y="330" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Dashboard</text>
+  <text x="122" y="360" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Trends, cost, recent runs</text>
+  <circle cx="102" cy="406" r="6" fill="#2563EB"/>
+  <text x="122" y="412" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Workflows</text>
+  <text x="122" y="442" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Search, filter, sort, create</text>
+
+  <rect x="348" y="158" width="240" height="326" rx="18" fill="#F0FDF4" stroke="#BBF7D0"/>
+  <text x="376" y="202" fill="#15803D" font-family="Arial, sans-serif" font-size="22" font-weight="700">Runtime Layer</text>
+  <circle cx="382" cy="242" r="6" fill="#16A34A"/>
+  <text x="402" y="248" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Workbench Run</text>
+  <text x="402" y="278" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Streams, outputs, checkpoints</text>
+  <circle cx="382" cy="324" r="6" fill="#16A34A"/>
+  <text x="402" y="330" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">State-machine Views</text>
+  <text x="402" y="360" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Overview, sequence, graph</text>
+  <circle cx="382" cy="406" r="6" fill="#16A34A"/>
+  <text x="402" y="412" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">History and Resume</text>
+  <text x="402" y="442" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Runs, docs, logs, recovery</text>
+
+  <rect x="628" y="158" width="240" height="326" rx="18" fill="#FFF7ED" stroke="#FED7AA"/>
+  <text x="656" y="202" fill="#C2410C" font-family="Arial, sans-serif" font-size="22" font-weight="700">Collaboration Layer</text>
+  <circle cx="662" cy="242" r="6" fill="#EA580C"/>
+  <text x="682" y="248" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Spec Coding</text>
+  <text x="682" y="278" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Requirements, design, tasks</text>
+  <circle cx="662" cy="324" r="6" fill="#EA580C"/>
+  <text x="682" y="330" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Agents / Models / Engines</text>
+  <text x="682" y="360" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Roles, pricing, CLI backends</text>
+  <circle cx="662" cy="406" r="6" fill="#EA580C"/>
+  <text x="682" y="412" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Schedules and APIs</text>
+  <text x="682" y="442" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Cron jobs, interactive docs</text>
+
+  <rect x="908" y="158" width="224" height="326" rx="18" fill="#F5F3FF" stroke="#DDD6FE"/>
+  <text x="936" y="202" fill="#6D28D9" font-family="Arial, sans-serif" font-size="22" font-weight="700">Asset Layer</text>
+  <circle cx="942" cy="242" r="6" fill="#7C3AED"/>
+  <text x="962" y="248" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Workspace</text>
+  <text x="962" y="278" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Browse, edit, upload</text>
+  <circle cx="942" cy="324" r="6" fill="#7C3AED"/>
+  <text x="962" y="330" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Notebook / Skills</text>
+  <text x="962" y="360" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Knowledge and reuse</text>
+  <circle cx="942" cy="406" r="6" fill="#7C3AED"/>
+  <text x="962" y="412" fill="#1F2937" font-family="Arial, sans-serif" font-size="16">Users</text>
+  <text x="962" y="442" fill="#4B5563" font-family="Arial, sans-serif" font-size="14">Registration and approval</text>
+
+  <path d="M308 320H348" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M588 320H628" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M868 320H908" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+  <path d="M336 314L348 320L336 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M616 314L628 320L616 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M896 314L908 320L896 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="70" y="520" width="1062" height="38" rx="19" fill="#F1F5F9"/>
+  <text x="600" y="545" text-anchor="middle" fill="#334155" font-family="Arial, sans-serif" font-size="15">After entering the console, open Onboarding for the full usage path and module guide</text>
+</svg>
