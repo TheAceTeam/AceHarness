@@ -136,8 +136,51 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       const binaryPath = join(dirname(platformPackageJsonPath), 'vendor', targetTriple, 'codex', binaryName);
       return existsSync(binaryPath) ? binaryPath : null;
     } catch {
+      // moduleRequire couldn't find @openai/codex in ACEHarness's own node_modules.
+      // Try resolving from common global install locations (user may have codex installed globally).
+      try {
+        const globalPaths = this.getGlobalNodeModulesPaths();
+        for (const globalPath of globalPaths) {
+          const codexPkgPath = join(globalPath, '@openai', 'codex', 'package.json');
+          if (!existsSync(codexPkgPath)) continue;
+          const globalCodexRequire = createRequire(codexPkgPath);
+          try {
+            const platformPkgPath = globalCodexRequire.resolve(`${platformPackage}/package.json`);
+            const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+            const binaryPath = join(dirname(platformPkgPath), 'vendor', targetTriple, 'codex', binaryName);
+            if (existsSync(binaryPath)) return binaryPath;
+          } catch { /* platform package not found here */ }
+        }
+      } catch { /* ignore */ }
       return null;
     }
+  }
+
+  private getGlobalNodeModulesPaths(): string[] {
+    const paths: string[] = [];
+    // nvm-managed node (Linux/Mac)
+    const nvmDir = process.env.NVM_DIR;
+    if (nvmDir) {
+      const nodeVersion = process.version;
+      paths.push(join(nvmDir, 'versions', 'node', nodeVersion, 'lib', 'node_modules'));
+    }
+    // Standard global prefix from process.execPath
+    const execDir = dirname(process.execPath);
+    if (process.platform === 'win32') {
+      paths.push(join(execDir, 'node_modules'));
+    } else {
+      paths.push(join(execDir, '..', 'lib', 'node_modules'));
+    }
+    // HOME-based paths
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    if (home) {
+      if (process.platform === 'win32') {
+        paths.push(join(home, 'AppData', 'Roaming', 'npm', 'node_modules'));
+      } else {
+        paths.push(join(home, '.local', 'lib', 'node_modules'));
+      }
+    }
+    return paths.filter((p) => p && existsSync(p));
   }
 
   /** Locate the codex CLI binary — cross-platform PATH + common install locations. */

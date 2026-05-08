@@ -677,6 +677,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
           } else if (
             sys.subtype === 'init' ||
             sys.subtype === 'session_start' ||
+            sys.subtype === 'status' ||
             sys.subtype === 'hook_started' ||
             sys.subtype === 'hook_response'
           ) {

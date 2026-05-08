@@ -29,6 +29,15 @@ export default function ChatModal() {
   const [model, setModel] = useState('claude-sonnet-4-6');
   const [engine, setEngine] = useState('');
   const effectiveEngine = useCurrentEngine(engine);
+  const prevEngineRef = useRef(effectiveEngine);
+
+  // Reset session when engine changes (session is tied to engine)
+  useEffect(() => {
+    if (prevEngineRef.current && prevEngineRef.current !== effectiveEngine) {
+      setSessionId(null);
+    }
+    prevEngineRef.current = effectiveEngine;
+  }, [effectiveEngine]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const autoScrollLockedRef = useRef(false);
@@ -71,7 +80,7 @@ export default function ChatModal() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, model, sessionId }),
+        body: JSON.stringify({ message: text, model, engine: effectiveEngine, sessionId }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {

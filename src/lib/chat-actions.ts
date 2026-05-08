@@ -394,7 +394,7 @@ function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
 }
 
 /** 从 AI 回复 markdown 中提取 action blocks 和 card blocks */
-export function parseActions(markdown: string): { text: string; actions: ActionBlock[]; cards: any[]; sidebarHints: HomeSidebarHint[] } {
+export function parseActions(markdown: string): { text: string; actions: ActionBlock[]; cards: any[]; sidebarHints: HomeSidebarHint[]; resultPlainTexts: string[] } {
   const actions: ActionBlock[] = [];
   const cards: any[] = [];
   const sidebarHints: HomeSidebarHint[] = [];
@@ -443,12 +443,15 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
   }
 
   const resultSections = getResultSections(markdown);
+  const resultPlainTexts: string[] = [];
   for (const section of resultSections) {
     // <result> is reserved for machine-readable side-channel output.
     // Parse any structured payloads inside it, but never leak the block into
     // the visible chat transcript. This also hides malformed/plain result
     // payloads from older prompts.
     removals.push([section.start, section.end]);
+
+    let sectionHasStructured = false;
 
     const firstNonWhitespace = section.content.search(/\S/);
     if (firstNonWhitespace !== -1 && section.content[firstNonWhitespace] === '{') {
@@ -458,8 +461,10 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
           const parsed = JSON.parse(jsonStr);
           if (isCardLike(parsed)) {
             cards.push(validateCard(parsed));
+            sectionHasStructured = true;
           } else if (isHomeSidebarHintLike(parsed)) {
             sidebarHints.push(parsed);
+            sectionHasStructured = true;
           }
         } catch {
           // Malformed machine-readable JSON remains hidden with the result block.
@@ -500,8 +505,10 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
         const parsed = JSON.parse(jsonStr);
         if (isCardLike(parsed)) {
           cards.push(validateCard(parsed));
+          sectionHasStructured = true;
         } else if (isHomeSidebarHintLike(parsed)) {
           sidebarHints.push(parsed);
+          sectionHasStructured = true;
         }
 
         // Any card/json code block inside <result> is machine-readable output.
@@ -522,6 +529,12 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
         codeBlockRegex.lastIndex = localBlockEnd;
       }
     }
+
+    // If no structured payload was found, save the plain text content
+    // so the caller can use it as fallback display when the visible text is empty.
+    if (!sectionHasStructured && section.content.trim()) {
+      resultPlainTexts.push(section.content.trim());
+    }
   }
 
   for (const range of getDanglingResultRanges(markdown)) {
@@ -537,7 +550,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
 
   const effectiveCards = sidebarHints.some((hint) => shouldSuppressCardsForSidebarHint(hint)) ? [] : cards;
 
-  return { text: text.trim(), actions, cards: effectiveCards, sidebarHints };
+  return { text: text.trim(), actions, cards: effectiveCards, sidebarHints, resultPlainTexts };
 }
 
 /** 判断 action 是否安全（自动执行） */

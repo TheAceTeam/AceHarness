@@ -890,7 +890,13 @@ function ChatPageContent() {
           ? parsedResult.sidebarHints.length > 0
           : /"type"\s*:\s*"home_sidebar"/.test(raw);
         if (hasResult) {
-          displayMsg = { ...msg, content: parsedResult?.text || '' };
+          // If the visible text outside <result> is empty but <result> contained
+          // plain text (not structured data), use that as the display content.
+          let visibleText = parsedResult?.text || '';
+          if (!visibleText && parsedResult?.resultPlainTexts?.length) {
+            visibleText = parsedResult.resultPlainTexts.join('\n\n');
+          }
+          displayMsg = { ...msg, content: visibleText };
         }
       }
       return (
