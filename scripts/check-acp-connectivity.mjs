@@ -12,7 +12,7 @@
  */
 
 import { execSync, spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { join, delimiter as pathDelimiter } from 'path';
 import { Writable, Readable } from 'node:stream';
 import {
@@ -30,6 +30,8 @@ function parseArgs(argv) {
     engine: '',
     cwd: process.cwd(),
     model: '',
+    /** 可执行文件绝对/相对路径（覆盖 PATH 解析） */
+    commandPath: '',
     prompt: 'ping',
     timeoutMs: 30000,
     json: false,
@@ -38,6 +40,8 @@ function parseArgs(argv) {
     const a = argv[i];
     if ((a === '--engine' || a === '-e') && argv[i + 1]) {
       options.engine = argv[++i];
+    } else if ((a === '--command' || a === '--binary') && argv[i + 1]) {
+      options.commandPath = argv[++i];
     } else if (a === '--cwd' && argv[i + 1]) {
       options.cwd = argv[++i];
     } else if (a === '--model' && argv[i + 1]) {
@@ -69,6 +73,8 @@ ACP 全链路联通性诊断
 
 可选:
   --cwd          工作目录（默认: 当前目录）
+  --command, --binary
+                 可执行文件路径（覆盖 PATH，用于测试某目录下的 agent 二进制）
   --model        指定模型（不传则跳过 setModel 阶段）
   --prompt       最小测试提示词（默认: ping）
   --timeout-ms   每阶段超时（默认: 30000）
@@ -77,6 +83,7 @@ ACP 全链路联通性诊断
 示例:
   node scripts/check-acp-connectivity.mjs --engine codegenie --model codegenie/glm-4.7
   node scripts/check-acp-connectivity.mjs --engine nga --cwd /tmp/ws --timeout-ms 45000
+  node scripts/check-acp-connectivity.mjs --engine cursor --command /opt/sdk/agent
 `);
 }
 
@@ -243,8 +250,12 @@ function pickModel(modelInput, availableModels) {
 function classifyHints(phase, payload) {
   const hints = [];
   if (phase === 'preflight') {
-    hints.push('CLI 未找到：先在同一终端执行 `<command> --help` 验证。');
-    hints.push('若终端可用但脚本不可用，通常是启动进程的 PATH 不一致。');
+    if (payload?.explicitBinary) {
+      hints.push('请确认 --command 指向存在的可执行文件，并具有执行权限 (chmod +x)。');
+    } else {
+      hints.push('CLI 未找到：先在同一终端执行 `<command> --help` 验证。');
+      hints.push('若终端可用但脚本不可用，通常是启动进程的 PATH 不一致。');
+    }
   } else if (phase === 'spawn') {
     hints.push('子进程无法拉起：检查命令名是否正确、cwd 是否存在、权限是否足够。');
     hints.push('Windows 下优先确认 npm 全局 .cmd shim 在 PATH 中。');
@@ -283,13 +294,15 @@ async function run() {
     }
     process.exit(2);
   }
-  const command = resolveEngineCommand(engine);
+  const explicitBinary = (opts.commandPath || '').trim();
+  const command = explicitBinary || resolveEngineCommand(engine);
   const argv = buildArgs(engine, opts.cwd);
 
   const report = {
     ok: false,
     engine,
     command,
+    commandOverride: explicitBinary || null,
     argv,
     cwd: opts.cwd,
     phases: [],
@@ -314,11 +327,26 @@ async function run() {
   };
 
   try {
-    const commandFound = commandExistsLikeServer(command);
-    if (!commandFound) {
-      throw makePhaseError('preflight', `命令不可用: ${command}`, { command });
+    let commandFound = false;
+    if (explicitBinary) {
+      try {
+        if (existsSync(command) && statSync(command).isFile()) commandFound = true;
+      } catch {
+        commandFound = false;
+      }
+      if (!commandFound) {
+        throw makePhaseError('preflight', `可执行文件不可用（不存在或非文件）: ${command}`, {
+          command,
+          explicitBinary: true,
+        });
+      }
+    } else {
+      commandFound = commandExistsLikeServer(command);
+      if (!commandFound) {
+        throw makePhaseError('preflight', `命令不可用: ${command}`, { command });
+      }
     }
-    pushPhase('preflight', 'ok', { commandFound: true });
+    pushPhase('preflight', 'ok', { commandFound: true, explicitBinary: Boolean(explicitBinary) });
 
     const childEnv = {
       ...process.env,
@@ -487,6 +515,7 @@ async function run() {
   } else {
     console.log(`\n=== ACP Connectivity Check: ${report.engine} ===`);
     console.log(`command: ${report.command}`);
+    if (report.commandOverride) console.log(`  (由 --command/--binary 指定，不经 PATH 解析)`);
     console.log(`argv: ${report.argv.join(' ')}`);
     console.log(`cwd: ${report.cwd}`);
     for (const p of report.phases) {
