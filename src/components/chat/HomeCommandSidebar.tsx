@@ -1417,6 +1417,8 @@ export default function HomeCommandSidebar({
         homepageCompact
         resumeCreationSessionId={currentCreationSession?.creationSessionId || creationBinding?.creationSessionId || null}
         frontendSessionId={activeSessionId}
+        inheritEngine={engine}
+        inheritModel={model}
         onSuccess={(filename, result) => {
           const nextCreationSession = result?.creationSession;
           if (nextCreationSession) {

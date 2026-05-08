@@ -86,8 +86,19 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       }
 
       this.streaming = true;
+      // ACP protocol doesn't have a separate system prompt channel.
+      // Prepend systemPrompt to the user message on first turn (new session).
+      // On resume (appendSystemPrompt), also prepend it so the AI gets refreshed context.
+      let fullPrompt = options.prompt;
+      if (options.systemPrompt) {
+        const isNewSession = !canReuse;
+        const shouldPrepend = isNewSession || options.appendSystemPrompt;
+        if (shouldPrepend) {
+          fullPrompt = `<system>\n${options.systemPrompt}\n</system>\n\n${options.prompt}`;
+        }
+      }
       console.log(`[${this.getName()}] calling sendPrompt...`);
-      const stopReason = await engine.sendPrompt(options.prompt);
+      const stopReason = await engine.sendPrompt(fullPrompt);
       console.log(`[${this.getName()}] sendPrompt returned: stopReason=${stopReason}`);
       this.streaming = false;
 

@@ -225,6 +225,8 @@ interface NewConfigModalProps {
   initialWorkspaceMode?: 'isolated-copy' | 'in-place';
   frontendSessionId?: string | null;
   hideAiGuided?: boolean;
+  inheritEngine?: string;
+  inheritModel?: string;
 }
 
 type ReferenceWorkflowSummary = {
@@ -1411,6 +1413,8 @@ export default function NewConfigModal({
   initialWorkspaceMode,
   frontendSessionId,
   hideAiGuided = false,
+  inheritEngine = '',
+  inheritModel = '',
 }: NewConfigModalProps) {
   const { toast } = useToast();
   const { appendSessionMessage } = useChat();
@@ -1456,6 +1460,7 @@ export default function NewConfigModal({
   const streamContentRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const chatIdRef = useRef<string | null>(null);
+  const retryAttemptedRef = useRef(false);
   const userInputRef = useRef<HTMLInputElement>(null);
   const restoringSessionRef = useRef(false);
   const restoreGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1464,9 +1469,9 @@ export default function NewConfigModal({
   const draftSessionCreatedInCurrentOpenRef = useRef(false);
   const modalWasOpenRef = useRef(false);
 
-  // Engine/model selection for AI mode
-  const [aiEngine, setAiEngine] = useState('');
-  const [aiModel, setAiModel] = useState('');
+  // Engine/model selection for AI mode — inherit from parent if provided
+  const [aiEngine, setAiEngine] = useState(inheritEngine);
+  const [aiModel, setAiModel] = useState(inheritModel);
   const [aiRestartFlag, setAiRestartFlag] = useState(0);
   const [referenceWorkflows, setReferenceWorkflows] = useState<ReferenceWorkflowSummary[]>([]);
   const [referenceLoading, setReferenceLoading] = useState(false);
@@ -1478,8 +1483,8 @@ export default function NewConfigModal({
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
   // Refs to always read latest engine/model in sendToAi
-  const aiEngineRef = useRef('');
-  const aiModelRef = useRef('');
+  const aiEngineRef = useRef(inheritEngine);
+  const aiModelRef = useRef(inheritModel);
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
     if (!session?.specCoding) return 1;
@@ -3145,6 +3150,7 @@ ${confirmedSpecPrompt}
     setCurrentThinking('');
     setClarificationForm(null);
     setClarificationAnswers({});
+    retryAttemptedRef.current = false;
     await ensureDraftCreationSession(targetFrontendSessionId);
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
@@ -3216,6 +3222,116 @@ ${confirmedSpecPrompt}
 
           const clarification = extractClarificationFormResult(finalContent);
           if (!clarification || clarification.questions.length === 0) {
+            // Auto-retry: send a correction prompt to the same session
+            const retrySessionId = data.sessionId || backendSessionId;
+            if (retrySessionId && !retryAttemptedRef.current) {
+              retryAttemptedRef.current = true;
+              setCurrentStream('');
+              setCurrentThinking('');
+              setAiMessages((prev) => [...prev, { role: 'ai', content: '⚠️ 格式不符，正在自动纠正...' }]);
+
+              const retryMessage = [
+                '你的上一条回复格式不正确，系统无法解析为合法的澄清表单。',
+                '请严格按照以下格式重新输出（不要输出其他内容）：',
+                '<result>',
+                '```json',
+                '{"type":"clarification_form","summary":"当前理解摘要","knownFacts":["已确认事实"],"missingFields":["缺失信息"],"questions":[{"id":"q1","label":"问题标签","question":"具体问题？","selectionMode":"single","options":[{"id":"opt1","label":"选项1","description":"说明","recommended":true}],"placeholder":"补充说明"}]}',
+                '```',
+                '</result>',
+                '',
+                '注意：',
+                '- 必须在 <result> 内输出 ```json 代码块',
+                '- type 必须是 "clarification_form"',
+                '- questions 数组不能为空，每个 question 必须有 id、label、question、options',
+                '- 不要输出 markdown 表格、不要输出纯文字问题列表',
+              ].join('\n');
+
+              try {
+                const retryToken = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+                const retryRes = await fetch('/api/chat/stream', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...(retryToken ? { Authorization: `Bearer ${retryToken}` } : {}) },
+                  body: JSON.stringify({
+                    message: retryMessage,
+                    model: aiModelRef.current,
+                    engine: aiEngineRef.current,
+                    sessionId: retrySessionId,
+                    frontendSessionId: targetFrontendSessionId,
+                    streamScope: PLANNING_STREAM_SCOPE,
+                    mode: 'dashboard',
+                    workingDirectory: values.workingDirectory,
+                  }),
+                });
+                const retryData = await retryRes.json().catch(() => null);
+                if (retryRes.ok && retryData?.chatId) {
+                  const retryChatId = retryData.chatId;
+                  chatIdRef.current = retryChatId;
+                  // Listen for retry stream
+                  const retryEs = new EventSource(`/api/chat/stream?id=${retryChatId}`);
+                  eventSourceRef.current = retryEs;
+                  let retryAccumulated = '';
+
+                  retryEs.addEventListener('delta', (ev) => {
+                    const d = JSON.parse(ev.data);
+                    retryAccumulated += d.content || '';
+                    setCurrentStream(retryAccumulated);
+                  });
+
+                  retryEs.addEventListener('done', async (ev) => {
+                    try {
+                      const retryDoneData = JSON.parse(ev.data);
+                      retryEs.close();
+                      eventSourceRef.current = null;
+                      chatIdRef.current = null;
+                      if (retryDoneData.sessionId) setBackendSessionId(retryDoneData.sessionId);
+
+                      const retryFinalContent = retryDoneData.result || retryAccumulated;
+                      setAiMessages((prev) => [...prev, { role: 'ai', content: retryFinalContent }]);
+                      await appendPlanningAssistantMessage(targetFrontendSessionId, retryFinalContent, retryDoneData.sessionId);
+                      setCurrentStream('');
+
+                      const retryClarification = extractClarificationFormResult(retryFinalContent);
+                      if (!retryClarification || retryClarification.questions.length === 0) {
+                        setAiPhase('waiting');
+                        setIsGeneratingPlan(false);
+                        setPlanningStage('idle');
+                        reject(new Error('AI 两次均未返回合法澄清表单，请检查引擎或手动重试'));
+                        return;
+                      }
+
+                      setAiPhase('idle');
+                      setIsGeneratingPlan(false);
+                      setPlanningStage('awaiting-answers');
+                      setClarificationForm(retryClarification);
+                      await persistDraftUiState({
+                        formStep: 2,
+                        planningStage: 'awaiting-answers',
+                        clarificationForm: retryClarification,
+                        clarificationAnswers: {},
+                      });
+                      resolve();
+                    } catch (retryErr) {
+                      setAiPhase('waiting');
+                      setIsGeneratingPlan(false);
+                      setPlanningStage('idle');
+                      reject(retryErr);
+                    }
+                  });
+
+                  retryEs.addEventListener('error', () => {
+                    retryEs.close();
+                    eventSourceRef.current = null;
+                    chatIdRef.current = null;
+                    setAiPhase('waiting');
+                    setIsGeneratingPlan(false);
+                    setPlanningStage('idle');
+                    reject(new Error('纠错重试流中断'));
+                  });
+                  return; // Don't reject yet, wait for retry
+                }
+              } catch { /* retry failed, fall through to reject */ }
+            }
+
             setAiPhase('waiting');
             setIsGeneratingPlan(false);
             setPlanningStage('idle');
