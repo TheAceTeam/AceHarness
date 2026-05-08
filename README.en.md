@@ -24,6 +24,9 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 
 ![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
 
+<p><strong>Core Capability Highlights</strong></p>
+<p>From the product overview into daily work, these six modules form the ACEHarness engineering task loop.</p>
+
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
     <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg" alt="ACEHarness">

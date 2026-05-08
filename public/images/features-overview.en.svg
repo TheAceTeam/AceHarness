@@ -24,9 +24,9 @@
     </filter>
     <style>
       .font { font-family: Arial, sans-serif; }
-      .muted { fill: #CBD5E1; font-size: 17px; }
+      .muted { fill: #CBD5E1; font-size: 15px; }
       .label { font-size: 14px; font-weight: 700; }
-      .title { fill: #F8FAFC; font-size: 29px; font-weight: 700; }
+      .title { fill: #F8FAFC; font-size: 27px; font-weight: 700; }
       .chip { fill: #0B1220; stroke: #334155; stroke-width: 1; }
     </style>
   </defs>
@@ -39,7 +39,7 @@
 
   <g class="font">
     <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">ACEHarness Feature Highlights</text>
-    <text x="80" y="172" fill="#CBD5E1" font-size="20">From requirement clarification to workbench execution, review, recovery, retrospectives, and reusable team knowledge.</text>
+    <text x="80" y="172" fill="#CBD5E1" font-size="20">From planning to execution, review, recovery, retrospectives, and reusable team knowledge.</text>
   </g>
 
   <g class="font" filter="url(#shadow)">
@@ -48,14 +48,14 @@
     <circle cx="128" cy="300" r="19" fill="#0EA5E9" fill-opacity="0.20" stroke="#7DD3FC"/>
     <text x="128" y="307" text-anchor="middle" fill="#BAE6FD" font-size="17" font-weight="700">01</text>
     <text x="160" y="294" fill="#7DD3FC" class="label">CREATE WITH CHAT OR FORM</text>
-    <text x="160" y="334" class="title">Conversational and Manual Creation</text>
+    <text x="160" y="334" class="title">Chat and Manual Creation</text>
     <text x="128" y="378" class="muted">
-      <tspan x="128" dy="0">Home chat turns natural-language requests into workflow drafts.</tspan>
-      <tspan x="128" dy="28">Manual creation fits explicit modes, directories, engines, and run options.</tspan>
-      <tspan x="128" dy="28">The console Onboarding guides the complete product path.</tspan>
+      <tspan x="128" dy="0">Home chat turns requests into workflow drafts.</tspan>
+      <tspan x="128" dy="28">Manual forms cover modes, directories, and engines.</tspan>
+      <tspan x="128" dy="28">Onboarding guides the full product path.</tspan>
     </text>
-    <rect x="128" y="460" width="298" height="34" rx="17" class="chip"/>
-    <text x="277" y="482" text-anchor="middle" fill="#BAE6FD" font-size="15" font-weight="700">Action confirmation / Drafts / Templates</text>
+    <rect x="128" y="460" width="270" height="34" rx="17" class="chip"/>
+    <text x="263" y="482" text-anchor="middle" fill="#BAE6FD" font-size="14" font-weight="700">Confirmations / Drafts / Templates</text>
 
     <rect x="572" y="250" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="572" y="250" width="7" height="266" rx="4" fill="#F59E0B"/>
@@ -64,12 +64,12 @@
     <text x="652" y="294" fill="#FCD34D" class="label">SPEC CODING LOOP</text>
     <text x="652" y="334" class="title">Spec and Step Binding</text>
     <text x="620" y="378" class="muted">
-      <tspan x="620" dy="0">requirements / design / tasks become formal planning artifacts.</tspan>
-      <tspan x="620" dy="28">Workflow creation binds steps to Spec tasks before execution.</tspan>
-      <tspan x="620" dy="28">Task status is owned by the system, not by free-form agent text.</tspan>
+      <tspan x="620" dy="0">requirements / design / tasks become artifacts.</tspan>
+      <tspan x="620" dy="28">Workflow steps bind to Spec tasks before runs.</tspan>
+      <tspan x="620" dy="28">Task state is maintained by the system.</tspan>
     </text>
-    <rect x="620" y="460" width="320" height="34" rx="17" class="chip"/>
-    <text x="780" y="482" text-anchor="middle" fill="#FEF3C7" font-size="15" font-weight="700">Runtime Spec / Persistence / Revision checks</text>
+    <rect x="620" y="460" width="292" height="34" rx="17" class="chip"/>
+    <text x="766" y="482" text-anchor="middle" fill="#FEF3C7" font-size="14" font-weight="700">Runtime Spec / Persistence / Checks</text>
 
     <rect x="1064" y="250" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="1064" y="250" width="7" height="266" rx="4" fill="#22C55E"/>
@@ -78,12 +78,12 @@
     <text x="1144" y="294" fill="#86EFAC" class="label">STATE MACHINE RUNTIME</text>
     <text x="1144" y="334" class="title">State-Machine Execution</text>
     <text x="1112" y="378" class="muted">
-      <tspan x="1112" dy="0">Each state can continue or roll back based on structured verdicts.</tspan>
-      <tspan x="1112" dy="28">Human checkpoints support approval, feedback, and forced jumps.</tspan>
-      <tspan x="1112" dy="28">Failed or interrupted runs can resume from persisted records.</tspan>
+      <tspan x="1112" dy="0">States continue or roll back by verdict.</tspan>
+      <tspan x="1112" dy="28">Checkpoints support approval and feedback.</tspan>
+      <tspan x="1112" dy="28">Interrupted runs resume from records.</tspan>
     </text>
-    <rect x="1112" y="460" width="292" height="34" rx="17" class="chip"/>
-    <text x="1258" y="482" text-anchor="middle" fill="#DCFCE7" font-size="15" font-weight="700">Transitions / Gates / Resume</text>
+    <rect x="1112" y="460" width="248" height="34" rx="17" class="chip"/>
+    <text x="1236" y="482" text-anchor="middle" fill="#DCFCE7" font-size="14" font-weight="700">Transitions / Gates / Resume</text>
 
     <rect x="80" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="80" y="558" width="7" height="266" rx="4" fill="#A78BFA"/>
@@ -92,12 +92,12 @@
     <text x="160" y="602" fill="#C4B5FD" class="label">SUPERVISOR ROUTING</text>
     <text x="160" y="642" class="title">Supervisor Smart Routing</text>
     <text x="128" y="686" class="muted">
-      <tspan x="128" dy="0">Agents declare missing information instead of knowing the roster.</tspan>
-      <tspan x="128" dy="28">Supervisor routes through keywords, lightweight models, and user fallback.</tspan>
-      <tspan x="128" dy="28">Plan Loop gathers key context before the agent executes.</tspan>
+      <tspan x="128" dy="0">Agents declare missing information.</tspan>
+      <tspan x="128" dy="28">Supervisor routes by keywords, models, or users.</tspan>
+      <tspan x="128" dy="28">Plan Loop gathers context before execution.</tspan>
     </text>
-    <rect x="128" y="768" width="318" height="34" rx="17" class="chip"/>
-    <text x="287" y="790" text-anchor="middle" fill="#EDE9FE" font-size="15" font-weight="700">NEED_INFO / Replay / Low-cost routing</text>
+    <rect x="128" y="768" width="260" height="34" rx="17" class="chip"/>
+    <text x="258" y="790" text-anchor="middle" fill="#EDE9FE" font-size="14" font-weight="700">NEED_INFO / Replay / Low-cost</text>
 
     <rect x="572" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="572" y="558" width="7" height="266" rx="4" fill="#F43F5E"/>
@@ -106,31 +106,31 @@
     <text x="652" y="602" fill="#FDA4AF" class="label">ADVERSARIAL REVIEW</text>
     <text x="652" y="642" class="title">Red/Blue Team Review</text>
     <text x="620" y="686" class="muted">
-      <tspan x="620" dy="0">Defender (Red Team) protects the plan, implementation, and evidence.</tspan>
-      <tspan x="620" dy="28">Attacker (Blue Team) attacks quality, risks, and edge cases.</tspan>
-      <tspan x="620" dy="28">Judge emits structured verdicts to continue or pass the iteration.</tspan>
+      <tspan x="620" dy="0">Defender protects plans and evidence.</tspan>
+      <tspan x="620" dy="28">Attacker challenges quality and risks.</tspan>
+      <tspan x="620" dy="28">Judge decides whether to pass or iterate.</tspan>
     </text>
-    <rect x="620" y="768" width="300" height="34" rx="17" class="chip"/>
-    <text x="770" y="790" text-anchor="middle" fill="#FFE4E6" font-size="15" font-weight="700">Defender / Attacker / Judge</text>
+    <rect x="620" y="768" width="250" height="34" rx="17" class="chip"/>
+    <text x="745" y="790" text-anchor="middle" fill="#FFE4E6" font-size="14" font-weight="700">Defender / Attacker / Judge</text>
 
     <rect x="1064" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="1064" y="558" width="7" height="266" rx="4" fill="#14B8A6"/>
     <circle cx="1112" cy="608" r="19" fill="#14B8A6" fill-opacity="0.20" stroke="#5EEAD4"/>
     <text x="1112" y="615" text-anchor="middle" fill="#CCFBF1" font-size="17" font-weight="700">06</text>
-    <text x="1144" y="602" fill="#5EEAD4" class="label">OBSERVABILITY AND MEMORY</text>
-    <text x="1144" y="642" class="title">Observability and Knowledge</text>
+    <text x="1144" y="602" fill="#5EEAD4" class="label">OBSERVE AND LEARN</text>
+    <text x="1144" y="642" class="title">Observability and Memory</text>
     <text x="1112" y="686" class="muted">
-      <tspan x="1112" dy="0">Workbench shows streams, step output, state graphs, and logs.</tspan>
-      <tspan x="1112" dy="28">Dashboard tracks run trends, token cost, and prompt quality.</tspan>
-      <tspan x="1112" dy="28">Workspace, Notebook, and Skills preserve deliverables and team knowledge.</tspan>
+      <tspan x="1112" dy="0">Workbench shows streams, graphs, and logs.</tspan>
+      <tspan x="1112" dy="28">Dashboard tracks cost and prompt quality.</tspan>
+      <tspan x="1112" dy="28">Assets preserve outputs and team knowledge.</tspan>
     </text>
-    <rect x="1112" y="768" width="308" height="34" rx="17" class="chip"/>
-    <text x="1266" y="790" text-anchor="middle" fill="#CCFBF1" font-size="15" font-weight="700">History / Cost / Reusable assets</text>
+    <rect x="1112" y="768" width="252" height="34" rx="17" class="chip"/>
+    <text x="1238" y="790" text-anchor="middle" fill="#CCFBF1" font-size="14" font-weight="700">History / Cost / Assets</text>
   </g>
 
   <g class="font">
     <rect x="80" y="880" width="1440" height="74" rx="24" fill="#0B1220" fill-opacity="0.86" stroke="#334155"/>
     <text x="122" y="925" fill="#F8FAFC" font-size="21" font-weight="700">Positioning</text>
-    <text x="244" y="925" fill="#CBD5E1" font-size="18">ACEHarness organizes creation, planning, execution, review, recovery, and retrospectives into a traceable local engineering loop.</text>
+    <text x="244" y="925" fill="#CBD5E1" font-size="18">ACEHarness turns planning, execution, review, recovery, and retrospectives into a local engineering loop.</text>
   </g>
 </svg>

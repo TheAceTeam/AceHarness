@@ -24,6 +24,9 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 
 ![ACEHarness 产品总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png)
 
+<p><strong>核心能力亮点</strong></p>
+<p>从产品全景进入日常工作流，下面六个模块构成 ACEHarness 的工程任务闭环。</p>
+
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
     <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg" alt="ACEHarness">
