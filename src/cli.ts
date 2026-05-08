@@ -101,6 +101,16 @@ const TOKENS_FILE = getWorkspaceDataFile('tokens.json');
 const ADMIN_FILE = getWorkspaceDataFile('admin.json');
 const NOTEBOOK_SHARES_FILE = getWorkspaceDataFile('notebook-shares.json');
 
+async function ensureRuntimeHome(): Promise<void> {
+  await Promise.all([
+    mkdir(getWorkspaceDirectory('workspace'), { recursive: true }),
+    mkdir(getWorkspaceDirectory('config'), { recursive: true }),
+    mkdir(getWorkspaceDirectory('data'), { recursive: true }),
+    mkdir(getWorkspaceDirectory('cache'), { recursive: true }),
+    mkdir(getWorkspaceDirectory('logs'), { recursive: true }),
+  ]);
+}
+
 const ENGINE_META: Array<{ id: EngineType; name: string }> = [
   { id: 'claude-code', name: 'Claude Code' },
   { id: 'codex', name: 'Codex' },
@@ -270,6 +280,8 @@ async function resetAceState(force: boolean) {
     process.exit(1);
   }
 
+  await ensureRuntimeHome();
+
   const targets = [
     getEngineConfigPath(),
     SYSTEM_SETTINGS_PATH,
@@ -301,6 +313,7 @@ async function loadConfiguredEngine(): Promise<ConfiguredEngine> {
 }
 
 async function saveConfiguredEngine(engine: EngineType, defaultModel: string) {
+  await mkdir(dirname(getEngineConfigPath()), { recursive: true });
   await writeFile(
     getEngineConfigPath(),
     JSON.stringify({ engine, defaultModel, updatedAt: new Date().toISOString() }, null, 2),
@@ -771,6 +784,8 @@ function tryOpenBrowser(url: string): boolean {
 }
 
 async function start() {
+  await ensureRuntimeHome();
+
   const settings = await loadSystemSettings();
   const configuredEngine = await loadConfiguredEngine();
   const adminExists = await isSetup();
