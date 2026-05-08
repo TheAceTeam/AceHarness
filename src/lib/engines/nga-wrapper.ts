@@ -15,16 +15,19 @@ interface NgaCommandResolution {
   command: string;
   skipDisableUpdate?: boolean;
   env?: Record<string, string>;
+  source?: 'primary' | 'codeagent';
 }
 
 export class NgaEngineWrapper extends ACPWrapperBase {
+  private static cachedResolution: NgaCommandResolution | null = null;
+
   private resolveCommand(): NgaCommandResolution {
     const searchPaths = getCommonCliSearchPaths();
     const ngagent = findCommand('ngagent', searchPaths);
-    if (ngagent) return { command: ngagent };
+    if (ngagent) return { command: ngagent, source: 'primary' };
 
     const nga = findCommand('nga', searchPaths);
-    if (nga && !this.shouldPreferCodeagent()) return { command: nga };
+    if (nga && !this.shouldPreferCodeagent()) return { command: nga, source: 'primary' };
 
     const codeagent = nga
       ? this.findSiblingCodeagent(nga) ?? this.findConfiguredCodeagent()
@@ -37,15 +40,33 @@ export class NgaEngineWrapper extends ACPWrapperBase {
       command: codeagent,
       skipDisableUpdate: true,
       env,
+      source: 'codeagent',
     };
   }
 
   protected async startNewEngine(options: EngineOptions): Promise<void> {
+    const cached = NgaEngineWrapper.cachedResolution;
+    if (cached) {
+      try {
+        console.log(`[NGA] using cached ACP command: ${cached.command} (${cached.source ?? 'unknown'})`);
+        await this.startEngineWithConfig(this.buildConfig(options, cached));
+        return;
+      } catch (cachedError) {
+        await this.stopFailedEngine();
+        NgaEngineWrapper.cachedResolution = null;
+        console.warn(
+          `[NGA] cached ACP command failed, clearing cache and retrying discovery. command=${cached.command}, reason=${this.errorMessage(cachedError)}`,
+        );
+      }
+    }
+
     const primary = this.resolveCommand();
     const primaryConfig = this.buildConfig(options, primary);
 
     try {
       await this.startEngineWithConfig(primaryConfig);
+      NgaEngineWrapper.cachedResolution = { ...primary, source: primary.source ?? 'primary' };
+      console.log(`[NGA] ACP handshake succeeded with primary command: ${primary.command}`);
       return;
     } catch (error) {
       await this.stopFailedEngine();
@@ -68,9 +89,11 @@ export class NgaEngineWrapper extends ACPWrapperBase {
 
       try {
         await this.startEngineWithConfig(this.buildConfig(options, fallback));
+        NgaEngineWrapper.cachedResolution = { ...fallback, source: 'codeagent' };
         console.log(`[NGA] codeagent ACP handshake succeeded: ${fallback.command}`);
       } catch (fallbackError) {
         await this.stopFailedEngine();
+        NgaEngineWrapper.cachedResolution = null;
         throw new Error(
           `[NGA] ACP handshake failed for both ${primary.command} and codeagent ${fallback.command}. ` +
           `primary=${this.errorMessage(error)}; fallback=${this.errorMessage(fallbackError)}`,
@@ -110,6 +133,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
       command: codeagent,
       skipDisableUpdate: true,
       env: this.buildCodeagentEnv(codeagent),
+      source: 'codeagent',
     };
   }
 
