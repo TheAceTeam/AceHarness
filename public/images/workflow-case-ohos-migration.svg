@@ -66,9 +66,9 @@
     <text x="630" y="528" fill="#bae6fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STATE 03</text>
     <text x="630" y="566" fill="#f8fafc" font-size="23" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">代码实现</text>
 
-    <rect x="844" y="490" width="196" height="92" rx="24" fill="#2a1013" stroke="#ef4444" stroke-width="2"/>
-    <text x="876" y="528" fill="#fecaca" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STATE 04</text>
-    <text x="876" y="566" fill="#f8fafc" font-size="23" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">红队审查</text>
+    <rect x="844" y="490" width="196" height="92" rx="24" fill="#0f172a" stroke="#60a5fa" stroke-width="2"/>
+    <text x="876" y="528" fill="#bfdbfe" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STATE 04</text>
+    <text x="876" y="566" fill="#f8fafc" font-size="23" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">蓝队审查</text>
 
     <rect x="1090" y="490" width="196" height="92" rx="24" fill="#10261a" stroke="#22c55e" stroke-width="2"/>
     <text x="1122" y="528" fill="#bbf7d0" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STATE 05</text>
@@ -85,8 +85,8 @@
   <path d="M1040 536H1090" stroke="url(#lineOhos)" stroke-width="4" marker-end="url(#arrowOhos)"/>
   <path d="M1286 536H1336" stroke="url(#lineOhos)" stroke-width="4" marker-end="url(#arrowOhos)"/>
 
-  <path d="M942 610C942 700 450 704 450 594" fill="none" stroke="#ef4444" stroke-width="4" stroke-dasharray="10 10" marker-end="url(#arrowOhos)"/>
-  <text x="700" y="710" fill="#fecaca" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">红队审查未通过，回退到架构设计</text>
+  <path d="M942 610C942 700 450 704 450 594" fill="none" stroke="#60a5fa" stroke-width="4" stroke-dasharray="10 10" marker-end="url(#arrowOhos)"/>
+  <text x="700" y="710" fill="#bfdbfe" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">蓝队审查未通过，回退到架构设计</text>
 
   <path d="M1188 610C1188 744 696 748 696 594" fill="none" stroke="#22c55e" stroke-width="4" stroke-dasharray="10 10" marker-end="url(#arrowOhos)"/>
   <text x="928" y="760" fill="#bbf7d0" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">最终验证失败，回退到代码实现</text>

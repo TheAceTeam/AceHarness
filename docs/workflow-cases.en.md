@@ -269,7 +269,7 @@ Cangjie HarmonyOS SDK API work is not a single-language coding task. It requires
 
 AI completed consistency across all three layers in one flow: gap analysis identified missing pieces in each layer, architecture design defined interfaces and struct reuse strategy, implementation updated six files in parallel (four C++ files plus two Cangjie files), and compile validation confirmed that cross-language linking was correct through `llvm-nm -D` symbol checks.
 
-#### Core Design 3: Red-team review validates each method against NAPI source behavior
+#### Core Design 3: Blue-team review validates each method against NAPI source behavior
 
 The blue-team review was not a generic code review. It **checked behavior method by method against ArkTS NAPI source code**. For example:
 

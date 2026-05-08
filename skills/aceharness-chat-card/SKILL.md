@@ -247,7 +247,7 @@ type Block =
 ````card
 <result>
 ```card
-{"header": {"icon": "smart_toy", "title": "architect", "subtitle": "架构师 - 负责设计技术方案", "gradient": "from-purple-500 to-pink-500", "badges": [{"text": "blue-team", "color": "blue"}, {"text": "claude-sonnet", "color": "purple"}]}, "blocks": [{"type": "info", "rows": [{"label": "团队", "value": "蓝队 (defender)"}, {"label": "模型", "value": "claude-sonnet-4-6"}, {"label": "类别", "value": "architect"}]}, {"type": "tabs", "tabs": [{"key": "prompts", "label": "提示词", "blocks": [{"type": "collapse", "title": "系统提示词", "subtitle": "2048 字符", "blocks": [{"type": "code", "code": "你是一个架构师...", "copyable": true}]}]}, {"key": "capabilities", "label": "能力", "blocks": [{"type": "badges", "items": [{"text": "代码审查", "color": "blue"}, {"text": "架构设计", "color": "green"}]}]}]}], "actions": [{"label": "编辑 Agent", "prompt": "编辑这个 Agent 的配置", "icon": "edit"}]}
+{"header": {"icon": "smart_toy", "title": "architect", "subtitle": "架构师 - 负责设计技术方案", "gradient": "from-purple-500 to-pink-500", "badges": [{"text": "red-team", "color": "red"}, {"text": "claude-sonnet", "color": "purple"}]}, "blocks": [{"type": "info", "rows": [{"label": "团队", "value": "红队 (defender)"}, {"label": "模型", "value": "claude-sonnet-4-6"}, {"label": "类别", "value": "architect"}]}, {"type": "tabs", "tabs": [{"key": "prompts", "label": "提示词", "blocks": [{"type": "collapse", "title": "系统提示词", "subtitle": "2048 字符", "blocks": [{"type": "code", "code": "你是一个架构师...", "copyable": true}]}]}, {"key": "capabilities", "label": "能力", "blocks": [{"type": "badges", "items": [{"text": "代码审查", "color": "blue"}, {"text": "架构设计", "color": "green"}]}]}]}], "actions": [{"label": "编辑 Agent", "prompt": "编辑这个 Agent 的配置", "icon": "edit"}]}
 ```
 </result>
 ````

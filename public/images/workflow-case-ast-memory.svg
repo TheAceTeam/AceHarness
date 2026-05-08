@@ -34,11 +34,11 @@
     <text x="424" y="392" fill="#bfdbfe" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STRATEGY</text>
     <text x="424" y="430" fill="#f8fafc" font-size="24" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">分阶段释放</text>
 
-    <rect x="652" y="310" width="170" height="88" rx="24" fill="#10261a" stroke="#22c55e" stroke-width="2"/>
-    <text x="690" y="361" fill="#dcfce7" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Defender</text>
+    <rect x="652" y="310" width="170" height="88" rx="24" fill="#2a1013" stroke="#ef4444" stroke-width="2"/>
+    <text x="690" y="361" fill="#fee2e2" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Defender</text>
 
-    <rect x="652" y="410" width="170" height="88" rx="24" fill="#2a1013" stroke="#ef4444" stroke-width="2"/>
-    <text x="696" y="461" fill="#fee2e2" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Attacker</text>
+    <rect x="652" y="410" width="170" height="88" rx="24" fill="#0f172a" stroke="#60a5fa" stroke-width="2"/>
+    <text x="696" y="461" fill="#bfdbfe" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Attacker</text>
 
     <rect x="874" y="354" width="158" height="92" rx="24" fill="#2b1b08" stroke="#f59e0b" stroke-width="2"/>
     <text x="912" y="393" fill="#fef3c7" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">JUDGE</text>

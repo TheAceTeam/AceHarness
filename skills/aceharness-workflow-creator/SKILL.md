@@ -26,7 +26,7 @@ Aceharness 工作流配置文件创建技能。**每当用户提到以下任何�
 ## 工作流模式
 
 **除非用户提出要求，否则尽量帮助用户创建state-machine（状态机模式）的工作流**
-**除非用户明确拒绝或场景不适用，否则尽量在方案中启用红蓝对抗机制（蓝队产出、红队挑战、裁判仲裁）**
+**除非用户明确拒绝或场景不适用，否则尽量在方案中启用红蓝对抗机制（红队产出、蓝队挑战、裁判仲裁）**
 
 ## 建模原则
 
@@ -104,7 +104,7 @@ node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workf
 2. **查询资源** — `agent.list` 查看可用 Agent，`config.list` 参考已有工作流
 3. **确认关键信息** — 工作目录、需求描述、代码目录（用户确认后再设计）
    - 必须确认 `context.workspaceMode`：是直接在工作目录执行（`in-place`），还是先复制副本再执行（`isolated-copy`）
-4. **设计方案** — 默认优先给出“按阶段建模的红蓝对抗”版本：每个关键阶段先定义 node/state，再在该 node 内放入蓝队、红队、裁判多个步骤；“设计”和“实施”默认开启人工审批；如用户要求简化再降级为普通流程；用 card 展示方案预览，确认后再写入
+4. **设计方案** — 默认优先给出“按阶段建模的红蓝对抗”版本：每个关键阶段先定义 node/state，再在该 node 内放入红队、蓝队、裁判多个步骤；“设计”和“实施”默认开启人工审批；如用户要求简化再降级为普通流程；用 card 展示方案预览，确认后再写入
 5. **写入 + 验证** — 必须运行验证脚本，优先使用脚本绝对路径；配置文件参数优先传运行时根目录下的相对路径，例如：`node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`
 
 **绝对不要在展示方案的同一条回复中创建文件，必须等用户确认。**

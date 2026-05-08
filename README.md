@@ -129,8 +129,6 @@ ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程�
 
 ![产品界面总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.svg)
 
-常用界面截图： [对话页](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/chat.png) · [仪表盘](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/dashboard.png) · [工作台设计视图](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workbench-design.png) · [工作台历史视图](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workbench-history.png) · [工作流管理](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflows.png)
-
 ## 工作流案例
 
 ![工作流案例总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflow-cases-overview.svg)

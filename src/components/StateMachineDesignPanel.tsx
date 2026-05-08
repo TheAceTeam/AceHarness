@@ -141,10 +141,10 @@ function SortableStepRow({
 
   const roleIcon = step.role === 'attacker' ? 'swords' : step.role === 'judge' ? 'gavel' : 'shield';
   const roleColor = step.role === 'attacker'
-    ? 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800'
+    ? 'bg-blue-500/10 text-blue-600 border-blue-200 dark:border-blue-800'
     : step.role === 'judge'
     ? 'bg-yellow-500/10 text-yellow-600 border-yellow-200 dark:border-yellow-800'
-    : 'bg-blue-500/10 text-blue-600 border-blue-200 dark:border-blue-800';
+    : 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800';
 
   return (
     <div ref={setNodeRef} style={style} className={`flex items-center gap-2 p-2.5 rounded-lg border ${roleColor} group`}>

@@ -114,8 +114,8 @@
   box-shadow: 0 0 10px hsl(var(--flow-error) / 0.3);
 }
 
-.stepNode.blue { border-left-color: hsl(var(--flow-defender)); }
-.stepNode.red { border-left-color: hsl(var(--flow-attacker)); }
+.stepNode.blue { border-left-color: hsl(var(--flow-attacker)); }
+.stepNode.red { border-left-color: hsl(var(--flow-defender)); }
 .stepNode.judge { border-left-color: hsl(var(--flow-judge)); }
 
 .pulseGlow {

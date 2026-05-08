@@ -125,8 +125,6 @@ Notes:
 
 ![Interface overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.en.svg)
 
-Screenshots: [Chat](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/chat.png) · [Dashboard](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/dashboard.png) · [Workbench design](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workbench-design.png) · [Workbench history](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workbench-history.png) · [Workflow management](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflows.png)
-
 ## Workflow Cases
 
 ![Workflow cases overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflow-cases-overview.en.svg)

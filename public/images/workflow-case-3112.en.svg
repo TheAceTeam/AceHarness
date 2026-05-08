@@ -96,11 +96,11 @@
   <text x="106" y="674" fill="#fed7aa" font-size="20" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Adversarial Review and Validation</text>
 
   <g filter="url(#shadow3112)">
-    <rect x="106" y="702" width="240" height="80" rx="22" fill="#1e1b4b" stroke="#818cf8" stroke-width="2"/>
-    <text x="136" y="752" fill="#e0e7ff" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Defender Implementation</text>
+    <rect x="106" y="702" width="240" height="80" rx="22" fill="#7f1d1d" stroke="#fca5a5" stroke-width="2"/>
+    <text x="136" y="752" fill="#fee2e2" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Defender Implementation</text>
 
-    <rect x="402" y="702" width="240" height="80" rx="22" fill="#7f1d1d" stroke="#fca5a5" stroke-width="2"/>
-    <text x="432" y="752" fill="#fee2e2" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Attacker Challenge</text>
+    <rect x="402" y="702" width="240" height="80" rx="22" fill="#1e1b4b" stroke="#818cf8" stroke-width="2"/>
+    <text x="432" y="752" fill="#e0e7ff" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Attacker Challenge</text>
 
     <rect x="698" y="702" width="210" height="80" rx="22" fill="#422006" stroke="#fbbf24" stroke-width="2"/>
     <text x="730" y="752" fill="#fef3c7" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Judge Verdict</text>

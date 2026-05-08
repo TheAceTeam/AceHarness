@@ -65,16 +65,16 @@
 
   <g filter="url(#shadow3116)">
     <rect x="96" y="402" width="214" height="54" rx="18" fill="#0b1223" stroke="#475569"/>
-    <circle cx="122" cy="428" r="8" fill="#38bdf8"/>
+    <circle cx="122" cy="428" r="8" fill="#ef4444"/>
     <text x="140" y="424" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
-      <tspan x="140" y="424">Blue Team</tspan>
+      <tspan x="140" y="424">Red Team</tspan>
       <tspan x="140" dy="18">issue-reproducer / architect</tspan>
     </text>
 
     <rect x="332" y="402" width="214" height="54" rx="18" fill="#0b1223" stroke="#475569"/>
-    <circle cx="358" cy="428" r="8" fill="#ef4444"/>
+    <circle cx="358" cy="428" r="8" fill="#38bdf8"/>
     <text x="376" y="424" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
-      <tspan x="376" y="424">Red Team</tspan>
+      <tspan x="376" y="424">Blue Team</tspan>
       <tspan x="376" dy="18">fix-breaker / code reviewer</tspan>
     </text>
 
@@ -120,7 +120,7 @@
   <text x="916" y="704" fill="#fcd34d" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">审查发现缺陷，回到方案设计</text>
 
   <path d="M718 458C718 392 472 384 472 468" fill="none" stroke="#60a5fa" stroke-width="4" stroke-dasharray="10 10" marker-end="url(#arrow3116)"/>
-  <text x="472" y="382" fill="#93c5fd" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">红队挑战未通过，退回根因定位</text>
+  <text x="472" y="382" fill="#93c5fd" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">蓝队挑战未通过，退回根因定位</text>
 
   <path d="M468 612C468 708 224 714 224 594" fill="none" stroke="#60a5fa" stroke-width="4" stroke-dasharray="10 10" marker-end="url(#arrow3116)"/>
   <text x="98" y="706" fill="#93c5fd" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Judge 判定失败，回到问题复现</text>

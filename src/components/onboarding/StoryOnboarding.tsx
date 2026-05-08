@@ -392,8 +392,8 @@ function renderModulePanel(moduleKey: ModuleKey) {
         <div className="rounded-lg border bg-black text-green-300 font-mono text-xs p-3 space-y-1 overflow-hidden">
           {[
             '[10:00:01] workflow: preparing context',
-            '[10:00:03] blue-team: drafting fix proposal',
-            '[10:00:06] red-team: generating challenge cases',
+            '[10:00:03] red-team: drafting fix proposal',
+            '[10:00:06] blue-team: generating challenge cases',
             '[10:00:09] judge: comparing verdict evidence',
             '[10:00:12] document panel: updating summary',
             '[10:00:15] checkpoint: waiting for human approval',
