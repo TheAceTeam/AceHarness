@@ -86,9 +86,8 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       }
 
       this.streaming = true;
-      // ACP protocol doesn't have a separate system prompt channel.
-      // Prepend systemPrompt to the user message on first turn (new session).
-      // On resume (appendSystemPrompt), also prepend it so the AI gets refreshed context.
+      // ACP agents (opencode) do not honor _meta.systemPrompt.
+      // Prepend systemPrompt to the user message on first turn or when appendSystemPrompt is set.
       let fullPrompt = options.prompt;
       if (options.systemPrompt) {
         const isNewSession = !canReuse;

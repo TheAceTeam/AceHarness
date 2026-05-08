@@ -9,7 +9,7 @@
 **⚠️ 核心规则（必须遵守）：**
 - 生成配置前必须用验证脚本校验 YAML，绝不能跳过验证
 - 绝对不要在展示方案的同一条回复中创建文件，必须等用户确认
-- 写入后必须运行验证：优先用脚本绝对路径执行，例如 `node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`；这里的 `configs/...` 应按运行时根目录解析
+- 写入后必须运行验证：使用 Skills 运行目录下的验证脚本，例如 `node ${Skills运行目录}/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`；这里的 `configs/...` 应按运行时根目录解析
 - 必须明确 `context.workspaceMode`：`in-place` 表示直接在设置的工作目录执行，`isolated-copy` 表示先创建副本工程再执行；如果用户没有明确要求隔离，优先使用 `in-place`
 - 如需表达并行任务、多 Agent 实例、channel 或 join policy，应按 workflow creator skill 的”并发设计元数据”规则写入 workflow YAML；依赖不清晰时保持串行，且不要承诺当前执行器一定真实并发执行
 - **绝对不要用 bash 直接创建 YAML 文件来替代 UI 创建弹窗流程**

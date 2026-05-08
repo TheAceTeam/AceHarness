@@ -2512,6 +2512,7 @@ export default function NewConfigModal({
 
     return [
       '你正在帮助用户做正式计划前的需求访谈。目标不是多问问题，而是补齐会改变方案、边界、兼容、验收或任务拆分的关键信息。',
+      '⚠️ 绝对禁止：不要创建任何文件。不要输出 markdown 表格或纯文字问题列表。你的唯一输出目标是在回复末尾的 <result> 内输出一个 ```json 代码块，类型为 clarification_form。',
       '先从用户输入、工作目录、参考工作流和已有上下文中提炼已确认事实；不要重复询问已经给出的信息，也不要把推测写成事实。',
       '本轮输出必须像资深产品/技术负责人做需求访谈：先给当前理解，再指出证据来源，再把缺口分为 blocking 与 optional，最后只问 3 到 7 个高价值问题。',
       '问题必须落到具体决策：目标用户与成功结果、当前行为与目标行为、范围与非目标、输入/输出/状态、兼容/迁移、失败/边界、安全/隐私、性能/可靠性、验证/发布。',
@@ -2689,12 +2690,13 @@ export default function NewConfigModal({
     const recommendationPrompt = buildCreationRecommendationsPrompt(creationRecommendations);
 
     return [
-      '你正在帮助用户生成正式计划，并且当前处于“业务计划生成”阶段。',
+      '你正在帮助用户生成正式计划，并且当前处于”业务计划生成”阶段。',
+      '⚠️ 绝对禁止：不要创建任何文件（bash/cat/write/echo 都不行）。不要输出独立的 markdown 文档。你的唯一输出目标是在回复末尾的 <result> 内输出一个 ```json 代码块，类型为 plan_draft。',
       '这一步要产出一套可以直接执行、可以继续迭代、可以被人工审查的正式计划制品。',
       '你显式使用 aceharness-spec-coding skill 来组织正式计划文档；底层制品仍采用 SpecCoding-style 的 specs/changes 结构，但文档内容本身必须完全围绕业务目标、业务规则和真实实现约束展开。',
       '请把输出写成稳定的计划 DSL，而不是自由散文。后续 workflow 和角色分工会根据这些正式制品自动派生，所以结构必须清晰、可引用、可追踪。',
       '你可以分多段普通文本逐步展示分析、思路和计划制品草案。',
-      '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。',
+      '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。<result> 内不要放普通文字或 HTML。',
       '重要：artifacts 中的 requirements、design、tasks 是 JSON 字符串值。字符串内的换行用 \\n 表示，字符串内如果需要 Mermaid 或代码块，用 ~~~ 代替 ``` 作为 fenced code block 分隔符（例如 ~~~mermaid\\n...\\n~~~），这样不会与外层 JSON 代码块冲突。不要在 JSON 字符串值内使用 ``` 三个反引号。',
       SPEC_LANGUAGE_RULE,
       '当你完成本轮计划草案时，输出如下结构化结果：',

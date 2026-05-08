@@ -29,8 +29,10 @@
 ### 规则 2：生成前必须验证
 
 ```bash
-echo '你的JSON' | node /absolute/path/to/skills/aceharness-chat-card/scripts/validate-card.mjs
+echo '你的JSON' | node ${Skills运行目录}/aceharness-chat-card/scripts/validate-card.mjs
 ```
+
+注意：`${Skills运行目录}` 请替换为系统提示词"环境信息"中给出的实际 Skills 运行目录路径。
 
 所有告警和报错都必须修正。验证通过标准：零错误 + 零告警。
 

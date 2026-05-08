@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createEngine, getConfiguredEngine } from '@/lib/engines/engine-factory';
 import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
 import { loadChatSettings } from '@/lib/chat-settings';
+import { getWorkspaceRoot } from '@/lib/app-paths';
 
 const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
 const CHAT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
         prompt: message,
         systemPrompt,
         model: useModel,
-        workingDirectory: process.cwd(),
+        workingDirectory: getWorkspaceRoot(),
         sessionId: sessionId || undefined,
       })
         .then(resolve)

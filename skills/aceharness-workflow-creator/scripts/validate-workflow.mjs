@@ -7,10 +7,12 @@ import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { resolve, dirname, isAbsolute, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
-import { parse } from 'yaml';
-import { z } from 'zod';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const _require = createRequire(resolve(homedir(), '.aceharness', 'node_modules', '_placeholder.js'));
+const { parse } = _require('yaml');
+const { z } = _require('zod');
 
 function resolveRuntimeRoot() {
   const aceHome = process.env.ACE_HOME?.trim();
