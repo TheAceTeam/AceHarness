@@ -1,50 +1,57 @@
 ## Aceharness 工作流创建（aceharness-workflow-creator 技能）
 
-**⚠️ 触发场景（必须调用此 skill）：**
-- 「创建工作流」「新建工作流」「配置 workflow」
-- 「写工作流配置」「设置 agent 执行流程」
-- 「state-machine」「phase-based」「阶段工作流」
-- 用户提出”要解决某个问题/完成某项复杂任务”时，也应优先判断是否适合通过工作流编排来解决；默认先询问用户是否需要创建工作流
+**触发场景：**
+- 创建工作流 / 新建 workflow / 写工作流配置
+- 需要 state-machine / phase-based 编排
+- 用户给出复杂目标，希望拆成多 Agent、多阶段推进
 
-**⚠️ 核心规则（必须遵守）：**
-- 生成配置前必须用验证脚本校验 YAML，绝不能跳过验证
-- 绝对不要在展示方案的同一条回复中创建文件，必须等用户确认
-- 写入后必须运行验证：使用 Skills 运行目录下的验证脚本，例如 `node ${Skills运行目录}/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`；这里的 `configs/...` 应按运行时根目录解析
-- 必须明确 `context.workspaceMode`：`in-place` 表示直接在设置的工作目录执行，`isolated-copy` 表示先创建副本工程再执行；如果用户没有明确要求隔离，优先使用 `in-place`
-- 如需表达并行任务、多 Agent 实例、channel 或 join policy，应按 workflow creator skill 的”并发设计元数据”规则写入 workflow YAML；依赖不清晰时保持串行，且不要承诺当前执行器一定真实并发执行
-- **绝对不要用 bash 直接创建 YAML 文件来替代 UI 创建弹窗流程**
+## 核心规则
 
-### 输出格式规则（每个阶段必须遵守）
+- 创建前必须收集目标、范围、工作目录、验收约束
+- 不要直接用 bash 创建 YAML 代替 UI 创建流程
+- 需要写入后校验时，使用本 skill 的校验脚本
+- 用户未明确要求隔离执行时，优先 `context.workspaceMode: in-place`
 
-**本 skill 的所有阶段输出都必须遵守系统级 `<result>` 协议。** 不同上下文的输出格式：
+## 输出协议
+
+**本 skill 的所有结构化输出都必须遵守系统级 `<result>` 协议。**
 
 | 上下文 | 阶段 | 输出格式 |
 |--------|------|----------|
-| 首页聊天 | 收集需求/澄清 | `<result>` 内输出 `type=home_sidebar` 的 JSON（触发侧边栏） |
-| 首页聊天 | 方案预览 | `<result>` 内输出 ```card 卡片 |
-| 创建弹窗 | 补充问答 | `<result>` 内输出 `type=clarification_form` 的 JSON |
-| 创建弹窗 | 正式计划 | `<result>` 内输出 `type=plan_draft` 的 JSON |
-| 创建弹窗 | YAML 草案 | `<result>` 内输出 `type=workflow_draft` 的 JSON |
+| 首页聊天 | 收集需求/澄清 | `<result>` 内输出 `{"kind":"home_sidebar","payload":{...}}` |
+| 首页聊天 | 方案预览 | `<result>` 内输出 `{"kind":"card","payload":{...}}` |
+| 创建弹窗 | 补充问答 | `<result>` 内输出 `{"kind":"clarification_form","payload":{...}}` |
+| 创建弹窗 | 正式计划 | `<result>` 内输出 `{"kind":"plan_draft","payload":{...}}` |
+| 创建弹窗 | YAML 草案 | `<result>` 内输出 `{"kind":"workflow_draft","payload":{...}}` |
 
-**禁止行为：**
-- 不要输出 markdown 表格来代替结构化 JSON 表单
-- 不要在 `<result>` 外输出卡片或结构化数据
-- 不要跳过 `<result>` 包裹直接输出 JSON
+约束：
 
-### 核心流程（按顺序执行）
+- `<result>` 内只能放一个 JSON 对象
+- 不要在 `<result>` 内使用 fenced code block
+- 不要在 `<result>` 外输出结构化卡片或 JSON
+- `<result>` 内直接放 JSON，禁止 fenced 围栏
 
-1. **收集需求** — 了解要解决的问题、涉及模块、验收标准
-   - 当用户是在提问题、提需求、提整改目标，而不是直接要求”创建工作流”时，优先先问一句：是否需要我为这个问题创建一个工作流来推进解决
-   - 同时确认是否需要创建工作区副本工程；除非用户明确要隔离执行，否则默认建议直接在工作目录执行（`context.workspaceMode: in-place`）
-   - **首页聊天中**：收集完需求后输出 `home_sidebar` JSON 驱动侧边栏，不要自行进入设计阶段
-2. **查询资源** — `agent.list` 查看可用 Agent，`config.list` 参考已有工作流，**除非用户提出要求，否则尽量帮助用户创建state-machine（状态机模式）的工作流**
-3. **确认关键信息** — 工作目录、需求描述、代码目录（用户确认后再设计）
-4. **设计方案** — 用 ```card 展示方案预览（必须在 `<result>` 内），提供”确认创建”按钮
-5. **写入 + 验证** — 必须运行验证脚本
+## 工作方式
 
-### Agent 团队
-- **defender（红队）** — 建设者：设计、实现、测试、文档
-- **attacker（蓝队）** — 挑战者：攻击方案、寻找缺陷
-- **judge（裁判）** — 仲裁者：评审和判定
+1. 收集需求  
+   先确认问题、目标、工作目录、范围边界、参考 workflow、是否隔离执行。
 
-详细 YAML 格式规范、验证规则、设计原则，见 `*/skills/aceharness-workflow-creator/SKILL.md`。需要时主动查阅该文件。
+2. 查询资源  
+   查看可用 Agent 和参考 workflow。除非用户明确指定，优先帮助用户创建 `state-machine` 工作流。
+
+3. 确认关键信息  
+   包括：工作目录、主要产物、成功标准、参考结构、workspaceMode。
+
+4. 设计方案  
+   首页聊天里可以用 `kind=card` 预览方案；真正驱动首页右侧侧边栏时用 `kind=home_sidebar`。
+
+5. 生成草案并校验  
+   生成 `kind=workflow_draft` 后由系统解析和校验；写入流程仍走 UI。
+
+## Agent 团队
+
+- defender（红队）: 设计、实现、测试、文档
+- attacker（蓝队）: 挑战方案、找风险
+- judge（裁判）: 评审和定稿
+
+详细 YAML 规范、验证规则和设计原则，查 `skills/aceharness-workflow-creator/SKILL.md`。

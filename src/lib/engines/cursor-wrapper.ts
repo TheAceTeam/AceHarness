@@ -13,7 +13,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '../command-exists';
 
@@ -76,7 +76,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         prefix = '\n\n<!-- chunk-boundary -->\n\n';
         this.lastBlockWasTool = false;
       }
-      this.emit('stream', { type: 'text', content: prefix + text } as EngineStreamEvent);
+      this.emitText(prefix + text);
     });
 
     this.engine.on('agent-thought', (content) => {
@@ -166,10 +166,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (!this.streaming) return;
       const name = params?.title || params?.name || params?.description || 'Subagent task';
       this.lastBlockWasTool = true;
-      this.emit('stream', {
-        type: 'text',
-        content: `\n\n**🤖 ${name}**\n`,
-      } as EngineStreamEvent);
+      this.emitText(`\n\n**🤖 ${name}**\n`);
     });
 
     this.engine.on('error', (error) => {
@@ -191,11 +188,21 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     const title = pending?.permissionTitle || pending?.title || toolUpdate.title || toolUpdate.kind || 'Tool';
     const icon = pending?.icon || this.toolIcon(title, toolUpdate.kind || '');
     const metadata = pending?.metadata || toolUpdate;
+    const rawInput = toolUpdate.rawInput || metadata?.rawInput || {};
+    const resolvedToolName =
+      rawInput.command ? 'bash'
+        : rawInput.pattern && rawInput.path ? 'grep'
+        : rawInput.pattern ? 'glob'
+        : rawInput.filePath ? 'read'
+        : title.toLowerCase().includes('task') ? 'task'
+        : title.toLowerCase().includes('write') || title.toLowerCase().includes('create') ? 'write'
+        : title.toLowerCase().includes('edit') || title.toLowerCase().includes('patch') ? 'edit'
+        : title.toLowerCase().includes('terminal') || title.toLowerCase().includes('bash') || title.toLowerCase().includes('shell') ? 'bash'
+        : 'tool';
 
-    let output = `\n\n**${icon} ${title}**\n`;
+    let output = `\n\n**${resolvedToolName === 'tool' ? `${icon} ${title}` : this.getToolTitle(resolvedToolName)}**\n`;
 
     // Extract command/path detail from rawInput if available
-    const rawInput = toolUpdate.rawInput || metadata?.rawInput || {};
     if (rawInput.command) {
       const cmd = rawInput.command;
       const cmdLines = cmd.split('\n');
@@ -220,7 +227,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     }
 
     this.lastBlockWasTool = true;
-    this.emit('stream', { type: 'text', content: output, metadata } as EngineStreamEvent);
+    this.emitText(output, metadata);
   }
 
   private toolIcon(title: string, kind: string): string {
@@ -271,7 +278,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
             const text = inner.text.trim();
             const lines = text.split('\n');
             if (text) {
-              parts.push(formatLargeContent(text, { summaryLabel: '查看内容' }));
+              parts.push(formatTextContent(text, { summaryLabel: '查看内容' }));
             }
           }
         }
@@ -297,7 +304,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if ('output' in raw && typeof raw.output === 'string') {
         const text = raw.output.trim();
         if (!text) return raw.exit !== undefined && raw.exit !== 0 ? `\n(exit code: ${raw.exit})\n` : '';
-        let result = formatLargeContent(text, { summaryLabel: '查看输出' });
+        let result = formatTextContent(text, { summaryLabel: '查看输出' });
         if (raw.exit !== undefined && raw.exit !== 0) result += `(exit code: ${raw.exit})\n`;
         return result;
       }
@@ -306,10 +313,10 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (raw.content && typeof raw.content === 'string') {
         const lines = raw.content.split('\n');
         if (lines.length > 15) {
-          return formatLargeContent(raw.content, { summaryLabel: '查看内容' });
+          return formatTextContent(raw.content, { summaryLabel: '查看内容' });
         }
         if (lines.length > 0) {
-          return `\n${fenced(raw.content)}\n`;
+          return formatTextContent(raw.content, { summaryLabel: '查看内容' });
         }
         return '';
       }

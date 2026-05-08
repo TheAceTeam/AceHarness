@@ -9,7 +9,8 @@
 import { EventEmitter } from 'events';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
-import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
+import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -106,7 +107,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
 
       return {
         success: isSuccess,
-        output: this.collectedOutput.trim(),
+        output: normalizeEngineOutput(this.collectedOutput),
         sessionId: this.currentSessionId ?? undefined,
         stopReason,
         metadata: ZERO_USAGE_METADATA
@@ -114,7 +115,8 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     } catch (error) {
       this.streaming = false;
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const hasUsableOutput = this.collectedOutput.trim().length > 0;
+      const normalizedOutput = normalizeEngineOutput(this.collectedOutput);
+      const hasUsableOutput = normalizedOutput.length > 0;
       const isConnectionClosed = /connection\s+closed/i.test(errorMessage);
 
       // Some ACP engines may close the connection right after streaming final output.
@@ -122,7 +124,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       if (isConnectionClosed && hasUsableOutput) {
         return {
           success: true,
-          output: this.collectedOutput.trim(),
+          output: normalizedOutput,
           sessionId: this.currentSessionId ?? undefined,
           stopReason: 'end_turn',
           metadata: ZERO_USAGE_METADATA,
@@ -153,6 +155,33 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     await this.engine.start();
   }
 
+  protected emitText(content: string, metadata?: unknown): void {
+    const normalized = normalizeEngineChunk(content, this.collectedOutput.length > 0);
+    if (!normalized) return;
+    this.collectedOutput += normalized;
+    this.emit('stream', { type: 'text', content: normalized, metadata } as EngineStreamEvent);
+  }
+
+  protected getToolTitle(toolName: string): string {
+    const titleMap: Record<string, string> = {
+      bash: '💻 执行命令',
+      write: '📝 写入文件',
+      edit: '✏️ 编辑文件',
+      multiedit: '✏️ 编辑文件',
+      patch: '✏️ 编辑文件',
+      read: '📖 读取文件',
+      glob: '🔍 搜索文件',
+      grep: '🔍 搜索内容',
+      ls: '📂 列出目录',
+      task: '🤖 子任务',
+      todo: '📋 任务列表',
+      todowrite: '📋 任务列表',
+      webfetch: '🌐 获取网页',
+      websearch: '🔎 搜索网页',
+    };
+    return titleMap[toolName] || `🔧 ${toolName}`;
+  }
+
   // ---------------------------------------------------------------------------
   // Event forwarding — subclasses can override setupEngineEvents for custom behavior
   // ---------------------------------------------------------------------------
@@ -170,8 +199,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         prefix = '\n\n<!-- chunk-boundary -->\n\n';
         this.lastBlockWasTool = false;
       }
-      this.collectedOutput += prefix + text;
-      this.emit('stream', { type: 'text', content: prefix + text } as EngineStreamEvent);
+      this.emitText(prefix + text);
     });
 
     this.engine.on('agent-thought', (content) => {
@@ -190,8 +218,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         this.seenToolIds.add(toolId);
         const formatted = this.formatToolCall(toolCall);
         this.lastBlockWasTool = true;
-        this.collectedOutput += formatted;
-        this.emit('stream', { type: 'text', content: formatted, metadata: toolCall } as EngineStreamEvent);
+        this.emitText(formatted, toolCall);
       }
     });
 
@@ -205,8 +232,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
           this.seenToolIds.add(toolId);
           const formatted = this.formatToolCall(toolUpdate);
           this.lastBlockWasTool = true;
-          this.collectedOutput += formatted;
-          this.emit('stream', { type: 'text', content: formatted, metadata: toolUpdate } as EngineStreamEvent);
+          this.emitText(formatted, toolUpdate);
         }
       }
 
@@ -223,8 +249,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         }
         const formatted = this.formatToolResult(resultText, toolUpdate);
         if (formatted) {
-          this.collectedOutput += formatted;
-          this.emit('stream', { type: 'text', content: formatted, metadata: toolUpdate } as EngineStreamEvent);
+          this.emitText(formatted, toolUpdate);
         }
       }
     });
@@ -301,7 +326,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected formatToolCall(toolCall: any): string {
     const toolName = this.resolveToolName(toolCall);
     const rawInput = toolCall.rawInput || {};
-    let header = `\n\n**🔧 ${toolCall.title || toolName}**\n`;
+    let header = `\n\n**${this.getToolTitle(toolName)}**\n`;
 
     switch (toolName) {
       case 'bash': {
@@ -399,14 +424,14 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     if (!output) return '';
     const parsed = this.parseToolXmlOutput(output);
     if (parsed) return parsed;
-    return formatLargeContent(output, { summaryLabel: '查看输出' });
+    return formatTextContent(output, { summaryLabel: '查看输出' });
   }
 
   private parseToolXmlOutput(output: string): string | null {
     const taskMatch = output.match(/<task_result>([\s\S]*?)<\/task_result>/);
     if (taskMatch) {
       const inner = taskMatch[1].trim();
-      return formatLargeContent(inner, { summaryLabel: '🤖 子任务结果' });
+      return formatTextContent(inner, { summaryLabel: '🤖 子任务结果' });
     }
     const pathRegex = /<path>(.*?)<\/path>\s*(?:<type>.*?<\/type>\s*)?<content>([\s\S]*?)<\/content>/g;
     let match;

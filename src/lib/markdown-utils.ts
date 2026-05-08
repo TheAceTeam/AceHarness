@@ -48,6 +48,13 @@ export function fenced(content: string, lang = ''): string {
 /** 大内容阈值（字符数），超过此值的工具输出将被截断或替换为文件链接 */
 const LARGE_CONTENT_CHAR_THRESHOLD = 50_000; // 50KB
 const LARGE_CONTENT_LINE_THRESHOLD = 500;
+const SHORT_CONTENT_CHAR_THRESHOLD = 1_200;
+const SHORT_CONTENT_LINE_THRESHOLD = 15;
+const INLINE_CONTENT_CHAR_THRESHOLD = 160;
+
+function escapeInlineCode(content: string): string {
+  return String(content ?? '').replace(/`/g, '\\`');
+}
 
 /**
  * 对有文件路径的大内容，返回文件链接而非完整内容。
@@ -71,4 +78,23 @@ export function formatLargeContent(
 
   const truncated = lines.slice(0, LARGE_CONTENT_LINE_THRESHOLD).join('\n');
   return `\n<details><summary>${label} (前 ${LARGE_CONTENT_LINE_THRESHOLD}/${lines.length} 行)</summary>\n\n${htmlCodeBlock(truncated, opts.lang)}\n\n</details>\n\n> ⚠️ 输出已截断，共 ${lines.length} 行 (${(content.length / 1024).toFixed(0)} KB)\n`;
+}
+
+export function formatTextContent(
+  content: string,
+  opts: { filePath?: string; lang?: string; summaryLabel?: string } = {},
+): string {
+  const normalized = String(content ?? '').trim();
+  if (!normalized) return '';
+
+  const lines = normalized.split('\n');
+  if (lines.length === 1 && normalized.length <= INLINE_CONTENT_CHAR_THRESHOLD) {
+    return `\n\`${escapeInlineCode(normalized)}\`\n`;
+  }
+
+  if (normalized.length <= SHORT_CONTENT_CHAR_THRESHOLD && lines.length <= SHORT_CONTENT_LINE_THRESHOLD) {
+    return `\n${fenced(normalized, opts.lang)}\n`;
+  }
+
+  return formatLargeContent(normalized, opts);
 }

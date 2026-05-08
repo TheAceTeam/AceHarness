@@ -7,11 +7,11 @@
 
 import { EventEmitter } from 'events';
 import { existsSync, statSync } from 'fs';
-import { createRequire } from 'module';
-import { dirname, extname, join } from 'path';
+import { extname, join } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
-import { commandExists, findCommand } from '../command-exists';
-import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
+import { findCommand } from '../command-exists';
+import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 import { repairWindowsMojibake } from '../mojibake-repair';
 import { readTextFileBestEffort } from '../text-decoding';
 
@@ -27,8 +27,6 @@ const ZERO_USAGE_METADATA: EngineResultMetadata = {
   duration_api_ms: 0,
   num_turns: 0,
 };
-
-const moduleRequire = createRequire(import.meta.url);
 
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -76,7 +74,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     try {
       await import('@openai/codex-sdk');
     } catch { return false; }
-    return !!this.findBundledCodexPath() || commandExists('codex', this.getCodexSearchPaths());
+    return !!this.findCodexPath();
   }
 
   private getCodexSearchPaths(): string[] {
@@ -94,119 +92,57 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return candidates.filter(Boolean);
   }
 
-  private findBundledCodexPath(): string | null {
-    const targetTriple = (() => {
-      if (process.platform === 'win32') {
-        if (process.arch === 'x64') return 'x86_64-pc-windows-msvc';
-        if (process.arch === 'arm64') return 'aarch64-pc-windows-msvc';
-      }
-      if (process.platform === 'darwin') {
-        if (process.arch === 'x64') return 'x86_64-apple-darwin';
-        if (process.arch === 'arm64') return 'aarch64-apple-darwin';
-      }
-      if (process.platform === 'linux' || process.platform === 'android') {
-        if (process.arch === 'x64') return 'x86_64-unknown-linux-musl';
-        if (process.arch === 'arm64') return 'aarch64-unknown-linux-musl';
-      }
-      return null;
-    })();
+  private getDirectCodexCandidates(): string[] {
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const binaryName = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+    const candidates: string[] = [];
 
-    if (!targetTriple) {
-      return null;
-    }
-
-    const platformPackage = {
-      'x86_64-unknown-linux-musl': '@openai/codex-linux-x64',
-      'aarch64-unknown-linux-musl': '@openai/codex-linux-arm64',
-      'x86_64-apple-darwin': '@openai/codex-darwin-x64',
-      'aarch64-apple-darwin': '@openai/codex-darwin-arm64',
-      'x86_64-pc-windows-msvc': '@openai/codex-win32-x64',
-      'aarch64-pc-windows-msvc': '@openai/codex-win32-arm64',
-    }[targetTriple];
-
-    if (!platformPackage) {
-      return null;
-    }
-
-    try {
-      const codexPackageJsonPath = moduleRequire.resolve('@openai/codex/package.json');
-      const codexRequire = createRequire(codexPackageJsonPath);
-      const platformPackageJsonPath = codexRequire.resolve(`${platformPackage}/package.json`);
-      const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
-      const binaryPath = join(dirname(platformPackageJsonPath), 'vendor', targetTriple, 'codex', binaryName);
-      return existsSync(binaryPath) ? binaryPath : null;
-    } catch {
-      // moduleRequire couldn't find @openai/codex in ACEHarness's own node_modules.
-      // Try resolving from common global install locations (user may have codex installed globally).
-      try {
-        const globalPaths = this.getGlobalNodeModulesPaths();
-        for (const globalPath of globalPaths) {
-          const codexPkgPath = join(globalPath, '@openai', 'codex', 'package.json');
-          if (!existsSync(codexPkgPath)) continue;
-          const globalCodexRequire = createRequire(codexPkgPath);
-          try {
-            const platformPkgPath = globalCodexRequire.resolve(`${platformPackage}/package.json`);
-            const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
-            const binaryPath = join(dirname(platformPkgPath), 'vendor', targetTriple, 'codex', binaryName);
-            if (existsSync(binaryPath)) return binaryPath;
-          } catch { /* platform package not found here */ }
-        }
-      } catch { /* ignore */ }
-      return null;
-    }
-  }
-
-  private getGlobalNodeModulesPaths(): string[] {
-    const paths: string[] = [];
-    // nvm-managed node (Linux/Mac)
     const nvmDir = process.env.NVM_DIR;
     if (nvmDir) {
-      const nodeVersion = process.version;
-      paths.push(join(nvmDir, 'versions', 'node', nodeVersion, 'lib', 'node_modules'));
+      candidates.push(join(nvmDir, 'versions', 'node', process.version, 'bin', binaryName));
     }
-    // Standard global prefix from process.execPath
-    const execDir = dirname(process.execPath);
+
     if (process.platform === 'win32') {
-      paths.push(join(execDir, 'node_modules'));
+      const appData = process.env.APPDATA || '';
+      if (appData) candidates.push(join(appData, 'npm', 'codex.cmd'));
+      if (home) candidates.push(join(home, 'AppData', 'Roaming', 'npm', 'codex.cmd'));
     } else {
-      paths.push(join(execDir, '..', 'lib', 'node_modules'));
-    }
-    // HOME-based paths
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    if (home) {
-      if (process.platform === 'win32') {
-        paths.push(join(home, 'AppData', 'Roaming', 'npm', 'node_modules'));
-      } else {
-        paths.push(join(home, '.local', 'lib', 'node_modules'));
+      if (home) {
+        candidates.push(join(home, '.nvm', 'versions', 'node', process.version, 'bin', 'codex'));
+        candidates.push(join(home, '.local', 'bin', 'codex'));
       }
+      candidates.push('/usr/local/bin/codex');
+      candidates.push('/usr/bin/codex');
     }
-    return paths.filter((p) => p && existsSync(p));
+
+    return candidates.filter(Boolean);
   }
 
-  /** Locate the codex CLI binary — cross-platform PATH + common install locations. */
+  /** Locate the codex CLI binary from the current environment. */
   private findCodexPath(): string | null {
-    const bundledPath = this.findBundledCodexPath();
-    if (bundledPath) {
-      return bundledPath;
+    for (const candidate of this.getDirectCodexCandidates()) {
+      if (existsSync(candidate)) {
+        return candidate;
+      }
     }
 
-    const resolved = findCommand('codex', this.getCodexSearchPaths());
-    if (!resolved) {
-      return null;
-    }
+    const resolvedFromPath = findCommand('codex', this.getCodexSearchPaths());
+    if (resolvedFromPath) {
+      if (process.platform !== 'win32') {
+        return resolvedFromPath;
+      }
 
-    if (process.platform !== 'win32') {
-      return resolved;
-    }
+      const lowerResolved = resolvedFromPath.toLowerCase();
+      if (lowerResolved.endsWith('.exe') || lowerResolved.endsWith('.com')) {
+        return resolvedFromPath;
+      }
 
-    const lowerResolved = resolved.toLowerCase();
-    if (lowerResolved.endsWith('.exe') || lowerResolved.endsWith('.com')) {
-      return resolved;
-    }
+      const exeCandidate = `${resolvedFromPath}.exe`;
+      if (existsSync(exeCandidate)) {
+        return exeCandidate;
+      }
 
-    const exeCandidate = `${resolved}.exe`;
-    if (existsSync(exeCandidate)) {
-      return exeCandidate;
+      return resolvedFromPath;
     }
 
     return null;
@@ -214,10 +150,12 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
   private emitText(content: string, appendToOutput = true): void {
     if (!content) return;
-    if (appendToOutput) this.collectedOutput += content;
+    const normalized = normalizeEngineChunk(content, this.collectedOutput.length > 0);
+    if (!normalized) return;
+    if (appendToOutput) this.collectedOutput += normalized;
     this.emit('stream', {
       type: 'text',
-      content,
+      content: normalized,
     } as EngineStreamEvent);
   }
 
@@ -227,9 +165,9 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     const cmd = command || '';
     const cmdLines = cmd.split('\n');
     const summary = cmdLines.length <= 1
-      ? '💻 执行命令'
-      : `💻 执行命令 (${cmdLines.length} 行)`;
-    return `\n\n**🔧 bash**\n\n<details><summary>${summary}</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
+      ? '查看命令'
+      : `查看命令 (${cmdLines.length} 行)`;
+    return `\n\n**💻 执行命令**\n\n<details><summary>${summary}</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
   }
 
   private formatCommandResult(output: string, exitCode?: number): string {
@@ -238,7 +176,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       resultText += resultText ? `\n(exit code: ${exitCode})` : `(exit code: ${exitCode})`;
     }
     if (!resultText) return '';
-    return formatLargeContent(resultText, { summaryLabel: '查看输出' });
+    return formatTextContent(resultText, { summaryLabel: '查看输出' });
   }
 
   private getStringField(source: any, keys: string[]): string {
@@ -301,7 +239,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       if (content.includes('\u0000')) {
         return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
       }
-      return formatLargeContent(content, { filePath: path, lang: this.inferFenceLanguage(path), summaryLabel: '查看文件内容' });
+      return formatTextContent(content, { filePath: path, lang: this.inferFenceLanguage(path), summaryLabel: '查看文件内容' });
     } catch {
       return '';
     }
@@ -459,7 +397,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
             } as EngineStreamEvent);
             return {
               success: false,
-              output: this.collectedOutput,
+              output: normalizeEngineOutput(this.collectedOutput),
               error: errMsg,
               metadata: ZERO_USAGE_METADATA,
             };
@@ -469,7 +407,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
       return {
         success: true,
-        output: this.collectedOutput,
+        output: normalizeEngineOutput(this.collectedOutput),
         sessionId: this.currentThread?.id,
         metadata: completionMetadata,
       };
@@ -478,7 +416,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       if (error?.name === 'AbortError' || this._abortController?.signal.aborted) {
         return {
           success: true,
-          output: this.collectedOutput || '',
+          output: normalizeEngineOutput(this.collectedOutput || ''),
           stopReason: 'cancelled',
           metadata: ZERO_USAGE_METADATA,
         };

@@ -4,6 +4,7 @@ import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ClipLoader } from 'react-spinners';
+import BrandLoadingScreen from '@/components/BrandLoadingScreen';
 import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, type NotebookScope } from '@/lib/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
@@ -4217,12 +4218,7 @@ export default function WorkbenchPage() {
   );
 
   if (pageLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-background text-foreground gap-4">
-        <ClipLoader color="hsl(var(--primary))" size={40} />
-        <p className="text-sm text-muted-foreground">加载工作流配置...</p>
-      </div>
-    );
+    return <BrandLoadingScreen message="加载工作流配置..." />;
   }
 
   if (loadError) {

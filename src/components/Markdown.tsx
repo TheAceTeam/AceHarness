@@ -528,7 +528,7 @@ const components = {
 
     return (
       <details
-        className="my-2 border border-border/50 rounded-md"
+        className="my-2 overflow-hidden rounded-md border border-border/50 bg-muted/20"
         {...props}
         onToggle={(event: any) => {
           setOpen(Boolean(event.currentTarget?.open));
@@ -544,7 +544,7 @@ const components = {
   },
   summary({ node: _node, children, ...props }: any) {
     return (
-      <summary className="cursor-pointer px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground select-none" {...props}>
+      <summary className="cursor-pointer border-b border-transparent px-3 py-2 text-[12px] font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground select-none [&::-webkit-details-marker]:hidden" {...props}>
         {children}
       </summary>
     );

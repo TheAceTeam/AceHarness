@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-beta.7",
+  "version": "1.0.0-beta.8",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:cli": "node scripts/build-cli.js",
@@ -95,11 +95,13 @@
     "@tiptap/y-tiptap": "^3.0.3",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/yazl": "^3.3.1",
+    "ai-json-repair": "^1.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "copy-to-clipboard": "^3.3.3",
     "framer-motion": "^12.34.0",
+    "jsonrepair": "^3.14.0",
     "katex": "^0.16.45",
     "lib0": "^0.2.117",
     "lowlight": "^3.3.0",
@@ -148,13 +150,7 @@
     "@anthropic-ai/claude-agent-sdk-linux-x64": "0.2.133",
     "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.2.133",
     "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.2.133",
-    "@anthropic-ai/claude-agent-sdk-win32-x64": "0.2.133",
-    "@openai/codex-darwin-arm64": "npm:@openai/codex@0.129.0-darwin-arm64",
-    "@openai/codex-darwin-x64": "npm:@openai/codex@0.129.0-darwin-x64",
-    "@openai/codex-linux-arm64": "npm:@openai/codex@0.129.0-linux-arm64",
-    "@openai/codex-linux-x64": "npm:@openai/codex@0.129.0-linux-x64",
-    "@openai/codex-win32-arm64": "npm:@openai/codex@0.129.0-win32-arm64",
-    "@openai/codex-win32-x64": "npm:@openai/codex@0.129.0-win32-x64"
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "0.2.133"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",

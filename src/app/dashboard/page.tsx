@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -627,10 +628,15 @@ export default function DashboardPage() {
               transition={{ delay: 0.6 }}
               className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6"
             >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <History className="w-5 h-5 text-primary" />
-                {t('dashboard.sections.recentRuns')}
-              </h3>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <Link href="/run-history" className="inline-flex items-center gap-2 text-lg font-semibold transition-colors hover:text-primary">
+                  <History className="w-5 h-5 text-primary" />
+                  <span>{t('dashboard.sections.recentRuns')}</span>
+                </Link>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/run-history">查看全部</Link>
+                </Button>
+              </div>
               <div className="space-y-3">
                 {recentRuns.map((run, i) => (
                   <motion.div

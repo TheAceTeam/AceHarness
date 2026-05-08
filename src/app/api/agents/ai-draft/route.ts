@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { extractJsonObject as extractStructuredJsonObject } from '@/lib/result-channel';
 import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
 import { loadChatSettings } from '@/lib/chat-settings';
 import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
@@ -96,17 +97,7 @@ function fallbackDraft(input: {
 }
 
 function extractJsonObject(text: string): any | null {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] || text;
-  const trimmed = candidate.trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+  return extractStructuredJsonObject(text);
 }
 
 function normalizeConfigFilename(filename: string): string {

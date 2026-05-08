@@ -3,8 +3,8 @@ import { createWriteStream, existsSync, createReadStream } from 'fs';
 import { dirname, join, normalize, resolve } from 'path';
 import { pipeline, Readable, Transform } from 'stream';
 import { promisify } from 'util';
+import { execFile } from 'child_process';
 import { createHash } from 'crypto';
-import * as unzipper from 'unzipper';
 import tar from 'tar-stream';
 import { createGunzip } from 'zlib';
 import { parse, stringify } from 'yaml';
@@ -13,6 +13,7 @@ import { getRuntimeSdkSettingsPath } from '@/lib/runtime-configs';
 import { loadSystemSettings } from '@/lib/system-settings';
 
 const streamPipeline = promisify(pipeline);
+const execFileAsync = promisify(execFile);
 
 const STATE_PATH = getWorkspaceDataFile('cangjie-sdk-state.yaml');
 const DATA_ROOT = getWorkspaceDataFile('cangjie');
@@ -300,21 +301,21 @@ function safeJoin(base: string, target: string): string {
 }
 
 async function extractZip(archivePath: string, targetDir: string) {
-  const isWindows = process.platform === 'win32';
-  const directory = await unzipper.Open.file(archivePath);
-  for (const entry of directory.files) {
-    const destination = safeJoin(targetDir, entry.path);
-    if (entry.type === 'Directory') {
-      await mkdir(destination, { recursive: true });
-      continue;
-    }
-    await mkdir(dirname(destination), { recursive: true });
-    await streamPipeline(entry.stream(), createWriteStream(destination));
-    if (!isWindows) {
-      const unixMode = entry.externalFileAttributes ? (entry.externalFileAttributes >>> 16) & 0o777 : 0;
-      if (unixMode) await chmod(destination, unixMode);
-    }
+  await mkdir(targetDir, { recursive: true });
+
+  if (process.platform === 'win32') {
+    await execFileAsync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+      archivePath,
+      targetDir,
+    ]);
+    return;
   }
+
+  await execFileAsync('unzip', ['-oq', archivePath, '-d', targetDir]);
 }
 
 async function extractTarGz(archivePath: string, targetDir: string) {

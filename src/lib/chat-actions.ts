@@ -4,10 +4,8 @@
 
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from './api';
 import { getWorkspaceSkillPath } from './app-paths';
-import {
-  type HomeSidebarHint,
-  shouldSuppressCardsForSidebarHint,
-} from './home-sidebar-state';
+import { extractJsonObject as extractResultJsonObject } from './result-channel';
+import { type HomeSidebarHint } from './home-sidebar-state';
 
 // Action 类型枚举
 export type ActionType =
@@ -315,6 +313,23 @@ function stripDanglingTrailingFence(content: string): string {
   return lines.slice(0, lastContentLine).join('\n').trimEnd();
 }
 
+function stripIncompleteStreamingFence(content: string): string {
+  const ranges = getFencedCodeBlockRanges(content);
+  if (ranges.length === 0) return content;
+  const [lastStart, lastEnd] = ranges[ranges.length - 1];
+  if (lastEnd !== content.length) return content;
+
+  const fencedBlock = content.slice(lastStart, lastEnd);
+  const lines = fencedBlock.split(/\r?\n/);
+  if (lines.length <= 1) return content;
+
+  const openingFence = lines[0]?.match(/^\s*(`{3,}|~{3,})/);
+  const closingFence = lines[lines.length - 1]?.match(/^\s*(`{3,}|~{3,})\s*$/);
+  if (!openingFence || closingFence) return content;
+
+  return content.slice(0, lastStart).trimEnd();
+}
+
 function getResultSections(markdown: string): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
   const sections: Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> = [];
   const codeBlockRanges = getFencedCodeBlockRanges(markdown);
@@ -358,7 +373,8 @@ function getDanglingResultRanges(markdown: string): Array<[number, number]> {
 
 function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
   if (!obj || typeof obj !== 'object') return false;
-  if (obj.type !== 'home_sidebar') return false;
+  if (obj.type !== undefined && obj.type !== 'home_sidebar') return false;
+  if (obj.kind !== undefined && obj.kind !== 'home_sidebar') return false;
   const validTabs = ['commander', 'workflow', 'agent'];
   const tabsValid = !obj.tabs || (Array.isArray(obj.tabs) && obj.tabs.every((tab: unknown) => typeof tab === 'string' && validTabs.includes(tab)));
   const activeValid = !obj.activeTab || validTabs.includes(obj.activeTab);
@@ -452,27 +468,25 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     removals.push([section.start, section.end]);
 
     let sectionHasStructured = false;
-
-    const firstNonWhitespace = section.content.search(/\S/);
-    if (firstNonWhitespace !== -1 && section.content[firstNonWhitespace] === '{') {
-      const jsonStr = extractBalancedJson(section.content, firstNonWhitespace);
-      if (jsonStr) {
-        try {
-          const parsed = JSON.parse(jsonStr);
-          if (isCardLike(parsed)) {
-            cards.push(validateCard(parsed));
-            sectionHasStructured = true;
-          } else if (isHomeSidebarHintLike(parsed)) {
-            sidebarHints.push(parsed);
-            sectionHasStructured = true;
-          }
-        } catch {
-          // Malformed machine-readable JSON remains hidden with the result block.
-        }
+    const trimmedContent = section.content.trim();
+    const rootParsed = trimmedContent.startsWith('```') ? null : extractResultJsonObject(section.content);
+    if (rootParsed) {
+      if (rootParsed.kind === 'card' && isCardLike(rootParsed.payload)) {
+        cards.push(validateCard(rootParsed.payload));
+        sectionHasStructured = true;
+      } else if (rootParsed.kind === 'home_sidebar' && isHomeSidebarHintLike(rootParsed.payload)) {
+        sidebarHints.push(rootParsed.payload);
+        sectionHasStructured = true;
+      } else if (isCardLike(rootParsed)) {
+        cards.push(validateCard(rootParsed));
+        sectionHasStructured = true;
+      } else if (isHomeSidebarHintLike(rootParsed)) {
+        sidebarHints.push(rootParsed);
+        sectionHasStructured = true;
       }
     }
 
-    const codeBlockRegex = /```(card|json)\s*\n/g;
+    const codeBlockRegex = /```(card|json)\s*/g;
     let match: RegExpExecArray | null;
     while ((match = codeBlockRegex.exec(section.content)) !== null) {
       const contentStart = match.index + match[0].length;
@@ -503,7 +517,13 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
 
       try {
         const parsed = JSON.parse(jsonStr);
-        if (isCardLike(parsed)) {
+        if (parsed?.kind === 'card' && isCardLike(parsed.payload)) {
+          cards.push(validateCard(parsed.payload));
+          sectionHasStructured = true;
+        } else if (parsed?.kind === 'home_sidebar' && isHomeSidebarHintLike(parsed.payload)) {
+          sidebarHints.push(parsed.payload);
+          sectionHasStructured = true;
+        } else if (isCardLike(parsed)) {
           cards.push(validateCard(parsed));
           sectionHasStructured = true;
         } else if (isHomeSidebarHintLike(parsed)) {
@@ -530,10 +550,10 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
       }
     }
 
-    // If no structured payload was found, save the plain text content
-    // so the caller can use it as fallback display when the visible text is empty.
+    // Keep legacy shape for callers during migration, but do not surface
+    // machine-channel plain text back into visible chat.
     if (!sectionHasStructured && section.content.trim()) {
-      resultPlainTexts.push(section.content.trim());
+      resultPlainTexts.push('');
     }
   }
 
@@ -548,9 +568,30 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
   }
   text = stripDanglingTrailingFence(text);
 
-  const effectiveCards = sidebarHints.some((hint) => shouldSuppressCardsForSidebarHint(hint)) ? [] : cards;
+  return { text: text.trim(), actions, cards, sidebarHints, resultPlainTexts: resultPlainTexts.filter(Boolean) };
+}
 
-  return { text: text.trim(), actions, cards: effectiveCards, sidebarHints, resultPlainTexts };
+export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
+  visibleText: string;
+  hasMachineResult: boolean;
+  hasSidebarHint: boolean;
+} {
+  const content = String(raw || '');
+  const hasMachineResult = getResultSections(content).length > 0 || getDanglingResultRanges(content).length > 0;
+  if (!hasMachineResult) {
+    return {
+      visibleText: streaming ? stripIncompleteStreamingFence(content) : content,
+      hasMachineResult: false,
+      hasSidebarHint: false,
+    };
+  }
+
+  const parsed = parseActions(content);
+  return {
+    visibleText: parsed.text,
+    hasMachineResult: true,
+    hasSidebarHint: streaming ? false : parsed.sidebarHints.length > 0,
+  };
 }
 
 /** 判断 action 是否安全（自动执行） */

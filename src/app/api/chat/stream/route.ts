@@ -57,7 +57,7 @@ async function loadChatHistory(frontendSessionId: string): Promise<string> {
       const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
       // Truncate long messages, remove action/result card blocks to save tokens
       let text = msg.content
-        .replace(/<result>\s*```(?:card|json)\s*\n[\s\S]*?```\s*<\/result>/g, '[result block]')
+        .replace(/<result>[\s\S]*?<\/result>/gi, '[result block]')
         .replace(/```(?:action|card)\s*\n[\s\S]*?```/g, '[action/card block]')
         .replace(/<\/?result>/g, '')
         .trim();

@@ -1,18 +1,9 @@
 import type { SpecCodingDocument } from '@/lib/schemas';
 import { normalizeSpecCodingDocument } from '@/lib/spec-coding-store';
+import { extractJsonObject as extractJsonObjectFromResultChannel } from '@/lib/result-channel';
 
 export function extractJsonObject(text: string): any | null {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] || text;
-  const trimmed = candidate.trim();
-  const start = trimmed.indexOf('{');
-  const end = trimmed.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) return null;
-  try {
-    return JSON.parse(trimmed.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+  return extractJsonObjectFromResultChannel(text);
 }
 
 export function normalizeStringArray(input: unknown, limit = 12): string[] {

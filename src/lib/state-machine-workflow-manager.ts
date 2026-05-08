@@ -78,6 +78,7 @@ import {
 import { importWorkspaceArtifactsIntoRunSpecCoding } from './runtime-spec-import';
 import { appendMemoryEntries } from './workflow-memory-store';
 import { upsertRelationshipSignal } from './agent-relationship-store';
+import { extractJsonObject as extractStructuredJsonObject } from './result-channel';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -1593,16 +1594,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   private extractJsonObject(raw: string): any | null {
-    const fencedMatch = raw.match(/```json\s*([\s\S]*?)```/i);
-    const candidate = fencedMatch?.[1] || raw;
-    const start = candidate.indexOf('{');
-    const end = candidate.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-    try {
-      return JSON.parse(candidate.slice(start, end + 1));
-    } catch {
-      return null;
-    }
+    return extractStructuredJsonObject(raw);
   }
 
   private buildFallbackFinalReview(status: 'completed' | 'failed' | 'stopped'): WorkflowFinalReview {
@@ -3785,14 +3777,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const validStates = new Set(config.workflow.states.map(s => s.name));
     // Check outputs in reverse order (last judge output takes precedence)
     for (const output of [...stepOutputs].reverse()) {
-      const jsonMatch = output.match(/```json\s*\n\s*(\{[\s\S]*?\})\s*\n\s*```/);
-      if (jsonMatch) {
-        try {
-          const parsed = JSON.parse(jsonMatch[1]);
-          if (parsed.next_state && validStates.has(parsed.next_state)) {
-            return parsed.next_state;
-          }
-        } catch { /* ignore */ }
+      const parsed = this.extractJsonObject(output);
+      if (parsed?.next_state && validStates.has(parsed.next_state)) {
+        return parsed.next_state;
       }
     }
     return null;
@@ -3806,24 +3793,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const issues: Issue[] = [];
 
     // Try to parse JSON block
-    const jsonMatch = output.match(/```json\s*\n\s*(\{[\s\S]*?\})\s*\n\s*```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (parsed.issues && Array.isArray(parsed.issues)) {
-          for (const issue of parsed.issues) {
-            // Skip issues without a meaningful description
-            if (!issue.description?.trim()) continue;
-            issues.push({
-              type: issue.type || 'implementation',
-              severity: issue.severity || 'minor',
-              description: issue.description.trim(),
-              foundInState: stateName,
-              foundByAgent: step.agent,
-            });
-          }
-        }
-      } catch { /* ignore parse errors */ }
+    const parsed = this.extractJsonObject(output);
+    if (parsed?.issues && Array.isArray(parsed.issues)) {
+      for (const issue of parsed.issues) {
+        if (!issue.description?.trim()) continue;
+        issues.push({
+          type: issue.type || 'implementation',
+          severity: issue.severity || 'minor',
+          description: issue.description.trim(),
+          foundInState: stateName,
+          foundByAgent: step.agent,
+        });
+      }
     }
 
     return issues;
@@ -3836,14 +3817,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return 'fail';
     }
 
-    const jsonMatch = output.match(/```json\s*\n\s*(\{[\s\S]*?\})\s*\n\s*```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        if (['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
-          return parsed.verdict;
-        }
-      } catch { /* ignore */ }
+    const parsed = this.extractJsonObject(output);
+    if (parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict)) {
+      return parsed.verdict;
     }
 
     // Fallback: check for keywords

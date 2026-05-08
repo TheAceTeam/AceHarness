@@ -157,6 +157,28 @@
   background: hsl(var(--card));
 }
 
+.markdownContent details[open] > summary {
+  border-bottom-color: hsl(var(--border) / 0.6);
+}
+
+.markdownContent details > summary + * {
+  padding: 10px 12px 12px;
+}
+
+.markdownContent details pre {
+  background: #282c34;
+  color: #e5e7eb;
+  border-color: hsl(var(--border) / 0.65);
+}
+
+.markdownContent details pre code {
+  color: inherit;
+}
+
+.markdownContent details > summary + * pre {
+  margin: 0;
+}
+
 :global(.ace-todo-header) {
   font-weight: 600;
   font-size: 13px;

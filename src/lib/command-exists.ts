@@ -62,6 +62,27 @@ export function getCommonCliSearchPaths(): string[] {
   ].filter(Boolean);
 }
 
+function findCommandViaLoginShell(command: string): string | null {
+  if (process.platform === 'win32') return null;
+  if (!/^[\w.-]+$/.test(command)) return null;
+
+  const shell = process.env.SHELL?.trim() || '/bin/sh';
+  try {
+    const output = execFileSync(shell, ['-lc', `command -v -- ${command}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+      env: process.env,
+    }).trim();
+
+    if (!output || output.includes('\n')) return null;
+    if (!output.includes('/')) return null;
+    return existsSync(output) ? output : null;
+  } catch {
+    return null;
+  }
+}
+
 export function findCommand(command: string, extraPaths: string[] = []): string | null {
   if (!command || /[\r\n]/.test(command)) return null;
 
@@ -101,6 +122,9 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
       if (existsSync(fullPath)) return fullPath;
     }
   }
+
+  const shellResolved = findCommandViaLoginShell(command);
+  if (shellResolved) return shellResolved;
 
   return null;
 }

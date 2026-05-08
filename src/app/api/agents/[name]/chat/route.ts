@@ -22,6 +22,11 @@ import {
 } from '@/lib/workflow-experience-store';
 import { workflowRegistry } from '@/lib/workflow-registry';
 import { loadRunState, saveRunState } from '@/lib/run-state-persistence';
+import {
+  extractSpecCodingRevisionCommand,
+  stripSpecCodingRevisionCommand,
+  type SpecCodingRevisionCommand,
+} from '@/lib/spec-coding-revision-protocol';
 
 function readGlobalEngineSelection(): { engine?: string; defaultModel?: string } {
   try {
@@ -37,41 +42,6 @@ function readGlobalEngineSelection(): { engine?: string; defaultModel?: string }
 }
 
 type ChatMode = 'standalone-chat' | 'workflow-chat';
-
-type SpecCodingRevisionCommand = {
-  type: 'spec-coding-revision';
-  apply?: boolean;
-  summary?: string;
-  affectedArtifacts?: string[];
-  impact?: string[];
-};
-
-function extractSpecCodingRevisionCommand(text: string): SpecCodingRevisionCommand | null {
-  const fenced = text.match(/```json\s*([\s\S]*?)```/i)?.[1];
-  const tagged = text.match(/<spec-coding-revision>\s*([\s\S]*?)\s*<\/spec-coding-revision>/i)?.[1];
-  const candidate = (fenced || tagged || text).trim();
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-
-  try {
-    const parsed = JSON.parse(candidate.slice(start, end + 1));
-    if (parsed?.type !== 'spec-coding-revision') return null;
-    return {
-      type: 'spec-coding-revision',
-      apply: parsed.apply !== false,
-      summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : '',
-      affectedArtifacts: Array.isArray(parsed.affectedArtifacts)
-        ? parsed.affectedArtifacts.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 4)
-        : [],
-      impact: Array.isArray(parsed.impact)
-        ? parsed.impact.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 5)
-        : [],
-    };
-  } catch {
-    return null;
-  }
-}
 
 async function applySupervisorSpecCodingRevision(input: {
   workflowContext: Record<string, any>;
@@ -328,8 +298,9 @@ export async function POST(
       roleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
         ? [
           '## Supervisor Spec Coding 修订协议',
-          '- 当用户明确要求你刷新、修订、更新、收敛 Spec Coding 制品 / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<spec-coding-revision>...</spec-coding-revision>` JSON 块。',
-          '- JSON 格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]}',
+          '- 当用户明确要求你刷新、修订、更新、收敛 Spec Coding 制品 / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<result>...</result>` 机器结果块。',
+          '- 推荐 JSON 格式: {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]}}',
+          '- 兼容旧格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]} 或 `<spec-coding-revision>...</spec-coding-revision>`。',
           '- 只有你判断需要真正落盘修订时才输出该块；否则不要输出。',
         ].join('\n')
         : '',
@@ -372,9 +343,7 @@ export async function POST(
         })
       : null;
     const cleanedOutput = specCodingRevisionCommand
-      ? (result.output || '')
-        .replace(/<spec-coding-revision>[\s\S]*?<\/spec-coding-revision>/gi, '')
-        .trim()
+      ? stripSpecCodingRevisionCommand(result.output || '')
       : (result.output || '');
     if (finalSessionId) {
       await appendMemoryEntries([

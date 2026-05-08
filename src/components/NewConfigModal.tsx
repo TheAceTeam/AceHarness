@@ -31,6 +31,7 @@ import { ComboboxPortalProvider } from './ui/combobox';
 import Markdown from './Markdown';
 import UniversalCard from './chat/cards/UniversalCard';
 import { parseActions } from '@/lib/chat-actions';
+import { extractStructuredResult as extractStructuredResultFromChannel } from '@/lib/result-channel';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
 import { agentApi } from '@/lib/api';
@@ -138,11 +139,11 @@ function buildPlanDraftRepairMessage(previousOutput: string) {
     '',
     '硬性格式要求：',
     '1. 最终输出必须包含一个 <result>...</result> 块。',
-    '2. <result> 内只能放一个 ```json 代码块。',
-    '3. JSON 顶层必须是 {"type":"plan_draft", ...}。',
+    '2. <result> 内只能放一个机器可读 JSON 对象，不要包 ```json 代码块。',
+    '3. JSON 顶层优先使用 {"kind":"plan_draft","payload":{...}}；兼容格式 {"type":"plan_draft", ...} 也可解析。',
     '4. 必须包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
     '5. artifacts 必须包含 requirements、design、tasks 三个字符串字段。',
-    '6. artifacts 字符串内如需 Mermaid 或代码块，用 ~~~ 代替 ``` 作为分隔符，避免与外层 JSON 代码块冲突。',
+    '6. artifacts 字符串内如需 Mermaid 或代码块，用 ~~~ 代替 ``` 作为分隔符，避免与 Markdown 代码块混淆。',
     '7. 输出 </result> 后不要再追加任何文字。',
     '',
     SPEC_LANGUAGE_RULE,
@@ -184,8 +185,8 @@ function buildWorkflowDraftRepairMessage(previousOutput: string, validation: any
     '',
     '硬性格式要求：',
     '1. 最终输出必须包含一个 <result>...</result> 块。',
-    '2. <result> 内只能放一个 ```json 代码块。',
-    '3. JSON 顶层必须是 {"type":"workflow_draft", ...}。',
+    '2. <result> 内只能放一个机器可读 JSON 对象，不要包 ```json 代码块。',
+    `3. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft", ...} 也可解析。`,
     `4. filename 必须是 "${filename}"。`,
     '5. config 必须是完整 AceHarness workflow 配置对象，包含 workflow 和 context。',
     '6. workflow.supervisor.agent 以及所有 step.agent 必须引用当前可用 Agent。',
@@ -719,27 +720,12 @@ function computeWorkflowBindingChanges(baseConfig: any, currentConfig: any): Wor
 }
 
 function extractStructuredResult<T>(markdown: string, expectedType: string): T | null {
-  const resultRegex = /<result>([\s\S]*?)<\/result>/g;
-  let resultMatch: RegExpExecArray | null;
-
-  while ((resultMatch = resultRegex.exec(markdown)) !== null) {
-    const content = resultMatch[1];
-    const jsonRegex = /```json\s*([\s\S]*?)```/g;
-    let jsonMatch: RegExpExecArray | null;
-
-    while ((jsonMatch = jsonRegex.exec(content)) !== null) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1].trim());
-        if (parsed?.type === expectedType) {
-          return parsed as T;
-        }
-      } catch {
-        // ignore malformed json block
-      }
-    }
-  }
-
-  return null;
+  const parsed = extractStructuredResultFromChannel<any>(markdown, (value: any): value is any => (
+    value?.type === expectedType ||
+    value?.kind === expectedType
+  ));
+  if (!parsed) return null;
+  return (parsed?.kind === expectedType ? parsed.payload : parsed) as T;
 }
 
 function extractPlanDraftResult(markdown: string): PlanDraftResult | null {
@@ -748,38 +734,28 @@ function extractPlanDraftResult(markdown: string): PlanDraftResult | null {
 
 function extractWorkflowDraftPreview(markdown: string, fallbackFilename?: string): WorkflowDraftPreviewState {
   let parseError = '';
-  const resultRegex = /<result>([\s\S]*?)<\/result>/g;
-  let resultMatch: RegExpExecArray | null;
-
-  while ((resultMatch = resultRegex.exec(markdown)) !== null) {
-    const content = resultMatch[1];
-    const jsonRegex = /```json\s*([\s\S]*?)```/g;
-    let jsonMatch: RegExpExecArray | null;
-
-    while ((jsonMatch = jsonRegex.exec(content)) !== null) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1].trim());
-        if (parsed?.type !== 'workflow_draft') continue;
-        if (!parsed.config || typeof parsed.config !== 'object') {
-          return {
-            source: 'result-json',
-            filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
-            summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-            config: null,
-            parseError: 'workflow_draft.config 缺失或不是对象',
-          };
-        }
-        return {
-          source: 'result-json',
-          filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
-          summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-          config: parsed.config,
-          yaml: stringifyYaml(parsed.config),
-        };
-      } catch (error: any) {
-        parseError = `workflow_draft JSON 解析失败: ${error?.message || 'JSON 格式错误'}`;
-      }
+  const parsed = extractStructuredResultFromChannel<any>(markdown, (value: any): value is any => (
+    value?.type === 'workflow_draft' ||
+    value?.kind === 'workflow_draft'
+  ));
+  if (parsed) {
+    const payload = parsed.kind === 'workflow_draft' ? parsed.payload : parsed;
+    if (!payload?.config || typeof payload.config !== 'object') {
+      return {
+        source: 'result-json',
+        filename: typeof payload?.filename === 'string' ? payload.filename : fallbackFilename,
+        summary: typeof payload?.summary === 'string' ? payload.summary : '',
+        config: null,
+        parseError: 'workflow_draft.config 缺失或不是对象',
+      };
     }
+    return {
+      source: 'result-json',
+      filename: typeof payload.filename === 'string' ? payload.filename : fallbackFilename,
+      summary: typeof payload.summary === 'string' ? payload.summary : '',
+      config: payload.config,
+      yaml: stringifyYaml(payload.config),
+    };
   }
 
   const yamlBlocks = [...markdown.matchAll(/```ya?ml\s*([\s\S]*?)```/gi)];
@@ -2512,144 +2488,144 @@ export default function NewConfigModal({
 
     return [
       '你正在帮助用户做正式计划前的需求访谈。目标不是多问问题，而是补齐会改变方案、边界、兼容、验收或任务拆分的关键信息。',
-      '⚠️ 绝对禁止：不要创建任何文件。不要输出 markdown 表格或纯文字问题列表。你的唯一输出目标是在回复末尾的 <result> 内输出一个 ```json 代码块，类型为 clarification_form。',
+      '⚠️ 绝对禁止：不要创建任何文件。不要输出 markdown 表格或纯文字问题列表。你的唯一输出目标是在回复末尾的 <result> 内输出一个机器可读 JSON 对象，类型为 clarification_form。',
       '先从用户输入、工作目录、参考工作流和已有上下文中提炼已确认事实；不要重复询问已经给出的信息，也不要把推测写成事实。',
       '本轮输出必须像资深产品/技术负责人做需求访谈：先给当前理解，再指出证据来源，再把缺口分为 blocking 与 optional，最后只问 3 到 7 个高价值问题。',
       '问题必须落到具体决策：目标用户与成功结果、当前行为与目标行为、范围与非目标、输入/输出/状态、兼容/迁移、失败/边界、安全/隐私、性能/可靠性、验证/发布。',
       '每个问题都使用结构化表单表达：声明 selectionMode=single 或 selectionMode=multiple，提供 2 到 4 个选项，至少一个选项带 recommended=true，同时保留 placeholder 供用户补充自由文本。',
       '每个问题的题面都要说明“这个答案会影响什么决策”，避免“还需要什么功能”“是否要优化体验”“是否需要联调”这类无法直接落地的问题。',
       '如果用户跳过某个问题，后续计划应采用保守默认假设；因此问题的 placeholder 或选项描述里要能看出默认假设和剩余风险。',
-      '机器可读结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。',
+      '机器可读结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 JSON 对象，不要包 ```json 代码块。',
       SPEC_LANGUAGE_RULE,
       '结构如下：',
       '<result>',
-      '```json',
       JSON.stringify({
-        type: 'clarification_form',
-        summary: '当前理解：用户要为某个工作目录创建可执行工作流；已知目标、入口或约束不足，需要先确认会影响计划 DSL 的关键决策。',
-        knownFacts: [
-          '用户已提供工作流名称和工作目录，证据来自表单字段。',
-          '用户已描述主要诉求，证据来自需求描述。',
-        ],
-        missingFields: [
-          'blocking: 目标用户、成功结果和本次必须覆盖的主流程仍未确认',
-          'blocking: 当前行为、目标行为和不做范围仍未确认',
-          'blocking: 兼容/迁移和失败路径要求仍未确认',
-          'optional: 验证命令、人工验收证据和发布偏好可进一步补充',
-        ],
-        questions: [
-          {
-            id: 'target_outcome',
-            label: '目标结果',
-            question: '这次工作流创建完成后，最重要的可观察成功结果是什么？这个答案会决定 requirements 的目标、需求优先级和验收标准。',
-            selectionMode: 'single',
-            options: [
-              {
-                id: 'implementation_ready',
-                label: '可直接实现(推荐)',
-                description: '产出能直接进入编码、验证和交付的计划，包含明确任务、入口、数据和验收证据。',
-                recommended: true,
-              },
-              {
-                id: 'decision_review',
-                label: '方案评审',
-                description: '重点产出方案比较、关键决策、风险和需要人工确认的边界。',
-              },
-              {
-                id: 'process_automation',
-                label: '流程自动化',
-                description: '重点产出可派生 workflow 的阶段、角色分工、检查点和失败处理。',
-              },
-            ],
-            placeholder: '如果跳过，将默认以“可直接实现”为目标，并把未确认评审点记录为 open questions。',
-            required: true,
-          },
-          {
-            id: 'scope_boundaries',
-            label: '范围边界',
-            question: '本次必须覆盖和明确排除的入口、角色、数据或场景有哪些？这个答案会决定 spec 的需求范围和 tasks 不能越界的非目标。',
-            selectionMode: 'multiple',
-            options: [
-              {
-                id: 'user_flow',
-                label: '用户主流程(推荐)',
-                description: '覆盖用户从输入需求到确认计划、生成 workflow 草案的完整主路径。',
-                recommended: true,
-              },
-              {
-                id: 'api_state',
-                label: 'API/状态',
-                description: '覆盖 API payload、状态字段、持久化记录或历史会话读取。',
-              },
-              {
-                id: 'ui_feedback',
-                label: 'UI反馈',
-                description: '覆盖加载、错误、空数据、确认和修订等用户可见状态。',
-              },
-              {
-                id: 'exclude_migration',
-                label: '排除迁移',
-                description: '本次只处理新流程，不迁移旧配置或旧会话；若选择此项，兼容风险需记录。',
-              },
-            ],
-            placeholder: '请补充必须不做的内容。例如：不改历史 API 字段、不迁移旧 workflow、不新增权限模型。',
-            required: true,
-          },
-          {
-            id: 'failure_compatibility',
-            label: '异常兼容',
-            question: '遇到缺失输入、旧数据、模型输出不合规或外部依赖失败时，系统应如何处理？这个答案会决定 design 的失败路径、兼容策略和验证任务。',
-            selectionMode: 'single',
-            options: [
-              {
-                id: 'conservative_continue',
-                label: '保守继续(推荐)',
-                description: '使用明确默认假设继续生成计划，并把风险写入 missingFields/open questions。',
-                recommended: true,
-              },
-              {
-                id: 'block_until_answered',
-                label: '阻止继续',
-                description: 'blocking 信息缺失时不生成正式计划，要求用户先补齐。',
-              },
-              {
-                id: 'fallback_existing',
-                label: '沿用旧逻辑',
-                description: '旧配置、旧会话或参考 workflow 可读时优先沿用，失败时再提示用户确认。',
-              },
-            ],
-            placeholder: '如果跳过，将默认保守继续：生成计划但显式标注假设、风险和待确认项。',
-            required: true,
-          },
-          {
-            id: 'validation_evidence',
-            label: '验证证据',
-            question: '后续用什么证据判断计划或实现完成？这个答案会决定 tasks 的验证方式和收口标准。',
-            selectionMode: 'multiple',
-            options: [
-              {
-                id: 'automated_checks',
-                label: '自动检查(推荐)',
-                description: '使用类型检查、构建、测试、schema 或规范校验命令作为证据。',
-                recommended: true,
-              },
-              {
-                id: 'manual_acceptance',
-                label: '人工验收',
-                description: '用用户可见流程、错误路径、状态刷新和持久化结果做验收记录。',
-              },
-              {
-                id: 'artifact_review',
-                label: '制品审阅',
-                description: '审查 requirements/design/tasks 之间的追踪链、一致性和非目标边界。',
-              },
-            ],
-            placeholder: '请补充项目已有命令或验收入口。例如：npm run build、npx tsc --noEmit、指定页面操作路径。',
-            required: false,
-          },
-        ],
+        kind: 'clarification_form',
+        payload: {
+          summary: '当前理解：用户要为某个工作目录创建可执行工作流；已知目标、入口或约束不足，需要先确认会影响计划 DSL 的关键决策。',
+          knownFacts: [
+            '用户已提供工作流名称和工作目录，证据来自表单字段。',
+            '用户已描述主要诉求，证据来自需求描述。',
+          ],
+          missingFields: [
+            'blocking: 目标用户、成功结果和本次必须覆盖的主流程仍未确认',
+            'blocking: 当前行为、目标行为和不做范围仍未确认',
+            'blocking: 兼容/迁移和失败路径要求仍未确认',
+            'optional: 验证命令、人工验收证据和发布偏好可进一步补充',
+          ],
+          questions: [
+            {
+              id: 'target_outcome',
+              label: '目标结果',
+              question: '这次工作流创建完成后，最重要的可观察成功结果是什么？这个答案会决定 requirements 的目标、需求优先级和验收标准。',
+              selectionMode: 'single',
+              options: [
+                {
+                  id: 'implementation_ready',
+                  label: '可直接实现(推荐)',
+                  description: '产出能直接进入编码、验证和交付的计划，包含明确任务、入口、数据和验收证据。',
+                  recommended: true,
+                },
+                {
+                  id: 'decision_review',
+                  label: '方案评审',
+                  description: '重点产出方案比较、关键决策、风险和需要人工确认的边界。',
+                },
+                {
+                  id: 'process_automation',
+                  label: '流程自动化',
+                  description: '重点产出可派生 workflow 的阶段、角色分工、检查点和失败处理。',
+                },
+              ],
+              placeholder: '如果跳过，将默认以“可直接实现”为目标，并把未确认评审点记录为 open questions。',
+              required: true,
+            },
+            {
+              id: 'scope_boundaries',
+              label: '范围边界',
+              question: '本次必须覆盖和明确排除的入口、角色、数据或场景有哪些？这个答案会决定 spec 的需求范围和 tasks 不能越界的非目标。',
+              selectionMode: 'multiple',
+              options: [
+                {
+                  id: 'user_flow',
+                  label: '用户主流程(推荐)',
+                  description: '覆盖用户从输入需求到确认计划、生成 workflow 草案的完整主路径。',
+                  recommended: true,
+                },
+                {
+                  id: 'api_state',
+                  label: 'API/状态',
+                  description: '覆盖 API payload、状态字段、持久化记录或历史会话读取。',
+                },
+                {
+                  id: 'ui_feedback',
+                  label: 'UI反馈',
+                  description: '覆盖加载、错误、空数据、确认和修订等用户可见状态。',
+                },
+                {
+                  id: 'exclude_migration',
+                  label: '排除迁移',
+                  description: '本次只处理新流程，不迁移旧配置或旧会话；若选择此项，兼容风险需记录。',
+                },
+              ],
+              placeholder: '请补充必须不做的内容。例如：不改历史 API 字段、不迁移旧 workflow、不新增权限模型。',
+              required: true,
+            },
+            {
+              id: 'failure_compatibility',
+              label: '异常兼容',
+              question: '遇到缺失输入、旧数据、模型输出不合规或外部依赖失败时，系统应如何处理？这个答案会决定 design 的失败路径、兼容策略和验证任务。',
+              selectionMode: 'single',
+              options: [
+                {
+                  id: 'conservative_continue',
+                  label: '保守继续(推荐)',
+                  description: '使用明确默认假设继续生成计划，并把风险写入 missingFields/open questions。',
+                  recommended: true,
+                },
+                {
+                  id: 'block_until_answered',
+                  label: '阻止继续',
+                  description: 'blocking 信息缺失时不生成正式计划，要求用户先补齐。',
+                },
+                {
+                  id: 'fallback_existing',
+                  label: '沿用旧逻辑',
+                  description: '旧配置、旧会话或参考 workflow 可读时优先沿用，失败时再提示用户确认。',
+                },
+              ],
+              placeholder: '如果跳过，将默认保守继续：生成计划但显式标注假设、风险和待确认项。',
+              required: true,
+            },
+            {
+              id: 'validation_evidence',
+              label: '验证证据',
+              question: '后续用什么证据判断计划或实现完成？这个答案会决定 tasks 的验证方式和收口标准。',
+              selectionMode: 'multiple',
+              options: [
+                {
+                  id: 'automated_checks',
+                  label: '自动检查(推荐)',
+                  description: '使用类型检查、构建、测试、schema 或规范校验命令作为证据。',
+                  recommended: true,
+                },
+                {
+                  id: 'manual_acceptance',
+                  label: '人工验收',
+                  description: '用用户可见流程、错误路径、状态刷新和持久化结果做验收记录。',
+                },
+                {
+                  id: 'artifact_review',
+                  label: '制品审阅',
+                  description: '审查 requirements/design/tasks 之间的追踪链、一致性和非目标边界。',
+                },
+              ],
+              placeholder: '请补充项目已有命令或验收入口。例如：npm run build、npx tsc --noEmit、指定页面操作路径。',
+              required: false,
+            },
+          ],
+        },
       }, null, 2),
-      '```',
       '</result>',
       '',
       `工作流名称: ${data.workflowName}`,
@@ -2691,36 +2667,36 @@ export default function NewConfigModal({
 
     return [
       '你正在帮助用户生成正式计划，并且当前处于”业务计划生成”阶段。',
-      '⚠️ 绝对禁止：不要创建任何文件（bash/cat/write/echo 都不行）。不要输出独立的 markdown 文档。你的唯一输出目标是在回复末尾的 <result> 内输出一个 ```json 代码块，类型为 plan_draft。',
+      '⚠️ 绝对禁止：不要创建任何文件（bash/cat/write/echo 都不行）。不要输出独立的 markdown 文档。你的唯一输出目标是在回复末尾的 <result> 内输出一个机器可读 JSON 对象，类型为 plan_draft。',
       '这一步要产出一套可以直接执行、可以继续迭代、可以被人工审查的正式计划制品。',
       '你显式使用 aceharness-spec-coding skill 来组织正式计划文档；底层制品仍采用 SpecCoding-style 的 specs/changes 结构，但文档内容本身必须完全围绕业务目标、业务规则和真实实现约束展开。',
       '请把输出写成稳定的计划 DSL，而不是自由散文。后续 workflow 和角色分工会根据这些正式制品自动派生，所以结构必须清晰、可引用、可追踪。',
       '你可以分多段普通文本逐步展示分析、思路和计划制品草案。',
-      '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 ```json 代码块。<result> 内不要放普通文字或 HTML。',
-      '重要：artifacts 中的 requirements、design、tasks 是 JSON 字符串值。字符串内的换行用 \\n 表示，字符串内如果需要 Mermaid 或代码块，用 ~~~ 代替 ``` 作为 fenced code block 分隔符（例如 ~~~mermaid\\n...\\n~~~），这样不会与外层 JSON 代码块冲突。不要在 JSON 字符串值内使用 ``` 三个反引号。',
+      '机器可读的结构化结果放在 <result>...</result> 内，并且 <result> 内只放一个独立的 JSON 对象。<result> 内不要放普通文字、HTML 或 ```json 代码块。',
+      '重要：artifacts 中的 requirements、design、tasks 是 JSON 字符串值。字符串内的换行用 \\n 表示，字符串内如果需要 Mermaid 或代码块，用 ~~~ 代替 ``` 作为 fenced code block 分隔符（例如 ~~~mermaid\\n...\\n~~~），避免与外层 `<result>` JSON 混淆。不要在 JSON 字符串值内使用 ``` 三个反引号。',
       SPEC_LANGUAGE_RULE,
       '当你完成本轮计划草案时，输出如下结构化结果：',
       '<result>',
-      '```json',
       JSON.stringify({
-        type: 'plan_draft',
-        summary: '计划摘要',
-        goals: ['目标'],
-        nonGoals: ['非目标'],
-        constraints: ['约束'],
-        clarification: {
-          summary: '需求澄清结论',
-          knownFacts: ['已确认信息'],
-          missingFields: ['仍缺的信息'],
-          questions: ['下一步要问的问题'],
-        },
-        artifacts: {
-          requirements: '# requirements.md\\n...',
-          design: '# design.md\\n...',
-          tasks: '# tasks.md\\n...',
+        kind: 'plan_draft',
+        payload: {
+          summary: '计划摘要',
+          goals: ['目标'],
+          nonGoals: ['非目标'],
+          constraints: ['约束'],
+          clarification: {
+            summary: '需求澄清结论',
+            knownFacts: ['已确认信息'],
+            missingFields: ['仍缺的信息'],
+            questions: ['下一步要问的问题'],
+          },
+          artifacts: {
+            requirements: '# requirements.md\\n...',
+            design: '# design.md\\n...',
+            tasks: '# tasks.md\\n...',
+          },
         },
       }, null, 2),
-      '```',
       '</result>',
       '',
       `目标文件名: configs/${data.filename}`,
@@ -2848,8 +2824,8 @@ export default function NewConfigModal({
         '',
         '输出要求：',
         '1. 可以先用普通文本说明你的修订思路，页面会实时显示。',
-        '2. 最终必须在 <result>...</result> 内输出一个 ```json 代码块。',
-        '3. JSON 顶层必须是 {"type":"plan_draft", ...}，并包含 summary、goals、nonGoals、constraints、clarification、artifacts。',
+        '2. 最终必须在 <result>...</result> 内输出一个 JSON 对象，不要包 ```json 代码块。',
+        '3. JSON 顶层优先使用 {"kind":"plan_draft","payload":{...}}，并包含 summary、goals、nonGoals、constraints、clarification、artifacts；兼容格式 {"type":"plan_draft", ...} 也可解析。',
         '4. artifacts 必须包含完整 requirements、design、tasks 三个字符串字段，不能只返回被修订的片段。',
         '5. artifacts 字符串内如需 Mermaid 或代码块，用 ~~~ 代替 ``` 作为分隔符，避免与外层 JSON 代码块冲突。',
         '6. 输出 </result> 后不要追加任何文字。',
@@ -3119,8 +3095,8 @@ ${confirmedSpecPrompt}
 6. specTaskBinding.requirementIds 应引用该 step 覆盖的需求编号；specTaskBinding.artifactKeys 用 requirements/design/tasks 标识该 step 主要依赖或产出的制品。
 7. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
 8. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
-9. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 \`\`\`json 代码块。
-10. JSON 顶层必须是 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}}，config 必须是完整 AceHarness workflow 配置对象。
+9. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
+10. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
 11. 输出 </result> 后不要再追加任何文字。
 12. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
 
@@ -3236,14 +3212,12 @@ ${confirmedSpecPrompt}
                 '你的上一条回复格式不正确，系统无法解析为合法的澄清表单。',
                 '请严格按照以下格式重新输出（不要输出其他内容）：',
                 '<result>',
-                '```json',
-                '{"type":"clarification_form","summary":"当前理解摘要","knownFacts":["已确认事实"],"missingFields":["缺失信息"],"questions":[{"id":"q1","label":"问题标签","question":"具体问题？","selectionMode":"single","options":[{"id":"opt1","label":"选项1","description":"说明","recommended":true}],"placeholder":"补充说明"}]}',
-                '```',
+                '{"kind":"clarification_form","payload":{"summary":"当前理解摘要","knownFacts":["已确认事实"],"missingFields":["缺失信息"],"questions":[{"id":"q1","label":"问题标签","question":"具体问题？","selectionMode":"single","options":[{"id":"opt1","label":"选项1","description":"说明","recommended":true}],"placeholder":"补充说明"}]}}',
                 '</result>',
                 '',
                 '注意：',
-                '- 必须在 <result> 内输出 ```json 代码块',
-                '- type 必须是 "clarification_form"',
+                '- 必须在 <result> 内直接输出 JSON 对象，不要包 ```json 代码块',
+                '- 顶层优先使用 {"kind":"clarification_form","payload":{...}}',
                 '- questions 数组不能为空，每个 question 必须有 id、label、question、options',
                 '- 不要输出 markdown 表格、不要输出纯文字问题列表',
               ].join('\n');

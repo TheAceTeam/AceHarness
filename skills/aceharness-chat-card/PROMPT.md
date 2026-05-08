@@ -9,14 +9,14 @@
 
 本 skill 仅适用于**展示型可视化卡片**（PR 分析、统计面板、状态展示等）。
 
-**以下场景不属于本 skill，不要使用 ```card 格式：**
-- `clarification_form`（补充问答表单）→ 用 ```json 在 `<result>` 内输出
-- `home_sidebar`（侧边栏驱动）→ 用 ```json 在 `<result>` 内输出
-- `plan_draft`（正式计划）→ 用 ```json 在 `<result>` 内输出
-- `workflow_draft`（YAML 草案）→ 用 ```json 在 `<result>` 内输出
+**以下场景不属于本 skill，不要使用 card 类型结果：**
+- `clarification_form`（补充问答表单）→ 用 `<result>` 内裸 JSON 输出
+- `home_sidebar`（侧边栏驱动）→ 用 `<result>` 内裸 JSON 输出
+- `plan_draft`（正式计划）→ 用 `<result>` 内裸 JSON 输出
+- `workflow_draft`（YAML 草案）→ 用 `<result>` 内裸 JSON 输出
 - 普通文字回答 → 直接输出文字，不需要卡片
 
-**判断标准：** 只有当最终产物是"给用户看的可视化信息展示"时才用 ```card。系统协议要求的机器可读 JSON（如表单、侧边栏指令）必须用 ```json。
+**判断标准：** 只有当最终产物是"给用户看的可视化信息展示"时才用 `kind=card`。系统协议要求的机器可读结果（如表单、侧边栏指令）必须输出对应的 `kind` 裸 JSON。
 
 ---
 
@@ -24,7 +24,7 @@
 
 ### 规则 1：card 必须在 `<result>` 内
 
-```card 代码块必须放在 `<result>...</result>` 内部，且与普通文字独立输出。
+card 结果必须放在 `<result>...</result>` 内部，且与普通文字独立输出。
 
 ### 规则 2：生成前必须验证
 
@@ -38,7 +38,7 @@ echo '你的JSON' | node ${Skills运行目录}/aceharness-chat-card/scripts/vali
 
 ### 规则 3：card 与 action 完全独立
 
-- ```card → 可视化卡片，展示信息
+- `{"kind":"card","payload":...}` → 可视化卡片，展示信息
 - ```action → 操作指令，触发系统行为
 
 ---
@@ -104,8 +104,8 @@ type Block =
 
 ## 正确示例
 
-````card
-```card
-{"header":{"icon":"bug_report","title":"[BUG] 编译器内部错误","subtitle":"Issue #3112","badges":[{"text":"bug","color":"red"},{"text":"待办的","color":"gray"}]},"blocks":[{"type":"info","rows":[{"label":"提交人","value":"yms_hi","icon":"person"},{"label":"时间","value":"2026-03-25 22:12:43","icon":"schedule"}]},{"type":"code","code":"Internal Compiler Error: Signal 11 received","lang":"text"}]}
+```text
+<result>
+{"kind":"card","payload":{"header":{"icon":"bug_report","title":"[BUG] 编译器内部错误","subtitle":"Issue #3112","badges":[{"text":"bug","color":"red"},{"text":"待办的","color":"gray"}]},"blocks":[{"type":"info","rows":[{"label":"提交人","value":"yms_hi","icon":"person"},{"label":"时间","value":"2026-03-25 22:12:43","icon":"schedule"}]},{"type":"code","code":"Internal Compiler Error: Signal 11 received","lang":"text"}]}}
+</result>
 ```
-````

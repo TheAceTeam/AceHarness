@@ -240,6 +240,12 @@ async function createManagerForTest(engine: MockEngine) {
 // parseVerdict
 // ============================================================
 describe('parseVerdict', () => {
+  test('parses pass from bare JSON object', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    expect(parseVerdict('{"verdict": "pass"}')).toBe('pass');
+  });
+
   test('parses pass from JSON block', async () => {
     const manager = await createManagerForTest(new MockEngine());
     const parseVerdict = (manager as any).parseVerdict.bind(manager);

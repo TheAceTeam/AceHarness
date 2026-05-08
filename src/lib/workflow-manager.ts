@@ -31,6 +31,7 @@ import { createDirectoryLinkSync } from './directory-links';
 import { resolveAgentSelection } from './agent-engine-selection';
 import { ensureDefaultSupervisorConfig } from './default-supervisor';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
+import { extractJsonObject as extractStructuredJsonObject } from './result-channel';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
@@ -1098,21 +1099,18 @@ export class WorkflowManager extends EventEmitter {
 
   /**
    * Parse structured JSON verdict from attacker/judge output.
-   * Expects a ```json block at the end of the output with:
+   * Expects a structured JSON object in bare or legacy fenced form:
    *   { "verdict": "pass"|"conditional_pass"|"fail", "remaining_issues": N, "summary": "..." }
    * Falls back to parseBugCount if no JSON found.
    */
   parseStepVerdict(output: string): { verdict: 'pass' | 'conditional_pass' | 'fail'; remainingIssues: number; summary: string } {
-    const jsonMatch = output.match(/```json\s*\n\s*(\{[\s\S]*?\})\s*\n\s*```\s*$/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1]);
-        return {
-          verdict: ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict) ? parsed.verdict : 'fail',
-          remainingIssues: typeof parsed.remaining_issues === 'number' ? parsed.remaining_issues : 0,
-          summary: parsed.summary || '',
-        };
-      } catch { /* fall through */ }
+    const parsed = extractStructuredJsonObject(output);
+    if (parsed) {
+      return {
+        verdict: ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict) ? parsed.verdict : 'fail',
+        remainingIssues: typeof parsed.remaining_issues === 'number' ? parsed.remaining_issues : 0,
+        summary: parsed.summary || '',
+      };
     }
     // Fallback: no structured JSON found — be conservative, require human review
     const bugCount = this.parseBugCount(output);

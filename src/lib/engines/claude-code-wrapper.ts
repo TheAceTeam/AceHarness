@@ -9,8 +9,9 @@
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
-import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { repairWindowsMojibake } from '../mojibake-repair';
 import { readTextFileBestEffort } from '../text-decoding';
 
@@ -119,7 +120,7 @@ function formatCommandOutput(output: string, exitCode?: number | null): string {
   if (!trimmed) {
     return exitCode != null && exitCode !== 0 ? `\n(exit code: ${exitCode})\n` : '';
   }
-  let rendered = formatLargeContent(trimmed, { summaryLabel: '查看输出' });
+  let rendered = formatTextContent(trimmed, { summaryLabel: '查看输出' });
   if (exitCode != null && exitCode !== 0) rendered += `(exit code: ${exitCode})\n`;
   return rendered;
 }
@@ -147,12 +148,12 @@ function formatClaudeToolExecutionResult(toolNameRaw: string, result: unknown): 
   if (toolName === 'read') {
     const text = extractTextFromUnknown(raw.content ?? raw.result ?? raw.text).trim();
     if (!text) return '';
-    return formatLargeContent(text, { summaryLabel: '查看内容' });
+    return formatTextContent(text, { summaryLabel: '查看内容' });
   }
 
   const text = extractTextFromUnknown(raw.output ?? raw.content ?? raw.result ?? raw.message ?? result).trim();
   if (!text) return '';
-  return formatLargeContent(text, { summaryLabel: '查看输出' });
+  return formatTextContent(text, { summaryLabel: '查看输出' });
 }
 function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string {
   const toolName = resolveToolName(toolNameRaw);
@@ -278,20 +279,20 @@ function formatClaudeToolBlock(toolNameRaw: string, inputJson: string, toolId?: 
   const toolName = resolveToolName(toolNameRaw) || 'tool';
   const isTaskTool = toolName === 'task' || toolName.endsWith('/task') || toolName.includes('task');
   const titleMap: Record<string, string> = {
-    read: '📖 Read',
-    write: '📝 Write',
-    bash: '💻 Bash',
-    edit: '✏️ Edit',
-    multiedit: '✏️ MultiEdit',
-    patch: '✏️ Patch',
-    grep: '🔍 Grep',
-    glob: '🔍 Glob',
-    ls: '📂 Ls',
-    task: '🤖 Task',
-    todo: '📋 Todo',
-    todowrite: '📋 TodoWrite',
-    webfetch: '🌐 WebFetch',
-    websearch: '🔎 WebSearch',
+    read: '📖 读取文件',
+    write: '📝 写入文件',
+    bash: '💻 执行命令',
+    edit: '✏️ 编辑文件',
+    multiedit: '✏️ 编辑文件',
+    patch: '✏️ 编辑文件',
+    grep: '🔍 搜索内容',
+    glob: '🔍 搜索文件',
+    ls: '📂 列出目录',
+    task: '🤖 子任务',
+    todo: '📋 任务列表',
+    todowrite: '📋 任务列表',
+    webfetch: '🌐 获取网页',
+    websearch: '🔎 搜索网页',
   };
   const title = isTaskTool ? '🤖 子任务' : (titleMap[toolName] || `🔧 ${toolName}`);
   const detail = formatClaudeToolResult(toolName, inputJson);
@@ -473,6 +474,12 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     }, timeoutMs);
 
     let accumulated = '';
+    const emitText = (content: string) => {
+      const normalized = normalizeEngineChunk(content, accumulated.length > 0);
+      if (!normalized) return;
+      accumulated += normalized;
+      this.emit('stream', { type: 'text', content: normalized } as EngineStreamEvent);
+    };
     const MAX_API_RETRY_ATTEMPTS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_ATTEMPTS', 12);
     const MIN_API_RETRY_DELAY_MS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_MIN_DELAY_MS', 10_000);
     const execStartedAt = Date.now();
@@ -570,8 +577,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
                 }
                 lastDeltaAt = now;
                 const nextPiece = lastBlockWasTool && !piece.startsWith('\n') ? `\n\n${piece}` : piece;
-                accumulated += nextPiece;
-                this.emit('stream', { type: 'text', content: nextPiece } as EngineStreamEvent);
+                emitText(nextPiece);
                 lastBlockWasTool = false;
               }
               lastAssistantSnapshot = snapshotText;
@@ -613,8 +619,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
                 toolCallsById.set(tool.id, { name: tool.name, inputJson: tool.inputJson });
               }
               const block = formatClaudeToolBlock(tool.name, tool.inputJson, tool.id);
-              accumulated += block;
-              this.emit('stream', { type: 'text', content: block } as EngineStreamEvent);
+              emitText(block);
               lastBlockWasTool = true;
               streamToolBlocks.delete(eventIndex);
             }
@@ -636,8 +641,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             }
             lastDeltaAt = now;
             const nextPiece = lastBlockWasTool && !piece.startsWith('\n') ? `\n\n${piece}` : piece;
-            accumulated += nextPiece;
-            this.emit('stream', { type: 'text', content: nextPiece } as EngineStreamEvent);
+            emitText(nextPiece);
             lastBlockWasTool = false;
           }
         } else if (msg.type === 'tool_progress') {
@@ -695,8 +699,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             info = `[SDK] ${sys.subtype}`;
           }
           if (info) {
-            accumulated += `\n${info}\n`;
-            this.emit('stream', { type: 'text', content: `\n${info}\n` } as EngineStreamEvent);
+            emitText(`\n${info}\n`);
           }
         } else if (msg.type === 'user') {
           const userMsg = msg as { parent_tool_use_id?: string | null; tool_use_result?: unknown };
@@ -705,8 +708,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             const tool = toolCallsById.get(toolUseId);
             const rendered = formatClaudeToolExecutionResult(tool?.name || '', userMsg.tool_use_result);
             if (rendered) {
-              accumulated += rendered;
-              this.emit('stream', { type: 'text', content: rendered } as EngineStreamEvent);
+              emitText(rendered);
               lastBlockWasTool = false;
             }
           }
@@ -720,7 +722,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
               : (resultText || accumulated);
             return {
               success: true,
-              output: finalOutput,
+              output: normalizeEngineOutput(finalOutput),
               sessionId: r.session_id || capturedSessionId,
               metadata: metadataFromClaudeResult(r, resolvedModel),
             };
@@ -728,7 +730,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
           const err = msg as { errors?: string[] };
           return {
             success: false,
-            output: accumulated,
+            output: normalizeEngineOutput(accumulated),
             error: err.errors?.join('; ') || 'SDK execution failed',
           };
         }
@@ -736,7 +738,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
 
       return {
         success: true,
-        output: accumulated,
+        output: normalizeEngineOutput(accumulated),
         sessionId: capturedSessionId,
         metadata: zeroUsageMetadata(resolvedModel),
       };
@@ -744,7 +746,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
       const isAborted = this._abortController?.signal.aborted;
       return {
         success: false,
-        output: accumulated,
+        output: normalizeEngineOutput(accumulated),
         error: isAborted ? this.getAbortMessage(timeoutMs) : (e instanceof Error ? e.message : String(e)),
       };
     } finally {

@@ -25,7 +25,7 @@ import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import AuthGuard from '@/components/AuthGuard';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { parseActions } from '@/lib/chat-actions';
+import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
@@ -878,25 +878,17 @@ function ChatPageContent() {
           </div>
         );
       }
-      // 非 streaming 的 assistant 消息：隐藏 <result> 机器通道，只展示普通正文和解析后的卡片/侧边栏提示
+      // assistant 消息：隐藏 <result> 机器通道。streaming 阶段只展示普通正文；
+      // 非 streaming 阶段再结合解析结果驱动侧边栏/卡片等结构化行为。
       const isStreaming = msg.id === streamingMessageId;
       let displayMsg = msg;
       let hasSidebarHint = false;
-      if (msg.role === 'assistant' && !isStreaming) {
+      if (msg.role === 'assistant') {
         const raw = msg.rawContent || msg.content || '';
-        const hasResult = /<result>[\s\S]*?<\/result>/i.test(raw);
-        const parsedResult = hasResult ? parseActions(raw) : null;
-        hasSidebarHint = parsedResult
-          ? parsedResult.sidebarHints.length > 0
-          : /"type"\s*:\s*"home_sidebar"/.test(raw);
-        if (hasResult) {
-          // If the visible text outside <result> is empty but <result> contained
-          // plain text (not structured data), use that as the display content.
-          let visibleText = parsedResult?.text || '';
-          if (!visibleText && parsedResult?.resultPlainTexts?.length) {
-            visibleText = parsedResult.resultPlainTexts.join('\n\n');
-          }
-          displayMsg = { ...msg, content: visibleText };
+        const normalized = normalizeAssistantDisplay(raw, isStreaming);
+        hasSidebarHint = normalized.hasSidebarHint;
+        if (normalized.hasMachineResult) {
+          displayMsg = { ...msg, content: normalized.visibleText };
         }
       }
       return (
