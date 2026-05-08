@@ -37,22 +37,47 @@ async function getAvailableDriveRoots(): Promise<string[]> {
   return checks.filter((item): item is string => Boolean(item));
 }
 
-async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, visited?: Set<string>): Promise<TreeNode[]> {
-  const seen = visited || new Set<string>();
+// Directories that are typically huge and not useful to browse
+const SKIP_DIRS = new Set([
+  'node_modules', '__pycache__', '.cache', 'dist', 'build',
+  '$Recycle.Bin', 'System Volume Information', 'Recovery',
+  'ProgramData', 'Windows', 'MSOCache',
+]);
+
+const MAX_ENTRIES = 3000; // Hard cap on total nodes to prevent OOM/hang
+
+interface BuildContext {
+  seen: Set<string>;
+  count: number;
+  truncated: boolean;
+}
+
+async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, ctx?: BuildContext): Promise<TreeNode[]> {
+  const context = ctx || { seen: new Set<string>(), count: 0, truncated: false };
+  if (context.count >= MAX_ENTRIES) {
+    context.truncated = true;
+    return [];
+  }
+
   const realDir = await fs.realpath(dirPath);
   if (!isInsidePath(rootPath, realDir)) {
     throw new Error('目录路径不合法');
   }
-  if (seen.has(realDir)) return [];
-  seen.add(realDir);
+  if (context.seen.has(realDir)) return [];
+  context.seen.add(realDir);
 
   const entries = await fs.readdir(realDir, { withFileTypes: true });
-  const filtered = entries.filter(e => !e.name.startsWith('.'));
+  const filtered = entries.filter(e => !e.name.startsWith('.') && !SKIP_DIRS.has(e.name));
 
   const dirs: TreeNode[] = [];
   const files: TreeNode[] = [];
 
   for (const entry of filtered) {
+    if (context.count >= MAX_ENTRIES) {
+      context.truncated = true;
+      break;
+    }
+
     const fullPath = path.join(realDir, entry.name);
     const relativePath = toPortablePath(path.relative(rootPath, fullPath));
 
@@ -61,10 +86,11 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
     }
 
     if (entry.isDirectory()) {
+      context.count++;
       let children: TreeNode[] | undefined;
       if (depth < maxDepth) {
         try {
-          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen);
+          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, context);
         } catch (error: any) {
           if (!['EPERM', 'EACCES', 'ENOENT'].includes(error?.code)) {
             throw error;
@@ -79,6 +105,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
         children,
       });
     } else if (entry.isFile()) {
+      context.count++;
       files.push({
         name: entry.name,
         path: relativePath,
@@ -112,12 +139,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '路径不是目录' }, { status: 400 });
     }
 
-    const tree = await buildTree(targetPath, rootPath, 0, maxDepth);
+    const context: BuildContext = { seen: new Set(), count: 0, truncated: false };
+    const tree = await buildTree(targetPath, rootPath, 0, maxDepth, context);
     return NextResponse.json({
       tree,
       workspaceRoot: toPortablePath(rootPath),
       targetPath: toPortablePath(targetPath),
       availableRoots: await getAvailableDriveRoots(),
+      truncated: context.truncated,
+      totalEntries: context.count,
     });
   } catch (error: any) {
     const { message, status } = workspaceErrorResponse(error);
