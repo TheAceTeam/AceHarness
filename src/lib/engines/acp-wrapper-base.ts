@@ -8,8 +8,21 @@
 
 import { EventEmitter } from 'events';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
-import { fenced } from '../markdown-utils';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
+};
 
 export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected engine: ACPEngine | null = null;
@@ -66,6 +79,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
             success: false,
             output: '',
             error: modelErr.message,
+            metadata: ZERO_USAGE_METADATA,
           };
         }
       }
@@ -83,7 +97,8 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         success: isSuccess,
         output: this.collectedOutput.trim(),
         sessionId: this.currentSessionId ?? undefined,
-        stopReason
+        stopReason,
+        metadata: ZERO_USAGE_METADATA
       };
     } catch (error) {
       this.streaming = false;
@@ -99,13 +114,15 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
           output: this.collectedOutput.trim(),
           sessionId: this.currentSessionId ?? undefined,
           stopReason: 'end_turn',
+          metadata: ZERO_USAGE_METADATA,
         };
       }
 
       return {
         success: false,
         output: '',
-        error: errorMessage
+        error: errorMessage,
+        metadata: ZERO_USAGE_METADATA
       };
     }
   }
@@ -277,7 +294,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
             header += `\n💻 执行命令: \`${cmd}\`\n`;
           } else {
             header += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-            header += `\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+            header += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
           }
         }
         break;
@@ -289,7 +306,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         header += `\n📝 写入文件: \`${wPath}\` (${wLines} 行)\n`;
         if (wContent) {
           const ext = wPath.split('.').pop() || '';
-          header += `\n<details><summary>查看内容 (${wLines} 行)</summary>\n\n${fenced(wContent, ext)}\n\n</details>\n`;
+          header += formatLargeContent(wContent, { filePath: wPath, lang: ext, summaryLabel: '查看内容' });
         }
         break;
       }
@@ -310,7 +327,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         if (oldStr || newStr) {
           const diff = (oldStr ? oldStr.split('\n').map((l: string) => '- ' + l).join('\n') + '\n' : '')
             + (newStr ? newStr.split('\n').map((l: string) => '+ ' + l).join('\n') + '\n' : '');
-          header += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(diff.trimEnd(), 'diff')}\n\n</details>\n`;
+          header += formatLargeContent(diff.trimEnd(), { filePath, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
         }
         break;
       }
@@ -364,16 +381,14 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     if (!output) return '';
     const parsed = this.parseToolXmlOutput(output);
     if (parsed) return parsed;
-    const lines = output.split('\n');
-    if (lines.length <= 15) return `\n${fenced(output)}\n`;
-    return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(output)}\n\n</details>\n`;
+    return formatLargeContent(output, { summaryLabel: '查看输出' });
   }
 
   private parseToolXmlOutput(output: string): string | null {
     const taskMatch = output.match(/<task_result>([\s\S]*?)<\/task_result>/);
     if (taskMatch) {
       const inner = taskMatch[1].trim();
-      return `\n<details><summary>🤖 子任务结果 (${inner.split('\n').length} 行)</summary>\n\n${fenced(inner)}\n\n</details>\n`;
+      return formatLargeContent(inner, { summaryLabel: '🤖 子任务结果' });
     }
     const pathRegex = /<path>(.*?)<\/path>\s*(?:<type>.*?<\/type>\s*)?<content>([\s\S]*?)<\/content>/g;
     let match;
@@ -382,9 +397,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       const fp = match[1].trim();
       const ct = match[2].trim();
       const ext = fp.split('.').pop() || '';
-      const lines = ct.split('\n');
-      if (lines.length <= 15) blocks.push(`\n${fenced(ct, ext)}\n`);
-      else blocks.push(`\n<details><summary>📄 ${fp} (${lines.length} 行)</summary>\n\n${fenced(ct, ext)}\n\n</details>\n`);
+      blocks.push(formatLargeContent(ct, { filePath: fp, lang: ext, summaryLabel: `📄 ${fp}` }));
     }
     if (blocks.length > 0) return blocks.join('');
     return null;

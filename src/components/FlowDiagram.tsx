@@ -136,7 +136,7 @@ export default function FlowDiagram({
   failedSteps = [], iterationStates = {}, onSelectStep, onSelectPhase, onSelectCheckpoint, pendingCheckpointPhase,
 }: FlowDiagramProps) {
   const getAgentTeam = (agentName: string) => {
-    return agents?.find((a) => a.name === agentName)?.team || 'blue';
+    return agents?.find((a) => a.name === agentName)?.team || 'red';
   };
 
   const getStepStatus = (step: Step) => {
@@ -516,7 +516,7 @@ export default function FlowDiagram({
                 group.steps.forEach((step, stepIdxInGroup) => {
                   const stepId = `step-${pi}-${group.startIndex + stepIdxInGroup}${idSuffix}`;
                   const status = round < rounds - 1 ? 'completed' : getStepStatus(step);
-                  const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-warning))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+                  const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
                   edges.push({
                     id: `${prevStepId}-${stepId}`,
                     source: prevStepId,
@@ -538,7 +538,7 @@ export default function FlowDiagram({
               ? (failedSteps?.includes(iterStep.name) ? 'failed' : 'completed')
               : getStepStatus(iterStep);
             const team = getAgentTeam(step.agent);
-            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-warning))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
             const displayName = step.name + roundSuffix;
 
             nodes.push({

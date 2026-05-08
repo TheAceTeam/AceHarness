@@ -196,7 +196,7 @@ export default function LoginPage() {
           <div className="bg-card rounded-2xl border p-8 shadow-xl">
             <div className="mb-6">
               <h2 className="text-xl font-semibold">登录</h2>
-              <p className="text-sm text-muted-foreground mt-1">请输入管理员账户信息</p>
+              <p className="text-sm text-muted-foreground mt-1">请输入账户信息</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -258,6 +258,10 @@ export default function LoginPage() {
           <div className="mt-6 text-center space-y-1">
             <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/login/reset')}>
               忘记密码？
+            </Button>
+            <br />
+            <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/register')}>
+              没有账号？申请注册
             </Button>
             <br />
             <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/setup')}>

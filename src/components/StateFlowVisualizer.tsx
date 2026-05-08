@@ -5,11 +5,18 @@ import { Badge } from './ui/badge';
 import { ArrowRight, TrendingUp, RotateCcw } from 'lucide-react';
 import type { StateTransitionRecord } from '@/lib/schemas';
 
+const HUMAN_APPROVAL_STATE = '__human_approval__';
+const ORIGIN_STATE = '__origin__';
+
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {
-  if (name === '__origin__') return '开始';
-  if (name === '__human_approval__') return '人工审查';
+  if (name === ORIGIN_STATE) return '开始';
+  if (name === HUMAN_APPROVAL_STATE) return '人工审查';
   return name;
+}
+
+function isWorkflowState(name: string): boolean {
+  return name !== ORIGIN_STATE && name !== HUMAN_APPROVAL_STATE;
 }
 
 interface StateFlowVisualizerProps {
@@ -53,8 +60,12 @@ export default function StateFlowVisualizer({
         stateOrder[record.to] = orderIndex++;
       }
 
-      // 如果目标状态的顺序小于源状态，认为是回退
-      if (stateOrder[record.to] < stateOrder[record.from]) {
+      // 只把真实 workflow 状态之间的后退计为回退；人工审查是旁路检查点，不代表流程倒退。
+      if (
+        isWorkflowState(record.from) &&
+        isWorkflowState(record.to) &&
+        stateOrder[record.to] < stateOrder[record.from]
+      ) {
         const existing = backwardTransitions.find(
           t => t.from === record.from && t.to === record.to
         );
@@ -96,7 +107,7 @@ export default function StateFlowVisualizer({
         <div className="space-y-4">
           {flowAnalysis.allStates.map((state, index) => {
             const isCurrentState = state === currentState;
-            const isHumanApproval = state === '__human_approval__';
+            const isHumanApproval = state === HUMAN_APPROVAL_STATE;
             const displayName = formatStateName(state);
             const visitCount = flowAnalysis.stateVisits[state] || 0;
             const outgoingTransitions = flowAnalysis.transitions[state] || {};
@@ -193,7 +204,7 @@ export default function StateFlowVisualizer({
                             flex items-center gap-3 p-3 rounded-lg border
                             ${isBackward
                               ? 'border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-950'
-                              : targetState === '__human_approval__'
+                              : targetState === HUMAN_APPROVAL_STATE
                               ? 'border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-950'
                               : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900'
                             }
@@ -201,7 +212,7 @@ export default function StateFlowVisualizer({
                         >
                           {isBackward ? (
                             <RotateCcw className="w-5 h-5 text-orange-500 flex-shrink-0" />
-                          ) : targetState === '__human_approval__' ? (
+                          ) : targetState === HUMAN_APPROVAL_STATE ? (
                             <span className="material-symbols-outlined text-orange-500 flex-shrink-0" style={{ fontSize: 20 }}>person</span>
                           ) : (
                             <ArrowRight className="w-5 h-5 text-blue-500 flex-shrink-0" />
@@ -223,7 +234,7 @@ export default function StateFlowVisualizer({
                               回退
                             </Badge>
                           )}
-                          {targetState === '__human_approval__' && !isBackward && (
+                          {targetState === HUMAN_APPROVAL_STATE && !isBackward && (
                             <Badge variant="outline" className="text-xs text-orange-600 border-orange-600">
                               人工审查
                             </Badge>
@@ -292,7 +303,7 @@ export default function StateFlowVisualizer({
 
           <div className="mt-4 p-3 rounded-lg bg-orange-100 dark:bg-orange-900 text-sm text-orange-900 dark:text-orange-100">
             <strong>提示：</strong>
-            回退表示工作流从后面的状态返回到前面的状态，通常是因为发现了需要在早期阶段解决的问题。
+            回退表示工作流从后面的状态返回到前面的状态，通常是因为发现了需要在早期阶段解决的问题；人工审查节点不计入回退。
           </div>
         </div>
       )}

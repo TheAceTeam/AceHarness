@@ -1,5 +1,6 @@
 "use client"
 
+import * as React from "react"
 import { useRef, useEffect } from "react"
 import { GripVertical } from "lucide-react"
 import { Group, Panel, Separator } from "react-resizable-panels"
@@ -9,14 +10,14 @@ import { cn } from "@/lib/utils"
 const ResizablePanelGroup = ({
   className,
   ...props
-}: React.ComponentProps<typeof Group>) => (
+}: any) => (
   <Group
     className={cn(className)}
     {...props}
   />
 )
 
-const ResizablePanel = Panel
+const ResizablePanel = (props: any) => <Panel {...props} />
 
 function HandleButton({ onClickHandle, handleIcon }: { onClickHandle?: () => void; handleIcon?: React.ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null)

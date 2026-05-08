@@ -78,6 +78,18 @@ workflow:
 - step 中的 agent 引用必须在运行时 `configs/agents/` 中存在
 - 如果用户坚持使用 phase-based，也应沿用“一个 phase 承载该阶段的多步骤协作”的思路，不要为了红蓝黄角色拆碎阶段
 
+## 并发设计元数据
+
+并发、多 Agent 多实例、channel、join policy 属于 workflow YAML / workflow 设计层。它们用于表达编排意图和未来运行调度元数据，不能在当前执行器尚未支持真实并发时承诺实际并行执行。
+
+当 workflow step 之间相互独立、没有共享写冲突、没有人工审批依赖时，可以在 workflow YAML 中表达并发设计：
+
+- workflow 级：`workflow.concurrency.agentInstances`、`workflow.concurrency.channels`、`workflow.concurrency.joinPolicies`
+- step 级：`step.parallelGroup`、`step.concurrency.groupId`、`step.concurrency.branchId`、`step.concurrency.joinPolicy`、`step.agentInstanceId`、`step.channelIds`
+- spec 追踪：`step.specTaskBinding` 仅用于把 workflow step 绑定到已有 spec task，便于运行态追踪和审查
+
+依赖关系不清晰、有共享写冲突、需要人工审批先后顺序，或任务之间存在明确产物依赖时，保持串行建模。
+
 ## 验证脚本
 
 ```bash
@@ -100,8 +112,8 @@ node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workf
 
 ## Agent 团队
 
-- **defender（蓝队）** — 建设者：设计、实现、测试、文档
-- **attacker（红队）** — 挑战者：攻击方案、寻找缺陷、压力测试
+- **defender（红队）** — 建设者：设计、实现、测试、文档
+- **attacker（蓝队）** — 挑战者：攻击方案、寻找缺陷、压力测试
 - **judge（裁判）** — 仲裁者：评审和判定
 
 ## 红蓝对抗（默认优先）
@@ -113,3 +125,37 @@ node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workf
 - “实施”阶段推荐结构：`defender(编码实施) -> attacker(代码审查/攻击实现) -> judge(实施评审)`，并设置 `requireHumanApproval: true`
 - 如需补充修复动作，应作为同一 state 内的后续步骤或通过 transition 回到该 state，而不是为了红蓝黄角色扩张状态数量
 - 适用场景：复杂需求、质量门禁、上线前评审；简单脚本类任务可在用户确认后简化
+
+## 示例模板
+
+以下模板是业务无关的通用骨架，可直接参考。完整 YAML 见 `templates/` 目录。
+
+### 功能开发（红蓝对抗）
+
+**文件：** `templates/feature-dev.yaml.md`
+
+适用于新功能开发、重构、迁移等需要设计→实施→验证的场景。
+
+```
+状态流：设计 → 实施 → 验证 → 完成（异常 → 终止）
+```
+
+### Bug 修复
+
+**文件：** `templates/bug-fix.yaml.md`
+
+适用于 bug 修复、crash 分析、性能问题排查。
+
+```
+状态流：复现确认 → 根因分析 → 修复实现 → 回归验证 → 完成（异常 → 终止）
+```
+
+### 分析审计
+
+**文件：** `templates/analysis-audit.yaml.md`
+
+适用于代码审计、安全分析、技术调研。
+
+```
+状态流：数据收集 → 深度分析 → 交叉验证 → 报告输出 → 完成
+```

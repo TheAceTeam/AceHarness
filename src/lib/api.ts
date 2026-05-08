@@ -3,6 +3,7 @@
  */
 
 import type { RunRecord } from '@/lib/run-store';
+import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 
 const API_BASE = '/api';
 
@@ -30,9 +31,11 @@ interface ConfigListResponse {
     filename: string;
     name: string;
     description: string;
+    mode?: 'phase-based' | 'state-machine';
     phaseCount: number;
     stepCount: number;
     agentCount: number;
+    createdAt?: number;
   }[];
 }
 
@@ -40,6 +43,38 @@ interface ConfigResponse {
   config: any;
   raw: string;
   agents: any[];
+}
+
+interface WorkflowCreationRecommendationsResponse {
+  recommendations: {
+    experiences: Array<{
+      runId: string;
+      workflowName?: string;
+      configFile: string;
+      summary: string;
+      experience: string[];
+      nextFocus: string[];
+    }>;
+    referenceWorkflow: null | {
+      filename: string;
+      name?: string;
+      description?: string;
+      mode: 'phase-based' | 'state-machine';
+      agents: string[];
+      supervisorAgent?: string;
+      source?: 'manual' | 'recommended-experience';
+      autoApply?: boolean;
+    };
+    recommendedAgents: string[];
+    recommendedSupervisorAgent?: string;
+    relationshipHints: Array<{
+      agent: string;
+      counterpart: string;
+      synergyScore: number;
+      strengths: string[];
+      lastConfigFile?: string;
+    }>;
+  };
 }
 
 interface ApiResponse {
@@ -53,6 +88,7 @@ interface WorkflowStatusResponse {
   statusReason?: string;
   runId: string | null;
   currentConfigFile: string | null;
+  workflowFrontendSessionId?: string | null;
   logs: any[];
   agents: any[];
   currentPhase: string | null;
@@ -64,6 +100,10 @@ interface WorkflowStatusResponse {
   globalContext?: string;
   phaseContexts?: Record<string, string>;
   workingDirectory?: string | null;
+  persistMode?: 'none' | 'repository';
+  deltaSpecMerged?: boolean;
+  deltaMergeState?: DeltaMergeState;
+  masterSpecPath?: string;
   // State machine specific fields
   stateHistory?: any[];
   issueTracker?: any[];
@@ -91,18 +131,248 @@ interface WorkflowStatusResponse {
     round: number;
     timestamp: string;
   }>;
-  pendingSdkPlanQuestion?: {
-    questions: unknown[];
-    fromAgent: string;
-    stateName: string;
-    stepName: string;
+  creationSession?: {
+    id: string;
+    workflowName: string;
+    filename: string;
+    status: string;
+    updatedAt: number;
+  };
+  specCodingSummary?: {
+    id: string;
+    version: number;
+    status: string;
+    source?: 'run' | 'creation';
+    summary?: string;
+    phaseCount: number;
+    taskCount?: number;
+    assignmentCount: number;
+    checkpointCount: number;
+    revisionCount: number;
+    progress?: {
+      overallStatus?: string;
+      completedPhaseIds?: string[];
+      activePhaseId?: string;
+      summary?: string;
+    };
+    latestRevision?: {
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    } | null;
+  };
+  specCodingDetails?: {
+    phases: Array<{
+      id: string;
+      title: string;
+      objective?: string;
+      ownerAgents: string[];
+      status: string;
+    }>;
+    tasks?: Array<{
+      id: string;
+      title: string;
+      detail?: string;
+      status: string;
+      phaseId?: string;
+      ownerAgents: string[];
+      updatedAt?: string;
+      updatedBy?: string;
+      validation?: string;
+    }>;
+    assignments: Array<{
+      agent: string;
+      responsibility: string;
+      phaseIds: string[];
+    }>;
+    checkpoints: Array<{
+      id: string;
+      title: string;
+      phaseId?: string;
+      status: string;
+    }>;
+    revisions: Array<{
+      id: string;
+      version: number;
+      summary: string;
+      createdAt: string;
+      createdBy?: string;
+    }>;
+    artifacts?: {
+      requirements?: string;
+      design?: string;
+      tasks?: string;
+    };
+  };
+  sourceOfTruth?: {
+    mode: 'phase-based' | 'state-machine' | 'unknown';
+    yamlSourceOfTruth: string[];
+    derivedIntoSpecCoding: string[];
+    runtimeSpecCodingSourceOfTruth: string[];
+    counts: {
+      yamlPhases: number;
+      yamlStates: number;
+      yamlSteps: number;
+      yamlCheckpoints: number;
+      specCodingPhases: number;
+      specCodingTasks?: number;
+      specCodingAssignments: number;
+      specCodingCheckpoints: number;
+    };
   } | null;
-  pendingPlanReview?: {
-    planContent: string;
-    stepKey: string;
-    agent: string;
+  latestSupervisorReview?: {
+    type: 'state-review' | 'checkpoint-advice' | 'chat-revision' | 'human-question';
+    stateName: string;
+    content: string;
+    timestamp: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  } | null;
+  humanQuestions?: HumanQuestion[];
+  pendingHumanQuestionId?: string | null;
+  pendingHumanQuestion?: HumanQuestion | null;
+  humanAnswersContext?: Array<{
+    questionId: string;
+    title: string;
+    question: string;
+    answer: string;
+    instruction?: string;
+    answeredAt: string;
+  }>;
+  rehearsal?: {
+    enabled: boolean;
+    summary: string;
+    recommendedNextSteps: string[];
+  } | null;
+  qualityChecks?: Array<{
+    id: string;
     stateName: string;
     stepName: string;
+    agent: string;
+    category: 'lint' | 'compile' | 'test' | 'custom';
+    status: 'passed' | 'failed' | 'warning';
+    summary: string;
+    createdAt: string;
+    commands: Array<{
+      command: string;
+      exitCode: number | null;
+      status: 'passed' | 'failed' | 'warning';
+      stdout?: string;
+      stderr?: string;
+      errorText?: string | null;
+    }>;
+  }>;
+  finalReview?: {
+    runId: string;
+    configFile: string;
+    supervisorAgent: string;
+    status: 'completed' | 'failed' | 'stopped';
+    summary: string;
+    nextFocus: string[];
+    experience: string[];
+    scoreCards: Array<{
+      agent: string;
+      score: number;
+      strengths: string[];
+      weaknesses: string[];
+    }>;
+    generatedAt: string;
+  } | null;
+  memoryLayers?: {
+    schema?: {
+      scopes: string[];
+      rules: string[];
+    };
+    runtime: {
+      specCodingSummary?: {
+        id: string;
+        version: number;
+        summary?: string;
+        progressSummary?: string;
+      } | null;
+      qualityChecks: Array<{
+        id: string;
+        stateName: string;
+        stepName: string;
+        agent: string;
+        category: 'lint' | 'compile' | 'test' | 'custom';
+        status: 'passed' | 'failed' | 'warning';
+        summary: string;
+        createdAt: string;
+      }>;
+    };
+    review: {
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    } | null;
+    history: Array<{
+      runId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    }>;
+    role?: {
+      agent: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    project?: {
+      key: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    workflow?: {
+      key: string;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    chat?: {
+      sessionId: string | null;
+      memories: Array<{
+        id: string;
+        title: string;
+        kind: string;
+        content: string;
+        source: string;
+        createdAt: string;
+        tags: string[];
+      }>;
+    };
+    recalledExperiences?: Array<{
+      runId: string;
+      status: 'completed' | 'failed' | 'stopped';
+      summary: string;
+      nextFocus: string[];
+      experience: string[];
+      generatedAt: string;
+    }>;
   } | null;
 }
 
@@ -192,6 +462,37 @@ export const configApi = {
     return response.json();
   },
 
+  async validateConfig(input: { config?: any; filename?: string }): Promise<{ validation: any }> {
+    const response = await authFetch(`${API_BASE}/configs/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.message || data?.error || '校验配置失败');
+    }
+    return data;
+  },
+
+  async getCreationRecommendations(input: {
+    workflowName?: string;
+    requirements?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+  }): Promise<WorkflowCreationRecommendationsResponse> {
+    const response = await authFetch(`${API_BASE}/configs/recommendations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '获取工作流编排推荐失败');
+    }
+    return data;
+  },
+
   async saveConfig(filename: string, config: any): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}`, {
       method: 'POST',
@@ -226,10 +527,20 @@ export const configApi = {
     if (!response.ok) throw new Error('删除配置失败');
     return response.json();
   },
+
+  async batchDeleteConfigs(filenames: string[]): Promise<ApiResponse & { deletedCount: number; errors?: string[] }> {
+    const response = await authFetch(`${API_BASE}/configs/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames }),
+    });
+    if (!response.ok) throw new Error('批量删除失败');
+    return response.json();
+  },
 };
 
 export const agentApi = {
-  async listAgents(): Promise<{ agents: any[] }> {
+  async listAgents(): Promise<{ agents: any[]; runtimeAgentsDir?: string }> {
     const response = await authFetch(`${API_BASE}/agents`);
     if (!response.ok) throw new Error('获取 Agent 列表失败');
     return response.json();
@@ -272,6 +583,120 @@ export const agentApi = {
     });
     if (!response.ok) throw new Error('批量替换模型失败');
     return response.json();
+  },
+
+  async draftAgent(input: {
+    displayName: string;
+    team?: string;
+    mission: string;
+    style?: string;
+    specialties?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+    engine?: string;
+    model?: string;
+  }): Promise<{
+    draft: any;
+    raw: string;
+    validation?: {
+      ok: boolean;
+      issues: Array<{
+        path: string[];
+        message: string;
+        severity: 'error' | 'warning';
+        code?: string;
+      }>;
+    };
+    experienceHints?: any[];
+    recommendations?: {
+      experiences: Array<{
+        runId: string;
+        workflowName?: string;
+        configFile: string;
+        summary: string;
+      }>;
+      referenceWorkflow: null | {
+        filename: string;
+        name?: string;
+        description?: string;
+        projectRoot?: string;
+        agents: string[];
+        phases: string[];
+        states: string[];
+      };
+      relationshipHints: Array<{
+        agent: string;
+        counterpart: string;
+        synergyScore: number;
+        strengths: string[];
+      }>;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/ai-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || '生成 Agent 草案失败');
+    }
+    return response.json();
+  },
+
+  async generateAvatar(input: {
+    displayName: string;
+    team?: string;
+    mission?: string;
+    style?: string;
+    variant?: string;
+  }): Promise<{ avatar: any; previewUrl: string }> {
+    const response = await authFetch(`${API_BASE}/agents/generate-avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || '生成 Agent 头像失败');
+    }
+    return response.json();
+  },
+
+  async chat(name: string, input: {
+    message: string;
+    mode?: 'standalone-chat' | 'workflow-chat';
+    sessionId?: string | null;
+    workingDirectory?: string;
+    workflowContext?: Record<string, any>;
+  }): Promise<{
+    ok: boolean;
+    output: string;
+    sessionId?: string | null;
+    mode: 'standalone-chat' | 'workflow-chat';
+    agent: string;
+    engine?: string;
+    model?: string;
+    isError?: boolean;
+    error?: string | null;
+    specCodingRevision?: {
+      applied: boolean;
+      summary: string;
+      affectedArtifacts: string[];
+      impact: string[];
+      target: 'creation' | 'run' | 'both';
+    } | null;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || 'Agent 对话失败');
+    }
+    return data;
   },
 };
 
@@ -317,9 +742,9 @@ export const runsApi = {
     return response.json();
   },
 
-  async listDocuments(id: string): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string }[] }> {
+  async listDocuments(id: string): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string }[]; documentDirectory?: string | null }> {
     const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents`);
-    if (!response.ok) return { files: [] };
+    if (!response.ok) return { files: [], documentDirectory: null };
     return response.json();
   },
 
@@ -384,11 +809,83 @@ export const runsApi = {
 };
 
 export const workflowApi = {
-  async start(configFile: string): Promise<ApiResponse> {
-    const response = await authFetch(`${API_BASE}/workflow/start`, {
+  async preflight(configFile: string): Promise<{
+    ok: boolean;
+    cwd: string;
+    checks: Array<{
+      id: string;
+      stateName: string;
+      stepName: string;
+      agent: string;
+      category: 'lint' | 'compile' | 'test' | 'custom';
+      status: 'passed' | 'failed' | 'warning';
+      origin?: 'workflow' | 'inferred';
+      summary: string;
+      createdAt: string;
+      commands: Array<{
+        command: string;
+        exitCode: number | null;
+        status: 'passed' | 'failed' | 'warning';
+        stdout?: string;
+        stderr?: string;
+        errorText?: string | null;
+      }>;
+    }>;
+    failedCount: number;
+    warningCount: number;
+    policy: {
+      blockOnFailure: boolean;
+      allowOnWarning: boolean;
+      inferredCommandCount: number;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/preflight`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ configFile }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '执行启动前检查失败');
+    }
+    return data;
+  },
+
+  async start(configFile: string, frontendSessionId?: string, options?: {
+    creationSessionId?: string;
+    skipPreflight?: boolean;
+    rehearsal?: boolean;
+    preflightChecks?: Array<{
+      id: string;
+      stateName: string;
+      stepName: string;
+      agent: string;
+      category: 'lint' | 'compile' | 'test' | 'custom';
+      status: 'passed' | 'failed' | 'warning';
+      origin?: 'workflow' | 'inferred';
+      summary: string;
+      createdAt: string;
+      commands: Array<{
+        command: string;
+        exitCode: number | null;
+        status: 'passed' | 'failed' | 'warning';
+        stdout?: string;
+        stderr?: string;
+        errorText?: string | null;
+      }>;
+    }>;
+  }): Promise<ApiResponse & { frontendSessionId?: string | null }> {
+    const response = await authFetch(`${API_BASE}/workflow/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        configFile,
+        frontendSessionId,
+        creationSessionId: options?.creationSessionId,
+        skipPreflight: options?.skipPreflight || false,
+        rehearsal: options?.rehearsal || false,
+        preflightChecks: options?.preflightChecks,
+      }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -479,11 +976,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async forceTransition(targetState: string, instruction?: string, configFile?: string): Promise<any> {
+  async forceTransition(targetState: string, instruction?: string, configFile?: string, runId?: string): Promise<any> {
     const response = await authFetch(`${API_BASE}/workflow/force-transition`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetState, instruction, configFile }),
+      body: JSON.stringify({ targetState, instruction, configFile, runId }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -492,10 +989,76 @@ export const workflowApi = {
     return response.json();
   },
 
-  async getStatus(configFile?: string): Promise<WorkflowStatusResponse> {
-    const params = configFile ? `?configFile=${encodeURIComponent(configFile)}` : '';
+  async getStatus(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
+    const search = new URLSearchParams();
+    if (configFile) search.set('configFile', configFile);
+    if (runId) search.set('runId', runId);
+    const params = search.toString() ? `?${search.toString()}` : '';
     const response = await authFetch(`${API_BASE}/workflow/status${params}`);
     if (!response.ok) throw new Error('获取状态失败');
+    return response.json();
+  },
+
+  async listHumanQuestions(filters?: {
+    status?: 'unanswered' | 'answered' | 'dismissed';
+    runId?: string;
+    configFile?: string;
+    limit?: number;
+  }): Promise<{ questions: HumanQuestion[] }> {
+    const search = new URLSearchParams();
+    if (filters?.status) search.set('status', filters.status);
+    if (filters?.runId) search.set('runId', filters.runId);
+    if (filters?.configFile) search.set('configFile', filters.configFile);
+    if (filters?.limit) search.set('limit', String(filters.limit));
+    const params = search.toString() ? `?${search.toString()}` : '';
+    const response = await authFetch(`${API_BASE}/workflow/human-questions${params}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '获取 Supervisor 消息失败');
+    }
+    return response.json();
+  },
+
+  async createHumanQuestion(input: {
+    configFile?: string;
+    runId?: string;
+    kind?: HumanQuestion['kind'];
+    title: string;
+    message: string;
+    supervisorAdvice?: string;
+    suggestedNextState?: string;
+    availableStates?: string[];
+    requiresWorkflowPause?: boolean;
+    answerSchema?: HumanQuestion['answerSchema'];
+    source?: HumanQuestion['source'];
+  }): Promise<{ question: HumanQuestion }> {
+    const response = await authFetch(`${API_BASE}/workflow/human-questions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '创建 Supervisor 消息失败');
+    }
+    return response.json();
+  },
+
+  async answerHumanQuestion(input: {
+    questionId: string;
+    runId?: string;
+    configFile?: string;
+    answer: HumanQuestionAnswer;
+  }): Promise<{ question: HumanQuestion }> {
+    const response = await authFetch(`${API_BASE}/workflow/human-questions/${encodeURIComponent(input.questionId)}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runId: input.runId, configFile: input.configFile, answer: input.answer }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || '回答 Supervisor 消息失败');
+    }
     return response.json();
   },
 
@@ -533,6 +1096,61 @@ export const workflowApi = {
       throw new Error(err.error || '重新运行失败');
     }
     return response.json();
+  },
+
+  async previewSpecMerge(input: { runId: string; configFile: string }): Promise<{
+    masterBefore: string;
+    mergedContent: string;
+    diff: string;
+    aiSummary: string;
+    mergeState: DeltaMergeState;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'preview', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '生成 Spec 合入预览失败');
+    }
+    return data;
+  },
+
+  async applySpecMerge(input: { runId: string; configFile: string; mergedHash: string }): Promise<{
+    success: boolean;
+    mergeState: DeltaMergeState;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '确认合入 Spec 失败');
+    }
+    return data;
+  },
+
+  async importWorkspaceDeltaSpec(input: { runId: string; configFile: string; summary?: string }): Promise<{
+    success: boolean;
+    bindingValidation?: any;
+    deltaMergeState?: DeltaMergeState;
+    deltaSpecMerged?: boolean;
+    specCodingSummary?: any;
+    specCodingDetails?: any;
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/spec-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'import-delta', ...input }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '导入 workspace delta spec 失败');
+    }
+    return data;
   },
 
   connectEventStream(onMessage: (data: any) => void): EventSource {
@@ -787,6 +1405,13 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
+export interface WorkspaceTreeResponse {
+  tree: TreeNode[];
+  workspaceRoot?: string;
+  targetPath?: string;
+  availableRoots?: string[];
+}
+
 export type WorkspaceMode = 'default' | 'notebook';
 export type NotebookScope = 'personal' | 'global';
 export type NotebookSharePermission = 'read' | 'write';
@@ -979,21 +1604,21 @@ export const workspaceApi = {
     }
     return data;
   },
-  async getTree(workspacePath: string, depth = 2): Promise<{ tree: TreeNode[] }> {
+  async getTree(workspacePath: string, depth = 2): Promise<WorkspaceTreeResponse> {
     const res = await authFetch(`${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&depth=${depth}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '获取文件树失败');
+      throw new Error(data.message || data.error || '获取文件树失败');
     }
     return res.json();
   },
-  async getSubTree(workspacePath: string, subPath: string, depth = 2): Promise<{ tree: TreeNode[] }> {
+  async getSubTree(workspacePath: string, subPath: string, depth = 2): Promise<WorkspaceTreeResponse> {
     const res = await authFetch(
       `${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&sub=${encodeURIComponent(subPath)}&depth=${depth}`
     );
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '获取子目录失败');
+      throw new Error(data.message || data.error || '获取子目录失败');
     }
     return res.json();
   },
@@ -1001,7 +1626,7 @@ export const workspaceApi = {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      const err = new Error(data.error || '读取文件失败') as Error & { size?: number };
+      const err = new Error(data.message || data.error || '读取文件失败') as Error & { size?: number };
       if (data.size != null) err.size = data.size;
       throw err;
     }
@@ -1015,16 +1640,64 @@ export const workspaceApi = {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '保存文件失败');
+      throw new Error(data.message || data.error || '保存文件失败');
     }
     return res.json();
   },
   async getFileBlob(workspace: string, file: string): Promise<Blob> {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}&mode=blob`);
     if (!res.ok) {
-      throw new Error('获取文件失败');
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取文件失败');
     }
     return res.blob();
+  },
+  async upload(workspace: string, targetPath: string, files: File[], options?: { conflict?: 'rename' | 'error'; relativePaths?: string[] }): Promise<{ success: boolean; count: number; files: Array<{ name: string; path: string; size: number }> }> {
+    const formData = new FormData();
+    formData.append('workspace', workspace);
+    formData.append('targetPath', targetPath || '');
+    formData.append('conflict', options?.conflict || 'rename');
+    const relativePaths = options?.relativePaths || files.map((file) => (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+    formData.append('relativePaths', JSON.stringify(relativePaths));
+    files.forEach((file) => formData.append('files', file));
+
+    const res = await authFetch(`${API_BASE}/workspace/upload`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '上传失败');
+    }
+    return res.json();
+  },
+  async download(workspace: string, targetPath: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent(targetPath)}`);
+    if (!res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || data.error || '下载失败');
+      }
+      const text = await res.text().catch(() => '');
+      throw new Error(text || '下载失败');
+    }
+
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+    const filename = decodeURIComponent(match?.[1] || match?.[2] || targetPath.split('/').filter(Boolean).pop() || 'download');
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   },
   async manage(workspace: string, action: string, params: Record<string, any>): Promise<{ success: boolean }> {
     const res = await authFetch(`${API_BASE}/workspace/manage`, {
@@ -1034,7 +1707,7 @@ export const workspaceApi = {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || '操作失败');
+      throw new Error(data.message || data.error || '操作失败');
     }
     return res.json();
   },

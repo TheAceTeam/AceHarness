@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 980" role="img" aria-labelledby="title desc">
+  <title id="title">AceHarness Workflow Case Overview</title>
+  <desc id="desc">Representative AceHarness workflows for complex bug fixing, performance work, and production migration.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#081120"/>
+      <stop offset="55%" stop-color="#111c36"/>
+      <stop offset="100%" stop-color="#1a1030"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowOrange" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#fb923c" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#fb923c" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#020617" flood-opacity="0.34"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="980" fill="url(#bg)"/>
+  <circle cx="280" cy="160" r="220" fill="url(#glowBlue)"/>
+  <circle cx="1330" cy="860" r="240" fill="url(#glowOrange)"/>
+  <path d="M0 180C320 120 420 360 700 310C930 270 1040 110 1600 180V0H0Z" fill="#ffffff" fill-opacity="0.025"/>
+
+  <text x="112" y="108" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">ACEHARNESS CASES</text>
+  <text x="112" y="164" fill="#f8fafc" font-size="44" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Workflow Case Overview</text>
+  <text x="112" y="208" fill="#cbd5e1" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">From compiler bug fixes to performance work and production migration, all driven by state machines and multi-agent collaboration.</text>
+
+  <rect x="112" y="248" rx="24" ry="24" width="1376" height="90" fill="#0f172a" fill-opacity="0.62" stroke="#334155" stroke-opacity="0.9"/>
+  <text x="150" y="302" fill="#f8fafc" font-size="24" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AceHarness</text>
+  <text x="300" y="302" fill="#94a3b8" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">State-machine orchestration · Supervisor routing · adversarial iteration · Human-in-the-Loop</text>
+
+  <line x1="800" y1="338" x2="446" y2="396" stroke="#475569" stroke-dasharray="8 10"/>
+  <line x1="800" y1="338" x2="1154" y2="396" stroke="#475569" stroke-dasharray="8 10"/>
+  <line x1="800" y1="338" x2="446" y2="708" stroke="#475569" stroke-dasharray="8 10"/>
+  <line x1="800" y1="338" x2="1154" y2="708" stroke="#475569" stroke-dasharray="8 10"/>
+
+  <g filter="url(#shadow)">
+    <rect x="112" y="392" rx="30" ry="30" width="648" height="252" fill="#0b1223" fill-opacity="0.9" stroke="#3b82f6" stroke-width="2"/>
+    <rect x="144" y="424" rx="14" ry="14" width="124" height="38" fill="#2563eb" fill-opacity="0.18" stroke="#60a5fa"/>
+    <text x="168" y="451" fill="#bfdbfe" font-size="15" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">ISSUE #701</text>
+    <text x="144" y="512" fill="#f8fafc" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Complex Compiler Bug Fixes</text>
+    <text x="144" y="552" fill="#93c5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Rollback + human approval + multi-round adversarial convergence</text>
+    <rect x="500" y="424" rx="18" ry="18" width="226" height="40" fill="#1d4ed8"/>
+    <text x="529" y="451" fill="#eff6ff" font-size="14" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AI solution matches the human fix</text>
+    <circle cx="158" cy="594" r="5" fill="#38bdf8"/>
+    <text x="176" y="601" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">3 automatic rollbacks between root cause and solution design</text>
+    <circle cx="158" cy="628" r="5" fill="#38bdf8"/>
+    <text x="176" y="635" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">5 files fixed, 5 regression suites, 57 steps</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="840" y="392" rx="30" ry="30" width="648" height="252" fill="#0b1223" fill-opacity="0.9" stroke="#8b5cf6" stroke-width="2"/>
+    <rect x="872" y="424" rx="14" ry="14" width="124" height="38" fill="#7c3aed" fill-opacity="0.18" stroke="#a78bfa"/>
+    <text x="896" y="451" fill="#ddd6fe" font-size="15" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">ISSUE #746</text>
+    <text x="872" y="512" fill="#f8fafc" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Automated Loop from Analysis to Gate</text>
+    <text x="872" y="552" fill="#c4b5fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Beyond 5 core states, it automatically hooks into tests, MRs, and gates</text>
+    <rect x="1222" y="424" rx="18" ry="18" width="232" height="40" fill="#6d28d9"/>
+    <text x="1253" y="451" fill="#f5f3ff" font-size="14" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">End-to-end automation</text>
+    <circle cx="886" cy="594" r="5" fill="#a78bfa"/>
+    <text x="904" y="601" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">2 files, 4 changed lines, targeted tests designed autonomously</text>
+    <circle cx="886" cy="628" r="5" fill="#a78bfa"/>
+    <text x="904" y="635" fill="#cbd5e1" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Relevant cases found automatically, MR submitted, gate pipeline kept moving</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="112" y="680" rx="30" ry="30" width="648" height="214" fill="#0b1223" fill-opacity="0.9" stroke="#22c55e" stroke-width="2"/>
+    <rect x="144" y="712" rx="14" ry="14" width="164" height="38" fill="#15803d" fill-opacity="0.18" stroke="#4ade80"/>
+    <text x="165" y="739" fill="#dcfce7" font-size="15" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AST MEMORY</text>
+    <rect x="488" y="708" rx="20" ry="20" width="238" height="56" fill="#166534"/>
+    <text x="531" y="745" fill="#f0fdf4" font-size="20" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Peak -30%</text>
+    <text x="144" y="798" fill="#f8fafc" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AST Destruction Memory Optimization</text>
+    <text x="144" y="836" fill="#86efac" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Performance governance driven by Defender / Attacker / Judge</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="840" y="680" rx="30" ry="30" width="648" height="214" fill="#0b1223" fill-opacity="0.9" stroke="#f59e0b" stroke-width="2"/>
+    <rect x="872" y="712" rx="14" ry="14" width="196" height="38" fill="#b45309" fill-opacity="0.18" stroke="#fbbf24"/>
+    <text x="893" y="739" fill="#fef3c7" font-size="15" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">OHOS MIGRATION</text>
+    <rect x="1202" y="708" rx="20" ry="20" width="252" height="56" fill="#b45309"/>
+    <text x="1231" y="745" fill="#fff7ed" font-size="20" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Production-grade State Machine</text>
+    <text x="872" y="798" fill="#f8fafc" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">OpenHarmony Cangjie Migration</text>
+    <text x="872" y="826" fill="#fcd34d" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="872" y="826">Specialized Skills, pre-commands,</tspan>
+      <tspan x="872" dy="26">and human approval gates in the delivery path</tspan>
+    </text>
+  </g>
+</svg>

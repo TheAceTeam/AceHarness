@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
+  <title id="title">ACEHarness Highlights Overview</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#081120"/>
+      <stop offset="52%" stop-color="#10192f"/>
+      <stop offset="100%" stop-color="#160f2c"/>
+    </linearGradient>
+    <linearGradient id="heroFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111c35" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#0a1120" stop-opacity="0.94"/>
+    </linearGradient>
+    <linearGradient id="cardFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a" stop-opacity="0.94"/>
+      <stop offset="100%" stop-color="#0a1020" stop-opacity="0.96"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPink" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f472b6" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#f472b6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#020617" flood-opacity="0.36"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1040" fill="url(#bg)"/>
+  <circle cx="250" cy="170" r="250" fill="url(#glowBlue)"/>
+  <circle cx="1360" cy="860" r="280" fill="url(#glowPink)"/>
+  <path d="M0 156C256 96 430 242 684 228C940 214 1164 96 1600 170V0H0Z" fill="#ffffff" fill-opacity="0.04"/>
+  <path d="M0 850C282 756 548 916 800 884C1122 844 1344 714 1600 778V1040H0Z" fill="#ffffff" fill-opacity="0.03"/>
+
+  <g font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+    <text x="80" y="146" fill="#f8fafc" font-size="50" font-weight="700">ACE Harness Highlights Overview</text>
+  </g>
+  
+  <g filter="url(#shadow)" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+    <rect x="80" y="304" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="80" y="304" width="8" height="224" rx="4" fill="#ef4444"/>
+    <circle cx="124" cy="352" r="18" fill="#ef4444" fill-opacity="0.18" stroke="#f87171"/>
+    <text x="124" y="359" text-anchor="middle" fill="#fecaca" font-size="18" font-weight="700">1</text>
+    <text x="154" y="344" fill="#fca5a5" font-size="15" font-weight="700" letter-spacing="1.2">BLUE TEAM VS RED TEAM</text>
+    <text x="154" y="382" fill="#f8fafc" font-size="29" font-weight="700">Adversarial Iteration</text>
+    <rect x="624" y="332" width="124" height="34" rx="17" fill="#ef4444" fill-opacity="0.12" stroke="#f87171" stroke-opacity="0.6"/>
+    <text x="686" y="354" text-anchor="middle" fill="#fecaca" font-size="18" font-weight="700">17 Agents</text>
+    <text x="124" y="420" fill="#cbd5e1" font-size="17">
+      <tspan x="124" dy="0">Defender / Attacker / Judge cover implementation, review, and arbitration.</tspan>
+      <tspan x="124" dy="24">Judge emits structured verdicts so the system can auto-pass or keep iterating.</tspan>
+      <tspan x="124" dy="24">Some agents include Review Panels with multiple sub-agents reviewing in parallel.</tspan>
+    </text>
+    <rect x="124" y="480" width="460" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="144" y="500" fill="#fca5a5" font-size="15" font-weight="600">Structured Judge verdicts drive automatic pass vs. iterate decisions</text>
+
+    <rect x="816" y="304" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="816" y="304" width="8" height="224" rx="4" fill="#ec4899"/>
+    <circle cx="860" cy="352" r="18" fill="#ec4899" fill-opacity="0.18" stroke="#f9a8d4"/>
+    <text x="860" y="359" text-anchor="middle" fill="#fce7f3" font-size="18" font-weight="700">2</text>
+    <text x="890" y="344" fill="#f9a8d4" font-size="15" font-weight="700" letter-spacing="1.2">ANALYZE DURING EXECUTION</text>
+    <text x="890" y="382" fill="#f8fafc" font-size="29" font-weight="700">Automated Analysis</text>
+    <rect x="1352" y="332" width="140" height="34" rx="17" fill="#ec4899" fill-opacity="0.12" stroke="#f9a8d4" stroke-opacity="0.6"/>
+    <text x="1423" y="354" text-anchor="middle" fill="#fce7f3" font-size="18" font-weight="700">O0 / O1 / O2</text>
+    <text x="860" y="420" fill="#cbd5e1" font-size="17">
+      <tspan x="860" dy="0">Picks the right regression levels instead of running the full suite blindly.</tspan>
+      <tspan x="860" dy="24">Tracks rollback hotspots, token usage, and cost in real time.</tspan>
+      <tspan x="860" dy="24">Historical prompts can be scored and improved.</tspan>
+    </text>
+    <rect x="860" y="480" width="490" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="880" y="500" fill="#f9a8d4" font-size="15" font-weight="600">Unified analysis of regression scope, rollback hotspots, token cost, and prompt quality</text>
+
+    <rect x="80" y="542" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="80" y="542" width="8" height="224" rx="4" fill="#f59e0b"/>
+    <circle cx="124" cy="590" r="18" fill="#f59e0b" fill-opacity="0.18" stroke="#fbbf24"/>
+    <text x="124" y="597" text-anchor="middle" fill="#fef3c7" font-size="18" font-weight="700">3</text>
+    <text x="154" y="582" fill="#fde68a" font-size="15" font-weight="700" letter-spacing="1.2">HUMAN-IN-THE-LOOP</text>
+    <text x="154" y="620" fill="#f8fafc" font-size="29" font-weight="700">Human Checkpoints</text>
+    <rect x="566" y="570" width="184" height="34" rx="17" fill="#f59e0b" fill-opacity="0.12" stroke="#fbbf24" stroke-opacity="0.6"/>
+    <text x="658" y="592" text-anchor="middle" fill="#fef3c7" font-size="18" font-weight="700">Approve / Inject / Jump</text>
+    <text x="124" y="664" fill="#cbd5e1" font-size="17">
+      <tspan x="124" dy="0">Approve after design; after the fix, choose iterate or accept.</tspan>
+      <tspan x="124" dy="24">Inject feedback at any time to add new constraints and goals.</tspan>
+      <tspan x="124" dy="24">Force-jump to any state when the current path is not working.</tspan>
+    </text>
+    <rect x="124" y="718" width="430" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="144" y="738" fill="#fde68a" font-size="15" font-weight="600">Human judgment stays inside the main path instead of sitting outside as fallback</text>
+
+    <rect x="816" y="542" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="816" y="542" width="8" height="224" rx="4" fill="#8b5cf6"/>
+    <circle cx="860" cy="590" r="18" fill="#8b5cf6" fill-opacity="0.18" stroke="#a78bfa"/>
+    <text x="860" y="597" text-anchor="middle" fill="#ede9fe" font-size="18" font-weight="700">4</text>
+    <text x="890" y="582" fill="#c4b5fd" font-size="15" font-weight="700" letter-spacing="1.2">STATE MACHINE ENGINE</text>
+    <text x="890" y="620" fill="#f8fafc" font-size="29" font-weight="700">State Machine Workflow Engine</text>
+    <rect x="1350" y="570" width="128" height="34" rx="17" fill="#8b5cf6" fill-opacity="0.12" stroke="#a78bfa" stroke-opacity="0.6"/>
+    <text x="1420" y="592" text-anchor="middle" fill="#ede9fe" font-size="18" font-weight="700">Loop Protection</text>
+    <text x="860" y="664" fill="#cbd5e1" font-size="17">
+      <tspan x="860" dy="0">Verdict-driven state transitions roll back upstream on failure.</tspan>
+      <tspan x="860" dy="24">State and global context coexist, and runs resume after restart.</tspan>
+    </text>
+    <rect x="860" y="718" width="340" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="880" y="738" fill="#ddd6fe" font-size="15" font-weight="600">Real run: 3 automatic rollbacks during an ICE fix</text>
+    <text x="1230" y="738" fill="#94a3b8" font-size="15">Supports resume and loop protection</text>
+
+    <rect x="80" y="780" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="80" y="780" width="8" height="224" rx="4" fill="#22c55e"/>
+    <circle cx="124" cy="828" r="18" fill="#22c55e" fill-opacity="0.18" stroke="#4ade80"/>
+    <text x="124" y="835" text-anchor="middle" fill="#dcfce7" font-size="18" font-weight="700">5</text>
+    <text x="154" y="820" fill="#bbf7d0" font-size="15" font-weight="700" letter-spacing="1.2">CHAT-DRIVEN WORKFLOW CREATION</text>
+    <text x="154" y="858" fill="#f8fafc" font-size="29" font-weight="700">Conversational Workflow Creation</text>
+    <rect x="622" y="808" width="126" height="34" rx="17" fill="#22c55e" fill-opacity="0.12" stroke="#4ade80" stroke-opacity="0.6"/>
+    <text x="685" y="830" text-anchor="middle" fill="#dcfce7" font-size="18" font-weight="700">70+ Commands</text>
+    <text x="124" y="902" fill="#cbd5e1" font-size="18">
+      <tspan x="124" dy="0">Create, edit, and start workflows, or even open a PR, from one sentence.</tspan>
+      <tspan x="124" dy="28">AI guides mode selection, agent setup, and iteration strategy.</tspan>
+    </text>
+    <rect x="124" y="956" width="430" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="144" y="976" fill="#bbf7d0" font-size="15" font-weight="600">Risk levels: auto-run / confirm / double-confirm</text>
+
+    <rect x="816" y="780" width="704" height="224" rx="28" fill="url(#cardFill)" stroke="#334155" stroke-width="1.2"/>
+    <rect x="816" y="780" width="8" height="224" rx="4" fill="#06b6d4"/>
+    <circle cx="860" cy="828" r="18" fill="#06b6d4" fill-opacity="0.18" stroke="#67e8f9"/>
+    <text x="860" y="835" text-anchor="middle" fill="#cffafe" font-size="18" font-weight="700">6</text>
+    <text x="890" y="820" fill="#a5f3fc" font-size="15" font-weight="700" letter-spacing="1.2">SUPERVISOR ROUTING</text>
+    <text x="890" y="858" fill="#f8fafc" font-size="29" font-weight="700">Supervisor Smart Routing</text>
+    <rect x="1300" y="808" width="200" height="34" rx="17" fill="#06b6d4" fill-opacity="0.12" stroke="#67e8f9" stroke-opacity="0.6"/>
+    <text x="1400" y="830" text-anchor="middle" fill="#cffafe" font-size="18" font-weight="700">Let AI choose the right teammate</text>
+    <text x="860" y="902" fill="#cbd5e1" font-size="18">
+      <tspan x="860" dy="0">Agents declare what they need; Supervisor routes; WorkflowManager runs the flow.</tspan>
+      <tspan x="860" dy="28">Keywords route for near-zero cost, then a lightweight LLM, then the user.</tspan>
+    </text>
+    <rect x="860" y="956" width="494" height="30" rx="15" fill="#111827" fill-opacity="0.9" stroke="#374151"/>
+    <text x="880" y="976" fill="#a5f3fc" font-size="15" font-weight="600">Plan loop: keyword match -&gt; lightweight LLM -&gt; user fallback</text>
+  </g>
+
+  <g opacity="0.24">
+    <line x1="784" y1="416" x2="816" y2="416" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <line x1="784" y1="654" x2="816" y2="654" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <line x1="784" y1="892" x2="816" y2="892" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 6"/>
+  </g>
+</svg>

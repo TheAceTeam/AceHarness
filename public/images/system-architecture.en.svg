@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1450" role="img" aria-labelledby="title desc">
+  <title id="title">AceHarness System Architecture</title>
+  <desc id="desc">The three-layer AceHarness architecture: frontend, orchestration, and execution.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#040913"/>
+      <stop offset="56%" stop-color="#0f1c38"/>
+      <stop offset="100%" stop-color="#160b23"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1223"/>
+      <stop offset="100%" stop-color="#121e37"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="22" stdDeviation="24" flood-color="#020617" flood-opacity="0.38"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1450" fill="url(#bg)"/>
+  <circle cx="260" cy="140" r="180" fill="#2563eb" fill-opacity="0.10"/>
+  <circle cx="1320" cy="1300" r="220" fill="#22c55e" fill-opacity="0.10"/>
+
+  <text x="112" y="98" fill="#93c5fd" font-size="26" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">ACEHARNESS PLATFORM</text>
+  <text x="112" y="160" fill="#f8fafc" font-size="60" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">System Architecture</text>
+
+  <g filter="url(#shadow)">
+    <rect x="96" y="220" width="1408" height="364" rx="36" fill="url(#panel)" stroke="#334155" stroke-width="1.5"/>
+    <text x="128" y="272" fill="#e2e8f0" font-size="34" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Frontend Layer · Next.js 16</text>
+
+    <rect x="124" y="322" width="248" height="118" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="154" y="364" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Chat</text>
+    <text x="154" y="392" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="154" y="392">70+ actions / wizard flows /</tspan>
+      <tspan x="154" dy="22">risk confirmation</tspan>
+    </text>
+
+    <rect x="392" y="322" width="248" height="118" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="422" y="364" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Dashboard</text>
+    <text x="422" y="392" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="422" y="392">live metrics / trends /</tspan>
+      <tspan x="422" dy="22">recent runs</tspan>
+    </text>
+
+    <rect x="660" y="322" width="248" height="118" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="690" y="364" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Workbench</text>
+    <text x="690" y="392" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="690" y="392">run / design / history /</tspan>
+      <tspan x="690" dy="22">state graph</tspan>
+    </text>
+
+    <rect x="928" y="322" width="248" height="118" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="958" y="364" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Schedules</text>
+    <text x="958" y="392" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="958" y="392">Cron scheduling / planned runs /</tspan>
+      <tspan x="958" dy="22">test trigger</tspan>
+    </text>
+
+    <rect x="1196" y="322" width="248" height="118" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="1226" y="364" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">API Docs</text>
+    <text x="1226" y="392" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="1226" y="392">50+ endpoints / interactive debug /</tspan>
+      <tspan x="1226" dy="22">examples</tspan>
+    </text>
+
+    <rect x="200" y="452" width="1200" height="104" rx="22" fill="#111827" stroke="#475569"/>
+    <text x="232" y="488" fill="#38bdf8" font-size="27" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">API Routing Layer</text>
+    <text x="408" y="482" fill="#cbd5e1" font-size="19" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="408" y="482">workflow/* · processes/* · configs/* · agents/*</tspan>
+      <tspan x="408" dy="24">runs/* · schedules/* · chat/* · skills/*</tspan>
+      <tspan x="408" dy="24">models/* · gitcode/*</tspan>
+    </text>
+  </g>
+
+  <path d="M800 584V626" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="146" y="626" width="1308" height="284" rx="36" fill="url(#panel)" stroke="#334155" stroke-width="1.5"/>
+    <text x="178" y="678" fill="#e2e8f0" font-size="34" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Orchestration Layer</text>
+
+    <rect x="176" y="724" width="300" height="126" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="206" y="768" fill="#e0e7ff" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Workflow Manager</text>
+    <text x="206" y="798" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="206" y="798">phased engine / serial and parallel</tspan>
+      <tspan x="206" dy="22">step orchestration</tspan>
+    </text>
+
+    <rect x="500" y="708" width="620" height="142" rx="28" fill="#0f172a" stroke="#22d3ee"/>
+    <text x="534" y="756" fill="#e0e7ff" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">StateMachine Workflow Manager</text>
+    <text x="534" y="786" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="534" y="786">state machine engine / conditional jumps / rollback control /</tspan>
+      <tspan x="534" dy="22">resume</tspan>
+    </text>
+    <rect x="876" y="726" width="220" height="44" rx="16" fill="#111827" stroke="#475569"/>
+    <text x="898" y="754" fill="#cbd5e1" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Supervisor-Lite Routing</text>
+    <rect x="876" y="780" width="220" height="44" rx="16" fill="#111827" stroke="#475569"/>
+    <text x="898" y="808" fill="#cbd5e1" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">context persistence / crash recovery</text>
+
+    <rect x="1124" y="724" width="300" height="126" rx="24" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="1154" y="768" fill="#e0e7ff" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Scheduler</text>
+    <text x="1154" y="798" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="1154" y="798">node-cron / recurring execution /</tspan>
+      <tspan x="1154" dy="22">scheduled jobs</tspan>
+    </text>
+  </g>
+
+  <path d="M328 850C328 900 620 912 742 960" fill="none" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+  <path d="M800 850V960" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+  <path d="M1272 850C1272 900 980 912 858 960" fill="none" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="410" y="960" width="780" height="440" rx="34" fill="url(#panel)" stroke="#334155" stroke-width="1.5"/>
+    <text x="442" y="1012" fill="#e2e8f0" font-size="34" font-weight="600" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Execution Layer</text>
+
+    <rect x="530" y="1040" width="540" height="116" rx="22" fill="#0f172a" stroke="#a78bfa"/>
+    <text x="562" y="1086" fill="#ddd6fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">ProcessManager</text>
+    <text x="562" y="1116" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="562" y="1116">concurrency control / queues / streaming output /</tspan>
+      <tspan x="562" dy="22">process lifecycle</tspan>
+    </text>
+
+    <rect x="530" y="1180" width="540" height="96" rx="22" fill="#0f172a" stroke="#38bdf8"/>
+    <text x="562" y="1219" fill="#e0f2fe" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Execution Engine</text>
+    <text x="562" y="1248" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Kiro CLI / Claude Code CLI + Skills</text>
+
+    <rect x="530" y="1294" width="540" height="96" rx="22" fill="#0f172a" stroke="#22c55e"/>
+    <text x="562" y="1333" fill="#dcfce7" font-size="28" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AI Services</text>
+    <text x="562" y="1362" fill="#94a3b8" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Claude / OpenAI / compatible models</text>
+  </g>
+
+  <path d="M800 1156V1180" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+  <path d="M800 1276V1294" stroke="#64748b" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+</svg>

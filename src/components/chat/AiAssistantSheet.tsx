@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import ChatMessage from '@/components/chat/ChatMessage';
+import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
+import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -14,6 +16,7 @@ import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { workspaceApi, type NotebookScope } from '@/lib/api';
 import { buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
 import { useToast } from '@/components/ui/toast';
+import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
 
 const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 
@@ -91,8 +94,11 @@ export function AiAssistantSheet({
   const [exportDirectory, setExportDirectory] = useState('');
   const [exportFileName, setExportFileName] = useState('');
   const [exportMessageId, setExportMessageId] = useState<string | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
   const editorRef = useRef<RichTextEditorHandle>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const pendingHistoryScrollAdjustRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
   const previousActiveSessionIdRef = useRef<string | null>(null);
   const lastAutoTaskIdRef = useRef<string | null>(null);
   const lastRequestRef = useRef<LastRequest | null>(null);
@@ -336,6 +342,113 @@ export function AiAssistantSheet({
     setInsertedMessageIds({});
   }, [sheetSessionId]);
 
+  useEffect(() => {
+    setHistoryExpanded(false);
+  }, [sheetSessionId]);
+
+  const renderedSessionMessages = useMemo(() => {
+    return sessionMessages.map((message, messageIndex) => {
+      const resultContent = message.role === 'assistant' ? extractResultContent(message.content) : null;
+      let forceCodeBlock = false;
+      if (message.role === 'assistant') {
+        for (let i = messageIndex - 1; i >= 0; i -= 1) {
+          const prev = sessionMessages[i];
+          if (prev?.role !== 'user') continue;
+          const displayCandidate = String((prev as any).displayText || prev.content || '');
+          forceCodeBlock = shouldTreatAsCodeResult(displayCandidate);
+          break;
+        }
+      }
+      const displayMessage = resultContent
+        ? { ...message, content: formatResultForDisplay(resultContent, forceCodeBlock) }
+        : message;
+
+      return (
+        <div key={message.id}>
+          <ChatMessage
+            message={displayMessage}
+            isStreaming={streamingMessageId === message.id}
+            onConfirmAction={(actionId) => confirmAction(message.id, actionId)}
+            onRejectAction={(actionId) => rejectAction(message.id, actionId)}
+            onUndoAction={(actionId) => undoActionById(message.id, actionId)}
+            onRetryAction={(actionId) => retryAction(message.id, actionId)}
+            onAction={(prompt) => { void send(prompt); }}
+            onDelete={deleteMessage}
+            onRetryFromMessage={retryFromMessage}
+            onContinue={continueFromMessage}
+            onSaveAsNotebook={(messageId) => openExportDialog(messageId)}
+          />
+          {onInsertResult && message.role === 'assistant' && resultContent && (
+            <div className="mb-3 -mt-3 ml-10 flex justify-start">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                disabled={!!insertedMessageIds[message.id]}
+                onClick={() => {
+                  onInsertResult(resultContent);
+                  setInsertedMessageIds((prev) => ({ ...prev, [message.id]: true }));
+                }}
+              >
+                {insertedMessageIds[message.id] ? '已插入' : insertButtonLabel}
+              </Button>
+            </div>
+          )}
+        </div>
+      );
+    });
+  }, [
+    confirmAction,
+    continueFromMessage,
+    deleteMessage,
+    extractResultContent,
+    formatResultForDisplay,
+    insertedMessageIds,
+    insertButtonLabel,
+    onInsertResult,
+    openExportDialog,
+    rejectAction,
+    retryAction,
+    retryFromMessage,
+    send,
+    sessionMessages,
+    shouldTreatAsCodeResult,
+    streamingMessageId,
+    undoActionById,
+  ]);
+
+  const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(sessionMessages as any[], {
+    streamingMessageId,
+  }), [sessionMessages, streamingMessageId]);
+  const hiddenMessageCount = Math.max(0, renderedSessionMessages.length - recentWindowSize);
+  const historicalMessageItems = hiddenMessageCount > 0
+    ? sessionMessages.slice(0, hiddenMessageCount).map((message, index) => ({
+        key: message.id,
+        node: renderedSessionMessages[index],
+      }))
+    : [];
+  const recentMessageItems = hiddenMessageCount > 0
+    ? sessionMessages.slice(-recentWindowSize).map((message, index) => ({
+        key: message.id,
+        node: renderedSessionMessages[hiddenMessageCount + index],
+      }))
+    : sessionMessages.map((message, index) => ({
+        key: message.id,
+        node: renderedSessionMessages[index],
+      }));
+  const historicalMessages = hiddenMessageCount > 0 ? renderedSessionMessages.slice(0, hiddenMessageCount) : [];
+
+  useEffect(() => {
+    const scroller = chatScrollRef.current;
+    const pending = pendingHistoryScrollAdjustRef.current;
+    if (!scroller || !pending) return;
+    pendingHistoryScrollAdjustRef.current = null;
+    const nextScrollHeight = scroller.scrollHeight;
+    const delta = nextScrollHeight - pending.prevScrollHeight;
+    if (Math.abs(delta) < 1) return;
+    scroller.scrollTop = Math.max(0, pending.prevScrollTop + delta);
+  }, [historyExpanded, hiddenMessageCount]);
+
   const handleCreateSession = useCallback(() => {
     const nextId = createSession();
     renameSession(nextId, sessionTitle);
@@ -395,63 +508,28 @@ export function AiAssistantSheet({
                 </div>
 
                 <TabsContent value="chat" className="mt-0 min-h-0 flex-1 overflow-hidden p-0 data-[state=inactive]:hidden">
-                  <div className="h-full overflow-y-auto px-3 py-3">
+                  <div ref={chatScrollRef} className="h-full overflow-y-auto px-3 py-3">
                     {sessionMessages.length === 0 && !isLoadingCurrentSession && (
                       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">输入问题开始对话</div>
                     )}
-                    {sessionMessages.map((message, messageIndex) => (
-                      <div key={message.id}>
-                        {(() => {
-                          const resultContent = message.role === 'assistant' ? extractResultContent(message.content) : null;
-                          let forceCodeBlock = false;
-                          if (message.role === 'assistant') {
-                            for (let i = messageIndex - 1; i >= 0; i -= 1) {
-                              const prev = sessionMessages[i];
-                              if (prev?.role !== 'user') continue;
-                              const displayCandidate = String((prev as any).displayText || prev.content || '');
-                              forceCodeBlock = shouldTreatAsCodeResult(displayCandidate);
-                              break;
-                            }
-                          }
-                          const displayMessage = resultContent
-                            ? { ...message, content: formatResultForDisplay(resultContent, forceCodeBlock) }
-                            : message;
-                          return (
-                            <>
-                        <ChatMessage
-                          message={displayMessage}
-                          isStreaming={streamingMessageId === message.id}
-                          onConfirmAction={(actionId) => confirmAction(message.id, actionId)}
-                          onRejectAction={(actionId) => rejectAction(message.id, actionId)}
-                          onUndoAction={(actionId) => undoActionById(message.id, actionId)}
-                          onRetryAction={(actionId) => retryAction(message.id, actionId)}
-                          onAction={(prompt) => { void send(prompt); }}
-                          onDelete={deleteMessage}
-                          onRetryFromMessage={retryFromMessage}
-                          onContinue={continueFromMessage}
-                          onSaveAsNotebook={(messageId) => openExportDialog(messageId)}
-                        />
-                        {onInsertResult && message.role === 'assistant' && resultContent && (
-                          <div className="mb-3 -mt-3 ml-10 flex justify-start">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs"
-                              disabled={!!insertedMessageIds[message.id]}
-                              onClick={() => {
-                                onInsertResult(resultContent);
-                                setInsertedMessageIds((prev) => ({ ...prev, [message.id]: true }));
-                              }}
-                            >
-                              {insertedMessageIds[message.id] ? '已插入' : insertButtonLabel}
-                            </Button>
-                          </div>
-                        )}
-                            </>
-                          );
-                        })()}
-                      </div>
-                    ))}
+                    <MessageHistoryCollapse
+                      hiddenCount={hiddenMessageCount}
+                      recentCount={recentWindowSize}
+                      open={historyExpanded}
+                      onOpenChange={(open) => {
+                        const scroller = chatScrollRef.current;
+                        pendingHistoryScrollAdjustRef.current = scroller
+                          ? { prevScrollHeight: scroller.scrollHeight, prevScrollTop: scroller.scrollTop }
+                          : null;
+                        setHistoryExpanded(open);
+                      }}
+                      hiddenContent={
+                        historyExpanded
+                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={chatScrollRef} />
+                          : historicalMessages
+                      }
+                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={chatScrollRef} />}
+                    />
                     {isLoadingCurrentSession && !streamingMessageId && (
                       <div className="text-sm text-muted-foreground px-2 py-1">AI 思考中...</div>
                     )}

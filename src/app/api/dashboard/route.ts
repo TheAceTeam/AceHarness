@@ -7,6 +7,7 @@ import { requireAuth } from '@/lib/auth-middleware';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
 import { listConfigsWithMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
+import { loadUsers } from '@/lib/user-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -32,12 +33,19 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
   ]);
 
   const { configs, configNameMap } = configResult;
-  const { runs, agentUsage } = runsResult;
+  const { runs, agentUsage, tokenRankingByUser, tokenRankingByWorkflow } = runsResult;
 
   const totalRuns = runs.length;
   const completed = runs.filter(r => r.status === 'completed').length;
   const successRate = totalRuns > 0 ? Math.round((completed / totalRuns) * 100) : 0;
   const runningRuns = runs.filter(r => r.status === 'running');
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const weeklyRuns = runs.filter(r => getSafeTime(r.startTime) >= sevenDaysAgo).length;
+  const totalTokenUsage = runs.reduce((sum, r) => sum + r.totalTokens, 0);
+  const weeklyTokenUsage = runs.reduce((sum, r) => {
+    return getSafeTime(r.startTime) >= sevenDaysAgo ? sum + r.totalTokens : sum;
+  }, 0);
 
   let totalDuration = 0;
   let durationCount = 0;
@@ -59,8 +67,6 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
   const recentRuns = runs.slice(0, 5);
 
   // Weekly activity
-  const now = Date.now();
-  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
   const dayCounts: number[] = [0, 0, 0, 0, 0, 0, 0];
   for (const r of runs) {
     const t = getSafeTime(r.startTime);
@@ -84,6 +90,9 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
     stats: {
       totalRuns, successRate, avgDuration,
       activeWorkflows: configs.length,
+      weeklyRuns,
+      totalTokenUsage,
+      weeklyTokenUsage,
       totalAgents: agentCount,
       runningProcesses: runningRuns.length,
     },
@@ -94,6 +103,8 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
       startTime: r.startTime, status: r.status, currentPhase: r.currentPhase,
     })),
     agentUsageData: topAgents,
+    tokenRankingByUser,
+    tokenRankingByWorkflow,
     activityData,
   };
 }
@@ -185,10 +196,26 @@ async function readAgentCount(): Promise<number> {
   } catch { return 0; }
 }
 
-interface RunSummary {
+interface TokenUsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+interface TokenRankingItem extends TokenUsageSummary {
+  name: string;
+  configFile?: string;
+  runs: number;
+  totalTokens: number;
+  cost: number;
+}
+
+interface RunSummary extends TokenUsageSummary {
   id: string; configFile: string; configName: string;
   startTime: string; endTime: string | null; status: string;
   currentPhase: string | null; totalSteps: number; completedSteps: number;
+  totalTokens: number; cost: number; ownerName: string;
 }
 
 function isValidRunState(state: any): state is {
@@ -205,10 +232,109 @@ function isValidRunState(state: any): state is {
   return !!state && typeof state === 'object' && !Array.isArray(state);
 }
 
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function readTokenUsage(source: any): TokenUsageSummary {
+  const usage = source?.tokenUsage || source || {};
+  return {
+    inputTokens: numberOrZero(usage.inputTokens),
+    outputTokens: numberOrZero(usage.outputTokens),
+    cacheCreationInputTokens: numberOrZero(usage.cacheCreationInputTokens),
+    cacheReadInputTokens: numberOrZero(usage.cacheReadInputTokens),
+  };
+}
+
+function addUsage(target: TokenUsageSummary, usage: TokenUsageSummary): void {
+  target.inputTokens += usage.inputTokens;
+  target.outputTokens += usage.outputTokens;
+  target.cacheCreationInputTokens += usage.cacheCreationInputTokens;
+  target.cacheReadInputTokens += usage.cacheReadInputTokens;
+}
+
+function totalTokens(usage: TokenUsageSummary): number {
+  return usage.inputTokens + usage.outputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens;
+}
+
+function emptyRankingItem(name: string, configFile?: string): TokenRankingItem {
+  return {
+    name,
+    configFile,
+    runs: 0,
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cost: 0,
+  };
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function finalizeRanking(items: Record<string, TokenRankingItem>): TokenRankingItem[] {
+  return Object.values(items)
+    .map(item => ({ ...item, cost: roundMoney(item.cost) }))
+    .sort((a, b) => b.totalTokens - a.totalTokens || b.runs - a.runs)
+    .slice(0, 10);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function getRunOwnerName(state: any, ownerNameById: Record<string, string>, legacyDefaultOwnerName = ''): string {
+  const explicitName = stringValue(state?.runOwnerName) || stringValue(state?.createdByName);
+  if (explicitName) return explicitName;
+
+  const ownerId = stringValue(state?.runOwnerId) || stringValue(state?.createdBy);
+  if (ownerId && ownerNameById[ownerId]) return ownerNameById[ownerId];
+
+  const legacyOwner = stringValue(state?.createdBy) || stringValue(state?.runOwnerId);
+  return legacyOwner || legacyDefaultOwnerName || '未知用户';
+}
+
+function getRunTokenUsage(state: any): { usage: TokenUsageSummary; cost: number } {
+  const usage: TokenUsageSummary = { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
+  let cost = 0;
+
+  if (Array.isArray(state?.stepLogs) && state.stepLogs.length > 0) {
+    for (const log of state.stepLogs) {
+      addUsage(usage, readTokenUsage(log));
+      cost += numberOrZero(log?.costUsd);
+    }
+    return { usage, cost };
+  }
+
+  if (Array.isArray(state?.agents)) {
+    for (const ag of state.agents) {
+      addUsage(usage, readTokenUsage(ag));
+      cost += numberOrZero(ag?.costUsd);
+    }
+  }
+
+  return { usage, cost };
+}
+
 async function readAllRunsSummary() {
   const runs: RunSummary[] = [];
   const agentUsage: Record<string, { calls: number; cost: number }> = {};
-  if (!existsSync(RUNS_DIR)) return { runs, agentUsage };
+  const tokenRankingByUserMap: Record<string, TokenRankingItem> = {};
+  const tokenRankingByWorkflowMap: Record<string, TokenRankingItem> = {};
+  const users = await loadUsers().catch(() => []);
+  const ownerNameById = Object.fromEntries(users.map((user) => [user.id, user.username]));
+  const legacyDefaultOwnerName = users.length === 1 ? users[0]?.username || '' : '';
+  if (!existsSync(RUNS_DIR)) {
+    return {
+      runs,
+      agentUsage,
+      tokenRankingByUser: [],
+      tokenRankingByWorkflow: [],
+    };
+  }
 
   const entries = await readdir(RUNS_DIR, { withFileTypes: true });
   const dirs = entries.filter(e => e.isDirectory() && !e.name.startsWith('.'));
@@ -231,13 +357,38 @@ async function readAllRunsSummary() {
   valid.sort((a, b) => getSafeTime(b.state.startTime) - getSafeTime(a.state.startTime));
 
   for (const { state } of valid) {
+    const { usage, cost } = getRunTokenUsage(state);
+    const runTotalTokens = totalTokens(usage);
+    const ownerName = getRunOwnerName(state, ownerNameById, legacyDefaultOwnerName);
+    const configFile = state.configFile || '';
+    const workflowKey = configFile || '(unknown)';
+
     runs.push({
-      id: state.runId, configFile: state.configFile, configName: state.configFile,
-      startTime: state.startTime, endTime: state.endTime, status: state.status,
+      id: state.runId || '', configFile, configName: configFile,
+      startTime: state.startTime || '', endTime: state.endTime || null, status: state.status || 'unknown',
       currentPhase: state.currentPhase || null,
       totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
       completedSteps: state.completedSteps?.length || 0,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
+      totalTokens: runTotalTokens,
+      cost,
+      ownerName,
     });
+
+    if (!tokenRankingByUserMap[ownerName]) tokenRankingByUserMap[ownerName] = emptyRankingItem(ownerName);
+    tokenRankingByUserMap[ownerName].runs += 1;
+    tokenRankingByUserMap[ownerName].totalTokens += runTotalTokens;
+    tokenRankingByUserMap[ownerName].cost += cost;
+    addUsage(tokenRankingByUserMap[ownerName], usage);
+
+    if (!tokenRankingByWorkflowMap[workflowKey]) tokenRankingByWorkflowMap[workflowKey] = emptyRankingItem(configFile || '未知工作流', configFile);
+    tokenRankingByWorkflowMap[workflowKey].runs += 1;
+    tokenRankingByWorkflowMap[workflowKey].totalTokens += runTotalTokens;
+    tokenRankingByWorkflowMap[workflowKey].cost += cost;
+    addUsage(tokenRankingByWorkflowMap[workflowKey], usage);
   }
 
   // Agent usage from recent 50
@@ -262,5 +413,10 @@ async function readAllRunsSummary() {
     }
   }
 
-  return { runs, agentUsage };
+  return {
+    runs,
+    agentUsage,
+    tokenRankingByUser: finalizeRanking(tokenRankingByUserMap),
+    tokenRankingByWorkflow: finalizeRanking(tokenRankingByWorkflowMap),
+  };
 }

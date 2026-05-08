@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { StoryOnboarding } from '@/components/onboarding/StoryOnboarding';
 import { Button } from '@/components/ui/button';
 import { useChat } from '@/contexts/ChatContext';
@@ -29,6 +30,7 @@ type ProgressPayload = {
 };
 
 export default function OnboardingPortal() {
+  const pathname = usePathname();
   const { isOpen: chatOpen } = useChat();
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<Role>('user');
@@ -97,6 +99,10 @@ export default function OnboardingPortal() {
     await loadProgress();
     setOpen(true);
   };
+
+  if (pathname === '/' || pathname === '/chat') {
+    return null;
+  }
 
   return (
     <>

@@ -23,8 +23,7 @@ export interface AgentSummary {
 }
 
 // Support multi-line question bodies and stop at next protocol tag or end of output.
-const NEED_INFO_REGEX = /\[NEED_INFO(?::human)?\]\s*([\s\S]+?)(?=\[NEED_INFO(?::human)?\]|\[PLAN_DONE\]|$)/gi;
-const PLAN_DONE_REGEX = /\[PLAN_DONE\]/i;
+const NEED_INFO_REGEX = /\[NEED_INFO(?::human)?\]\s*([\s\S]+?)(?=\[NEED_INFO(?::human)?\]|$)/gi;
 
 interface WorkflowStep {
   name: string;
@@ -51,10 +50,6 @@ export function parseNeedInfo(step: WorkflowStep, output: string): InfoRequest[]
   }
 
   return requests;
-}
-
-export function isPlanDone(output: string): boolean {
-  return PLAN_DONE_REGEX.test(output);
 }
 
 export async function routeInfoRequest(

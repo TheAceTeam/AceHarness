@@ -4,10 +4,11 @@ import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
 import { loadChatSettings } from '@/lib/chat-settings';
 
 const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
+const CHAT_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, model, sessionId, mode } = await request.json();
+    const { message, model, engine: requestedEngine, sessionId, mode } = await request.json();
 
     if (!message?.trim()) {
       return NextResponse.json({ error: '消息不能为空' }, { status: 400 });
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
       systemPrompt = await buildDashboardSystemPrompt(enabledSkills);
     }
 
-    const engineType = await getConfiguredEngine();
+    const engineType = requestedEngine || await getConfiguredEngine();
     const engine = await createEngine(engineType);
 
     if (!engine) {
@@ -37,14 +38,24 @@ export async function POST(request: NextRequest) {
       if (event.type === 'text') chunks.push(event.content);
     });
 
-    const result = await engine.execute({
-      agent: 'chat',
-      step: 'chat',
-      prompt: message,
-      systemPrompt,
-      model: useModel,
-      workingDirectory: process.cwd(),
-      sessionId: sessionId || undefined,
+    const result = await new Promise<any>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        engine.cancel();
+        reject(new Error(`聊天请求超过 ${CHAT_TIMEOUT_MS / 60000} 分钟，已自动销毁`));
+      }, CHAT_TIMEOUT_MS);
+
+      engine.execute({
+        agent: 'chat',
+        step: 'chat',
+        prompt: message,
+        systemPrompt,
+        model: useModel,
+        workingDirectory: process.cwd(),
+        sessionId: sessionId || undefined,
+      })
+        .then(resolve)
+        .catch(reject)
+        .finally(() => clearTimeout(timeoutId));
     });
 
     engine.cancel();
@@ -52,6 +63,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       result: result.output || chunks.join(''),
       sessionId: result.sessionId,
+      engine: engineType,
       isError: !result.success,
     });
   } catch (error: any) {

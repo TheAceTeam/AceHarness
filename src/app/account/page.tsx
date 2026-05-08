@@ -377,7 +377,6 @@ function AccountContent() {
               workspaceRoot="/"
               value={newDir}
               onChange={setNewDir}
-              className="h-64"
             />
             <p className="text-xs text-muted-foreground">工作流执行时将在此目录下创建隔离的运行环境</p>
             {dirError && <p className="text-sm text-destructive">{dirError}</p>}

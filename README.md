@@ -2,6 +2,8 @@
 
 # ACE Harness (Agent Centric Engineering Harness)
 
+[English](./README.en.md) | 中文
+
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="./public/logo.png">
     <img src="./public/logo.png" alt="ACEHarness" width="300">
@@ -82,6 +84,10 @@ git clone <repository-url> && cd aceharness
 npm install 
 
 # 本地调试（无需run build)
+ACE_HOST=0.0.0.0
+ACE_PORT=3000
+# $env:ACE_HOST=0.0.0.0
+# $env:ACE_PORT=3001
 npm run dev  # 自定义端口：npm run dev -- -p 8080
 
 # 应用于生产环境（首次或更新后需要重新run build）
@@ -109,7 +115,7 @@ Judge 输出结构化判决，系统据此自动决定"通过"或"继续迭代"�
 { "verdict": "fail", "remaining_issues": 3, "summary": "边界条件未覆盖" }
 ```
 
-内置 17 个专业 Agent，覆盖架构设计、代码实现、安全审计、性能测试等角色。部分 Agent 还配备了 Review Panel（会审模式），由多个子 Agent 从不同维度并行评审。
+内置多类专业 Agent，覆盖架构设计、代码实现、测试验证、安全审计、文档编写等角色。部分 Agent 还配备了 Review Panel（会审模式），由多个子 Agent 从不同维度并行评审。
 
 ### 2. 自动化分析 -- 不只是跑任务，还能分析结果
 
@@ -552,7 +558,7 @@ AI 在这个流程中自主完成了三层代码的一致性开发：Gap 分析�
 - 3 个 API 完成全栈开发（`lstatSync`、`mkdtempSync`、`getxattrSync`），C++ FFI 编译通过
 - 注入 5 套专属 Skills，每个 Agent 携带仓颉/鸿蒙领域知识
 - 产出 **11 份结构化文档**，涵盖 Gap 分析、架构设计、编码实现、编译验证、红军审查、评审裁决、最终审查、API 文档、产出汇总
-- 全部产出写入 `.ace-outputs/{runId}/` 目录，全链路可追溯
+- 全部产出写入运行记录的 `runs/{runId}/outputs/` 目录，全链路可追溯
 
 ---
 

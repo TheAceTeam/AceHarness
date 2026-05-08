@@ -3,48 +3,77 @@
  *
  * Unified wrapper implementing the Engine interface for Claude Code.
  * Uses @anthropic-ai/claude-agent-sdk for all execution:
- * - Normal mode: permissionMode 'bypassPermissions'
- * - Plan mode: permissionMode 'plan' + AskUserQuestion bridge + plan capture
+ * - permissionMode 'bypassPermissions'
  */
 
 import { EventEmitter } from 'events';
-import { readdir, readFile, stat, mkdir, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
-import { fenced } from '../markdown-utils';
-import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
-
-export type SdkPlanCapturedVia =
-  | 'canUseTool_write'
-  | 'stop_hook'
-  | 'output_parse'
-  | 'filesystem';
-export type SdkPlanSubtaskTelemetry = {
-  phase: 'start' | 'progress' | 'tool' | 'end';
-  taskId: string;
-  description: string;
-  elapsedSec: number;
-  detail?: string;
-  toolName?: string;
-  terminalStatus?: 'completed' | 'failed' | 'stopped';
-  summary?: string;
-  outputFile?: string;
-};
+import { fenced, htmlCodeBlock, formatLargeContent } from '../markdown-utils';
+import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import { repairWindowsMojibake } from '../mojibake-repair';
+import { readTextFileBestEffort } from '../text-decoding';
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
-const CAPTURE_PRIORITY: Record<SdkPlanCapturedVia, number> = {
-  canUseTool_write: 0, stop_hook: 1, output_parse: 2, filesystem: 3,
+const ZERO_USAGE_METADATA: EngineResultMetadata = {
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  },
+  cost_usd: 0,
+  duration_ms: 0,
+  duration_api_ms: 0,
+  num_turns: 0,
 };
-function priorityOf(via: SdkPlanCapturedVia | ''): number {
-  return via ? CAPTURE_PRIORITY[via] : 999;
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
-function clip(s: string, max: number): string {
-  return s.length <= max ? s : s.slice(0, max) + '…';
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+function delayWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new Error('Aborted'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function metadataFromClaudeResult(result: Record<string, unknown>, resolvedModel?: string): EngineResultMetadata {
+  const usage = result.usage && typeof result.usage === 'object' ? result.usage as Record<string, unknown> : {};
+  return {
+    usage: {
+      input_tokens: numberOrZero(usage.input_tokens),
+      output_tokens: numberOrZero(usage.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage.cache_read_input_tokens),
+    },
+    cost_usd: numberOrZero(result.cost_usd),
+    duration_ms: numberOrZero(result.duration_ms),
+    duration_api_ms: numberOrZero(result.duration_api_ms),
+    num_turns: numberOrZero(result.num_turns),
+    ...(resolvedModel ? { resolvedModel } : {}),
+  };
+}
+
+function zeroUsageMetadata(resolvedModel?: string): EngineResultMetadata {
+  return resolvedModel ? { ...ZERO_USAGE_METADATA, resolvedModel } : ZERO_USAGE_METADATA;
+}
+
 function parseToolJson(inputJson: string): Record<string, unknown> | null {
   if (!inputJson.trim()) return null;
   try {
@@ -80,23 +109,17 @@ function toolText(rawInput: Record<string, unknown>, keys: string[]): string {
 function readToolFileContent(filePath: string): string {
   if (!filePath || !existsSync(filePath)) return '';
   try {
-    return readFileSync(filePath, 'utf-8');
+    return readTextFileBestEffort(filePath);
   } catch {
     return '';
   }
 }
 function formatCommandOutput(output: string, exitCode?: number | null): string {
-  const trimmed = output.trim();
+  const trimmed = repairWindowsMojibake(output.trim());
   if (!trimmed) {
     return exitCode != null && exitCode !== 0 ? `\n(exit code: ${exitCode})\n` : '';
   }
-  const lines = trimmed.split('\n');
-  let rendered = '';
-  if (lines.length <= 15) {
-    rendered = `\n${fenced(trimmed)}\n`;
-  } else {
-    rendered = `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(trimmed)}\n\n</details>\n`;
-  }
+  let rendered = formatLargeContent(trimmed, { summaryLabel: '查看输出' });
   if (exitCode != null && exitCode !== 0) rendered += `(exit code: ${exitCode})\n`;
   return rendered;
 }
@@ -124,16 +147,12 @@ function formatClaudeToolExecutionResult(toolNameRaw: string, result: unknown): 
   if (toolName === 'read') {
     const text = extractTextFromUnknown(raw.content ?? raw.result ?? raw.text).trim();
     if (!text) return '';
-    const lines = text.split('\n');
-    if (lines.length <= 15) return `\n${fenced(text)}\n`;
-    return `\n<details><summary>查看内容 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
+    return formatLargeContent(text, { summaryLabel: '查看内容' });
   }
 
   const text = extractTextFromUnknown(raw.output ?? raw.content ?? raw.result ?? raw.message ?? result).trim();
   if (!text) return '';
-  const lines = text.split('\n');
-  if (lines.length <= 15) return `\n${fenced(text)}\n`;
-  return `\n<details><summary>查看输出 (${lines.length} 行)</summary>\n\n${fenced(text)}\n\n</details>\n`;
+  return formatLargeContent(text, { summaryLabel: '查看输出' });
 }
 function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string {
   const toolName = resolveToolName(toolNameRaw);
@@ -146,7 +165,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     const content = toolText(rawInput, ['content', 'text', 'new_string', 'newString']);
     const lines = content ? content.split('\n').length : 0;
     let out = `\n📝 写入文件: \`${p || '(未知路径)'}\`${lines ? ` (${lines} 行)` : ''}\n`;
-    if (content) out += `\n<details><summary>查看内容 (${lines} 行)</summary>\n\n${fenced(content, lang)}\n\n</details>\n`;
+    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
     return out;
   }
   if (toolName === 'bash') {
@@ -154,13 +173,13 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (!cmd) return '\n💻 执行命令\n';
     const cmdLines = cmd.split('\n');
     if (cmdLines.length <= 1 && cmd.length <= 120) return `\n💻 执行命令: \`${cmd}\`\n`;
-    return `\n💻 执行命令 (${cmdLines.length} 行)\n\n<details><summary>查看命令</summary>\n\n${fenced(cmd, 'bash')}\n\n</details>\n`;
+    return `\n💻 执行命令 (${cmdLines.length} 行)\n\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
   }
   if (toolName === 'read') {
     const content = toolText(rawInput, ['content', 'result', 'text']) || readToolFileContent(p);
     const lines = content ? content.split('\n').length : 0;
     let out = `\n📖 读取文件: \`${p || '(未知路径)'}\`\n`;
-    if (content) out += `\n<details><summary>查看内容 (${lines} 行)</summary>\n\n${fenced(content, lang)}\n\n</details>\n`;
+    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
     return out;
   }
   if (toolName === 'edit' || toolName === 'multiedit' || toolName === 'patch') {
@@ -177,7 +196,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (oldStr || newStr) {
       const diff = (oldStr ? oldStr.split('\n').map((l) => `- ${l}`).join('\n') + '\n' : '')
         + (newStr ? newStr.split('\n').map((l) => `+ ${l}`).join('\n') + '\n' : '');
-      out += `\n<details><summary>查看变更 (${stats})</summary>\n\n${fenced(diff.trimEnd(), 'diff')}\n\n</details>\n`;
+      out += formatLargeContent(diff.trimEnd(), { filePath: p, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
     }
     return out;
   }
@@ -202,7 +221,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
     if (subagentType) out += `\n类型: \`${subagentType}\`\n`;
     if (prompt) {
       const lines = prompt.split('\n').length;
-      out += `\n<details><summary>查看提示词 (${lines} 行)</summary>\n\n${fenced(prompt)}\n\n</details>\n`;
+      out += `\n<details><summary>查看提示词 (${lines} 行)</summary>\n\n${htmlCodeBlock(prompt)}\n\n</details>\n`;
     }
     return out;
   }
@@ -250,7 +269,7 @@ function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string 
   }
   if (inputJson.trim()) {
     const lines = inputJson.split('\n').length;
-    return `\n<details><summary>查看输入 (${lines} 行)</summary>\n\n${fenced(inputJson, 'json')}\n\n</details>\n`;
+    return `\n<details><summary>查看输入 (${lines} 行)</summary>\n\n${htmlCodeBlock(inputJson, 'json')}\n\n</details>\n`;
   }
   return '';
 }
@@ -277,29 +296,6 @@ function formatClaudeToolBlock(toolNameRaw: string, inputJson: string, toolId?: 
   const title = isTaskTool ? '🤖 子任务' : (titleMap[toolName] || `🔧 ${toolName}`);
   const detail = formatClaudeToolResult(toolName, inputJson);
   return `\n\n**${title}**\n${detail || '\n'}`;
-}
-
-export async function readLatestPlanFile(
-  workDir: string
-): Promise<{ path: string; content: string } | null> {
-  const plansDir = join(workDir, '.claude', 'plans');
-  if (!existsSync(plansDir)) return null;
-  let best: { path: string; mtime: number } | null = null;
-  try {
-    const files = await readdir(plansDir);
-    for (const name of files) {
-      const p = join(plansDir, name);
-      const st = await stat(p).catch(() => null);
-      if (st?.isFile()) {
-        if (!best || st.mtimeMs > best.mtime) best = { path: p, mtime: st.mtimeMs };
-      }
-    }
-  } catch { return null; }
-  if (!best) return null;
-  try {
-    const content = await readFile(best.path, 'utf-8');
-    return { path: best.path, content };
-  } catch { return null; }
 }
 
 function extractTextFromUnknown(value: unknown): string {
@@ -422,7 +418,6 @@ function findResolvedModel(value: unknown, depth = 0): string | undefined {
   }
   return undefined;
 }
-
 // ============================================================================
 // ClaudeCodeEngineWrapper
 // ============================================================================
@@ -430,13 +425,6 @@ function findResolvedModel(value: unknown, depth = 0): string | undefined {
 export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
   private _abortController: AbortController | null = null;
   private _abortReason: 'user' | 'timeout' | 'retry_limit' | 'unknown' | null = null;
-
-  // Plan mode state
-  private _capturedDeliverable = '';
-  private _planFilePath = '';
-  private _capturedVia: SdkPlanCapturedVia | '' = '';
-  private _pendingQuestionResolver: ((answers: Record<string, string>) => void) | null = null;
-  private _pendingQuestion: Record<string, unknown> | null = null;
 
   getName(): string { return 'claude-code'; }
 
@@ -474,35 +462,9 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     this.removeAllListeners();
   }
 
-  // ---- Plan mode public API ----
-
-  get capturedDeliverable(): string { return this._capturedDeliverable; }
-  get planFilePath(): string { return this._planFilePath; }
-  get capturedVia(): SdkPlanCapturedVia | '' { return this._capturedVia; }
-
-  setCapturedDeliverable(content: string, filePath: string, via: SdkPlanCapturedVia): void {
-    if (!content?.trim()) return;
-    if (this._capturedVia && priorityOf(via) > priorityOf(this._capturedVia)) return;
-    this._capturedDeliverable = content;
-    this._planFilePath = filePath;
-    this._capturedVia = via;
-    this.emit('plan-file-captured', { path: filePath, length: content.length, via });
-  }
-
-  getPendingQuestion(): Record<string, unknown> | null { return this._pendingQuestion; }
-
-  submitAnswers(answers: Record<string, string>): void {
-    if (this._pendingQuestionResolver) {
-      this._pendingQuestionResolver(answers);
-      this._pendingQuestionResolver = null;
-      this._pendingQuestion = null;
-    }
-  }
-
   // ---- Execute (unified SDK entry) ----
 
   async execute(options: EngineOptions): Promise<EngineResult> {
-    const isPlan = options.mode === 'plan';
     this._abortController = new AbortController();
     this._abortReason = null;
     const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000;
@@ -511,7 +473,8 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     }, timeoutMs);
 
     let accumulated = '';
-    const MAX_API_RETRY_ATTEMPTS = 5;
+    const MAX_API_RETRY_ATTEMPTS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_ATTEMPTS', 12);
+    const MIN_API_RETRY_DELAY_MS = positiveIntFromEnv('ACE_CLAUDE_API_RETRY_MIN_DELAY_MS', 10_000);
     const execStartedAt = Date.now();
     let firstDeltaAt = 0;
     let lastDeltaAt = 0;
@@ -539,53 +502,27 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         const userEnv = buildEnvObject(userEnvVars);
         Object.assign(spawnEnv, userEnv);
       } catch {}
+      if (!spawnEnv.CLAUDE_CODE_MAX_RETRIES) {
+        spawnEnv.CLAUDE_CODE_MAX_RETRIES = String(MAX_API_RETRY_ATTEMPTS);
+      }
 
       // SDK query options
       const sdkOptions: Record<string, unknown> = {
         env: spawnEnv,
         cwd: options.workingDirectory,
         model: options.model || undefined,
-        permissionMode: isPlan ? 'plan' : 'bypassPermissions',
-        allowDangerouslySkipPermissions: !isPlan,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         abortController: this._abortController,
-        maxTurns: isPlan ? 80 : 200,
+        maxTurns: 200,
       };
 
       if (options.sessionId) {
         (sdkOptions as any).resume = options.sessionId;
       }
 
-      // Plan mode: canUseTool hook for AskUserQuestion + Write capture
-      if (isPlan) {
-        sdkOptions.canUseTool = async (toolName: string, input: unknown) => {
-          if (toolName === 'AskUserQuestion') {
-            const questions = (input as { questions?: unknown }).questions ?? [];
-            this._pendingQuestion = input as Record<string, unknown>;
-            this.emit('ask-user-question', { questions });
-            this.emit('stream', { type: 'text', content: '\n⏳ 等待用户回答问题…\n' } as EngineStreamEvent);
-            const answers = await new Promise<Record<string, string>>((resolve) => {
-              this._pendingQuestionResolver = resolve;
-            });
-            const formatted = Object.entries(answers).map(([k, v]) => `- ${k}: ${v}`).join('\n');
-            this.emit('stream', { type: 'text', content: `\n✅ 用户已回答:\n${formatted}\n` } as EngineStreamEvent);
-            return { behavior: 'allow' as const, updatedInput: { ...(input as Record<string, unknown>), answers } };
-          }
-          if (toolName === 'Write') {
-            const ti = input as Record<string, unknown>;
-            const filePath = String(ti.file_path ?? ti.filePath ?? '');
-            const content = String(ti.content ?? '');
-            if ((filePath.includes('.claude/plans') || filePath.includes('.claude\\plans')) && content.trim()) {
-              this.setCapturedDeliverable(content, filePath, 'canUseTool_write');
-            }
-            return { behavior: 'allow' as const, updatedInput: input };
-          }
-          return { behavior: 'allow' as const, updatedInput: input };
-        };
-      }
-
       const iter = query({ prompt: userFacingPrompt, options: sdkOptions as any });
-      const taskStartedAt = new Map<string, number>();
       const streamToolBlocks = new Map<number, { id: string; name: string; inputJson: string }>();
       const toolCallsById = new Map<string, { name: string; inputJson: string }>();
       let capturedSessionId: string | undefined;
@@ -704,14 +641,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             lastBlockWasTool = false;
           }
         } else if (msg.type === 'tool_progress') {
-          const tp = msg as { tool_use_id: string; tool_name: string; elapsed_time_seconds: number; task_id?: string };
-          const tid = tp.task_id || tp.tool_use_id;
-          const desc = `工具「${tp.tool_name}」执行中`;
-          this.emit('sdk-plan-subtask', {
-            phase: 'tool', taskId: tid, description: desc,
-            elapsedSec: tp.elapsed_time_seconds, toolName: tp.tool_name,
-            detail: `tool_use_id=${tp.tool_use_id}`,
-          } satisfies SdkPlanSubtaskTelemetry);
+          continue;
         } else if (msg.type === 'system') {
           const sys = msg as { subtype?: string; message?: string; tool_name?: string };
           if (streamDebug) {
@@ -721,31 +651,12 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             }
           }
           if (sys.subtype === 'task_started') {
-            const t = msg as { task_id: string; description?: string; task_type?: string; workflow_name?: string; prompt?: string };
-            taskStartedAt.set(t.task_id, Date.now());
-            const doing = clip(t.description || t.prompt || '(无描述)', 200);
-            const meta = [t.task_type ? `类型 ${t.task_type}` : null, t.workflow_name ? `工作流 ${t.workflow_name}` : null].filter(Boolean).join(' · ');
-            this.emit('sdk-plan-subtask', { phase: 'start', taskId: t.task_id, description: doing, elapsedSec: 0, detail: meta || undefined } satisfies SdkPlanSubtaskTelemetry);
             continue;
           }
           if (sys.subtype === 'task_progress') {
-            const t = msg as { task_id: string; description?: string; last_tool_name?: string; summary?: string; usage?: { duration_ms?: number; tool_uses?: number; total_tokens?: number } };
-            const start = taskStartedAt.get(t.task_id);
-            const wallMs = start != null ? Date.now() - start : undefined;
-            const { sec: elapsedSec } = formatElapsedSec(t.usage?.duration_ms, wallMs);
-            const doing = clip(t.description || t.summary || '(进行中)', 200);
-            const detailExtra = [t.last_tool_name ? `最近工具：${t.last_tool_name}` : null, t.summary && t.summary !== t.description ? `进度摘要：${clip(t.summary, 120)}` : null].filter(Boolean).join(' · ');
-            this.emit('sdk-plan-subtask', { phase: 'progress', taskId: t.task_id, description: doing, elapsedSec, detail: detailExtra || undefined, toolName: t.last_tool_name } satisfies SdkPlanSubtaskTelemetry);
             continue;
           }
           if (sys.subtype === 'task_notification') {
-            const t = msg as { task_id: string; status: 'completed' | 'failed' | 'stopped'; summary?: string; output_file?: string; usage?: { duration_ms?: number } };
-            const start = taskStartedAt.get(t.task_id);
-            const wallMs = start != null ? Date.now() - start : undefined;
-            taskStartedAt.delete(t.task_id);
-            const { sec: elapsedSec } = formatElapsedSec(t.usage?.duration_ms, wallMs);
-            const sum = clip(t.summary || '(无摘要)', 240);
-            this.emit('sdk-plan-subtask', { phase: 'end', taskId: t.task_id, description: sum, elapsedSec, terminalStatus: t.status, summary: t.summary, outputFile: t.output_file } satisfies SdkPlanSubtaskTelemetry);
             continue;
           }
           let info = '';
@@ -754,7 +665,12 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             const attempt = Number(retry.attempt || 0);
             if (attempt >= MAX_API_RETRY_ATTEMPTS) {
               this.abortWithReason('retry_limit');
-              throw new Error(`SDK API 重试已达上限（${MAX_API_RETRY_ATTEMPTS} 次），已终止请求`);
+              throw new Error(`SDK API retry limit reached (${MAX_API_RETRY_ATTEMPTS} attempts), request aborted`);
+            }
+            const sdkDelayMs = Number(retry.retry_delay_ms || 0);
+            const extraDelayMs = Math.max(0, MIN_API_RETRY_DELAY_MS - sdkDelayMs);
+            if (extraDelayMs > 0) {
+              await delayWithAbort(extraDelayMs, this._abortController?.signal);
             }
             // Hide SDK retry noise from end-user stream output.
             continue;
@@ -795,24 +711,17 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
           }
         } else if (msg.type === 'result') {
           if (msg.subtype === 'success') {
-            const r = msg as { result?: string; session_id?: string };
+            const r = msg as { result?: string; session_id?: string } & Record<string, unknown>;
             const resultText = r.result ?? '';
-            if (resultText && isPlan) {
-              this.maybeParsePlanFromOutput(resultText);
-            }
             const streamedHasAssistantText = assistantTextBytesEmitted > 0;
             const finalOutput = streamedHasAssistantText
               ? (accumulated || resultText)
               : (resultText || accumulated);
-            if (isPlan) {
-              const fsHit = await readLatestPlanFile(options.workingDirectory);
-              if (fsHit?.content?.trim()) this.setCapturedDeliverable(fsHit.content, fsHit.path, 'filesystem');
-            }
             return {
               success: true,
-              output: isPlan ? (this._capturedDeliverable || finalOutput) : finalOutput,
+              output: finalOutput,
               sessionId: r.session_id || capturedSessionId,
-              metadata: resolvedModel ? { resolvedModel } : undefined,
+              metadata: metadataFromClaudeResult(r, resolvedModel),
             };
           }
           const err = msg as { errors?: string[] };
@@ -824,27 +733,11 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         }
       }
 
-      // Post-loop: filesystem fallback + persist plan
-      if (isPlan) {
-        const fsHit = await readLatestPlanFile(options.workingDirectory);
-        if (fsHit?.content?.trim()) {
-          this.setCapturedDeliverable(fsHit.content, fsHit.path, 'filesystem');
-        }
-        const planText = this._capturedDeliverable || accumulated;
-        if (planText?.trim()) {
-          try {
-            const plansDir = join(options.workingDirectory, '.claude', 'plans');
-            await mkdir(plansDir, { recursive: true });
-            await writeFile(join(plansDir, `plan-${Date.now()}.md`), planText, 'utf-8');
-          } catch {}
-        }
-      }
-
       return {
         success: true,
-        output: isPlan ? (this._capturedDeliverable || accumulated) : accumulated,
+        output: accumulated,
         sessionId: capturedSessionId,
-        metadata: resolvedModel ? { resolvedModel } : undefined,
+        metadata: zeroUsageMetadata(resolvedModel),
       };
     } catch (e: unknown) {
       const isAborted = this._abortController?.signal.aborted;
@@ -860,11 +753,4 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
     }
   }
 
-  private maybeParsePlanFromOutput(text: string): void {
-    if (!text?.trim()) return;
-    const fence = /```(?:plan|markdown)?\s*([\s\S]*?)```/i.exec(text);
-    if (fence?.[1]?.trim()) {
-      this.setCapturedDeliverable(fence[1].trim(), '(parsed-from-output)', 'output_parse');
-    }
-  }
 }

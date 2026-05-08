@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { parse, stringify } from 'yaml';
-import { roleConfigSchema } from '@/lib/schemas';
 import { getRuntimeAgentConfigPath } from '@/lib/runtime-configs';
+import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/creator-validation';
 
 export async function GET(
   request: NextRequest,
@@ -31,16 +31,16 @@ export async function POST(
     const body = await request.json();
     const { agent } = body;
 
-    const validationResult = roleConfigSchema.safeParse(agent);
-    if (!validationResult.success) {
+    const validationResult = validateAgentDraft(agent);
+    if (!validationResult.ok || !validationResult.normalized) {
       return NextResponse.json(
-        { error: 'Agent 配置验证失败', details: validationResult.error },
+        { error: 'Agent 配置验证失败', details: formatValidationIssuesForResponse(validationResult) },
         { status: 400 }
       );
     }
 
     const filepath = await getRuntimeAgentConfigPath(name);
-    const yamlContent = stringify(agent);
+    const yamlContent = stringify(validationResult.normalized);
     await writeFile(filepath, yamlContent, 'utf-8');
 
     return NextResponse.json({ success: true, message: 'Agent 配置已保存' });

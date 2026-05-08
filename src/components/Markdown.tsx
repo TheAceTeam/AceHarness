@@ -1,6 +1,6 @@
 'use client';
 
-import { Children, isValidElement, useMemo, useState, useCallback, useEffect } from 'react';
+import { Children, isValidElement, useMemo, useState, useCallback, useEffect, useId } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -10,7 +10,77 @@ import { useToast } from '@/components/ui/toast';
 import { workspaceApi } from '@/lib/api';
 import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook-markdown';
 import { copyText } from '@/lib/clipboard';
+import { AnsiLogBlock } from '@/components/AnsiLogBlock';
+import { Button } from '@/components/ui/button';
 import styles from './Markdown.module.css';
+
+function normalizeWindowsSeparators(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+function isUnixAbsolutePath(input: string): boolean {
+  return input.startsWith('/');
+}
+
+function isWindowsDrivePath(input: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(input);
+}
+
+function isUncPath(input: string): boolean {
+  return /^\\\\[^\\]+\\[^\\]+/.test(input) || /^\/\/[^/]+\/[^/]+/.test(input);
+}
+
+function toWorkspaceAbsolutePath(href: string): string | null {
+  if (!href) return null;
+  const raw = decodeURIComponent(String(href).trim());
+  if (!raw) return null;
+
+  if (isUnixAbsolutePath(raw) || isWindowsDrivePath(raw) || isUncPath(raw)) {
+    return normalizeWindowsSeparators(raw);
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      const path = decodeURIComponent(url.pathname || '');
+      const normalizedPath = normalizeWindowsSeparators(path);
+      if (/^\/[a-zA-Z]:\//.test(normalizedPath)) {
+        return normalizedPath.slice(1);
+      }
+      if (isUnixAbsolutePath(normalizedPath) && (
+        normalizedPath.startsWith('/root/') ||
+        normalizedPath.startsWith('/usr') ||
+        normalizedPath.startsWith('/home/') ||
+        normalizedPath.startsWith('/tmp/') ||
+        normalizedPath.startsWith('/mnt/') ||
+        normalizedPath.startsWith('/var/') ||
+        normalizedPath.startsWith('/opt/')
+      )) {
+        return normalizedPath;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getWorkspaceLinkParts(absolutePath: string): { workspacePath: string; filePath: string | null } {
+  const normalized = normalizeWindowsSeparators(absolutePath);
+  const trimmed = normalized.replace(/\/+$/g, '');
+  const slashIndex = trimmed.lastIndexOf('/');
+  if (slashIndex <= 0) {
+    return {
+      workspacePath: trimmed || normalized,
+      filePath: null,
+    };
+  }
+  return {
+    workspacePath: trimmed.slice(0, slashIndex) || '/',
+    filePath: trimmed.slice(slashIndex + 1) || null,
+  };
+}
 
 function isSummaryElement(child: unknown): child is React.ReactElement<any> {
   return isValidElement(child) && (
@@ -52,6 +122,7 @@ const verdictConfig: Record<string, { icon: string; label: string; color: string
 let basicHljsLanguagesRegistered = false;
 let cangjieLanguageRegistered = false;
 let highlightReady = false;
+let mermaidInitialized = false;
 
 function VerdictCard({ data }: { data: { verdict: string; remaining_issues?: number; summary?: string } }) {
   const cfg = verdictConfig[data.verdict] || verdictConfig.fail;
@@ -180,6 +251,125 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   return renderHighlightedCode(code, language);
 }
 
+function MermaidBlock({ code }: { code: string }) {
+  const diagramId = useId().replace(/:/g, '-');
+  const [svg, setSvg] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const mod = await import('mermaid');
+        const mermaid = mod.default || mod;
+        if (!mermaidInitialized) {
+          mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'loose',
+            theme: 'neutral',
+          });
+          mermaidInitialized = true;
+        }
+        const result = await mermaid.render(`mermaid-${diagramId}`, code);
+        if (cancelled) return;
+        setSvg(result.svg);
+        setError(null);
+      } catch (err: any) {
+        if (cancelled) return;
+        setSvg('');
+        setError(err?.message || 'Mermaid 渲染失败');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [code, diagramId]);
+
+  return (
+    <div className="my-3 rounded-lg border border-border/60 bg-background/70 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-xs font-medium text-muted-foreground">Mermaid</div>
+        <CopyButton text={code} className="static" />
+      </div>
+      {svg ? (
+        <div
+          className="overflow-x-auto rounded-md bg-white p-3 dark:bg-slate-950"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      ) : (
+        <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+          {error || 'Mermaid 渲染中...'}
+        </div>
+      )}
+      {error ? (
+        <details className="mt-3 rounded-md border border-border/50">
+          <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">查看 Mermaid 源码</summary>
+          <div className="p-3">
+            <CodeBlock code={code} language="text" />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+const DETAILS_LAZY_CHAR_THRESHOLD = 120000;
+const DETAILS_LAZY_LINE_THRESHOLD = 2000;
+
+function LazyDetailsBody({
+  bodyText,
+  bodyNodes,
+  open,
+}: {
+  bodyText: string;
+  bodyNodes: any[];
+  open: boolean;
+}) {
+  const [contentLoaded, setContentLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const lineCount = bodyText ? bodyText.split(/\r?\n/).length : 0;
+    const shouldLazyLoad = bodyText.length > DETAILS_LAZY_CHAR_THRESHOLD || lineCount > DETAILS_LAZY_LINE_THRESHOLD;
+    if (!shouldLazyLoad) {
+      setContentLoaded(true);
+    }
+  }, [bodyText, open]);
+
+  useEffect(() => {
+    if (!open) {
+      setContentLoaded(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const lineCount = bodyText ? bodyText.split(/\r?\n/).length : 0;
+  const shouldLazyLoad = bodyText.length > DETAILS_LAZY_CHAR_THRESHOLD || lineCount > DETAILS_LAZY_LINE_THRESHOLD;
+
+  if (shouldLazyLoad && !contentLoaded) {
+    return (
+      <div className="px-3 py-3 space-y-3">
+        <div className="rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs leading-6 text-muted-foreground">
+          这段详情较大，约 {lineCount.toLocaleString()} 行 / {bodyText.length.toLocaleString()} 字符。默认不立即渲染，避免实时输出卡顿。
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setContentLoaded(true)}>
+          加载详情内容
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-3 py-2">
+      {bodyText ? renderMarkdownFragment(bodyText) : null}
+      {bodyNodes}
+    </div>
+  );
+}
+
 function RunnableCodeBlock({ code, language }: { code: string; language: string }) {
   const { toast } = useToast();
   const [running, setRunning] = useState(false);
@@ -228,13 +418,13 @@ function RunnableCodeBlock({ code, language }: { code: string; language: string 
               {result?.stdout && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">stdout</div>
-                  <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 border">{result.stdout}</pre>
+                  <AnsiLogBlock text={result.stdout} />
                 </div>
               )}
               {result?.stderr && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">stderr</div>
-                  <pre className="whitespace-pre-wrap break-words rounded bg-background p-2 border text-red-400">{result.stderr}</pre>
+                  <AnsiLogBlock text={result.stderr} />
                 </div>
               )}
               {!result?.stdout && !result?.stderr && <div className="text-muted-foreground">无输出</div>}
@@ -251,6 +441,10 @@ const components = {
     const language = normalizeFenceLanguage(className);
     const code = String(children).replace(/\n$/, '');
     const isMultiLine = code.includes('\n');
+
+    if (language === 'mermaid') {
+      return <MermaidBlock code={code} />;
+    }
 
     if (language === 'json') {
       const verdict = tryParseVerdict(code);
@@ -275,11 +469,34 @@ const components = {
   },
   a({ href, children, ...props }: any) {
     const isGitCode = href && href.includes('gitcode.com');
-    const linkStyle = { color: 'white', textDecoration: 'underline' };
+    const workspaceAbsolutePath = href ? toWorkspaceAbsolutePath(href) : null;
+
+    if (workspaceAbsolutePath) {
+      const { workspacePath, filePath } = getWorkspaceLinkParts(workspaceAbsolutePath);
+      return (
+        <button
+          type="button"
+          className="inline-flex items-center gap-0.5 text-primary font-medium underline decoration-primary/40 underline-offset-4 hover:decoration-primary/80 hover:opacity-90 transition-opacity"
+          onClick={() => {
+            if (typeof window === 'undefined') return;
+            window.dispatchEvent(new CustomEvent('ace:open-workspace-path', {
+              detail: {
+                absolutePath: workspaceAbsolutePath,
+                workspacePath,
+                filePath,
+              },
+            }));
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_open</span>
+          {children}
+        </button>
+      );
+    }
 
     if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
       return (
-        <a href={href} target="_blank" rel="noopener noreferrer" style={linkStyle} {...props}>
+        <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
           {isGitCode && (
             <svg className="inline-block w-4 h-4 mr-1 align-text-bottom" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
               <path d="M685.679715 183.998617l-40.447039 22.783459-9.343778 5.418538a203.259173 203.259173 0 0 1-124.583708 30.463276 239.268984 239.268984 0 0 0-81.192739 5.20521c-46.71889 12.714365-89.171216 4.778553-132.348856-12.543702a316.749811 316.749811 0 0 0-33.791198-9.045119l1.023976 24.106094c0.597319 14.506322 1.151973 27.988669 2.133283 41.471015 2.389277 31.572583-6.058523 60.286568-21.418158 88.189906a387.190804 387.190804 0 0 0-50.601465 196.390002c2.389277 111.570684 69.630346 194.427382 182.438334 230.010538 99.069647 31.31659 198.736613 29.951289 298.232917 5.546534a279.502695 279.502695 0 0 0 141.649969-83.752677c9.258447-10.026429 17.492918-20.991501 24.575416-32.681891 28.841982-48.68151 9.557106-94.205763-46.505562-103.464209a312.184586 312.184586 0 0 0-44.798936-3.413252l-15.146307-0.255994c-14.079666-0.127997-28.116666-0.255994-42.068334-1.450632-48.169523-3.92524-96.424377-8.277137-144.124577-15.786292-23.679438-3.839909-43.561632-19.412872-46.3349-45.35359-2.986596-28.500656 4.693222-57.214641 31.401921-71.038312a202.917847 202.917847 0 0 1 76.968839-23.46611c81.022076-5.759863 162.470808-0.511988 242.127582 15.487632 139.431355 28.585988 212.261625 166.268051 145.27655 292.259726-94.504422 177.489118-242.468908 279.886686-447.98936 284.707905-160.422857 3.839909-301.731501-47.102881-413.003525-165.244076C-122.365094 582.410488 3.071927 132.074517 369.612555 23.917085c169.979963-49.918814 327.800215-21.332827 471.45547 82.302046 51.625441 37.247115 64.851793 99.112313 34.473848 149.628446-25.258067 42.111-72.104954 61.182547-121.853106 49.66282-31.99924-7.466489-55.124024-38.996407-61.395876-82.472707l-0.98131-8.277137a123.474401 123.474401 0 0 0-1.791957-11.434395l-3.839909-19.327541z" fill="#DA203E"></path>
@@ -290,7 +507,7 @@ const components = {
       );
     }
     return (
-      <a href={href} style={linkStyle} {...props}>
+      <a href={href} {...props}>
         {children}
       </a>
     );
@@ -300,6 +517,7 @@ const components = {
       return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
     }
 
+    const [open, setOpen] = useState(Boolean(props.open));
     const parts = Children.toArray(children);
     const summaryNode = parts.find(isSummaryElement) || null;
     const bodyText = parts
@@ -309,14 +527,18 @@ const components = {
     const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
 
     return (
-      <details className="my-2 border border-border/50 rounded-md" {...props}>
+      <details
+        className="my-2 border border-border/50 rounded-md"
+        {...props}
+        onToggle={(event: any) => {
+          setOpen(Boolean(event.currentTarget?.open));
+          props.onToggle?.(event);
+        }}
+      >
         {summaryNode}
-        {(bodyText || bodyNodes.length > 0) && (
-          <div className="px-3 py-2">
-            {bodyText ? renderMarkdownFragment(bodyText) : null}
-            {bodyNodes}
-          </div>
-        )}
+        {(bodyText || bodyNodes.length > 0) ? (
+          <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
+        ) : null}
       </details>
     );
   },
@@ -382,8 +604,46 @@ function normalizeMarkdownInput(content: unknown): string {
   return typeof content === 'string' ? content : '';
 }
 
+function stripDanglingTrailingFence(content: string): string {
+  const lines = content.split('\n');
+  let lastContentLine = lines.length - 1;
+  while (lastContentLine >= 0 && lines[lastContentLine].trim() === '') {
+    lastContentLine -= 1;
+  }
+  if (lastContentLine < 0) return content;
+
+  const trailingFence = lines[lastContentLine].match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+  if (!trailingFence) return content;
+
+  let inCodeBlock = false;
+  let fenceWidth = 0;
+  let fenceChar: '`' | '~' | null = null;
+  for (let index = 0; index < lastContentLine; index += 1) {
+    const line = lines[index];
+    if (!inCodeBlock) {
+      const open = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (open) {
+        inCodeBlock = true;
+        fenceWidth = open[1].length;
+        fenceChar = open[1][0] as '`' | '~';
+      }
+      continue;
+    }
+
+    const closeRe = fenceChar === '~' ? /^\s{0,3}(~{3,})\s*$/ : /^\s{0,3}(`{3,})\s*$/;
+    const close = line.match(closeRe);
+    if (close && close[1].length >= fenceWidth) {
+      inCodeBlock = false;
+      fenceChar = null;
+    }
+  }
+
+  if (inCodeBlock) return content;
+  return lines.slice(0, lastContentLine).join('\n').trimEnd();
+}
+
 function closeUnterminatedFences(content: unknown): string {
-  const safeContent = normalizeMarkdownInput(content);
+  const safeContent = stripDanglingTrailingFence(normalizeMarkdownInput(content));
   const lines = safeContent.split('\n');
   let inCodeBlock = false;
   let fenceWidth = 0;
@@ -413,16 +673,78 @@ function closeUnterminatedFences(content: unknown): string {
   return safeContent;
 }
 
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderTaskStatusLines(content: string): string {
+  const lines = content.split('\n');
+  let inCodeBlock = false;
+  let fenceWidth = 0;
+  let fenceChar: '`' | '~' | null = null;
+
+  return lines.map((line) => {
+    if (!inCodeBlock) {
+      const fenceOpen = line.match(/^(`{3,}|~{3,})/);
+      if (fenceOpen) {
+        inCodeBlock = true;
+        fenceWidth = fenceOpen[1].length;
+        fenceChar = fenceOpen[1][0] as '`' | '~';
+        return line;
+      }
+
+      const taskLine = line.match(/^(\s*)-\s+\[([ xX-])\]\s+(.+)$/);
+      if (!taskLine) return line;
+
+      const marker = taskLine[2].toLowerCase();
+      const body = taskLine[3];
+      const bodyWithoutComment = body.replace(/\s*<!--[\s\S]*?-->\s*$/g, '').trim();
+      const escapedBody = escapeHtml(bodyWithoutComment);
+
+      if (marker === 'x') {
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>`;
+      }
+      if (marker === '-') {
+        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>`;
+      }
+      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>`;
+    }
+
+    const closeRe = fenceChar === '~' ? /^(~{3,})\s*$/ : /^(`{3,})\s*$/;
+    const fenceClose = line.match(closeRe);
+    if (fenceClose && fenceClose[1].length >= fenceWidth) {
+      inCodeBlock = false;
+      fenceChar = null;
+    }
+    return line;
+  }).join('\n');
+}
+
+function stripHiddenSpecCodingComments(content: string): string {
+  return content.replace(/\s*<!--\s*spec-coding-task:[\s\S]*?-->\s*$/gm, '');
+}
+
 function preprocessMarkdown(content: unknown): string {
   const closed = closeUnterminatedFences(content);
-  return closed.replace(
+  return renderTaskStatusLines(stripHiddenSpecCodingComments(closed)).replace(
     /(?<![<"\[])(https?:\/\/[^\s<>\]")]+)/g,
     '<$1>'
   );
 }
 
+const MESSAGE_LAZY_CHAR_THRESHOLD = 500_000; // 500KB
+
 export default function Markdown({ children }: { children?: string | null }) {
-  const processedContent = useMemo(() => preprocessMarkdown(children), [children]);
+  const contentLength = children?.length || 0;
+  const [forceRenderLarge, setForceRenderLarge] = useState(false);
+  const isLarge = contentLength > MESSAGE_LAZY_CHAR_THRESHOLD && !forceRenderLarge;
+  const effectiveChildren = isLarge ? (children || '').slice(0, 2000) + '\n\n---' : children;
+  const processedContent = useMemo(() => preprocessMarkdown(effectiveChildren), [effectiveChildren]);
   const [, forceRefresh] = useState(0);
 
   useEffect(() => {
@@ -511,6 +833,14 @@ export default function Markdown({ children }: { children?: string | null }) {
   return (
     <div className={styles.markdownContent}>
       {renderMarkdownFragment(processedContent)}
+      {isLarge && (
+        <button
+          onClick={() => setForceRenderLarge(true)}
+          className="mt-2 px-3 py-1.5 text-xs rounded-md border border-border bg-muted/50 hover:bg-muted text-muted-foreground transition-colors"
+        >
+          展开完整内容 ({(contentLength / 1024).toFixed(0)} KB)
+        </button>
+      )}
     </div>
   );
 }

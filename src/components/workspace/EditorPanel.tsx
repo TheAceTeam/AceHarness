@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 import { Loader2, FileCode2, Play } from "lucide-react"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
+import { AnsiLogBlock } from "@/components/AnsiLogBlock"
 import { registerCangjieLanguage } from "@/lib/cangjie-language"
 import { registerCMakeLanguage } from "@/lib/cmake-language"
 import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/api"
@@ -79,6 +80,7 @@ interface EditorPanelProps {
   onSave: (content: string) => Promise<void>
   oversize?: boolean
   fileBlob?: Blob | null
+  error?: string | null
   fileType?: string
   mode?: WorkspaceMode
   notebookScope?: NotebookScope
@@ -211,6 +213,12 @@ function buildLineDiff(beforeText: string, afterText: string): DiffLine[] {
   return lines
 }
 
+function formatErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error.trim()) return error
+  return fallback
+}
+
 export function EditorPanel({
   filePath,
   content,
@@ -219,6 +227,7 @@ export function EditorPanel({
   onSave,
   oversize,
   fileBlob,
+  error,
   fileType,
   mode = 'default',
   notebookScope = 'personal',
@@ -443,14 +452,16 @@ export function EditorPanel({
   }, [aiSuggestions, onAcceptAiSuggestion, onRejectAiSuggestion])
 
   const handleSave = React.useCallback(async () => {
-    if (!editorContent || saving) return
+    if (editorContent == null || saving) return
     setSaving(true)
     try {
       await onSave(editorContent)
+    } catch (error) {
+      toast("error", formatErrorMessage(error, "保存失败"))
     } finally {
       setSaving(false)
     }
-  }, [editorContent, onSave, saving])
+  }, [editorContent, onSave, saving, toast])
 
   const handleRun = React.useCallback(async () => {
     if (!filePath || !isRunnableCangjieFile(filePath) || editorContent == null || running) return
@@ -603,6 +614,11 @@ export function EditorPanel({
               <FileCode2 className="h-12 w-12" />
               <p className="text-sm">选择一个文件开始编辑</p>
               <p className="text-xs">使用 ⌘P 快速搜索文件</p>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center text-destructive">
+              <FileCode2 className="h-12 w-12" />
+              <p className="text-sm">{error}</p>
             </div>
           ) : oversize ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
@@ -791,19 +807,19 @@ export function EditorPanel({
                 {runResult?.commandSummary && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">执行命令</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3">{runResult.commandSummary}</pre>
+                    <AnsiLogBlock text={runResult.commandSummary} />
                   </div>
                 )}
                 {runResult?.stdout && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">stdout</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3">{runResult.stdout}</pre>
+                    <AnsiLogBlock text={runResult.stdout} />
                   </div>
                 )}
                 {runResult?.stderr && (
                   <div>
                     <div className="text-xs text-muted-foreground mb-1">stderr</div>
-                    <pre className="whitespace-pre-wrap break-words rounded border bg-muted/30 p-3 text-red-400">{runResult.stderr}</pre>
+                    <AnsiLogBlock text={runResult.stderr} />
                   </div>
                 )}
                 {!runResult?.stdout && !runResult?.stderr && !runResult?.commandSummary && (

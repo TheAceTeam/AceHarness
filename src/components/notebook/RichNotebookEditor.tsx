@@ -556,6 +556,8 @@ export function RichNotebookEditor({
 }: RichNotebookEditorProps) {
   const { toast } = useToast();
   const changeSourceRef = useRef<'internal' | 'external'>('external');
+  const lastKnownContentRef = useRef(content);
+  const derivedRefreshFrameRef = useRef<number | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [collabUser, setCollabUser] = useState<{ id: string; name: string; color: string }>({
     id: '',
@@ -613,6 +615,10 @@ export function RichNotebookEditor({
   useEffect(() => {
     outputBackedSuccessRef.current = outputBackedSuccess;
   }, [outputBackedSuccess]);
+
+  useEffect(() => {
+    lastKnownContentRef.current = content;
+  }, [content]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -694,6 +700,27 @@ export function RichNotebookEditor({
     setDependencyNodes(nodes);
     setDependencyEdges(edges);
   }, []);
+
+  const refreshDerivedNotebookState = useCallback((targetEditor: Editor) => {
+    setOutputBackedSuccessWithRef(buildOutputBackedStatus(targetEditor));
+    setAiSuggestionCount(countAiSuggestionNodes(targetEditor));
+    refreshDependencyGraph(targetEditor);
+  }, [refreshDependencyGraph, setOutputBackedSuccessWithRef]);
+
+  const scheduleDerivedNotebookStateRefresh = useCallback((targetEditor: Editor) => {
+    if (typeof window === 'undefined') {
+      refreshDerivedNotebookState(targetEditor);
+      return;
+    }
+    if (derivedRefreshFrameRef.current !== null) {
+      window.cancelAnimationFrame(derivedRefreshFrameRef.current);
+    }
+    derivedRefreshFrameRef.current = window.requestAnimationFrame(() => {
+      derivedRefreshFrameRef.current = null;
+      if (targetEditor.isDestroyed) return;
+      refreshDerivedNotebookState(targetEditor);
+    });
+  }, [refreshDerivedNotebookState]);
 
   const replaceSuggestionNodeWithText = useCallback((targetEditor: Editor, pos: number, text: string) => {
     const node = targetEditor.state.doc.nodeAt(pos);
@@ -1107,11 +1134,13 @@ export function RichNotebookEditor({
     return base;
   }, [cellRunState, collabSession, collabUser.color, collabUser.id, collabUser.name, filePath, onRunCell, outputBackedSuccess, replaceSuggestionNodeWithText, resolveCellStatus, setCellRunStateWithRef, toast]);
 
+  const initialEditorContent = collabSession ? lastKnownContentRef.current : content;
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: notebookExtensions,
     editable: permission !== 'read',
-    content: collabSession ? undefined : content,
+    content: initialEditorContent,
     contentType: 'markdown',
     editorProps: {
       attributes: {
@@ -1181,9 +1210,8 @@ export function RichNotebookEditor({
       if (!collabSession && content) {
         editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
       }
-      setOutputBackedSuccessWithRef(buildOutputBackedStatus(editor));
-      setAiSuggestionCount(countAiSuggestionNodes(editor));
-      refreshDependencyGraph(editor);
+      lastKnownContentRef.current = editor.getMarkdown();
+      refreshDerivedNotebookState(editor);
     },
     onUpdate: ({ editor }) => {
       changeSourceRef.current = 'internal';
@@ -1196,10 +1224,9 @@ export function RichNotebookEditor({
         });
         return;
       }
-      setOutputBackedSuccessWithRef(buildOutputBackedStatus(editor));
-      setAiSuggestionCount(countAiSuggestionNodes(editor));
-      refreshDependencyGraph(editor);
+      scheduleDerivedNotebookStateRefresh(editor);
       const markdown = editor.getMarkdown();
+      lastKnownContentRef.current = markdown;
       onChange(markdown);
     },
   }, [collabSession?.provider, collabSession?.doc, permission, filePath, scope, shareToken, collabUser.name, collabUser.color]);
@@ -1207,6 +1234,10 @@ export function RichNotebookEditor({
   useEffect(() => {
     editorRef.current = editor || null;
     return () => {
+      if (typeof window !== 'undefined' && derivedRefreshFrameRef.current !== null) {
+        window.cancelAnimationFrame(derivedRefreshFrameRef.current);
+        derivedRefreshFrameRef.current = null;
+      }
       editorRef.current = null;
     };
   }, [editor]);
@@ -1288,10 +1319,9 @@ export function RichNotebookEditor({
     }
     if (content === editor.getMarkdown()) return;
     editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
-    setOutputBackedSuccessWithRef(buildOutputBackedStatus(editor));
-    setAiSuggestionCount(countAiSuggestionNodes(editor));
-    refreshDependencyGraph(editor);
-  }, [collabSession, content, editor, refreshDependencyGraph, setOutputBackedSuccessWithRef]);
+    lastKnownContentRef.current = content;
+    refreshDerivedNotebookState(editor);
+  }, [collabSession, content, editor, refreshDerivedNotebookState]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1347,9 +1377,8 @@ export function RichNotebookEditor({
         if (selfId !== leaderId) return;
         changeSourceRef.current = 'internal';
         editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
-        setOutputBackedSuccessWithRef(buildOutputBackedStatus(editor));
-        setAiSuggestionCount(countAiSuggestionNodes(editor));
-        refreshDependencyGraph(editor);
+        lastKnownContentRef.current = content;
+        refreshDerivedNotebookState(editor);
         doc.transact(() => {
           config.set('initialContentLoaded', true);
         }, 'seed-init');
@@ -1359,8 +1388,7 @@ export function RichNotebookEditor({
     const onProviderSync = (isSynced: boolean) => {
       if (!isSynced) return;
       trySeedInitialContent();
-      setOutputBackedSuccessWithRef(buildOutputBackedStatus(editor));
-      refreshDependencyGraph(editor);
+      scheduleDerivedNotebookStateRefresh(editor);
     };
     const onAwarenessChange = () => {
       trySeedInitialContent();
@@ -1372,7 +1400,7 @@ export function RichNotebookEditor({
       provider.off('sync', onProviderSync);
       provider.awareness.off('change', onAwarenessChange);
     };
-  }, [collabSession, content, editor, refreshDependencyGraph, setOutputBackedSuccessWithRef]);
+  }, [collabSession, content, editor, refreshDerivedNotebookState, scheduleDerivedNotebookStateRefresh]);
 
   useEffect(() => {
     if (!collabSession || !collabUser.id || !collabUser.name) return;
@@ -3275,7 +3303,7 @@ export function RichNotebookEditor({
             minSize="18%"
             collapsible
             collapsedSize={0}
-            onResize={(size) => {
+            onResize={(size: any) => {
               if (applyingPanelResizeRef.current) return;
               const numeric = typeof size === 'number'
                 ? size

@@ -21,7 +21,7 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({ agents });
+    return NextResponse.json({ agents, runtimeAgentsDir: agentsDir });
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取 Agent 列表失败', message: error.message },

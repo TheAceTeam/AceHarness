@@ -4,7 +4,11 @@ import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { ThemeProvider } from '@/components/theme-provider';
 import { ToastProvider } from '@/components/ui/toast';
-import OnboardingPortal from '@/components/onboarding/OnboardingPortal';
+
+const OnboardingPortal = dynamic(() => import('@/components/onboarding/OnboardingPortal'), {
+  ssr: false,
+  loading: () => null,
+});
 
 // 动态导入 ChatModalWrapper 避免阻塞首屏
 const ChatModalWrapper = dynamic(() => import('@/components/ChatModalWrapper'), {
@@ -24,6 +28,7 @@ const NO_CHAT_PATHS = ['/login', '/setup'];
 export function Providers({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const isNoChatPage = NO_CHAT_PATHS.some(p => pathname?.startsWith(p));
+  const isChatLikePage = pathname === '/' || pathname === '/chat';
 
   return (
     <ThemeProvider
@@ -47,8 +52,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <ChatProvider>
           <ToastProvider>
             {children}
-            <OnboardingPortal />
-            <ChatModalWrapper />
+            {!isChatLikePage && (
+              <>
+                <OnboardingPortal />
+                <ChatModalWrapper />
+              </>
+            )}
           </ToastProvider>
         </ChatProvider>
       )}

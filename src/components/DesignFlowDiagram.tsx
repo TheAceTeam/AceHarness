@@ -347,7 +347,7 @@ export default function DesignFlowDiagram({
             const stepId = `step-${pi}-${si}`;
             groupStepIds.push(stepId);
             const stepX = startX + idx * (stepNodeW + horizontalGap);
-            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-warning))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
 
             nodes.push({
               id: stepId,
@@ -403,7 +403,7 @@ export default function DesignFlowDiagram({
             previousStepIds.forEach((prevId) => {
               groupStepIds.forEach((currId) => {
                 const step = phase.steps[parseInt(currId.split('-')[2])];
-                const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-warning))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+                const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
                 edges.push({
                   id: `${prevId}-${currId}`,
                   source: prevId, target: currId,
@@ -424,7 +424,7 @@ export default function DesignFlowDiagram({
           const si = stepI;
           const stepId = `step-${pi}-${si}`;
           const stepY = stepsStartY + currentRowIndex * (stepNodeH + stepGap);
-          const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-warning))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+          const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
           const canMoveUp = si > 0;
           const canMoveDown = si < phase.steps.length - 1;
           // Can merge with next step if next step exists and is also sequential (or same group)

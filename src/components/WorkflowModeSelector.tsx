@@ -9,12 +9,14 @@ interface WorkflowModeSelectorProps {
   value: 'phase-based' | 'state-machine' | 'ai-guided';
   onChange: (mode: 'phase-based' | 'state-machine' | 'ai-guided') => void;
   showDetails?: boolean;
+  hideAiGuided?: boolean;
 }
 
 export default function WorkflowModeSelector({
   value,
   onChange,
   showDetails = true,
+  hideAiGuided = false,
 }: WorkflowModeSelectorProps) {
   const [hoveredMode, setHoveredMode] = useState<string | null>(null);
 
@@ -84,14 +86,15 @@ export default function WorkflowModeSelector({
     },
   ];
 
-  const selectedMode = modes.find(m => m.id === value);
-  const hoveredModeData = modes.find(m => m.id === hoveredMode);
+  const filteredModes = hideAiGuided ? modes.filter(m => m.id !== 'ai-guided') : modes;
+  const selectedMode = filteredModes.find(m => m.id === value);
+  const hoveredModeData = filteredModes.find(m => m.id === hoveredMode);
 
   return (
     <div className="space-y-6">
       {/* 模式选择卡片 */}
       <div className="grid grid-cols-2 gap-4">
-        {modes.map((mode) => {
+        {filteredModes.map((mode) => {
           const Icon = mode.icon;
           const isSelected = value === mode.id;
           const isHovered = hoveredMode === mode.id;

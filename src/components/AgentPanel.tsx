@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import Markdown from '@/components/Markdown';
@@ -25,6 +25,7 @@ interface Agent {
   status: 'waiting' | 'running' | 'completed' | 'failed';
   currentTask: string | null;
   completedTasks: number;
+  sessionId?: string | null;
   output?: string;
   tokenUsage?: TokenUsage;
   iterationCount?: number;
@@ -64,6 +65,8 @@ interface AgentPanelProps {
   currentStepName?: string | null;
   onSelectPersistedStep?: (stepName: string) => void;
   onViewPersistedStepOutput?: (log: PersistedStepLog) => void;
+  systemPrompt?: string;
+  iterationPrompt?: string;
 }
 
 export default function AgentPanel({
@@ -79,8 +82,11 @@ export default function AgentPanel({
   currentStepName,
   onSelectPersistedStep,
   onViewPersistedStepOutput,
+  systemPrompt,
+  iterationPrompt,
 }: AgentPanelProps) {
   const logsContainerRef = useRef<HTMLDivElement>(null);
+  const [showPrompt, setShowPrompt] = useState(false);
   const agentLogs = logs.filter((log) => log.agent === agent.name);
   const relevantPersistedLogs = (selectedStepName
     ? persistedStepLogs.filter((log) => {
@@ -151,6 +157,42 @@ export default function AgentPanel({
         <div className="rounded-md bg-muted p-3">
           <div className="text-xs text-muted-foreground uppercase mb-1">当前任务</div>
           <div className="text-sm">{agent.currentTask}</div>
+        </div>
+      )}
+
+      {(systemPrompt || iterationPrompt) && (
+        <div className="rounded-md border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs text-muted-foreground uppercase">Agent 提示词</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                查看当前角色配置中的系统提示词和迭代提示词。
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setShowPrompt((value) => !value)}>
+              {showPrompt ? '收起' : '查看'}
+            </Button>
+          </div>
+          {showPrompt ? (
+            <div className="mt-3 space-y-3">
+              {systemPrompt ? (
+                <div>
+                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">System Prompt</div>
+                  <pre className="max-h-64 overflow-auto rounded border bg-background p-2 text-xs leading-relaxed whitespace-pre-wrap break-words font-mono">
+                    {systemPrompt}
+                  </pre>
+                </div>
+              ) : null}
+              {iterationPrompt ? (
+                <div>
+                  <div className="mb-1 text-[11px] font-medium text-muted-foreground">Iteration Prompt</div>
+                  <pre className="max-h-64 overflow-auto rounded border bg-background p-2 text-xs leading-relaxed whitespace-pre-wrap break-words font-mono">
+                    {iterationPrompt}
+                  </pre>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
 

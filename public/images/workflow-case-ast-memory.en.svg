@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">AST Destruction Memory Optimization</title>
+  <desc id="desc">How AceHarness used three-role adversarial review to analyze AST lifecycles, design phased release, and validate lower peak memory.</desc>
+  <defs>
+    <linearGradient id="bgAst" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#08111d"/>
+      <stop offset="55%" stop-color="#0f1f26"/>
+      <stop offset="100%" stop-color="#172037"/>
+    </linearGradient>
+    <filter id="shadowAst" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#020617" flood-opacity="0.34"/>
+    </filter>
+    <marker id="arrowAst" viewBox="0 0 10 10" refX="8.2" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="820" fill="url(#bgAst)"/>
+  <circle cx="1320" cy="140" r="180" fill="#22c55e" fill-opacity="0.14"/>
+  <circle cx="300" cy="740" r="210" fill="#38bdf8" fill-opacity="0.10"/>
+
+  <text x="92" y="92" fill="#86efac" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif" letter-spacing="3">AST MEMORY CASE</text>
+  <text x="92" y="146" fill="#f8fafc" font-size="46" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AST Destruction Memory Optimization</text>
+  <text x="92" y="186" fill="#cbd5e1" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Instead of shipping a raw performance patch, the workflow first explained lifecycle boundaries, then landed the change after Defender / Attacker / Judge debate.</text>
+
+  <g filter="url(#shadowAst)">
+    <rect x="92" y="238" width="980" height="336" rx="34" fill="#0b1223" fill-opacity="0.84" stroke="#334155"/>
+
+    <rect x="132" y="354" width="210" height="92" rx="24" fill="#0f172a" stroke="#38bdf8" stroke-width="2"/>
+    <text x="164" y="392" fill="#bae6fd" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">ANALYSIS</text>
+    <text x="164" y="430" fill="#f8fafc" font-size="24" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Lifecycle Analysis</text>
+
+    <rect x="392" y="354" width="210" height="92" rx="24" fill="#0f172a" stroke="#60a5fa" stroke-width="2"/>
+    <text x="424" y="392" fill="#bfdbfe" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">STRATEGY</text>
+    <text x="424" y="430" fill="#f8fafc" font-size="24" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Phased Release</text>
+
+    <rect x="652" y="310" width="170" height="88" rx="24" fill="#10261a" stroke="#22c55e" stroke-width="2"/>
+    <text x="690" y="361" fill="#dcfce7" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Defender</text>
+
+    <rect x="652" y="410" width="170" height="88" rx="24" fill="#2a1013" stroke="#ef4444" stroke-width="2"/>
+    <text x="696" y="461" fill="#fee2e2" font-size="21" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Attacker</text>
+
+    <rect x="874" y="354" width="158" height="92" rx="24" fill="#2b1b08" stroke="#f59e0b" stroke-width="2"/>
+    <text x="912" y="393" fill="#fef3c7" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">JUDGE</text>
+    <text x="912" y="431" fill="#fff7ed" font-size="24" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Verdict Approved</text>
+  </g>
+
+  <path d="M342 400H392" stroke="#34d399" stroke-width="4" marker-end="url(#arrowAst)"/>
+  <path d="M602 400H652" stroke="#34d399" stroke-width="4" marker-end="url(#arrowAst)"/>
+  <path d="M822 400H874" stroke="#34d399" stroke-width="4" marker-end="url(#arrowAst)"/>
+
+  <g filter="url(#shadowAst)">
+    <rect x="1108" y="238" width="400" height="500" rx="34" fill="#0b1223" fill-opacity="0.88" stroke="#22c55e"/>
+    <text x="1144" y="292" fill="#86efac" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">PERFORMANCE RESULT</text>
+    <text x="1144" y="348" fill="#f8fafc" font-size="34" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Peak Memory Down ~30%</text>
+    <text x="1144" y="390" fill="#cbd5e1" font-size="16" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+      <tspan x="1144" y="390">Only after confirming it would not introduce</tspan>
+      <tspan x="1144" dy="28">use-after-free risk did the phased</tspan>
+      <tspan x="1144" dy="28">release strategy proceed to implementation and validation.</tspan>
+    </text>
+
+    <line x1="1148" y1="628" x2="1392" y2="628" stroke="#475569" stroke-width="2"/>
+    <line x1="1148" y1="518" x2="1392" y2="518" stroke="#334155" stroke-width="1" stroke-dasharray="6 8"/>
+    <rect x="1160" y="458" width="78" height="170" rx="18" fill="#1e293b"/>
+    <rect x="1292" y="509" width="78" height="119" rx="18" fill="#16a34a"/>
+    <rect x="1402" y="486" width="82" height="44" rx="16" fill="#10261a" stroke="#4ade80"/>
+    <text x="1420" y="514" fill="#22c55e" font-size="24" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">-30%</text>
+    <text x="1162" y="660" fill="#94a3b8" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Before</text>
+    <text x="1294" y="660" fill="#bbf7d0" font-size="15" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">After</text>
+
+    <rect x="1144" y="670" width="304" height="52" rx="18" fill="#10261a" stroke="#4ade80"/>
+    <text x="1170" y="702" fill="#f0fdf4" font-size="18" font-weight="700" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">Optimize only after multi-round adversarial review</text>
+  </g>
+
+  <rect x="92" y="632" width="980" height="106" rx="28" fill="#0b1223" fill-opacity="0.8" stroke="#475569"/>
+  <circle cx="130" cy="685" r="8" fill="#38bdf8"/>
+  <text x="150" y="692" fill="#cbd5e1" font-size="18" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">AI explained AST lifecycles first, proposed a release strategy next, and entered implementation only after safety challenges and arbitration.</text>
+</svg>
