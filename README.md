@@ -22,6 +22,8 @@ Your team of AIs, collaborating to get work done.
 
 ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。它把「对话式创建」「状态机工作流」「红蓝对抗式评审」「Supervisor 路由」「运行记录与成本追踪」组合在一起，让复杂研发任务可以被拆解、执行、回退、审查和复盘。
 
+![ACEHarness 产品总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png)
+
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
     <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg" alt="ACEHarness">
@@ -52,7 +54,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 ### 前置条件
 
 - Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
-- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`cursor-cli`、`codex`、`trae-cli`、`Cangjie Magic` 等至少一种
+- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`cangjie-magic` 等至少一种
 - `ANTHROPIC_API_KEY`：默认对话和工作流执行所需，见 `.env.example`
 
 ### 安装与运行
@@ -101,100 +103,14 @@ ACE_HOST=0.0.0.0 ACE_PORT=3000 npm start
 
 ## 核心机制
 
-### 1. 状态机工作流引擎 -- 不只是线性流水线
+![核心机制总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/core-mechanisms-overview.svg)
 
-传统 AI 工作流只能"从头跑到尾"。ACEHarness 引入**有限状态机**模型，每个状态可以根据 Agent 输出的结构化判决（verdict）动态决定下一步走向：
+ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程任务拆成可计划、可回退、可审查、可恢复、可复盘的闭环：
 
-![状态机工作流执行视图](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/hero-state-machine.png)
-
-- **条件跳转**：Agent 输出 `{"verdict": "fail"}` 时自动回退到上游状态重新分析
-- **最大转移次数保护**：防止死循环（如 `maxTransitions: 50`）
-- **状态级上下文**：每个状态维护独立上下文，跨状态共享全局信息
-- **崩溃恢复**：服务重启后自动检测中断的运行，支持断点续跑
-
-在实际运行记录中可以看到，修复一个编译器 ICE 问题时工作流在"根因定位"和"方案设计"之间**自动回退了 3 次**，直到定位到真正的根因后才继续推进 -- 这就是状态机模式的价值。
-
-### 2. Spec Coding -- 从需求到任务的可追踪闭环
-
-Spec Coding 用于把一句需求先整理成正式计划制品，再驱动工作流执行。它通常包含 `requirements.md`、`design.md`、`tasks.md` 等文档，并在创建工作流时把工作流步骤和 Spec 任务建立绑定关系。
-
-这条链路解决的是"AI 一边跑一边改计划，最后说不清做了什么"的问题：
-
-- **创建阶段先绑定**：AI 生成工作流草案时会收到结构化 Spec 任务上下文，并输出每个步骤对应的 `specTaskBinding.taskIds`
-- **系统维护状态**：任务开始、完成、失败、重启后的状态由运行系统维护，不依赖普通 Agent 在文本里自觉勾选
-- **运行态总览**：工作台总览可以按 Spec 任务展示主任务和子任务状态，帮助用户看懂当前工作流推进到哪里
-- **修订闭环**：Supervisor 修订、用户修订工作流或导入 Spec 后，系统会重新校验步骤和任务绑定，确保两者仍能对应
-- **持久化模式**：启用持久化 Spec 后，运行态的计划修订和任务进度会同步写入仓库 delta 目录；不会默认从持久化文件反向覆盖运行态，除非用户显式导入
-
-适合场景：大型缺陷修复、跨模块重构、API 设计与实现、需要审查计划和执行证据的研发任务。
-
-### 3. Supervisor 智能路由 -- 让 AI 决定找谁干活
-
-**核心问题**：传统多 Agent 工作流中，Agent 按固定顺序执行、被动接收前序产出。信息不足时只能猜测，产出质量差再由人工 iterate -- 本质是 Agent「不知道自己不知道什么」，也「没有办法主动问别人」。
-
-**架构设计**：ACEHarness 内置 Supervisor-Lite 架构，将协作拆成三层职责分离：
-
-- **Agent** 只声明「我缺什么」（`[NEED_INFO]` 协议），不需要知道团队里有谁
-- **Supervisor** 只做路由（关键词匹配 → 轻量 LLM → fallback 用户），不参与业务内容
-- **WorkflowManager** 只管状态流转和持久化，不做路由决策
-
-路由分两层：关键词命中则零成本直达，不命中才调轻量模型做语义匹配，再不行就降级给用户。整个过程嵌在一个 Plan 循环中（可配轮次上限），Agent 在信息充分后才正式执行。
-
-**价值**：
-
-- **Agent 无感知**：prompt 中不注入 Agent 列表，Agent 只专注领域工作，路由完全交给 Supervisor
-- **成本趋零**：大部分路由走关键词匹配，单次 LLM 路由约 $0.001，远低于信息不足导致的重跑成本
-- **信息流打破线性**：分析员可以在执行中直接咨询编码实现者，不必等到对方的步骤执行完
-- **渐进式零侵入**：步骤上加一行 `enablePlanLoop: true` 即启用，不加则执行路径完全不变；三级 fallback 保证流程永远不卡死
-
-工作台中的 Supervisor 视图可以回放每一轮决策过程，清晰展示"为什么选了这条路"。
-
-### 4. 对抗式迭代 -- Red Team vs Blue Team
-
-每个工作流阶段可配置三种角色：
-
-| 角色 | 职责 | 示例 Agent |
-|------|------|-----------|
-| **Defender** (红队) | 守住方案、实现功能、补齐证据 | architect, developer, fix-hunter, ... |
-| **Attacker** (蓝队) | 主动攻击方案、审查质量、发现缺陷 | fix-breaker, design-breaker, stress-tester, ... |
-| **Judge** (裁判) | 仲裁双方，输出判决 | fix-judge, code-judge, design-judge, ... |
-
-Judge 输出结构化判决，系统据此自动决定"通过"或"继续迭代"：
-
-```json
-{ "verdict": "fail", "remaining_issues": 3, "summary": "边界条件未覆盖" }
-```
-
-内置多类专业 Agent，覆盖架构设计、代码实现、测试验证、安全审计、文档编写等角色。部分 Agent 还配备了 Review Panel（会审模式），由多个子 Agent 从不同维度并行评审。
-
-### 5. 人工检查点 -- Human-in-the-Loop
-
-在关键决策节点设置人工审批门：
-
-- 方案设计完成后，人工确认是否开始编码
-- 代码修复后，人工决定是否继续迭代或接受结果
-- 支持**反馈注入**：在迭代过程中随时向 Agent 注入额外指令
-- 支持**强制跳转**：不满意当前路径时，直接跳转到任意状态
-
-### 6. 自动化分析 -- 不只是跑任务，还能分析结果
-
-系统不只是"按顺序调 Agent"，而是在执行过程中进行智能分析：
-
-- **回归测试判定**：自动识别哪些测试需要跑（O0/O1/O2 不同优化级别），而不是盲目全量回归
-- **回退路径分析**：流转图中实时展示回退次数、热点状态，帮助定位工作流瓶颈
-- **成本追踪**：每个步骤记录 Token 用量和费用，支持成本优化决策
-- **Prompt 分析**：对历史运行的 Prompt 进行质量评估和优化建议
-
-### 7. 对话式创建工作流 -- 说一句话就能建
-
-首页的对话界面不只是聊天，它内置多类动作指令，覆盖工作流全生命周期：
-
-- "帮我创建一个修复 Issue #3116 的工作流" -- AI 会引导你选择模式、配置 Agent、设置迭代策略
-- "把 fix-hunter 的模型换成 opus" -- 直接修改 Agent 配置
-- "启动 oh-cangjiedev-sm 工作流" -- 一键启动
-- "帮我提交一个 PR，标题是..." -- 集成 GitCode 操作
-
-对话中的操作按风险等级分类：安全操作自动执行，变更操作需确认，破坏性操作需二次确认。
+- **创建与计划**：从首页对话或手动表单创建工作流，Spec Coding 将需求整理成 `requirements.md`、`design.md`、`tasks.md`，并在创建阶段绑定步骤与任务。
+- **运行与协作**：状态机根据结构化判决决定继续、回退或进入人工检查点；Supervisor 在 Agent 缺信息时负责路由补上下文。
+- **审查与恢复**：Defender 红队、Attacker 蓝队和 Judge 形成对抗式评审；失败、重启或人工介入后仍可基于运行记录恢复。
+- **观测与沉淀**：工作台展示流式输出、状态图、日志、成本和 Prompt 分析，产物可进入 Workspace、Notebook、Skills 或持久化 Spec。
 
 ---
 
@@ -247,9 +163,9 @@ Judge 输出结构化判决，系统据此自动决定"通过"或"继续迭代"�
 { "engine": "claude-code" }
 ```
 
-支持 `claude-code`、`kiro-cli`、`opencode`、`cursor-cli`、`codex`、`trae-cli`、`Cangjie Magic` 等引擎：
+支持的执行引擎包括 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`（Cursor CLI）、`codex`、`trae-cli`、`cangjie-magic`（CangjieMagic）。
 
-子进程会继承 `process.env`，无需额外配置。切换引擎只需在引擎页面切换可用的 cli 工具即可。
+子进程会继承 `process.env`，无需额外配置。切换引擎只需在引擎页面选择本机可用的 CLI 工具即可。
 
 ---
 
@@ -323,7 +239,7 @@ npm run lint
 | 可视化 | ReactFlow 11、Recharts 3、Mermaid 11 |
 | 表单与拖拽 | React Hook Form 7、@dnd-kit |
 | Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、react-syntax-highlighter、KaTeX |
-| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `codex` / `opencode` 等 CLI 引擎 |
+| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `cangjie-magic` |
 | 测试 | Vitest 4、Testing Library、jsdom |
 | 国际化与主题 | next-intl 4、next-themes |
 

@@ -22,6 +22,8 @@ Your team of AIs, collaborating to get work done.
 
 ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines conversational creation, state-machine workflows, adversarial review, Supervisor routing, run history, and cost tracking so complex development work can be decomposed, executed, resumed, reviewed, and replayed.
 
+![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
+
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
     <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg" alt="ACEHarness">
@@ -51,7 +53,7 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 ### Requirements
 
 - Node.js `>= 20` / npm `>= 9`
-- `claude-code` / `kiro-cli` / `opencode` / `cursor-cli` / `codex` / `trae-cli` / `Cangjie Magic`
+- One AI execution engine: `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, or `cangjie-magic`
 
 ### Install and Run
 
@@ -97,98 +99,14 @@ Open `http://127.0.0.1:3000` after startup. After entering the console, use Onbo
 
 ## Core Mechanisms
 
-### 1. Adversarial Iteration: Red Team vs Blue Team
+![Core mechanisms overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/core-mechanisms-overview.en.svg)
 
-Each workflow stage can define three roles:
+ACEHarness is not just a chain of agents. It organizes engineering work into a loop that can be planned, rolled back, reviewed, resumed, observed, and reused:
 
-| Role | Responsibility | Example Agents |
-|------|------|-----------|
-| **Defender** (Red Team) | Defend the plan, implement the change, and provide evidence | architect, developer, fix-hunter, ... |
-| **Attacker** (Blue Team) | Attack the proposal, review quality, and find defects | fix-breaker, design-breaker, stress-tester, ... |
-| **Judge** | Arbitrate both sides and output a verdict | fix-judge, code-judge, design-judge, ... |
-
-The Judge produces a structured verdict, and the system decides whether to pass or continue iterating:
-
-```json
-{ "verdict": "fail", "remaining_issues": 3, "summary": "Edge cases are still uncovered" }
-```
-
-ACEHarness ships with specialized agents for architecture design, implementation, security auditing, performance testing, documentation, and more. Some agents also include a Review Panel mode, where multiple sub-agents review in parallel from different angles.
-
-### 2. Automated Analysis: More Than Just Running Tasks
-
-The system does not merely "run agents in order". It analyzes execution as it goes:
-
-- **Regression test decisions**: automatically determines which tests to run for O0/O1/O2 optimization levels instead of always running the full suite
-- **Rollback-path analysis**: visualizes rollback counts and hot states in the transition graph to help identify workflow bottlenecks
-- **Cost tracking**: records token usage and cost for every step, enabling cost optimization decisions
-- **Prompt analysis**: evaluates historical prompts and suggests quality improvements
-
-### 3. Human-in-the-Loop Checkpoints
-
-Critical decisions can be guarded by manual approval gates:
-
-- Confirm whether coding should begin after design is completed
-- Decide whether to continue iterating or accept the result after a code fix
-- Support **feedback injection**: add extra instructions to the agent at any time during iteration
-- Support **forced jumps**: jump directly to any state if the current path is unsatisfactory
-
-### 4. State Machine Workflow Engine: Beyond Linear Pipelines
-
-Traditional AI workflows tend to run from start to finish linearly. ACEHarness introduces a **finite-state machine** model where every state can decide the next step dynamically based on the agent's structured verdict:
-
-![State machine workflow execution view](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/hero-state-machine.png)
-
-- **Conditional transitions**: when an agent outputs `{"verdict": "fail"}`, the workflow can automatically roll back to an upstream state for re-analysis
-- **Maximum transition protection**: prevents infinite loops, such as `maxTransitions: 50`
-- **State-scoped context**: each state maintains its own context while also sharing global information
-- **Crash recovery**: after a service restart, interrupted runs are detected automatically and can resume from checkpoints
-
-In real execution logs, when fixing a compiler ICE issue, the workflow automatically rolled back **three times** between root-cause analysis and solution design before moving forward with the actual fix. That is the practical value of a state-machine workflow.
-
-### 5. Spec Coding: A Traceable Loop from Requirement to Task
-
-Spec Coding turns an initial request into formal planning artifacts before execution. A typical Spec includes `requirements.md`, `design.md`, and `tasks.md`, and workflow creation binds workflow steps to Spec tasks before the run starts.
-
-This closes the gap where an AI may change the plan while running and leave users unsure what actually happened:
-
-- **Binding at creation time**: when AI generates a workflow draft, it receives structured Spec task context and outputs `specTaskBinding.taskIds` for each step
-- **System-owned status**: task start, completion, failure, and restart status are maintained by the runtime system rather than by free-form agent text
-- **Runtime overview**: the workbench overview can show top-level tasks and subtasks bound to workflow steps
-- **Revision loop**: Supervisor revisions, user workflow edits, and imported Specs trigger binding validation so steps and tasks remain aligned
-- **Persistent mode**: when persistent Spec is enabled, runtime plan revisions and task progress are written to the repository delta directory; persistent files do not overwrite runtime state unless the user explicitly imports them
-
-### 6. Conversational Workflow Creation: Build It by Saying It
-
-The chat interface on the home page is not just for conversation. It includes multiple action commands that cover the full workflow lifecycle:
-
-- "Help me create a workflow to fix Issue #3116" — AI guides you through mode selection, agent configuration, and iteration strategy
-- "Switch fix-hunter to opus" — updates the agent configuration directly
-- "Start the oh-cangjiedev-sm workflow" — launches with one command
-- "Help me submit a PR with the title ..." — integrates GitCode operations
-
-Actions in the conversation are classified by risk level: safe operations run automatically, change operations require confirmation, and destructive operations require a second confirmation.
-
-### 7. Supervisor Smart Routing: Let AI Decide Who Should Work on What
-
-**The core problem**: in traditional multi-agent workflows, agents execute in a fixed sequence and passively consume upstream output. When information is missing, they can only guess, and humans must iterate after poor results. In other words, agents do not know what they do not know, and they have no proactive way to ask the right teammate.
-
-**Architecture**: ACEHarness includes a Supervisor-Lite architecture that separates collaboration into three layers of responsibility:
-
-- **Agent** declares only what information it needs through the `[NEED_INFO]` protocol, without knowing the team roster
-- **Supervisor** performs routing only, moving from keyword matching to lightweight LLM routing and then to user fallback when needed
-- **WorkflowManager** handles state transitions and persistence only, without making routing decisions
-
-Routing happens in two layers: keyword hits route with near-zero cost, lightweight semantic routing runs only when needed, and the final fallback asks the user. The entire process is embedded in a configurable Plan loop so the agent executes only after it has enough information.
-
-**Key advantages**:
-
-- **Agent-agnostic collaboration**: prompts do not include an injected agent list, so each agent stays focused on its own domain while routing is delegated entirely to Supervisor
-- **Near-zero routing cost**: most routing is handled by keyword matching, and a single LLM routing decision costs roughly $0.001, much cheaper than reruns caused by missing information
-- **Breaks linear information flow**: an analyst can actively consult an implementation expert mid-execution instead of waiting for that expert's turn in the sequence
-- **Progressive, zero-intrusion adoption**: add one line such as `enablePlanLoop: true` to a step to enable it; leave it out and the original execution path is unchanged. A three-level fallback prevents deadlock
-
-The Supervisor view in the workbench can replay every decision round and clearly show why a route was chosen.
+- **Creation and planning**: create workflows from home chat or manual forms; Spec Coding turns the request into `requirements.md`, `design.md`, and `tasks.md`, then binds workflow steps to tasks before execution.
+- **Execution and collaboration**: the state machine decides whether to continue, roll back, or pause at a human checkpoint; Supervisor routes missing context when agents need help.
+- **Review and recovery**: Defender, Attacker, and Judge form an adversarial review loop; failed, restarted, or interrupted runs can resume from persisted records.
+- **Observability and memory**: the workbench shows streams, state graphs, logs, cost, and prompt analysis; outputs can flow into Workspace, Notebook, Skills, or persistent Spec.
 
 ---
 
@@ -241,7 +159,7 @@ Copy `.env.example` to `.env.local` and fill in real values. The table below lis
 { "engine": "claude-code" }
 ```
 
-Supported engines include `claude-code`, `kiro-cli`, `opencode`, `cursor-cli`, `codex`, `trae-cli`, and `Cangjie Magic`.
+Supported execution engines include `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor` (Cursor CLI), `codex`, `trae-cli`, and `cangjie-magic` (CangjieMagic).
 
 Child processes inherit `process.env`, so no extra setup is required. To switch engines, simply change the active CLI tool on the engine page.
 
@@ -317,7 +235,7 @@ npm run lint
 | Visualization | ReactFlow 11, Recharts 3, Mermaid 11 |
 | Forms and drag-and-drop | React Hook Form 7, @dnd-kit |
 | Markdown and docs | react-markdown, remark-gfm, rehype-raw, react-syntax-highlighter, KaTeX |
-| AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `codex` / `opencode` CLI engines |
+| AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `cangjie-magic` |
 | Testing | Vitest 4, Testing Library, jsdom |
 | Internationalization and themes | next-intl 4, next-themes |
 

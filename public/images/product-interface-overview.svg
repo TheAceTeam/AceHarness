@@ -1,64 +1,126 @@
-<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1200" height="620" rx="28" fill="#F8FAFC"/>
-  <rect x="34" y="34" width="1132" height="552" rx="24" fill="white" stroke="#D8DEE8"/>
-  <text x="70" y="86" fill="#111827" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="30" font-weight="700">ACEHarness 产品界面总览</text>
-  <text x="70" y="118" fill="#5B6472" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="15">从对话创建到工作台运行、从资产管理到团队知识沉淀，所有入口围绕工程任务闭环组织。</text>
+<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ACEHarness 产品界面总览</title>
+  <desc id="desc">以入口层、运行层、协作层和资产层展示 ACEHarness 的主要产品界面。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#07111F"/>
+      <stop offset="55%" stop-color="#101827"/>
+      <stop offset="100%" stop-color="#171329"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#111C31" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#0B1220" stop-opacity="0.98"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowOrange" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FB923C" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#FB923C" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-12%" y="-16%" width="124%" height="142%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.38"/>
+    </filter>
+    <style>
+      .font { font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif; }
+      .title { fill: #F8FAFC; font-size: 30px; font-weight: 800; }
+      .subtitle { fill: #CBD5E1; font-size: 15px; }
+      .layer { fill: #F8FAFC; font-size: 22px; font-weight: 800; }
+      .item { fill: #F8FAFC; font-size: 15px; font-weight: 700; }
+      .desc { fill: #CBD5E1; font-size: 13px; }
+    </style>
+  </defs>
 
-  <rect x="68" y="158" width="240" height="326" rx="18" fill="#EFF6FF" stroke="#BFDBFE"/>
-  <text x="96" y="202" fill="#1D4ED8" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">入口层</text>
-  <circle cx="102" cy="242" r="6" fill="#2563EB"/>
-  <text x="122" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">对话页 /</text>
-  <text x="122" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">自然语言创建、动作确认、会话管理</text>
-  <circle cx="102" cy="324" r="6" fill="#2563EB"/>
-  <text x="122" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">仪表盘 /dashboard</text>
-  <text x="122" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">运行趋势、成本、最近记录</text>
-  <circle cx="102" cy="406" r="6" fill="#2563EB"/>
-  <text x="122" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">工作流管理 /workflows</text>
-  <text x="122" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">搜索、筛选、排序、复制、新建</text>
+  <rect width="1200" height="620" rx="28" fill="url(#bg)"/>
+  <circle cx="140" cy="90" r="220" fill="url(#glowBlue)"/>
+  <circle cx="1050" cy="560" r="260" fill="url(#glowOrange)"/>
+  <path d="M0 92C206 36 344 144 535 132C742 118 930 36 1200 94V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
+  <path d="M0 514C210 446 410 548 600 526C828 498 1008 438 1200 480V620H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
-  <rect x="348" y="158" width="240" height="326" rx="18" fill="#F0FDF4" stroke="#BBF7D0"/>
-  <text x="376" y="202" fill="#15803D" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">运行层</text>
-  <circle cx="382" cy="242" r="6" fill="#16A34A"/>
-  <text x="402" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">工作台运行视图</text>
-  <text x="402" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">实时流、步骤输出、人工检查点</text>
-  <circle cx="382" cy="324" r="6" fill="#16A34A"/>
-  <text x="402" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">状态机可视化</text>
-  <text x="402" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">总览、时序图、流转图、状态图</text>
-  <circle cx="382" cy="406" r="6" fill="#16A34A"/>
-  <text x="402" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">历史与恢复</text>
-  <text x="402" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">运行记录、文档、日志、失败恢复</text>
+  <rect x="34" y="34" width="1132" height="552" rx="24" fill="#0B1220" fill-opacity="0.72" stroke="#334155"/>
+  <g class="font">
+    <text x="70" y="86" class="title">ACEHarness 产品界面总览</text>
+    <text x="70" y="118" class="subtitle">从对话创建到工作台运行、从资产管理到团队知识沉淀，所有入口围绕工程任务闭环组织。</text>
+  </g>
 
-  <rect x="628" y="158" width="240" height="326" rx="18" fill="#FFF7ED" stroke="#FED7AA"/>
-  <text x="656" y="202" fill="#C2410C" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">协作层</text>
-  <circle cx="662" cy="242" r="6" fill="#EA580C"/>
-  <text x="682" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Spec Coding</text>
-  <text x="682" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">需求、设计、任务、步骤绑定</text>
-  <circle cx="662" cy="324" r="6" fill="#EA580C"/>
-  <text x="682" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Agent / 模型 / 引擎</text>
-  <text x="682" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">角色配置、模型费率、CLI 后端</text>
-  <circle cx="662" cy="406" r="6" fill="#EA580C"/>
-  <text x="682" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">定时任务与 API</text>
-  <text x="682" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">Cron 调度、交互式 API 文档</text>
+  <g class="font" filter="url(#shadow)">
+    <rect x="68" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
+    <rect x="68" y="158" width="7" height="326" rx="4" fill="#38BDF8"/>
+    <circle cx="104" cy="198" r="18" fill="#0EA5E9" fill-opacity="0.20" stroke="#7DD3FC"/>
+    <text x="104" y="205" text-anchor="middle" fill="#BAE6FD" font-size="16" font-weight="800">01</text>
+    <text x="132" y="204" fill="#7DD3FC" font-size="14" font-weight="800">ENTRY</text>
+    <text x="96" y="238" class="layer">入口层</text>
+    <circle cx="102" cy="278" r="6" fill="#38BDF8"/>
+    <text x="122" y="284" class="item">对话页 /</text>
+    <text x="122" y="312" class="desc">创建、确认、会话管理</text>
+    <circle cx="102" cy="354" r="6" fill="#38BDF8"/>
+    <text x="122" y="360" class="item">仪表盘 /dashboard</text>
+    <text x="122" y="388" class="desc">趋势、成本、最近记录</text>
+    <circle cx="102" cy="430" r="6" fill="#38BDF8"/>
+    <text x="122" y="436" class="item">工作流管理 /workflows</text>
+    <text x="122" y="464" class="desc">搜索、筛选、排序、新建</text>
 
-  <rect x="908" y="158" width="224" height="326" rx="18" fill="#F5F3FF" stroke="#DDD6FE"/>
-  <text x="936" y="202" fill="#6D28D9" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="22" font-weight="700">资产层</text>
-  <circle cx="942" cy="242" r="6" fill="#7C3AED"/>
-  <text x="962" y="248" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Workspace</text>
-  <text x="962" y="278" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">文件浏览、编辑、上传</text>
-  <circle cx="942" cy="324" r="6" fill="#7C3AED"/>
-  <text x="962" y="330" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">Notebook / Skills</text>
-  <text x="962" y="360" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">知识沉淀、能力复用</text>
-  <circle cx="942" cy="406" r="6" fill="#7C3AED"/>
-  <text x="962" y="412" fill="#1F2937" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="16">用户与账号</text>
-  <text x="962" y="442" fill="#4B5563" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14">注册、审核、权限管理</text>
+    <rect x="348" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
+    <rect x="348" y="158" width="7" height="326" rx="4" fill="#22C55E"/>
+    <circle cx="384" cy="198" r="18" fill="#22C55E" fill-opacity="0.20" stroke="#86EFAC"/>
+    <text x="384" y="205" text-anchor="middle" fill="#DCFCE7" font-size="16" font-weight="800">02</text>
+    <text x="412" y="204" fill="#86EFAC" font-size="14" font-weight="800">RUNTIME</text>
+    <text x="376" y="238" class="layer">运行层</text>
+    <circle cx="382" cy="278" r="6" fill="#22C55E"/>
+    <text x="402" y="284" class="item">工作台运行视图</text>
+    <text x="402" y="312" class="desc">实时流、输出、检查点</text>
+    <circle cx="382" cy="354" r="6" fill="#22C55E"/>
+    <text x="402" y="360" class="item">状态机可视化</text>
+    <text x="402" y="388" class="desc">总览、时序、流转、状态</text>
+    <circle cx="382" cy="430" r="6" fill="#22C55E"/>
+    <text x="402" y="436" class="item">历史与恢复</text>
+    <text x="402" y="464" class="desc">记录、文档、日志、恢复</text>
 
-  <path d="M308 320H348" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
-  <path d="M588 320H628" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
-  <path d="M868 320H908" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
-  <path d="M336 314L348 320L336 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M616 314L628 320L616 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M896 314L908 320L896 326" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="628" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
+    <rect x="628" y="158" width="7" height="326" rx="4" fill="#F59E0B"/>
+    <circle cx="664" cy="198" r="18" fill="#F59E0B" fill-opacity="0.20" stroke="#FCD34D"/>
+    <text x="664" y="205" text-anchor="middle" fill="#FEF3C7" font-size="16" font-weight="800">03</text>
+    <text x="692" y="204" fill="#FCD34D" font-size="14" font-weight="800">COLLAB</text>
+    <text x="656" y="238" class="layer">协作层</text>
+    <circle cx="662" cy="278" r="6" fill="#F59E0B"/>
+    <text x="682" y="284" class="item">Spec Coding</text>
+    <text x="682" y="312" class="desc">需求、设计、任务绑定</text>
+    <circle cx="662" cy="354" r="6" fill="#F59E0B"/>
+    <text x="682" y="360" class="item">Agent / 模型 / 引擎</text>
+    <text x="682" y="388" class="desc">角色、费率、CLI 后端</text>
+    <circle cx="662" cy="430" r="6" fill="#F59E0B"/>
+    <text x="682" y="436" class="item">定时任务与 API</text>
+    <text x="682" y="464" class="desc">Cron 调度、API 文档</text>
 
-  <rect x="70" y="520" width="1062" height="38" rx="19" fill="#F1F5F9"/>
-  <text x="600" y="545" text-anchor="middle" fill="#334155" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="15">进入控制台后，可通过 Onboarding 查看完整使用路径和模块引导</text>
+    <rect x="908" y="158" width="224" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
+    <rect x="908" y="158" width="7" height="326" rx="4" fill="#A78BFA"/>
+    <circle cx="944" cy="198" r="18" fill="#8B5CF6" fill-opacity="0.20" stroke="#C4B5FD"/>
+    <text x="944" y="205" text-anchor="middle" fill="#EDE9FE" font-size="16" font-weight="800">04</text>
+    <text x="972" y="204" fill="#C4B5FD" font-size="14" font-weight="800">ASSETS</text>
+    <text x="936" y="238" class="layer">资产层</text>
+    <circle cx="942" cy="278" r="6" fill="#A78BFA"/>
+    <text x="962" y="284" class="item">Workspace</text>
+    <text x="962" y="312" class="desc">文件浏览、编辑、上传</text>
+    <circle cx="942" cy="354" r="6" fill="#A78BFA"/>
+    <text x="962" y="360" class="item">Notebook / Skills</text>
+    <text x="962" y="388" class="desc">知识沉淀、能力复用</text>
+    <circle cx="942" cy="430" r="6" fill="#A78BFA"/>
+    <text x="962" y="436" class="item">用户与账号</text>
+    <text x="962" y="464" class="desc">注册、审核、权限管理</text>
+  </g>
+
+  <g stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M308 320H348"/>
+    <path d="M588 320H628"/>
+    <path d="M868 320H908"/>
+    <path d="M336 314L348 320L336 326"/>
+    <path d="M616 314L628 320L616 326"/>
+    <path d="M896 314L908 320L896 326"/>
+  </g>
+
+  <g class="font">
+    <rect x="70" y="520" width="1062" height="42" rx="21" fill="#0B1220" fill-opacity="0.92" stroke="#334155"/>
+    <text x="600" y="547" text-anchor="middle" fill="#CBD5E1" font-size="15" font-weight="700">进入控制台后，可通过 Onboarding 查看完整使用路径和模块引导</text>
+  </g>
 </svg>
