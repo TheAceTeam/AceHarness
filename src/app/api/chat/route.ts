@@ -59,6 +59,8 @@ export async function POST(request: NextRequest) {
         .finally(() => clearTimeout(timeoutId));
     });
 
+    // Brief delay to allow final stream events to flush before cleanup
+    await new Promise(r => setTimeout(r, 1000));
     engine.cancel();
 
     return NextResponse.json({
