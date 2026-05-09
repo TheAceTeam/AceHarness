@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/chat/ChatMessage';
+import { KeyRound, Settings, UserPlus } from 'lucide-react';
 
 const CAROUSEL_ITEMS = [
   {
@@ -255,18 +256,30 @@ export default function LoginPage() {
           </div>
 
           {/* Footer */}
-          <div className="mt-6 text-center space-y-1">
-            <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/login/reset')}>
-              忘记密码？
-            </Button>
-            <br />
-            <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/register')}>
-              没有账号？申请注册
-            </Button>
-            <br />
-            <Button variant="link" className="text-xs text-muted-foreground" onClick={() => router.push('/setup')}>
-              首次使用？前往设置
-            </Button>
+          <div className="mt-6 rounded-xl border bg-card/60 p-2 shadow-sm">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Button variant="ghost" className="h-auto justify-start gap-2 px-3 py-2 text-left text-xs text-muted-foreground" onClick={() => router.push('/login/reset')}>
+                <KeyRound className="h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">忘记密码</span>
+                  <span className="block truncate">密保重置</span>
+                </span>
+              </Button>
+              <Button variant="ghost" className="h-auto justify-start gap-2 px-3 py-2 text-left text-xs text-muted-foreground" onClick={() => router.push('/register')}>
+                <UserPlus className="h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">申请注册</span>
+                  <span className="block truncate">新用户入口</span>
+                </span>
+              </Button>
+              <Button variant="ghost" className="h-auto justify-start gap-2 px-3 py-2 text-left text-xs text-muted-foreground" onClick={() => router.push('/setup')}>
+                <Settings className="h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">首次设置</span>
+                  <span className="block truncate">初始化系统</span>
+                </span>
+              </Button>
+            </div>
           </div>
         </div>
       </div>

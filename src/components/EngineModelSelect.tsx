@@ -19,6 +19,7 @@ interface Props {
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [globalEngine, setGlobalEngine] = useState('claude-code');
+  const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
 
   const isModelCompatible = useMemo(() => {
@@ -32,11 +33,28 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   }, []);
 
   useEffect(() => {
-    const refresh = () => {
-      fetch('/api/models').then(r => r.json()).then(d => setModels(d.models || [])).catch(() => {});
-      fetch('/api/engine').then(r => r.json()).then(d => {
-        if (d.engine) setGlobalEngine(d.engine);
+    let cancelled = false;
+    const refresh = async () => {
+      fetch('/api/models').then(r => r.json()).then(d => {
+        if (!cancelled) setModels(d.models || []);
       }).catch(() => {});
+      fetch('/api/engine').then(r => r.json()).then(d => {
+        if (!cancelled && d.engine) setGlobalEngine(d.engine);
+      }).catch(() => {});
+
+      const availability: Record<string, boolean> = {};
+      await Promise.all(getConcreteEngines().map(async (eng) => {
+        try {
+          const response = await fetch(`/api/engine/availability?engine=${encodeURIComponent(eng.id)}`);
+          const data = await response.json();
+          availability[eng.id] = Boolean(data.available);
+        } catch {
+          availability[eng.id] = false;
+        }
+      }));
+      if (!cancelled) {
+        setEngineAvailability(availability);
+      }
     };
     refresh();
     const onEngineUpdated = () => refresh();
@@ -46,6 +64,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
     return () => {
+      cancelled = true;
       window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
       window.removeEventListener('storage', onStorage);
     };
@@ -54,6 +73,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const effectiveEngine = engine || globalEngine;
   const globalEngineInfo = getEngineMeta(globalEngine);
   const globalLabel = globalEngineInfo?.name || globalEngine;
+  const isEngineSelectable = (engineId: string) => engineAvailability[engineId] !== false;
 
   // Composite value: "engineId::modelValue" — empty engineId = follow system
   const compositeValue = `${engine}::${model}`;
@@ -62,7 +82,9 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     const result: ComboboxGroupDef[] = [];
 
     // "跟随系统" group — uses the global engine's compatible models
-    const sysModels = models.filter((m) => isModelCompatible(m, globalEngine));
+    const sysModels = isEngineSelectable(globalEngine)
+      ? models.filter((m) => isModelCompatible(m, globalEngine))
+      : [];
     if (sysModels.length > 0) {
       result.push({
         label: `跟随系统 (${globalLabel})`,
@@ -77,6 +99,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
 
     // Concrete engine groups
     for (const eng of getConcreteEngines()) {
+      if (!isEngineSelectable(eng.id)) continue;
       const engineModels = models.filter((m) => isModelCompatible(m, eng.id));
       if (engineModels.length > 0) {
         result.push({
@@ -92,7 +115,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     }
 
     return result;
-  }, [models, globalEngine, globalLabel, isModelCompatible]);
+  }, [models, globalEngine, globalLabel, isModelCompatible, engineAvailability]);
 
   const modelLabel = models.find(m => m.value === model)?.label || model || '选择模型';
   const triggerLabel = modelLabel;
