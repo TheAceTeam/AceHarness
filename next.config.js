@@ -9,6 +9,8 @@ process.stderr.write = ((chunk, ...args) => {
   // workflow-manager.ts and state-machine-workflow-manager.ts use dynamic resolve for skills directory
   if (str.includes('workflow-manager') && str.includes('file pattern')) return true;
   if (str.includes('state-machine-workflow-manager') && str.includes('file pattern')) return true;
+  // app-paths.ts uses dynamic path join with INSTALL_ROOT - Turbopack can't resolve at build time
+  if (str.includes('app-paths') && str.includes('file pattern')) return true;
   return originalStderrWrite(chunk, ...args);
 });
 
