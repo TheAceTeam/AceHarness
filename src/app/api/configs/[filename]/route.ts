@@ -8,6 +8,8 @@ import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsD
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
 import { loadCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
 import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { deleteRunsByConfig } from '@/lib/run-store';
+import { workflowRegistry } from '@/lib/workflow-registry';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -23,6 +25,12 @@ async function canAccessWorkflow(filename: string, userId: string, role: 'admin'
   if (meta.visibility === 'public') return true;
   if (role === 'admin') return true;
   return !meta.createdBy || meta.createdBy === userId;
+}
+
+async function stopRunningWorkflow(filename: string): Promise<void> {
+  const manager = workflowRegistry.getRunningManager(filename);
+  if (!manager) return;
+  await manager.stop();
 }
 
 export async function GET(
@@ -160,12 +168,21 @@ export async function DELETE(
     if (!(await canAccessWorkflow(filename, auth.id, auth.role))) {
       return NextResponse.json({ error: '无权限删除该工作流' }, { status: 403 });
     }
+    await stopRunningWorkflow(filename);
     const filepath = await getRuntimeWorkflowConfigPath(filename);
     await unlink(filepath);
     const configsDir = await getRuntimeConfigsDirPath();
     await markConfigDeleted(configsDir, filename);
     await deleteConfigMeta(filename, 'workflow');
-    return NextResponse.json({ success: true, message: '配置已删除' });
+    const runsCleanup = await deleteRunsByConfig(filename);
+    return NextResponse.json({
+      success: true,
+      message: runsCleanup.deletedCount > 0
+        ? `配置已删除，并清理 ${runsCleanup.deletedCount} 条运行记录`
+        : '配置已删除',
+      deletedRunsCount: runsCleanup.deletedCount,
+      deletedRunIds: runsCleanup.runIds,
+    });
   } catch (error: any) {
     return NextResponse.json(
       { error: '删除配置失败', message: error.message },

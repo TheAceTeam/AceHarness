@@ -28,6 +28,10 @@ const ZERO_USAGE_METADATA: EngineResultMetadata = {
   num_turns: 0,
 };
 
+function runtimeImport<T = any>(moduleName: string): Promise<T> {
+  return Function('moduleName', 'return import(moduleName)')(moduleName) as Promise<T>;
+}
+
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -72,7 +76,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await import('@openai/codex-sdk');
+      await runtimeImport('@openai/codex-sdk');
     } catch { return false; }
     return !!this.findCodexPath();
   }
@@ -294,7 +298,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     this.collectedOutput = '';
     this.lastBlockWasTool = false;
     try {
-      const { Codex } = await import('@openai/codex-sdk');
+      const { Codex } = await runtimeImport<typeof import('@openai/codex-sdk')>('@openai/codex-sdk');
 
       if (!this.codexInstance) {
         const codexPath = this.findCodexPath();

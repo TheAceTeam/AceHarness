@@ -99,7 +99,7 @@ interface ChatMessageProps {
   } | null;
 }
 
-function ThinkingBot() {
+export function ThinkingBot() {
   return (
     <div className="flex items-center gap-1.5 py-1.5">
       <svg className="shrink-0 animate-[botBounce_1.2s_ease-in-out_infinite]" width="28" height="28" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">

@@ -25,6 +25,19 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+type ConfigSortKey = 'name' | 'createdAt';
+type SortDirection = 'asc' | 'desc';
+
+interface ConfigListOptions {
+  page?: number;
+  pageSize?: number;
+  keyword?: string;
+  search?: string;
+  mode?: 'all' | 'phase-based' | 'state-machine' | string;
+  sortKey?: ConfigSortKey;
+  sortDirection?: SortDirection;
+}
+
 interface ConfigListResponse {
   files: string[];
   configs: {
@@ -37,6 +50,19 @@ interface ConfigListResponse {
     agentCount: number;
     createdAt?: number;
   }[];
+  pagination: {
+    total: number;
+    totalPages: number;
+    page: number;
+    pageSize: number;
+    unfilteredTotal: number;
+  };
+  filters: {
+    keyword: string;
+    mode: string;
+    sortKey: ConfigSortKey;
+    sortDirection: SortDirection;
+  };
 }
 
 interface ConfigResponse {
@@ -442,10 +468,57 @@ export interface SdkOverviewResponse {
 }
 
 export const configApi = {
-  async listConfigs(): Promise<ConfigListResponse> {
-    const response = await authFetch(`${API_BASE}/configs`);
+  async listConfigs(options: ConfigListOptions = {}): Promise<ConfigListResponse> {
+    const params = new URLSearchParams();
+    if (options.page) params.set('page', String(options.page));
+    if (options.pageSize) params.set('pageSize', String(options.pageSize));
+    if (options.keyword) params.set('keyword', options.keyword);
+    if (options.search) params.set('search', options.search);
+    if (options.mode && options.mode !== 'all') params.set('mode', options.mode);
+    if (options.sortKey) params.set('sortKey', options.sortKey);
+    if (options.sortDirection) params.set('sortDirection', options.sortDirection);
+
+    const query = params.toString();
+    const response = await authFetch(`${API_BASE}/configs${query ? `?${query}` : ''}`);
     if (!response.ok) throw new Error('获取配置列表失败');
     return response.json();
+  },
+
+  async listAllConfigs(options: Omit<ConfigListOptions, 'page' | 'pageSize'> = {}): Promise<ConfigListResponse> {
+    const pageSize = 100;
+    let page = 1;
+    let firstPage: ConfigListResponse | null = null;
+    const configs: ConfigListResponse['configs'] = [];
+    const files: string[] = [];
+
+    while (true) {
+      const data = await this.listConfigs({ ...options, page, pageSize });
+      if (!firstPage) firstPage = data;
+      configs.push(...(data.configs || []));
+      files.push(...(data.files || []));
+
+      if (!data.pagination || page >= data.pagination.totalPages) {
+        break;
+      }
+      page += 1;
+    }
+
+    if (!firstPage) {
+      throw new Error('获取配置列表失败');
+    }
+
+    return {
+      ...firstPage,
+      files,
+      configs,
+      pagination: {
+        ...firstPage.pagination,
+        page: 1,
+        pageSize: configs.length || pageSize,
+        total: configs.length,
+        totalPages: 1,
+      },
+    };
   },
 
   async getConfig(filename: string): Promise<ConfigResponse> {

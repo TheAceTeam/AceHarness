@@ -637,7 +637,7 @@ async function executeActionInner(type: ActionType, params: Record<string, any>)
   switch (type) {
     // Config
     case 'config.list':
-      return configApi.listConfigs();
+      return configApi.listAllConfigs();
     case 'config.get':
       return configApi.getConfig(params.filename);
     case 'config.validate':

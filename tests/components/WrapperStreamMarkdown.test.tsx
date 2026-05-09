@@ -7,6 +7,18 @@ import ChatMessage from '@/components/chat/ChatMessage';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
 import { extractSpecCodingRevisionCommand } from '@/lib/spec-coding-revision-protocol';
 import { extractStructuredResult } from '@/lib/result-channel';
+import {
+  extractClarificationFormResult,
+  extractPlanDraftResult,
+  extractWorkflowDraftPreview,
+} from '@/lib/ai-result-normalizers';
+import { applyAiSpecCodingDraft } from '@/lib/ai-draft-utils';
+import { validateWorkflowDraft } from '@/lib/creator-validation';
+import { buildCreationSession } from '@/lib/spec-coding-store';
+import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/schemas';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 function createAsyncIterable<T>(items: T[]) {
   return {
@@ -43,6 +55,44 @@ async function openAllDetails(container: HTMLElement) {
 
 function getRenderedText() {
   return document.body.textContent || '';
+}
+
+function workflowConfig(projectRoot: string) {
+  return {
+    workflow: {
+      name: 'AI Result Workflow',
+      phases: [
+        {
+          name: 'Implement',
+          steps: [
+            {
+              name: 'Code',
+              agent: 'developer',
+              task: 'Implement the requested change',
+            },
+          ],
+        },
+      ],
+      supervisor: { enabled: true, agent: 'default-supervisor' },
+    },
+    context: {
+      projectRoot,
+      workspaceMode: 'in-place',
+      requirements: 'Cover AI result parsing',
+    },
+  };
+}
+
+function baseSpecCoding(projectRoot: string) {
+  return buildCreationSession({
+    filename: 'ai-result-workflow.yaml',
+    workflowName: 'AI Result Workflow',
+    mode: 'phase-based',
+    workingDirectory: projectRoot,
+    workspaceMode: 'in-place',
+    requirements: 'Cover AI result parsing',
+    config: workflowConfig(projectRoot),
+  }).specCoding;
 }
 
 async function buildCodexRenderedMessage(events: any[]) {
@@ -410,6 +460,32 @@ describe('Wrapper stream markdown rendering', () => {
       },
     });
     expect(parsed?.payload?.questions).toHaveLength(1);
+    const clarificationForm = extractClarificationFormResult(content);
+    expect(clarificationForm).toMatchObject({
+      type: 'clarification_form',
+      summary: '需要确认边界',
+      knownFacts: ['已提供目录'],
+      missingFields: ['目标用户'],
+    });
+    expect(clarificationForm?.questions).toHaveLength(1);
+
+    const projectRoot = mkdtempSync(join(tmpdir(), 'ace-ai-result-'));
+    const session = buildCreationSession({
+      filename: 'ai-result-workflow.yaml',
+      workflowName: 'AI Result Workflow',
+      mode: 'phase-based',
+      workingDirectory: projectRoot,
+      workspaceMode: 'in-place',
+      requirements: 'Cover AI result parsing',
+      config: workflowConfig(projectRoot),
+      uiState: {
+        formStep: 2,
+        planningStage: 'awaiting-answers',
+        clarificationForm: clarificationForm!,
+        clarificationAnswers: {},
+      },
+    });
+    expect(creationSessionSchema.parse(session).uiState?.clarificationForm?.type).toBe('clarification_form');
     expect(normalizeAssistantDisplay(content, false)).toEqual({
       visibleText: '先补几个关键问题。',
       hasMachineResult: true,
@@ -462,13 +538,29 @@ describe('Wrapper stream markdown rendering', () => {
       design: '# design',
       tasks: '# tasks',
     });
+    const planDraft = extractPlanDraftResult(content);
+    expect(planDraft).toMatchObject({
+      type: 'plan_draft',
+      summary: '实现首页历史查询',
+      goals: ['支持分页'],
+      nonGoals: ['不改运行引擎'],
+      constraints: ['保持现有风格'],
+    });
+
+    const specCoding = applyAiSpecCodingDraft(baseSpecCoding(process.cwd()), planDraft);
+    expect(specCodingDocumentSchema.parse(specCoding).artifacts).toMatchObject({
+      requirements: '# requirements',
+      design: '# design',
+      tasks: '# tasks',
+    });
   });
 
   test('acp wrapper workflow draft result parses after streaming completes', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'ace-ai-result-'));
     const finalContent = [
       '这是 workflow 草案。',
       '<result>',
-      '{kind:"workflow_draft",payload:{filename:"history.yaml",summary:"历史查询工作流",config:{workflow:{name:"history-query"},context:{projectRoot:"/tmp/project"}}}}',
+      `{kind:"workflow_draft",payload:{filename:"history.yaml",summary:"历史查询工作流",config:{workflow:{name:"history-query",phases:[{name:"Implement",steps:[{name:"Code",agent:"developer",task:"Implement"}]}],supervisor:{enabled:true,agent:"default-supervisor"}},context:{projectRoot:${JSON.stringify(projectRoot)},workspaceMode:"in-place"}}}}`,
       '</result>',
     ].join('\n');
 
@@ -487,13 +579,28 @@ describe('Wrapper stream markdown rendering', () => {
       kind: 'workflow_draft',
       payload: {
         filename: 'history.yaml',
-        summary: '历史查询工作流',
-        config: {
-          workflow: { name: 'history-query' },
-          context: { projectRoot: '/tmp/project' },
+          summary: '历史查询工作流',
+          config: {
+          workflow: {
+            name: 'history-query',
+            phases: [{ name: 'Implement', steps: [{ name: 'Code', agent: 'developer', task: 'Implement' }] }],
+            supervisor: { enabled: true, agent: 'default-supervisor' },
+          },
+          context: { projectRoot, workspaceMode: 'in-place' },
         },
       },
     });
+    const preview = extractWorkflowDraftPreview(content, 'fallback.yaml');
+    expect(preview).toMatchObject({
+      source: 'result-json',
+      filename: 'history.yaml',
+      summary: '历史查询工作流',
+    });
+    expect(preview.config).toMatchObject({
+      workflow: { name: 'history-query' },
+      context: { projectRoot, workspaceMode: 'in-place' },
+    });
+    expect(validateWorkflowDraft(preview.config).ok).toBe(true);
     expect(normalizeAssistantDisplay(content, false)).toEqual({
       visibleText: '这是 workflow 草案。',
       hasMachineResult: true,

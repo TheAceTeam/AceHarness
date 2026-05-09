@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
 import { useForm, type FieldErrors } from 'react-hook-form';
 import { useTheme } from 'next-themes';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
 import { newConfigFormSchema, type NewConfigForm } from '@/lib/schemas';
 import { useToast } from '@/components/ui/toast';
 import {
@@ -30,8 +30,20 @@ import { EngineModelSelect } from './EngineModelSelect';
 import { ComboboxPortalProvider } from './ui/combobox';
 import Markdown from './Markdown';
 import UniversalCard from './chat/cards/UniversalCard';
+import { ThinkingBot } from './chat/ChatMessage';
 import { parseActions } from '@/lib/chat-actions';
-import { extractStructuredResult as extractStructuredResultFromChannel } from '@/lib/result-channel';
+import {
+  extractClarificationFormResult,
+  extractPlanDraftResult,
+  extractWorkflowDraftPreview,
+  type ClarificationAnswerValue,
+  type ClarificationFormResult,
+  type ClarificationQuestionItem,
+  type PlanDraftResult,
+  type SpecCodingArtifactDrafts,
+  type SpecCodingArtifactKey,
+  type WorkflowDraftPreviewState,
+} from '@/lib/ai-result-normalizers';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
 import { agentApi } from '@/lib/api';
@@ -63,6 +75,14 @@ const SPEC_LANGUAGE_RULE = [
   '如果输入混合多种语言，以用户需求正文占比最高的语言为准；若用户最后明确指定语言，则以用户指定语言为准。',
   '文件名、代码、YAML key、API 名称、技术专名和产品名可以保留原文，但不要在多份正式计划制品之间混用中文和英文标题/说明。',
 ].join('\n');
+
+function PlanningThinkingBot() {
+  return (
+    <div className="-my-1 scale-90 origin-left">
+      <ThinkingBot />
+    </div>
+  );
+}
 const WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT = [
   '## Workflow 草案阶段硬约束',
   '当前处于创建工作流的 workflow 草案阶段。AI 只负责根据已确认的 SpecCoding/计划制品生成草案文本和机器可读 workflow_draft。',
@@ -265,67 +285,6 @@ type WorkflowCreationRecommendations = {
     strengths: string[];
     lastConfigFile?: string;
   }>;
-};
-
-type SpecCodingArtifactKey = 'requirements' | 'design' | 'tasks';
-
-type SpecCodingArtifactDrafts = Record<SpecCodingArtifactKey, string>;
-
-type PlanDraftResult = {
-  type: 'plan_draft';
-  summary?: string;
-  goals?: string[];
-  nonGoals?: string[];
-  constraints?: string[];
-  clarification?: {
-    summary?: string;
-    knownFacts?: string[];
-    missingFields?: string[];
-    questions?: string[];
-  };
-  artifacts?: {
-    requirements?: string;
-    design?: string;
-    tasks?: string;
-  };
-};
-
-type WorkflowDraftPreviewState = {
-  source: 'result-json' | 'yaml' | 'none';
-  filename?: string;
-  summary?: string;
-  yaml?: string;
-  config?: any | null;
-  parseError?: string;
-  validation?: any;
-};
-
-type ClarificationQuestionItem = {
-  id: string;
-  label: string;
-  question: string;
-  selectionMode?: 'single' | 'multiple';
-  options: Array<{
-    id: string;
-    label: string;
-    description?: string;
-    recommended?: boolean;
-  }>;
-  placeholder?: string;
-  required?: boolean;
-};
-
-type ClarificationAnswerValue = {
-  optionIds: string[];
-  note: string;
-};
-
-type ClarificationFormResult = {
-  type: 'clarification_form';
-  summary?: string;
-  knownFacts?: string[];
-  missingFields?: string[];
-  questions: ClarificationQuestionItem[];
 };
 
 function buildArtifactDrafts(specCoding: any): SpecCodingArtifactDrafts {
@@ -717,107 +676,6 @@ function computeWorkflowBindingChanges(baseConfig: any, currentConfig: any): Wor
       toAgent: current.agent,
     }];
   });
-}
-
-function extractStructuredResult<T>(markdown: string, expectedType: string): T | null {
-  const parsed = extractStructuredResultFromChannel<any>(markdown, (value: any): value is any => (
-    value?.type === expectedType ||
-    value?.kind === expectedType
-  ));
-  if (!parsed) return null;
-  return (parsed?.kind === expectedType ? parsed.payload : parsed) as T;
-}
-
-function extractPlanDraftResult(markdown: string): PlanDraftResult | null {
-  return extractStructuredResult<PlanDraftResult>(markdown, 'plan_draft');
-}
-
-function extractWorkflowDraftPreview(markdown: string, fallbackFilename?: string): WorkflowDraftPreviewState {
-  let parseError = '';
-  const parsed = extractStructuredResultFromChannel<any>(markdown, (value: any): value is any => (
-    value?.type === 'workflow_draft' ||
-    value?.kind === 'workflow_draft'
-  ));
-  if (parsed) {
-    const payload = parsed.kind === 'workflow_draft' ? parsed.payload : parsed;
-    if (!payload?.config || typeof payload.config !== 'object') {
-      return {
-        source: 'result-json',
-        filename: typeof payload?.filename === 'string' ? payload.filename : fallbackFilename,
-        summary: typeof payload?.summary === 'string' ? payload.summary : '',
-        config: null,
-        parseError: 'workflow_draft.config 缺失或不是对象',
-      };
-    }
-    return {
-      source: 'result-json',
-      filename: typeof payload.filename === 'string' ? payload.filename : fallbackFilename,
-      summary: typeof payload.summary === 'string' ? payload.summary : '',
-      config: payload.config,
-      yaml: stringifyYaml(payload.config),
-    };
-  }
-
-  const yamlBlocks = [...markdown.matchAll(/```ya?ml\s*([\s\S]*?)```/gi)];
-  for (let index = yamlBlocks.length - 1; index >= 0; index -= 1) {
-    const rawYaml = yamlBlocks[index]?.[1]?.trim() || '';
-    if (!rawYaml) continue;
-    try {
-      const config = parseYaml(rawYaml);
-      if (!config || typeof config !== 'object') {
-        parseError = 'YAML 解析成功，但结果不是对象';
-        continue;
-      }
-      return {
-        source: 'yaml',
-        filename: fallbackFilename,
-        config,
-        yaml: rawYaml,
-      };
-    } catch (error: any) {
-      parseError = `YAML 解析失败: ${error?.message || 'YAML 格式错误'}`;
-    }
-  }
-
-  return {
-    source: 'none',
-    filename: fallbackFilename,
-    config: null,
-    parseError: parseError || '未检测到可读取的 workflow_draft JSON 或 YAML 代码块',
-  };
-}
-
-function extractClarificationFormResult(markdown: string): ClarificationFormResult | null {
-  const parsed = extractStructuredResult<ClarificationFormResult>(markdown, 'clarification_form');
-  if (!parsed) return null;
-  return {
-    ...parsed,
-    questions: Array.isArray(parsed.questions)
-      ? parsed.questions
-        .filter((item) => item && typeof item.question === 'string')
-        .map((item, index) => ({
-          id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `question_${index + 1}`,
-          label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : `问题 ${index + 1}`,
-          question: item.question.trim(),
-          selectionMode: ((item as any).selectionMode === 'multiple' ? 'multiple' : 'single') as 'single' | 'multiple',
-          options: Array.isArray((item as any).options)
-            ? (item as any).options
-              .filter((option: any) => option && typeof option.label === 'string' && option.label.trim())
-              .map((option: any, optionIndex: number) => ({
-                id: typeof option.id === 'string' && option.id.trim() ? option.id.trim() : `option_${optionIndex + 1}`,
-                label: option.label.trim(),
-                description: typeof option.description === 'string' ? option.description.trim() : '',
-                recommended: option.recommended === true,
-              }))
-              .slice(0, 4)
-            : [],
-          placeholder: typeof item.placeholder === 'string' ? item.placeholder.trim() : '',
-          required: item.required !== false,
-        }))
-        .filter((item) => item.options.length > 0)
-        .slice(0, 6)
-      : [],
-  };
 }
 
 function getClarificationQuestionOptions(item: ClarificationQuestionItem): Array<{
@@ -4446,10 +4304,16 @@ ${confirmedSpecPrompt}
                             {cards.map((card, ci) => (
                               <UniversalCard key={ci} card={card} />
                             ))}
-                            <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-green-500" />
+                            <PlanningThinkingBot />
                           </div>
                         );
                       })()
+                    ) : null}
+
+                    {isGeneratingPlan && !currentStream ? (
+                      <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
+                        <PlanningThinkingBot />
+                      </div>
                     ) : null}
 
                     {!aiMessages.length && !currentThinking && !currentStream ? (
@@ -4591,10 +4455,16 @@ ${confirmedSpecPrompt}
                       {cards.map((card, ci) => (
                         <UniversalCard key={ci} card={card} />
                       ))}
-                      <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-green-500" />
+                      <PlanningThinkingBot />
                     </div>
                   );
                 })()
+              ) : null}
+
+              {isGeneratingPlan && !currentStream ? (
+                <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
+                  <PlanningThinkingBot />
+                </div>
               ) : null}
             </div>
           </div>
@@ -4729,7 +4599,7 @@ ${confirmedSpecPrompt}
                     {cards.map((card, ci) => (
                       <UniversalCard key={ci} card={card} />
                     ))}
-                    <span className="inline-block w-2 h-4 bg-green-500 animate-pulse ml-0.5" />
+                    <PlanningThinkingBot />
                   </div>
                 );
               })()
@@ -4738,9 +4608,8 @@ ${confirmedSpecPrompt}
             <WorkflowDraftPreviewCard preview={workflowDraftPreview} />
 
             {aiPhase === 'streaming' && !currentStream && !currentThinking && (
-              <div className="flex items-center gap-3 text-muted-foreground py-4">
-                <div className="animate-spin w-5 h-5 border-2 border-green-500 border-t-transparent rounded-full" />
-                <span className="text-sm">AI 正在根据计划制品生成工作流...</span>
+              <div className="bg-muted/50 rounded-lg p-4 border">
+                <PlanningThinkingBot />
               </div>
             )}
             </div>
@@ -5578,7 +5447,7 @@ ${confirmedSpecPrompt}
                     {isRevisingPlan ? (
                       <div className="space-y-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                         <div className="flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300">
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
                           AI 正在按修订说明重新生成正式计划制品
                         </div>
                         <div className="text-[11px] leading-5 text-amber-700/80 dark:text-amber-300/80">
@@ -5599,7 +5468,7 @@ ${confirmedSpecPrompt}
                                 {cards.map((card, ci) => (
                                   <UniversalCard key={ci} card={card} />
                                 ))}
-                                <span className="ml-0.5 inline-block h-4 w-2 animate-pulse bg-amber-500" />
+                                <PlanningThinkingBot />
                               </div>
                             );
                           })()

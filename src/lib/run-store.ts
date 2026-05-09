@@ -114,6 +114,15 @@ export async function listRunsByConfig(configFile: string): Promise<RunRecord[]>
   return all.filter((r) => r.configFile === configFile);
 }
 
+export async function deleteRunsByConfig(configFile: string): Promise<{ deletedCount: number; runIds: string[] }> {
+  const runs = await listRunsByConfig(configFile);
+  const runIds = runs.map((run) => run.id);
+  for (const runId of runIds) {
+    await deleteRun(runId);
+  }
+  return { deletedCount: runIds.length, runIds };
+}
+
 export async function deleteRun(id: string): Promise<void> {
   const runDir = resolve(RUNS_DIR, id);
   if (existsSync(runDir)) {

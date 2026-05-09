@@ -14,6 +14,7 @@
     "test:components": "vitest run tests/components --environment jsdom",
     "ace": "node ./bin/ace.js",
     "check:engines": "node ./scripts/check-engine-availability.mjs",
+    "check:engine-chat": "node ./scripts/check-engine-chat.cjs",
     "check:acp": "node ./scripts/check-acp-connectivity.mjs",
     "prepare": "node scripts/build-cli.js",
     "prepack": "npm run build && npm run prune:package-maps",

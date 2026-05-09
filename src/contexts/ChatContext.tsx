@@ -110,6 +110,7 @@ interface DashboardChatContextType {
   skillSettings: Record<string, boolean>;
   discoveredSkills: { name: string; label: string; description: string; source?: string; tags?: string[] }[];
   toggleSkill: (skill: string) => void;
+  setSkillsEnabled: (skills: Record<string, boolean>) => void;
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
@@ -133,7 +134,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   engine: '', effectiveEngine: '', setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
   undoActionById: async () => {}, retryAction: async () => {},
-  skillSettings: {}, discoveredSkills: [], toggleSkill: () => {},
+  skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
   appendVisibleSessionTag: async () => {},
@@ -309,6 +310,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const toggleSkill = useCallback((skill: string) => {
     setSkillSettings(prev => {
       const next = { ...prev, [skill]: !prev[skill] };
+      fetch('/api/chat/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: next }),
+      }).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const setSkillsEnabled = useCallback((skills: Record<string, boolean>) => {
+    setSkillSettings(prev => {
+      const next = { ...prev, ...skills };
       fetch('/api/chat/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1633,7 +1646,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       loading, streamingMessageId, model, setModel: handleSetModel,
       engine, effectiveEngine, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction,
-      skillSettings, discoveredSkills, toggleSkill,
+      skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
       appendVisibleSessionTag,

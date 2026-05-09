@@ -94,7 +94,7 @@ export default function SchedulesPage() {
   const loadJobs = useCallback(async () => {
     try {
       setLoading(true);
-      const [schedData, cfgData] = await Promise.all([scheduleApi.list(), configApi.listConfigs()]);
+      const [schedData, cfgData] = await Promise.all([scheduleApi.list(), configApi.listAllConfigs()]);
       setJobs(schedData.jobs || []);
       setConfigs((cfgData.configs || []).map((c: any) => ({ filename: c.filename, name: c.name })));
     } catch { toast('error', t('schedules.messages.loadFailed')); }

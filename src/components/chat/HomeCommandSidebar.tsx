@@ -386,7 +386,7 @@ export default function HomeCommandSidebar({
     try {
       setLoading(true);
       const [configData, agentData] = await Promise.all([
-        configApi.listConfigs(),
+        configApi.listAllConfigs(),
         agentApi.listAgents(),
       ]);
 

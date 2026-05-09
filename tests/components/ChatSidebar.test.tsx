@@ -8,12 +8,16 @@ const mockCreateSession = vi.fn(() => 'new-session-id');
 const mockDeleteSession = vi.fn();
 const mockRenameSession = vi.fn();
 const mockSetActiveSessionId = vi.fn();
+const mockToggleSkill = vi.fn();
+const mockSetSkillsEnabled = vi.fn();
 
 let mockSessions: any[] = [
   { id: 'sess-1', title: 'Session One', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 5 },
   { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
 ];
 let mockLoading = false;
+let mockSkillSettings: Record<string, boolean> = {};
+let mockDiscoveredSkills: any[] = [];
 
 vi.mock('@/contexts/ChatContext', () => ({
   useChat: () => ({
@@ -25,9 +29,10 @@ vi.mock('@/contexts/ChatContext', () => ({
     deleteSession: mockDeleteSession,
     renameSession: mockRenameSession,
     loading: mockLoading,
-    skillSettings: {},
-    discoveredSkills: [],
-    toggleSkill: vi.fn(),
+    skillSettings: mockSkillSettings,
+    discoveredSkills: mockDiscoveredSkills,
+    toggleSkill: mockToggleSkill,
+    setSkillsEnabled: mockSetSkillsEnabled,
   }),
 }));
 
@@ -65,6 +70,8 @@ describe('ChatSidebar', () => {
       { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
     ];
     mockLoading = false;
+    mockSkillSettings = {};
+    mockDiscoveredSkills = [];
   });
 
   test('renders session list', () => {
@@ -318,5 +325,39 @@ describe('ChatSidebar', () => {
     await user.click(screen.getByRole('button', { name: '删除' }));
 
     expect(mockDeleteSession).toHaveBeenCalledWith('sess-1');
+  });
+
+  test('skill manager can select all and clear selectable skills', async () => {
+    const user = userEvent.setup();
+    mockDiscoveredSkills = [
+      { name: 'aceharness-chat-card', label: 'Chat Card', description: '必选卡片' },
+      { name: 'aceharness-spec-coding', label: 'Spec Coding', description: '计划生成' },
+      { name: 'docx', label: 'DOCX', description: '文档处理', source: 'anthropics' },
+    ];
+    mockSkillSettings = {
+      'aceharness-chat-card': true,
+      'aceharness-spec-coding': false,
+      docx: true,
+    };
+
+    render(<ChatSidebar />);
+
+    await user.click(screen.getByRole('button', { name: /Skills/ }));
+    expect(screen.getByText('已启用 2 / 3 个技能')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: '全选' }));
+    expect(mockSetSkillsEnabled).toHaveBeenCalledWith({
+      'aceharness-spec-coding': true,
+      docx: true,
+      'aceharness-chat-card': true,
+    });
+
+    await user.click(screen.getByRole('button', { name: '全部取消' }));
+    expect(mockSetSkillsEnabled).toHaveBeenCalledWith({
+      'aceharness-spec-coding': false,
+      docx: false,
+      'aceharness-chat-card': true,
+    });
+    expect(mockToggleSkill).not.toHaveBeenCalled();
   });
 });

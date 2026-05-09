@@ -60,7 +60,7 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
   const loadJobs = useCallback(async () => {
     try {
       setLoading(true);
-      const [schedData, cfgData] = await Promise.all([scheduleApi.list(), configApi.listConfigs()]);
+      const [schedData, cfgData] = await Promise.all([scheduleApi.list(), configApi.listAllConfigs()]);
       let allJobs = schedData.jobs || [];
       if (configFile) allJobs = allJobs.filter(j => j.configFile === configFile);
       setJobs(allJobs);

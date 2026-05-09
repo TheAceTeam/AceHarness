@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -20,8 +20,7 @@ import {
 } from '@/components/ui/table';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { useTranslations } from '@/hooks/useTranslations';
-import { Search, Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
+import { Plus, LogIn, Edit, Trash2, ArrowLeft, ArrowRight, FileText, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -53,18 +52,37 @@ type WorkflowSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
 
 const VIEW_MODE_KEY = 'aceharness:workflows:view-mode';
+const DEFAULT_PAGE_SIZE = 20;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
+
+interface WorkflowPagination {
+  total: number;
+  totalPages: number;
+  page: number;
+  pageSize: number;
+  unfilteredTotal: number;
+}
 
 export default function WorkflowsPage() {
   const router = useRouter();
-  const { t } = useTranslations();
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
   const [workflows, setWorkflows] = useState<WorkflowConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedMode, setSelectedMode] = useState<string>('all');
   const [sortKey, setSortKey] = useState<WorkflowSortKey>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pagination, setPagination] = useState<WorkflowPagination>({
+    total: 0,
+    totalPages: 1,
+    page: 1,
+    pageSize: DEFAULT_PAGE_SIZE,
+    unfilteredTotal: 0,
+  });
   const [showNewModal, setShowNewModal] = useState(false);
   const [showAIGuide, setShowAIGuide] = useState(false);
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
@@ -81,8 +99,19 @@ export default function WorkflowsPage() {
       const saved = localStorage.getItem(VIEW_MODE_KEY);
       if (saved === 'gallery' || saved === 'table') setViewMode(saved);
     } catch {}
-    loadWorkflows();
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+      setPage(1);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedMode, sortKey, sortDirection, pageSize]);
 
   useEffect(() => {
     const updateFloatingState = () => {
@@ -112,18 +141,45 @@ export default function WorkflowsPage() {
     try { localStorage.setItem(VIEW_MODE_KEY, mode); } catch {}
   };
 
-  const loadWorkflows = async () => {
+  const loadWorkflows = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await configApi.listConfigs();
+      const data = await configApi.listConfigs({
+        page,
+        pageSize,
+        keyword: debouncedSearchQuery,
+        mode: selectedMode,
+        sortKey,
+        sortDirection,
+      });
       setWorkflows(data.configs || []);
+      if (data.pagination?.page && data.pagination.page !== page) {
+        setPage(data.pagination.page);
+      }
+      setPagination(data.pagination || {
+        total: data.configs?.length || 0,
+        totalPages: 1,
+        page,
+        pageSize,
+        unfilteredTotal: data.configs?.length || 0,
+      });
+      setSelectedWorkflows((prev) => {
+        if (prev.size === 0) return prev;
+        const visibleFiles = new Set((data.configs || []).map((workflow) => workflow.filename));
+        const next = new Set([...prev].filter((filename) => visibleFiles.has(filename)));
+        return next.size === prev.size ? prev : next;
+      });
     } catch (error) {
       console.error('Failed to load workflows:', error);
       toast('error', '无法加载工作流列表');
     } finally {
       setLoading(false);
     }
-  };
+  }, [debouncedSearchQuery, page, pageSize, selectedMode, sortDirection, sortKey, toast]);
+
+  useEffect(() => {
+    loadWorkflows();
+  }, [loadWorkflows]);
 
   const handleAICreate = () => {
     setShowAIGuide(true);
@@ -205,17 +261,13 @@ export default function WorkflowsPage() {
     }
   };
 
-  const getWorkflowCreatedAtTime = (value?: number | string) => {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const formatWorkflowCreatedAt = (value?: number | string) => {
+    let timestamp = 0;
+    if (typeof value === 'number') timestamp = Number.isFinite(value) ? value : 0;
     if (typeof value === 'string' && value.trim()) {
       const parsed = Date.parse(value);
-      return Number.isFinite(parsed) ? parsed : 0;
+      timestamp = Number.isFinite(parsed) ? parsed : 0;
     }
-    return 0;
-  };
-
-  const formatWorkflowCreatedAt = (value?: number | string) => {
-    const timestamp = getWorkflowCreatedAtTime(value);
     if (!timestamp) return '-';
     return new Date(timestamp).toLocaleString('zh-CN', {
       year: 'numeric',
@@ -242,30 +294,15 @@ export default function WorkflowsPage() {
       : <ArrowDown className="h-3.5 w-3.5 text-primary" />;
   };
 
-  const filteredWorkflows = workflows.filter((wf) => {
-    const matchesSearch =
-      wf.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      wf.filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      wf.description?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesMode = selectedMode === 'all' || wf.mode === selectedMode;
-    return matchesSearch && matchesMode;
-  });
-
-  const displayedWorkflows = useMemo(() => {
-    return [...filteredWorkflows].sort((a, b) => {
-      const direction = sortDirection === 'asc' ? 1 : -1;
-      if (sortKey === 'createdAt') {
-        const diff = getWorkflowCreatedAtTime(a.createdAt) - getWorkflowCreatedAtTime(b.createdAt);
-        if (diff !== 0) return diff * direction;
-        return a.name.localeCompare(b.name, 'zh-CN');
-      }
-      const diff = a.name.localeCompare(b.name, 'zh-CN');
-      if (diff !== 0) return diff * direction;
-      return a.filename.localeCompare(b.filename, 'zh-CN') * direction;
-    });
-  }, [filteredWorkflows, sortDirection, sortKey]);
+  const displayedWorkflows = workflows;
   const allDisplayedWorkflowsSelected = displayedWorkflows.length > 0
     && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
+  const totalLabel = useMemo(() => {
+    if (!pagination.total) return '暂无工作流';
+    const start = (pagination.page - 1) * pagination.pageSize + 1;
+    const end = Math.min(pagination.page * pagination.pageSize, pagination.total);
+    return `显示 ${start}-${end} / ${pagination.total} 个工作流`;
+  }, [pagination]);
 
   const modeLabel = (mode?: string) => mode === 'state-machine' ? '状态机' : '阶段模式';
   const modeBadgeClass = (mode?: string) =>
@@ -353,8 +390,20 @@ export default function WorkflowsPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    当前显示 {filteredWorkflows.length} / {workflows.length} 个工作流
+                    {totalLabel}
                   </span>
+                  <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                    <SelectTrigger className="h-9 w-[112px] bg-background">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAGE_SIZE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={String(option)}>
+                          {option} / 页
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   {/* View mode toggle */}
                   <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
                     <Button
@@ -398,16 +447,16 @@ export default function WorkflowsPage() {
           <div className="flex items-center justify-center py-20">
             <div className="text-muted-foreground">加载中...</div>
           </div>
-        ) : filteredWorkflows.length === 0 ? (
+        ) : displayedWorkflows.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <FileText className="w-12 h-12 text-muted-foreground/50 mb-4" />
             <h3 className="text-lg font-medium mb-2">
-              {workflows.length === 0 ? '还没有工作流' : '没有匹配的工作流'}
+              {pagination.unfilteredTotal === 0 ? '还没有工作流' : '没有匹配的工作流'}
             </h3>
             <p className="text-sm text-muted-foreground mb-4">
-              {workflows.length === 0 ? '创建你的第一个工作流配置' : '尝试调整搜索条件'}
+              {pagination.unfilteredTotal === 0 ? '创建你的第一个工作流配置' : '尝试调整搜索条件'}
             </p>
-            {workflows.length === 0 && (
+            {pagination.unfilteredTotal === 0 && (
               <div className="flex items-center gap-3">
                 <Button size="sm" variant="outline" onClick={handleAICreate}>
                   <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
@@ -527,12 +576,12 @@ export default function WorkflowsPage() {
         ) : (
           /* Gallery view */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredWorkflows.map((workflow, index) => (
+            {displayedWorkflows.map((workflow, index) => (
               <motion.div
                 key={workflow.filename}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.05 }}
+                transition={{ delay: Math.min(index, 12) * 0.03 }}
                 className={cn(
                   'relative group rounded-xl border bg-card p-5 hover:shadow-md transition-all',
                   selectedWorkflows.has(workflow.filename)
@@ -589,6 +638,35 @@ export default function WorkflowsPage() {
             ))}
           </div>
         )}
+
+        {!loading && pagination.total > 0 ? (
+          <section className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-muted-foreground">{totalLabel}</div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page <= 1}
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+              >
+                <ArrowLeft className="mr-1 h-4 w-4" />
+                上一页
+              </Button>
+              <Badge variant="secondary">
+                第 {pagination.page} / {pagination.totalPages} 页
+              </Badge>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pagination.page >= pagination.totalPages}
+                onClick={() => setPage((current) => current + 1)}
+              >
+                下一页
+                <ArrowRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          </section>
+        ) : null}
       </div>
 
       {showNewModal && (

@@ -4,6 +4,14 @@ import { existsSync } from 'fs';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
 import { getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted } from '@/lib/runtime-configs';
+import { deleteRunsByConfig } from '@/lib/run-store';
+import { workflowRegistry } from '@/lib/workflow-registry';
+
+async function stopRunningWorkflow(filename: string): Promise<void> {
+  const manager = workflowRegistry.getRunningManager(filename);
+  if (!manager) return;
+  await manager.stop();
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +26,8 @@ export async function POST(request: NextRequest) {
     const configsDir = await getRuntimeConfigsDirPath();
     const errors: string[] = [];
     let deletedCount = 0;
+    let deletedRunsCount = 0;
+    const deletedRunIds: string[] = [];
 
     for (const raw of filenames) {
       const filename = String(raw).replace(/\\/g, '/').replace(/^\/+/, '');
@@ -33,19 +43,29 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
+        await stopRunningWorkflow(filename);
         const filepath = await getRuntimeWorkflowConfigPath(filename);
         if (existsSync(filepath)) {
           await unlink(filepath);
         }
         await markConfigDeleted(configsDir, filename);
         await deleteConfigMeta(filename, 'workflow');
+        const runsCleanup = await deleteRunsByConfig(filename);
+        deletedRunsCount += runsCleanup.deletedCount;
+        deletedRunIds.push(...runsCleanup.runIds);
         deletedCount++;
       } catch (err: any) {
         errors.push(`${filename}: ${err.message}`);
       }
     }
 
-    return NextResponse.json({ success: true, deletedCount, errors: errors.length > 0 ? errors : undefined });
+    return NextResponse.json({
+      success: true,
+      deletedCount,
+      deletedRunsCount,
+      deletedRunIds,
+      errors: errors.length > 0 ? errors : undefined,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: '批量删除失败', message: error.message }, { status: 500 });
   }

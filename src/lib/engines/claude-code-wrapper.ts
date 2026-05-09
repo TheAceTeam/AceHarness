@@ -7,13 +7,17 @@
  */
 
 import { EventEmitter } from 'events';
-import { existsSync } from 'fs';
+import { accessSync, constants, existsSync } from 'fs';
+import { createRequire } from 'module';
 import { loadEnvVars, buildEnvObject } from '../env-manager';
 import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { repairWindowsMojibake } from '../mojibake-repair';
 import { readTextFileBestEffort } from '../text-decoding';
+import { findCommand, getCommonCliSearchPaths } from '../command-exists';
+
+const requireFromHere = createRequire(__filename);
 
 // ============================================================================
 // Helpers
@@ -382,6 +386,52 @@ function buildCleanEnv(): Record<string, string | undefined> {
   env.IS_SANDBOX = '1';
   return env;
 }
+
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasRuntimeGlibc(): boolean {
+  const header = process.report?.getReport?.().header as { glibcVersionRuntime?: string } | undefined;
+  return Boolean(header?.glibcVersionRuntime);
+}
+
+function resolveClaudeNativeBinary(): string | undefined {
+  const envPath = process.env.ACE_CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE;
+  if (envPath && isExecutable(envPath)) return envPath;
+
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const packageNames = (() => {
+    if (process.platform === 'linux') {
+      const arch = process.arch;
+      const glibc = hasRuntimeGlibc();
+      const primary = glibc
+        ? [`@anthropic-ai/claude-agent-sdk-linux-${arch}`]
+        : [`@anthropic-ai/claude-agent-sdk-linux-${arch}-musl`];
+      const fallback = glibc
+        ? [`@anthropic-ai/claude-agent-sdk-linux-${arch}-musl`]
+        : [`@anthropic-ai/claude-agent-sdk-linux-${arch}`];
+      return [...primary, ...fallback];
+    }
+    return [`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`];
+  })();
+
+  for (const packageName of packageNames) {
+    try {
+      const candidate = requireFromHere.resolve(`${packageName}/claude${suffix}`);
+      if (isExecutable(candidate)) return candidate;
+    } catch {
+      // Try next platform package.
+    }
+  }
+
+  return findCommand('claude', getCommonCliSearchPaths()) || undefined;
+}
 function formatElapsedSec(usageMs?: number, wallMs?: number): { text: string; sec: number } {
   const ms = usageMs ?? wallMs;
   if (ms == null || ms < 0) return { text: '?', sec: 0 };
@@ -432,7 +482,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
   async isAvailable(): Promise<boolean> {
     try {
       await import('@anthropic-ai/claude-agent-sdk');
-      return true;
+      return Boolean(resolveClaudeNativeBinary());
     } catch { return false; }
   }
 
@@ -524,6 +574,11 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         abortController: this._abortController,
         maxTurns: 200,
       };
+
+      const pathToClaudeCodeExecutable = resolveClaudeNativeBinary();
+      if (pathToClaudeCodeExecutable) {
+        sdkOptions.pathToClaudeCodeExecutable = pathToClaudeCodeExecutable;
+      }
 
       if (options.sessionId) {
         (sdkOptions as any).resume = options.sessionId;

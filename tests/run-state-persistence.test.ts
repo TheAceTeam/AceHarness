@@ -92,6 +92,31 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('deleteRunsByConfig removes only runs for the deleted workflow config', async () => {
+    await withIsolatedAceHome(async () => {
+      vi.resetModules();
+      const [{ saveRunState, loadRunState }, { deleteRunsByConfig }] = await Promise.all([
+        import('@/lib/run-state-persistence'),
+        import('@/lib/run-store'),
+      ]);
+
+      const targetRunA = minimalRunState({ runId: 'run-target-a', configFile: 'target.yaml' });
+      const targetRunB = minimalRunState({ runId: 'run-target-b', configFile: 'target.yaml' });
+      const otherRun = minimalRunState({ runId: 'run-other', configFile: 'other.yaml' });
+      await saveRunState(targetRunA);
+      await saveRunState(targetRunB);
+      await saveRunState(otherRun);
+
+      const result = await deleteRunsByConfig('target.yaml');
+
+      expect(result.deletedCount).toBe(2);
+      expect(result.runIds.sort()).toEqual(['run-target-a', 'run-target-b']);
+      expect(await loadRunState('run-target-a')).toBeNull();
+      expect(await loadRunState('run-target-b')).toBeNull();
+      expect(await loadRunState('run-other')).not.toBeNull();
+    });
+  });
+
   test('saveRunState creates directory and file on first save', async () => {
     await withIsolatedAceHome(async () => {
       const { saveRunState, loadRunState } = await loadPersistence();

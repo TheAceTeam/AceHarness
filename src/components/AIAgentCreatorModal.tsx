@@ -112,7 +112,7 @@ export default function AIAgentCreatorModal({
   useEffect(() => {
     if (open) {
       setDraftInput(normalizeAgentDraft(initialDraft || undefined));
-      configApi.listConfigs()
+      configApi.listAllConfigs()
         .then((result) => setWorkflows((result.configs || []) as WorkflowSummary[]))
         .catch(() => setWorkflows([]));
       return;

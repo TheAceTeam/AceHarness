@@ -100,7 +100,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const kiroEngine = new KiroCliEngineWrapper();
       const kiroAvailable = await kiroEngine.isAvailable();
       if (!kiroAvailable) {
-        console.warn('[EngineFactory] Kiro CLI is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] Kiro CLI is not available');
         return null;
       }
       return kiroEngine;
@@ -117,7 +117,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const codexEngine = new CodexEngineWrapper();
       const codexAvailable = await codexEngine.isAvailable();
       if (!codexAvailable) {
-        console.warn('[EngineFactory] Codex is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] Codex is not available');
         return null;
       }
       return codexEngine;
@@ -126,7 +126,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const cursorEngine = new CursorEngineWrapper();
       const cursorAvailable = await cursorEngine.isAvailable();
       if (!cursorAvailable) {
-        console.warn('[EngineFactory] Cursor CLI is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] Cursor CLI is not available');
         return null;
       }
       return cursorEngine;
@@ -134,7 +134,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'cangjie-magic':
       const cjEngine = new CangjieMagicEngineWrapper();
       if (!(await cjEngine.isAvailable())) {
-        console.warn('[EngineFactory] CangjieMagic is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] CangjieMagic is not available');
         return null;
       }
       return cjEngine;
@@ -142,7 +142,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'opencode':
       const ocEngine = new OpenCodeEngineWrapper();
       if (!(await ocEngine.isAvailable())) {
-        console.warn('[EngineFactory] OpenCode is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] OpenCode is not available');
         return null;
       }
       return ocEngine;
@@ -150,7 +150,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'nga':
       const ngaEngine = new NgaEngineWrapper();
       if (!(await ngaEngine.isAvailable())) {
-        console.warn('[EngineFactory] NGA (nga) is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] NGA (nga) is not available');
         return null;
       }
       return ngaEngine;
@@ -158,7 +158,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'codegenie':
       const codegenieEngine = new CodegenieEngineWrapper();
       if (!(await codegenieEngine.isAvailable())) {
-        console.warn('[EngineFactory] CodeGenie is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] CodeGenie is not available');
         return null;
       }
       return codegenieEngine;
@@ -166,7 +166,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'trae-cli':
       const traeEngine = new TraeCliEngineWrapper();
       if (!(await traeEngine.isAvailable())) {
-        console.warn('[EngineFactory] Trae CLI is not available, falling back to Claude Code');
+        console.warn('[EngineFactory] Trae CLI is not available');
         return null;
       }
       return traeEngine;

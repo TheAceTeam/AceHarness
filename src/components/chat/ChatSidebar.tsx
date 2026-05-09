@@ -59,6 +59,7 @@ export default function ChatSidebar() {
     skillSettings,
     discoveredSkills,
     toggleSkill,
+    setSkillsEnabled,
   } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
   const [sessionView, setSessionView] = useState<'chat' | 'runs'>('chat');
@@ -372,6 +373,7 @@ export default function ChatSidebar() {
           skills={discoveredSkills}
           skillSettings={skillSettings}
           toggleSkill={toggleSkill}
+          setSkillsEnabled={setSkillsEnabled}
           onClose={() => setSkillModalOpen(false)}
         />
       )}
@@ -388,11 +390,13 @@ function SkillManagerModal({
   skills,
   skillSettings,
   toggleSkill,
+  setSkillsEnabled,
   onClose,
 }: {
   skills: SkillItem[];
   skillSettings: Record<string, boolean>;
   toggleSkill: (name: string) => void;
+  setSkillsEnabled: (skills: Record<string, boolean>) => void;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState('');
@@ -417,6 +421,17 @@ function SkillManagerModal({
 
   const cangjieCount = skills.filter(s => (s.source || 'cangjie') === 'cangjie').length;
   const anthropicsCount = skills.filter(s => (s.source || 'cangjie') === 'anthropics').length;
+  const enabledCount = skills.filter(s => !!skillSettings[s.name]).length;
+  const selectableSkills = skills.filter(s => !LOCKED_SKILLS.includes(s.name));
+  const selectedFilteredCount = filtered.filter(s => !!skillSettings[s.name]).length;
+
+  const setAllSelectableSkills = (enabled: boolean) => {
+    const next = Object.fromEntries(selectableSkills.map(skill => [skill.name, enabled]));
+    for (const skillName of LOCKED_SKILLS) {
+      if (skills.some(skill => skill.name === skillName)) next[skillName] = true;
+    }
+    setSkillsEnabled(next);
+  };
 
   const tabs = [
     { key: 'all' as const, label: '全部', count: skills.length },
@@ -435,7 +450,7 @@ function SkillManagerModal({
           <div>
             <h3 className="text-base font-semibold">Skills 管理</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              已启用 {skills.filter(s => !!skillSettings[s.name]).length} / {skills.length} 个技能
+              已启用 {enabledCount} / {skills.length} 个技能
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -468,6 +483,33 @@ function SkillManagerModal({
               onChange={e => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs"
             />
+          </div>
+          <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
+            <span className="text-[11px] text-muted-foreground">
+              当前列表 {selectedFilteredCount} / {filtered.length} 已启用
+            </span>
+            <div className="flex gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setAllSelectableSkills(true)}
+                disabled={selectableSkills.length === 0}
+              >
+                全选
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setAllSelectableSkills(false)}
+                disabled={selectableSkills.length === 0}
+              >
+                全部取消
+              </Button>
+            </div>
           </div>
         </div>
 
