@@ -397,8 +397,8 @@ function isExecutable(filePath: string): boolean {
 }
 
 function hasRuntimeGlibc(): boolean {
-  const header = process.report?.getReport?.().header as { glibcVersionRuntime?: string } | undefined;
-  return Boolean(header?.glibcVersionRuntime);
+  const report = process.report?.getReport?.() as unknown as { header?: { glibcVersionRuntime?: string } } | undefined;
+  return Boolean(report?.header?.glibcVersionRuntime);
 }
 
 function resolveClaudeNativeBinary(): string | undefined {
