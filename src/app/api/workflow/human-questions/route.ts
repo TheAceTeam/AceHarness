@@ -5,6 +5,8 @@ import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow-regi
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
 import { loadRunState, type HumanQuestion } from '@/lib/run-state-persistence';
 
+const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
+
 async function listPersistedQuestions(filters: {
   status?: string | null;
   runId?: string | null;
@@ -21,7 +23,12 @@ async function listPersistedQuestions(filters: {
     const state = await loadRunState(entry.name);
     if (!state?.humanQuestions?.length) continue;
     if (filters.configFile && state.configFile !== filters.configFile) continue;
-    questions.push(...state.humanQuestions.map((question) => ({
+    const hideInactiveUnanswered = filters.status === 'unanswered' && INACTIVE_RUN_STATUSES.has(state.status);
+    const questions = hideInactiveUnanswered
+      ? state.humanQuestions.filter((question) => question.status !== 'unanswered')
+      : state.humanQuestions;
+    if (!questions.length) continue;
+    questions.push(...questions.map((question) => ({
       ...question,
       workflowFrontendSessionId: question.workflowFrontendSessionId ?? state.workflowFrontendSessionId ?? null,
     })));

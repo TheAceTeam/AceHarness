@@ -135,6 +135,19 @@ export interface CollaborationWerewolfVote {
   round: number;
 }
 
+export interface CollaborationWerewolfMemoryEntry {
+  id: string;
+  createdAt: number;
+  round: number;
+  phase: CollaborationWerewolfPhase;
+  action?: CollaborationWerewolfAction;
+  title: string;
+  summary: string;
+  visibility: 'public' | 'god' | 'private' | 'werewolves';
+  audience?: string[];
+  actor?: string;
+}
+
 export interface CollaborationWerewolfState {
   enabled: boolean;
   phase: CollaborationWerewolfPhase;
@@ -173,6 +186,7 @@ export interface CollaborationWerewolfState {
     seerTarget?: string;
     deaths?: string[];
   };
+  memories?: CollaborationWerewolfMemoryEntry[];
 }
 
 export interface CollaborationRoomState {
@@ -186,6 +200,7 @@ export interface CollaborationRoomState {
   werewolfView?: {
     mode: 'god' | 'night';
     viewer?: string;
+    viewerRole?: CollaborationWerewolfPlayer['role'];
   };
 }
 

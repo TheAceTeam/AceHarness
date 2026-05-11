@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow-registry';
 import { loadRunState, type HumanQuestionAnswer } from '@/lib/run-state-persistence';
 
+const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ questionId: string }> }
@@ -26,6 +28,17 @@ export async function POST(
     }
     if (persisted && configFile && persisted.configFile !== configFile) {
       return NextResponse.json({ error: '运行记录与配置文件不匹配' }, { status: 400 });
+    }
+    if (persisted && INACTIVE_RUN_STATUSES.has(persisted.status)) {
+      const staleQuestion = persisted.humanQuestions?.find((question) => question.id === questionId) || null;
+      return NextResponse.json({
+        question: staleQuestion ? {
+          ...staleQuestion,
+          status: staleQuestion.status === 'unanswered' ? 'dismissed' : staleQuestion.status,
+        } : null,
+        stale: true,
+        message: `该人工审查问题来自已停止的工作流（${persisted.status}），已视为失效。`,
+      });
     }
 
     const manager = runId

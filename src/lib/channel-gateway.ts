@@ -38,6 +38,27 @@ function textReplies(replies: string[], kind: ChannelGatewayReplyMessage['kind']
   return replies.map((text) => ({ kind, text }));
 }
 
+function buildWechatReplyGuardrail(): string {
+  return [
+    '[微信渠道回复要求]',
+    '- 你的回复将直接发送到微信。',
+    '- 只允许输出纯文本。',
+    '- 不要输出 Markdown。',
+    '- 不要输出代码块，不要使用 ``` 包裹内容。',
+    '- 不要输出 HTML 标签。',
+    '- 不要输出 <result></result> 或任何 XML / HTML 风格标签。',
+    '- 不要使用表格、标题、列表符号、引用块等富文本格式。',
+    '- 如果需要给出代码、命令或路径，也要改写成普通纯文本描述。',
+  ].join('\n');
+}
+
+function applyWechatReplyGuardrail(integration: ChannelIntegration, text: string): string {
+  if (integration.provider !== 'wechat-bridge') return text;
+  const trimmed = text.trim();
+  if (!trimmed) return buildWechatReplyGuardrail();
+  return `${trimmed}\n\n${buildWechatReplyGuardrail()}`;
+}
+
 function extractSharedSecret(body: any, headerSecret?: string | null): string {
   return String(headerSecret || body?.secret || body?.token || body?.sharedSecret || '').trim();
 }
@@ -262,6 +283,7 @@ function buildWorkflowContext(binding: ChannelSessionBinding, status: any) {
 
 async function handleWorkflowMessage(binding: ChannelSessionBinding, integration: ChannelIntegration, message: NormalizedChannelMessage): Promise<ChannelGatewayReply> {
   const text = message.text.trim();
+  const guardedText = applyWechatReplyGuardrail(integration, text);
   const lower = text.toLowerCase();
   const status = await loadWorkflowStatus(binding);
   if (!status) {
@@ -346,7 +368,7 @@ async function handleWorkflowMessage(binding: ChannelSessionBinding, integration
         updatedAt: Date.now(),
       },
       workflowContext: buildWorkflowContext(binding, status),
-      hostMessage: text,
+      hostMessage: guardedText,
       summarizer: binding.roundtableSummarizer,
       workingDirectory: user.personalDir,
     });
@@ -377,7 +399,7 @@ async function handleWorkflowMessage(binding: ChannelSessionBinding, integration
     return { ok: false, binding, replies: ['当前 workflow 未在运行，无法处理实时消息。'] };
   }
   if (binding.workflowMode === 'feedback-only' || !lower.startsWith('/')) {
-    manager.injectLiveFeedback(text);
+    manager.injectLiveFeedback(guardedText);
     return { ok: true, binding, replies: ['反馈已注入当前运行。'], replyMessages: textReplies(['反馈已注入当前运行。']) };
   }
   return { ok: false, binding, replies: ['无法识别的 workflow 命令。可用命令：/status /approve /iterate /questions /answer /roundtable start'] };
@@ -415,7 +437,7 @@ async function handleRoundtableMessage(binding: ChannelSessionBinding, integrati
       personalDir: user.personalDir,
     },
     roundtableId: roundtable.id,
-    hostMessage: message.text,
+    hostMessage: applyWechatReplyGuardrail(integration, message.text),
     runBinding: status ? {
       configFile: binding.configFile || status.currentConfigFile || '',
       runId: binding.runId || status.runId || '',
@@ -455,7 +477,7 @@ async function handleAgentChatMessage(binding: ChannelSessionBinding, integratio
   const { executeAgentChat } = await import('@/lib/agent-chat-service');
   const result = await executeAgentChat({
     agentName: binding.agentName || 'default-supervisor',
-    message: message.text,
+    message: applyWechatReplyGuardrail(integration, message.text),
     mode: status ? 'workflow-chat' : 'standalone-chat',
     sessionId: binding.agentSessionId || null,
     workingDirectory: user.personalDir,

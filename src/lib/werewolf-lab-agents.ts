@@ -30,7 +30,7 @@ export const WEREWOLF_ROLE_PROMPTS: Record<CollaborationWerewolfPlayer['role'], 
 };
 
 export const TEMP_WEREWOLF_SUPERVISOR = {
-  name: '临时主持人',
+  name: 'AI 上帝',
   persona: '中立主持，负责维护回合、复述规则和结算票流。',
 };
 

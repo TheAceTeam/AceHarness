@@ -112,6 +112,7 @@ interface ChatMessageProps {
   werewolfView?: {
     mode: 'god' | 'night';
     viewer?: string;
+    viewerRole?: 'werewolf' | 'seer' | 'witch' | 'hunter' | 'idiot' | 'guard' | 'villager';
   };
   currentUser?: {
     username?: string;
@@ -288,7 +289,10 @@ function canSeeWerewolfCard(card: any, view?: ChatMessageProps['werewolfView']):
   if (card.visibility === 'god') return false;
   if (!view?.viewer) return false;
   if (card.visibility === 'private') return Array.isArray(card.audience) && card.audience.includes(view.viewer);
-  if (card.visibility === 'werewolves') return Array.isArray(card.audience) && card.audience.includes(view.viewer);
+  if (card.visibility === 'werewolves') {
+    if (view.viewerRole === 'werewolf') return true;
+    return Array.isArray(card.audience) && card.audience.includes(view.viewer);
+  }
   return true;
 }
 
@@ -325,6 +329,7 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
         : 'text-muted-foreground';
   const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
   const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
+  const isPending = message.content?.includes('正在推进') || message.content?.includes('处理中');
   return (
     <div className="group mb-4 flex items-start gap-2">
       {spriteStyle ? (
@@ -345,6 +350,12 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
             {displayActionLabel ? (
               <span className="rounded-full border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {displayActionLabel}
+              </span>
+            ) : null}
+            {isPending ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+                推进中
               </span>
             ) : null}
             {visible && card.visibility && card.visibility !== 'public' ? (

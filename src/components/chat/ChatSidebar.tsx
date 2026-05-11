@@ -208,11 +208,16 @@ function getWorkflowSessionBucket(input: {
   relatedBinding?: SidebarSession['workflowBinding'];
 }): WorkflowBucketKey {
   const { session, activeSessionId, pendingQuestionCount, runStatusById, relatedBinding = session.workflowBinding } = input;
-  if (pendingQuestionCount > 0) return 'active';
-  if (session.id === activeSessionId && relatedBinding) return 'active';
-  if (session.creationSession && session.creationSession.status !== 'archived') return 'active';
   const runId = relatedBinding?.runId;
-  if (runId && isActiveRunStatus(runStatusById[runId])) return 'active';
+  const runStatus = runId ? runStatusById[runId] : '';
+  if (runId) {
+    if (isActiveRunStatus(runStatus)) {
+      if (pendingQuestionCount > 0) return 'active';
+      if (session.id === activeSessionId && relatedBinding) return 'active';
+      return 'active';
+    }
+    return 'archived';
+  }
   return 'archived';
 }
 
