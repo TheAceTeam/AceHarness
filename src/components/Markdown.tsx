@@ -4,6 +4,7 @@ import { Children, isValidElement, useMemo, useState, useCallback, useEffect, us
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 import { useToast } from '@/components/ui/toast';
@@ -227,7 +228,7 @@ function renderMarkdownFragment(content: string) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, rehypePreserveUnknownHtmlAsText]}
+      rehypePlugins={[rehypeRaw, rehypeSanitize, rehypePreserveUnknownHtmlAsText]}
       components={components}
     >
       {preprocessMarkdown(content)}

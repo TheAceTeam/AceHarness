@@ -126,6 +126,14 @@ const engines: Engine[] = [
     features: ['ACP 协议', '智能代码编辑', '代码执行', 'MCP 工具支持', '插件系统'],
     endpoints: ['anthropic', 'openai'],
   },
+  {
+    id: 'magic-cli',
+    name: 'Magic CLI',
+    description: '仓颉 Magic CLI，支持 ACP 协议，[repo url](https://gitcode.com/Cangjie-SIG/magic-cli)',
+    status: 'available',
+    features: ['ACP 协议', 'JSON-RPC 2.0', '仓颉原生', '流式输出'],
+    endpoints: ['anthropic', 'openai'],
+  },
 ];
 
 const CLAUDE_ALIAS_LABELS: Record<string, string> = {
@@ -582,7 +590,7 @@ export default function EnginesPage() {
                     placeholder="选择默认模型"
                     triggerClassName="h-9 text-sm"
                   />
-                  {!['cangjie-magic', 'codex'].includes(engine.id) && (
+                  {!['cangjie-magic', 'codex', 'magic-cli'].includes(engine.id) && (
                     <>
                       <Button
                         variant="outline"

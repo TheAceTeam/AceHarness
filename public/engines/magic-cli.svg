@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <radialGradient id="ball" cx="40%" cy="35%" r="50%">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="60%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#4c1d95"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#c49464"/>
+      <stop offset="100%" stop-color="#8b5e3c"/>
+    </linearGradient>
+  </defs>
+  <!-- outer glow -->
+  <circle cx="32" cy="30" r="28" fill="url(#glow)"/>
+  <!-- wooden pedestal bottom base (wide flat) -->
+  <ellipse cx="32" cy="55" rx="16" ry="3" fill="#6b3a1f"/>
+  <!-- wooden pedestal column (short wide) -->
+  <path d="M20 51 L20 54 Q20 56 24 56 L40 56 Q44 56 44 54 L44 51 Z" fill="url(#wood)"/>
+  <!-- wooden pedestal top platform (wide flat) -->
+  <ellipse cx="32" cy="51" rx="14" ry="3" fill="#c49464"/>
+  <!-- wood grain lines -->
+  <line x1="22" y1="53" x2="42" y2="53" stroke="#8b5e3c" stroke-width="0.4" opacity="0.5"/>
+  <line x1="21" y1="55" x2="43" y2="55" stroke="#8b5e3c" stroke-width="0.4" opacity="0.5"/>
+  <!-- main sphere -->
+  <circle cx="32" cy="30" r="18" fill="url(#ball)"/>
+  <!-- highlight -->
+  <ellipse cx="25" cy="22" rx="6" ry="4" fill="white" opacity="0.25" transform="rotate(-30 25 22)"/>
+  <!-- small stars/sparkles -->
+  <circle cx="18" cy="16" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="46" cy="14" r="1" fill="white" opacity="0.6"/>
+  <circle cx="47" cy="42" r="1.2" fill="white" opacity="0.5"/>
+  <circle cx="15" cy="38" r="0.8" fill="white" opacity="0.7"/>
+</svg>

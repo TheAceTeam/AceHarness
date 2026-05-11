@@ -45,6 +45,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ models: [], message: `${engineType} does not support ACP model discovery` });
   }
 
+  // magic-cli: models come from config YAML, not ACP discovery, due to magic-cli can't support model
+  // listing via ACP protocol currently.
+  if (engineType === 'magic-cli') {
+    const { getModelOptions } = await import('@/lib/models');
+    const allModels = await getModelOptions();
+    const models = allModels
+      .filter(m => !m.engines || m.engines.length === 0 || m.engines.includes('magic-cli'))
+      .map(m => ({ modelId: m.value, name: m.label }));
+    return NextResponse.json({ engine: engineType, models });
+  }
+
   const commandMap: Record<string, string> = {
     'opencode': 'opencode',
     // Prefer ngagent when available; it's commonly the intended ACP stdio entrypoint.

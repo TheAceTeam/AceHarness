@@ -32,6 +32,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected seenToolIds = new Set<string>();
   protected streaming = false;
   protected collectedOutput = '';
+  protected skipRuntimeModelSwitch = false;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
@@ -68,8 +69,9 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-      if (options.model) {
+      if (options.model && !this.skipRuntimeModelSwitch) {
         try {
+          // magic-cli doesn't support runtime model switching via ACP, so skip this step for it.
           await engine.setModel(options.model);
         } catch (modelErr: any) {
           // Emit the error to the stream so the user sees available models in the UI

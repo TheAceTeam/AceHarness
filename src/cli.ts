@@ -19,7 +19,7 @@ import {
 process.chdir(getRepoRoot());
 
 type Locale = 'zh' | 'en';
-type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli';
+type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli' | 'magic-cli';
 
 interface ConfiguredEngine {
   engine?: EngineType;
@@ -121,6 +121,7 @@ const ENGINE_META: Array<{ id: EngineType; name: string }> = [
   { id: 'cursor', name: 'Cursor CLI' },
   { id: 'cangjie-magic', name: 'CangjieMagic' },
   { id: 'trae-cli', name: 'Trae CLI' },
+  { id: 'magic-cli', name: 'Magic CLI' },
 ];
 
 const CLI_MESSAGES: Record<Locale, CliMessages> = {
@@ -411,7 +412,7 @@ async function detectEngines() {
       engine.id === 'claude-code' ? await moduleExists('@anthropic-ai/claude-agent-sdk')
         : engine.id === 'codex' ? (await moduleExists('@openai/codex-sdk')) || commandExists('codex')
           : engine.id === 'cangjie-magic' ? isCangjieMagicAvailable()
-            : commandExists(engine.id === 'cursor' ? 'agent' : engine.id),
+            : commandExists(engine.id === 'cursor' ? 'agent' : engine.id === 'magic-cli' ? 'magic-cli.sh' : engine.id),
   })));
 
   return availability;

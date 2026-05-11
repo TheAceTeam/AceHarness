@@ -257,6 +257,10 @@ export class ACPEngine extends EventEmitter {
       case 'trae-cli':
         args.push('acp', 'serve');
         break;
+      case 'magic-cli':
+        args.push('acp');
+        if (this.config.model) args.push('--model', this.config.model);
+        break;
       default:
         throw new Error(`Unknown engine type: ${this.config.engineType}`);
     }

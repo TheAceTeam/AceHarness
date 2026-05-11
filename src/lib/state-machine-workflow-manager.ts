@@ -1777,7 +1777,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private async initializeEngine(workflowEngine?: string): Promise<void> {
     try {
       const requestedEngine = workflowEngine?.trim();
-      const supportedEngines: EngineType[] = ['claude-code', 'kiro-cli', 'codex', 'cursor', 'cangjie-magic', 'opencode', 'nga', 'codegenie', 'trae-cli'];
+      const supportedEngines: EngineType[] = ['claude-code', 'kiro-cli', 'codex', 'cursor', 'cangjie-magic', 'opencode', 'nga', 'codegenie', 'trae-cli', 'magic-cli', 'magic-cli'];
       const isSupportedEngine = (value: string): value is EngineType => supportedEngines.includes(value as EngineType);
 
       if (requestedEngine) {

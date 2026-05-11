@@ -18,3 +18,4 @@ export * from './codex-wrapper';
 export * from './cursor-wrapper';
 export * from './claude-code-wrapper';
 export * from './engine-config';
+export * from './magic-cli-wrapper';
