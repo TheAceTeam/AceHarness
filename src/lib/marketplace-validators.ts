@@ -10,6 +10,9 @@ export function validateSearchRequest(request: any): request is SearchRequest {
   if (request.keyword !== undefined && typeof request.keyword !== 'string') {
     return false;
   }
+  if (request.category !== undefined && typeof request.category !== 'string') {
+    return false;
+  }
   return true;
 }
 

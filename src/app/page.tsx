@@ -142,6 +142,7 @@ function ChatPageContent() {
     confirmAction, rejectAction, undoActionById, retryAction,
     skillSettings, setSessionWorkbenchState,
     appendSessionMessage,
+    updateSessionMessage,
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
@@ -949,7 +950,8 @@ function ChatPageContent() {
 
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
     streamingMessageId,
-  }), [messages, streamingMessageId]);
+    forceFullWindow: Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled),
+  }), [messages, streamingMessageId, activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled]);
 
   const renderedMessages = useMemo(() => {
     const hiddenCount = Math.max(0, messages.length - recentWindowSize);
@@ -1282,6 +1284,7 @@ function ChatPageContent() {
                     sessionWorkbenchState={activeSession?.sessionWorkbenchState}
                     setSessionWorkbenchState={setSessionWorkbenchState}
                     appendSessionMessage={appendSessionMessage}
+                    updateSessionMessage={updateSessionMessage}
                     sidebarHint={latestSidebarHint}
                     activeTab={homeSidebarTab}
                     onTabChange={handleHomeSidebarTabChange}

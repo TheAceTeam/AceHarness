@@ -279,6 +279,10 @@ function getWerewolfCard(message: ChatMessageProps['message']) {
   return (message.cards || []).find((card) => card?.type === 'werewolf_speech') || null;
 }
 
+function getWerewolfExtraCards(message: ChatMessageProps['message']) {
+  return (message.cards || []).filter((card) => card?.type !== 'werewolf_speech');
+}
+
 function getWerewolfInitial(name: string): string {
   return name.replace(/\s+/g, '').slice(0, 1) || '?';
 }
@@ -525,7 +529,19 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   }
 
   if (werewolfCard) {
-    return <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} />;
+    const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
+    return (
+      <div className="mb-4">
+        <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} />
+        {visibleExtraCards.length ? (
+          <div className="ml-10 max-w-[85%] space-y-2">
+            {visibleExtraCards.map((card, index) => (
+              <UniversalCard key={index} card={card} onAction={onAction} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   // Assistant message

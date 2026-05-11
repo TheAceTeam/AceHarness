@@ -6,6 +6,7 @@ import { getConfiguredEngine, getOrCreateEngine, type EngineType } from '@/lib/e
 import { resolveAgentSelection } from '@/lib/agent-engine-selection';
 import { getEngineConfigPath } from '@/lib/app-paths';
 import type { RoleConfig } from '@/lib/schemas';
+import type { Engine } from '@/lib/engines/engine-interface';
 import {
   appendSpecCodingRevision,
 } from '@/lib/spec-coding-store';
@@ -63,6 +64,77 @@ export interface ExecuteAgentChatResult {
     target: 'run';
   } | null;
   reusePolicy: string;
+}
+
+export interface PreparedAgentChat {
+  roleConfig: RoleConfig;
+  mode: ChatMode;
+  resumeSessionId: string;
+  workingDirectory: string;
+  workflowContext: Record<string, any> | null;
+  engine: Engine;
+  engineType: EngineType;
+  model: string;
+  prompt: string;
+  sessionReuseKey: string;
+}
+
+export async function finalizeAgentChatExecution(input: {
+  prepared: PreparedAgentChat;
+  userMessage: string;
+  rawOutput: string;
+  success: boolean;
+  error?: string | null;
+  sessionId?: string | null;
+}): Promise<ExecuteAgentChatResult> {
+  const { prepared } = input;
+  const finalSessionId = input.sessionId || prepared.resumeSessionId || null;
+  const specCodingRevisionCommand = prepared.roleConfig.roleType === 'supervisor' && prepared.mode === 'workflow-chat'
+    ? extractSpecCodingRevisionCommand(input.rawOutput || '')
+    : null;
+  const specCodingRevision = specCodingRevisionCommand && specCodingRevisionCommand.apply !== false && prepared.workflowContext
+    ? await applySupervisorSpecCodingRevision({
+        workflowContext: prepared.workflowContext,
+        supervisorAgent: prepared.roleConfig.name,
+        command: specCodingRevisionCommand,
+      })
+    : null;
+  const cleanedOutput = specCodingRevisionCommand
+    ? stripSpecCodingRevisionCommand(input.rawOutput || '')
+    : (input.rawOutput || '');
+
+  if (finalSessionId) {
+    await appendMemoryEntries([
+      {
+        scope: 'chat',
+        key: `${prepared.roleConfig.name}:${finalSessionId}`,
+        kind: 'session',
+        title: `${prepared.roleConfig.name} ${prepared.mode}`,
+        content: `用户: ${input.userMessage}\n助手: ${cleanedOutput.slice(0, 1600)}`,
+        source: prepared.mode,
+        runId: typeof prepared.workflowContext?.runId === 'string' ? prepared.workflowContext.runId : undefined,
+        configFile: typeof prepared.workflowContext?.configFile === 'string' ? prepared.workflowContext.configFile : undefined,
+        agent: prepared.roleConfig.name,
+        tags: [prepared.mode],
+      },
+    ]).catch(() => {});
+  }
+
+  return {
+    ok: input.success || Boolean(cleanedOutput),
+    output: cleanedOutput || '',
+    sessionId: finalSessionId,
+    mode: prepared.mode,
+    agent: prepared.roleConfig.name,
+    engine: prepared.engineType,
+    model: prepared.model,
+    isError: !input.success,
+    error: input.error || null,
+    specCodingRevision,
+    reusePolicy: prepared.mode === 'workflow-chat'
+      ? 'workflow-chat 优先复用 run 绑定会话；standalone-chat 不自动继承 workflow 记忆。'
+      : 'standalone-chat 仅复用该角色的独立会话与长期角色记忆。',
+  };
 }
 
 function readGlobalEngineSelection(): { engine?: string; defaultModel?: string } {
@@ -253,6 +325,43 @@ function formatLatestSupervisorReview(raw: unknown): string {
 
 export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<ExecuteAgentChatResult> {
   const message = String(input.message || '').trim();
+  const prepared = await prepareAgentChat(input);
+
+  const result = await prepared.engine.execute({
+    agent: prepared.roleConfig.name,
+    step: prepared.mode,
+    prompt: prepared.prompt,
+    systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
+    model: prepared.model,
+    workingDirectory: prepared.workingDirectory,
+    allowedTools: prepared.roleConfig.allowedTools,
+    sessionId: prepared.resumeSessionId || undefined,
+    appendSystemPrompt: Boolean(prepared.resumeSessionId),
+    mcpServers: prepared.roleConfig.mcpServers,
+  });
+
+  if (!result.success && !result.output && result.error) {
+    return finalizeAgentChatExecution({
+      prepared,
+      userMessage: message,
+      rawOutput: '',
+      success: false,
+      error: result.error || 'Agent 对话失败',
+      sessionId: result.sessionId || prepared.resumeSessionId || null,
+    });
+  }
+  return finalizeAgentChatExecution({
+    prepared,
+    userMessage: message,
+    rawOutput: result.output || '',
+    success: result.success,
+    error: result.error || null,
+    sessionId: result.sessionId || prepared.resumeSessionId || null,
+  });
+}
+
+export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<PreparedAgentChat> {
+  const message = String(input.message || '').trim();
   const mode = (input.mode === 'workflow-chat' ? 'workflow-chat' : 'standalone-chat') as ChatMode;
   const resumeSessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
   const workingDirectory = typeof input.workingDirectory === 'string' && input.workingDirectory.trim()
@@ -282,10 +391,8 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
     throw new Error('Agent 未配置可用模型');
   }
 
-  const engine = await getOrCreateEngine(
-    effectiveEngine,
-    `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`
-  );
+  const sessionReuseKey = `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`;
+  const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey);
   if (!engine) {
     const temporaryLabel = input.temporaryRoleConfig ? '临时 Agent' : '业务 Agent';
     throw new Error(`Agent 对话引擎不可用：${effectiveEngine}${effectiveModel ? ` / ${effectiveModel}` : ''}（${temporaryLabel}：${roleConfig.name}）`);
@@ -336,82 +443,16 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
     message,
   ].filter(Boolean).join('\n\n');
 
-  const result = await engine.execute({
-    agent: roleConfig.name,
-    step: mode,
-    prompt,
-    systemPrompt: roleConfig.systemPrompt || `你是 ${roleConfig.name}。`,
-    model: effectiveModel,
-    workingDirectory,
-    allowedTools: roleConfig.allowedTools,
-    sessionId: resumeSessionId || undefined,
-    appendSystemPrompt: Boolean(resumeSessionId),
-    mcpServers: roleConfig.mcpServers,
-  });
-
-  if (!result.success && !result.output && result.error) {
-    return {
-      ok: false,
-      output: '',
-      sessionId: result.sessionId || resumeSessionId || null,
-      mode,
-      agent: roleConfig.name,
-      engine: effectiveEngine,
-      model: effectiveModel,
-      isError: true,
-      error: result.error || 'Agent 对话失败',
-      specCodingRevision: null,
-      reusePolicy: mode === 'workflow-chat'
-        ? 'workflow-chat 优先复用 run 绑定会话；standalone-chat 不自动继承 workflow 记忆。'
-        : 'standalone-chat 仅复用该角色的独立会话与长期角色记忆。',
-    };
-  }
-
-  const finalSessionId = result.sessionId || resumeSessionId || null;
-  const specCodingRevisionCommand = roleConfig.roleType === 'supervisor' && mode === 'workflow-chat'
-    ? extractSpecCodingRevisionCommand(result.output || '')
-    : null;
-  const specCodingRevision = specCodingRevisionCommand && specCodingRevisionCommand.apply !== false && workflowContext
-    ? await applySupervisorSpecCodingRevision({
-        workflowContext,
-        supervisorAgent: roleConfig.name,
-        command: specCodingRevisionCommand,
-      })
-    : null;
-  const cleanedOutput = specCodingRevisionCommand
-    ? stripSpecCodingRevisionCommand(result.output || '')
-    : (result.output || '');
-
-  if (finalSessionId) {
-    await appendMemoryEntries([
-      {
-        scope: 'chat',
-        key: `${roleConfig.name}:${finalSessionId}`,
-        kind: 'session',
-        title: `${roleConfig.name} ${mode}`,
-        content: `用户: ${message}\n助手: ${cleanedOutput.slice(0, 1600)}`,
-        source: mode,
-        runId: typeof workflowContext?.runId === 'string' ? workflowContext.runId : undefined,
-        configFile: typeof workflowContext?.configFile === 'string' ? workflowContext.configFile : undefined,
-        agent: roleConfig.name,
-        tags: [mode],
-      },
-    ]).catch(() => {});
-  }
-
   return {
-    ok: true,
-    output: cleanedOutput || '',
-    sessionId: finalSessionId,
+    roleConfig,
     mode,
-    agent: roleConfig.name,
-    engine: effectiveEngine,
+    resumeSessionId,
+    workingDirectory,
+    workflowContext,
+    engine,
+    engineType: effectiveEngine,
     model: effectiveModel,
-    isError: !result.success,
-    error: result.error || null,
-    specCodingRevision,
-    reusePolicy: mode === 'workflow-chat'
-      ? 'workflow-chat 优先复用 run 绑定会话；standalone-chat 不自动继承 workflow 记忆。'
-      : 'standalone-chat 仅复用该角色的独立会话与长期角色记忆。',
+    prompt,
+    sessionReuseKey,
   };
 }

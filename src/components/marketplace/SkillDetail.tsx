@@ -29,11 +29,11 @@ export function SkillDetail({ skill, onClose, onInstall }: SkillDetailProps) {
           </Button>
         </div>
 
-        {skill.organization && (
-          <div className="mb-4">
+        <div className="mb-4 flex flex-wrap gap-2">
+          {skill.organization ? (
             <Badge variant="secondary">{skill.organization}</Badge>
-          </div>
-        )}
+          ) : null}
+        </div>
 
         <div className="mb-6">
           <h3 className="font-semibold mb-2">描述</h3>
@@ -122,10 +122,11 @@ export function SkillDetail({ skill, onClose, onInstall }: SkillDetailProps) {
 
         <div className="flex gap-2">
           <Button
-            onClick={() => onInstall(skill.name)}
+            onClick={() => onInstall(installName)}
             className="flex-1"
+            disabled={Boolean(skill.installed)}
           >
-            安装
+            {skill.installed ? '已安装' : '安装'}
           </Button>
           <Button
             onClick={onClose}

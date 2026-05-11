@@ -72,6 +72,7 @@ export interface CollaborationRoomMessage {
   speakerName: string;
   content: string;
   createdAt: number;
+  cards?: any[];
   status?: 'pending' | 'done' | 'error';
   error?: string | null;
   engine?: string;

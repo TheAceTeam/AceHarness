@@ -859,7 +859,34 @@ export const agentApi = {
     return response.json();
   },
 
-    async chat(name: string, input: {
+  async streamChat(name: string, input: {
+    message: string;
+    mode?: 'standalone-chat' | 'workflow-chat';
+    sessionId?: string | null;
+    workingDirectory?: string;
+    workflowContext?: Record<string, any>;
+    temporaryRoleConfig?: Record<string, any>;
+  }): Promise<{
+    streamId: string;
+    events: EventSource;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.streamId) {
+      throw new Error(data?.error || 'Agent 流式对话失败');
+    }
+    const events = new EventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
+    return {
+      streamId: data.streamId,
+      events,
+    };
+  },
+
+  async chat(name: string, input: {
       message: string;
       mode?: 'standalone-chat' | 'workflow-chat';
       sessionId?: string | null;
@@ -867,22 +894,22 @@ export const agentApi = {
       workflowContext?: Record<string, any>;
       temporaryRoleConfig?: Record<string, any>;
     }): Promise<{
-    ok: boolean;
-    output: string;
-    sessionId?: string | null;
-    mode: 'standalone-chat' | 'workflow-chat';
-    agent: string;
-    engine?: string;
-    model?: string;
-    isError?: boolean;
-    error?: string | null;
-    specCodingRevision?: {
-      applied: boolean;
-      summary: string;
-      affectedArtifacts: string[];
-      impact: string[];
-      target: 'creation' | 'run' | 'both';
-    } | null;
+      ok: boolean;
+      output: string;
+      sessionId?: string | null;
+      mode: 'standalone-chat' | 'workflow-chat';
+      agent: string;
+      engine?: string;
+      model?: string;
+      isError?: boolean;
+      error?: string | null;
+      specCodingRevision?: {
+        applied: boolean;
+        summary: string;
+        affectedArtifacts: string[];
+        impact: string[];
+        target: 'creation' | 'run' | 'both';
+      } | null;
   }> {
     const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/chat`, {
       method: 'POST',

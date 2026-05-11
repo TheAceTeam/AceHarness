@@ -6,6 +6,7 @@ import { agentApi, configApi, workflowApi } from '@/lib/api';
 import type {
   CollaborationRoomMessage,
   CollaborationRoomState,
+  CollaborationWerewolfAction,
   CollaborationWerewolfMemoryEntry,
   CollaborationWerewolfPhase,
   CollaborationWerewolfPlayer,
@@ -309,7 +310,11 @@ function formatWerewolfRoster(state?: CollaborationWerewolfState | null, reveal 
 function formatWerewolfPersonaRoster(state?: CollaborationWerewolfState | null): string {
   if (!state?.players?.length) return '暂无玩家';
   return state.players
-    .map((player) => `- ${player.agentName}：${player.persona}`)
+    .map((player) => {
+      const temporaryAgent = getTemporaryWerewolfAgent(player.agentName);
+      const speakingHint = temporaryAgent ? `；说话感觉：${temporaryAgent.speechStyle}` : '';
+      return `- ${player.agentName}：${player.persona}${speakingHint}`;
+    })
     .join('\n');
 }
 
@@ -457,6 +462,19 @@ function parseVoteTarget(output: string, candidates: string[]): { target: string
   return mentioned ? { target: mentioned, reason } : null;
 }
 
+function parseWerewolfSheriffWithdrawal(output: string): boolean {
+  const normalized = output.replace(/\s+/g, '');
+  return [
+    '退水',
+    '退警',
+    '不上警',
+    '不拿警徽',
+    '放弃警长',
+    '我退',
+    '我不竞选警长',
+  ].some((keyword) => normalized.includes(keyword));
+}
+
 function buildWerewolfVoteLines(votes: CollaborationWerewolfVote[], sheriff?: string, badgeDestroyed?: boolean): string[] {
   return votes.map((vote) => `${vote.voter} -> ${vote.target}${sheriff === vote.voter && !badgeDestroyed ? '（警长票）' : ''}${vote.reason ? `：${vote.reason}` : ''}`);
 }
@@ -470,6 +488,47 @@ function buildWerewolfTallySummary(votes: CollaborationWerewolfVote[], sheriff?:
   const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
   if (!sorted.length) return '暂无有效票型。';
   return sorted.map(([target, weight]) => `${target} ${Number.isInteger(weight) ? weight.toFixed(0) : weight.toFixed(1)} 票`).join('；');
+}
+
+function buildWerewolfTallyChartCard(input: {
+  title: string;
+  subtitle?: string;
+  votes: CollaborationWerewolfVote[];
+  sheriff?: string;
+  badgeDestroyed?: boolean;
+  visibility?: 'public' | 'god' | 'private' | 'werewolves';
+  audience?: string[];
+}): any[] {
+  if (!input.votes.length) return [];
+  const tally = new Map<string, number>();
+  input.votes.forEach((vote) => {
+    const weight = input.sheriff === vote.voter && !input.badgeDestroyed ? 1.5 : 1;
+    tally.set(vote.target, (tally.get(vote.target) || 0) + weight);
+  });
+  const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  if (!sorted.length) return [];
+  const colors = ['rose', 'sky', 'emerald', 'amber', 'violet', 'cyan', 'lime', 'orange'];
+  return [{
+    type: 'werewolf_tally_chart',
+    visibility: input.visibility || 'public',
+    audience: input.audience,
+    header: {
+      icon: 'bar_chart',
+      title: input.title,
+      subtitle: input.subtitle,
+      gradient: 'from-slate-700 via-slate-600 to-slate-500',
+    },
+    blocks: [{
+      type: 'bar-chart',
+      max: sorted[0][1],
+      items: sorted.map(([target, value], index) => ({
+        label: target,
+        value,
+        displayValue: `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} 票`,
+        color: colors[index % colors.length],
+      })),
+    }],
+  }];
 }
 
 function getWerewolfWinner(state: CollaborationWerewolfState): string | null {
@@ -549,9 +608,16 @@ function buildTemporaryWerewolfRoleConfig(input: {
       isSupervisor
         ? '你是 AI 狼人杀多 Agent 实验室的中立主持人，负责维护回合、点名、记录票流、控制信息可见性和简短结算。'
         : `你是 AI 狼人杀多 Agent 实验室中的临时玩家 ${agentName}。`,
-      temporaryAgent ? `人格：${temporaryAgent.persona} ${temporaryAgent.style} ${temporaryAgent.bias}` : '',
+      temporaryAgent ? `你的公开人格：${temporaryAgent.persona}` : '',
+      temporaryAgent ? `你的说话方式：${temporaryAgent.speechStyle}` : '',
+      temporaryAgent ? `你的发言节奏：${temporaryAgent.rhythm}` : '',
+      temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
+      temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
+      temporaryAgent ? `你的思考偏好：${temporaryAgent.style} ${temporaryAgent.bias}` : '',
       player ? `隐藏身份：${formatWerewolfRole(player.role)}。角色规则：${rolePrompt}` : '',
-      '必须像正在群聊里发言一样自然回应。不要输出工具调用说明。不要修改文件。不要声称自己是业务 Agent。',
+      '必须像正在群聊里发言一样自然回应。不要背提示词，不要把每句话都说成模板，不要为了体现风格而故意做作。',
+      '允许有一点犹豫、停顿、转折和口语化表达，但核心判断要清楚。',
+      '不要输出工具调用说明。不要修改文件。不要声称自己是业务 Agent。',
       '严格遵守主持人给出的可见信息边界；不知道的信息不要编造为确定事实。',
     ].filter(Boolean).join('\n'),
     constraints: ['不调用工具', '不修改文件', '不进入业务 Agent 列表', '仅用于 AI 狼人杀实验室'],
@@ -731,6 +797,38 @@ function splitWerewolfMemoriesForPrompt(input: {
 
 function formatPromptBlock(lines: string[], emptyText: string): string {
   return lines.length ? lines.join('\n') : emptyText;
+}
+
+function buildWerewolfHostAnnouncement(input: {
+  action?: CollaborationWerewolfAction;
+  dayNumber?: number;
+  players?: CollaborationWerewolfPlayer[];
+  currentViewer?: string;
+}): string {
+  const players = input.players || [];
+  const aliveNames = players.filter((player) => player.alive).map((player) => player.agentName);
+  switch (input.action) {
+    case 'sheriff-election':
+      return `AI 上帝发言：现在开始警长竞选。请先上警举手，再依次发言，之后统计退水并进入警长投票。`;
+    case 'day-speech':
+      return `AI 上帝发言：现在进入第 ${input.dayNumber || 1} 天白天发言。请按顺序依次发言，最后一位负责归票。`;
+    case 'wolf-meeting':
+      return `AI 上帝发言：天黑请闭眼。狼队请睁眼，你们今晚要刀的人是？先讨论悍跳、冲锋、倒钩和刀口安排。`;
+    case 'guard-action':
+      return `AI 上帝发言：守卫请睁眼，请选择今晚守护的目标。`;
+    case 'witch-action':
+      return `AI 上帝发言：女巫请睁眼，今晚中刀的玩家已经确定，请决定是否使用解药或毒药。`;
+    case 'seer-check':
+      return `AI 上帝发言：预言家请睁眼，请选择你今晚要查验的玩家。`;
+    case 'vote':
+      return `AI 上帝发言：现在开始放逐投票。请所有存活玩家依次投票，警长票按 1.5 票结算。`;
+    case 'settlement':
+      return `AI 上帝发言：现在开始结算，请大家关注票型、出局结果与后续发言顺序。`;
+    default:
+      return aliveNames.length
+        ? `AI 上帝发言：当前场上存活玩家有 ${aliveNames.join('、')}，请按流程继续。`
+        : 'AI 上帝发言：请按当前流程继续。';
+  }
 }
 
 function buildWorkflowPromptContext(input: {
@@ -965,6 +1063,19 @@ interface HomeCommandSidebarProps {
       id?: string;
     }
   ) => Promise<void>;
+  updateSessionMessage?: (
+    sessionId: string,
+    messageId: string,
+    patch: {
+      role?: 'user' | 'assistant' | 'error';
+      content?: string;
+      rawContent?: string;
+      cards?: any[];
+      engine?: string;
+      model?: string;
+      timestamp?: number;
+    }
+  ) => Promise<void>;
   sidebarHint: HomeSidebarHint | null;
   activeTab: SidebarTab;
   availableTabs: SidebarTab[];
@@ -999,6 +1110,7 @@ export default function HomeCommandSidebar({
   sessionWorkbenchState,
   setSessionWorkbenchState,
   appendSessionMessage,
+  updateSessionMessage,
   sidebarHint,
   activeTab,
   availableTabs,
@@ -1053,6 +1165,7 @@ export default function HomeCommandSidebar({
   const [recentlyEliminatedSeatIds, setRecentlyEliminatedSeatIds] = useState<string[]>([]);
   const [phaseTransitionBanner, setPhaseTransitionBanner] = useState<{ key: string; label: string } | null>(null);
   const collaborationPendingMessageIdRef = useRef<string | null>(null);
+  const collaborationStreamingMessageIdRef = useRef<string | null>(null);
   const previousAliveSeatIdsRef = useRef<string[]>([]);
   const previousPhaseRef = useRef<string>('');
   const lastStatusSignatureRef = useRef('');
@@ -1171,8 +1284,26 @@ export default function HomeCommandSidebar({
   const latestCollaborationSpeaker = collaborationMessages.length
     ? [...collaborationMessages].reverse().find((message) => message.speakerType !== 'human' && message.speakerType !== 'system')?.speakerName || ''
     : '';
+  const visibleWerewolfHighlightedSeatId = useMemo(() => {
+    if (!isWerewolfLab) return '';
+    if (!werewolfState) return latestCollaborationSpeaker || '';
+    if (canSeeWerewolfActionMeta({
+      state: werewolfState,
+      viewMode: werewolfViewMode,
+      viewer: effectiveWerewolfNightViewer,
+    })) {
+      return werewolfState.currentActor || latestCollaborationSpeaker || '';
+    }
+    return '';
+  }, [
+    effectiveWerewolfNightViewer,
+    isWerewolfLab,
+    latestCollaborationSpeaker,
+    werewolfState,
+    werewolfViewMode,
+  ]);
   const highlightedSeatId = isWerewolfLab
-    ? (werewolfState?.currentActor || latestCollaborationSpeaker || '')
+    ? visibleWerewolfHighlightedSeatId
     : (latestCollaborationSpeaker || effectiveCollaborationSupervisor);
   const werewolfHistoryPromptBlock = useMemo(() => {
     if (!werewolfHistoryEntries.length) return '暂无历史对局记忆。';
@@ -1403,6 +1534,54 @@ export default function HomeCommandSidebar({
     effectiveCollaborationSupervisor,
     ensureSessionId,
     isWerewolfLab,
+  ]);
+
+  const appendStreamingCollaborationMessage = useCallback((message: CollaborationRoomMessage, state?: CollaborationWerewolfState | null) => {
+    const sessionId = activeSessionId || ensureSessionId();
+    if (!sessionId || !appendSessionMessage) return;
+    collaborationStreamingMessageIdRef.current = `chat-${message.id}`;
+    const role = message.speakerType === 'human' ? 'user' : message.status === 'error' ? 'error' : 'assistant';
+    void appendSessionMessage(sessionId, {
+      id: `chat-${message.id}`,
+      role,
+      content: message.content,
+      rawContent: message.content,
+      timestamp: message.createdAt,
+      engine: message.engine,
+      model: message.model,
+      cards: isWerewolfLab
+        ? [createWerewolfChatCard(message, state?.players || werewolfState?.players), ...((message.cards || []).filter(Boolean))]
+        : message.cards,
+    });
+  }, [
+    activeSessionId,
+    appendSessionMessage,
+    ensureSessionId,
+    isWerewolfLab,
+    werewolfState?.players,
+  ]);
+
+  const updateStreamingCollaborationMessage = useCallback((message: CollaborationRoomMessage, state?: CollaborationWerewolfState | null) => {
+    const sessionId = activeSessionId || ensureSessionId();
+    const messageId = `chat-${message.id}`;
+    if (!sessionId || !updateSessionMessage) return;
+    void updateSessionMessage(sessionId, messageId, {
+      role: message.status === 'error' ? 'error' : 'assistant',
+      content: message.content,
+      rawContent: message.content,
+      engine: message.engine,
+      model: message.model,
+      timestamp: message.createdAt,
+      cards: isWerewolfLab
+        ? [createWerewolfChatCard(message, state?.players || werewolfState?.players), ...((message.cards || []).filter(Boolean))]
+        : message.cards,
+    });
+  }, [
+    activeSessionId,
+    ensureSessionId,
+    isWerewolfLab,
+    updateSessionMessage,
+    werewolfState?.players,
   ]);
 
   useEffect(() => {
@@ -1896,7 +2075,24 @@ export default function HomeCommandSidebar({
     }
     const isHost = agentName === TEMP_WEREWOLF_SUPERVISOR.name;
     const existingSession = collaborationAgentSessionsRef.current[agentName];
-    const result = await agentApi.chat(agentName, {
+    const speakerType: CollaborationRoomMessage['speakerType'] = isHost ? 'supervisor' : 'agent';
+    const baseMessage = createCollaborationMessage({
+      roundId,
+      speakerType,
+      speakerName: agentName,
+      content: '',
+      status: 'pending',
+      werewolf: messagePatch?.werewolf,
+    });
+    updateCollaborationRoom((room) => ({
+      ...room,
+      messages: [
+        ...(room.messages || []),
+        baseMessage,
+      ],
+    }));
+    appendStreamingCollaborationMessage(baseMessage, werewolfState);
+    const stream = await agentApi.streamChat(agentName, {
       message,
       mode: 'standalone-chat',
       sessionId: existingSession || undefined,
@@ -1917,45 +2113,104 @@ export default function HomeCommandSidebar({
         model,
       }),
     });
-    const content = result.output || result.error || '无输出';
-    if (result.sessionId) {
-      collaborationAgentSessionsRef.current = {
-        ...collaborationAgentSessionsRef.current,
-        [agentName]: result.sessionId,
+    return await new Promise<string>((resolve, reject) => {
+      let content = '';
+      stream.events.addEventListener('delta', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        content += String(data?.content || '');
+        const nextMessage = {
+          ...baseMessage,
+          content,
+          status: 'pending' as const,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          werewolf: room.werewolf ? {
+            ...room.werewolf,
+            currentActor: agentName,
+          } : room.werewolf,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? nextMessage : message),
+        }));
+        updateStreamingCollaborationMessage(nextMessage, werewolfState ? { ...werewolfState, currentActor: agentName } : werewolfState);
+      }) as EventListener);
+      stream.events.addEventListener('done', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        if (data?.sessionId) {
+          collaborationAgentSessionsRef.current = {
+            ...collaborationAgentSessionsRef.current,
+            [agentName]: data.sessionId,
+          };
+        }
+        const finalContent = data?.specCodingRevision?.applied
+          ? `${data.output || content || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
+          : (data?.output || content || data?.error || '无输出');
+        const finalMessage = {
+          ...baseMessage,
+          content: finalContent,
+          status: data?.isError ? 'error' as const : 'done' as const,
+          error: data?.error || null,
+          engine: data?.engine,
+          model: data?.model,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          agentSessions: {
+            ...(room.agentSessions || {}),
+            ...(data?.sessionId ? { [agentName]: data.sessionId } : {}),
+          },
+          werewolf: room.werewolf ? {
+            ...room.werewolf,
+            currentActor: agentName,
+          } : room.werewolf,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState ? { ...werewolfState, currentActor: agentName } : werewolfState);
+        stream.events.close();
+        resolve(finalContent);
+      }) as EventListener);
+      stream.events.addEventListener('failed', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        const errorText = data?.message || 'Agent 对话失败';
+        const finalMessage = {
+          ...baseMessage,
+          content: content || errorText,
+          status: 'error' as const,
+          error: errorText,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState);
+        stream.events.close();
+        reject(new Error(errorText));
+      }) as EventListener);
+      stream.events.onerror = () => {
+        const errorText = 'Agent 流式连接中断';
+        const finalMessage = {
+          ...baseMessage,
+          content: content || errorText,
+          status: 'error' as const,
+          error: errorText,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState);
+        stream.events.close();
+        reject(new Error(errorText));
       };
-    }
-    const collaborationMessage = createCollaborationMessage({
-      roundId,
-      speakerType: isHost ? 'supervisor' : 'agent',
-      speakerName: agentName,
-      content,
-      status: result.isError ? 'error' : 'done',
-      error: result.error || null,
-      engine: result.engine,
-      model: result.model,
-      werewolf: messagePatch?.werewolf,
     });
-    updateCollaborationRoom((room) => ({
-      ...room,
-      agentSessions: {
-        ...(room.agentSessions || {}),
-        ...(result.sessionId ? { [agentName]: result.sessionId } : {}),
-      },
-      messages: [
-        ...(room.messages || []),
-        collaborationMessage,
-      ],
-    }));
-    appendCollaborationMessageToChat(collaborationMessage, werewolfState);
-    return content;
   }, [
-    appendCollaborationMessageToChat,
+    appendStreamingCollaborationMessage,
     collaborationRoom?.topic,
     collaborationTopic,
     effectiveCollaborationSupervisor,
     engine,
     model,
     updateCollaborationRoom,
+    updateStreamingCollaborationMessage,
     werewolfState,
     workflowDraft.workingDirectory,
   ]);
@@ -1971,50 +2226,113 @@ export default function HomeCommandSidebar({
     }
     const existingSession = collaborationAgentSessionsRef.current[agentName]
       || (agentName === boundCommander ? binding?.supervisorSessionId || undefined : binding?.attachedAgentSessions?.[agentName]);
-    const result = await agentApi.chat(agentName, {
+    const speakerType: CollaborationRoomMessage['speakerType'] = agentName === (boundCommander || 'default-supervisor') ? 'supervisor' : 'agent';
+    const baseMessage = createCollaborationMessage({
+      roundId,
+      speakerType,
+      speakerName: agentName,
+      content: '',
+      status: 'pending',
+      werewolf: messagePatch?.werewolf,
+    });
+    updateCollaborationRoom((room) => ({
+      ...room,
+      messages: [
+        ...(room.messages || []),
+        baseMessage,
+      ],
+    }));
+    appendStreamingCollaborationMessage(baseMessage, werewolfState);
+    const stream = await agentApi.streamChat(agentName, {
       message,
       mode: 'workflow-chat',
       sessionId: existingSession || undefined,
       workingDirectory: workflowDraft.workingDirectory || undefined,
       workflowContext: buildCollaborationWorkflowContext(agentName),
     });
-    const speakerType = agentName === (boundCommander || 'default-supervisor') ? 'supervisor' : 'agent';
-    const content = result.specCodingRevision?.applied
-      ? `${result.output || result.error || '无输出'}\n\n---\n已刷新 Spec：${result.specCodingRevision.summary}`
-      : (result.output || result.error || '无输出');
-    if (result.sessionId) {
-      collaborationAgentSessionsRef.current = {
-        ...collaborationAgentSessionsRef.current,
-        [agentName]: result.sessionId,
+    return await new Promise<string>((resolve, reject) => {
+      let content = '';
+      stream.events.addEventListener('delta', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        content += String(data?.content || '');
+        const nextMessage = {
+          ...baseMessage,
+          content,
+          status: 'pending' as const,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? nextMessage : message),
+        }));
+        updateStreamingCollaborationMessage(nextMessage, werewolfState);
+      }) as EventListener);
+      stream.events.addEventListener('done', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        if (data?.sessionId) {
+          collaborationAgentSessionsRef.current = {
+            ...collaborationAgentSessionsRef.current,
+            [agentName]: data.sessionId,
+          };
+        }
+        const finalContent = data?.specCodingRevision?.applied
+          ? `${data.output || content || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
+          : (data?.output || content || data?.error || '无输出');
+        const finalMessage = {
+          ...baseMessage,
+          content: finalContent,
+          status: data?.isError ? 'error' as const : 'done' as const,
+          error: data?.error || null,
+          engine: data?.engine,
+          model: data?.model,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          agentSessions: {
+            ...(room.agentSessions || {}),
+            ...(data?.sessionId ? { [agentName]: data.sessionId } : {}),
+          },
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState);
+        stream.events.close();
+        resolve(finalContent);
+      }) as EventListener);
+      stream.events.addEventListener('failed', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        const errorText = data?.message || 'Agent 对话失败';
+        const finalMessage = {
+          ...baseMessage,
+          content: content || errorText,
+          status: 'error' as const,
+          error: errorText,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState);
+        stream.events.close();
+        reject(new Error(errorText));
+      }) as EventListener);
+      stream.events.onerror = () => {
+        const errorText = 'Agent 流式连接中断';
+        const finalMessage = {
+          ...baseMessage,
+          content: content || errorText,
+          status: 'error' as const,
+          error: errorText,
+        };
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: (room.messages || []).map((message) => message.id === baseMessage.id ? finalMessage : message),
+        }));
+        updateStreamingCollaborationMessage(finalMessage, werewolfState);
+        stream.events.close();
+        reject(new Error(errorText));
       };
-    }
-
-    const collaborationMessage = createCollaborationMessage({
-      roundId,
-      speakerType,
-      speakerName: agentName,
-      content,
-      status: result.isError ? 'error' : 'done',
-      error: result.error || null,
-      engine: result.engine,
-      model: result.model,
-      werewolf: messagePatch?.werewolf,
     });
-    updateCollaborationRoom((room) => ({
-      ...room,
-      agentSessions: {
-        ...(room.agentSessions || {}),
-        ...(result.sessionId ? { [agentName]: result.sessionId } : {}),
-      },
-      messages: [
-        ...(room.messages || []),
-        collaborationMessage,
-      ],
-    }));
-    appendCollaborationMessageToChat(collaborationMessage, werewolfState);
-    return content;
   }, [
-    appendCollaborationMessageToChat,
+    appendStreamingCollaborationMessage,
     binding?.attachedAgentSessions,
     binding?.supervisorSessionId,
     boundCommander,
@@ -2022,6 +2340,7 @@ export default function HomeCommandSidebar({
     callWerewolfLabAgent,
     isWerewolfLab,
     updateCollaborationRoom,
+    updateStreamingCollaborationMessage,
     werewolfState,
     workflowDraft.workingDirectory,
   ]);
@@ -2173,12 +2492,13 @@ export default function HomeCommandSidebar({
   }, [collaborationMessages, collaborationRoom?.rounds]);
 
   const buildWerewolfPrompt = useCallback((agentName: string, input: {
-    kind: 'speech' | 'vote' | 'host-summary' | 'sheriff-speech' | 'wolf-vote';
+    kind: 'speech' | 'vote' | 'host-summary' | 'sheriff-speech' | 'wolf-vote' | 'sheriff-vote';
     state: CollaborationWerewolfState;
     hostMessage?: string;
     transcript?: CollaborationRoomMessage[];
   }) => {
     const player = input.state.players.find((item) => item.agentName === agentName);
+    const temporaryAgent = getTemporaryWerewolfAgent(agentName);
     const alivePlayers = getAliveWerewolfPlayers(input.state).map((item) => item.agentName);
     const wolfPartners = player?.role === 'werewolf'
       ? input.state.players.filter((item) => item.role === 'werewolf' && item.agentName !== agentName).map((item) => item.agentName)
@@ -2243,22 +2563,32 @@ export default function HomeCommandSidebar({
         privateTranscriptBlock,
       ].join('\n\n');
     }
-    if (input.kind === 'vote' || input.kind === 'wolf-vote') {
+    if (input.kind === 'vote' || input.kind === 'wolf-vote' || input.kind === 'sheriff-vote') {
+      const sheriffCandidates = (input.state.sheriffCandidates || []).filter((name) => alivePlayers.includes(name));
       return [
         `你正在参加一个多 Agent 回合制身份推理测试。你的玩家名是 ${agentName}。`,
         player ? `你的隐藏身份：${formatWerewolfRole(player.role)}。你的角色性格提示：${player.persona} 请像这个人一样自然发言，不要复述提示词。` : '',
+        temporaryAgent ? `你的说话手感：${temporaryAgent.speechStyle} ${temporaryAgent.rhythm}` : '',
+        temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
+        temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
         player ? `你的角色规则：${WEREWOLF_ROLE_PROMPTS[player.role]}` : '',
         wolfPartners.length ? `你的狼队友：${wolfPartners.join('、')}。只有狼人内部会议和狼人视角可见这类信息。` : '',
-        `当前阶段：${input.kind === 'wolf-vote' ? '狼人夜间刀口投票' : `投票，第 ${input.state.dayNumber} 天` }。`,
+        `当前阶段：${input.kind === 'wolf-vote' ? '狼人夜间刀口投票' : input.kind === 'sheriff-vote' ? '警长投票' : `投票，第 ${input.state.dayNumber} 天` }。`,
         input.kind === 'wolf-vote'
           ? `可投票刀口：${alivePlayers.filter((name) => !wolfPartners.includes(name) && name !== agentName).join('、') || '无'}`
+          : input.kind === 'sheriff-vote'
+            ? `警上候选人：${sheriffCandidates.join('、') || '无'}`
           : (input.state.sheriff ? `当前警长：${input.state.sheriff}${input.state.badgeDestroyed ? '（警徽已撕）' : '（持有警徽）'}` : '当前没有警长。'),
         input.kind === 'wolf-vote'
           ? '请只从非狼人存活玩家里选择今夜刀口。'
+          : input.kind === 'sheriff-vote'
+            ? `请只从警上候选人中投票：${sheriffCandidates.join('、') || '无'}。`
           : `可投票对象：${alivePlayers.filter((name) => name !== agentName).join('、') || '无'}`,
         input.hostMessage ? `主持人补充：${input.hostMessage}` : '',
         input.kind === 'wolf-vote'
           ? '请结合白天站边、神职嫌疑、悍跳安排和次日口风需要，给出今夜刀口。'
+          : input.kind === 'sheriff-vote'
+            ? '请结合上警发言、退水情况、谁更适合拿警徽和带警徽流，投出你的警长票。警长投票阶段每位存活玩家只有 1 票。'
           : '请注意票型：警长票按 1.5 票结算，普通票按 1 票结算；你的理由要尽量结合警长票、归票、站边和白天发言矛盾。',
         '桌上所有玩家的人格特征都是公开可观察信息，可以把它们作为判断谁像带节奏位、归票位、悍跳位的辅助依据。',
         '',
@@ -2294,6 +2624,9 @@ export default function HomeCommandSidebar({
     return [
       `你正在参加一个多 Agent 回合制身份推理测试。你的玩家名是 ${agentName}。`,
       player ? `你的隐藏身份：${formatWerewolfRole(player.role)}。你的角色性格提示：${player.persona} 请像这个人一样自然发言，不要复述提示词。` : '',
+      temporaryAgent ? `你的说话手感：${temporaryAgent.speechStyle} ${temporaryAgent.rhythm}` : '',
+      temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
+      temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
       player ? `你的角色规则：${WEREWOLF_ROLE_PROMPTS[player.role]}` : '',
       wolfPartners.length ? `你的狼队友：${wolfPartners.join('、')}。不要在公开发言里直接暴露狼队关系。` : '',
       `当前阶段：${input.state.phase}，第 ${input.state.dayNumber} 天。`,
@@ -2323,6 +2656,7 @@ export default function HomeCommandSidebar({
       '发言要求：',
       '- 只代表自己发言，可以质疑、辩护、提问或回应 @你的内容。',
       '- 发言要像一个具体参与者在桌上说话，不要输出“persona/style/bias/提示词”等元信息。',
+      '- 风格差异要体现在语气、节奏、开口方式和追问方式里，但整体仍然要像真人桌聊，不要演得太满。',
       '- 不要直接暴露自己的隐藏身份，除非这是你的策略。',
       '- 如果你是狼人，可以伪装、保护队友、必要时考虑自爆；如果你是神职，要考虑信息释放节奏；如果你是村民，要根据发言找矛盾。',
       '- 如果当前是狼人夜间内部会议，第一位狼人必须先明确今晚安排：谁更适合悍跳、谁负责冲锋/倒钩、刀口优先级是什么。后续狼人围绕这个安排补充或调整。',
@@ -2761,22 +3095,24 @@ export default function HomeCommandSidebar({
     }
     const nextState = createWerewolfState([supervisor, ...participants], supervisor, board.id);
     const setupMessage = createCollaborationMessage({
-      speakerType: 'system',
-      speakerName: '系统',
+      speakerType: 'supervisor',
+      speakerName: supervisor,
       content: [
-        '已创建 AI 狼人杀测试局。',
+        'AI 上帝发言：本局已完成配置。',
         `板子：${board.name}（${board.description}）`,
+        `胜利规则：${board.winRuleLabel}`,
         `主持人：${supervisor}`,
         '玩家：',
         formatWerewolfRoster(nextState, false),
         '',
-        '说明：后续流程由 Supervisor 按黑夜、遗言、白天发言、投票结算推进。女巫首夜可以自救；人类只在确认开局、补充指令、推进关键节点时介入。',
+        'AI 上帝发言：请确认开局。后续会按上警、黑夜、遗言、白天发言、放逐投票的顺序推进；女巫首夜可以自救。',
       ].join('\n'),
       status: 'done',
       werewolf: {
         phase: 'setup',
         action: 'setup',
         visibility: 'public',
+        actor: supervisor,
       },
     });
     updateCollaborationRoom((room) => ({
@@ -2812,14 +3148,23 @@ export default function HomeCommandSidebar({
     const candidates = alivePlayers
       .filter((player) => ['seer', 'werewolf', 'villager', 'hunter'].includes(player.role))
       .slice(0, Math.min(4, alivePlayers.length));
-    const sheriff = candidates.find((player) => player.role === 'seer') || candidates[0] || alivePlayers[0];
     const roundId = `ww-sheriff-${werewolfState.dayNumber}-${Date.now()}`;
     const hostMessage = collaborationDraft.trim() || '警长竞选：先上警举手，再按顺序做上警发言。每名上警玩家只发言一轮，最后一名上警玩家负责归票，提醒场上如何投警长票。';
-    const hostCollaborationMessage = createCollaborationMessage({
+    const openingMessage = createCollaborationMessage({
       roundId,
       speakerType: 'supervisor',
       speakerName: effectiveCollaborationSupervisor,
-      content: `${hostMessage}\n上警举手：${candidates.map((player) => player.agentName).join('、') || '无人上警'}。`,
+      content: `AI 上帝发言：现在开始警长竞选。\n${hostMessage}`,
+      status: 'done',
+      werewolf: { phase: 'day', action: 'sheriff-election', visibility: 'public', actor: effectiveCollaborationSupervisor },
+    });
+    const handsMessage = createCollaborationMessage({
+      roundId,
+      speakerType: 'supervisor',
+      speakerName: effectiveCollaborationSupervisor,
+      content: candidates.length
+        ? `AI 上帝发言：上警举手结束。${candidates.map((player) => player.agentName).join('、')} 选择上警，共 ${candidates.length} 人上警。`
+        : 'AI 上帝发言：本轮无人上警。',
       status: 'done',
       werewolf: { phase: 'day', action: 'sheriff-election', visibility: 'public', actor: effectiveCollaborationSupervisor },
     });
@@ -2834,16 +3179,22 @@ export default function HomeCommandSidebar({
       },
       messages: [
         ...(room.messages || []),
-        hostCollaborationMessage,
+        openingMessage,
+        handsMessage,
       ],
     }));
-    appendCollaborationMessageToChat(hostCollaborationMessage, werewolfState);
+    appendCollaborationMessagesToChat([openingMessage, handsMessage], werewolfState);
     setCollaborationDraft('');
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage('Supervisor 正在组织警长竞选与上警发言...', '警长竞选');
-      const transcript: CollaborationRoomMessage[] = [...collaborationMessages];
+      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
+        action: 'sheriff-election',
+        dayNumber: werewolfState.dayNumber,
+        players: werewolfState.players,
+      }), '警长竞选');
+      const transcript: CollaborationRoomMessage[] = [...collaborationMessages, openingMessage, handsMessage];
+      const withdrawnCandidates = new Set<string>();
       for (const candidate of candidates) {
         const output = await callCollaborationAgent(candidate.agentName, buildWerewolfPrompt(candidate.agentName, {
           kind: 'sheriff-speech',
@@ -2857,31 +3208,137 @@ export default function HomeCommandSidebar({
         }), roundId, {
           werewolf: { phase: 'day', action: 'sheriff-speech', visibility: 'public', actor: candidate.agentName },
         });
-        transcript.push(createCollaborationMessage({
+        const speechMessage = createCollaborationMessage({
           roundId,
           speakerType: 'agent',
           speakerName: candidate.agentName,
           content: output,
           status: 'done',
           werewolf: { phase: 'day', action: 'sheriff-speech', visibility: 'public', actor: candidate.agentName },
+        });
+        transcript.push(speechMessage);
+        if (parseWerewolfSheriffWithdrawal(output)) withdrawnCandidates.add(candidate.agentName);
+      }
+      const finalCandidates = candidates.filter((candidate) => !withdrawnCandidates.has(candidate.agentName));
+      const withdrawalMessage = createCollaborationMessage({
+        roundId,
+        speakerType: 'supervisor',
+        speakerName: effectiveCollaborationSupervisor,
+        content: [
+          `AI 上帝发言：上警发言结束。`,
+          `退水情况：${withdrawnCandidates.size ? Array.from(withdrawnCandidates).join('、') : '无人退水'}。`,
+          `留在警上的玩家：${finalCandidates.length ? finalCandidates.map((player) => player.agentName).join('、') : '无人留警上'}。`,
+        ].join('\n'),
+        status: 'done',
+        werewolf: { phase: 'day', action: 'sheriff-speech', visibility: 'public', actor: effectiveCollaborationSupervisor },
+      });
+      transcript.push(withdrawalMessage);
+      updateCollaborationRoom((room) => ({
+        ...room,
+        messages: [
+          ...(room.messages || []),
+          withdrawalMessage,
+        ],
+      }));
+      appendCollaborationMessageToChat(withdrawalMessage, werewolfState);
+
+      const sheriffVotes: CollaborationWerewolfVote[] = [];
+      let sheriff: CollaborationWerewolfPlayer | undefined;
+      let voteSummaryText = '无人进入警长投票。';
+      if (finalCandidates.length > 0) {
+        const voteStartMessage = createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: `AI 上帝发言：现在开始警长投票。留警上的玩家有 ${finalCandidates.map((player) => player.agentName).join('、')}。请所有存活玩家依次投票。`,
+          status: 'done',
+          werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: effectiveCollaborationSupervisor },
+        });
+        transcript.push(voteStartMessage);
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: [
+            ...(room.messages || []),
+            voteStartMessage,
+          ],
         }));
+        appendCollaborationMessageToChat(voteStartMessage, werewolfState);
+
+        for (const voter of alivePlayers) {
+          const output = await callCollaborationAgent(voter.agentName, buildWerewolfPrompt(voter.agentName, {
+            kind: 'sheriff-vote',
+            state: {
+              ...werewolfState,
+              phase: 'day',
+              currentAction: 'sheriff-vote',
+              sheriffCandidates: finalCandidates.map((player) => player.agentName),
+            },
+            hostMessage: `当前进行警长投票，仅能从 ${finalCandidates.map((player) => player.agentName).join('、')} 中投一人。`,
+            transcript,
+          }), roundId, {
+            werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: voter.agentName },
+          });
+          const parsedVote = parseVoteTarget(output, finalCandidates.map((player) => player.agentName));
+          if (parsedVote) {
+            sheriffVotes.push({
+              voter: voter.agentName,
+              target: parsedVote.target,
+              reason: parsedVote.reason,
+              round: werewolfState.dayNumber,
+            });
+          }
+          transcript.push(createCollaborationMessage({
+            roundId,
+            speakerType: 'agent',
+            speakerName: voter.agentName,
+            content: output,
+            status: 'done',
+            werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: voter.agentName },
+          }));
+        }
+        const tally = new Map<string, number>();
+        sheriffVotes.forEach((vote) => tally.set(vote.target, (tally.get(vote.target) || 0) + 1));
+        const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+        const topScore = sorted[0]?.[1] ?? 0;
+        const topCandidates = sorted.filter(([, score]) => score === topScore).map(([name]) => name);
+        sheriff = topCandidates.length === 1
+          ? finalCandidates.find((candidate) => candidate.agentName === topCandidates[0])
+          : undefined;
+        voteSummaryText = [
+          `警长票型：${buildWerewolfVoteLines(sheriffVotes).join('；') || '暂无有效警长票'}`,
+          `得票统计：${buildWerewolfTallySummary(sheriffVotes)}`,
+          topCandidates.length > 1
+            ? `AI 上帝发言：${topCandidates.join('、')} 平票，暂未产生警长。`
+            : sheriff
+              ? `AI 上帝发言：${sheriff.agentName} 获得警徽。`
+              : 'AI 上帝发言：本轮没有产生警长。',
+        ].join('\n');
       }
       const nextState: CollaborationWerewolfState = {
         ...werewolfState,
         phase: 'day',
         sheriff: sheriff?.agentName,
-        sheriffCandidates: candidates.map((player) => player.agentName),
+        sheriffCandidates: finalCandidates.map((player) => player.agentName),
         sheriffElectionDone: true,
         players: werewolfState.players.map((player) => ({
           ...player,
-          sheriffCandidate: candidates.some((candidate) => candidate.agentName === player.agentName),
+          sheriffCandidate: finalCandidates.some((candidate) => candidate.agentName === player.agentName),
           sheriff: player.agentName === sheriff?.agentName,
         })),
         currentAction: 'day-speech',
         currentActor: effectiveCollaborationSupervisor,
         lastSummary: sheriff
-          ? `警长投票完成：${sheriff.agentName} 获得警徽。请注意后续票型里警长票按 1.5 票结算，白天发言顺序将围绕警长位置推进。`
-          : '无人竞选警长，本局无警徽。',
+          ? [
+            `警长投票完成：${sheriff.agentName} 获得警徽。`,
+            voteSummaryText,
+            '请注意后续票型里警长票按 1.5 票结算，白天发言顺序将围绕警长位置推进。',
+          ].join('\n')
+          : [
+            finalCandidates.length
+              ? '警长投票结束，但本轮未产生警长。'
+              : '警长竞选结束，无人留在警上，本局无警徽。',
+            voteSummaryText,
+          ].join('\n'),
         memories: [
           ...(werewolfState.memories || []),
           createWerewolfMemoryEntry({
@@ -2889,9 +3346,15 @@ export default function HomeCommandSidebar({
             phase: 'day',
             action: 'sheriff-vote',
             title: '警长竞选结果',
-            summary: sheriff
-              ? `${sheriff.agentName} 获得警徽；上警名单：${candidates.map((player) => player.agentName).join('、') || '无'}。`
-              : `无人当选警长；上警名单：${candidates.map((player) => player.agentName).join('、') || '无'}。`,
+            summary: [
+              `上警名单：${candidates.map((player) => player.agentName).join('、') || '无'}。`,
+              `退水名单：${withdrawnCandidates.size ? Array.from(withdrawnCandidates).join('、') : '无人退水'}。`,
+              `留警上：${finalCandidates.map((player) => player.agentName).join('、') || '无人留警上'}。`,
+              sheriff
+                ? `${sheriff.agentName} 获得警徽。`
+                : '本轮未产生警长。',
+              sheriffVotes.length ? `警长票型：${buildWerewolfVoteLines(sheriffVotes).join('；')}` : '',
+            ].filter(Boolean).join(' '),
             visibility: 'public',
             actor: effectiveCollaborationSupervisor,
           }),
@@ -2902,6 +3365,11 @@ export default function HomeCommandSidebar({
         speakerType: 'supervisor',
         speakerName: effectiveCollaborationSupervisor,
         content: nextState.lastSummary || '警长竞选结束。',
+        cards: buildWerewolfTallyChartCard({
+          title: '警长投票统计',
+          subtitle: sheriff ? `${sheriff.agentName} 获得警徽` : '本轮未产生警长',
+          votes: sheriffVotes,
+        }),
         status: 'done',
         werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: effectiveCollaborationSupervisor },
       });
@@ -2938,6 +3406,7 @@ export default function HomeCommandSidebar({
     buildWerewolfPrompt,
     callCollaborationAgent,
     appendCollaborationMessageToChat,
+    appendCollaborationMessagesToChat,
     collaborationDraft,
     collaborationMessages,
     effectiveCollaborationSupervisor,
@@ -2987,7 +3456,11 @@ export default function HomeCommandSidebar({
       roundId,
       speakerType: 'supervisor',
       speakerName: effectiveCollaborationSupervisor,
-      content: hostMessage,
+      content: [
+        `AI 上帝发言：现在进入第 ${werewolfState.dayNumber} 天白天发言。`,
+        `发言顺序：${alivePlayers.map((player) => player.agentName).join(' -> ')}。`,
+        hostMessage,
+      ].join('\n'),
       status: 'done',
       werewolf: {
         phase: 'day',
@@ -3019,22 +3492,14 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(`Supervisor 正在推进第 ${werewolfState.dayNumber} 天白天发言...`, '白天发言');
+      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
+        action: 'day-speech',
+        dayNumber: werewolfState.dayNumber,
+        players: werewolfState.players,
+      }), '白天发言');
       const transcript: CollaborationRoomMessage[] = [
         ...collaborationMessages,
-        createCollaborationMessage({
-          roundId,
-          speakerType: 'supervisor',
-          speakerName: effectiveCollaborationSupervisor,
-          content: hostMessage,
-          status: 'done',
-          werewolf: {
-            phase: 'day',
-            action: 'day-speech',
-            visibility: 'public',
-            actor: effectiveCollaborationSupervisor,
-          },
-        }),
+        hostCollaborationMessage,
       ];
       for (const player of alivePlayers) {
         const output = await callCollaborationAgent(player.agentName, buildWerewolfPrompt(player.agentName, {
@@ -3071,6 +3536,14 @@ export default function HomeCommandSidebar({
       }), roundId, {
         werewolf: { phase: 'day', action: 'settlement', visibility: 'public', actor: effectiveCollaborationSupervisor },
       });
+      const summaryMessage = createCollaborationMessage({
+        roundId,
+        speakerType: 'supervisor',
+        speakerName: effectiveCollaborationSupervisor,
+        content: summary,
+        status: 'done',
+        werewolf: { phase: 'day', action: 'settlement', visibility: 'public', actor: effectiveCollaborationSupervisor },
+      });
       updateCollaborationRoom((room) => ({
         ...room,
         werewolf: room.werewolf ? {
@@ -3092,10 +3565,21 @@ export default function HomeCommandSidebar({
             }),
           ],
         } : room.werewolf,
+        messages: [
+          ...(room.messages || []),
+          summaryMessage,
+        ],
         rounds: (room.rounds || []).map((round) => round.id === roundId
           ? { ...round, status: 'completed', completedAt: Date.now(), summary }
           : round),
       }));
+      appendCollaborationMessageToChat(summaryMessage, {
+        ...werewolfState,
+        phase: 'voting',
+        currentAction: 'vote',
+        currentActor: effectiveCollaborationSupervisor,
+        lastSummary: summary,
+      });
       toast('success', '白天发言轮完成，进入投票阶段');
     } catch (error: any) {
       updateCollaborationRoom((room) => ({
@@ -3286,8 +3770,42 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(`Supervisor 正在推进第 ${werewolfState.dayNumber} 夜行动...`, '黑夜处理中');
+      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
+        action: 'wolf-meeting',
+        dayNumber: werewolfState.dayNumber,
+        players: werewolfState.players,
+      }), '黑夜处理中');
       const transcript: CollaborationRoomMessage[] = [...collaborationMessages, openingMessage];
+      const pushNightStageMessage = (message: CollaborationRoomMessage) => {
+        transcript.push(message);
+        nightMessages.push(message);
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: [
+            ...(room.messages || []),
+            message,
+          ],
+        }));
+        appendCollaborationMessageToChat(message, werewolfState);
+      };
+      pushNightStageMessage(createCollaborationMessage({
+        roundId,
+        speakerType: 'supervisor',
+        speakerName: effectiveCollaborationSupervisor,
+        content: 'AI 上帝发言：天黑请闭眼。',
+        status: 'done',
+        werewolf: { phase: 'night', action: 'system', visibility: 'public', actor: effectiveCollaborationSupervisor },
+      }));
+      if (wolves.length) {
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：狼队请睁眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'wolf-meeting', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolves[0]?.agentName },
+        }));
+      }
       for (const [wolfIndex, wolf] of wolves.entries()) {
         const output = await callCollaborationAgent(wolf.agentName, buildWerewolfPrompt(wolf.agentName, {
           kind: 'speech',
@@ -3336,6 +3854,16 @@ export default function HomeCommandSidebar({
           werewolf: { phase: 'night', action: 'wolf-kill', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolf.agentName },
         }));
       }
+      if (wolves.length) {
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：狼队请闭眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'wolf-kill', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolves[0]?.agentName },
+        }));
+      }
       if (wolfVotes.length > 0) {
         const tally = new Map<string, number>();
         wolfVotes.forEach((vote) => tally.set(vote.target, (tally.get(vote.target) || 0) + 1));
@@ -3348,6 +3876,13 @@ export default function HomeCommandSidebar({
           speakerType: 'supervisor',
           speakerName: effectiveCollaborationSupervisor,
           content: `狼队内部投票结果：${buildWerewolfVoteLines(wolfVotes).join('；')}。\n最终刀口：${wolfTarget?.agentName || '未确定'}。`,
+          cards: buildWerewolfTallyChartCard({
+            title: '狼队刀口票型',
+            subtitle: '仅狼队可见',
+            votes: wolfVotes,
+            visibility: 'werewolves',
+            audience: wolves.map((player) => player.agentName),
+          }),
           status: 'done',
           werewolf: { phase: 'night', action: 'wolf-kill', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolves[0]?.agentName },
         });
@@ -3355,6 +3890,14 @@ export default function HomeCommandSidebar({
         nightMessages.push(wolfVoteSummary);
       }
       if (guard && guardTarget) {
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：守卫请睁眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'guard-action', visibility: 'private', audience: [guard.agentName], actor: guard.agentName },
+        }));
         const output = await callCollaborationAgent(guard.agentName, buildWerewolfPrompt(guard.agentName, {
           kind: 'speech',
           state: { ...werewolfState, phase: 'night', currentAction: 'guard-action', currentActor: guard.agentName },
@@ -3371,8 +3914,24 @@ export default function HomeCommandSidebar({
           status: 'done',
           werewolf: { phase: 'night', action: 'guard-action', visibility: 'private', audience: [guard.agentName], actor: guard.agentName },
         }));
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：守卫请闭眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'guard-action', visibility: 'private', audience: [guard.agentName], actor: guard.agentName },
+        }));
       }
       if (witch && wolfTarget) {
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：女巫请睁眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'witch-action', visibility: 'private', audience: [witch.agentName], actor: witch.agentName },
+        }));
         const output = await callCollaborationAgent(witch.agentName, buildWerewolfPrompt(witch.agentName, {
           kind: 'speech',
           state: { ...werewolfState, phase: 'night', currentAction: 'witch-action', currentActor: witch.agentName },
@@ -3393,8 +3952,24 @@ export default function HomeCommandSidebar({
           status: 'done',
           werewolf: { phase: 'night', action: 'witch-action', visibility: 'private', audience: [witch.agentName], actor: witch.agentName },
         }));
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：女巫请闭眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'witch-action', visibility: 'private', audience: [witch.agentName], actor: witch.agentName },
+        }));
       }
       if (seer && seerTarget) {
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：预言家请睁眼。',
+          status: 'done',
+          werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
+        }));
         const output = await callCollaborationAgent(seer.agentName, buildWerewolfPrompt(seer.agentName, {
           kind: 'speech',
           state: { ...werewolfState, phase: 'night', currentAction: 'seer-check', currentActor: seer.agentName },
@@ -3408,6 +3983,14 @@ export default function HomeCommandSidebar({
           speakerType: 'agent',
           speakerName: seer.agentName,
           content: output,
+          status: 'done',
+          werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
+        }));
+        pushNightStageMessage(createCollaborationMessage({
+          roundId,
+          speakerType: 'supervisor',
+          speakerName: effectiveCollaborationSupervisor,
+          content: 'AI 上帝发言：预言家请闭眼。',
           status: 'done',
           werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
         }));
@@ -3559,6 +4142,7 @@ export default function HomeCommandSidebar({
         speakerType: 'supervisor',
         speakerName: effectiveCollaborationSupervisor,
         content: [
+          `AI 上帝发言：${werewolfState.pendingHunterShot} 出局，进入猎人技能结算。`,
           hunterResult.content || '猎人选择不开枪。',
           badgeResult.message || '',
           winner ? `结局：${winner}` : '',
@@ -3588,56 +4172,127 @@ export default function HomeCommandSidebar({
     const nextPhase = cameFromNight ? 'day' : 'night';
     const nextDayNumber = cameFromNight ? werewolfState.dayNumber : werewolfState.dayNumber + 1;
     const nextAction = cameFromNight ? 'day-speech' : 'wolf-meeting';
-    const content = targets.length
-      ? `死后遗言：${targets.join('、')} 可以留下最后发言。遗言结束后${cameFromNight ? '进入白天发言' : '进入下一夜'}。`
-      : `没有待处理遗言，${cameFromNight ? '进入白天发言' : '进入下一夜'}。`;
+    const openingContent = targets.length
+      ? `AI 上帝发言：${targets.join('、')} 请依次留下遗言。遗言结束后${cameFromNight ? '进入白天发言' : '进入下一夜'}。`
+      : `AI 上帝发言：本轮没有待处理遗言，${cameFromNight ? '直接进入白天发言' : '直接进入下一夜'}。`;
     const lastWordsMessage = createCollaborationMessage({
       roundId,
       speakerType: 'supervisor',
       speakerName: effectiveCollaborationSupervisor,
-      content,
+      content: openingContent,
       status: 'done',
       werewolf: { phase: 'last-words', action: 'last-words', visibility: 'public', audience: targets, actor: targets[0] || effectiveCollaborationSupervisor },
     });
     updateCollaborationRoom((room) => ({
       ...room,
-      werewolf: room.werewolf ? {
-        ...room.werewolf,
-        phase: nextPhase,
-        dayNumber: nextDayNumber,
-        pendingLastWords: [],
-        currentAction: nextAction,
-        currentActor: effectiveCollaborationSupervisor,
-        lastSummary: content,
-        memories: [
-          ...(room.werewolf.memories || []),
-          createWerewolfMemoryEntry({
-            round: werewolfState.dayNumber,
-            phase: 'last-words',
-            action: 'last-words',
-            title: '死后遗言处理',
-            summary: content,
-            visibility: 'public',
-            actor: targets[0] || effectiveCollaborationSupervisor,
-          }),
-        ],
-      } : room.werewolf,
       messages: [
         ...(room.messages || []),
         lastWordsMessage,
       ],
     }));
-    appendCollaborationMessageToChat(lastWordsMessage, {
-      ...werewolfState,
-      phase: nextPhase,
-      dayNumber: nextDayNumber,
-      pendingLastWords: [],
-      currentAction: nextAction,
-      currentActor: effectiveCollaborationSupervisor,
-      lastSummary: content,
-    });
-    toast('success', '遗言环节已处理');
+    appendCollaborationMessageToChat(lastWordsMessage, werewolfState);
+    try {
+      if (targets.length) {
+        setCollaborationBusy(true);
+        const transcript: CollaborationRoomMessage[] = [...collaborationMessages, lastWordsMessage];
+        for (const target of targets) {
+          const output = await callCollaborationAgent(target, buildWerewolfPrompt(target, {
+            kind: 'speech',
+            state: {
+              ...werewolfState,
+              phase: 'last-words',
+              currentAction: 'last-words',
+              currentActor: target,
+            },
+            hostMessage: `你已经出局，现在是遗言环节。请用一轮发言留下你的判断、站边和对场上玩家的最后提醒。`,
+            transcript,
+          }), roundId, {
+            werewolf: { phase: 'last-words', action: 'last-words', visibility: 'public', actor: target },
+          });
+          transcript.push(createCollaborationMessage({
+            roundId,
+            speakerType: 'agent',
+            speakerName: target,
+            content: output,
+            status: 'done',
+            werewolf: { phase: 'last-words', action: 'last-words', visibility: 'public', actor: target },
+          }));
+        }
+      }
+      const closingContent = targets.length
+        ? `AI 上帝发言：遗言结束。${cameFromNight ? `现在进入第 ${nextDayNumber} 天白天发言。` : `现在进入第 ${nextDayNumber} 夜。`}`
+        : openingContent;
+      const nextState: CollaborationWerewolfState = {
+        ...werewolfState,
+        phase: nextPhase,
+        dayNumber: nextDayNumber,
+        pendingLastWords: [],
+        currentAction: nextAction,
+        currentActor: effectiveCollaborationSupervisor,
+        lastSummary: closingContent,
+      };
+      const closingMessage = targets.length ? createCollaborationMessage({
+        roundId,
+        speakerType: 'supervisor',
+        speakerName: effectiveCollaborationSupervisor,
+        content: closingContent,
+        status: 'done',
+        werewolf: { phase: nextPhase, action: 'settlement', visibility: 'public', actor: effectiveCollaborationSupervisor },
+      }) : null;
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? {
+          ...room.werewolf,
+          phase: nextPhase,
+          dayNumber: nextDayNumber,
+          pendingLastWords: [],
+          currentAction: nextAction,
+          currentActor: effectiveCollaborationSupervisor,
+          lastSummary: closingContent,
+          memories: [
+            ...(room.werewolf.memories || []),
+            createWerewolfMemoryEntry({
+              round: werewolfState.dayNumber,
+              phase: 'last-words',
+              action: 'last-words',
+              title: '死后遗言处理',
+              summary: closingContent,
+              visibility: 'public',
+              actor: targets[0] || effectiveCollaborationSupervisor,
+            }),
+          ],
+        } : room.werewolf,
+        messages: closingMessage
+          ? [...(room.messages || []), closingMessage]
+          : (room.messages || []),
+      }));
+      if (closingMessage) {
+        appendCollaborationMessageToChat(closingMessage, nextState);
+      }
+      toast('success', '遗言环节已处理');
+    } catch (error: any) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        messages: [
+          ...(room.messages || []),
+          createCollaborationMessage({
+            roundId,
+            speakerType: 'system',
+            speakerName: '系统',
+            content: `遗言环节中断：${error?.message || '未知错误'}`,
+            status: 'error',
+            error: error?.message || '未知错误',
+          }),
+        ],
+      }));
+      toast('error', error?.message || '遗言环节失败');
+    } finally {
+      setCollaborationBusy(false);
+    }
   }, [
+    buildWerewolfPrompt,
+    callCollaborationAgent,
+    collaborationMessages,
     effectiveCollaborationSupervisor,
     appendCollaborationMessageToChat,
     toast,
@@ -3663,7 +4318,11 @@ export default function HomeCommandSidebar({
       roundId,
       speakerType: 'supervisor',
       speakerName: effectiveCollaborationSupervisor,
-      content: hostMessage,
+      content: [
+        `AI 上帝发言：现在开始第 ${werewolfState.dayNumber} 天放逐投票。`,
+        '请所有存活玩家依次投票，警长票按 1.5 票结算。',
+        hostMessage,
+      ].join('\n'),
       status: 'done',
       werewolf: {
         phase: 'voting',
@@ -3685,22 +4344,14 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(`Supervisor 正在结算第 ${werewolfState.dayNumber} 天投票...`, '投票结算');
+      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
+        action: 'vote',
+        dayNumber: werewolfState.dayNumber,
+        players: werewolfState.players,
+      }), '投票结算');
       const transcript: CollaborationRoomMessage[] = [
         ...collaborationMessages,
-        createCollaborationMessage({
-          roundId,
-          speakerType: 'supervisor',
-          speakerName: effectiveCollaborationSupervisor,
-          content: hostMessage,
-          status: 'done',
-          werewolf: {
-            phase: 'voting',
-            action: 'vote',
-            visibility: 'public',
-            actor: effectiveCollaborationSupervisor,
-          },
-        }),
+        voteHostMessage,
       ];
       const votes = [];
       for (const player of alivePlayers) {
@@ -3826,6 +4477,13 @@ export default function HomeCommandSidebar({
         speakerType: 'supervisor',
         speakerName: effectiveCollaborationSupervisor,
         content: voteSummary,
+        cards: buildWerewolfTallyChartCard({
+          title: `第 ${werewolfState.dayNumber} 天放逐票型`,
+          subtitle: eliminated ? `出局：${eliminated}` : '本轮没有出局玩家',
+          votes,
+          sheriff: werewolfState.sheriff,
+          badgeDestroyed: werewolfState.badgeDestroyed,
+        }),
         status: 'done',
         werewolf: {
           phase: nextState.phase,
@@ -4028,6 +4686,10 @@ export default function HomeCommandSidebar({
         @keyframes fadeIn {
           0% { opacity: 0; transform: scale(0.94); }
           100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes seatDisconnect {
+          0% { opacity: 1; filter: grayscale(0); }
+          100% { opacity: 0.38; filter: grayscale(1); }
         }
       `}</style>
       <aside className="flex h-full min-h-0 flex-col border-l bg-card/40 backdrop-blur-sm">
@@ -4264,6 +4926,10 @@ export default function HomeCommandSidebar({
                       </div>
                       {workflowRoundtableSeats.length > 0 ? (
                         <div className="rounded-2xl border bg-muted/10 p-3">
+                          <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span>顺时针发言</span>
+                            <span>由被 @ 的 Agent 依次接话</span>
+                          </div>
                           <div className="relative mx-auto aspect-square max-w-[360px]">
                             {workflowRoundtableSeats.map((seat, index) => {
                               const total = workflowRoundtableSeats.length;
@@ -4271,25 +4937,37 @@ export default function HomeCommandSidebar({
                               const radius = total <= 4 ? 34 : total <= 6 ? 38 : 41;
                               const x = 50 + radius * Math.cos(angle);
                               const y = 50 + radius * Math.sin(angle);
+                              const nextAngle = (Math.PI * 2 * ((index + 0.5) % Math.max(total, 1))) / Math.max(total, 1) - Math.PI / 2;
+                              const arrowX = 50 + (radius - 7) * Math.cos(nextAngle);
+                              const arrowY = 50 + (radius - 7) * Math.sin(nextAngle);
                               return (
-                                <button
-                                  key={seat.id}
-                                  type="button"
-                                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                                  style={{ left: `${x}%`, top: `${y}%` }}
-                                  onClick={() => setSelectedSeatId(seat.id)}
-                                >
-                                  <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${seat.active ? 'scale-105' : ''}`}>
-                                    {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
-                                    {seat.seatNumber ? (
-                                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
-                                        {seat.seatNumber}
-                                      </span>
-                                    ) : null}
-                                    <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
-                                  </div>
-                                  <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
-                                </button>
+                                <div key={seat.id}>
+                                  {total > 1 ? (
+                                    <div
+                                      className="absolute -translate-x-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70"
+                                      style={{ left: `${arrowX}%`, top: `${arrowY}%` }}
+                                    >
+                                      ↻
+                                    </div>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="absolute -translate-x-1/2 -translate-y-1/2"
+                                    style={{ left: `${x}%`, top: `${y}%` }}
+                                    onClick={() => setSelectedSeatId(seat.id)}
+                                  >
+                                    <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${seat.active ? 'scale-105' : ''}`}>
+                                      {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
+                                      {seat.seatNumber ? (
+                                        <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
+                                          {seat.seatNumber}
+                                        </span>
+                                      ) : null}
+                                      <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
+                                    </div>
+                                    <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
+                                  </button>
+                                </div>
                               );
                             })}
                             <div className="absolute left-1/2 top-1/2 flex h-32 w-32 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm">
@@ -4600,6 +5278,10 @@ export default function HomeCommandSidebar({
                   {werewolfState?.players?.length ? (
                     <div className="space-y-2">
                       <div className="rounded-2xl border bg-muted/10 p-3">
+                        <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>顺时针发言</span>
+                          <span>警长位高亮，死亡席位断线显示</span>
+                        </div>
                         <div className="relative mx-auto aspect-square max-w-[420px]">
                             {werewolfRoundtableSeats.map((seat, index) => {
                             const total = werewolfRoundtableSeats.length;
@@ -4607,6 +5289,9 @@ export default function HomeCommandSidebar({
                             const radius = total <= 6 ? 38 : total <= 9 ? 41 : 43;
                             const x = 50 + radius * Math.cos(angle);
                             const y = 50 + radius * Math.sin(angle);
+                            const nextAngle = (Math.PI * 2 * ((index + 0.5) % Math.max(total, 1))) / Math.max(total, 1) - Math.PI / 2;
+                            const arrowX = 50 + (radius - 8) * Math.cos(nextAngle);
+                            const arrowY = 50 + (radius - 8) * Math.sin(nextAngle);
                             const player = werewolfState.players.find((item) => item.agentName === seat.id);
                             const revealRole = player ? shouldRevealWerewolfRoleForViewer({
                               player,
@@ -4617,35 +5302,49 @@ export default function HomeCommandSidebar({
                               const roleSpriteStyle = player && revealRole ? getWerewolfRoleSpriteStyle(player.role) : null;
                               const justEliminated = recentlyEliminatedSeatIds.includes(seat.id);
                               return (
-                                <button
-                                  key={seat.id}
-                                  type="button"
-                                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                                style={{ left: `${x}%`, top: `${y}%` }}
-                                onClick={() => setSelectedSeatId(seat.id)}
-                              >
-                                <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${seat.active ? 'scale-105' : ''} ${seat.dimmed ? 'opacity-45 grayscale' : ''} ${justEliminated ? 'animate-[seatFall_1.2s_ease-out]' : ''}`}>
-                                  {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
-                                  {justEliminated ? <span className="absolute inset-[-6px] rounded-full border border-destructive/50 animate-ping" /> : null}
-                                  {seat.seatNumber ? (
-                                    <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
-                                      {seat.seatNumber}
-                                    </span>
+                                <div key={seat.id}>
+                                  {total > 1 ? (
+                                    <div
+                                      className="absolute -translate-x-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70"
+                                      style={{ left: `${arrowX}%`, top: `${arrowY}%` }}
+                                    >
+                                      ↻
+                                    </div>
                                   ) : null}
-                                  {roleSpriteStyle ? (
-                                    <span
-                                      className={`h-10 w-8 rounded border border-amber-500/35 bg-cover shadow-sm ${seat.speaking ? 'animate-[spin_6s_linear_infinite]' : ''}`}
-                                      style={roleSpriteStyle}
-                                      aria-label={player ? formatWerewolfRole(player.role) : seat.name}
-                                    />
-                                  ) : (
-                                    <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
-                                  )}
+                                  <button
+                                    type="button"
+                                    className="absolute -translate-x-1/2 -translate-y-1/2"
+                                  style={{ left: `${x}%`, top: `${y}%` }}
+                                  onClick={() => setSelectedSeatId(seat.id)}
+                                >
+                                  <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${player?.sheriff ? 'ring-2 ring-amber-400/80 shadow-[0_0_0_8px_rgba(251,191,36,0.18)]' : ''} ${seat.active ? 'scale-105' : ''} ${seat.dimmed ? 'opacity-45 grayscale animate-[seatDisconnect_240ms_ease-out_forwards]' : ''} ${justEliminated ? 'animate-[seatFall_1.2s_ease-out]' : ''}`}>
+                                    {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
+                                    {justEliminated ? <span className="absolute inset-[-6px] rounded-full border border-destructive/50 animate-ping" /> : null}
+                                    {seat.seatNumber ? (
+                                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
+                                        {seat.seatNumber}
+                                      </span>
+                                    ) : null}
+                                    {player?.sheriff ? (
+                                      <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[9px] font-semibold text-amber-700 shadow-sm dark:text-amber-300">
+                                        警
+                                      </span>
+                                    ) : null}
+                                    {roleSpriteStyle ? (
+                                      <span
+                                        className={`h-10 w-8 rounded border border-amber-500/35 bg-cover shadow-sm ${seat.speaking ? 'animate-[spin_6s_linear_infinite]' : ''}`}
+                                        style={roleSpriteStyle}
+                                        aria-label={player ? formatWerewolfRole(player.role) : seat.name}
+                                      />
+                                    ) : (
+                                      <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
+                                    )}
+                                  </div>
+                                  <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
+                                </button>
                                 </div>
-                                <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
-                              </button>
-                            );
-                          })}
+                              );
+                            })}
                           <div className="absolute left-1/2 top-1/2 flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm">
                             {phaseTransitionBanner ? (
                               <div className="absolute inset-0 flex items-center justify-center rounded-full bg-background/88 animate-[fadeIn_220ms_ease-out]">

@@ -12,6 +12,7 @@ export interface AdaptiveMessageWindowOptions {
   maxRecentMessages?: number;
   targetWeight?: number;
   streamingMessageId?: string | null;
+  forceFullWindow?: boolean;
 }
 
 const DEFAULT_OPTIONS = {
@@ -56,6 +57,7 @@ export function computeAdaptiveRecentWindow(
   options?: AdaptiveMessageWindowOptions
 ): number {
   const resolved = { ...DEFAULT_OPTIONS, ...(options || {}) };
+  if (resolved.forceFullWindow) return messages.length;
   if (messages.length <= resolved.minRecentMessages) return messages.length;
 
   let totalWeight = 0;

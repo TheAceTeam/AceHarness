@@ -128,6 +128,11 @@ interface DashboardChatContextType {
     message: Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>,
     options?: { backendSessionId?: string }
   ) => Promise<void>;
+  updateSessionMessage: (
+    sessionId: string,
+    messageId: string,
+    patch: Partial<ChatMessage>
+  ) => Promise<void>;
 }
 
 const DashboardChatContext = createContext<DashboardChatContextType>({
@@ -148,6 +153,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   updateSessionCreationBinding: async () => {},
   appendVisibleSessionTag: async () => {},
   appendSessionMessage: async () => {},
+  updateSessionMessage: async () => {},
 });
 
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -861,6 +867,51 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const session = await apiLoadSession(sessionId);
     if (!session) return;
     const updated = applyMessage(session);
+    await apiSaveSession(updated);
+    setSessions((list) => list.map((item) => item.id === updated.id ? {
+      ...item,
+      title: updated.title,
+      updatedAt: updated.updatedAt,
+      messageCount: updated.messages.length,
+      lastMessage: updated.messages.filter((msg) => msg.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      agentBinding: updated.agentBinding,
+      workflowBinding: updated.workflowBinding,
+      creationSession: updated.creationSession,
+      sessionWorkbenchState: updated.sessionWorkbenchState,
+    } : item));
+  }, [updateActiveSession]);
+
+  const updateSessionMessage = useCallback(async (
+    sessionId: string,
+    messageId: string,
+    patch: Partial<ChatMessage>
+  ) => {
+    const applyPatch = (session: ChatSession): ChatSession => {
+      const messages = session.messages.map((message) => (
+        message.id === messageId
+          ? {
+              ...message,
+              ...patch,
+              id: message.id,
+              timestamp: patch.timestamp || message.timestamp,
+            }
+          : message
+      ));
+      return {
+        ...session,
+        updatedAt: Date.now(),
+        messages,
+      };
+    };
+
+    if (activeSessionRef.current?.id === sessionId) {
+      updateActiveSession((session) => applyPatch(session));
+      return;
+    }
+
+    const session = await apiLoadSession(sessionId);
+    if (!session) return;
+    const updated = applyPatch(session);
     await apiSaveSession(updated);
     setSessions((list) => list.map((item) => item.id === updated.id ? {
       ...item,
@@ -1740,6 +1791,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       updateSessionCreationBinding,
       appendVisibleSessionTag,
       appendSessionMessage,
+      updateSessionMessage,
     }}>
       {children}
     </DashboardChatContext.Provider>
