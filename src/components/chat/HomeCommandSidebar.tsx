@@ -249,6 +249,13 @@ function formatWerewolfRoster(state?: CollaborationWerewolfState | null, reveal 
     .join('\n');
 }
 
+function formatWerewolfPersonaRoster(state?: CollaborationWerewolfState | null): string {
+  if (!state?.players?.length) return '暂无玩家';
+  return state.players
+    .map((player) => `- ${player.agentName}：${player.persona}`)
+    .join('\n');
+}
+
 function getAliveWerewolfPlayers(state?: CollaborationWerewolfState | null): CollaborationWerewolfPlayer[] {
   return (state?.players || []).filter((player) => player.alive);
 }
@@ -528,6 +535,50 @@ function canSeeWerewolfMessage(input: {
     return viewerPlayer?.role === 'werewolf';
   }
   return true;
+}
+
+function canSeeWerewolfActionMeta(input: {
+  state?: CollaborationWerewolfState | null;
+  viewMode: 'god' | 'night';
+  viewer?: string;
+}): boolean {
+  const { state, viewMode, viewer } = input;
+  const action = state?.currentAction;
+  if (!state || !action || viewMode === 'god' || state.revealedRoles) return true;
+  if (action === 'guard-action' || action === 'witch-action' || action === 'seer-check') {
+    return Boolean(viewer && state.currentActor === viewer);
+  }
+  if (action === 'wolf-meeting' || action === 'wolf-kill') {
+    const viewerPlayer = state.players.find((player) => player.agentName === viewer);
+    return viewerPlayer?.role === 'werewolf';
+  }
+  return true;
+}
+
+function getWerewolfCurrentActionLabel(input: {
+  state?: CollaborationWerewolfState | null;
+  viewMode: 'god' | 'night';
+  viewer?: string;
+}): string {
+  const { state, viewMode, viewer } = input;
+  if (!state) return '未开始';
+  if (canSeeWerewolfActionMeta({ state, viewMode, viewer })) {
+    return formatWerewolfActionLabel(state.currentAction || state.phase);
+  }
+  return state.phase === 'night' ? '黑夜处理中' : formatWerewolfActionLabel(state.phase);
+}
+
+function getWerewolfCurrentActorLabel(input: {
+  state?: CollaborationWerewolfState | null;
+  viewMode: 'god' | 'night';
+  viewer?: string;
+}): string {
+  const { state, viewMode, viewer } = input;
+  if (!state?.currentActor) return TEMP_WEREWOLF_SUPERVISOR.name;
+  if (canSeeWerewolfActionMeta({ state, viewMode, viewer })) {
+    return state.currentActor;
+  }
+  return state.phase === 'night' ? '隐藏行动' : TEMP_WEREWOLF_SUPERVISOR.name;
 }
 
 function formatWerewolfActionLabel(action?: NonNullable<CollaborationRoomMessage['werewolf']>['action'] | CollaborationWerewolfState['currentAction'] | CollaborationWerewolfPhase): string {
@@ -1761,6 +1812,7 @@ export default function HomeCommandSidebar({
       .map((message) => `${message.speakerName}: ${message.content.slice(0, 1000)}`)
       .join('\n\n');
     const roster = formatWerewolfRoster(input.state, agentName === effectiveCollaborationSupervisor || input.kind === 'host-summary');
+    const personaRoster = formatWerewolfPersonaRoster(input.state);
     if (input.kind === 'host-summary') {
       return [
         `你是主持人 ${agentName}，正在主持一个多 Agent 回合制身份推理测试。`,
@@ -1769,6 +1821,10 @@ export default function HomeCommandSidebar({
         '如果这是白天发言收口，请明确指出谁的发言最像归票位、谁在带节奏、谁像冲锋/倒钩位，以及建议把票压到哪几名玩家身上。',
         '如果这是警长竞选收口，请明确总结上警玩家、退水情况、谁更像真预言家或悍跳位、警长票流关注点，并提醒进入警长投票。',
         '不要代替玩家投票。不要泄露隐藏身份，除非消息中已公开或玩家已出局且规则要求公开。',
+        '桌上的人格特征是公开信息，你可以用它判断谁更像适合悍跳、归票、冲锋、倒钩、拿警徽或藏身份的人。',
+        '',
+        '公开人格席位表：',
+        personaRoster,
         '',
         '玩家列表：',
         roster,
@@ -1788,6 +1844,10 @@ export default function HomeCommandSidebar({
         `可投票对象：${alivePlayers.filter((name) => name !== agentName).join('、') || '无'}`,
         input.hostMessage ? `主持人补充：${input.hostMessage}` : '',
         '请注意票型：警长票按 1.5 票结算，普通票按 1 票结算；你的理由要尽量结合警长票、归票、站边和白天发言矛盾。',
+        '桌上所有玩家的人格特征都是公开可观察信息，可以把它们作为判断谁像带节奏位、归票位、悍跳位的辅助依据。',
+        '',
+        '公开人格席位表：',
+        personaRoster,
         '',
         '请只输出一票，格式必须包含：',
         'VOTE: <玩家名>',
@@ -1809,12 +1869,17 @@ export default function HomeCommandSidebar({
       `发言顺序：${getWerewolfSpeechOrder(input.state).join(' -> ') || '未定'}`,
       input.hostMessage ? `主持人本轮指令：${input.hostMessage}` : '',
       '',
+      '桌上所有玩家的人格特征都是公开信息，你可以合理判断谁更像适合起跳、归票、冲锋、倒钩、藏身份或带节奏的人。',
+      '',
+      '公开人格席位表：',
+      personaRoster,
+      '',
       '发言要求：',
       '- 只代表自己发言，可以质疑、辩护、提问或回应 @你的内容。',
       '- 发言要像一个具体参与者在桌上说话，不要输出“persona/style/bias/提示词”等元信息。',
       '- 不要直接暴露自己的隐藏身份，除非这是你的策略。',
       '- 如果你是狼人，可以伪装、保护队友、必要时考虑自爆；如果你是神职，要考虑信息释放节奏；如果你是村民，要根据发言找矛盾。',
-      '- 如果当前是狼人夜间内部会议，请像真狼队一样讨论：谁来悍跳、谁负责冲锋、谁可以倒钩、警徽流或金水/查杀口径怎么编、刀口如何服务白天格局。',
+      '- 如果当前是狼人夜间内部会议，请像真狼队一样自然商量第二天怎么演、怎么站边、怎么配合刀口；必要时再讨论谁悍跳、谁冲锋或倒钩。',
       '- 每名玩家在同一轮白天讨论里最多发言两轮；若你已进入第二轮，请收口，不要继续展开新分支。',
       '- 如果你是本轮最后一个发言位，请主动做归票，总结 1 到 2 个优先出局位，并说明票型理由。',
       '- 结尾可以点名你最想追问的一个 Agent，格式如 @agentName；如果不需要继续追问，可以不 @。',
@@ -2433,7 +2498,7 @@ export default function HomeCommandSidebar({
     const guard = alivePlayers.find((player) => player.role === 'guard');
     const roleState = getWerewolfRoleState(werewolfState);
     const roundId = `ww-night-${werewolfState.dayNumber}-${Date.now()}`;
-    const hostMessage = collaborationDraft.trim() || `第 ${werewolfState.dayNumber} 夜行动：狼人先进行内部会议，讨论谁悍跳、谁冲锋或倒钩、警徽流怎么编、明天对白天票型怎么带节奏，再决定刀口；随后守卫守护，狼人落刀，女巫决定是否用药，预言家查验。女巫首夜可以自救。`;
+    const hostMessage = collaborationDraft.trim() || `第 ${werewolfState.dayNumber} 夜行动：狼人先进行内部会议，先商量第二天怎么演、怎么站边、刀口怎么服务白天格局，需要时再决定谁悍跳或带节奏；随后守卫守护，狼人落刀，女巫决定是否用药，预言家查验。女巫首夜可以自救。`;
     const guardTarget = guard
       ? pickWerewolfTarget(alivePlayers, [guard.agentName, roleState.guardLastTarget || ''], 'seer')
         || pickWerewolfTarget(alivePlayers, [guard.agentName, roleState.guardLastTarget || ''])
@@ -2519,8 +2584,8 @@ export default function HomeCommandSidebar({
           kind: 'speech',
           state: { ...werewolfState, phase: 'night', currentAction: 'wolf-meeting', currentActor: wolf.agentName },
           hostMessage: wolfTarget
-            ? `狼人内部会议：请讨论今夜是否袭击 ${wolfTarget.agentName}，并同步商量明天谁悍跳、谁冲锋、谁倒钩、警徽流怎么报、如果上警该怎样归票。这段只给狼队可见。`
-            : '狼人内部会议：请确认今夜行动，并商量明天谁悍跳、谁冲锋、谁倒钩、警徽流怎么报。',
+            ? `狼人内部会议：请讨论今夜是否袭击 ${wolfTarget.agentName}，并顺手商量明天怎么演、谁更适合起跳或带节奏、刀口如何配合白天发言。这段只给狼队可见。`
+            : '狼人内部会议：请确认今夜行动，并自然商量明天怎么演、谁更适合起跳或带节奏。',
           transcript,
         }), roundId, {
           werewolf: { phase: 'night', action: 'wolf-meeting', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolf.agentName },
@@ -3591,11 +3656,19 @@ export default function HomeCommandSidebar({
                     <div className="grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-3">
                       <div>
                         <div className="text-[10px] text-muted-foreground">当前环节</div>
-                        <div className="mt-1 font-medium">{formatWerewolfActionLabel(werewolfState?.currentAction || werewolfState?.phase)}</div>
+                        <div className="mt-1 font-medium">{getWerewolfCurrentActionLabel({
+                          state: werewolfState,
+                          viewMode: werewolfViewMode,
+                          viewer: effectiveWerewolfNightViewer,
+                        })}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-muted-foreground">正在行动</div>
-                        <div className="mt-1 truncate font-medium">{werewolfState?.currentActor || effectiveCollaborationSupervisor}</div>
+                        <div className="mt-1 truncate font-medium">{getWerewolfCurrentActorLabel({
+                          state: werewolfState,
+                          viewMode: werewolfViewMode,
+                          viewer: effectiveWerewolfNightViewer,
+                        })}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-muted-foreground">存活情况</div>
