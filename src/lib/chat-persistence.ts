@@ -25,6 +25,11 @@ export interface PersistedMessage {
   id: string;
   role: 'user' | 'assistant' | 'error';
   content: string;
+  source?: {
+    type: 'wechat';
+    label?: string;
+    direction?: 'inbound' | 'outbound';
+  };
   actions?: PersistedAction[];
   costUsd?: number;
   durationMs?: number;

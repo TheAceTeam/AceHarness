@@ -41,8 +41,21 @@ describe('wrapper availability in current environment', () => {
 
   test('codex matches SDK + CLI discovery availability', async () => {
     const wrapper = new CodexEngineWrapper();
-    const expected = await hasModule('@openai/codex-sdk') && Boolean((wrapper as any).findCodexPath());
+    const expected = await hasModule('@openai/codex-sdk') || Boolean((wrapper as any).findCodexFallbackPath());
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
+  });
+
+  test('codex fallback avoids Windows npm command shims for SDK spawn', async () => {
+    const wrapper = new CodexEngineWrapper();
+    const codexPath = (wrapper as any).findCodexFallbackPath();
+
+    if (process.platform !== 'win32' || !codexPath) {
+      expect(true).toBe(true);
+      return;
+    }
+
+    expect(codexPath.toLowerCase()).toMatch(/codex\.exe$/);
+    expect(codexPath.toLowerCase()).not.toMatch(/\.(cmd|bat|ps1)$/);
   });
 
   test('cursor matches CLI discovery availability', async () => {

@@ -57,8 +57,8 @@ export type ClarificationAnswerValue = {
 export type ClarificationFormResult = {
   type: 'clarification_form';
   summary?: string;
-  knownFacts?: string[];
-  missingFields?: string[];
+  knownFacts: string[];
+  missingFields: string[];
   questions: ClarificationQuestionItem[];
 };
 
@@ -147,6 +147,8 @@ export function extractClarificationFormResult(markdown: string): ClarificationF
   return {
     ...parsed,
     type: 'clarification_form',
+    knownFacts: Array.isArray(parsed.knownFacts) ? parsed.knownFacts : [],
+    missingFields: Array.isArray(parsed.missingFields) ? parsed.missingFields : [],
     questions: Array.isArray(parsed.questions)
       ? parsed.questions
         .filter((item) => item && typeof item.question === 'string')

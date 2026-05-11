@@ -243,23 +243,31 @@ export default function AgentsPage() {
 
   const handleBatchReplaceModel = async () => {
     if (!fromModel || !toModel) {
-      setAlertMessage('请选择源模型和目标模型');
+      setAlertMessage('请选择源策略和目标策略');
       return;
     }
-    // Parse composite "engine::model" values
-    const [fromEng, ...fromRest] = fromModel.split('::');
+
+    const sourceType = fromModel === UNCONFIGURED_POLICY_VALUE ? 'unconfigured' : 'strategy';
+    const [fromEng, ...fromRest] = sourceType === 'strategy' ? fromModel.split('::') : ['', ''];
     const fromMod = fromRest.join('::');
     const [toEng, ...toRest] = toModel.split('::');
     const toMod = toRest.join('::');
 
-    if (fromEng === toEng && fromMod === toMod) {
-      setAlertMessage('源模型和目标模型不能相同');
+    if (!toEng || !toMod) {
+      setAlertMessage('请选择目标引擎和目标模型');
+      return;
+    }
+
+    if (sourceType === 'strategy' && fromEng === toEng && fromMod === toMod) {
+      setAlertMessage('源策略和目标策略不能相同');
       return;
     }
     const confirmed = await confirm({
-      title: '确认批量替换',
-      description: `确定要将引擎 "${fromEng || '跟随全局'}" 下使用 "${fromMod}" 的 Agent 替换为 "${toEng || '跟随全局'}" 的 "${toMod}" 吗？`,
-      confirmLabel: '确认替换',
+      title: '确认批量设置模型策略',
+      description: sourceType === 'unconfigured'
+        ? `确定要为当前未配置模型策略的 Agent 批量设置为 "${getEngineMeta(toEng)?.name || toEng}" / "${toMod}" 吗？`
+        : `确定要将引擎 "${getEngineMeta(fromEng)?.name || fromEng}" 下使用 "${fromMod}" 的 Agent 批量设置为 "${getEngineMeta(toEng)?.name || toEng}" / "${toMod}" 吗？`,
+      confirmLabel: '确认设置',
       cancelLabel: '取消',
       variant: 'default',
     });
@@ -267,7 +275,13 @@ export default function AgentsPage() {
 
     setBatchReplacing(true);
     try {
-      const result = await agentApi.batchReplaceModel(fromEng, fromMod, toMod);
+      const result = await agentApi.batchSetModelPolicy({
+        sourceType,
+        sourceEngine: sourceType === 'strategy' ? fromEng : undefined,
+        sourceModel: sourceType === 'strategy' ? fromMod : undefined,
+        targetEngine: toEng,
+        targetModel: toMod,
+      });
       setAlertMessage(result.message);
       await loadAgents();
       setShowBatchReplaceModal(false);
@@ -312,9 +326,9 @@ export default function AgentsPage() {
     })),
   ];
 
-  // Source: only engine::model combos that actually exist in agents
+  // Source: existing engine::model combos plus agents without any explicit model strategy
   const batchSourceGroups: ComboboxGroupDef[] = (() => {
-    // Collect all existing engine::model pairs from agents
+    const groups: ComboboxGroupDef[] = [];
     const existing = new Map<string, Set<string>>();
     for (const a of agents) {
       for (const [eng, mod] of Object.entries(a.engineModels || {})) {
@@ -323,7 +337,22 @@ export default function AgentsPage() {
         existing.get(eng)!.add(mod);
       }
     }
-    return ALL_ENGINES
+    const unconfiguredCount = agents.filter((agent) => {
+      const engineModels = agent.engineModels || {};
+      return Object.keys(engineModels).length === 0 || !Object.values(engineModels).some(Boolean);
+    }).length;
+
+    if (unconfiguredCount > 0) {
+      groups.push({
+        label: '未配置策略',
+        items: [{
+          value: UNCONFIGURED_POLICY_VALUE,
+          label: `未配置模型策略 (${unconfiguredCount})`,
+        }],
+      });
+    }
+
+    groups.push(...ALL_ENGINES
       .filter(eng => existing.has(eng.id))
       .map(eng => ({
         label: eng.name,
@@ -333,28 +362,30 @@ export default function AgentsPage() {
           return { value: `${eng.id}::${mod}`, label, icon: eng.icon };
         }),
       }))
-      .filter(g => g.items.length > 0);
+      .filter(g => g.items.length > 0));
+
+    return groups;
   })();
 
-  // Target: filter by effective engine (follow-global uses globalEngine)
+  // Target: choose a concrete engine + model policy to apply
   const batchTargetGroups: ComboboxGroupDef[] = (() => {
-    if (!fromModel) return [];
-    const [srcEng] = fromModel.split('::');
-    const effectiveEng = srcEng || globalEngine;
-    const eng = ALL_ENGINES.find(e => e.id === srcEng) || ALL_ENGINES[0];
-    const engineModels = availableModels.filter(
-      m => !m.engines || m.engines.length === 0 || m.engines.includes(effectiveEng),
-    );
-    if (engineModels.length === 0) return [];
-    return [{
-      label: eng.name,
-      icon: eng.icon,
-      items: engineModels.map(m => ({
-        value: `${srcEng}::${m.value}`,
-        label: m.label,
-        icon: eng.icon,
-      })),
-    }];
+    return getConcreteEngines()
+      .map((engine) => {
+        const engineModels = availableModels.filter(
+          m => !m.engines || m.engines.length === 0 || m.engines.includes(engine.id),
+        );
+        if (engineModels.length === 0) return null;
+        return {
+          label: engine.name,
+          icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
+          items: engineModels.map(m => ({
+            value: `${engine.id}::${m.value}`,
+            label: m.label,
+            icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
+          })),
+        };
+      })
+      .filter((group): group is NonNullable<typeof group> => Boolean(group));
   })();
 
   const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
@@ -498,6 +529,10 @@ export default function AgentsPage() {
             <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
             AI 创建
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setShowBatchReplaceModal(true)}>
+            <span className="material-symbols-outlined text-sm mr-1">swap_horiz</span>
+            批量设置模型策略
+          </Button>
           <Button size="sm" onClick={handleCreateAgent}>
             <span className="material-symbols-outlined text-sm mr-1">add</span>
             新建 Agent
@@ -613,7 +648,7 @@ export default function AgentsPage() {
                   onClick={() => setShowBatchReplaceModal(true)}
                 >
                   <span className="material-symbols-outlined mr-1 text-sm">swap_horiz</span>
-                  批量替换模型
+                  批量设置模型策略
                 </Button>
               </div>
             </div>
@@ -1017,36 +1052,46 @@ export default function AgentsPage() {
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowBatchReplaceModal(false)}>
           <div className="bg-card rounded-lg w-[500px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
             <div className="p-5 border-b">
-              <h3 className="text-lg font-semibold">批量替换模型</h3>
+              <h3 className="text-lg font-semibold">批量设置模型策略</h3>
             </div>
             <div className="p-5 space-y-4">
               <div>
-                <label className="text-sm font-medium mb-2 block">源（引擎 + 模型）</label>
+                <label className="text-sm font-medium mb-2 block">源策略</label>
                 <SingleCombobox
                   value={fromModel}
                   onValueChange={(v) => { setFromModel(v); setToModel(''); }}
                   groups={batchSourceGroups}
-                  placeholder="选择当前使用的引擎和模型"
+                  placeholder="选择当前策略，或选择未配置策略"
                 />
               </div>
               <div>
-                <label className="text-sm font-medium mb-2 block">替换为</label>
+                <label className="text-sm font-medium mb-2 block">目标策略</label>
                 <SingleCombobox
                   value={toModel}
                   onValueChange={setToModel}
                   groups={batchTargetGroups}
-                  placeholder={fromModel ? "选择目标模型" : "请先选择源模型"}
+                  placeholder={fromModel ? "选择目标引擎和模型" : "请先选择源策略"}
                 />
               </div>
               {fromModel && toModel && (() => {
-                const [fEng] = fromModel.split('::');
-                const fMod = fromModel.split('::').slice(1).join('::');
+                const sourceType = fromModel === UNCONFIGURED_POLICY_VALUE ? 'unconfigured' : 'strategy';
+                const [fEng] = sourceType === 'strategy' ? fromModel.split('::') : [''];
+                const fMod = sourceType === 'strategy' ? fromModel.split('::').slice(1).join('::') : '';
                 const tMod = toModel.split('::').slice(1).join('::');
+                const [tEng] = toModel.split('::');
                 const fEngName = ALL_ENGINES.find(e => e.id === fEng)?.name || fEng || '跟随全局';
-                const affected = agents.filter(a => a.engineModels?.[fEng] === fMod).length;
+                const tEngName = getEngineMeta(tEng)?.name || tEng;
+                const affected = sourceType === 'unconfigured'
+                  ? agents.filter((agent) => {
+                      const engineModels = agent.engineModels || {};
+                      return Object.keys(engineModels).length === 0 || !Object.values(engineModels).some(Boolean);
+                    }).length
+                  : agents.filter(a => a.engineModels?.[fEng] === fMod).length;
                 return (
                   <div className="text-sm text-muted-foreground">
-                    将引擎 "{fEngName}" 下使用 "{fMod}" 的 Agent 模型替换为 "{tMod}"（影响 {affected} 个 Agent）
+                    {sourceType === 'unconfigured'
+                      ? `将未配置模型策略的 Agent 设置为 "${tEngName}" / "${tMod}"（影响 ${affected} 个 Agent）`
+                      : `将引擎 "${fEngName}" 下使用 "${fMod}" 的 Agent 设置为 "${tEngName}" / "${tMod}"（影响 ${affected} 个 Agent）`}
                   </div>
                 );
               })()}
@@ -1056,7 +1101,7 @@ export default function AgentsPage() {
                 取消
               </Button>
               <Button onClick={handleBatchReplaceModel} disabled={batchReplacing}>
-                {batchReplacing ? '替换中...' : '确认替换'}
+                {batchReplacing ? '设置中...' : '确认设置'}
               </Button>
             </div>
           </div>
@@ -1080,3 +1125,4 @@ export default function AgentsPage() {
     </div>
   );
 }
+  const UNCONFIGURED_POLICY_VALUE = '__unconfigured__';

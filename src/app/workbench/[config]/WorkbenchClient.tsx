@@ -5,7 +5,7 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ClipLoader } from 'react-spinners';
 import BrandLoadingScreen from '@/components/BrandLoadingScreen';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, type NotebookScope } from '@/lib/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type NotebookScope } from '@/lib/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
@@ -262,10 +262,11 @@ export default function WorkbenchPage() {
   const initialRunId = searchParams.get('run') || searchParams.get('runId');
   const focusTarget = searchParams.get('focus');
   const focusQuestionId = searchParams.get('questionId');
+  const searchParamsString = searchParams.toString();
 
   // Update URL query params without full navigation
   const updateUrl = useCallback((updates: Record<string, string | null>) => {
-    const sp = new URLSearchParams(searchParams.toString());
+    const sp = new URLSearchParams(searchParamsString);
     for (const [key, val] of Object.entries(updates)) {
       if (val === null) sp.delete(key);
       else sp.set(key, val);
@@ -274,8 +275,13 @@ export default function WorkbenchPage() {
       sp.delete('runId');
     }
     const qs = sp.toString();
-    router.replace(`/workbench/${encodeURIComponent(configFile)}${qs ? '?' + qs : ''}`, { scroll: false });
-  }, [searchParams, configFile, router]);
+    const currentUrl = `/workbench/${encodeURIComponent(configFile)}${searchParamsString ? `?${searchParamsString}` : ''}`;
+    const nextUrl = `/workbench/${encodeURIComponent(configFile)}${qs ? `?${qs}` : ''}`;
+    if (nextUrl === currentUrl) {
+      return;
+    }
+    router.replace(nextUrl, { scroll: false });
+  }, [searchParamsString, configFile, router]);
 
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
@@ -295,6 +301,11 @@ export default function WorkbenchPage() {
   const [markdownModal, setMarkdownModal] = useState<{ title: string; chunks: string[] } | null>(null);
   const [specCodingModalOpen, setSpecCodingModalOpen] = useState(false);
   const [specCodingModalFullscreen, setSpecCodingModalFullscreen] = useState(false);
+  const [specCodingExplorerTab, setSpecCodingExplorerTab] = useState<'artifacts' | 'revisions'>('artifacts');
+  const [specRevisionTarget, setSpecRevisionTarget] = useState<'requirements' | 'design' | 'tasks'>('design');
+  const [specRevisionDraft, setSpecRevisionDraft] = useState('');
+  const [specRevisionSummary, setSpecRevisionSummary] = useState('');
+  const [savingSpecRevision, setSavingSpecRevision] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
@@ -880,6 +891,10 @@ export default function WorkbenchPage() {
     () => specCodingArtifactEntries.find((entry) => entry.key === specCodingArtifactTab) || specCodingArtifactEntries[0],
     [specCodingArtifactEntries, specCodingArtifactTab]
   );
+  const specRevisionBaseArtifact = useMemo(
+    () => specCodingArtifactEntries.find((entry) => entry.key === specRevisionTarget) || specCodingArtifactEntries[1] || specCodingArtifactEntries[0],
+    [specCodingArtifactEntries, specRevisionTarget]
+  );
   const sanitizeNotebookName = useCallback((name: string) => {
     return name
       .trim()
@@ -903,6 +918,109 @@ export default function WorkbenchPage() {
     setSpecCodingSaveDirectory('');
     setSpecCodingSaveDialogOpen(true);
   }, []);
+  const handleSaveSpecRevision = useCallback(async () => {
+    if (!creationSessionSummary?.id || !specCodingDetails || !specCodingSummary) {
+      toast('error', '当前工作流没有可修订的创建期 Spec');
+      return;
+    }
+    if (specCodingSummary.source === 'run') {
+      toast('error', '当前显示的是运行快照，请先回到创建基线或使用 Delta 导入流程');
+      return;
+    }
+    const content = specRevisionDraft.trimEnd();
+    if (!content.trim()) {
+      toast('error', '修订内容不能为空');
+      return;
+    }
+    const currentContent = specRevisionBaseArtifact?.content || '';
+    if (content === currentContent.trimEnd()) {
+      toast('warning', '修订内容没有变化');
+      return;
+    }
+
+    const label = specRevisionBaseArtifact?.label || `${specRevisionTarget}.md`;
+    const revisionSummary = specRevisionSummary.trim() || `设计页手动修订 ${label}`;
+    const nextArtifacts = {
+      ...(specCodingDetails.artifacts || {}),
+      [specRevisionTarget]: content,
+    };
+    const nextSpecCoding = {
+      id: specCodingSummary.id,
+      version: specCodingSummary.version,
+      status: specCodingSummary.status,
+      summary: specCodingSummary.summary || revisionSummary,
+      workflowName: workflowConfig?.workflow?.name || creationSessionSummary.workflowName || configFile,
+      phases: specCodingDetails.phases || [],
+      assignments: specCodingDetails.assignments || [],
+      checkpoints: specCodingDetails.checkpoints || [],
+      tasks: specCodingDetails.tasks || [],
+      progress: specCodingSummary.progress || {
+        overallStatus: 'pending',
+        completedPhaseIds: [],
+        activePhaseId: specCodingDetails.phases?.[0]?.id,
+      },
+      revisions: specCodingDetails.revisions || [],
+      artifacts: nextArtifacts,
+      linkedConfigFilename: configFile,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      setSavingSpecRevision(true);
+      const data = await specCodingApi.updateCreationSession(creationSessionSummary.id, {
+        specCoding: nextSpecCoding,
+        specCodingStatus: specCodingSummary.status,
+        revisionSummary,
+      });
+      const session = data.session;
+      if (!session?.specCoding) {
+        throw new Error('保存后没有返回 Spec 内容');
+      }
+      const updatedSpec = session.specCoding;
+      setSpecCodingSummary({
+        id: updatedSpec.id,
+        version: updatedSpec.version,
+        status: updatedSpec.status,
+        source: 'creation',
+        summary: updatedSpec.summary,
+        phaseCount: updatedSpec.phases?.length || 0,
+        taskCount: updatedSpec.tasks?.length || 0,
+        assignmentCount: updatedSpec.assignments?.length || 0,
+        checkpointCount: updatedSpec.checkpoints?.length || 0,
+        progress: updatedSpec.progress,
+        latestRevision: updatedSpec.revisions?.at(-1) || null,
+      });
+      setSpecCodingDetails({
+        phases: updatedSpec.phases || [],
+        tasks: updatedSpec.tasks || [],
+        assignments: updatedSpec.assignments || [],
+        checkpoints: updatedSpec.checkpoints || [],
+        revisions: updatedSpec.revisions || [],
+        artifacts: updatedSpec.artifacts || {},
+      });
+      setSpecRevisionDraft('');
+      setSpecRevisionSummary('');
+      setSpecCodingArtifactTab(specRevisionTarget);
+      setSpecCodingExplorerTab('revisions');
+      toast('success', `${label} 修订已保存`);
+    } catch (error: any) {
+      toast('error', error?.message || '保存 Spec 修订失败');
+    } finally {
+      setSavingSpecRevision(false);
+    }
+  }, [
+    configFile,
+    creationSessionSummary,
+    specCodingDetails,
+    specCodingSummary,
+    specRevisionBaseArtifact,
+    specRevisionDraft,
+    specRevisionSummary,
+    specRevisionTarget,
+    toast,
+    workflowConfig?.workflow?.name,
+  ]);
   const saveSpecCodingArtifactToNotebook = useCallback(async () => {
     if (!activeSpecCodingArtifact?.content?.trim()) return;
     setSavingSpecCodingArtifact(true);
@@ -1620,11 +1738,12 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     if (!pendingHumanQuestion) return;
-    // 已停止的工作流不再跳转人工审查
-    if (workflowStatus !== 'running' && workflowStatus !== 'paused') return;
+    // 已停止/已结束的工作流不再跳转人工审查
+    if (workflowStatus === 'stopped' || workflowStatus === 'completed' || workflowStatus === 'failed' || workflowStatus === 'crashed') return;
     // 跳转到 workbench supervisor tab 而不是首页
+    dispatch({ type: 'SET_ACTIVE_TAB', payload: 'workflow' });
     setExecutionViewTabOverride('supervisor');
-  }, [pendingHumanQuestion, workflowStatus]);
+  }, [dispatch, pendingHumanQuestion, workflowStatus]);
 
   useEffect(() => {
     if (!humanApprovalMinimizedPulse) return;
@@ -1753,7 +1872,7 @@ export default function WorkbenchPage() {
     if (runId && runId !== currentUrlRun) {
       updateUrl({ run: runId });
     }
-  }, [runId]);
+  }, [runId, searchParams, updateUrl]);
 
   // Smart polling: start at 5s, increase to 10s if stable
   useEffect(() => {
@@ -3836,6 +3955,107 @@ export default function WorkbenchPage() {
     );
   };
 
+  const renderSpecCodingOverviewCard = () => {
+    if (!specCodingSummary) {
+      return (
+        <div className="rounded-2xl border bg-background/75 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
+                <h3 className="text-base font-semibold">Spec 基线</h3>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                当前工作流没有绑定 Spec 计划；需要完整制品时可在配置页查看或维护。
+              </p>
+            </div>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setDesignTab('config')}>
+              去配置
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="rounded-2xl border bg-background/75 p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>fact_check</span>
+              <h3 className="text-base font-semibold">Spec 基线摘要</h3>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              概览只展示当前设计依据；完整制品、任务状态和修订入口放在配置页。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Badge variant="outline" className="text-[10px]">v{specCodingSummary.version}</Badge>
+            <Badge variant="secondary" className="text-[10px]">{specCodingSummary.status}</Badge>
+            {specCodingSummary.source ? (
+              <Badge variant="outline" className="text-[10px]">
+                {specCodingSummary.source === 'run' ? 'Run Snapshot' : 'Creation Baseline'}
+              </Badge>
+            ) : null}
+          </div>
+        </div>
+        {specCodingSummary.summary ? (
+          <div className="rounded-xl border bg-muted/20 p-3 text-sm leading-6 text-muted-foreground">
+            {specCodingSummary.summary}
+          </div>
+        ) : null}
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-[10px] text-muted-foreground">阶段/状态</div>
+            <div className="mt-1 text-lg font-semibold">{specCodingSummary.phaseCount || specCodingDetails?.phases?.length || 0}</div>
+          </div>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-[10px] text-muted-foreground">任务</div>
+            <div className="mt-1 text-lg font-semibold">{specCodingTaskProgress.total || specCodingSummary.taskCount || 0}</div>
+          </div>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-[10px] text-muted-foreground">制品</div>
+            <div className="mt-1 text-lg font-semibold">
+              {specCodingArtifactEntries.filter((entry) => entry.content.trim()).length}/{specCodingArtifactEntries.length}
+            </div>
+          </div>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-[10px] text-muted-foreground">修订</div>
+            <div className="mt-1 text-lg font-semibold">{specCodingDetails?.revisions?.length || 0}</div>
+          </div>
+        </div>
+        {specCodingSummary.latestRevision ? (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs leading-5 text-muted-foreground">
+            <div className="font-medium text-foreground">最近修订 v{specCodingSummary.latestRevision.version}</div>
+            <div className="mt-1">{specCodingSummary.latestRevision.summary}</div>
+          </div>
+        ) : null}
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => {
+              setDesignTab('config');
+            }}
+          >
+            查看配置页
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => {
+              setSpecCodingExplorerTab('artifacts');
+              setSpecCodingModalOpen(true);
+            }}
+          >
+            打开 Spec
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const renderSpecCodingPanel = (options?: { className?: string }) => {
     const canMergeSpec = persistMode === 'repository'
       && Boolean(runId || initialRunId || selectedRun?.id)
@@ -4109,6 +4329,21 @@ export default function WorkbenchPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
+                onClick={() => {
+                  setSpecRevisionTarget(activeSpecCodingArtifact.key);
+                  setSpecRevisionDraft(activeSpecCodingArtifact.content || '');
+                  setSpecRevisionSummary('');
+                  setSpecCodingExplorerTab('revisions');
+                }}
+                disabled={!creationSessionSummary?.id || specCodingSummary?.source === 'run'}
+                title="修订当前 Spec"
+              >
+                <span className="material-symbols-outlined text-sm">edit_note</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
                 onClick={() => triggerDownload(activeSpecCodingArtifact.content, activeSpecCodingArtifact.label)}
                 disabled={!activeSpecCodingArtifact.content.trim()}
                 title="下载当前文档"
@@ -4141,6 +4376,24 @@ export default function WorkbenchPage() {
       </div>
       <div className="flex flex-1 overflow-hidden">
         <aside className="w-64 shrink-0 overflow-y-auto border-r border-border bg-muted/20">
+          <div className="grid grid-cols-2 gap-1 border-b border-border p-2">
+            <Button
+              variant={specCodingExplorerTab === 'artifacts' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setSpecCodingExplorerTab('artifacts')}
+            >
+              制品
+            </Button>
+            <Button
+              variant={specCodingExplorerTab === 'revisions' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => setSpecCodingExplorerTab('revisions')}
+            >
+              修订
+            </Button>
+          </div>
           <div className="border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
             制品列表
           </div>
@@ -4184,6 +4437,8 @@ export default function WorkbenchPage() {
           ) : null}
         </aside>
         <main className="flex min-w-0 flex-1 flex-col">
+          {specCodingExplorerTab === 'artifacts' ? (
+          <>
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{activeSpecCodingArtifact.title}</div>
@@ -4212,6 +4467,107 @@ export default function WorkbenchPage() {
               </div>
             )}
           </div>
+          </>
+          ) : (
+            <div className="flex-1 overflow-auto p-5">
+              <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+                <div className="space-y-3">
+                  <div className="rounded-xl border p-4">
+                    <div className="text-sm font-semibold">修订记录</div>
+                    <div className="mt-3 space-y-2">
+                      {specCodingDetails?.revisions?.length ? (
+                        [...specCodingDetails.revisions].reverse().map((revision) => (
+                          <div key={revision.id} className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium text-foreground">v{revision.version}</span>
+                              <span>{new Date(revision.createdAt).toLocaleString()}</span>
+                            </div>
+                            <div className="mt-1 leading-5">{revision.summary}</div>
+                            {revision.createdBy ? (
+                              <div className="mt-1 text-[10px]">修订者：{revision.createdBy}</div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">当前还没有修订记录。</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-3 rounded-xl border p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">手动修订 Spec</div>
+                      <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                        修改创建基线中的 requirements、design 或 tasks，并写入一条 revision 记录。
+                      </div>
+                    </div>
+                    {specCodingSummary?.source === 'run' ? (
+                      <Badge variant="outline" className="text-[10px]">Run 快照只读</Badge>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-[180px_1fr]">
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">修订制品</Label>
+                      <Select
+                        value={specRevisionTarget}
+                        onValueChange={(value) => {
+                          const key = value as 'requirements' | 'design' | 'tasks';
+                          const artifact = specCodingArtifactEntries.find((entry) => entry.key === key);
+                          setSpecRevisionTarget(key);
+                          setSpecRevisionDraft(artifact?.content || '');
+                        }}
+                        disabled={savingSpecRevision}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="requirements">requirements.md</SelectItem>
+                          <SelectItem value="design">design.md</SelectItem>
+                          <SelectItem value="tasks">tasks.md</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">修订摘要</Label>
+                      <Input
+                        value={specRevisionSummary}
+                        onChange={(event) => setSpecRevisionSummary(event.target.value)}
+                        placeholder={`例如：调整 ${specRevisionBaseArtifact?.label || 'design.md'} 的阶段边界和验收标准`}
+                        disabled={savingSpecRevision}
+                      />
+                    </div>
+                  </div>
+                  <Textarea
+                    value={specRevisionDraft}
+                    onChange={(event) => setSpecRevisionDraft(event.target.value)}
+                    rows={20}
+                    className="min-h-[420px] font-mono text-xs"
+                    placeholder="在这里编辑完整 Markdown 内容"
+                    disabled={savingSpecRevision || !creationSessionSummary?.id || specCodingSummary?.source === 'run'}
+                  />
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setSpecRevisionDraft(specRevisionBaseArtifact?.content || '')}
+                      disabled={savingSpecRevision}
+                    >
+                      恢复当前内容
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void handleSaveSpecRevision()}
+                      disabled={savingSpecRevision || !creationSessionSummary?.id || specCodingSummary?.source === 'run' || !specRevisionDraft.trim()}
+                    >
+                      {savingSpecRevision ? '保存中...' : '保存修订'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       </div>
     </>
@@ -4747,13 +5103,13 @@ export default function WorkbenchPage() {
                     {renderSpecCodingPanel()}
                   </div>
                 </TabsContent>
-                <TabsContent value="documents" className="mt-0 overflow-y-auto h-full p-4">
-                  <div className="space-y-3">
+                <TabsContent value="documents" className="mt-0 h-full overflow-hidden p-4">
+                  <div className="flex h-full min-h-0 flex-col gap-3">
                     <div className="rounded-2xl border border-border/60 bg-background/70 px-3 py-3">
                       <div className="text-sm font-medium">文档</div>
                       <div className="mt-1 text-xs text-muted-foreground">查看本次运行产生的文档与制品目录。</div>
                     </div>
-                    <div className="h-[calc(100vh-220px)] min-h-[420px] overflow-hidden rounded-xl border">
+                    <div className="min-h-0 flex-1 overflow-hidden rounded-xl border">
                       <DocumentsPanel
                         runId={runId || selectedRun?.id || null}
                         openLatestTimestampedRequest={openLatestAiDocRequest}
@@ -5296,7 +5652,7 @@ export default function WorkbenchPage() {
                       </div>
                     ) : null}
 
-                    {renderSpecCodingPanel({ className: 'space-y-4' })}
+                    {renderSpecCodingOverviewCard()}
                   </div>
                 </div>
               )}
@@ -5342,7 +5698,7 @@ export default function WorkbenchPage() {
                         <div>
                           <h3 className="text-base font-semibold">工作流配置</h3>
                           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            编辑工作流运行参数，并查看 requirements/design/tasks 等 Spec 计划制品入口。
+                            编辑工作流运行参数，并维护 requirements/design/tasks、任务状态和修订记录。
                           </p>
                         </div>
                       </div>

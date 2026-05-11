@@ -46,6 +46,7 @@ export default function StateMachineRuntimePanel({
   onStateClick,
 }: StateMachineRuntimePanelProps) {
   const [selectedTransition, setSelectedTransition] = useState<StateTransitionRecord | null>(null);
+  const inHumanApproval = currentState === '__human_approval__';
 
   // 过滤掉空描述的问题
   const validIssues = issueTracker.filter(i => i.description?.trim());
@@ -69,7 +70,7 @@ export default function StateMachineRuntimePanel({
       {/* 顶部状态卡片 */}
       <div className="grid grid-cols-4 gap-4">
         {/* 当前状态 */}
-        <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-4 text-white">
+        <div className={`${inHumanApproval ? 'bg-gradient-to-br from-amber-400 via-amber-500 to-orange-500 text-black ring-2 ring-amber-300 shadow-lg' : 'bg-gradient-to-br from-blue-500 to-blue-600 text-white'} rounded-xl p-4`}>
           <div className="flex items-center gap-2 mb-2">
             <Activity className="w-5 h-5" />
             <span className="text-sm font-medium">当前状态</span>
@@ -85,7 +86,12 @@ export default function StateMachineRuntimePanel({
               </button>
             ) : '未开始'}
           </div>
-          {status === 'running' && (
+          {inHumanApproval ? (
+            <div className="mt-2 inline-flex items-center gap-1 rounded-full bg-black/10 px-2 py-0.5 text-sm font-medium">
+              <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse" />
+              <span>人工审查待处理</span>
+            </div>
+          ) : status === 'running' && (
             <div className="flex items-center gap-1 mt-2 text-sm">
               <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
               <span>执行中...</span>
@@ -198,7 +204,7 @@ export default function StateMachineRuntimePanel({
                   `}
                 >
                   <div className="flex items-center gap-2 mb-2">
-                    <Badge variant="outline" className="text-xs">
+                    <Badge variant={record.to === '__human_approval__' || record.from === '__human_approval__' ? 'destructive' : 'outline'} className="text-xs">
                       #{stateHistory.length - idx}
                     </Badge>
                     <span className="text-xs text-gray-500">
@@ -206,7 +212,7 @@ export default function StateMachineRuntimePanel({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-2 text-sm font-medium mb-1">
+                  <div className={`flex items-center gap-2 text-sm font-medium mb-1 ${record.to === '__human_approval__' || record.from === '__human_approval__' ? 'text-amber-700 dark:text-amber-300' : ''}`}>
                     <button
                       type="button"
                       onClick={(event) => {
@@ -250,6 +256,11 @@ export default function StateMachineRuntimePanel({
                           +{record.issues.length - 2}
                         </Badge>
                       )}
+                    </div>
+                  )}
+                  {(record.to === '__human_approval__' || record.from === '__human_approval__') && (
+                    <div className="mt-2">
+                      <Badge variant="destructive" className="text-xs">人工审查节点</Badge>
                     </div>
                   )}
                 </div>

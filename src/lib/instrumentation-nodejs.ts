@@ -48,4 +48,11 @@ export async function runNodejsInstrumentation() {
   } catch (error) {
     console.error('[ACEHarness] Workflow recovery failed:', error);
   }
+
+  try {
+    const { ensureChannelEventBridgeRegistered } = await import('./channel-delivery');
+    ensureChannelEventBridgeRegistered();
+  } catch (error) {
+    console.error('[ACEHarness] Channel event bridge setup failed:', error);
+  }
 }

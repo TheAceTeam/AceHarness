@@ -213,6 +213,7 @@ function buildStateDiagramStepGroups(steps: any[]) {
 function StateNode({ data }: any) {
   const { state, isInitial, isFinal, isCurrent, currentStep, completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
+  const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
     const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
     const isRunningStep = currentStep === step.name || currentStep === `${state.name}-${step.name}`;
@@ -242,7 +243,13 @@ function StateNode({ data }: any) {
     <div
       className={`
         px-3 py-2 rounded-lg border-2 min-w-[220px] max-w-[320px] transition-all
-        ${isCurrent ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg' : isHumanCheckpoint ? 'border-orange-400 bg-orange-50 dark:bg-orange-950' : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800'}
+        ${isCurrent && isHumanApprovalState
+          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950 shadow-[0_0_0_3px_rgba(245,158,11,0.18)]'
+          : isCurrent
+            ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg'
+            : isHumanCheckpoint
+              ? 'border-amber-400 bg-amber-50/80 dark:bg-amber-950/80'
+              : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800'}
         ${isInitial ? 'ring-2 ring-green-400' : ''}
         ${isFinal ? 'ring-2 ring-red-400' : ''}
       `}
@@ -256,20 +263,24 @@ function StateNode({ data }: any) {
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
           {isHumanCheckpoint && (
-            <span className="material-symbols-outlined text-orange-500" style={{ fontSize: 13 }}>person</span>
+            <span className="material-symbols-outlined text-amber-600" style={{ fontSize: 13 }}>notification_important</span>
           )}
           <div className="font-semibold text-xs">{state.name}</div>
         </div>
         <div className="flex gap-1">
           {isInitial && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-green-100 dark:bg-green-900">初始</Badge>}
           {isFinal && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-red-100 dark:bg-red-900">终止</Badge>}
-          {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-orange-100 dark:bg-orange-900">人工</Badge>}
-          {isCurrent && <Badge className="text-[10px] px-1 py-0 bg-blue-500 text-white">执行中</Badge>}
+          {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工审查</Badge>}
+          {isCurrent && (
+            <Badge className={`text-[10px] px-1 py-0 ${isHumanApprovalState ? 'bg-amber-500 text-black' : 'bg-blue-500 text-white'}`}>
+              {isHumanApprovalState ? '等待处理' : '执行中'}
+            </Badge>
+          )}
         </div>
       </div>
 
       {state.description && (
-        <div className="text-[10px] text-gray-500 dark:text-gray-400 mb-1.5 line-clamp-1">
+        <div className={`text-[10px] mb-1.5 line-clamp-1 ${isHumanApprovalState ? 'text-amber-700 dark:text-amber-200 font-medium' : 'text-gray-500 dark:text-gray-400'}`}>
           {state.description}
         </div>
       )}
@@ -309,7 +320,7 @@ function StateNode({ data }: any) {
       {/* 人工审查节点：当前状态时显示可选跳转目标 */}
       {isHumanCheckpoint && isCurrent && isRunning && onForceTransition && (
         <div className="mt-1.5 space-y-0.5">
-          <div className="text-[10px] text-orange-600 dark:text-orange-400 font-medium mb-0.5">选择下一步：</div>
+          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold mb-0.5">人工审查待处理，请明确选择下一步：</div>
           {state.transitions && state.transitions.length > 0 ? (
             state.transitions.map((transition: any, idx: number) => (
               <button

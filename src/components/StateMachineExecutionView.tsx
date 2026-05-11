@@ -439,11 +439,18 @@ export default function StateMachineExecutionView({
             <GitBranch className="w-4 h-4" />
             <span>流转历史</span>
           </TabsTrigger>
-          <TabsTrigger value="supervisor" className={`flex items-center gap-2 ${hasPendingHumanQuestion ? 'text-orange-500 animate-pulse' : ''}`}>
+          <TabsTrigger
+            value="supervisor"
+            className={`flex items-center gap-2 ${
+              hasPendingHumanQuestion
+                ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
+                : ''
+            }`}
+          >
             <MessageSquare className="w-4 h-4" />
-            <span>Supervisor</span>
+            <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
             {hasPendingHumanQuestion && (
-              <span className="h-2 w-2 rounded-full bg-orange-500" />
+              <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
             )}
           </TabsTrigger>
         </TabsList>
@@ -651,10 +658,10 @@ export default function StateMachineExecutionView({
                     ) : null}
                     {item.eventTags.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {item.eventTags.map((t) => {
+                        {item.eventTags.map((t, index) => {
                           const cfg = EVENT_TAG_CONFIG[t];
                           return cfg ? (
-                            <span key={t} className={`inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${cfg.className}`}>
+                            <span key={`${item.id}-event-tag-${t}-${index}`} className={`inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${cfg.className}`}>
                               {cfg.label}
                             </span>
                           ) : null;

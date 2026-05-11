@@ -47,6 +47,13 @@ const CATEGORIES = [
       { icon: 'analytics', label: '分析运行', prompt: '分析最近一次运行的提示词效果', color: 'from-rose-500 to-rose-600' },
     ],
   },
+  {
+    title: '多Agent能力实验室',
+    icon: 'groups',
+    actions: [
+      { icon: 'psychology_alt', label: 'AI 狼人杀', prompt: '__HOME_ACTION__:werewolf_lab', color: 'from-slate-700 via-fuchsia-700 to-rose-600' },
+    ],
+  },
 ];
 
 const ALL_ACTIONS = CATEGORIES.flatMap(c => c.actions);
@@ -190,6 +197,10 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
   const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
 
   const handleActionClick = (action: (typeof ALL_ACTIONS)[number]) => {
+    if (action.prompt.startsWith('__HOME_ACTION__:')) {
+      onAction(action.prompt);
+      return;
+    }
     if (ACTION_GUIDES[action.label]) {
       setGuideAction(action);
       return;

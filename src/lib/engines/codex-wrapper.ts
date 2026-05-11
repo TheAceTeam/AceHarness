@@ -7,13 +7,16 @@
 
 import { EventEmitter } from 'events';
 import { existsSync, statSync } from 'fs';
-import { extname, join } from 'path';
+import { createRequire } from 'module';
+import { extname } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { findCommand } from '../command-exists';
+import { findCommand, getCommonCliSearchPaths } from '../command-exists';
 import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 import { repairWindowsMojibake } from '../mojibake-repair';
 import { readTextFileBestEffort } from '../text-decoding';
+
+const requireFromHere = createRequire(__filename);
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -28,8 +31,34 @@ const ZERO_USAGE_METADATA: EngineResultMetadata = {
   num_turns: 0,
 };
 
-function runtimeImport<T = any>(moduleName: string): Promise<T> {
-  return Function('moduleName', 'return import(moduleName)')(moduleName) as Promise<T>;
+async function runtimeImport<T = any>(moduleName: string): Promise<T> {
+  try {
+    return await Function('moduleName', 'return import(moduleName)')(moduleName) as T;
+  } catch (error: any) {
+    if (String(error?.message || error).includes('dynamic import callback')) {
+      return await import(/* @vite-ignore */ moduleName) as T;
+    }
+    throw error;
+  }
+}
+
+function canResolveCodexSdk(): boolean {
+  try {
+    requireFromHere.resolve('@openai/codex-sdk');
+    return true;
+  } catch {
+    try {
+      requireFromHere.resolve('@openai/codex-sdk/dist/index.js');
+      return true;
+    } catch {
+      try {
+        requireFromHere.resolve('@openai/codex/package.json');
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
 }
 
 function numberOrZero(value: unknown): number {
@@ -50,6 +79,13 @@ function metadataFromCodexEvent(event: Record<string, unknown> | null): EngineRe
     duration_api_ms: numberOrZero(event?.duration_api_ms),
     num_turns: numberOrZero(event?.num_turns),
   };
+}
+
+function isSpawnableCodexOverride(candidate: string | null | undefined): candidate is string {
+  if (!candidate) return false;
+  if (process.platform !== 'win32') return true;
+  const lower = candidate.toLowerCase();
+  return lower.endsWith('.exe') || lower.endsWith('.com');
 }
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
@@ -77,78 +113,15 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   async isAvailable(): Promise<boolean> {
     try {
       await runtimeImport('@openai/codex-sdk');
-    } catch { return false; }
-    return !!this.findCodexPath();
+      return true;
+    } catch {
+      return canResolveCodexSdk() || Boolean(this.findCodexFallbackPath());
+    }
   }
 
-  private getCodexSearchPaths(): string[] {
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    const candidates = process.platform === 'win32'
-      ? [
-          home ? join(home, 'AppData', 'Roaming', 'npm') : '',
-          home ? join(home, '.local', 'bin') : '',
-        ]
-      : [
-          home ? join(home, '.local', 'bin') : '',
-          '/usr/local/bin',
-          '/usr/bin',
-        ];
-    return candidates.filter(Boolean);
-  }
-
-  private getDirectCodexCandidates(): string[] {
-    const home = process.env.HOME || process.env.USERPROFILE || '';
-    const binaryName = process.platform === 'win32' ? 'codex.cmd' : 'codex';
-    const candidates: string[] = [];
-
-    const nvmDir = process.env.NVM_DIR;
-    if (nvmDir) {
-      candidates.push(join(nvmDir, 'versions', 'node', process.version, 'bin', binaryName));
-    }
-
-    if (process.platform === 'win32') {
-      const appData = process.env.APPDATA || '';
-      if (appData) candidates.push(join(appData, 'npm', 'codex.cmd'));
-      if (home) candidates.push(join(home, 'AppData', 'Roaming', 'npm', 'codex.cmd'));
-    } else {
-      if (home) {
-        candidates.push(join(home, '.nvm', 'versions', 'node', process.version, 'bin', 'codex'));
-        candidates.push(join(home, '.local', 'bin', 'codex'));
-      }
-      candidates.push('/usr/local/bin/codex');
-      candidates.push('/usr/bin/codex');
-    }
-
-    return candidates.filter(Boolean);
-  }
-
-  /** Locate the codex CLI binary from the current environment. */
-  private findCodexPath(): string | null {
-    for (const candidate of this.getDirectCodexCandidates()) {
-      if (existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    const resolvedFromPath = findCommand('codex', this.getCodexSearchPaths());
-    if (resolvedFromPath) {
-      if (process.platform !== 'win32') {
-        return resolvedFromPath;
-      }
-
-      const lowerResolved = resolvedFromPath.toLowerCase();
-      if (lowerResolved.endsWith('.exe') || lowerResolved.endsWith('.com')) {
-        return resolvedFromPath;
-      }
-
-      const exeCandidate = `${resolvedFromPath}.exe`;
-      if (existsSync(exeCandidate)) {
-        return exeCandidate;
-      }
-
-      return resolvedFromPath;
-    }
-
+  private findCodexFallbackPath(): string | null {
+    const resolved = findCommand('codex', getCommonCliSearchPaths());
+    if (isSpawnableCodexOverride(resolved)) return resolved;
     return null;
   }
 
@@ -293,128 +266,150 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return `\n\n**📝 文件变更**\n${parts.join('')}`;
   }
 
+  private createCodexClient(Codex: any, codexPathOverride?: string | null): any {
+    return codexPathOverride
+      ? new Codex({ codexPathOverride })
+      : new Codex();
+  }
+
+  private async runWithClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<EngineResult> {
+    if (!this.codexInstance || codexPathOverride) {
+      this.codexInstance = this.createCodexClient(Codex, codexPathOverride);
+      this.currentThread = null;
+    }
+
+    // Create or reuse thread
+    if (options.sessionId) {
+      this.currentThread = this.codexInstance.resumeThread(
+        options.sessionId,
+        this.getThreadOptions(options),
+      );
+    } else if (!this.currentThread) {
+      this.currentThread = this.codexInstance.startThread(this.getThreadOptions(options));
+    }
+
+    // Build prompt
+    let fullPrompt = '';
+    if (options.systemPrompt) {
+      fullPrompt += `# System Instructions\n\n${options.systemPrompt}\n\n`;
+    }
+    fullPrompt += `# Task\n\n${options.prompt}`;
+
+    // Stream events
+    const { events } = await this.currentThread.runStreamed(fullPrompt, {
+      signal: this._abortController!.signal,
+    });
+
+    let completionMetadata: EngineResultMetadata = ZERO_USAGE_METADATA;
+    for await (const event of events) {
+      switch (event.type) {
+        case 'item.started': {
+          const item = event.item;
+          if (item.type === 'command_execution') {
+            this.emitText(this.formatCommandExecution(item.command || ''));
+            this.lastBlockWasTool = true;
+          } else if (item.type === 'file_change') {
+            const formatted = this.formatFileChanges((item as any).changes || []);
+            if (formatted) {
+              this.emitText(formatted);
+              this.lastBlockWasTool = true;
+            }
+          }
+          break;
+        }
+        case 'item.completed': {
+          const item = event.item;
+          if (item.type === 'agent_message') {
+            const text = item.text || '';
+            const prefix = this.lastBlockWasTool && !text.startsWith('\n')
+              ? '\n\n<!-- chunk-boundary -->\n\n'
+              : '';
+            this.emitText(prefix + text);
+            this.lastBlockWasTool = false;
+          } else if (item.type === 'reasoning') {
+            this.emit('stream', {
+              type: 'thought',
+              content: (item as any).text || '',
+            } as EngineStreamEvent);
+          } else if (item.type === 'command_execution') {
+            const formatted = this.formatCommandResult((item as any).aggregated_output || '', (item as any).exit_code);
+            if (formatted) this.emitText(formatted);
+          } else if (item.type === 'file_change') {
+            const formatted = this.formatFileChanges((item as any).changes || []);
+            if (formatted) this.emitText(formatted);
+          } else if (item.type === 'todo_list') {
+            const items = (item as any).items || [];
+            if (items.length > 0) {
+              const done = items.filter((t: any) => t.completed).length;
+              const todoHeader = `📋 任务列表 (${done}/${items.length} 完成)`;
+              let content = `\n<!-- todo-list-marker -->\n<div class="ace-todo-list">\n<div class="ace-todo-header">${todoHeader}</div>\n`;
+              content += `<div class="ace-todo-progress"><div class="ace-todo-progress-bar" style="width:${Math.round((done / items.length) * 100)}%"></div></div>\n`;
+              for (const t of items) {
+                const icon = t.completed ? '✅' : '⬜';
+                const cls = t.completed ? 'ace-todo-done' : 'ace-todo-pending';
+                content += `<div class="ace-todo-item ${cls}">${icon} ${t.text}</div>\n`;
+              }
+              content += `</div>\n`;
+              this.emitText(content);
+            }
+          }
+          break;
+        }
+        case 'error': {
+          this.emit('stream', {
+            type: 'error',
+            content: event.message,
+          } as EngineStreamEvent);
+          break;
+        }
+        case 'turn.completed': {
+          completionMetadata = metadataFromCodexEvent(event as Record<string, unknown>);
+          break;
+        }
+        case 'turn.failed': {
+          const errMsg = (event as any).error?.message || 'Unknown error';
+          this.emit('stream', {
+            type: 'error',
+            content: errMsg,
+          } as EngineStreamEvent);
+          return {
+            success: false,
+            output: normalizeEngineOutput(this.collectedOutput),
+            error: errMsg,
+            metadata: ZERO_USAGE_METADATA,
+          };
+        }
+      }
+    }
+
+    return {
+      success: true,
+      output: normalizeEngineOutput(this.collectedOutput),
+      sessionId: this.currentThread?.id,
+      metadata: completionMetadata,
+    };
+  }
+
   async execute(options: EngineOptions): Promise<EngineResult> {
     this._abortController = new AbortController();
     this.collectedOutput = '';
     this.lastBlockWasTool = false;
     try {
       const { Codex } = await runtimeImport<typeof import('@openai/codex-sdk')>('@openai/codex-sdk');
-
-      if (!this.codexInstance) {
-        const codexPath = this.findCodexPath();
-        this.codexInstance = new Codex(codexPath ? { codexPathOverride: codexPath } : {});
-      }
-
-      // Create or reuse thread
-      if (options.sessionId) {
-        this.currentThread = this.codexInstance.resumeThread(
-          options.sessionId,
-          this.getThreadOptions(options),
-        );
-      } else if (!this.currentThread) {
-        this.currentThread = this.codexInstance.startThread(this.getThreadOptions(options));
-      }
-
-      // Build prompt
-      let fullPrompt = '';
-      if (options.systemPrompt) {
-        fullPrompt += `# System Instructions\n\n${options.systemPrompt}\n\n`;
-      }
-      fullPrompt += `# Task\n\n${options.prompt}`;
-
-      // Stream events
-      const { events } = await this.currentThread.runStreamed(fullPrompt, {
-        signal: this._abortController!.signal,
-      });
-
-      let completionMetadata: EngineResultMetadata = ZERO_USAGE_METADATA;
-      for await (const event of events) {
-        switch (event.type) {
-          case 'item.started': {
-            const item = event.item;
-            if (item.type === 'command_execution') {
-              this.emitText(this.formatCommandExecution(item.command || ''));
-              this.lastBlockWasTool = true;
-            } else if (item.type === 'file_change') {
-              const formatted = this.formatFileChanges((item as any).changes || []);
-              if (formatted) {
-                this.emitText(formatted);
-                this.lastBlockWasTool = true;
-              }
-            }
-            break;
-          }
-          case 'item.completed': {
-            const item = event.item;
-            if (item.type === 'agent_message') {
-              const text = item.text || '';
-              const prefix = this.lastBlockWasTool && !text.startsWith('\n')
-                ? '\n\n<!-- chunk-boundary -->\n\n'
-                : '';
-              this.emitText(prefix + text);
-              this.lastBlockWasTool = false;
-            } else if (item.type === 'reasoning') {
-              this.emit('stream', {
-                type: 'thought',
-                content: (item as any).text || '',
-              } as EngineStreamEvent);
-            } else if (item.type === 'command_execution') {
-              const formatted = this.formatCommandResult((item as any).aggregated_output || '', (item as any).exit_code);
-              if (formatted) this.emitText(formatted);
-            } else if (item.type === 'file_change') {
-              const formatted = this.formatFileChanges((item as any).changes || []);
-              if (formatted) this.emitText(formatted);
-            } else if (item.type === 'todo_list') {
-              const items = (item as any).items || [];
-              if (items.length > 0) {
-                const done = items.filter((t: any) => t.completed).length;
-                const todoHeader = `📋 任务列表 (${done}/${items.length} 完成)`;
-                let content = `\n<!-- todo-list-marker -->\n<div class="ace-todo-list">\n<div class="ace-todo-header">${todoHeader}</div>\n`;
-                content += `<div class="ace-todo-progress"><div class="ace-todo-progress-bar" style="width:${Math.round((done / items.length) * 100)}%"></div></div>\n`;
-                for (const t of items) {
-                  const icon = t.completed ? '✅' : '⬜';
-                  const cls = t.completed ? 'ace-todo-done' : 'ace-todo-pending';
-                  content += `<div class="ace-todo-item ${cls}">${icon} ${t.text}</div>\n`;
-                }
-                content += `</div>\n`;
-                this.emitText(content);
-              }
-            }
-            break;
-          }
-          case 'error': {
-            this.emit('stream', {
-              type: 'error',
-              content: event.message,
-            } as EngineStreamEvent);
-            break;
-          }
-          case 'turn.completed': {
-            completionMetadata = metadataFromCodexEvent(event as Record<string, unknown>);
-            break;
-          }
-          case 'turn.failed': {
-            const errMsg = (event as any).error?.message || 'Unknown error';
-            this.emit('stream', {
-              type: 'error',
-              content: errMsg,
-            } as EngineStreamEvent);
-            return {
-              success: false,
-              output: normalizeEngineOutput(this.collectedOutput),
-              error: errMsg,
-              metadata: ZERO_USAGE_METADATA,
-            };
-          }
+      try {
+        return await this.runWithClient(Codex, options);
+      } catch (primaryError: any) {
+        if (primaryError?.name === 'AbortError' || this._abortController?.signal.aborted) {
+          throw primaryError;
         }
+        const fallbackPath = this.findCodexFallbackPath();
+        if (!fallbackPath) throw primaryError;
+        this.codexInstance = null;
+        this.currentThread = null;
+        this.collectedOutput = '';
+        this.lastBlockWasTool = false;
+        return await this.runWithClient(Codex, options, fallbackPath);
       }
-
-      return {
-        success: true,
-        output: normalizeEngineOutput(this.collectedOutput),
-        sessionId: this.currentThread?.id,
-        metadata: completionMetadata,
-      };
     } catch (error: any) {
       // Abort is expected when cancel() is called
       if (error?.name === 'AbortError' || this._abortController?.signal.aborted) {

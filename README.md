@@ -45,6 +45,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 - [产品界面](#产品界面)
 - [工作流案例](#工作流案例)
 - [配置与引擎](#配置与引擎)
+- [渠道接入](#渠道接入)
 - [文档](#文档)
 - [开发参考](#开发参考)
 - [贡献指南](#贡献指南)
@@ -136,6 +137,12 @@ ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程�
 查看四个案例的根因路径、执行数据与交付结果：[工作流案例文档](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/workflow-cases.md)。
 
 ## 配置与引擎
+
+## 渠道接入
+
+ACEHarness 现已支持把工作流运行时对话和多 Agent 圆桌桥接到外部聊天平台。当前内置了 `Feishu`、`DingTalk`、`WeChat Bridge`、`Generic Webhook` 四类 provider 模板，可通过 `POST /api/channels/setup` 一键生成 webhook 和共享密钥，再由外部平台或桥接器把消息投递到 `/api/channels/inbound/:integrationId`。
+
+详细说明见：[渠道接入文档](./docs/channel-integrations.md)。
 
 ### 环境变量 (`.env.local`)
 

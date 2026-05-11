@@ -11,6 +11,11 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'error';
   content: string;
   rawContent?: string;
+  source?: {
+    type: 'wechat';
+    label?: string;
+    direction?: 'inbound' | 'outbound';
+  };
   actions?: ActionState[];
   cards?: any[];
   engine?: string;
@@ -87,6 +92,8 @@ interface DashboardChatContextType {
       team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
+    sessionWorkbenchState?: SessionWorkbenchState;
+    messages?: Array<Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>>;
   }) => string;
   deleteSession: (id: string) => void;
   renameSession: (id: string, title: string) => void;
@@ -114,6 +121,7 @@ interface DashboardChatContextType {
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
+  updateSessionCreationBinding: (sessionId: string, creationSession: ChatSession['creationSession'] | null) => Promise<void>;
   appendVisibleSessionTag: (sessionId: string, label: string) => Promise<void>;
   appendSessionMessage: (
     sessionId: string,
@@ -137,12 +145,46 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
+  updateSessionCreationBinding: async () => {},
   appendVisibleSessionTag: async () => {},
   appendSessionMessage: async () => {},
 });
 
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ACTIVE_SESSION_STORAGE_KEY = 'aceharness:chat:active-session-id';
+
+function readStoredActiveSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const scoped = window.sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    if (scoped) return scoped;
+  } catch {}
+
+  try {
+    return window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredActiveSessionId(sessionId: string | null): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    if (sessionId) {
+      window.sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+    } else {
+      window.sessionStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    }
+  } catch {}
+
+  // Remove the legacy shared-tab key so different browser windows stop
+  // competing over the same active session selection.
+  try {
+    window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {}
+}
 
 // --- Server API helpers ---
 function getAuthHeaders(): Record<string, string> {
@@ -359,9 +401,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     apiListSessions().then(list => {
       setSessions(list);
       if (list.length === 0) return;
-      const savedActiveSessionId = typeof window !== 'undefined'
-        ? window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)
-        : null;
+      const savedActiveSessionId = readStoredActiveSessionId();
       const nextActiveSession = savedActiveSessionId
         ? list.find((session) => session.id === savedActiveSessionId)
         : null;
@@ -370,12 +410,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (activeSessionId) {
-      window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
-    } else {
-      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
-    }
+    writeStoredActiveSessionId(activeSessionId);
   }, [activeSessionId]);
 
   // Re-parse messages with unparsed action/card blocks in content
@@ -587,7 +622,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [activeSessionId]);
 
   useEffect(() => {
-    if (!activeSessionId || !activeSession?.workflowBinding) return;
+    const shouldRefreshFromPersistence = Boolean(
+      activeSessionId
+      && (
+        activeSession?.workflowBinding
+        || activeSession?.sessionWorkbenchState?.wechatBinding
+      )
+    );
+    if (!shouldRefreshFromPersistence || !activeSessionId) return;
 
     let cancelled = false;
     const refreshWorkflowSession = async () => {
@@ -632,12 +674,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
 
     refreshWorkflowSession();
-    const timer = window.setInterval(refreshWorkflowSession, 5000);
+    const timer = window.setInterval(refreshWorkflowSession, activeSession?.sessionWorkbenchState?.wechatBinding ? 3000 : 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSession?.workflowBinding?.configFile, activeSession?.workflowBinding?.runId, activeSessionId, reparseSession]);
+  }, [
+    activeSession?.workflowBinding?.configFile,
+    activeSession?.workflowBinding?.runId,
+    activeSession?.sessionWorkbenchState?.wechatBinding?.bindingId,
+    activeSessionId,
+    reparseSession,
+  ]);
 
   // Debounced persist to server
   const pendingSessionRef = useRef<ChatSession | null>(null);
@@ -700,6 +748,38 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       updatedAt: Date.now(),
       sessionWorkbenchState: typeof state === 'function' ? state(session.sessionWorkbenchState) : state,
     }));
+  }, [updateActiveSession]);
+
+  const updateSessionCreationBinding = useCallback(async (
+    sessionId: string,
+    creationSession: ChatSession['creationSession'] | null
+  ) => {
+    const applyBinding = (session: ChatSession): ChatSession => ({
+      ...session,
+      updatedAt: Date.now(),
+      creationSession: creationSession || undefined,
+    });
+
+    if (activeSessionRef.current?.id === sessionId) {
+      updateActiveSession((session) => applyBinding(session));
+      return;
+    }
+
+    const session = await apiLoadSession(sessionId);
+    if (!session) return;
+    const updated = applyBinding(session);
+    await apiSaveSession(updated);
+    setSessions((list) => list.map((item) => item.id === updated.id ? {
+      ...item,
+      title: updated.title,
+      updatedAt: updated.updatedAt,
+      messageCount: updated.messages.length,
+      lastMessage: updated.messages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      agentBinding: updated.agentBinding,
+      workflowBinding: updated.workflowBinding,
+      creationSession: updated.creationSession,
+      sessionWorkbenchState: updated.sessionWorkbenchState,
+    } : item));
   }, [updateActiveSession]);
 
   const appendVisibleSessionTag = useCallback(async (sessionId: string, label: string) => {
@@ -802,12 +882,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
+    sessionWorkbenchState?: SessionWorkbenchState;
+    messages?: Array<Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>>;
   }) => {
     const id = genId();
     const title = options?.title?.trim() || '新对话';
     const now = Date.now();
+    const initialMessages: ChatMessage[] = (options?.messages || []).map((message, index) => ({
+      ...message,
+      id: message.id || genId(),
+      timestamp: message.timestamp || now + index,
+    }));
     const session: ChatSession = {
-      id, title, model, engine: engine || undefined, messages: [],
+      id, title, model, engine: engine || undefined, messages: initialMessages,
       agentBinding: options?.agentBinding ? {
         agentName: options.agentBinding.agentName,
         team: options.agentBinding.team,
@@ -815,13 +902,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         createdAt: now,
         updatedAt: now,
       } : undefined,
-      sessionWorkbenchState: undefined,
+      sessionWorkbenchState: options?.sessionWorkbenchState,
       createdAt: now, updatedAt: now,
     };
     const summary: SessionSummary = {
       id, title, model,
       createdAt: session.createdAt, updatedAt: session.updatedAt,
-      messageCount: 0,
+      messageCount: initialMessages.length,
+      lastMessage: initialMessages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
       agentBinding: session.agentBinding,
       sessionWorkbenchState: session.sessionWorkbenchState,
     };
@@ -1649,6 +1737,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
+      updateSessionCreationBinding,
       appendVisibleSessionTag,
       appendSessionMessage,
     }}>

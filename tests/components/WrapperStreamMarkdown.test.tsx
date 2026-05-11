@@ -42,6 +42,33 @@ function renderMessage(content: string, extraMessage: Record<string, any> = {}) 
   );
 }
 
+function renderWerewolfMessage(view: { mode: 'god' | 'night'; viewer?: string }) {
+  return render(
+    <ChatMessage
+      message={{
+        id: 'ww1',
+        role: 'assistant',
+        content: '狼人夜间讨论：今晚落刀预言家。',
+        rawContent: '狼人夜间讨论：今晚落刀预言家。',
+        cards: [{
+          type: 'werewolf_speech',
+          speakerName: '不动声色的谋略高手',
+          speakerType: 'agent',
+          actionLabel: '狼人内部会议',
+          visibility: 'werewolves',
+          audience: ['不动声色的谋略高手'],
+          colorIndex: 1,
+        }],
+      }}
+      werewolfView={view}
+      onConfirmAction={() => {}}
+      onRejectAction={() => {}}
+      onUndoAction={() => {}}
+      onRetryAction={() => {}}
+    />
+  );
+}
+
 async function openAllDetails(container: HTMLElement) {
   const detailsNodes = Array.from(container.querySelectorAll('details'));
   for (const details of detailsNodes) {
@@ -223,6 +250,45 @@ async function buildAcpRenderedMessage(
 }
 
 describe('Wrapper stream markdown rendering', () => {
+  test('werewolf history re-renders hidden night actions when switching view', () => {
+    const { rerender } = renderWerewolfMessage({ mode: 'night' });
+    expect(screen.getByText(/当前视角不可见/)).toBeInTheDocument();
+    expect(screen.queryByText(/今晚落刀预言家/)).toBeNull();
+    expect(screen.queryByText('不动声色的谋略高手')).toBeNull();
+    expect(screen.queryByText('狼人内部会议')).toBeNull();
+    expect(screen.queryByText('狼队可见')).toBeNull();
+    expect(screen.getByText('隐藏行动')).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain('不动声色的谋略高手');
+
+    rerender(
+      <ChatMessage
+        message={{
+          id: 'ww1',
+          role: 'assistant',
+          content: '狼人夜间讨论：今晚落刀预言家。',
+          rawContent: '狼人夜间讨论：今晚落刀预言家。',
+          cards: [{
+            type: 'werewolf_speech',
+            speakerName: '不动声色的谋略高手',
+            speakerType: 'agent',
+            actionLabel: '狼人内部会议',
+            visibility: 'werewolves',
+            audience: ['不动声色的谋略高手'],
+            colorIndex: 1,
+          }],
+        }}
+        werewolfView={{ mode: 'god' }}
+        onConfirmAction={() => {}}
+        onRejectAction={() => {}}
+        onUndoAction={() => {}}
+        onRetryAction={() => {}}
+      />
+    );
+
+    expect(screen.getByText(/今晚落刀预言家/)).toBeInTheDocument();
+    expect(screen.queryByText(/当前视角不可见/)).toBeNull();
+  });
+
   test('codex renders command details, short output, and assistant text', async () => {
     const { view } = await buildCodexRenderedMessage([
       {

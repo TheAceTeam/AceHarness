@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -93,6 +94,7 @@ const WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT = [
 ].join('\n');
 const PERSIST_SPEC_MODE_STORAGE_KEY = 'aceharness.newConfig.persistMode';
 const PERSIST_SPEC_ROOT_STORAGE_KEY = 'aceharness.newConfig.specRoot';
+const SPEC_PLANNING_ENABLED_STORAGE_KEY = 'aceharness.newConfig.specPlanningEnabled';
 
 function normalizePersistSpecValues(values: { persistMode?: string; specRoot?: string }) {
   const persistMode = values.persistMode === 'repository' ? 'repository' : 'none';
@@ -1251,7 +1253,7 @@ export default function NewConfigModal({
   inheritModel = '',
 }: NewConfigModalProps) {
   const { toast } = useToast();
-  const { appendSessionMessage } = useChat();
+  const { appendSessionMessage, updateSessionCreationBinding } = useChat();
   const { resolvedTheme } = useTheme();
   const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>('phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
@@ -1316,6 +1318,9 @@ export default function NewConfigModal({
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
+  const [specPlanningEnabled, setSpecPlanningEnabled] = useState(true);
+  const draftBootstrapStartedRef = useRef(false);
+  const draftFieldSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Refs to always read latest engine/model in sendToAi
   const aiEngineRef = useRef(inheritEngine);
   const aiModelRef = useRef(inheritModel);
@@ -1373,6 +1378,8 @@ export default function NewConfigModal({
   const persistModeValue = watch('persistMode') || 'none';
   const specRootValue = watch('specRoot') || '.spec';
   const showReferenceWorkflowOptions = workflowMode === 'ai-guided' && !hideAiGuided;
+  const useSpecPlanningFlow = workflowMode === 'ai-guided' && specPlanningEnabled;
+  const showSpecPlanningToggle = workflowMode === 'ai-guided' || workflowMode === 'state-machine';
   const referenceWorkflowMode = getReferenceWorkflowMode(workflowMode);
   const filteredReferenceWorkflows = useMemo(() => (
     referenceWorkflows.filter((workflow) => normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode)
@@ -1413,10 +1420,12 @@ export default function NewConfigModal({
   useEffect(() => {
     if (!isOpen) {
       modalWasOpenRef.current = false;
+      draftBootstrapStartedRef.current = false;
       return;
     }
     if (modalWasOpenRef.current) return;
     modalWasOpenRef.current = true;
+    draftBootstrapStartedRef.current = false;
     draftSessionCreatedInCurrentOpenRef.current = false;
     if (!resumeCreationSessionId) {
       setPreviewSession(null);
@@ -1432,11 +1441,15 @@ export default function NewConfigModal({
     if (typeof window === 'undefined') return;
     const storedMode = localStorage.getItem(PERSIST_SPEC_MODE_STORAGE_KEY);
     const storedRoot = localStorage.getItem(PERSIST_SPEC_ROOT_STORAGE_KEY);
+    const storedSpecPlanning = localStorage.getItem(SPEC_PLANNING_ENABLED_STORAGE_KEY);
     if (storedMode === 'repository' || storedMode === 'none') {
       setValue('persistMode', storedMode, { shouldDirty: false, shouldValidate: false });
     }
     if (storedRoot && storedRoot.trim()) {
       setValue('specRoot', storedRoot.trim(), { shouldDirty: false, shouldValidate: false });
+    }
+    if (storedSpecPlanning === '0' || storedSpecPlanning === '1') {
+      setSpecPlanningEnabled(storedSpecPlanning !== '0');
     }
   }, [isOpen, resumeCreationSessionId, setValue]);
 
@@ -1445,7 +1458,8 @@ export default function NewConfigModal({
     if (typeof window === 'undefined') return;
     localStorage.setItem(PERSIST_SPEC_MODE_STORAGE_KEY, persistModeValue === 'repository' ? 'repository' : 'none');
     localStorage.setItem(PERSIST_SPEC_ROOT_STORAGE_KEY, (specRootValue || '.spec').trim() || '.spec');
-  }, [isOpen, persistModeValue, specRootValue]);
+    localStorage.setItem(SPEC_PLANNING_ENABLED_STORAGE_KEY, specPlanningEnabled ? '1' : '0');
+  }, [isOpen, persistModeValue, specPlanningEnabled, specRootValue]);
 
   useEffect(() => {
     if (!isOpen || showReferenceWorkflowOptions) return;
@@ -1849,6 +1863,24 @@ export default function NewConfigModal({
     }
   }, [validateWorkflowDraftConfig]);
 
+  const ensurePlanningChatSession = useCallback(async () => {
+    if (planningFrontendSessionId) return planningFrontendSessionId;
+    const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: `创建计划：${getValues('workflowName') || '新工作流'}`,
+        model: aiModelRef.current || undefined,
+        engine: aiEngineRef.current || undefined,
+        visibility: 'private',
+      }),
+    });
+    if (!data?.session?.id) {
+      throw new Error(data?.error || '创建计划会话失败');
+    }
+    setPlanningFrontendSessionId(data.session.id);
+    return data.session.id as string;
+  }, [getValues, planningFrontendSessionId]);
+
   // Send a message to the AI stream and show the response
   const sendToAi = useCallback(async (
     message: string,
@@ -1862,7 +1894,7 @@ export default function NewConfigModal({
 
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const targetFrontendSessionId = planningFrontendSessionId || frontendSessionId || undefined;
+      const targetFrontendSessionId = await ensurePlanningChatSession();
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2026,7 +2058,7 @@ export default function NewConfigModal({
       toast('error', 'AI 请求失败: ' + err.message);
       setAiPhase('waiting');
     }
-  }, [checkExistingWorkflowFile, formStep, frontendSessionId, getValues, planningFrontendSessionId, toast, validateWorkflowDraftConfig]);
+  }, [checkExistingWorkflowFile, ensurePlanningChatSession, formStep, getValues, toast, validateWorkflowDraftConfig]);
 
   // PLACEHOLDER_SUBMIT_AND_RENDER
 
@@ -2088,26 +2120,87 @@ export default function NewConfigModal({
   }, [clearErrors, getValues, setError, toast]);
 
   const bindDraftCreationSessionToChat = useCallback(async (session: any) => {
-    const targetChatSessionId = session?.chatSessionId || planningFrontendSessionId;
-    if (!targetChatSessionId || !session?.id) return;
-    const sessionData = await modalSessionJsonFetch<any>(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`);
-    if (!sessionData?.session) return;
-    await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`, {
-      method: 'PUT',
+    const creationBinding = {
+      creationSessionId: session.id,
+      filename: session.filename,
+      workflowName: session.workflowName,
+      status: session.status,
+      specCodingId: session.specCoding?.id,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+    };
+    const targetChatSessionIds = Array.from(new Set([
+      session?.chatSessionId,
+      planningFrontendSessionId,
+      frontendSessionId,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+    if (targetChatSessionIds.length === 0 || !session?.id) return;
+
+    await Promise.all(targetChatSessionIds.map(async (targetChatSessionId) => {
+      const sessionData = await modalSessionJsonFetch<any>(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`).catch(() => null);
+      if (!sessionData?.session) return;
+      await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...sessionData.session,
+          creationSession: creationBinding,
+        }),
+      }).catch(() => {});
+      await updateSessionCreationBinding(targetChatSessionId, creationBinding).catch(() => {});
+    }));
+  }, [frontendSessionId, planningFrontendSessionId, updateSessionCreationBinding]);
+
+  const createInitialDraftCreationSession = useCallback(async () => {
+    if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) {
+      return draftCreationSessionId;
+    }
+
+    const planningSessionId = await ensurePlanningChatSession();
+    const values = getValues();
+    const { persistMode, specRoot } = normalizePersistSpecValues(values);
+    const config = buildPreviewConfigFromForm();
+    const data = await modalSessionJsonFetch<any>('/api/spec-coding/sessions', {
+      method: 'POST',
       body: JSON.stringify({
-        ...sessionData.session,
-        creationSession: {
-          creationSessionId: session.id,
-          filename: session.filename,
-          workflowName: session.workflowName,
-          status: session.status,
-          specCodingId: session.specCoding?.id,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
+        chatSessionId: planningSessionId,
+        status: 'draft',
+        specCodingStatus: 'draft',
+        filename: values.filename || generateDefaultFilename(),
+        workflowName: values.workflowName || '新工作流',
+        referenceWorkflow: effectiveReferenceWorkflowValue,
+        mode: workflowMode,
+        workingDirectory: values.workingDirectory || '',
+        workspaceMode: values.workspaceMode || 'in-place',
+        description: values.description,
+        requirements: values.requirements,
+        persistMode,
+        specRoot,
+        config,
+        uiState: {
+          formStep: 1,
+          planningStage: 'idle',
+          clarificationAnswers: {},
         },
       }),
-    }).catch(() => {});
-  }, [planningFrontendSessionId]);
+    });
+    if (!data?.session?.id) {
+      throw new Error(data?.error || '创建创建态草稿失败');
+    }
+    setDraftCreationSessionId(data.session.id);
+    setPlanningFrontendSessionId(planningSessionId);
+    draftSessionCreatedInCurrentOpenRef.current = true;
+    await bindDraftCreationSessionToChat(data.session);
+    return data.session.id as string;
+  }, [
+    bindDraftCreationSessionToChat,
+    buildPreviewConfigFromForm,
+    draftCreationSessionId,
+    effectiveReferenceWorkflowValue,
+    ensurePlanningChatSession,
+    generateDefaultFilename,
+    getValues,
+    workflowMode,
+  ]);
 
   const createPreviewSession = useCallback(async (draft?: PlanDraftResult, chatSessionId?: string | null) => {
     const values = getValues();
@@ -2255,6 +2348,9 @@ export default function NewConfigModal({
 
   const ensureDraftCreationSession = useCallback(async (chatSessionId?: string | null) => {
     if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) return draftCreationSessionId;
+    if (!chatSessionId) {
+      return createInitialDraftCreationSession();
+    }
     const values = getValues();
     const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const config = buildPreviewConfigFromForm();
@@ -2289,7 +2385,7 @@ export default function NewConfigModal({
     draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
     return data.session.id as string;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
+  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
 
   const persistDraftUiState = useCallback(async (input: {
     formStep: 2 | 3 | 4 | 5;
@@ -2311,27 +2407,79 @@ export default function NewConfigModal({
     }).catch(() => {});
   }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
-  const ensurePlanningChatSession = useCallback(async () => {
-    if (frontendSessionId) {
-      setPlanningFrontendSessionId(frontendSessionId);
-      return frontendSessionId;
-    }
-    if (planningFrontendSessionId) return planningFrontendSessionId;
-    const data = await modalSessionJsonFetch<any>('/api/chat/sessions', {
-      method: 'POST',
-      body: JSON.stringify({
-        title: `创建计划：${getValues('workflowName') || '新工作流'}`,
-        model: aiModelRef.current || undefined,
-        engine: aiEngineRef.current || undefined,
-        visibility: 'private',
-      }),
+  useEffect(() => {
+    if (!isOpen || resumeCreationSessionId || !specPlanningEnabled) return;
+    if (draftCreationSessionId || draftBootstrapStartedRef.current) return;
+    draftBootstrapStartedRef.current = true;
+    createInitialDraftCreationSession().catch(() => {
+      draftBootstrapStartedRef.current = false;
     });
-    if (!data?.session?.id) {
-      throw new Error(data?.error || '创建计划会话失败');
+  }, [createInitialDraftCreationSession, draftCreationSessionId, isOpen, resumeCreationSessionId, specPlanningEnabled]);
+
+  useEffect(() => {
+    if (!isOpen || !draftCreationSessionId || restoringSessionRef.current) return;
+
+    if (draftFieldSyncTimerRef.current) {
+      clearTimeout(draftFieldSyncTimerRef.current);
     }
-    setPlanningFrontendSessionId(data.session.id);
-    return data.session.id as string;
-  }, [frontendSessionId, getValues, planningFrontendSessionId]);
+
+    draftFieldSyncTimerRef.current = setTimeout(() => {
+      const values = getValues();
+      const { persistMode, specRoot } = normalizePersistSpecValues(values);
+      const config = buildPreviewConfigFromForm();
+      void modalSessionJsonFetch(`/api/spec-coding/sessions/${encodeURIComponent(draftCreationSessionId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          chatSessionId: planningFrontendSessionId || undefined,
+          filename: values.filename || generateDefaultFilename(),
+          workflowName: values.workflowName || '新工作流',
+          referenceWorkflow: effectiveReferenceWorkflowValue,
+          mode: workflowMode,
+          workingDirectory: values.workingDirectory || '',
+          workspaceMode: values.workspaceMode || 'in-place',
+          description: values.description,
+          requirements: values.requirements,
+          persistMode,
+          specRoot,
+          config,
+          uiState: {
+            formStep: formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5 ? formStep : 1,
+            planningStage,
+            clarificationForm: clarificationForm || undefined,
+            clarificationAnswers,
+          },
+        }),
+      }).catch(() => {});
+    }, 250);
+
+    return () => {
+      if (draftFieldSyncTimerRef.current) {
+        clearTimeout(draftFieldSyncTimerRef.current);
+        draftFieldSyncTimerRef.current = null;
+      }
+    };
+  }, [
+    buildPreviewConfigFromForm,
+    clarificationAnswers,
+    clarificationForm,
+    descriptionValue,
+    draftCreationSessionId,
+    effectiveReferenceWorkflowValue,
+    filenameValue,
+    formStep,
+    generateDefaultFilename,
+    getValues,
+    isOpen,
+    persistModeValue,
+    planningFrontendSessionId,
+    planningStage,
+    requirementsValue,
+    specRootValue,
+    workflowMode,
+    workflowNameValue,
+    workingDirectoryValue,
+    workspaceModeValue,
+  ]);
 
   const buildClarificationSystemPrompt = useCallback((previewConfig: any) => {
     const data = getValues();
@@ -2871,6 +3019,7 @@ export default function NewConfigModal({
     const specCoding = activePreviewSession?.specCoding || {};
     const artifacts = specCoding.artifacts || {};
     const workflowDraftSummary = activePreviewSession?.workflowDraftSummary;
+    const hasConfirmedSpecCoding = Boolean(specCoding?.id);
 
     setAiFilename('');
     setAiMessages([]);
@@ -2931,7 +3080,8 @@ ${truncateForPrompt(artifacts.tasks, 5000)}
 `
       : '';
 
-    const prompt = `请基于用户已经确认的 SpecCoding 和 Agent 分工，直接搭建 AceHarness 工作流 YAML 草案。
+    const prompt = hasConfirmedSpecCoding
+      ? `请基于用户已经确认的 SpecCoding 和 Agent 分工，直接搭建 AceHarness 工作流 YAML 草案。
 
 **目标文件名**: configs/${filename}
 **工作流名称**: ${data.workflowName}
@@ -2957,6 +3107,31 @@ ${confirmedSpecPrompt}
 10. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
 11. 输出 </result> 后不要再追加任何文字。
 12. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
+
+请现在直接开始生成 workflow YAML 草案。系统会校验 <result> 内的 config；如有问题，系统会把校验错误直接反馈给你继续修正。`
+      : `请基于用户输入和参考 workflow，直接搭建 AceHarness 工作流 YAML 草案。本次创建已关闭 Spec 计划步骤，所以不要生成 requirements/design/tasks，也不要强制添加 specTaskBinding。
+
+**目标文件名**: configs/${filename}
+**工作流名称**: ${data.workflowName}
+${data.referenceWorkflow ? `**参考工作流**: ${data.referenceWorkflow}` : ''}
+**工作目录**: ${workDir}
+**工作区模式**: ${data.workspaceMode === 'isolated-copy' ? '创建副本工程后执行（isolated-copy）' : '直接在工作目录执行（in-place）'}
+**需求描述**: ${reqs}
+${data.description ? `**补充说明**: ${data.description}` : ''}
+${referencePrompt}
+${recommendationPrompt}
+
+当前阶段要求：
+1. 直接生成 workflow YAML 草案，不要重新开启 SpecCoding，不要要求用户先确认 Spec。
+2. 草案必须明确 workflow mode、context、supervisor、roles、phases/states、steps、agent 分配、checkpoint 和必要的 preCommands。
+3. 如果引用 Agent，请优先使用推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
+4. 本次没有 SpecCoding.tasks，因此不要强制提供 specTaskBinding；只有在确有明确需求编号或制品引用时才可添加非必需绑定。
+5. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
+6. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
+7. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
+8. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
+9. 输出 </result> 后不要再追加任何文字。
+10. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
 
 请现在直接开始生成 workflow YAML 草案。系统会校验 <result> 内的 config；如有问题，系统会把校验错误直接反馈给你继续修正。`;
 
@@ -3544,7 +3719,9 @@ ${confirmedSpecPrompt}
     }
 
     try {
-      await validatePersistedSpecSelection(validation.data);
+      if (specPlanningEnabled) {
+        await validatePersistedSpecSelection(validation.data);
+      }
     } catch {
       return;
     }
@@ -3561,6 +3738,22 @@ ${confirmedSpecPrompt}
     }
 
     try {
+      if (!specPlanningEnabled) {
+        setFormStep(5);
+        setPreviewSession(null);
+        setDraftCreationSessionId(null);
+        setAiMessages([]);
+        setCurrentStream('');
+        setCurrentThinking('');
+        setAiPhase('streaming');
+        setAiFilename('');
+        setWorkflowDraftConfig(null);
+        setWorkflowDraftValidation(null);
+        setWorkflowDraftPreview(null);
+        setBackendSessionId(undefined);
+        await startAiStream(null);
+        return;
+      }
       if (previewSession) {
         setFormStep(4);
         return;
@@ -3706,8 +3899,9 @@ ${confirmedSpecPrompt}
         body: JSON.stringify({
           ...values,
           mode: workflowMode,
-          frontendSessionId,
-          creationSessionId: previewSession?.id,
+          frontendSessionId: planningFrontendSessionId || frontendSessionId,
+          creationSessionId: specPlanningEnabled ? previewSession?.id : undefined,
+          skipSpecCoding: !specPlanningEnabled,
           configDraft: validation.normalized || workflowDraftConfig,
         }),
       });
@@ -3810,6 +4004,7 @@ ${confirmedSpecPrompt}
     reset,
     resetAll,
     sendToAi,
+    specPlanningEnabled,
     toast,
     validateWorkflowDraftConfig,
     workflowDraftConfig,
@@ -3846,7 +4041,9 @@ ${confirmedSpecPrompt}
     const values = validation.data;
 
     try {
-      await validatePersistedSpecSelection(values);
+      if (specPlanningEnabled) {
+        await validatePersistedSpecSelection(values);
+      }
     } catch {
       return;
     }
@@ -3861,8 +4058,9 @@ ${confirmedSpecPrompt}
         },
         body: JSON.stringify({
           ...values,
-          frontendSessionId,
-          creationSessionId: previewSession?.id,
+          frontendSessionId: planningFrontendSessionId || frontendSessionId,
+          creationSessionId: specPlanningEnabled ? (previewSession?.id || draftCreationSessionId || undefined) : undefined,
+          skipSpecCoding: !specPlanningEnabled,
         }),
       });
       const result = await response.json();
@@ -3879,7 +4077,7 @@ ${confirmedSpecPrompt}
               setError(field as keyof NewConfigForm, { type: 'server', message: issue.message });
             }
           }
-          toast('error', '表单验证失败:\n' + details.map((e: any) => e.message).join('\n'));
+          toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
         } else {
           toast('error', result.message || result.error);
         }
@@ -3922,6 +4120,9 @@ ${confirmedSpecPrompt}
 
   useEffect(() => {
     return () => {
+      if (draftFieldSyncTimerRef.current) {
+        clearTimeout(draftFieldSyncTimerRef.current);
+      }
       if (restoreGuardTimerRef.current) {
         clearTimeout(restoreGuardTimerRef.current);
       }
@@ -3994,8 +4195,8 @@ ${confirmedSpecPrompt}
       const data = await sessionResponse.json().catch(() => null);
       throw new Error(data?.error || '创建创建态会话失败');
     }
-    const sessionResult = await sessionResponse.json();
-    if (frontendSessionId && sessionResult?.session) {
+      const sessionResult = await sessionResponse.json();
+    if (frontendSessionId && sessionResult?.session?.specCoding) {
       await fetch(`/api/chat/sessions/${encodeURIComponent(frontendSessionId)}`, {
         method: 'PUT',
         headers: {
@@ -4030,7 +4231,7 @@ ${confirmedSpecPrompt}
     const filename = aiFilename;
     let creationSession: any;
     const workflowName = getValues('workflowName') || '新工作流';
-    if (filename) {
+    if (filename && specPlanningEnabled) {
       try {
         creationSession = await createCreationSessionForExistingConfig(filename);
       } catch (error: any) {
@@ -5517,7 +5718,7 @@ ${confirmedSpecPrompt}
           </div>
         </div>
         <form id="new-config-form" onSubmit={handleSubmit(onSubmit, onInvalid)} className="flex-1 overflow-auto px-6 space-y-6">
-          {workflowMode === 'ai-guided' && !hideAiGuided ? (
+          {useSpecPlanningFlow && !hideAiGuided ? (
             <>
               <CreationStageStepper currentStep={1} />
 
@@ -5525,6 +5726,18 @@ ${confirmedSpecPrompt}
                 当前处于第 1 步：先收敛需求与约束，并按 `skills/aceharness-spec-coding` 生成正式计划制品。确认计划后，系统才会进入 workflow 草案阶段。
               </div>
             </>
+          ) : workflowMode === 'ai-guided' ? (
+            <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
+              当前处于快速编排模式：会跳过 Spec 计划、补充问答和正式制品确认，下一步直接进入 workflow 草案生成。
+            </div>
+          ) : workflowMode === 'state-machine' && !specPlanningEnabled ? (
+            <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
+              当前处于快速编排模式：会直接创建状态机 workflow 配置，不生成 Spec 基线，也不会写入 spec 修订链路。
+            </div>
+          ) : workflowMode === 'state-machine' ? (
+            <div className="rounded-xl border bg-muted/20 p-4 text-xs leading-6 text-muted-foreground">
+              当前会在创建配置时同步建立 Spec 基线，后续可在设计页继续查看和修订 requirements / design / tasks。
+            </div>
           ) : null}
 
           <input type="hidden" {...register('mode')} />
@@ -5533,7 +5746,7 @@ ${confirmedSpecPrompt}
           <input type="hidden" {...register('workspaceMode')} />
           <input type="hidden" {...register('persistMode')} />
 
-          {!homepageCompact && (
+          {true && (
             <>
               <div className="space-y-2">
                 <Label className="text-base font-semibold">
@@ -5579,6 +5792,41 @@ ${confirmedSpecPrompt}
               )}
             </div>
           )}
+
+          {showSpecPlanningToggle ? (
+            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <Label htmlFor="specPlanningEnabled">Spec 计划模式</Label>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {workflowMode === 'ai-guided'
+                      ? '开启后会先生成 requirements/design/tasks 并支持确认前修订；关闭后会直接进入 workflow 编排草案。'
+                      : '开启后会为新工作流建立 Spec 基线并支持后续修订；关闭后只创建 workflow 配置，直接按非 Spec 模式运行。'}
+                  </p>
+                </div>
+                <Switch
+                  id="specPlanningEnabled"
+                  checked={specPlanningEnabled}
+                  onCheckedChange={(checked: boolean) => {
+                    setSpecPlanningEnabled(Boolean(checked));
+                    if (!checked) {
+                      setValue('persistMode', 'none', { shouldDirty: true, shouldValidate: false });
+                    }
+                  }}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant={specPlanningEnabled ? 'secondary' : 'outline'}>
+                  {specPlanningEnabled ? '先修订 Spec' : '跳过 Spec'}
+                </Badge>
+                <Badge variant="outline">
+                  {workflowMode === 'ai-guided'
+                    ? (specPlanningEnabled ? '完整计划链路' : '直接编排 workflow')
+                    : (specPlanningEnabled ? '创建并附带 Spec 基线' : '仅创建 workflow 配置')}
+                </Badge>
+              </div>
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="workflowName">
@@ -5771,6 +6019,7 @@ ${confirmedSpecPrompt}
             </p>
           </div>
 
+          {specPlanningEnabled ? (
           <div className="space-y-4 rounded-lg border bg-muted/20 p-4">
             <div className="space-y-1">
               <Label htmlFor="persistMode">Spec 持久化</Label>
@@ -5816,6 +6065,7 @@ ${confirmedSpecPrompt}
               </div>
             )}
           </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="filename">
@@ -5858,8 +6108,12 @@ ${confirmedSpecPrompt}
             disabled={isSubmitting || isGeneratingPlan}
           >
             {workflowMode === 'ai-guided'
-              ? (isGeneratingPlan ? '生成计划中...' : '下一步')
-              : (isSubmitting ? '创建中...' : '创建')}
+              ? specPlanningEnabled
+                ? (isGeneratingPlan ? '生成计划中...' : '下一步')
+                : (isGeneratingPlan ? '生成草案中...' : '直接进入编排')
+              : workflowMode === 'state-machine' && !specPlanningEnabled
+                ? (isSubmitting ? '创建中...' : '创建')
+                : (isSubmitting ? '创建中...' : '创建')}
           </Button>
         </div>
       </DialogContent>

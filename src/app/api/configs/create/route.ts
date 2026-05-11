@@ -220,6 +220,7 @@ export async function POST(request: NextRequest) {
     const frontendSessionId = typeof body.frontendSessionId === 'string' ? body.frontendSessionId : undefined;
     const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
     const configDraft = body.configDraft && typeof body.configDraft === 'object' ? body.configDraft : null;
+    const skipSpecCoding = body.skipSpecCoding === true;
 
     // 验证表单
     const validationResult = newConfigFormSchema.safeParse(body);
@@ -235,7 +236,7 @@ export async function POST(request: NextRequest) {
 
     const { filename, workflowName, referenceWorkflow, workingDirectory, workspaceMode, description, mode, requirements, persistMode, specRoot } = validationResult.data;
     const workflowMode = mode || 'phase-based';
-    const normalizedPersistMode = persistMode === 'repository' ? 'repository' : 'none';
+    const normalizedPersistMode = skipSpecCoding ? 'none' : (persistMode === 'repository' ? 'repository' : 'none');
     const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
     if (normalizedPersistMode === 'repository') {
       assertPersistedSpecRootReady(workingDirectory, normalizedSpecRoot);
@@ -335,10 +336,27 @@ export async function POST(request: NextRequest) {
         : 'AI 已根据需求生成阶段工作流，请在设计页面调整阶段和步骤。';
     }
 
-    let creationSession = creationSessionId ? await loadCreationSession(creationSessionId) : null;
+    let creationSession = !skipSpecCoding && creationSessionId ? await loadCreationSession(creationSessionId) : null;
     if (creationSession?.createdBy && creationSession.createdBy !== auth.id) {
       return NextResponse.json({ error: '无权复用该创建态会话' }, { status: 403 });
     }
+    if (skipSpecCoding) {
+      await writeFile(filepath, stringify(defaultConfig), 'utf-8');
+      await setConfigMeta(filename, {
+        createdBy: auth.id,
+        visibility: 'private',
+        createdAt: Date.now(),
+      }, 'workflow');
+
+      return NextResponse.json({
+        success: true,
+        message,
+        filename,
+        creationSession: null,
+        specCodingSkipped: true,
+      });
+    }
+
     if (creationSession) {
       creationSession = await updateCreationSession(creationSession.id, {
         chatSessionId: frontendSessionId || creationSession.chatSessionId,
@@ -433,7 +451,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: '配置文件已创建',
+      message,
       filename,
       creationSession,
     });

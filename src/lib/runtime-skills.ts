@@ -101,6 +101,36 @@ export async function getRuntimeSkillPath(...segments: string[]): Promise<string
   return getWorkspaceSkillPath(...segments);
 }
 
+export function getInstallSkillsDirPath(): string {
+  return INSTALL_SKILLS_DIR;
+}
+
+export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promise<{ synced: string[]; missing: string[] }> {
+  await ensureRuntimeSkillsSeeded();
+
+  const runtimeSkillsDir = getWorkspaceSkillsDir();
+  const synced: string[] = [];
+  const missing: string[] = [];
+
+  for (const rawName of skillNames) {
+    const skillName = rawName.trim();
+    if (!skillName) continue;
+
+    const src = join(INSTALL_SKILLS_DIR, skillName);
+    if (!existsSync(src)) {
+      missing.push(skillName);
+      continue;
+    }
+
+    const dest = join(runtimeSkillsDir, skillName);
+    await cp(src, dest, { recursive: true, force: true });
+    synced.push(skillName);
+  }
+
+  await ensureSkillDeps();
+  return { synced, missing };
+}
+
 export function getSkillsTempPath(...segments: string[]): string {
   return getWorkspaceCacheFile('skills', ...segments);
 }

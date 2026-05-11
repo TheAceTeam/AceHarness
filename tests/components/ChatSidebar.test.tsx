@@ -146,16 +146,22 @@ describe('ChatSidebar', () => {
     render(<ChatSidebar />);
 
     expect(screen.getByText('Plain Chat')).toBeTruthy();
-    expect(screen.getByText('Create Workflow')).toBeTruthy();
+    expect(screen.queryByText('Create Workflow')).toBeNull();
     expect(screen.queryByText('Run Workflow')).toBeNull();
-    expect(screen.getByText('创建')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /工作流/ }));
 
-    expect(screen.getByText('Run Workflow')).toBeTruthy();
+    expect(screen.queryByText('Run Workflow')).toBeNull();
     expect(screen.queryByText('Plain Chat')).toBeNull();
-    expect(screen.queryByText('Create Workflow')).toBeNull();
-    expect(screen.getByText('运行')).toBeTruthy();
+    expect(screen.getByText('Draft Workflow')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
+    expect(screen.getByText('工作流设计')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /非运行中/ }));
+
+    expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
+    expect(screen.getByText('运行会话')).toBeTruthy();
   });
 
   test('filters sessions within each tab', async () => {

@@ -65,6 +65,130 @@ export interface SessionPreflightSnapshot {
   checks: SessionPreflightCheckSummary[];
 }
 
+export interface CollaborationRoomMessage {
+  id: string;
+  roundId?: string;
+  speakerType: 'human' | 'agent' | 'supervisor' | 'system';
+  speakerName: string;
+  content: string;
+  createdAt: number;
+  status?: 'pending' | 'done' | 'error';
+  error?: string | null;
+  engine?: string;
+  model?: string;
+  werewolf?: {
+    phase?: CollaborationWerewolfPhase;
+    action?: CollaborationWerewolfAction;
+    visibility?: 'public' | 'god' | 'private' | 'werewolves';
+    audience?: string[];
+    actor?: string;
+  };
+}
+
+export interface CollaborationRoomRound {
+  id: string;
+  topic: string;
+  participants: string[];
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  summary?: string;
+}
+
+export type CollaborationWerewolfPhase = 'setup' | 'night' | 'last-words' | 'day' | 'voting' | 'ended';
+export type CollaborationWerewolfAction =
+  | 'setup'
+  | 'sheriff-election'
+  | 'sheriff-speech'
+  | 'sheriff-vote'
+  | 'badge-transfer'
+  | 'badge-destroy'
+  | 'wolf-meeting'
+  | 'guard-action'
+  | 'seer-check'
+  | 'wolf-kill'
+  | 'witch-action'
+  | 'hunter-shot'
+  | 'idiot-reveal'
+  | 'last-words'
+  | 'day-speech'
+  | 'vote'
+  | 'settlement'
+  | 'system'
+  | 'idle';
+
+export interface CollaborationWerewolfPlayer {
+  agentName: string;
+  role: 'werewolf' | 'seer' | 'witch' | 'hunter' | 'idiot' | 'guard' | 'villager';
+  alive: boolean;
+  persona: string;
+  sheriffCandidate?: boolean;
+  sheriff?: boolean;
+  badgeDestroyed?: boolean;
+  idiotRevealed?: boolean;
+}
+
+export interface CollaborationWerewolfVote {
+  voter: string;
+  target: string;
+  reason?: string;
+  round: number;
+}
+
+export interface CollaborationWerewolfState {
+  enabled: boolean;
+  phase: CollaborationWerewolfPhase;
+  dayNumber: number;
+  boardId?: string;
+  boardName?: string;
+  players: CollaborationWerewolfPlayer[];
+  eliminated: string[];
+  votes: CollaborationWerewolfVote[];
+  lastSummary?: string;
+  lastError?: string;
+  revealedRoles?: boolean;
+  currentActor?: string;
+  currentAction?: CollaborationWerewolfAction;
+  lastNightVictim?: string;
+  pendingLastWords?: string[];
+  speechOrder?: string[];
+  sheriff?: string;
+  sheriffCandidates?: string[];
+  sheriffElectionDone?: boolean;
+  badgeDestroyed?: boolean;
+  pendingHunterShot?: string;
+  roleState?: {
+    witchAntidoteUsed?: boolean;
+    witchPoisonUsed?: boolean;
+    hunterShotUsed?: boolean;
+    guardLastTarget?: string;
+    idiotRevealed?: boolean;
+  };
+  night?: {
+    round: number;
+    guarded?: string;
+    wolfTarget?: string;
+    saved?: string;
+    poisoned?: string;
+    seerTarget?: string;
+    deaths?: string[];
+  };
+}
+
+export interface CollaborationRoomState {
+  topic?: string;
+  selectedAgents?: string[];
+  mode?: 'free' | 'roundtable';
+  messages: CollaborationRoomMessage[];
+  rounds: CollaborationRoomRound[];
+  agentSessions?: Record<string, string>;
+  werewolf?: CollaborationWerewolfState | null;
+  werewolfView?: {
+    mode: 'god' | 'night';
+    viewer?: string;
+  };
+}
+
 export interface HomeSidebarHint {
   type: 'home_sidebar';
   mode?: HomeSidebarMode;
@@ -86,6 +210,20 @@ export interface HomeSidebarHint {
 export interface SessionWorkbenchState {
   homeSidebar?: HomeSidebarHint | null;
   latestPreflight?: SessionPreflightSnapshot | null;
+  collaborationRoom?: CollaborationRoomState | null;
+  wechatBinding?: {
+    integrationId: string;
+    integrationName: string;
+    bindingId: string;
+    accountId?: string;
+    externalConversationId: string;
+    externalConversationName?: string;
+    bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+    targetLabel: string;
+    webhookPath?: string;
+    secret?: string;
+    updatedAt: number;
+  } | null;
 }
 
 export function inferHomeSidebarTab(

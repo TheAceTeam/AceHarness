@@ -89,7 +89,7 @@ const API_DATA: ApiCategory[] = [
       { method: 'GET', path: '/api/agents/:name', description: '读取指定 Agent 配置', response: '{ agent, raw }' },
       { method: 'POST', path: '/api/agents/:name', description: '保存/更新 Agent 配置', requestBody: '{ agent: object }', response: '{ success }' },
       { method: 'DELETE', path: '/api/agents/:name', description: '删除 Agent 配置', response: '{ success }' },
-      { method: 'POST', path: '/api/agents/batch', description: '批量替换 Agent 模型', requestBody: '{ action: "replace-model", fromModel, toModel }', response: '{ success, updatedCount }' },
+      { method: 'POST', path: '/api/agents/batch', description: '批量设置 Agent 模型策略', requestBody: '{ action: "set-model-policy", sourceType, sourceEngine?, sourceModel?, targetEngine, targetModel }', response: '{ success, updatedCount }' },
     ],
   },
   {
@@ -155,6 +155,21 @@ const API_DATA: ApiCategory[] = [
       { method: 'GET', path: '/api/chat/settings', description: '获取对话设置', response: '{ skills, discoveredSkills }' },
       { method: 'PUT', path: '/api/chat/settings', description: '更新对话设置', requestBody: '{ skills: Record<string, boolean> }', response: '{ success }' },
       { method: 'GET', path: '/api/chat/debug-prompt', description: '获取对话调试 Prompt 信息', response: '{ success, debug }' },
+    ],
+  },
+  {
+    name: 'Channels', icon: 'hub',
+    endpoints: [
+      { method: 'GET', path: '/api/channels/providers', description: '列出支持的一键接入 provider 模板', response: '{ providers }' },
+      { method: 'POST', path: '/api/channels/setup', description: '按 provider 模板一键创建渠道集成', requestBody: '{ provider, name?, defaultBinding?, providerConfig? }', response: '{ integration, onboarding }' },
+      { method: 'GET', path: '/api/channels/integrations', description: '列出当前用户创建的渠道集成', response: '{ integrations }' },
+      { method: 'PUT', path: '/api/channels/integrations/:id', description: '更新渠道集成配置', requestBody: '{ enabled?, bindingStrategy?, defaultBinding?, providerConfig? }', response: '{ integration }' },
+      { method: 'DELETE', path: '/api/channels/integrations/:id', description: '删除渠道集成及其 binding', response: '{ success }' },
+      { method: 'GET', path: '/api/channels/integrations/:id/bootstrap', description: '读取该接入点的桥接协议、示例 payload 和当前 bindings', response: '{ integration, protocol, bindings }' },
+      { method: 'GET', path: '/api/channels/bindings?integrationId=id', description: '列出渠道会话绑定', response: '{ bindings }' },
+      { method: 'POST', path: '/api/channels/bindings', description: '创建或更新渠道 binding', requestBody: '{ integrationId, bindingType, externalConversationId, configFile?/runId?/agentName? }', response: '{ binding }' },
+      { method: 'POST', path: '/api/channels/inbound/:integrationId', description: '外部平台 webhook 入口', requestBody: '{ secret, message: { conversationId, userId, text } }', response: '{ ok, replies, replyMessages, binding? }' },
+      { method: 'GET', path: '/api/channels/roundtables/:id', description: '读取某次圆桌运行记录', response: '{ roundtable }' },
     ],
   },
   {

@@ -7,11 +7,22 @@ import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/engine-metadata';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { getWerewolfRoleSpriteStyle } from '@/lib/werewolf-role-assets';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
 const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
 const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
+const WEREWOLF_CHAT_COLORS = [
+  { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/25 bg-rose-500/8' },
+  { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/25 bg-sky-500/8' },
+  { avatar: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', name: 'text-emerald-700 dark:text-emerald-300', bubble: 'border-emerald-500/25 bg-emerald-500/8' },
+  { avatar: 'border-violet-500/30 bg-violet-500/15 text-violet-700 dark:text-violet-300', name: 'text-violet-700 dark:text-violet-300', bubble: 'border-violet-500/25 bg-violet-500/8' },
+  { avatar: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300', name: 'text-amber-700 dark:text-amber-300', bubble: 'border-amber-500/25 bg-amber-500/8' },
+  { avatar: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300', name: 'text-cyan-700 dark:text-cyan-300', bubble: 'border-cyan-500/25 bg-cyan-500/8' },
+  { avatar: 'border-lime-500/30 bg-lime-500/15 text-lime-700 dark:text-lime-300', name: 'text-lime-700 dark:text-lime-300', bubble: 'border-lime-500/25 bg-lime-500/8' },
+  { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/25 bg-fuchsia-500/8' },
+] as const;
 
 function parseWorkflowEvent(content: string) {
   const match = content.trim().match(WORKFLOW_EVENT_PATTERN);
@@ -73,6 +84,11 @@ interface ChatMessageProps {
     role: 'user' | 'assistant' | 'error';
     content: string;
     rawContent?: string;
+    source?: {
+      type: 'wechat';
+      label?: string;
+      direction?: 'inbound' | 'outbound';
+    };
     actions?: ActionState[];
     cards?: any[];
     engine?: string;
@@ -93,6 +109,10 @@ interface ChatMessageProps {
   onEditMessage?: (messageId: string) => void;
   onContinue?: (messageId: string) => void; // For timeout recovery
   onSaveAsNotebook?: (messageId: string) => void;
+  werewolfView?: {
+    mode: 'god' | 'night';
+    viewer?: string;
+  };
   currentUser?: {
     username?: string;
     avatar?: string;
@@ -254,10 +274,100 @@ function UserAvatar({ user }: { user?: ChatMessageProps['currentUser'] }) {
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, currentUser }: ChatMessageProps) {
+function getWerewolfCard(message: ChatMessageProps['message']) {
+  return (message.cards || []).find((card) => card?.type === 'werewolf_speech') || null;
+}
+
+function getWerewolfInitial(name: string): string {
+  return name.replace(/\s+/g, '').slice(0, 1) || '?';
+}
+
+function canSeeWerewolfCard(card: any, view?: ChatMessageProps['werewolfView']): boolean {
+  if (!card?.visibility || card.visibility === 'public') return true;
+  if (view?.mode === 'god') return true;
+  if (card.visibility === 'god') return false;
+  if (!view?.viewer) return false;
+  if (card.visibility === 'private') return Array.isArray(card.audience) && card.audience.includes(view.viewer);
+  if (card.visibility === 'werewolves') return Array.isArray(card.audience) && card.audience.includes(view.viewer);
+  return true;
+}
+
+function formatHiddenWerewolfContent(card: any): string {
+  return '当前视角不可见。切换到上帝视角或绑定相关玩家后可查看。';
+}
+
+function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatMessageProps['message']; view?: ChatMessageProps['werewolfView'] }) {
+  const color = WEREWOLF_CHAT_COLORS[Math.max(0, Number(card.colorIndex || 0)) % WEREWOLF_CHAT_COLORS.length];
+  const isSupervisor = card.speakerType === 'supervisor';
+  const isSystem = card.speakerType === 'system';
+  const visible = canSeeWerewolfCard(card, view);
+  const spriteStyle = visible && !isSupervisor && !isSystem ? getWerewolfRoleSpriteStyle(card.role) : null;
+  const avatarClass = isSupervisor
+    ? 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300'
+    : isSystem
+      ? 'border-muted bg-muted/70 text-muted-foreground'
+      : visible
+        ? color.avatar
+        : 'border-muted bg-muted/70 text-muted-foreground';
+  const bubbleClass = isSupervisor
+    ? 'border-amber-500/25 bg-amber-500/8'
+    : isSystem
+      ? 'border-muted bg-muted/40'
+      : visible
+        ? color.bubble
+        : 'border-muted bg-muted/30';
+  const nameClass = isSupervisor
+    ? 'text-amber-700 dark:text-amber-300'
+    : isSystem
+      ? 'text-muted-foreground'
+      : visible
+        ? color.name
+        : 'text-muted-foreground';
+  const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
+  const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
+  return (
+    <div className="group mb-4 flex items-start gap-2">
+      {spriteStyle ? (
+        <div
+          className="mt-0.5 h-12 w-8 shrink-0 rounded-md border border-amber-500/35 bg-cover shadow-sm"
+          style={spriteStyle}
+          title={visible ? (card.roleLabel || card.speakerName) : undefined}
+        />
+      ) : (
+        <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
+          {visible ? (isSystem ? '系' : getWerewolfInitial(card.speakerName || 'A')) : '隐'}
+        </div>
+      )}
+      <div className="max-w-[85%] space-y-1">
+        <div className={`rounded-2xl rounded-bl-sm border px-4 py-2.5 text-sm ${bubbleClass}`}>
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <span className={`font-medium ${nameClass}`}>{displayName}</span>
+            {displayActionLabel ? (
+              <span className="rounded-full border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {displayActionLabel}
+              </span>
+            ) : null}
+            {visible && card.visibility && card.visibility !== 'public' ? (
+              <span className="rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                {card.visibility === 'werewolves' ? '狼队可见' : card.visibility === 'private' ? '私聊' : '上帝'}
+              </span>
+            ) : null}
+          </div>
+          <div className="prose-sm prose-neutral max-w-none text-muted-foreground dark:prose-invert [&_p]:my-1">
+            <Markdown>{visible ? (message.rawContent || message.content) : formatHiddenWerewolfContent(card)}</Markdown>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, werewolfView, currentUser }: ChatMessageProps) {
   const [modelLabel, setModelLabel] = useState(message.model || '');
   const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
   const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
+  const werewolfCard = message.role === 'assistant' ? getWerewolfCard(message) : null;
+  const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
   const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
   const actionTagClassName = isWorkflowActionTag
     ? 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300'
@@ -322,10 +432,19 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             </button>
           )}
         </div>
-        <div className="max-w-[78%] rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
+        <div className="max-w-[78%] space-y-1">
+          {sourceLabel ? (
+            <div className="flex justify-end">
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
+                {sourceLabel}
+              </span>
+            </div>
+          ) : null}
+          <div className="rounded-2xl rounded-br-sm px-4 py-2.5 bg-primary text-primary-foreground text-sm">
           <div className="[&_a]:text-white [&_a]:underline [&_a:hover]:text-blue-200 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[320px] [&_img]:rounded-md [&_img]:border [&_img]:border-white/25 [&_img]:object-contain">
             <Markdown>{message.content}</Markdown>
           </div>
+        </div>
         </div>
         <UserAvatar user={currentUser} />
       </div>
@@ -344,8 +463,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             <span className="rounded-full border border-amber-500/25 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-300">
               {workflowEvent.type}
             </span>
-            {workflowEvent.tags.slice(0, 4).map((tag) => (
-              <span key={tag} className="rounded-full bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
+            {workflowEvent.tags.slice(0, 4).map((tag, index) => (
+              <span key={`${message.id}-workflow-tag-${tag}-${index}`} className="rounded-full bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
                 {tag}
               </span>
             ))}
@@ -394,11 +513,22 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     );
   }
 
+  if (werewolfCard) {
+    return <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} />;
+  }
+
   // Assistant message
   return (
     <div className="group flex mb-4 items-start gap-2">
       <AssistantAvatar />
       <div className="max-w-[85%] space-y-1">
+        {sourceLabel ? (
+          <div>
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
+              {sourceLabel}
+            </span>
+          </div>
+        ) : null}
         {isStreaming && !message.content && <ThinkingBot />}
         {message.content && (
           <div className="rounded-2xl rounded-bl-sm px-4 py-2.5 bg-muted text-sm prose-sm prose-neutral dark:prose-invert max-w-none [&_pre]:bg-background [&_pre]:border [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">

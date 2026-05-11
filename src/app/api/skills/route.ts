@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
-import { getRuntimeSkillsDirPath, getSkillsTempPath } from '@/lib/runtime-skills';
+import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
 
 /** Scan skills/ directory, find xxx/SKILL.md with valid frontmatter */
-async function discoverSkills() {
+async function discoverSkills(skillsDir: string) {
   const skills: any[] = [];
   try {
-    const skillsDir = await getRuntimeSkillsDirPath();
     const entries = await fs.readdir(skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -44,12 +43,23 @@ async function discoverSkills() {
 export async function GET() {
   try {
     const skillsDir = await getRuntimeSkillsDirPath();
+    const installSkillsDir = getInstallSkillsDirPath();
     const dirExists = existsSync(skillsDir);
     if (!dirExists) {
-      return NextResponse.json({ skills: [], isCloned: true, message: 'Skills 目录不存在', runtimeSkillsDir: skillsDir });
+      return NextResponse.json({
+        skills: [],
+        installSkills: [],
+        isCloned: true,
+        message: 'Skills 目录不存在',
+        runtimeSkillsDir: skillsDir,
+        installSkillsDir,
+      });
     }
-    const skills = await discoverSkills();
-    return NextResponse.json({ skills, isCloned: true, runtimeSkillsDir: skillsDir });
+    const [skills, installSkills] = await Promise.all([
+      discoverSkills(skillsDir),
+      existsSync(installSkillsDir) ? discoverSkills(installSkillsDir) : Promise.resolve([]),
+    ]);
+    return NextResponse.json({ skills, installSkills, isCloned: true, runtimeSkillsDir: skillsDir, installSkillsDir });
   } catch (error) {
     console.error('Failed to read skills:', error);
     return NextResponse.json({ error: 'Failed to read skills' }, { status: 500 });
@@ -199,5 +209,42 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('Failed to export skills:', error);
     return NextResponse.json({ error: '导出失败: ' + (error as Error).message }, { status: 500 });
+  }
+}
+
+// PATCH: Sync selected installed skills into runtime skills directory
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const skillNames = Array.isArray(body.skills)
+      ? body.skills.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+    if (skillNames.length === 0) {
+      return NextResponse.json({ error: '请选择要同步的 Skill' }, { status: 400 });
+    }
+
+    const installSkillsDir = getInstallSkillsDirPath();
+    if (!existsSync(installSkillsDir)) {
+      return NextResponse.json({ error: '安装目录中不存在 skills 目录' }, { status: 404 });
+    }
+
+    const installSkills = await discoverSkills(installSkillsDir);
+    const installSkillSet = new Set(installSkills.map((skill) => skill.path));
+    const invalid = skillNames.filter((name: string) => !installSkillSet.has(name));
+    if (invalid.length > 0) {
+      return NextResponse.json({ error: `这些 Skill 不在安装目录中：${invalid.join(', ')}` }, { status: 404 });
+    }
+
+    const result = await syncInstalledSkillsToRuntime(skillNames);
+    return NextResponse.json({
+      success: true,
+      synced: result.synced,
+      missing: result.missing,
+      message: `已同步 ${result.synced.length} 个 Skill 到 runtime 目录`,
+    });
+  } catch (error) {
+    console.error('Failed to sync installed skills:', error);
+    return NextResponse.json({ error: '同步失败: ' + (error as Error).message }, { status: 500 });
   }
 }

@@ -78,7 +78,7 @@ export default function CopyConfigModal({
               setError(field, { type: 'server', message: issue.message });
             }
           }
-          toast('error', '表单验证失败:\n' + details.map((e: any) => e.message).join('\n'));
+          toast('error', '表单验证失败:\n' + details.map((e: any) => e?.message || '未知校验错误').join('\n'));
         } else {
           toast('error', result.message || result.error);
         }

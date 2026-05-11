@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
 import Markdown from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
@@ -64,6 +64,18 @@ export default function HumanQuestionCard({
   const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => buildDefaultAnswer(question));
   const options: Array<{ label: string; value: string; description?: string }> = question.answerSchema.options || question.availableStates?.map((state) => ({ label: state, value: state })) || [];
   const ready = useMemo(() => isAnswerReady(question, answer), [answer, question]);
+
+  useEffect(() => {
+    setAnswer(buildDefaultAnswer(question));
+  }, [
+    question.id,
+    question.status,
+    question.answerSchema.type,
+    question.answerSchema.required,
+    question.suggestedNextState,
+    question.availableStates,
+    question.answerSchema.options,
+  ]);
 
   const toggleOption = (value: string, checked: boolean) => {
     const current = new Set(answer.selectedOptions || []);

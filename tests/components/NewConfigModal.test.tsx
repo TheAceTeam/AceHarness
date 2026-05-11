@@ -1,0 +1,367 @@
+// @vitest-environment jsdom
+import React from 'react';
+import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
+import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
+import { waitFor, screen } from '@testing-library/react';
+
+const chatContextMock = {
+  ...defaultChatContextMock,
+  appendSessionMessage: vi.fn(async () => {}),
+  updateSessionCreationBinding: vi.fn(async () => {}),
+};
+
+vi.mock('next/dynamic', () => ({
+  default: () => function DynamicStub() {
+    return <div data-testid="dynamic-stub" />;
+  },
+}));
+
+vi.mock('next-themes', () => ({
+  useTheme: () => ({ resolvedTheme: 'light' }),
+}));
+
+vi.mock('@/contexts/ChatContext', () => ({
+  useChat: () => chatContextMock,
+}));
+
+vi.mock('@/components/WorkflowModeSelector', () => ({
+  default: () => <div data-testid="workflow-mode-selector" />,
+}));
+
+vi.mock('@/components/EngineModelSelect', () => ({
+  EngineModelSelect: () => <div data-testid="engine-model-select" />,
+}));
+
+vi.mock('@/components/common/WorkspaceDirectoryPicker', () => ({
+  default: () => <div data-testid="workspace-directory-picker" />,
+}));
+
+vi.mock('@/components/Markdown', () => ({
+  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('@/components/chat/cards/UniversalCard', () => ({
+  default: () => <div data-testid="universal-card" />,
+}));
+
+vi.mock('@/components/chat/ChatMessage', () => ({
+  ThinkingBot: () => <div data-testid="thinking-bot" />,
+}));
+
+vi.mock('@/components/ui/combobox', () => ({
+  ComboboxPortalProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SingleCombobox: ({ value, onValueChange, options = [] as Array<{ value: string; label: string }> }: any) => (
+    <select
+      data-testid="single-combobox"
+      value={value}
+      onChange={(event) => onValueChange?.(event.target.value)}
+    >
+      {options.map((option: any) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
+vi.mock('@/lib/chat-actions', () => ({
+  parseActions: () => ({ text: '', actions: [], cards: [], sidebarHints: [] }),
+}));
+
+vi.mock('@/lib/ai-result-normalizers', () => ({
+  extractClarificationFormResult: () => null,
+  extractPlanDraftResult: () => null,
+  extractWorkflowDraftPreview: () => ({ filename: '', config: null, yaml: '', parseError: '' }),
+}));
+
+vi.mock('@/lib/api', () => ({
+  agentApi: {
+    listAgents: vi.fn(async () => ({ agents: [] })),
+  },
+}));
+
+vi.mock('@/components/ui/dialog', () => ({
+  Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div>{children}</div> : null),
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('@/components/ui/button', () => ({
+  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+}));
+
+vi.mock('@/components/ui/checkbox', () => ({
+  Checkbox: ({ checked, onCheckedChange, ...props }: any) => (
+    <input
+      type="checkbox"
+      checked={!!checked}
+      onChange={(event) => onCheckedChange?.(event.target.checked)}
+      {...props}
+    />
+  ),
+}));
+
+vi.mock('@/components/ui/switch', () => ({
+  Switch: ({ checked, onCheckedChange, ...props }: any) => (
+    <input
+      type="checkbox"
+      checked={!!checked}
+      onChange={(event) => onCheckedChange?.(event.target.checked)}
+      {...props}
+    />
+  ),
+}));
+
+vi.mock('@/components/ui/input', () => ({
+  Input: React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>((props, ref) => (
+    <input ref={ref} {...props} />
+  )),
+}));
+
+vi.mock('@/components/ui/textarea', () => ({
+  Textarea: React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>((props, ref) => (
+    <textarea ref={ref} {...props} />
+  )),
+}));
+
+vi.mock('@/components/ui/label', () => ({
+  Label: ({ children, ...props }: any) => <label {...props}>{children}</label>,
+}));
+
+vi.mock('@/components/ui/badge', () => ({
+  Badge: ({ children, ...props }: any) => <span {...props}>{children}</span>,
+}));
+
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children, value }: any) => <div data-value={value}>{children}</div>,
+  SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectValue: ({ placeholder }: any) => <span>{placeholder}</span>,
+}));
+
+vi.mock('@/components/ui/tabs', () => ({
+  Tabs: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsList: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
+}));
+
+vi.mock('@/components/ui/avatar', () => ({
+  Avatar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AvatarFallback: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AvatarImage: () => null,
+}));
+
+vi.mock('@/components/ui/table', () => ({
+  Table: ({ children }: { children: React.ReactNode }) => <table>{children}</table>,
+  TableBody: ({ children }: { children: React.ReactNode }) => <tbody>{children}</tbody>,
+  TableCell: ({ children }: { children: React.ReactNode }) => <td>{children}</td>,
+  TableHead: ({ children }: { children: React.ReactNode }) => <th>{children}</th>,
+  TableHeader: ({ children }: { children: React.ReactNode }) => <thead>{children}</thead>,
+  TableRow: ({ children }: { children: React.ReactNode }) => <tr>{children}</tr>,
+}));
+
+import NewConfigModal from '@/components/NewConfigModal';
+
+type FetchCall = {
+  url: string;
+  method: string;
+  body?: any;
+};
+
+function createJsonResponse(data: any, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: async () => data,
+  } as Response;
+}
+
+describe('NewConfigModal backend draft isolation', () => {
+  const fetchCalls: FetchCall[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchCalls.length = 0;
+    localStorage.setItem('auth-token', 'token');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('bootstraps independent planning chat and creation session on open', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/chat/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-1',
+            title: body?.title || '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'draft-1',
+            chatSessionId: body?.chatSessionId,
+            filename: body?.filename,
+            workflowName: body?.workflowName,
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: { id: 'spec-1' },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-1',
+            title: '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-1' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ success: true });
+      }
+      if (url === '/api/spec-coding/sessions/draft-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'draft-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(true);
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(true);
+    });
+
+    const draftCreateCall = fetchCalls.find((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST');
+    expect(draftCreateCall?.body.chatSessionId).toBe('planning-1');
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'planning-1',
+      expect.objectContaining({ creationSessionId: 'draft-1' })
+    );
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'draft-1' })
+    );
+  });
+
+  test('restores from backend resumeCreationSessionId instead of creating a new draft', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/resume-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'resume-1',
+            chatSessionId: 'planning-resume',
+            mode: 'ai-guided',
+            workflowName: '恢复中的工作流',
+            filename: 'resume-workflow.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/resume',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: {
+              id: 'spec-resume',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 1,
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/resume-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'resume-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="resume-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions/resume-1' && call.method === 'GET')).toBe(true);
+    });
+
+    expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
+    expect(screen.getByDisplayValue('恢复中的工作流')).toBeTruthy();
+    expect(screen.getByDisplayValue('resume-workflow.yaml')).toBeTruthy();
+  });
+});

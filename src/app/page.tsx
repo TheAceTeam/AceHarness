@@ -17,6 +17,7 @@ import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, creat
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ChatSidebar from '@/components/chat/ChatSidebar';
+import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage, { RobotLogo } from '@/components/chat/ChatMessage';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
@@ -27,6 +28,7 @@ import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
 import {
+  type CollaborationRoomState,
   inferHomeSidebarMode,
   inferHomeSidebarTab,
   type HomeSidebarHint,
@@ -37,6 +39,11 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
 import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
+import {
+  DEFAULT_WEREWOLF_BOARD_ID,
+  TEMP_WEREWOLF_SUPERVISOR,
+  listTemporaryWerewolfAgentNames,
+} from '@/lib/werewolf-lab-agents';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
@@ -57,6 +64,30 @@ const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 const MOBILE_BREAKPOINT = 768;
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
+
+function createWerewolfLabRoom(now = Date.now()): CollaborationRoomState {
+  const players = listTemporaryWerewolfAgentNames();
+  return {
+    topic: '多Agent能力实验室：AI 狼人杀',
+    selectedAgents: [TEMP_WEREWOLF_SUPERVISOR.name, ...players],
+    mode: 'roundtable',
+    messages: [],
+    rounds: [],
+    agentSessions: {},
+    werewolf: {
+      enabled: true,
+      phase: 'setup',
+      dayNumber: 1,
+      boardId: DEFAULT_WEREWOLF_BOARD_ID,
+      boardName: '预女猎',
+      players: [],
+      eliminated: [],
+      votes: [],
+      revealedRoles: false,
+      lastSummary: '请先选择板子，系统会随机选择参与人格并分配身份。',
+    },
+  };
+}
 
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
@@ -110,6 +141,7 @@ function ChatPageContent() {
     model, setModel, engine, effectiveEngine, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction,
     skillSettings, setSessionWorkbenchState,
+    appendSessionMessage,
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
@@ -132,6 +164,8 @@ function ChatPageContent() {
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
+  const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
+  const [origin, setOrigin] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
   const editEditorRef = useRef<RichTextEditorHandle | null>(null);
@@ -223,6 +257,12 @@ function ChatPageContent() {
     setHomeSidebarTab((prev) => (prev === derivedHomeSidebarTab ? prev : derivedHomeSidebarTab));
     setHomeSidebarMode((prev) => (prev === derivedHomeSidebarMode ? prev : derivedHomeSidebarMode));
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setOrigin(window.location.origin);
+    }
+  }, []);
 
   useEffect(() => {
     const handleOpenWorkspacePath = (event: Event) => {
@@ -717,6 +757,51 @@ function ChatPageContent() {
       return;
     }
 
+    if (prompt === '__HOME_ACTION__:werewolf_lab') {
+      const now = Date.now();
+      const sessionId = createSession({
+        title: '多Agent能力实验室 · AI 狼人杀',
+        sessionWorkbenchState: {
+          homeSidebar: {
+            type: 'home_sidebar',
+            mode: 'active',
+            activeTab: 'commander',
+            tabs: ['commander'],
+            intent: 'supervisor-chat',
+            stage: 'running',
+            reason: '启动多Agent能力实验室，用 AI 狼人杀测试群聊、点名、回合制和投票能力。',
+            summary: '这是一个多Agent协作能力测试对话。右侧协作室已预置 AI 狼人杀实验流程，可选择板子、随机角色和视角后由 Supervisor 推进。',
+            recommendedNextAction: '在右侧协作室选择板子，必要时刷新随机角色，然后点击“确认角色并开局”。',
+          },
+          collaborationRoom: createWerewolfLabRoom(now),
+        },
+        messages: [
+          {
+            role: 'user',
+            content: '启动多Agent能力实验室：AI 狼人杀',
+            timestamp: now,
+          },
+          {
+            role: 'assistant',
+            content: [
+              '已创建一个 AI 狼人杀实验对话。',
+              '',
+              '右侧协作室已预置 20 个临时测试人格。先选择板子和参与人格，再让 Supervisor 按流程推进发言、投票和结算。',
+            ].join('\n'),
+            timestamp: now + 1,
+          },
+        ],
+      });
+      setActiveSessionId(sessionId);
+      setHomeSidebarTab('commander');
+      setHomeSidebarMode('active');
+      unlockAutoScroll();
+      setInput('');
+      editorRef.current?.clear();
+      toast('success', '已创建多Agent能力实验室对话');
+      return;
+    }
+
     if (prompt && prompt.includes('\n')) {
       setInput(prompt);
       editorRef.current?.setContent(prompt);
@@ -906,6 +991,7 @@ function ChatPageContent() {
             onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
             onContinue={msg.role === 'error' ? continueFromMessage : undefined}
             onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+            werewolfView={activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolfView}
             currentUser={currentUser}
           />
           {hasSidebarHint && (
@@ -950,6 +1036,7 @@ function ChatPageContent() {
   }, [historyExpanded, hiddenMessageCount]);
 
   const activeAgentBinding = activeSession?.agentBinding;
+  const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
   const activeAgentAvatarSrc = activeAgentBinding
     ? resolveAgentAvatarSrc(undefined, activeAgentBinding.agentName, {
         team: activeAgentBinding.team || 'red',
@@ -1018,6 +1105,21 @@ function ChatPageContent() {
                 </Button>
               </div>
             ) : null}
+            <Button
+              size="sm"
+              variant={activeWeChatBinding ? 'default' : 'outline'}
+              className="rounded-full"
+              onClick={() => setWeChatBindDialogOpen(true)}
+              title="绑定当前首页对话到微信 Bot"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>forum</span>
+              <span>微信 Bot</span>
+              {activeWeChatBinding ? (
+                <span className="ml-2 hidden sm:inline text-xs opacity-90">
+                  {activeWeChatBinding.externalConversationId}
+                </span>
+              ) : null}
+            </Button>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1179,6 +1281,7 @@ function ChatPageContent() {
                     activeSession={activeSession}
                     sessionWorkbenchState={activeSession?.sessionWorkbenchState}
                     setSessionWorkbenchState={setSessionWorkbenchState}
+                    appendSessionMessage={appendSessionMessage}
                     sidebarHint={latestSidebarHint}
                     activeTab={homeSidebarTab}
                     onTabChange={handleHomeSidebarTabChange}
@@ -1288,6 +1391,31 @@ function ChatPageContent() {
           />
         )}
       </div>
+
+      <WeChatSessionBindDialog
+        open={wechatBindDialogOpen}
+        onOpenChange={setWeChatBindDialogOpen}
+        activeSession={activeSession}
+        origin={origin}
+        onBindingSaved={({ integration, binding, targetLabel, accountId }) => {
+          setSessionWorkbenchState((prev) => ({
+            ...(prev || {}),
+            wechatBinding: {
+              integrationId: integration.id,
+              integrationName: integration.name,
+              bindingId: binding.id,
+              accountId,
+              externalConversationId: binding.externalConversationId,
+              externalConversationName: binding.externalConversationName,
+              bindingType: binding.bindingType,
+              targetLabel,
+              webhookPath: integration.webhookPath,
+              secret: integration.secret,
+              updatedAt: Date.now(),
+            },
+          }));
+        }}
+      />
     </div>
   );
 }

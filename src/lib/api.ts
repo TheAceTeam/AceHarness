@@ -25,6 +25,12 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+function normalizeValidationDetails(details: any): Array<{ path?: Array<string | number>; message?: string }> {
+  if (Array.isArray(details)) return details;
+  if (Array.isArray(details?.issues)) return details.issues;
+  return [];
+}
+
 type ConfigSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
 
@@ -467,6 +473,89 @@ export interface SdkOverviewResponse {
   effective: EffectiveSdkInfo;
 }
 
+export interface ChannelProviderPreset {
+  id: string;
+  name: string;
+  category: 'official' | 'bridge' | 'generic';
+  transport: 'webhook';
+  description: string;
+  capabilities: string[];
+  fields: Array<{
+    key: string;
+    label: string;
+    type: 'text' | 'password' | 'url' | 'textarea';
+    required?: boolean;
+    placeholder?: string;
+    help?: string;
+  }>;
+  setupGuide: string[];
+}
+
+export interface ChannelIntegrationRecord {
+  id: string;
+  name: string;
+  provider: string;
+  enabled: boolean;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  secret: string;
+  webhookPath: string;
+  transport: 'webhook';
+  capabilities: string[];
+  bindingStrategy: 'manual' | 'per-conversation-auto';
+  defaultBinding?: {
+    bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+    configFile?: string;
+    runId?: string;
+    agentName?: string;
+    workflowMode?: 'feedback-only' | 'full-control';
+    roundtableParticipants?: string[];
+    roundtableSummarizer?: string;
+  } | null;
+  providerConfig?: Record<string, any>;
+}
+
+export interface ChannelBindingRecord {
+  id: string;
+  integrationId: string;
+  bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  externalConversationId: string;
+  externalUserId?: string;
+  externalConversationName?: string;
+  runId?: string;
+  configFile?: string;
+  frontendSessionId?: string;
+  agentName?: string;
+  agentSessionId?: string;
+  workflowMode?: 'feedback-only' | 'full-control';
+  roundtableId?: string;
+  roundtableParticipants?: string[];
+  roundtableSummarizer?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ChannelReplyMessage {
+  kind: 'text' | 'roundtable-message' | 'roundtable-summary' | 'system';
+  speakerType?: 'human' | 'agent' | 'supervisor' | 'system';
+  speakerName?: string;
+  text: string;
+}
+
+export interface WeChatOfficialLoginSessionRecord {
+  id: string;
+  qrcode: string;
+  qrcodeUrl: string;
+  status: 'pending' | 'scanned' | 'confirmed' | 'expired' | 'error';
+  accountId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export const configApi = {
   async listConfigs(options: ConfigListOptions = {}): Promise<ConfigListResponse> {
     const params = new URLSearchParams();
@@ -574,7 +663,10 @@ export const configApi = {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => null);
-      const details = data?.details?.map((d: any) => `${d.path?.join('.')}: ${d.message}`).join('; ');
+      const details = normalizeValidationDetails(data?.details)
+        .map((d: any) => `${Array.isArray(d?.path) ? d.path.join('.') : ''}: ${d?.message || ''}`.replace(/^:\s*/, '').trim())
+        .filter(Boolean)
+        .join('; ');
       throw new Error(data?.error ? `${data.error}${details ? ` (${details})` : ''}` : '保存配置失败');
     }
     return response.json();
@@ -609,6 +701,21 @@ export const configApi = {
     });
     if (!response.ok) throw new Error('批量删除失败');
     return response.json();
+  },
+};
+
+export const specCodingApi = {
+  async updateCreationSession(id: string, patch: Record<string, any>): Promise<{ session: any }> {
+    const response = await authFetch(`${API_BASE}/spec-coding/sessions/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || data?.message || '更新 Spec 计划失败');
+    }
+    return data;
   },
 };
 
@@ -655,6 +762,22 @@ export const agentApi = {
       body: JSON.stringify({ action: 'replace-model', engine, fromModel, toModel }),
     });
     if (!response.ok) throw new Error('批量替换模型失败');
+    return response.json();
+  },
+
+  async batchSetModelPolicy(input: {
+    sourceType: 'strategy' | 'unconfigured';
+    sourceEngine?: string;
+    sourceModel?: string;
+    targetEngine: string;
+    targetModel: string;
+  }): Promise<ApiResponse & { updatedCount: number }> {
+    const response = await authFetch(`${API_BASE}/agents/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-model-policy', ...input }),
+    });
+    if (!response.ok) throw new Error('批量设置模型策略失败');
     return response.json();
   },
 
@@ -736,13 +859,14 @@ export const agentApi = {
     return response.json();
   },
 
-  async chat(name: string, input: {
-    message: string;
-    mode?: 'standalone-chat' | 'workflow-chat';
-    sessionId?: string | null;
-    workingDirectory?: string;
-    workflowContext?: Record<string, any>;
-  }): Promise<{
+    async chat(name: string, input: {
+      message: string;
+      mode?: 'standalone-chat' | 'workflow-chat';
+      sessionId?: string | null;
+      workingDirectory?: string;
+      workflowContext?: Record<string, any>;
+      temporaryRoleConfig?: Record<string, any>;
+    }): Promise<{
     ok: boolean;
     output: string;
     sessionId?: string | null;
@@ -1385,6 +1509,179 @@ export const systemSettingsApi = {
     return response.json();
   },
 };
+
+export const channelApi = {
+  async listProviders(): Promise<{ providers: ChannelProviderPreset[] }> {
+    const response = await authFetch(`${API_BASE}/channels/providers`);
+    if (!response.ok) throw new Error('获取渠道 provider 失败');
+    return response.json();
+  },
+
+  async setup(input: {
+    provider: string;
+    name?: string;
+    bindingStrategy?: 'manual' | 'per-conversation-auto';
+    defaultBinding?: Record<string, any>;
+    providerConfig?: Record<string, any>;
+    enabled?: boolean;
+  }): Promise<{ integration: ChannelIntegrationRecord; preset: ChannelProviderPreset; onboarding: { webhookUrl: string; secret: string; nextSteps: string[]; samplePayload: Record<string, any> } }> {
+    const response = await authFetch(`${API_BASE}/channels/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '创建渠道集成失败');
+    return data;
+  },
+
+  async listIntegrations(): Promise<{ integrations: ChannelIntegrationRecord[] }> {
+    const response = await authFetch(`${API_BASE}/channels/integrations`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '获取渠道集成失败');
+    return data;
+  },
+
+  async updateIntegration(id: string, patch: Partial<ChannelIntegrationRecord>): Promise<{ integration: ChannelIntegrationRecord }> {
+    const response = await authFetch(`${API_BASE}/channels/integrations/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '更新渠道集成失败');
+    return data;
+  },
+
+  async deleteIntegration(id: string): Promise<{ success: boolean }> {
+    const response = await authFetch(`${API_BASE}/channels/integrations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '删除渠道集成失败');
+    return data;
+  },
+
+  async listBindings(integrationId?: string): Promise<{ bindings: ChannelBindingRecord[] }> {
+    const response = await authFetch(`${API_BASE}/channels/bindings${integrationId ? `?integrationId=${encodeURIComponent(integrationId)}` : ''}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '获取渠道 binding 失败');
+    return data;
+  },
+
+  async saveBinding(input: Partial<ChannelBindingRecord> & { integrationId: string; externalConversationId: string; bindingType: 'workflow-run' | 'roundtable' | 'agent-chat' }): Promise<{ binding: ChannelBindingRecord }> {
+    const response = await authFetch(`${API_BASE}/channels/bindings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '保存渠道 binding 失败');
+    return data;
+  },
+
+  async testSend(id: string, input: { text?: string; bindingId?: string }): Promise<{ success: boolean; status?: number }> {
+    const response = await authFetch(`${API_BASE}/channels/integrations/${encodeURIComponent(id)}/test-send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '发送测试消息失败');
+    return data;
+  },
+
+  async simulateInbound(integration: ChannelIntegrationRecord, input: {
+      conversationId: string;
+      conversationName?: string;
+      userId?: string;
+      userName?: string;
+      text: string;
+    }): Promise<{ ok?: boolean; replies?: string[]; replyMessages?: ChannelReplyMessage[]; binding?: ChannelBindingRecord | null; metadata?: Record<string, any>; challenge?: string; error?: string }> {
+      const response = await fetch(integration.webhookPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret: integration.secret,
+        message: {
+          conversationId: input.conversationId,
+          conversationName: input.conversationName,
+          userId: input.userId || 'web-tester',
+          userName: input.userName || 'Web Tester',
+          text: input.text,
+        },
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '模拟入站消息失败');
+      }
+      return data;
+    },
+
+  async getBootstrap(id: string): Promise<{
+      integration: ChannelIntegrationRecord;
+      protocol: {
+        version: string;
+        inbound: Record<string, any>;
+        response: Record<string, any>;
+        outbound: Record<string, any>;
+      };
+      bindings: ChannelBindingRecord[];
+    }> {
+      const response = await authFetch(`${API_BASE}/channels/integrations/${encodeURIComponent(id)}/bootstrap`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '获取桥接协议失败');
+      return data;
+    },
+
+  async createWeChatOfficialLoginSession(): Promise<{ session: WeChatOfficialLoginSessionRecord }> {
+    const response = await authFetch(`${API_BASE}/channels/wechat-official/login`, {
+      method: 'POST',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '创建微信扫码会话失败');
+    return data;
+  },
+
+  async getWeChatOfficialLoginSession(id: string): Promise<{ session: WeChatOfficialLoginSessionRecord }> {
+    const response = await authFetch(`${API_BASE}/channels/wechat-official/login/${encodeURIComponent(id)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '获取微信扫码状态失败');
+    return data;
+  },
+
+  async waitForWeChatOfficialLoginSession(id: string, timeoutMs = 45000): Promise<{ session: WeChatOfficialLoginSessionRecord }> {
+    const response = await authFetch(`${API_BASE}/channels/wechat-official/login/${encodeURIComponent(id)}/wait?timeoutMs=${encodeURIComponent(String(timeoutMs))}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '等待微信扫码确认失败');
+    return data;
+  },
+
+  async startWeChatOfficialBridge(input: { integrationId: string; accountId: string }): Promise<{
+    runtime: {
+      key: string;
+      accountId: string;
+      integrationId: string;
+      webhookUrl: string;
+      running: boolean;
+      startedAt: number;
+      lastEventAt: number;
+      lastEvent?: string;
+      lastError?: string;
+    };
+    integration: ChannelIntegrationRecord;
+  }> {
+    const response = await authFetch(`${API_BASE}/channels/wechat-official/bridge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || '启动微信桥接失败');
+    return data;
+  },
+  };
 
 export const cangjieSdkApi = {
   async getOverview(): Promise<SdkOverviewResponse> {

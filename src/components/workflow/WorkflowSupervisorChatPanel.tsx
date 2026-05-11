@@ -79,6 +79,7 @@ export default function WorkflowSupervisorChatPanel({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold">Supervisor 对话</span>
             <Badge variant="outline" className="text-[10px]">同首页会话</Badge>
+            <Badge variant="secondary" className="text-[10px]">@ 圆桌走首页协作室</Badge>
             {pendingHumanQuestion ? <Badge variant="destructive" className="text-[10px]">等待人工回复</Badge> : null}
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
@@ -129,11 +130,18 @@ export default function WorkflowSupervisorChatPanel({
       </div>
 
       <div className="border-t p-3">
+        <div className="mb-2 rounded-lg border bg-muted/20 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+          这里发送的是 Supervisor 单聊消息。需要多 Agent 圆桌时，到首页协作室使用
+          <span className="font-mono"> @agent </span>
+          或
+          <span className="font-mono"> @全员 </span>
+          主持；没有新的 @ 时本轮会自然结束。
+        </div>
         <div className="flex items-end gap-2">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="给 Supervisor 发送消息，系统会自动携带当前 workflow / run 上下文..."
+            placeholder="给 Supervisor 发送单聊消息，系统会自动携带当前 workflow / run 上下文..."
             className="min-h-[64px] resize-none"
             disabled={!loaded}
             onKeyDown={(event) => {
