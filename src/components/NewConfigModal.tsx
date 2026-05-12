@@ -89,6 +89,7 @@ const WORKFLOW_DRAFT_SYSTEM_GUARD_PROMPT = [
   '当前处于创建工作流的 workflow 草案阶段。AI 只负责根据已确认的 SpecCoding/计划制品生成草案文本和机器可读 workflow_draft。',
   '可以为整理草案文本或辅助生成内容使用脚本，但不要写入最终 workflow 文件。',
   '禁止自行校验 workflow/YAML：不要调用 validateWorkflowDraft，不要运行 ts-node/Node 脚本校验 YAML，不要调用 config.validate，不要输出 action，也不要声称“我会做本地结构校验”或“我已本地校验”。',
+  '如果生成的是 state-machine workflow，则每个非终止状态都必须完整提供三条且仅三条 verdict 转移：pass、conditional_pass、fail。不要缺项，不要重复，也不要额外添加未绑定 verdict 的 transition。',
   '系统会在你输出后自动解析 <result> 或 YAML 代码块，并使用服务端内建校验器判断 valid/invalid；校验失败时系统会把错误反馈给你继续修。',
   '你可以在心里做一致性自检，但对用户只展示草案、必要说明，以及最后的 <result> JSON。不要把“检查可用 Agent”“推断 schema”“本地校验”“运行 validateWorkflowDraft”写成任务列表。',
 ].join('\n');
@@ -213,9 +214,10 @@ function buildWorkflowDraftRepairMessage(previousOutput: string, validation: any
     '5. config 必须是完整 AceHarness workflow 配置对象，包含 workflow 和 context。',
     '6. workflow.supervisor.agent 以及所有 step.agent 必须引用当前可用 Agent。',
     '7. context.projectRoot 必须是用户提供的绝对工作目录。',
-    '8. AI-guided 创建阶段必须为每个 workflow step 显式提供 specTaskBinding.taskIds；taskIds 必须来自已确认 SpecCoding 的结构化 tasks，不要编造 ID，也不要依赖系统自动推断。',
-    '9. 每个 step 建议提供稳定 id；specTaskBinding 可同时包含 requirementIds 和 artifactKeys，其中 artifactKeys 可从 requirements/design/tasks 中选择。',
-    '10. 输出 </result> 后不要再追加任何文字。',
+    '8. 如果 config.workflow.mode 是 state-machine，则每个非终止状态必须且只能有三条 transitions，并分别绑定 condition.verdict=pass / conditional_pass / fail；不要缺失 verdict，不要重复 verdict，也不要添加额外的无 verdict transition。',
+    '9. AI-guided 创建阶段必须为每个 workflow step 显式提供 specTaskBinding.taskIds；taskIds 必须来自已确认 SpecCoding 的结构化 tasks，不要编造 ID，也不要依赖系统自动推断。',
+    '10. 每个 step 建议提供稳定 id；specTaskBinding 可同时包含 requirementIds 和 artifactKeys，其中 artifactKeys 可从 requirements/design/tasks 中选择。',
+    '11. 输出 </result> 后不要再追加任何文字。',
     '',
     '内建校验结果：',
     formatValidationIssuesForPrompt(validation),
@@ -423,12 +425,34 @@ function stripResultBlocksForDisplay(markdown: string) {
 
 function formatWorkflowCondition(condition: any): string {
   if (!condition || typeof condition !== 'object') return '';
-  if (typeof condition.verdict === 'string') return `verdict=${condition.verdict}`;
+  if (typeof condition.verdict === 'string') {
+    const verdictLabels: Record<string, string> = {
+      pass: '通过',
+      conditional_pass: '有条件通过',
+      fail: '失败',
+    };
+    return verdictLabels[condition.verdict] || `verdict=${condition.verdict}`;
+  }
   const entries = Object.entries(condition)
     .filter(([, value]) => value !== undefined && value !== null)
     .slice(0, 3);
   if (entries.length === 0) return '';
   return entries.map(([key, value]) => `${key}=${String(value)}`).join(', ');
+}
+
+function createVerdictTransitions(input: {
+  passTo: string;
+  conditionalPassTo: string;
+  failTo: string;
+  passLabel: string;
+  conditionalPassLabel: string;
+  failLabel: string;
+}) {
+  return [
+    { to: input.passTo, condition: { verdict: 'pass' }, priority: 10, label: input.passLabel },
+    { to: input.conditionalPassTo, condition: { verdict: 'conditional_pass' }, priority: 20, label: input.conditionalPassLabel },
+    { to: input.failTo, condition: { verdict: 'fail' }, priority: 30, label: input.failLabel },
+  ];
 }
 
 function buildWorkflowDraftVisualModel(config: any): {
@@ -971,10 +995,14 @@ function createStateMachinePreviewConfig(
           steps: [
             { name: '分析需求', agent: analysisAgent, role: 'defender', task: '澄清需求并整理约束与目标。' },
           ],
-          transitions: [
-            { to: '方案设计', condition: { verdict: 'pass' }, priority: 1, label: '分析完成' },
-            { to: '需求分析', condition: { verdict: 'conditional_pass' }, priority: 2, label: '继续澄清' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '方案设计',
+            conditionalPassTo: '需求分析',
+            failTo: '需求分析',
+            passLabel: '分析完成',
+            conditionalPassLabel: '继续澄清',
+            failLabel: '分析失败，重新梳理',
+          }),
         },
         {
           name: '方案设计',
@@ -986,10 +1014,14 @@ function createStateMachinePreviewConfig(
           steps: [
             { name: '设计方案', agent: designAgent, role: 'defender', task: '生成 workflow 阶段、步骤和分工草案。' },
           ],
-          transitions: [
-            { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '设计完成' },
-            { to: '方案设计', condition: { verdict: 'conditional_pass' }, priority: 2, label: '继续调整' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '完成',
+            conditionalPassTo: '方案设计',
+            failTo: '需求分析',
+            passLabel: '设计完成',
+            conditionalPassLabel: '继续调整',
+            failLabel: '返回需求分析',
+          }),
         },
         {
           name: '完成',
@@ -3101,12 +3133,13 @@ ${confirmedSpecPrompt}
 4. 如果引用 Agent，请优先使用已确认 SpecCoding assignments、推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
 5. 每个 workflow step 必须提供稳定 id，并显式设置 specTaskBinding。specTaskBinding.taskIds 必须直接引用上方 SpecCoding.tasks 中已有的叶子 task id；一个 step 可绑定多个 taskIds，但不能编造新的 task id。
 6. specTaskBinding.requirementIds 应引用该 step 覆盖的需求编号；specTaskBinding.artifactKeys 用 requirements/design/tasks 标识该 step 主要依赖或产出的制品。
-7. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
-8. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
-9. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
-10. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
-11. 输出 </result> 后不要再追加任何文字。
-12. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
+7. 如果 workflow mode 是 state-machine，则每个非终止状态必须且只能有三条 transitions：一条 pass、一条 conditional_pass、一条 fail。不要缺任何一条，也不要重复 verdict，更不要添加未指定 verdict 的额外 transition。
+8. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
+9. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
+10. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
+11. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
+12. 输出 </result> 后不要再追加任何文字。
+13. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
 
 请现在直接开始生成 workflow YAML 草案。系统会校验 <result> 内的 config；如有问题，系统会把校验错误直接反馈给你继续修正。`
       : `请基于用户输入和参考 workflow，直接搭建 AceHarness 工作流 YAML 草案。本次创建已关闭 Spec 计划步骤，所以不要生成 requirements/design/tasks，也不要强制添加 specTaskBinding。
@@ -3126,12 +3159,13 @@ ${recommendationPrompt}
 2. 草案必须明确 workflow mode、context、supervisor、roles、phases/states、steps、agent 分配、checkpoint 和必要的 preCommands。
 3. 如果引用 Agent，请优先使用推荐 Agent、参考工作流结构和本提示中已经出现的 Agent 名称；不要为了校验 Agent/YAML 自行读取 configs/agents 或运行校验脚本。
 4. 本次没有 SpecCoding.tasks，因此不要强制提供 specTaskBinding；只有在确有明确需求编号或制品引用时才可添加非必需绑定。
-5. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
-6. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
-7. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
-8. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
-9. 输出 </result> 后不要再追加任何文字。
-10. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
+5. 如果 workflow mode 是 state-machine，则每个非终止状态必须且只能有三条 transitions：一条 pass、一条 conditional_pass、一条 fail。不要缺任何一条，也不要重复 verdict，更不要添加未指定 verdict 的额外 transition。
+6. 你不要直接写入 configs/${filename}，也不要只声明“确认后写入”。系统会负责保存和校验。
+7. 先把完整 YAML 草案展示给用户确认；然后在回复末尾输出机器可读结果，供系统立即校验。
+8. 机器可读结果必须放在 <result>...</result> 内，且 <result> 内只能放一个独立的 JSON 对象，不要包 \`\`\`json 代码块。
+9. JSON 顶层优先使用 {"kind":"workflow_draft","payload":{"filename":"${filename}","summary":"...","config":{...}}}；兼容格式 {"type":"workflow_draft","filename":"${filename}","summary":"...","config":{...}} 也可解析。config 必须是完整 AceHarness workflow 配置对象。
+10. 输出 </result> 后不要再追加任何文字。
+11. 禁止输出“现在我会做本地结构校验/运行 validateWorkflowDraft/运行 YAML 校验”这类过程描述；系统收到你的 <result> 后会自动完成解析与校验。
 
 请现在直接开始生成 workflow YAML 草案。系统会校验 <result> 内的 config；如有问题，系统会把校验错误直接反馈给你继续修正。`;
 

@@ -912,7 +912,12 @@ function getConditionLabel(transition: StateTransition): string {
   const parts: string[] = [];
 
   if (condition.verdict) {
-    parts.push(condition.verdict);
+    const verdictLabels: Record<string, string> = {
+      pass: '通过',
+      conditional_pass: '有条件通过',
+      fail: '失败',
+    };
+    parts.push(verdictLabels[condition.verdict] || condition.verdict);
   }
 
   if (condition.issueTypes && condition.issueTypes.length > 0) {

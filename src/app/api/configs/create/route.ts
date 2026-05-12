@@ -26,6 +26,21 @@ function createDefaultWorkflowGovernance() {
   };
 }
 
+function createVerdictTransitions(input: {
+  passTo: string;
+  conditionalPassTo: string;
+  failTo: string;
+  passLabel: string;
+  conditionalPassLabel: string;
+  failLabel: string;
+}) {
+  return [
+    { to: input.passTo, condition: { verdict: 'pass' }, priority: 10, label: input.passLabel },
+    { to: input.conditionalPassTo, condition: { verdict: 'conditional_pass' }, priority: 20, label: input.conditionalPassLabel },
+    { to: input.failTo, condition: { verdict: 'fail' }, priority: 30, label: input.failLabel },
+  ];
+}
+
 function createPhaseBasedConfig(workflowName: string, workingDirectory: string, workspaceMode: 'isolated-copy' | 'in-place', description?: string) {
   return {
     workflow: {
@@ -74,11 +89,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '方案挑战', agent: 'design-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
             { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合红队方案和蓝队意见，给出评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '实施', condition: { verdict: 'pass' }, priority: 1, label: '设计通过' },
-            { to: '设计', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修改' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '重新设计' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '实施',
+            conditionalPassTo: '设计',
+            failTo: '设计',
+            passLabel: '设计通过',
+            conditionalPassLabel: '需要修改',
+            failLabel: '重新设计',
+          }),
         },
         {
           name: '实施',
@@ -92,11 +110,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '代码审查', agent: 'code-hunter', role: 'attacker', task: '审查代码实现，检查安全性、性能和代码质量' },
             { name: '实施评审', agent: 'code-judge', role: 'judge', task: '综合实施结果和审查意见，给出评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '测试', condition: { verdict: 'pass' }, priority: 1, label: '实施完成' },
-            { to: '实施', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修改' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '设计有问题' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '测试',
+            conditionalPassTo: '实施',
+            failTo: '设计',
+            passLabel: '实施完成',
+            conditionalPassLabel: '需要修改',
+            failLabel: '设计有问题',
+          }),
         },
         {
           name: '测试',
@@ -110,11 +131,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '压力测试', agent: 'stress-tester', role: 'attacker', task: '进行边界测试和压力测试，寻找潜在问题' },
             { name: '测试评审', agent: 'code-judge', role: 'judge', task: '综合测试结果，给出最终评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '测试通过' },
-            { to: '实施', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修复' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '严重问题' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '完成',
+            conditionalPassTo: '实施',
+            failTo: '设计',
+            passLabel: '测试通过',
+            conditionalPassLabel: '需要修复',
+            failLabel: '严重问题',
+          }),
         },
         {
           name: '完成',

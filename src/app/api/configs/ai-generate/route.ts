@@ -136,6 +136,21 @@ function generatePhaseBasedConfig(requirements: string, workflowName: string, wo
   };
 }
 
+function createVerdictTransitions(input: {
+  passTo: string;
+  conditionalPassTo: string;
+  failTo: string;
+  passLabel: string;
+  conditionalPassLabel: string;
+  failLabel: string;
+}) {
+  return [
+    { to: input.passTo, condition: { verdict: 'pass' }, priority: 10, label: input.passLabel },
+    { to: input.conditionalPassTo, condition: { verdict: 'conditional_pass' }, priority: 20, label: input.conditionalPassLabel },
+    { to: input.failTo, condition: { verdict: 'fail' }, priority: 30, label: input.failLabel },
+  ];
+}
+
 /**
  * 生成状态机模式配置（每个状态包含红队/蓝队/裁判三个步骤）
  */
@@ -157,10 +172,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '渗透测试', agent: 'stress-tester', task: '模拟攻击，验证安全防护' },
           { name: '扫描评估', agent: 'code-judge', task: '评估扫描和渗透结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '漏洞分析', condition: { verdict: 'pass' }, priority: 1, label: '发现问题' },
-          { to: '完成', condition: { verdict: 'fail' }, priority: 2, label: '无问题' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '漏洞分析',
+          conditionalPassTo: '安全扫描',
+          failTo: '完成',
+          passLabel: '发现问题',
+          conditionalPassLabel: '继续补充扫描',
+          failLabel: '无问题',
+        }),
       },
       {
         name: '漏洞分析', description: '红队分析、蓝队验证、裁判判定', isInitial: false, isFinal: false,
@@ -170,10 +189,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '漏洞验证', agent: 'code-hunter', task: '验证漏洞可利用性，评估实际风险' },
           { name: '分析评审', agent: 'code-judge', task: '综合分析结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '修复验证', condition: { verdict: 'pass' }, priority: 1, label: '分析完成' },
-          { to: '安全扫描', condition: { verdict: 'fail' }, priority: 2, label: '需要更多数据' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '修复验证',
+          conditionalPassTo: '漏洞分析',
+          failTo: '安全扫描',
+          passLabel: '分析完成',
+          conditionalPassLabel: '继续分析',
+          failLabel: '需要更多数据',
+        }),
       },
       {
         name: '修复验证', description: '红队修复、蓝队回测、裁判验收', isInitial: false, isFinal: false,
@@ -183,10 +206,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '修复回测', agent: 'stress-tester', task: '对修复后的代码进行安全回测' },
           { name: '修复评审', agent: 'code-judge', task: '验证修复效果，给出 verdict' },
         ],
-        transitions: [
-          { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '修复验证通过' },
-          { to: '漏洞分析', condition: { verdict: 'fail' }, priority: 2, label: '修复无效' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '完成',
+          conditionalPassTo: '修复验证',
+          failTo: '漏洞分析',
+          passLabel: '修复验证通过',
+          conditionalPassLabel: '继续修补',
+          failLabel: '修复无效',
+        }),
       },
       {
         name: '完成', description: '安全审计完成', isInitial: false, isFinal: true,
@@ -209,10 +236,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '复现验证', agent: 'code-hunter', task: '独立验证复现用例，确认问题存在' },
           { name: '复现评审', agent: 'code-judge', task: '确认复现结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '根因分析', condition: { verdict: 'pass' }, priority: 1, label: '已复现' },
-          { to: '复现确认', condition: { verdict: 'fail' }, priority: 2, label: '未能复现' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '根因分析',
+          conditionalPassTo: '复现确认',
+          failTo: '复现确认',
+          passLabel: '已复现',
+          conditionalPassLabel: '继续补充复现条件',
+          failLabel: '未能复现',
+        }),
       },
       {
         name: '根因分析', description: '红队定位、蓝队挑战、裁判判定', isInitial: false, isFinal: false,
@@ -222,10 +253,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '分析挑战', agent: 'design-breaker', task: '挑战根因分析结论，寻找遗漏' },
           { name: '分析评审', agent: 'design-judge', task: '综合分析结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '修复实施', condition: { verdict: 'pass' }, priority: 1, label: '根因已定位' },
-          { to: '复现确认', condition: { verdict: 'fail' }, priority: 2, label: '需要更多信息' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '修复实施',
+          conditionalPassTo: '根因分析',
+          failTo: '复现确认',
+          passLabel: '根因已定位',
+          conditionalPassLabel: '继续定位',
+          failLabel: '需要更多信息',
+        }),
       },
       {
         name: '修复实施', description: '红队修复、蓝队审查、裁判验收', isInitial: false, isFinal: false,
@@ -235,10 +270,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '修复审查', agent: 'code-hunter', task: '审查修复代码质量和正确性' },
           { name: '修复评审', agent: 'code-judge', task: '综合修复结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '回归验证', condition: { verdict: 'pass' }, priority: 1, label: '修复完成' },
-          { to: '根因分析', condition: { verdict: 'fail' }, priority: 2, label: '方案不可行' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '回归验证',
+          conditionalPassTo: '修复实施',
+          failTo: '根因分析',
+          passLabel: '修复完成',
+          conditionalPassLabel: '继续修复',
+          failLabel: '方案不可行',
+        }),
       },
       {
         name: '回归验证', description: '红队测试、蓝队压测、裁判判定', isInitial: false, isFinal: false,
@@ -248,10 +287,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '压力回测', agent: 'stress-tester', task: '对修复进行压力和边界测试' },
           { name: '验证评审', agent: 'code-judge', task: '综合验证结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '验证通过' },
-          { to: '修复实施', condition: { verdict: 'fail' }, priority: 2, label: '验证未通过' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '完成',
+          conditionalPassTo: '回归验证',
+          failTo: '修复实施',
+          passLabel: '验证通过',
+          conditionalPassLabel: '继续验证',
+          failLabel: '验证未通过',
+        }),
       },
       {
         name: '完成', description: '修复流程结束', isInitial: false, isFinal: true,
@@ -275,10 +318,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '方案挑战', agent: 'design-breaker', task: '审查设计方案，寻找潜在缺陷' },
           { name: '设计评审', agent: 'design-judge', task: '综合评审，给出 verdict' },
         ],
-        transitions: [
-          { to: '实施', condition: { verdict: 'pass' }, priority: 1, label: '设计通过' },
-          { to: '设计', condition: { verdict: 'fail' }, priority: 2, label: '需要修改' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '实施',
+          conditionalPassTo: '设计',
+          failTo: '设计',
+          passLabel: '设计通过',
+          conditionalPassLabel: '继续修改',
+          failLabel: '需要修改',
+        }),
       },
       {
         name: '实施', description: '红队编码、蓝队审查、裁判验收', isInitial: false, isFinal: false,
@@ -288,10 +335,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '代码审查', agent: 'code-hunter', task: '审查代码质量和安全性' },
           { name: '实施评审', agent: 'code-judge', task: '综合评审，给出 verdict' },
         ],
-        transitions: [
-          { to: '测试', condition: { verdict: 'pass' }, priority: 1, label: '实施完成' },
-          { to: '设计', condition: { verdict: 'fail' }, priority: 2, label: '设计有问题' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '测试',
+          conditionalPassTo: '实施',
+          failTo: '设计',
+          passLabel: '实施完成',
+          conditionalPassLabel: '继续修正',
+          failLabel: '设计有问题',
+        }),
       },
       {
         name: '测试', description: '红队测试、蓝队攻击、裁判判定', isInitial: false, isFinal: false,
@@ -301,10 +352,14 @@ function generateStateMachineConfig(requirements: string, workflowName: string, 
           { name: '压力测试', agent: 'stress-tester', task: '进行边界和压力测试' },
           { name: '测试评审', agent: 'code-judge', task: '综合测试结果，给出 verdict' },
         ],
-        transitions: [
-          { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '测试通过' },
-          { to: '实施', condition: { verdict: 'fail' }, priority: 2, label: '测试失败' },
-        ],
+        transitions: createVerdictTransitions({
+          passTo: '完成',
+          conditionalPassTo: '测试',
+          failTo: '实施',
+          passLabel: '测试通过',
+          conditionalPassLabel: '继续验证',
+          failLabel: '测试失败',
+        }),
       },
       {
         name: '完成', description: '工作流结束', isInitial: false, isFinal: true,

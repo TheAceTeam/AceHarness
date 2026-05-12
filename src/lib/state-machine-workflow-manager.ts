@@ -11,6 +11,7 @@ import { existsSync } from 'fs';
 import { cpus } from 'os';
 import { parse } from 'yaml';
 import { resolveAgentModel } from './workflow-manager';
+import { resolveWorkflowExecutionPolicy } from './agent-engine-selection';
 import { processManager } from './process-manager';
 import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from './engines/engine-interface';
 import { createRun, updateRun } from './run-store';
@@ -940,6 +941,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (workflowConfig.workflow.mode !== 'state-machine') {
         throw new Error('配置文件不是状态机模式');
       }
+      this.assertRequiredVerdictTransitions(workflowConfig);
 
       // === Create run FIRST so frontend can see it immediately ===
       const totalSteps = workflowConfig.workflow.states.reduce(
@@ -983,6 +985,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         const compiled = compileStepTaskBindings(workflowConfig, this.currentRunSpecCoding);
         workflowConfig = compiled.config as StateMachineWorkflowConfig;
         this.currentWorkflowConfig = workflowConfig;
+        this.assertRequiredVerdictTransitions(workflowConfig);
         this.bindingValidation = compiled.validation;
         this.stepTaskBindingsSnapshot = compiled.validation.bindings;
         this.stepTaskBindingsByStepKey = new Map(
@@ -1059,7 +1062,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await reportPreparingProgress('准备中：构建 Agent 视图...', '构建 Agent 视图');
       this.initializeAgents(workflowConfig);
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
-      await this.initializeEngine(workflowConfig.context?.engine);
+        await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
       await this.syncSkillsToWorkspace(workflowConfig);
@@ -3124,7 +3127,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         '\n# 文档输出要求',
         `请将你产出的步骤成果详细总结写入以下目录：\n\`${outputPath}\``,
         `当前步骤的步骤成果详细总结文件名必须是：\`${summaryFileName}\``,
-        '如果你还需要创建其他附加产物文件，也必须使用时间戳前缀，但后半段名称可以根据内容自行命名；只要不要与当前步骤的步骤成果详细总结重名即可。',
+        '以上规则仅适用于系统要求的“步骤成果详细总结”归档文件。',
+        '除步骤成果详细总结外，其他正式产物文件（例如代码、设计文档、API 文档、说明文档、脚本、配置等）应严格按照用户要求、任务要求和项目目录约定写入；如果用户要求产出到工作目录，就写入工作目录，不要写入该归档目录。',
         '\n# 步骤结论归档协议',
         '步骤成果详细总结与步骤结论是两种不同输出。',
         '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论只需要放在回复末尾的 <step-conclusion> 中。',
@@ -3686,9 +3690,14 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     // No matching transition - wait for human decision instead of crashing
+    const configuredVerdicts = [...new Set(
+      transitions
+        .map((transition) => transition.condition?.verdict)
+        .filter((verdict): verdict is 'pass' | 'conditional_pass' | 'fail' => Boolean(verdict))
+    )];
     this.emit('escalation', {
       state: result.stateName,
-      reason: `没有匹配的状态转移规则 (verdict: ${result.verdict})，等待人工决策`,
+      reason: `没有匹配的状态转移规则 (verdict: ${result.verdict}，已配置 verdict: ${configuredVerdicts.join(', ') || '无'})，等待人工决策`,
       result,
     });
 
@@ -3702,7 +3711,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const humanQuestion = await this.createHumanQuestion({
       kind: 'approval',
       title: '需要人工选择下一状态',
-      message: `verdict "${result.verdict}" 没有匹配的转移规则，请选择下一步状态。`,
+      message: `verdict "${result.verdict}" 没有匹配的转移规则。当前状态应至少配置 pass / conditional_pass / fail 三条路径；如需继续，请人工选择下一步状态。`,
       currentState: result.stateName,
       suggestedNextState: transitions[0]?.to || result.stateName,
       availableStates: config.workflow.states.map(s => s.name),
@@ -3721,7 +3730,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       suggestedNextState: transitions[0]?.to || result.stateName,
       result,
       availableStates: config.workflow.states.map(s => s.name),
-      reason: `verdict "${result.verdict}" 没有匹配的转移规则`,
+      reason: `verdict "${result.verdict}" 没有匹配的转移规则，当前状态应配置完整三路 verdict 转移`,
       humanQuestion,
     });
 
@@ -3783,6 +3792,35 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     return null;
+  }
+
+  private assertRequiredVerdictTransitions(config: StateMachineWorkflowConfig): void {
+    const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
+    const invalidStates: string[] = [];
+
+    for (const state of config.workflow.states || []) {
+      if (state.isFinal) continue;
+      const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+      const verdicts = transitions
+        .map((transition) => transition.condition?.verdict)
+        .filter((verdict): verdict is typeof requiredVerdicts[number] => requiredVerdicts.includes(verdict as any));
+
+      const extras = transitions.filter((transition) => !requiredVerdicts.includes(transition.condition?.verdict as any));
+      const missing = requiredVerdicts.filter((verdict) => !verdicts.includes(verdict));
+      const duplicated = requiredVerdicts.filter((verdict) => verdicts.filter((item) => item === verdict).length > 1);
+
+      if (extras.length > 0 || missing.length > 0 || duplicated.length > 0) {
+        const parts: string[] = [];
+        if (missing.length > 0) parts.push(`缺少 ${missing.join(', ')}`);
+        if (duplicated.length > 0) parts.push(`${duplicated.join(', ')} 重复`);
+        if (extras.length > 0) parts.push('存在未绑定 verdict 的额外转移');
+        invalidStates.push(`${state.name}（${parts.join('；')}）`);
+      }
+    }
+
+    if (invalidStates.length > 0) {
+      throw new Error(`状态机运行前校验失败：非终止状态必须完整配置 pass / conditional_pass / fail 三条转移路径。异常状态：${invalidStates.join('；')}`);
+    }
   }
 
   private parseIssuesFromOutput(
@@ -3973,7 +4011,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     // Initialize engine
-    await this.initializeEngine(workflowConfig.context?.engine);
+    await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {

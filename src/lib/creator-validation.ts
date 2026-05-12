@@ -149,6 +149,7 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
   const availableAgents = new Set(getAvailableAgents());
   const referencedAgents = new Set<string>();
   if (mode === 'state-machine') {
+    const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
     const stateNames = new Set<string>();
     for (const state of workflowAny.states || []) {
       if (stateNames.has(state.name)) {
@@ -175,6 +176,45 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
     for (const state of workflowAny.states || []) {
       if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
         pushIssue(issues, 'warning', ['workflow', 'states', state.name, 'transitions'], `终止状态 "${state.name}" 通常不应再配置转移规则`);
+        continue;
+      }
+      if (state.isFinal) {
+        continue;
+      }
+
+      const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+      const verdictTransitions = transitions.filter((transition: any) => (
+        typeof transition?.condition?.verdict === 'string'
+        && requiredVerdicts.includes(transition.condition.verdict)
+      ));
+      const nonVerdictTransitions = transitions.filter((transition: any) => !requiredVerdicts.includes(transition?.condition?.verdict));
+
+      if (nonVerdictTransitions.length > 0) {
+        pushIssue(
+          issues,
+          'error',
+          ['workflow', 'states', state.name, 'transitions'],
+          `状态 "${state.name}" 现在要求使用固定三路 verdict 转移，不再支持未指定 verdict 的额外转移规则`
+        );
+      }
+
+      for (const verdict of requiredVerdicts) {
+        const matches = verdictTransitions.filter((transition: any) => transition.condition.verdict === verdict);
+        if (matches.length === 0) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', state.name, 'transitions'],
+            `状态 "${state.name}" 缺少 ${verdict} 转移路径`
+          );
+        } else if (matches.length > 1) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', state.name, 'transitions'],
+            `状态 "${state.name}" 的 ${verdict} 转移路径重复，必须且只能保留一条`
+          );
+        }
       }
     }
   } else {

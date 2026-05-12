@@ -27,7 +27,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Plus, Trash2, GripVertical, ChevronDown, ChevronLeft, ChevronRight, ArrowRight, Info } from 'lucide-react';
+import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
 import StateMachineDiagram from './StateMachineDiagram';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/schemas';
@@ -51,6 +51,38 @@ const joinPolicyLabels: Record<string, string> = {
   quorum: '达到指定数量',
   manual: '人工确认',
 };
+
+const VERDICT_TRANSITION_PRESETS = [
+  {
+    verdict: 'pass' as const,
+    title: '通过',
+    description: '当前状态目标达成，进入下一状态。',
+    defaultLabel: '通过后进入下一状态',
+    priority: 10,
+    tone: 'border-emerald-500/30 bg-emerald-500/5',
+    badgeTone: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300',
+  },
+  {
+    verdict: 'conditional_pass' as const,
+    title: '有条件通过',
+    description: '方向正确但仍需补充，一般留在本状态继续迭代。',
+    defaultLabel: '补充后继续当前状态',
+    priority: 20,
+    tone: 'border-amber-500/30 bg-amber-500/5',
+    badgeTone: 'bg-amber-500/12 text-amber-700 dark:text-amber-300',
+  },
+  {
+    verdict: 'fail' as const,
+    title: '失败',
+    description: '当前状态未通过，回退或重新执行。',
+    defaultLabel: '失败后回退',
+    priority: 30,
+    tone: 'border-rose-500/30 bg-rose-500/5',
+    badgeTone: 'bg-rose-500/12 text-rose-700 dark:text-rose-300',
+  },
+];
+
+type VerdictTransition = typeof VERDICT_TRANSITION_PRESETS[number]['verdict'];
 
 const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
 
@@ -121,6 +153,28 @@ const getGroupRange = (steps: WorkflowStep[], index: number) => {
   return { start, end };
 };
 
+function buildVerdictTransitions(
+  state: StateMachineState,
+  states: StateMachineState[],
+  existingTransitions?: StateTransition[]
+): StateTransition[] {
+  const transitions = Array.isArray(existingTransitions) ? existingTransitions : state.transitions || [];
+  const defaultForwardTarget = states.find((item) => item.name !== state.name)?.name || '';
+  return VERDICT_TRANSITION_PRESETS.map((preset) => {
+    const existing = transitions.find((transition) => transition.condition?.verdict === preset.verdict);
+    const fallbackTarget = preset.verdict === 'pass' ? defaultForwardTarget : state.name;
+    return {
+      to: existing?.to ?? fallbackTarget,
+      condition: {
+        ...(existing?.condition || {}),
+        verdict: preset.verdict,
+      },
+      priority: preset.priority,
+      label: existing?.label || preset.defaultLabel,
+    };
+  });
+}
+
 // 可拖拽的步骤行
 function SortableStepRow({
   step, index, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup,
@@ -189,27 +243,97 @@ function SortableStepRow({
   );
 }
 
-// 转移条件编辑行
-function TransitionRow({
-  transition, index, states, currentStateName, onChange, onDelete,
+// 左侧状态列表：可拖拽排序
+function SortableStateListItem({
+  state,
+  index,
+  isSelected,
+  onSelect,
+  onDelete,
 }: {
-  transition: StateTransition;
+  state: StateMachineState;
   index: number;
-  states: StateMachineState[];
-  currentStateName: string;
-  onChange: (t: StateTransition) => void;
+  isSelected: boolean;
+  onSelect: () => void;
   onDelete: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const otherStates = states.filter(s => s.name !== currentStateName);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.55 : 1 };
 
-  // 生成人类可读的条件描述
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group flex items-center gap-1 rounded-lg border border-transparent px-2 py-2 transition-colors text-sm ${
+        isSelected
+          ? 'border-primary/40 bg-primary text-primary-foreground'
+          : 'hover:bg-muted hover:border-border'
+      }`}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        className={`cursor-grab active:cursor-grabbing touch-none flex-shrink-0 rounded p-0.5 ${
+          isSelected ? 'text-primary-foreground/80 hover:text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+        }`}
+        aria-label="拖动排序"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <GripVertical className="w-4 h-4" />
+      </button>
+      <div
+        role="button"
+        tabIndex={0}
+        className="flex-1 min-w-0 cursor-pointer text-left"
+        onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onSelect();
+          }
+        }}
+      >
+        <div className="font-medium truncate">{state.name}</div>
+        <div className={`text-xs ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+          {state.steps?.length ?? 0}步 · {state.transitions?.length ?? 0}转移
+        </div>
+      </div>
+      <div className="flex gap-0.5 ml-0.5 flex-shrink-0">
+        {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 self-center" title="初始状态" />}
+        {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 self-center" title="终止状态" />}
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className={`h-5 w-5 p-0 opacity-0 group-hover:opacity-100 flex-shrink-0 ${
+          isSelected ? 'hover:bg-primary-foreground/20 text-primary-foreground' : 'text-destructive hover:text-destructive'
+        }`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+      >
+        <Trash2 className="w-3 h-3" />
+      </Button>
+    </div>
+  );
+}
+
+// 固定 verdict 三分支编辑卡
+function VerdictTransitionCard({
+  transition, states, onChange, preset,
+}: {
+  transition: StateTransition;
+  states: StateMachineState[];
+  onChange: (t: StateTransition) => void;
+  preset: typeof VERDICT_TRANSITION_PRESETS[number];
+}) {
+  const [expanded, setExpanded] = useState(false);
+
   const conditionSummary = () => {
     const parts: string[] = [];
-    if (transition.condition.verdict) {
-      const labels: Record<string, string> = { pass: '✓ 通过', conditional_pass: '△ 有条件通过', fail: '✗ 失败' };
-      parts.push(labels[transition.condition.verdict] || transition.condition.verdict);
-    }
     if (transition.condition.issueTypes?.length) {
       parts.push(`问题类型: ${transition.condition.issueTypes.join('/')}`);
     }
@@ -219,94 +343,70 @@ function TransitionRow({
     if (transition.condition.minIssueCount !== undefined) {
       parts.push(`≥${transition.condition.minIssueCount}个问题`);
     }
-    return parts.length ? parts.join(' · ') : '无条件（默认）';
+    if (transition.condition.maxIssueCount !== undefined) {
+      parts.push(`≤${transition.condition.maxIssueCount}个问题`);
+    }
+    return parts.length ? parts.join(' · ') : '仅按 verdict 判定';
   };
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-      {/* 头部：点击展开/收起 */}
-      <div
-        className="flex items-center gap-2 p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {expanded ? <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />}
-        <ArrowRight className="w-4 h-4 text-blue-500 flex-shrink-0" />
-        <span className="font-medium text-sm flex-shrink-0">{transition.to || '未设置'}</span>
-        <span className="text-xs text-gray-500 flex-1 truncate">{conditionSummary()}</span>
-        <Badge variant="outline" className="text-xs flex-shrink-0">优先级 {transition.priority}</Badge>
-        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:text-destructive flex-shrink-0"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}>
-          <Trash2 className="w-3 h-3" />
-        </Button>
-      </div>
+    <div className={`overflow-hidden rounded-2xl border ${preset.tone}`}>
+      <div className="flex items-start gap-3 p-4">
+        <button
+          type="button"
+          className="mt-0.5 rounded-full border border-border/60 bg-background/80 p-1 text-muted-foreground"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
+                <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
+              </div>
+              <div className="text-xs text-muted-foreground">{preset.description}</div>
+            </div>
+            <div className="rounded-full border bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground">
+              {conditionSummary()}
+            </div>
+          </div>
 
-      {/* 展开的编辑区 */}
-      {expanded && (
-        <div className="p-3 pt-0 border-t border-gray-100 dark:border-gray-800 space-y-3 bg-gray-50 dark:bg-gray-900">
-          {/* 目标状态 */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs mb-1 block">跳转到</Label>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+            <div className="space-y-1.5">
+              <Label className="text-xs">跳转目标</Label>
               <SingleCombobox
                 value={transition.to}
-                onValueChange={(v) => onChange({ ...transition, to: v })}
-                options={states.map(s => ({ value: s.name, label: s.name }))}
-                placeholder="选择目标状态"
-                triggerClassName="h-8 text-sm"
+                onValueChange={(value) => onChange({ ...transition, to: value })}
+                options={states.map((state) => ({ value: state.name, label: state.name }))}
+                placeholder="选择状态"
+                triggerClassName="h-9 bg-background/90"
                 searchable={false}
               />
             </div>
-            <div>
-              <Label className="text-xs mb-1 block">优先级（数字越小越优先）</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">路径说明</Label>
               <Input
-                type="number"
-                className="h-8 text-sm"
-                value={transition.priority}
-                onChange={(e) => onChange({ ...transition, priority: Number(e.target.value) })}
+                className="h-9 bg-background/90 text-sm"
+                value={transition.label || ''}
+                onChange={(e) => onChange({ ...transition, label: e.target.value })}
+                placeholder={preset.defaultLabel}
               />
             </div>
           </div>
+        </div>
+      </div>
 
-          {/* 触发条件说明 */}
-          <div className="flex items-start gap-2 p-2 rounded bg-blue-50 dark:bg-blue-950 text-xs text-blue-700 dark:text-blue-300">
-            <Info className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            <span>当 Judge 输出满足以下条件时，工作流跳转到目标状态。多个条件同时满足才触发。</span>
+      {expanded ? (
+        <div className="space-y-3 border-t border-border/50 bg-background/60 p-4">
+          <div className="flex items-start gap-2 rounded-xl bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>这条路径的 verdict 已固定为 {preset.title}。下面这些条件只是额外收紧，不会替代 verdict 本身。</span>
           </div>
 
-          {/* 裁判结果 */}
           <div>
-            <Label className="text-xs mb-1.5 block">Judge 裁判结果</Label>
-            <div className="flex gap-2">
-              {[
-                { value: 'pass', label: '通过', color: 'bg-green-100 dark:bg-green-900 border-green-300 dark:border-green-700 text-green-700 dark:text-green-300' },
-                { value: 'conditional_pass', label: '有条件通过', color: 'bg-yellow-100 dark:bg-yellow-900 border-yellow-300 dark:border-yellow-700 text-yellow-700 dark:text-yellow-300' },
-                { value: 'fail', label: '失败', color: 'bg-red-100 dark:bg-red-900 border-red-300 dark:border-red-700 text-red-700 dark:text-red-300' },
-              ].map(opt => {
-                const selected = transition.condition.verdict === opt.value;
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => onChange({
-                      ...transition,
-                      condition: {
-                        ...transition.condition,
-                        verdict: selected ? undefined : opt.value as any,
-                      },
-                    })}
-                    className={`flex-1 py-1.5 px-2 rounded border text-xs font-medium transition-all ${selected ? opt.color : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300'}`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-xs text-gray-400 mt-1">不选则不限制裁判结果</p>
-          </div>
-
-          {/* 问题类型 */}
-          <div>
-            <Label className="text-xs mb-1.5 block">发现的问题类型（满足任意一个即触发）</Label>
+            <Label className="mb-1.5 block text-xs">问题类型过滤</Label>
             <div className="flex flex-wrap gap-2">
               {[
                 { value: 'design', label: '设计问题', desc: '架构/方案缺陷' },
@@ -314,7 +414,7 @@ function TransitionRow({
                 { value: 'performance', label: '性能问题', desc: '性能瓶颈/退化' },
                 { value: 'security', label: '安全问题', desc: '漏洞/安全缺陷' },
                 { value: 'test', label: '测试问题', desc: '测试用例失败' },
-              ].map(opt => {
+              ].map((opt) => {
                 const selected = transition.condition.issueTypes?.includes(opt.value as any);
                 return (
                   <button
@@ -324,29 +424,27 @@ function TransitionRow({
                     onClick={() => {
                       const current = transition.condition.issueTypes || [];
                       const next = selected
-                        ? current.filter(t => t !== opt.value)
+                        ? current.filter((item) => item !== opt.value)
                         : [...current, opt.value as any];
                       onChange({ ...transition, condition: { ...transition.condition, issueTypes: next.length ? next : undefined } });
                     }}
-                    className={`px-2.5 py-1 rounded-full border text-xs transition-all ${selected ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-200 dark:border-gray-700 text-gray-600 hover:border-blue-300'}`}
+                    className={`rounded-full border px-2.5 py-1 text-xs transition-all ${selected ? 'border-blue-500 bg-blue-500 text-white' : 'border-border bg-background/90 text-muted-foreground hover:border-blue-300'}`}
                   >
                     {opt.label}
                   </button>
                 );
               })}
             </div>
-            <p className="text-xs text-gray-400 mt-1">不选则不限制问题类型</p>
           </div>
 
-          {/* 严重程度 */}
           <div>
-            <Label className="text-xs mb-1.5 block">问题严重程度（满足任意一个即触发）</Label>
+            <Label className="mb-1.5 block text-xs">严重程度过滤</Label>
             <div className="flex gap-2">
               {[
-                { value: 'critical', label: '严重', color: 'bg-red-500 text-white border-red-500' },
-                { value: 'major', label: '主要', color: 'bg-orange-500 text-white border-orange-500' },
-                { value: 'minor', label: '次要', color: 'bg-gray-500 text-white border-gray-500' },
-              ].map(opt => {
+                { value: 'critical', label: '严重', color: 'border-red-500 bg-red-500 text-white' },
+                { value: 'major', label: '主要', color: 'border-orange-500 bg-orange-500 text-white' },
+                { value: 'minor', label: '次要', color: 'border-slate-500 bg-slate-500 text-white' },
+              ].map((opt) => {
                 const selected = transition.condition.severities?.includes(opt.value as any);
                 return (
                   <button
@@ -355,27 +453,25 @@ function TransitionRow({
                     onClick={() => {
                       const current = transition.condition.severities || [];
                       const next = selected
-                        ? current.filter(s => s !== opt.value)
+                        ? current.filter((item) => item !== opt.value)
                         : [...current, opt.value as any];
                       onChange({ ...transition, condition: { ...transition.condition, severities: next.length ? next : undefined } });
                     }}
-                    className={`flex-1 py-1.5 rounded border text-xs font-medium transition-all ${selected ? opt.color : 'border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-300'}`}
+                    className={`flex-1 rounded border py-1.5 text-xs font-medium transition-all ${selected ? opt.color : 'border-border bg-background/90 text-muted-foreground hover:border-gray-300'}`}
                   >
                     {opt.label}
                   </button>
                 );
               })}
             </div>
-            <p className="text-xs text-gray-400 mt-1">不选则不限制严重程度</p>
           </div>
 
-          {/* 问题数量 */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs mb-1 block">最少问题数量</Label>
+              <Label className="mb-1 block text-xs">最少问题数量</Label>
               <Input
                 type="number"
-                className="h-8 text-sm"
+                className="h-9 bg-background/90 text-sm"
                 placeholder="不限"
                 value={transition.condition.minIssueCount ?? ''}
                 onChange={(e) => onChange({
@@ -385,10 +481,10 @@ function TransitionRow({
               />
             </div>
             <div>
-              <Label className="text-xs mb-1 block">最多问题数量</Label>
+              <Label className="mb-1 block text-xs">最多问题数量</Label>
               <Input
                 type="number"
-                className="h-8 text-sm"
+                className="h-9 bg-background/90 text-sm"
                 placeholder="不限"
                 value={transition.condition.maxIssueCount ?? ''}
                 onChange={(e) => onChange({
@@ -399,7 +495,7 @@ function TransitionRow({
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -430,8 +526,18 @@ export default function StateMachineDesignPanel({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
+  /** 左侧状态列表单独使用略高的拖动阈值，避免与「点击选中」冲突 */
+  const stateListSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
   const selectedState = states.find(s => s.name === selectedStateName) ?? null;
   const selectedStateIndex = states.findIndex(s => s.name === selectedStateName);
+  const selectedStateVerdictTransitions = useMemo(
+    () => (selectedState && !selectedState.isFinal ? buildVerdictTransitions(selectedState, states, selectedState.transitions) : []),
+    [selectedState, states]
+  );
   const flowSummary = useMemo(() => {
     const transitionCount = states.reduce((sum, state) => sum + (state.transitions?.length ?? 0), 0);
     const stepCount = states.reduce((sum, state) => sum + (state.steps?.length ?? 0), 0);
@@ -461,6 +567,14 @@ export default function StateMachineDesignPanel({
     const oldIndex = Number(active.id);
     const newIndex = Number(over.id);
     updateState({ ...selectedState, steps: arrayMove(selectedState.steps, oldIndex, newIndex) });
+  };
+
+  const handleStateListDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = Number(active.id);
+    const newIndex = Number(over.id);
+    onStatesChange(arrayMove(states, oldIndex, newIndex));
   };
 
   const handleAddState = () => {
@@ -603,26 +717,19 @@ export default function StateMachineDesignPanel({
     });
   };
 
-  const handleAddTransition = () => {
-    if (!selectedState) return;
-    const target = states.find(s => s.name !== selectedState.name);
-    const newT: StateTransition = {
-      to: target?.name ?? '',
-      condition: {},
-      priority: ((selectedState.transitions?.length ?? 0) + 1) * 10,
-    };
-    updateState({ ...selectedState, transitions: [...(selectedState.transitions || []), newT] });
+  const handleResetVerdictTransitions = () => {
+    if (!selectedState || selectedState.isFinal) return;
+    updateState({ ...selectedState, transitions: buildVerdictTransitions(selectedState, states) });
   };
 
-  const handleUpdateTransition = (index: number, t: StateTransition) => {
+  const handleUpdateVerdictTransition = (verdict: VerdictTransition, transition: StateTransition) => {
     if (!selectedState) return;
-    const transitions = (selectedState.transitions || []).map((old, i) => i === index ? t : old);
+    const transitions = buildVerdictTransitions(selectedState, states, selectedState.transitions).map((item) => (
+      item.condition.verdict === verdict
+        ? { ...transition, condition: { ...(transition.condition || {}), verdict }, priority: VERDICT_TRANSITION_PRESETS.find((preset) => preset.verdict === verdict)?.priority || item.priority }
+        : item
+    ));
     updateState({ ...selectedState, transitions });
-  };
-
-  const handleDeleteTransition = (index: number) => {
-    if (!selectedState) return;
-    updateState({ ...selectedState, transitions: (selectedState.transitions || []).filter((_, i) => i !== index) });
   };
 
   // 编辑步骤时的初始数据
@@ -656,36 +763,23 @@ export default function StateMachineDesignPanel({
             <Plus className="w-3.5 h-3.5 mr-1" />添加
           </Button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {states.map((state) => (
-            <div
-              key={state.name}
-              onClick={() => setSelectedStateName(state.name)}
-              className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors text-sm ${
-                selectedStateName === state.name
-                  ? 'bg-primary text-primary-foreground'
-                  : 'hover:bg-muted'
-              }`}
-            >
-              <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{state.name}</div>
-                <div className={`text-xs ${selectedStateName === state.name ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                  {state.steps?.length ?? 0}步 · {state.transitions?.length ?? 0}转移
-                </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          <DndContext id="sm-state-list" sensors={stateListSensors} collisionDetection={closestCenter} onDragEnd={handleStateListDragEnd}>
+            <SortableContext items={states.map((_, i) => String(i))} strategy={verticalListSortingStrategy}>
+              <div className="space-y-1">
+                {states.map((state, index) => (
+                  <SortableStateListItem
+                    key={state.name}
+                    state={state}
+                    index={index}
+                    isSelected={selectedStateName === state.name}
+                    onSelect={() => setSelectedStateName(state.name)}
+                    onDelete={() => handleDeleteState(state.name)}
+                  />
+                ))}
               </div>
-              <div className="flex gap-0.5 ml-1">
-                {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 flex-shrink-0" title="初始状态" />}
-                {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0" title="终止状态" />}
-              </div>
-              <Button
-                size="sm" variant="ghost"
-                className={`h-5 w-5 p-0 opacity-0 group-hover:opacity-100 ml-1 flex-shrink-0 ${selectedStateName === state.name ? 'hover:bg-primary-foreground/20 text-primary-foreground' : 'text-destructive hover:text-destructive'}`}
-                onClick={(e) => { e.stopPropagation(); handleDeleteState(state.name); }}
-              >
-                <Trash2 className="w-3 h-3" />
-              </Button>
-            </div>
-          ))}
+            </SortableContext>
+          </DndContext>
         </div>
       </div>
 
@@ -779,7 +873,7 @@ export default function StateMachineDesignPanel({
                 <Plus className="w-3.5 h-3.5 mr-1" />添加步骤
               </Button>
             </div>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <DndContext id="sm-step-list" sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={(selectedState.steps || []).map((_, i) => String(i))} strategy={verticalListSortingStrategy}>
                 <div className="space-y-1.5">
                   {buildStepGroups(selectedState.steps || []).map((group) => {
@@ -862,33 +956,46 @@ export default function StateMachineDesignPanel({
 
           {/* 状态转移规则 */}
           <div>
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-2 flex items-center justify-between">
               <div>
                 <span className="text-sm font-semibold">状态转移规则</span>
-                <p className="text-xs text-muted-foreground mt-0.5">定义当前状态执行完后，满足什么条件时跳转到哪个状态</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">默认要求每个非终止状态都完整填写 pass / conditional_pass / fail 三条路径。</p>
               </div>
-              <Button size="sm" variant="ghost" className="h-7 px-2" onClick={handleAddTransition}>
-                <Plus className="w-3.5 h-3.5 mr-1" />添加
-              </Button>
+              {!selectedState.isFinal ? (
+                <Button size="sm" variant="outline" className="h-8 gap-1.5 px-3 text-xs" onClick={handleResetVerdictTransitions}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  恢复标准三路
+                </Button>
+              ) : null}
             </div>
-            <div className="space-y-2">
-              {(selectedState.transitions || []).map((transition, index) => (
-                <TransitionRow
-                  key={index}
-                  transition={transition}
-                  index={index}
-                  states={states}
-                  currentStateName={selectedState.name}
-                  onChange={(t) => handleUpdateTransition(index, t)}
-                  onDelete={() => handleDeleteTransition(index)}
-                />
-              ))}
-              {(selectedState.transitions?.length ?? 0) === 0 && (
-                <div className="text-center text-sm text-muted-foreground py-6 border border-dashed border-border rounded-lg">
-                  暂无转移规则，点击添加
+            {selectedState.isFinal ? (
+              <div className="rounded-2xl border border-dashed border-border bg-muted/20 px-4 py-5 text-sm text-muted-foreground">
+                终止状态不需要配置转移规则。
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+                  <div className="flex items-start gap-2">
+                    <ArrowRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                    <span>系统会按 verdict 固定识别三条路径。你只需要分别填写目标状态和可选的额外过滤条件，不再手工维护优先级。</span>
+                  </div>
                 </div>
-              )}
-            </div>
+                {selectedStateVerdictTransitions.map((transition) => {
+                  const verdict = transition.condition.verdict as VerdictTransition;
+                  const preset = VERDICT_TRANSITION_PRESETS.find((item) => item.verdict === verdict);
+                  if (!preset) return null;
+                  return (
+                    <VerdictTransitionCard
+                      key={verdict}
+                      transition={transition}
+                      states={states}
+                      preset={preset}
+                      onChange={(nextTransition) => handleUpdateVerdictTransition(verdict, nextTransition)}
+                    />
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       ) : (
