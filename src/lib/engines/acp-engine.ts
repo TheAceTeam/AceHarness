@@ -6,7 +6,8 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import { delimiter as pathDelimiter } from 'path';
+import { existsSync } from 'fs';
+import { delimiter as pathDelimiter, join } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '../command-exists';
@@ -60,6 +61,29 @@ function escapeWinCmdToken(s: string): string {
   return s;
 }
 
+function getWindowsSystemPaths(): string[] {
+  if (process.platform !== 'win32') return [];
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
+    .map((item) => item?.trim())
+    .filter(Boolean) as string[];
+  const paths = roots.flatMap((root) => [
+    join(root, 'System32'),
+    join(root, 'Sysnative'),
+    root,
+  ]);
+  return Array.from(new Set(paths));
+}
+
+function resolveWindowsCmdShell(): string {
+  const candidates = [
+    process.env.ComSpec?.trim(),
+    ...getWindowsSystemPaths().map((dir) => join(dir, 'cmd.exe')),
+    'C:\\Windows\\System32\\cmd.exe',
+    'cmd.exe',
+  ].filter(Boolean) as string[];
+  return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
+}
+
 /**
  * Spawn ACP CLI. On Windows, plain `spawn('codegenie', …)` often fails to resolve npm `.cmd` shims;
  * use `shell: true` so `codegenie.cmd` / PATH behave like an interactive terminal.
@@ -80,7 +104,7 @@ function spawnAcpCli(
   const line = [command, ...argv].map(escapeWinCmdToken).join(' ');
   console.log(`[${engineType}] win32 shell spawn (cmd): ${line}`);
   return spawn(line, {
-    shell: true,
+    shell: resolveWindowsCmdShell(),
     windowsHide: true,
     cwd: opts.cwd,
     env: opts.env,
@@ -98,6 +122,7 @@ export class ACPEngine extends EventEmitter {
   private initialized = false;
   private availableModels: Array<{ modelId: string; name: string }> = [];
   private lastStderrChunk = '';
+  private lastExitInfo = '';
 
   constructor(private config: ACPEngineConfig) {
     super();
@@ -112,6 +137,7 @@ export class ACPEngine extends EventEmitter {
     const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
     const envPath = [
       process.env.PATH || '',
+      ...getWindowsSystemPaths(),
       ...commonCliPaths,
       this.config.env?.PATH || this.config.env?.Path || '',
     ].filter(Boolean).join(pathDelimiter);
@@ -142,6 +168,7 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('exit', (code, signal) => {
+      this.lastExitInfo = `code=${code}, signal=${signal}`;
       if (code !== 0 || signal) {
         console.warn(
           `[${this.config.engineType}] child exited early code=${code} signal=${signal}; stderr tail: ${this.lastStderrChunk?.slice(0, 500) || '<empty>'}`
@@ -279,20 +306,25 @@ export class ACPEngine extends EventEmitter {
     });
 
     const initTimeoutMs = 30_000;
-    const result = await Promise.race([
-      initPromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
-              )
-            ),
-          initTimeoutMs
-        )
-      ),
-    ]);
+    let result;
+    try {
+      result = await Promise.race([
+        initPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
+                )
+              ),
+            initTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('connection.initialize', error);
+    }
     this.initialized = true;
     console.log(`[${this.config.engineType}] connection.initialize() done`);
 
@@ -320,20 +352,25 @@ export class ACPEngine extends EventEmitter {
     });
 
     const sessionTimeoutMs = 30_000;
-    const result = await Promise.race([
-      newSessionPromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
-              )
-            ),
-          sessionTimeoutMs
-        )
-      ),
-    ]);
+    let result;
+    try {
+      result = await Promise.race([
+        newSessionPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
+                )
+              ),
+            sessionTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('newSession', error);
+    }
     this.sessionId = result.sessionId;
     this.availableModels = (result.models?.availableModels as any[]) || [];
     console.log(`[${this.config.engineType}] session created: ${this.sessionId}`);
@@ -452,6 +489,15 @@ export class ACPEngine extends EventEmitter {
     if (fuzzy.length > 0) return fuzzy[0].modelId;
     // No match found
     return '';
+  }
+
+  private withAcpDiagnostics(phase: string, error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error);
+    const stderrTail = this.lastStderrChunk?.slice(-1000) || '<empty>';
+    const exitInfo = this.lastExitInfo || '<not-exited>';
+    return new Error(
+      `${message}. phase=${phase}; engineType=${this.config.engineType}; command=${this.config.command}; cwd=${this.config.workingDirectory}; childExit=${exitInfo}; stderrTail=${stderrTail}`
+    );
   }
 
   /**

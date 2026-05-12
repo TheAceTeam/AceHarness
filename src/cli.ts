@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { spawn } from 'child_process';
 import { commandExists } from './lib/command-exists';
 import { parse, stringify } from 'yaml';
@@ -757,10 +757,23 @@ async function syncBrowserLocale(settings: SystemSettings) {
 }
 
 function tryOpenBrowser(url: string): boolean {
+  const resolveWindowsCmd = () => {
+    const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
+      .map((item) => item?.trim())
+      .filter(Boolean) as string[];
+    const candidates = [
+      process.env.ComSpec?.trim(),
+      ...roots.flatMap((root) => [join(root, 'System32', 'cmd.exe'), join(root, 'Sysnative', 'cmd.exe')]),
+      'C:\\Windows\\System32\\cmd.exe',
+      'cmd.exe',
+    ].filter(Boolean) as string[];
+    return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
+  };
+
   const commands: Array<[string, string[]]> = process.platform === 'darwin'
     ? [['open', [url]]]
     : process.platform === 'win32'
-      ? [[process.env.ComSpec || 'cmd.exe', ['/c', 'start', '', url]]]
+      ? [[resolveWindowsCmd(), ['/c', 'start', '', url]]]
       : [['xdg-open', [url]]];
 
   for (const [command, args] of commands) {

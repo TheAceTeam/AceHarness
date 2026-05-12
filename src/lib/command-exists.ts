@@ -6,7 +6,16 @@ const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin
 
 function defaultWindowsScanDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
+    .map((item) => item?.trim())
+    .filter(Boolean) as string[];
+  const systemDirs = roots.flatMap((root) => [
+    join(root, 'System32'),
+    join(root, 'Sysnative'),
+    root,
+  ]);
   return [
+    ...systemDirs,
     home ? join(home, 'AppData', 'Roaming', 'npm') : '',
     process.env.APPDATA ? join(process.env.APPDATA, 'npm') : '',
     process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Programs') : '',
@@ -17,6 +26,16 @@ function defaultWindowsScanDirs(): string[] {
     home ? join(home, '.local', 'bin') : '',
     'C:\\Program Files\\nodejs',
   ].filter(Boolean);
+}
+
+function resolveWindowsCmdShell(): string {
+  const candidates = [
+    process.env.ComSpec?.trim(),
+    ...defaultWindowsScanDirs().map((dir) => join(dir, 'cmd.exe')),
+    'C:\\Windows\\System32\\cmd.exe',
+    'cmd.exe',
+  ].filter(Boolean) as string[];
+  return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
 }
 
 function getExecutableCandidates(command: string): string[] {
@@ -98,7 +117,7 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
       const output = execSync(`where.exe ${command}`, {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        shell: process.env.ComSpec,
+        shell: resolveWindowsCmdShell(),
       }).trim();
       const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       const preferred = pickPreferredWindowsCommand(lines);
