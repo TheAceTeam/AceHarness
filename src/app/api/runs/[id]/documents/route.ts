@@ -42,17 +42,23 @@ function normalizeLookupKey(value: string): string {
 
 function resolveStepMetadata(
   logicalName: string,
-  stepMap: Record<string, { agent: string; phaseName: string; role: string }>
+  stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }>
 ): { resolvedStepName: string; agent: string; phaseName: string; role: string } | null {
   const direct = stepMap[logicalName] || stepMap[normalizeLookupKey(logicalName)];
   if (direct) {
-    return { resolvedStepName: logicalName, ...direct };
+    return { resolvedStepName: direct.canonicalStepName, agent: direct.agent, phaseName: direct.phaseName, role: direct.role };
   }
 
   const keys = Object.keys(stepMap).sort((a, b) => b.length - a.length);
   for (const key of keys) {
     if (logicalName.endsWith(`-${key}`)) {
-      return { resolvedStepName: key, ...stepMap[key] };
+      const matched = stepMap[key];
+      return {
+        resolvedStepName: matched.canonicalStepName,
+        agent: matched.agent,
+        phaseName: matched.phaseName,
+        role: matched.role,
+      };
     }
   }
 
@@ -115,7 +121,7 @@ export async function GET(
     const versionRegex = /^(.+)-v(\d+)\.md$/;
 
     // Build step→phase/agent lookup from config (once, outside loop)
-    const stepMap: Record<string, { agent: string; phaseName: string; role: string }> = {};
+    const stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }> = {};
     try {
       const configPath = await resolveWorkflowConfigPath(state.configFile);
       if (configPath) {
@@ -125,7 +131,7 @@ export async function GET(
           for (const phase of config.workflow.phases) {
             for (const step of phase.steps || []) {
               const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
+              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
               stepMap[step.name] = info;
               stepMap[safeStep] = info;
             }
@@ -136,7 +142,7 @@ export async function GET(
           for (const state of config.workflow.states) {
             for (const step of state.steps || []) {
               const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { agent: step.agent || '', phaseName: state.name, role: step.role || 'defender' };
+              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: state.name, role: step.role || 'defender' };
               stepMap[step.name] = info;
               stepMap[safeStep] = info;
               // Also map "stateName-stepName" format used in output filenames

@@ -100,7 +100,13 @@ function getFileGroup(filename: string): string {
 }
 
 function getTreeLinkName(file: DocFile): string {
-  return stripTimestampPrefix(file.baseName || file.filename);
+  return file.groupLabel || file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+}
+
+function getTreeGroupKey(file: DocFile): string {
+  if (file.groupKey) return file.groupKey;
+  const logical = file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+  return logical.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
 }
 
 function sortDocFiles(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocFile[] {
@@ -119,8 +125,9 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
   const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[] }>();
 
   files.forEach((file) => {
-    const name = getTreeLinkName(file);
-    const existing = map.get(name) || { name, summary: null, details: [] };
+    const key = getTreeGroupKey(file);
+    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [] };
+    existing.name ||= getTreeLinkName(file);
     if (hasTimestamp(file.filename)) {
       existing.details.push(file);
     } else if (!existing.summary) {
@@ -128,7 +135,7 @@ function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: Sort
     } else {
       existing.details.push(file);
     }
-    map.set(name, existing);
+    map.set(key, existing);
   });
 
   return Array.from(map.entries())
@@ -380,7 +387,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   useEffect(() => {
     if (!previewFile) return;
-    const key = getTreeLinkName(previewFile);
+    const key = getTreeGroupKey(previewFile);
     setExpandedGroups((prev) => {
       if (prev.has(key)) return prev;
       const next = new Set(prev);
