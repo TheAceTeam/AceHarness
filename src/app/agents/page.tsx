@@ -7,21 +7,17 @@ import { agentApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { FolderOpen, Globe } from 'lucide-react';
-import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/engine-metadata';
+import { FolderOpen } from 'lucide-react';
 import AgentEditModal from '@/components/AgentEditModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import { ClipLoader } from 'react-spinners';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
-import { ModelOption } from '@/lib/models';
-import { SingleCombobox, type ComboboxOption, type ComboboxGroupDef } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { resolveAgentSelection } from '@/lib/agent-engine-selection';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Table,
@@ -75,16 +71,12 @@ export default function AgentsPage() {
   const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
   const [isNewAgent, setIsNewAgent] = useState(false);
   const [showAICreateModal, setShowAICreateModal] = useState(false);
-  const [showBatchReplaceModal, setShowBatchReplaceModal] = useState(false);
-  const [fromModel, setFromModel] = useState('');
-  const [toModel, setToModel] = useState('');
-  const [batchReplacing, setBatchReplacing] = useState(false);
   const [alertMessage, setAlertMessage] = useState('');
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
+  const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [runtimeAgentsDir, setRuntimeAgentsDir] = useState('');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
@@ -95,7 +87,6 @@ export default function AgentsPage() {
 
   useEffect(() => {
     loadAgents();
-    loadModels();
     loadChatSessions();
     fetch('/api/engine').then(r => r.json()).then(d => {
       if (d.engine) setGlobalEngine(d.engine);
@@ -145,16 +136,6 @@ export default function AgentsPage() {
     };
   }, []);
 
-  const loadModels = async () => {
-    try {
-      const response = await fetch('/api/models');
-      const data = await response.json();
-      setAvailableModels(data.models || []);
-    } catch (error) {
-      console.error('Failed to load models:', error);
-    }
-  };
-
   const loadAgents = async () => {
     try {
       setLoading(true);
@@ -167,6 +148,10 @@ export default function AgentsPage() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    setSelectedAgentNames((prev) => prev.filter((name) => agents.some((agent) => agent.name === name)));
+  }, [agents]);
 
   const loadChatSessions = async () => {
     try {
@@ -241,56 +226,40 @@ export default function AgentsPage() {
     }
   };
 
-  const handleBatchReplaceModel = async () => {
-    if (!fromModel || !toModel) {
-      setAlertMessage('请选择源策略和目标策略');
+  const toggleAgentSelection = (name: string) => {
+    setSelectedAgentNames((prev) => (
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
+    ));
+  };
+
+  const toggleSelectAllFiltered = (checked: boolean | 'indeterminate') => {
+    if (checked) {
+      setSelectedAgentNames(filteredAgents.map((agent) => agent.name));
       return;
     }
+    setSelectedAgentNames([]);
+  };
 
-    const sourceType = fromModel === UNCONFIGURED_POLICY_VALUE ? 'unconfigured' : 'strategy';
-    const [fromEng, ...fromRest] = sourceType === 'strategy' ? fromModel.split('::') : ['', ''];
-    const fromMod = fromRest.join('::');
-    const [toEng, ...toRest] = toModel.split('::');
-    const toMod = toRest.join('::');
-
-    if (!toEng || !toMod) {
-      setAlertMessage('请选择目标引擎和目标模型');
-      return;
-    }
-
-    if (sourceType === 'strategy' && fromEng === toEng && fromMod === toMod) {
-      setAlertMessage('源策略和目标策略不能相同');
+  const handleBatchDeleteAgents = async () => {
+    if (selectedAgentNames.length === 0) {
+      toast('warning', '请先选择要删除的 Agent');
       return;
     }
     const confirmed = await confirm({
-      title: '确认批量设置模型策略',
-      description: sourceType === 'unconfigured'
-        ? `确定要为当前未配置模型策略的 Agent 批量设置为 "${getEngineMeta(toEng)?.name || toEng}" / "${toMod}" 吗？`
-        : `确定要将引擎 "${getEngineMeta(fromEng)?.name || fromEng}" 下使用 "${fromMod}" 的 Agent 批量设置为 "${getEngineMeta(toEng)?.name || toEng}" / "${toMod}" 吗？`,
-      confirmLabel: '确认设置',
+      title: '确认批量删除',
+      description: `确定要删除这 ${selectedAgentNames.length} 个 Agent 吗？`,
+      confirmLabel: '批量删除',
       cancelLabel: '取消',
-      variant: 'default',
+      variant: 'destructive',
     });
     if (!confirmed) return;
-
-    setBatchReplacing(true);
     try {
-      const result = await agentApi.batchSetModelPolicy({
-        sourceType,
-        sourceEngine: sourceType === 'strategy' ? fromEng : undefined,
-        sourceModel: sourceType === 'strategy' ? fromMod : undefined,
-        targetEngine: toEng,
-        targetModel: toMod,
-      });
-      setAlertMessage(result.message);
+      const result = await agentApi.batchDeleteAgents(selectedAgentNames);
+      setSelectedAgentNames([]);
       await loadAgents();
-      setShowBatchReplaceModal(false);
-      setFromModel('');
-      setToModel('');
+      toast('success', result.message || `已删除 ${result.updatedCount} 个 Agent`);
     } catch (error: any) {
-      setAlertMessage('批量替换失败: ' + error.message);
-    } finally {
-      setBatchReplacing(false);
+      toast('error', error.message || '批量删除 Agent 失败');
     }
   };
 
@@ -309,84 +278,6 @@ export default function AgentsPage() {
     if (firstTag === 'C++' || firstTag === '编译器' || firstTag === 'LLVM') return 'compiler';
     return 'common';
   };
-
-  // Get all unique models (from engineModels values)
-  const allModels = Array.from(new Set(agents.flatMap(a => Object.values(a.engineModels || {})).filter(Boolean)));
-
-  const ALL_ENGINES = [
-    {
-      id: '',
-      name: '跟随全局',
-      icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
-    },
-    ...getConcreteEngines().map((engine) => ({
-      id: engine.id,
-      name: engine.name,
-      icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
-    })),
-  ];
-
-  // Source: existing engine::model combos plus agents without any explicit model strategy
-  const batchSourceGroups: ComboboxGroupDef[] = (() => {
-    const groups: ComboboxGroupDef[] = [];
-    const existing = new Map<string, Set<string>>();
-    for (const a of agents) {
-      for (const [eng, mod] of Object.entries(a.engineModels || {})) {
-        if (!mod) continue;
-        if (!existing.has(eng)) existing.set(eng, new Set());
-        existing.get(eng)!.add(mod);
-      }
-    }
-    const unconfiguredCount = agents.filter((agent) => {
-      const engineModels = agent.engineModels || {};
-      return Object.keys(engineModels).length === 0 || !Object.values(engineModels).some(Boolean);
-    }).length;
-
-    if (unconfiguredCount > 0) {
-      groups.push({
-        label: '未配置策略',
-        items: [{
-          value: UNCONFIGURED_POLICY_VALUE,
-          label: `未配置模型策略 (${unconfiguredCount})`,
-        }],
-      });
-    }
-
-    groups.push(...ALL_ENGINES
-      .filter(eng => existing.has(eng.id))
-      .map(eng => ({
-        label: eng.name,
-        icon: eng.icon,
-        items: Array.from(existing.get(eng.id)!).map(mod => {
-          const label = availableModels.find(m => m.value === mod)?.label || mod;
-          return { value: `${eng.id}::${mod}`, label, icon: eng.icon };
-        }),
-      }))
-      .filter(g => g.items.length > 0));
-
-    return groups;
-  })();
-
-  // Target: choose a concrete engine + model policy to apply
-  const batchTargetGroups: ComboboxGroupDef[] = (() => {
-    return getConcreteEngines()
-      .map((engine) => {
-        const engineModels = availableModels.filter(
-          m => !m.engines || m.engines.length === 0 || m.engines.includes(engine.id),
-        );
-        if (engineModels.length === 0) return null;
-        return {
-          label: engine.name,
-          icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
-          items: engineModels.map(m => ({
-            value: `${engine.id}::${m.value}`,
-            label: m.label,
-            icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
-          })),
-        };
-      })
-      .filter((group): group is NonNullable<typeof group> => Boolean(group));
-  })();
 
   const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
 
@@ -449,6 +340,8 @@ export default function AgentsPage() {
   const groupLabels: Record<string, string> = { all: '全部', common: '通用', compiler: '编译器', openharmony: '仓颉' };
   const chatReadyAgents = agents.filter((agent) => agent.alwaysAvailableForChat);
   const supervisorAgents = agents.filter((agent) => agent.roleType === 'supervisor');
+  const allFilteredSelected = filteredAgents.length > 0 && filteredAgents.every((agent) => selectedAgentNames.includes(agent.name));
+  const hasPartialFilteredSelection = filteredAgents.some((agent) => selectedAgentNames.includes(agent.name));
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
@@ -483,17 +376,8 @@ export default function AgentsPage() {
   const getAgentRuntimeMeta = (agent: AgentConfig) => {
     const relatedSessions = listSessionsForAgent(chatSessions, agent.name);
     const latestSession = relatedSessions[0];
-    const resolved = resolveAgentSelection(agent as any, {
-      engine: globalEngine,
-      defaultModel: globalDefaultModel,
-    });
-    const engineLabel = resolved.effectiveEngine
-      ? (getEngineMeta(resolved.effectiveEngine)?.name || resolved.effectiveEngine)
-      : '未配置';
     return {
       latestSession,
-      resolved,
-      engineLabel,
       avatarSrc: resolveAgentAvatarSrc(agent.avatar, agent.name, {
         team: agent.team,
         roleType: agent.roleType || 'normal',
@@ -528,10 +412,6 @@ export default function AgentsPage() {
           <Button size="sm" onClick={() => setShowAICreateModal(true)} variant="outline">
             <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
             AI 创建
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setShowBatchReplaceModal(true)}>
-            <span className="material-symbols-outlined text-sm mr-1">swap_horiz</span>
-            批量设置模型策略
           </Button>
           <Button size="sm" onClick={handleCreateAgent}>
             <span className="material-symbols-outlined text-sm mr-1">add</span>
@@ -637,18 +517,6 @@ export default function AgentsPage() {
                     <div className="text-sm font-medium">首页先规划</div>
                     <div className="mt-2 text-xs leading-6 text-muted-foreground">回到首页按对话方式先收敛需求，再回这里落地成角色。</div>
                   </div>
-                </Button>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>工具操作后置处理：</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 rounded-full px-3 text-xs"
-                  onClick={() => setShowBatchReplaceModal(true)}
-                >
-                  <span className="material-symbols-outlined mr-1 text-sm">swap_horiz</span>
-                  批量设置模型策略
                 </Button>
               </div>
             </div>
@@ -786,6 +654,24 @@ export default function AgentsPage() {
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mr-2 inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1.5 text-xs">
+                  <Checkbox
+                    checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                    onCheckedChange={toggleSelectAllFiltered}
+                    className="h-4 w-4"
+                  />
+                  <span>全选当前筛选结果</span>
+                </div>
+                {selectedAgentNames.length > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    className="rounded-full"
+                    onClick={handleBatchDeleteAgents}
+                  >
+                    批量删除 {selectedAgentNames.length}
+                  </Button>
+                ) : null}
                 {CATEGORIES.map((cat) => (
                   <Button
                     key={cat}
@@ -856,18 +742,28 @@ export default function AgentsPage() {
                         </div>
                         <div className="relative mt-5 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
                           {groupedAgents[team].map(agent => {
-                            const { latestSession, resolved, engineLabel } = getAgentRuntimeMeta(agent);
+                            const { latestSession } = getAgentRuntimeMeta(agent);
+                            const isSelected = selectedAgentNames.includes(agent.name);
                             return (
                               <div
                                 key={agent.name}
                                 className="group relative min-w-0"
                               >
+                                <div className="absolute left-4 top-4 z-20">
+                                  <Checkbox
+                                    checked={isSelected}
+                                    onCheckedChange={() => toggleAgentSelection(agent.name)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="h-4 w-4 border-white/40 bg-black/30 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-slate-950"
+                                  />
+                                </div>
                                 <AgentHeroCard
                                   agent={agent as any}
                                   className="h-full"
+                                  selected={isSelected}
                                   meta={
                                     <div className="space-y-1">
-                                      <div className="truncate">{engineLabel} / {resolved.effectiveModel || '未配置模型'}{agent.temperature !== undefined ? ` / temp ${agent.temperature}` : ''}</div>
+                                      <div className="truncate">{agent.temperature !== undefined ? `温度 ${agent.temperature}` : '默认温度'}</div>
                                       {latestSession?.workflowBinding ? (
                                         <div className="truncate text-white/45">
                                           Run {latestSession.workflowBinding.runId} · {latestSession.workflowBinding.configFile}
@@ -927,10 +823,16 @@ export default function AgentsPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                            onCheckedChange={toggleSelectAllFiltered}
+                          />
+                        </TableHead>
                         <TableHead>角色</TableHead>
                         <TableHead>阵营</TableHead>
                         <TableHead>分类</TableHead>
-                        <TableHead>模型</TableHead>
+                        <TableHead>温度</TableHead>
                         <TableHead>标签</TableHead>
                         <TableHead>会话</TableHead>
                         <TableHead className="text-right">操作</TableHead>
@@ -938,9 +840,15 @@ export default function AgentsPage() {
                     </TableHeader>
                     <TableBody>
                       {filteredAgents.map((agent) => {
-                        const { latestSession, resolved, engineLabel, avatarSrc } = getAgentRuntimeMeta(agent);
+                        const { latestSession, avatarSrc } = getAgentRuntimeMeta(agent);
                         return (
                           <TableRow key={agent.name}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedAgentNames.includes(agent.name)}
+                                onCheckedChange={() => toggleAgentSelection(agent.name)}
+                              />
+                            </TableCell>
                             <TableCell className="min-w-[220px]">
                               <div className="flex items-center gap-3">
                                 <Avatar className="h-11 w-11 ring-1 ring-border/60">
@@ -962,10 +870,9 @@ export default function AgentsPage() {
                             </TableCell>
                             <TableCell>{teamLabels[agent.team]}</TableCell>
                             <TableCell>{agent.category || '未分类'}</TableCell>
-                            <TableCell className="min-w-[240px]">
-                              <div className="truncate">{engineLabel} / {resolved.effectiveModel || '未配置模型'}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {agent.temperature !== undefined ? `temp ${agent.temperature}` : '默认温度'}
+                            <TableCell className="min-w-[120px]">
+                              <div className="text-sm">
+                                {agent.temperature !== undefined ? agent.temperature : '默认'}
                               </div>
                             </TableCell>
                             <TableCell className="min-w-[220px]">
@@ -1048,66 +955,6 @@ export default function AgentsPage() {
         onContinueEdit={handleContinueEditAIAgent}
       />
 
-      {showBatchReplaceModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowBatchReplaceModal(false)}>
-          <div className="bg-card rounded-lg w-[500px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b">
-              <h3 className="text-lg font-semibold">批量设置模型策略</h3>
-            </div>
-            <div className="p-5 space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">源策略</label>
-                <SingleCombobox
-                  value={fromModel}
-                  onValueChange={(v) => { setFromModel(v); setToModel(''); }}
-                  groups={batchSourceGroups}
-                  placeholder="选择当前策略，或选择未配置策略"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">目标策略</label>
-                <SingleCombobox
-                  value={toModel}
-                  onValueChange={setToModel}
-                  groups={batchTargetGroups}
-                  placeholder={fromModel ? "选择目标引擎和模型" : "请先选择源策略"}
-                />
-              </div>
-              {fromModel && toModel && (() => {
-                const sourceType = fromModel === UNCONFIGURED_POLICY_VALUE ? 'unconfigured' : 'strategy';
-                const [fEng] = sourceType === 'strategy' ? fromModel.split('::') : [''];
-                const fMod = sourceType === 'strategy' ? fromModel.split('::').slice(1).join('::') : '';
-                const tMod = toModel.split('::').slice(1).join('::');
-                const [tEng] = toModel.split('::');
-                const fEngName = ALL_ENGINES.find(e => e.id === fEng)?.name || fEng || '跟随全局';
-                const tEngName = getEngineMeta(tEng)?.name || tEng;
-                const affected = sourceType === 'unconfigured'
-                  ? agents.filter((agent) => {
-                      const engineModels = agent.engineModels || {};
-                      return Object.keys(engineModels).length === 0 || !Object.values(engineModels).some(Boolean);
-                    }).length
-                  : agents.filter(a => a.engineModels?.[fEng] === fMod).length;
-                return (
-                  <div className="text-sm text-muted-foreground">
-                    {sourceType === 'unconfigured'
-                      ? `将未配置模型策略的 Agent 设置为 "${tEngName}" / "${tMod}"（影响 ${affected} 个 Agent）`
-                      : `将引擎 "${fEngName}" 下使用 "${fMod}" 的 Agent 设置为 "${tEngName}" / "${tMod}"（影响 ${affected} 个 Agent）`}
-                  </div>
-                );
-              })()}
-            </div>
-            <div className="p-5 border-t flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowBatchReplaceModal(false)} disabled={batchReplacing}>
-                取消
-              </Button>
-              <Button onClick={handleBatchReplaceModel} disabled={batchReplacing}>
-                {batchReplacing ? '设置中...' : '确认设置'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {dialogProps && <ConfirmDialog {...dialogProps} />}
 
       {alertMessage && (
@@ -1125,4 +972,3 @@ export default function AgentsPage() {
     </div>
   );
 }
-  const UNCONFIGURED_POLICY_VALUE = '__unconfigured__';

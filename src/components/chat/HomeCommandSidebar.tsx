@@ -56,6 +56,8 @@ import {
   listTemporaryWerewolfAgentNames,
 } from '@/lib/werewolf-lab-agents';
 import { WEREWOLF_ROLE_ASSETS, WEREWOLF_ROLEBOOK_ENTRIES, getWerewolfRoleSpriteStyle } from '@/lib/werewolf-role-assets';
+import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
+import { cn } from '@/lib/utils';
 type WerewolfHistoryEntry = {
   id: string;
   boardId: string;
@@ -202,6 +204,11 @@ function mergeCollaborationRoom(
     werewolf: patch.werewolf ?? prev?.werewolf ?? null,
     werewolfView: patch.werewolfView ?? prev?.werewolfView,
   };
+}
+
+function areStringSetsEqual(set: Set<string>, values: string[]): boolean {
+  if (set.size !== values.length) return false;
+  return values.every((value) => set.has(value));
 }
 
 function extractAgentMentions(input: string, availableAgents: string[]): string[] {
@@ -490,6 +497,89 @@ function buildWerewolfTallySummary(votes: CollaborationWerewolfVote[], sheriff?:
   return sorted.map(([target, weight]) => `${target} ${Number.isInteger(weight) ? weight.toFixed(0) : weight.toFixed(1)} 票`).join('；');
 }
 
+function buildVoteAvatarSrc(name: string): string | undefined {
+  if (isTemporaryWerewolfAgent(name)) return undefined;
+  return resolveAgentAvatarSrc(undefined, name);
+}
+
+function buildVoteChartItems(input: {
+  votes: { voter: string; target: string }[];
+  sheriff?: string;
+  badgeDestroyed?: boolean;
+}) {
+  const tally = new Map<string, number>();
+  const votersByTarget = new Map<string, { name: string; avatarSrc?: string; weightLabel?: string }[]>();
+  input.votes.forEach((vote) => {
+    const weight = input.sheriff === vote.voter && !input.badgeDestroyed ? 1.5 : 1;
+    tally.set(vote.target, (tally.get(vote.target) || 0) + weight);
+    const bucket = votersByTarget.get(vote.target) || [];
+    bucket.push({
+      name: vote.voter,
+      avatarSrc: buildVoteAvatarSrc(vote.voter),
+      ...(weight !== 1 ? { weightLabel: `${weight} 票` } : {}),
+    });
+    votersByTarget.set(vote.target, bucket);
+  });
+  const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
+  const colors = ['rose', 'sky', 'emerald', 'amber', 'violet', 'cyan', 'lime', 'orange'];
+  return {
+    max: sorted[0]?.[1],
+    items: sorted.map(([target, value], index) => ({
+      label: target,
+      value,
+      displayValue: `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} 票`,
+      color: colors[index % colors.length],
+      voters: votersByTarget.get(target) || [],
+    })),
+  };
+}
+
+function buildRoundVoteChartCard(input: {
+  title: string;
+  subtitle?: string;
+  votes: { voter: string; target: string }[];
+  sheriff?: string;
+  badgeDestroyed?: boolean;
+}) {
+  if (!input.votes.length) return [];
+  const chart = buildVoteChartItems({
+    votes: input.votes,
+    sheriff: input.sheriff,
+    badgeDestroyed: input.badgeDestroyed,
+  });
+  if (!chart.items.length) return [];
+  return [{
+    type: 'round_vote_chart',
+    header: {
+      icon: 'bar_chart',
+      title: input.title,
+      subtitle: input.subtitle,
+      gradient: 'from-slate-700 via-slate-600 to-slate-500',
+    },
+    blocks: [{
+      type: 'bar-chart',
+      max: chart.max,
+      items: chart.items,
+    }],
+  }];
+}
+
+function extractRoundVotes(messages: CollaborationRoomMessage[], candidates?: string[]) {
+  const votes: { voter: string; target: string }[] = [];
+  const allowed = candidates?.length ? candidates : undefined;
+  messages.forEach((message) => {
+    if (message.speakerType !== 'agent' && message.speakerType !== 'supervisor') return;
+    const parsed = parseVoteTarget(message.content, allowed || []);
+    if (!parsed) return;
+    if (allowed && !allowed.includes(parsed.target)) return;
+    votes.push({
+      voter: message.speakerName,
+      target: parsed.target,
+    });
+  });
+  return votes;
+}
+
 function buildWerewolfTallyChartCard(input: {
   title: string;
   subtitle?: string;
@@ -500,14 +590,12 @@ function buildWerewolfTallyChartCard(input: {
   audience?: string[];
 }): any[] {
   if (!input.votes.length) return [];
-  const tally = new Map<string, number>();
-  input.votes.forEach((vote) => {
-    const weight = input.sheriff === vote.voter && !input.badgeDestroyed ? 1.5 : 1;
-    tally.set(vote.target, (tally.get(vote.target) || 0) + weight);
+  const chart = buildVoteChartItems({
+    votes: input.votes.map((vote) => ({ voter: vote.voter, target: vote.target })),
+    sheriff: input.sheriff,
+    badgeDestroyed: input.badgeDestroyed,
   });
-  const sorted = [...tally.entries()].sort((a, b) => b[1] - a[1]);
-  if (!sorted.length) return [];
-  const colors = ['rose', 'sky', 'emerald', 'amber', 'violet', 'cyan', 'lime', 'orange'];
+  if (!chart.items.length) return [];
   return [{
     type: 'werewolf_tally_chart',
     visibility: input.visibility || 'public',
@@ -520,15 +608,29 @@ function buildWerewolfTallyChartCard(input: {
     },
     blocks: [{
       type: 'bar-chart',
-      max: sorted[0][1],
-      items: sorted.map(([target, value], index) => ({
-        label: target,
-        value,
-        displayValue: `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} 票`,
-        color: colors[index % colors.length],
-      })),
+      max: chart.max,
+      items: chart.items,
     }],
   }];
+}
+
+function buildWerewolfBreakpoint(input: {
+  handler: 'night' | 'sheriff-election' | 'day-speech' | 'last-words' | 'vote';
+  roundId: string;
+  stepLabel: string;
+  resumeFrom?: string;
+  failedActor?: string;
+  error: string;
+}) {
+  return {
+    handler: input.handler,
+    roundId: input.roundId,
+    stepLabel: input.stepLabel,
+    resumeFrom: input.resumeFrom,
+    failedActor: input.failedActor,
+    failedAt: Date.now(),
+    error: input.error,
+  } as NonNullable<CollaborationWerewolfState['breakpoint']>;
 }
 
 function getWerewolfWinner(state: CollaborationWerewolfState): string | null {
@@ -1083,6 +1185,7 @@ interface HomeCommandSidebarProps {
   expanded: boolean;
   onCollapse: () => void;
   onExpand: () => void;
+  werewolfMode?: boolean;
 }
 
 const TAB_LABELS: Record<SidebarTab, string> = {
@@ -1118,6 +1221,7 @@ export default function HomeCommandSidebar({
   expanded,
   onCollapse,
   onExpand,
+  werewolfMode = false,
 }: HomeCommandSidebarProps) {
   const router = useRouter();
   const { toast } = useToast();
@@ -1149,7 +1253,14 @@ export default function HomeCommandSidebar({
   const [agentDraftResult, setAgentDraftResult] = useState<AgentDraftResult | null>(null);
   const [agentDraftRaw, setAgentDraftRaw] = useState('');
   const [collaborationTopic, setCollaborationTopic] = useState('');
+
+  const werewolfSectionClass = werewolfMode ? 'werewolf-wood-frame' : '';
+  const werewolfCardClass = werewolfMode ? 'werewolf-parchment' : '';
+  const werewolfBadgeClass = werewolfMode ? 'werewolf-copper-badge' : '';
+  const werewolfGhostButtonClass = werewolfMode ? 'werewolf-ghost-button' : '';
+  const werewolfGoldButtonClass = werewolfMode ? 'werewolf-gold-button' : '';
   const [collaborationDraft, setCollaborationDraft] = useState('');
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [selectedCollaborationAgents, setSelectedCollaborationAgents] = useState<Set<string>>(new Set());
   const [collaborationSpeaker, setCollaborationSpeaker] = useState('');
   const [collaborationBusy, setCollaborationBusy] = useState(false);
@@ -1164,6 +1275,7 @@ export default function HomeCommandSidebar({
   const [werewolfHistoryEntries, setWerewolfHistoryEntries] = useState<WerewolfHistoryEntry[]>([]);
   const [recentlyEliminatedSeatIds, setRecentlyEliminatedSeatIds] = useState<string[]>([]);
   const [phaseTransitionBanner, setPhaseTransitionBanner] = useState<{ key: string; label: string } | null>(null);
+  const lastWerewolfViewSyncRef = useRef('');
   const collaborationPendingMessageIdRef = useRef<string | null>(null);
   const collaborationStreamingMessageIdRef = useRef<string | null>(null);
   const previousAliveSeatIdsRef = useRef<string[]>([]);
@@ -1173,6 +1285,7 @@ export default function HomeCommandSidebar({
   const collaborationAgentSessionsRef = useRef<Record<string, string>>({});
   const werewolfAutoStopRef = useRef(false);
   const werewolfAutoTurnsRef = useRef(0);
+  const collaborationTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
 
   const binding = activeSession?.workflowBinding;
@@ -1387,6 +1500,9 @@ export default function HomeCommandSidebar({
       .filter((name) => !query || name.toLowerCase().includes(query))
       .slice(0, 8);
   }, [mentionCandidateAgents, mentionQuery]);
+  useEffect(() => {
+    setActiveMentionIndex(0);
+  }, [mentionQuery]);
   const collaborationMentionedAgents = useMemo(
     () => extractAgentMentions(collaborationDraft, availableCollaborationAgents),
     [availableCollaborationAgents, collaborationDraft]
@@ -1493,8 +1609,8 @@ export default function HomeCommandSidebar({
       engine: message.engine,
       model: message.model,
       cards: isWerewolfLab
-        ? [createWerewolfChatCard(message, state?.players || werewolfState?.players)]
-        : undefined,
+        ? [createWerewolfChatCard(message, state?.players || werewolfState?.players), ...((message.cards || []).filter(Boolean))]
+        : message.cards,
     });
   }, [
     activeSessionId,
@@ -1589,12 +1705,30 @@ export default function HomeCommandSidebar({
   }, [creationBinding]);
 
   useEffect(() => {
-    setCollaborationTopic(collaborationRoom?.topic || '');
+    const selectedAgents = collaborationRoom?.selectedAgents || [];
+    setCollaborationTopic((prev) => (prev === (collaborationRoom?.topic || '') ? prev : (collaborationRoom?.topic || '')));
     setCollaborationDraft('');
-    setSelectedCollaborationAgents(new Set(collaborationRoom?.selectedAgents || []));
-    setWerewolfBoardId(collaborationRoom?.werewolf?.boardId || DEFAULT_WEREWOLF_BOARD_ID);
+    setSelectedCollaborationAgents((prev) => (
+      areStringSetsEqual(prev, selectedAgents) ? prev : new Set(selectedAgents)
+    ));
+    setWerewolfBoardId((prev) => {
+      const next = collaborationRoom?.werewolf?.boardId || DEFAULT_WEREWOLF_BOARD_ID;
+      return prev === next ? prev : next;
+    });
     collaborationAgentSessionsRef.current = collaborationRoom?.agentSessions || {};
   }, [activeSessionId]);
+
+  useEffect(() => {
+    if (!isWerewolfLab) return;
+    const persistedMode = collaborationRoom?.werewolfView?.mode || 'night';
+    const persistedViewer = collaborationRoom?.werewolfView?.viewer || '';
+    setWerewolfViewMode((prev) => (prev === persistedMode ? prev : persistedMode));
+    setWerewolfNightViewer((prev) => (prev === persistedViewer ? prev : persistedViewer));
+  }, [
+    collaborationRoom?.werewolfView?.mode,
+    collaborationRoom?.werewolfView?.viewer,
+    isWerewolfLab,
+  ]);
 
   useEffect(() => {
     collaborationAgentSessionsRef.current = collaborationRoom?.agentSessions || {};
@@ -1966,6 +2100,7 @@ export default function HomeCommandSidebar({
     setSessionWorkbenchState((prev) => {
       const base = mergeCollaborationRoom(prev?.collaborationRoom, {});
       const nextRoom = updater(base);
+      if (nextRoom === base) return prev || { collaborationRoom: base };
       return {
         ...(prev || {}),
         collaborationRoom: {
@@ -1979,14 +2114,33 @@ export default function HomeCommandSidebar({
 
   useEffect(() => {
     if (!isWerewolfLab) return;
-    updateCollaborationRoom((room) => ({
-      ...room,
-      werewolfView: {
+    const syncSignature = [
+      activeSessionId || '',
+      werewolfViewMode,
+      effectiveWerewolfNightViewer || '',
+      effectiveWerewolfNightViewerRole || '',
+    ].join('|');
+    if (lastWerewolfViewSyncRef.current === syncSignature) return;
+    lastWerewolfViewSyncRef.current = syncSignature;
+
+    updateCollaborationRoom((room) => {
+      const nextView = {
         mode: werewolfViewMode,
         viewer: effectiveWerewolfNightViewer || undefined,
         viewerRole: effectiveWerewolfNightViewerRole,
-      },
-    }));
+      };
+      if (
+        room.werewolfView?.mode === nextView.mode
+        && room.werewolfView?.viewer === nextView.viewer
+        && room.werewolfView?.viewerRole === nextView.viewerRole
+      ) {
+        return room;
+      }
+      return {
+        ...room,
+        werewolfView: nextView,
+      };
+    });
   }, [effectiveWerewolfNightViewer, effectiveWerewolfNightViewerRole, isWerewolfLab, updateCollaborationRoom, werewolfViewMode]);
 
   useEffect(() => {
@@ -1994,10 +2148,13 @@ export default function HomeCommandSidebar({
     if (selectedCollaborationAgents.size > 0) return;
     const supervisor = TEMP_WEREWOLF_SUPERVISOR.name;
     const defaultPlayers = pickRandomTemporaryWerewolfAgents(selectedWerewolfBoard.playerCount);
-    setSelectedCollaborationAgents(new Set([supervisor, ...defaultPlayers]));
+    const selectedAgents = [supervisor, ...defaultPlayers];
+    setSelectedCollaborationAgents((prev) => (
+      areStringSetsEqual(prev, selectedAgents) ? prev : new Set(selectedAgents)
+    ));
     updateCollaborationRoom((room) => ({
       ...room,
-      selectedAgents: [supervisor, ...defaultPlayers],
+      selectedAgents,
       werewolf: room.werewolf?.players?.length
         ? room.werewolf
         : {
@@ -2096,9 +2253,11 @@ export default function HomeCommandSidebar({
       message,
       mode: 'standalone-chat',
       sessionId: existingSession || undefined,
+      frontendSessionId: activeSessionId || undefined,
       workingDirectory: workflowDraft.workingDirectory || undefined,
       workflowContext: {
         temporaryLab: 'werewolf',
+        frontendSessionId: activeSessionId || undefined,
         collaborationTopic: collaborationTopic.trim() || collaborationRoom?.topic || 'AI 狼人杀能力测试',
         collaborationSpeaker: agentName,
         roundId,
@@ -2247,6 +2406,7 @@ export default function HomeCommandSidebar({
       message,
       mode: 'workflow-chat',
       sessionId: existingSession || undefined,
+      frontendSessionId: activeSessionId || undefined,
       workingDirectory: workflowDraft.workingDirectory || undefined,
       workflowContext: buildCollaborationWorkflowContext(agentName),
     });
@@ -2372,7 +2532,17 @@ export default function HomeCommandSidebar({
   }, [appendCollaborationMessageToChat, collaborationDraft, collaborationRoom?.topic, collaborationTopic, selectedCollaborationAgentList, toast, updateCollaborationRoom]);
 
   const insertCollaborationMention = useCallback((mention: string) => {
-    setCollaborationDraft((current) => insertMention(current, mention));
+    setCollaborationDraft((current) => {
+      const next = insertMention(current, mention);
+      requestAnimationFrame(() => {
+        const el = collaborationTextareaRef.current;
+        if (!el) return;
+        const pos = next.length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      });
+      return next;
+    });
   }, []);
 
   const toggleCollaborationAgent = useCallback((agentName: string, checked: boolean) => {
@@ -2794,12 +2964,30 @@ export default function HomeCommandSidebar({
         transcript: roundTranscript,
         participants: finalParticipants,
       }), roundId);
+      const roundVoteCards = buildRoundVoteChartCard({
+        title: '本轮群聊票型',
+        subtitle: '根据本轮 VOTE 结构化投票自动汇总',
+        votes: extractRoundVotes(roundTranscript, finalParticipants),
+      });
+      const summaryMessage = createCollaborationMessage({
+        roundId,
+        speakerType: summarizer === (boundCommander || 'default-supervisor') ? 'supervisor' : 'agent',
+        speakerName: summarizer,
+        content: summary,
+        cards: roundVoteCards,
+        status: 'done',
+      });
       updateCollaborationRoom((room) => ({
         ...room,
+        messages: [
+          ...(room.messages || []),
+          summaryMessage,
+        ],
         rounds: (room.rounds || []).map((round) => round.id === roundId
           ? { ...round, participants: finalParticipants, status: 'completed', completedAt: Date.now(), summary }
           : round),
       }));
+      appendCollaborationMessageToChat(summaryMessage);
     } catch (error: any) {
       updateCollaborationRoom((room) => ({
         ...room,
@@ -3036,12 +3224,30 @@ export default function HomeCommandSidebar({
         transcript: roundTranscript,
         participants: finalParticipants,
       }), roundId);
+      const roundVoteCards = buildRoundVoteChartCard({
+        title: '本轮圆桌票型',
+        subtitle: '根据本轮 VOTE 结构化投票自动汇总',
+        votes: extractRoundVotes(roundTranscript, finalParticipants),
+      });
+      const summaryMessage = createCollaborationMessage({
+        roundId,
+        speakerType: summarizer === (boundCommander || 'default-supervisor') ? 'supervisor' : 'agent',
+        speakerName: summarizer,
+        content: summary,
+        cards: roundVoteCards,
+        status: 'done',
+      });
       updateCollaborationRoom((room) => ({
         ...room,
+        messages: [
+          ...(room.messages || []),
+          summaryMessage,
+        ],
         rounds: (room.rounds || []).map((round) => round.id === roundId
           ? { ...round, participants: finalParticipants, status: 'completed', completedAt: Date.now(), summary }
           : round),
       }));
+      appendCollaborationMessageToChat(summaryMessage);
       toast('success', '圆桌讨论已完成');
     } catch (error: any) {
       updateCollaborationRoom((room) => ({
@@ -3129,6 +3335,7 @@ export default function HomeCommandSidebar({
     appendCollaborationMessageToChat(setupMessage, nextState);
     setSelectedCollaborationAgents(new Set([supervisor, ...participants]));
     setCollaborationTopic('AI 狼人杀能力测试');
+    setWerewolfViewMode('night');
   }, [
     availableCollaborationAgents,
     autoWerewolfPlayers,
@@ -3188,11 +3395,10 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
-        action: 'sheriff-election',
-        dayNumber: werewolfState.dayNumber,
-        players: werewolfState.players,
-      }), '警长竞选');
+      appendCollaborationPendingMessage(
+        `AI 上帝正在组织第 ${werewolfState.dayNumber} 天警长竞选，请稍候。`,
+        '警长竞选',
+      );
       const transcript: CollaborationRoomMessage[] = [...collaborationMessages, openingMessage, handsMessage];
       const withdrawnCandidates = new Set<string>();
       for (const candidate of candidates) {
@@ -3327,6 +3533,7 @@ export default function HomeCommandSidebar({
         })),
         currentAction: 'day-speech',
         currentActor: effectiveCollaborationSupervisor,
+        breakpoint: undefined,
         lastSummary: sheriff
           ? [
             `警长投票完成：${sheriff.agentName} 获得警徽。`,
@@ -3492,11 +3699,10 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
-        action: 'day-speech',
-        dayNumber: werewolfState.dayNumber,
-        players: werewolfState.players,
-      }), '白天发言');
+      appendCollaborationPendingMessage(
+        `AI 上帝正在组织第 ${werewolfState.dayNumber} 天白天发言，请稍候。`,
+        '白天发言',
+      );
       const transcript: CollaborationRoomMessage[] = [
         ...collaborationMessages,
         hostCollaborationMessage,
@@ -3552,6 +3758,7 @@ export default function HomeCommandSidebar({
           currentAction: 'vote',
           currentActor: effectiveCollaborationSupervisor,
           lastSummary: summary,
+          breakpoint: undefined,
           memories: [
             ...(room.werewolf.memories || []),
             createWerewolfMemoryEntry({
@@ -3770,11 +3977,10 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
-        action: 'wolf-meeting',
-        dayNumber: werewolfState.dayNumber,
-        players: werewolfState.players,
-      }), '黑夜处理中');
+      appendCollaborationPendingMessage(
+        `AI 上帝正在推进第 ${werewolfState.dayNumber} 夜，请稍候。`,
+        '黑夜处理中',
+      );
       const transcript: CollaborationRoomMessage[] = [...collaborationMessages, openingMessage];
       const pushNightStageMessage = (message: CollaborationRoomMessage) => {
         transcript.push(message);
@@ -3888,6 +4094,14 @@ export default function HomeCommandSidebar({
         });
         transcript.push(wolfVoteSummary);
         nightMessages.push(wolfVoteSummary);
+        updateCollaborationRoom((room) => ({
+          ...room,
+          messages: [
+            ...(room.messages || []),
+            wolfVoteSummary,
+          ],
+        }));
+        appendCollaborationMessageToChat(wolfVoteSummary, werewolfState);
       }
       if (guard && guardTarget) {
         pushNightStageMessage(createCollaborationMessage({
@@ -4087,6 +4301,14 @@ export default function HomeCommandSidebar({
           currentAction: 'wolf-meeting',
           currentActor: effectiveCollaborationSupervisor,
           lastError: errorText,
+          breakpoint: buildWerewolfBreakpoint({
+            handler: 'night',
+            roundId,
+            stepLabel: `第 ${werewolfState.dayNumber} 夜`,
+            resumeFrom: room.werewolf?.currentAction || 'wolf-meeting',
+            failedActor: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            error: errorText,
+          }),
           lastSummary: `黑夜轮中断：${errorText}。可重试当前黑夜。`,
         } : room.werewolf,
         messages: [...(room.messages || []), errorMessage],
@@ -4230,6 +4452,7 @@ export default function HomeCommandSidebar({
         currentAction: nextAction,
         currentActor: effectiveCollaborationSupervisor,
         lastSummary: closingContent,
+        breakpoint: undefined,
       };
       const closingMessage = targets.length ? createCollaborationMessage({
         roundId,
@@ -4284,6 +4507,18 @@ export default function HomeCommandSidebar({
             error: error?.message || '未知错误',
           }),
         ],
+        werewolf: room.werewolf ? {
+          ...room.werewolf,
+          lastError: error?.message || '未知错误',
+          breakpoint: buildWerewolfBreakpoint({
+            handler: 'last-words',
+            roundId,
+            stepLabel: `第 ${werewolfState.dayNumber} 天遗言`,
+            resumeFrom: werewolfState.pendingHunterShot || (werewolfState.pendingLastWords || [])[0] || effectiveCollaborationSupervisor,
+            failedActor: effectiveCollaborationSupervisor,
+            error: error?.message || '未知错误',
+          }),
+        } : room.werewolf,
       }));
       toast('error', error?.message || '遗言环节失败');
     } finally {
@@ -4344,11 +4579,10 @@ export default function HomeCommandSidebar({
 
     try {
       setCollaborationBusy(true);
-      appendCollaborationPendingMessage(buildWerewolfHostAnnouncement({
-        action: 'vote',
-        dayNumber: werewolfState.dayNumber,
-        players: werewolfState.players,
-      }), '投票结算');
+      appendCollaborationPendingMessage(
+        `AI 上帝正在组织第 ${werewolfState.dayNumber} 天投票结算，请稍候。`,
+        '投票结算',
+      );
       const transcript: CollaborationRoomMessage[] = [
         ...collaborationMessages,
         voteHostMessage,
@@ -4432,6 +4666,7 @@ export default function HomeCommandSidebar({
         pendingHunterShot: hunterPending,
         currentAction: hunterPending ? 'hunter-shot' : 'wolf-meeting',
         currentActor: effectiveCollaborationSupervisor,
+        breakpoint: undefined,
         lastSummary: idiotFlips
           ? `${eliminated} 被投票放逐，白痴翻牌免死并失去投票权，白天结束进入下一夜。`
           : eliminated
@@ -4531,6 +4766,18 @@ export default function HomeCommandSidebar({
             error: error?.message || '未知错误',
           }),
         ],
+        werewolf: room.werewolf ? {
+          ...room.werewolf,
+          lastError: error?.message || '未知错误',
+          breakpoint: buildWerewolfBreakpoint({
+            handler: 'vote',
+            roundId,
+            stepLabel: `第 ${werewolfState.dayNumber} 天投票`,
+            resumeFrom: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            failedActor: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            error: error?.message || '未知错误',
+          }),
+        } : room.werewolf,
       }));
       toast('error', error?.message || '投票轮失败');
     } finally {
@@ -4551,6 +4798,26 @@ export default function HomeCommandSidebar({
   const handleWerewolfSupervisorStep = useCallback(async () => {
     if (!werewolfState?.players?.length) {
       handleSetupWerewolf();
+      return;
+    }
+    if (werewolfState.breakpoint?.handler === 'night') {
+      await handleWerewolfNightRound();
+      return;
+    }
+    if (werewolfState.breakpoint?.handler === 'sheriff-election') {
+      await handleWerewolfSheriffElection();
+      return;
+    }
+    if (werewolfState.breakpoint?.handler === 'day-speech') {
+      await handleWerewolfSpeechRound();
+      return;
+    }
+    if (werewolfState.breakpoint?.handler === 'last-words') {
+      await handleWerewolfLastWordsRound();
+      return;
+    }
+    if (werewolfState.breakpoint?.handler === 'vote') {
+      await handleWerewolfVoteRound();
       return;
     }
     if (werewolfState.phase === 'setup' || werewolfState.phase === 'night') {
@@ -4581,6 +4848,7 @@ export default function HomeCommandSidebar({
     handleWerewolfSheriffElection,
     handleWerewolfSpeechRound,
     handleWerewolfVoteRound,
+    werewolfState?.breakpoint?.handler,
     toast,
     werewolfState?.phase,
     werewolfState?.players?.length,
@@ -4655,16 +4923,17 @@ export default function HomeCommandSidebar({
 
   const renderMentionSuggestions = () => (
     mentionSuggestions.length > 0 ? (
-      <div className="rounded-lg border bg-background p-2 shadow-sm">
+      <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
         <div className="mb-1 text-[10px] text-muted-foreground">@ 提示</div>
         <div className="flex flex-wrap gap-1.5">
-          {mentionSuggestions.map((name) => (
+          {mentionSuggestions.map((name, index) => (
             <Button
               key={name}
               type="button"
               size="sm"
-              variant="ghost"
+              variant={index === activeMentionIndex ? 'secondary' : 'ghost'}
               className="h-7 max-w-full px-2 text-xs"
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => insertCollaborationMention(name)}
             >
               <span className="truncate">@{name}</span>
@@ -4692,8 +4961,13 @@ export default function HomeCommandSidebar({
           100% { opacity: 0.38; filter: grayscale(1); }
         }
       `}</style>
-      <aside className="flex h-full min-h-0 flex-col border-l bg-card/40 backdrop-blur-sm">
-        <div className="border-b px-4 py-4">
+      <aside
+        className={cn(
+          'flex h-full min-h-0 flex-col border-l bg-card/40 backdrop-blur-sm',
+          werewolfMode && 'werewolf-wood-panel border-l-stone-700/60'
+        )}
+      >
+        <div className={cn('border-b px-4 py-4', werewolfMode && 'border-stone-700/60 bg-black/5')}>
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Command</p>
@@ -5011,13 +5285,39 @@ export default function HomeCommandSidebar({
 
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">主持人消息</label>
-                      <Textarea
-                        value={collaborationDraft}
-                        onChange={(event) => setCollaborationDraft(event.target.value)}
-                        placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
-                        className="min-h-[86px]"
-                      />
-                      {renderMentionSuggestions()}
+                      <div className="relative">
+                        <Textarea
+                          ref={collaborationTextareaRef}
+                          value={collaborationDraft}
+                          onChange={(event) => setCollaborationDraft(event.target.value)}
+                          placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
+                          className="min-h-[86px]"
+                          onKeyDown={(event) => {
+                            if (mentionSuggestions.length > 0) {
+                              if (event.key === 'ArrowDown') {
+                                event.preventDefault();
+                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+                                return;
+                              }
+                              if (event.key === 'ArrowUp') {
+                                event.preventDefault();
+                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                                return;
+                              }
+                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                                event.preventDefault();
+                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
+                                return;
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                setCollaborationDraft((prev) => `${prev} `);
+                              }
+                            }
+                          }}
+                        />
+                        {renderMentionSuggestions()}
+                      </div>
                     </div>
 
                     <Button
@@ -5032,7 +5332,7 @@ export default function HomeCommandSidebar({
                 ) : null}
 
                 {isWerewolfLab ? (
-                <div className="rounded-xl border border-dashed p-3 space-y-3">
+                <div className={cn('rounded-xl border border-dashed p-3 space-y-3', werewolfSectionClass)}>
                   <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-medium">AI 狼人杀测试</div>
@@ -5047,13 +5347,13 @@ export default function HomeCommandSidebar({
                         type="button"
                         size="sm"
                         variant="outline"
-                        className="h-7 gap-1 px-2 text-xs"
+                        className={cn('h-7 gap-1 px-2 text-xs', werewolfGhostButtonClass)}
                         onClick={() => setWerewolfRolebookOpen(true)}
                       >
                         <span className="material-symbols-outlined text-sm">style</span>
                         角色图鉴
                       </Button>
-                      <Badge variant={werewolfState?.enabled ? 'secondary' : 'outline'} className="text-[10px]">
+                      <Badge variant={werewolfState?.enabled ? 'secondary' : 'outline'} className={cn('text-[10px]', werewolfBadgeClass)}>
                         {werewolfState?.enabled ? `${werewolfState.phase} · D${werewolfState.dayNumber}` : '未开始'}
                       </Badge>
                     </div>
@@ -5072,17 +5372,17 @@ export default function HomeCommandSidebar({
                           <option key={board.id} value={board.id}>{board.name}</option>
                         ))}
                       </select>
-                      <div className="rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground">
+                      <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                         {selectedWerewolfBoard.description}
                       </div>
-                      <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] leading-5 text-muted-foreground">
+                      <div className={cn('rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                         规则：{selectedWerewolfBoard.winRuleLabel}。{selectedWerewolfBoard.winRuleDescription}
                       </div>
                     </div>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
                         <label className="text-xs text-muted-foreground">流程</label>
-                        <Badge variant="outline" className="text-[9px]">
+                        <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
                           {isWerewolfConfigured ? 'Supervisor 主导中' : '等待确认开局'}
                         </Badge>
                       </div>
@@ -5097,13 +5397,13 @@ export default function HomeCommandSidebar({
                         ].map(([phase, label]) => {
                           const active = werewolfState?.phase === phase || werewolfState?.currentAction === phase;
                           return (
-                            <div key={phase} className={`rounded-md border px-2 py-1 text-center ${active ? 'border-primary bg-primary/10 text-primary' : 'bg-muted/20 text-muted-foreground'}`}>
+                            <div key={phase} className={cn('rounded-md border px-2 py-1 text-center', active ? 'border-primary bg-primary/10 text-primary' : 'bg-muted/20 text-muted-foreground', werewolfMode && !active ? 'border-amber-800/30 bg-stone-800/15 text-stone-300' : undefined)}>
                               {label}
                             </div>
                           );
                         })}
                       </div>
-                      <div className="rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground">
+                      <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                         {isWerewolfConfigured
                           ? `当前：${selectedWerewolfBoard.name}，第 ${werewolfState?.dayNumber || 1} 天。可以在人工介入里补充指令，再让 Supervisor 推进。`
                           : `选择板子后会随机选择 ${selectedWerewolfBoard.playerCount} 个临时人格，并按 ${selectedWerewolfBoard.name} 分配身份。`}
@@ -5111,7 +5411,7 @@ export default function HomeCommandSidebar({
                     </div>
                   </div>
 
-                  <div className="grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto] sm:items-start">
+                  <div className={cn('grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto] sm:items-start', werewolfCardClass)}>
                     <div className="min-w-0">
                       <div className="text-xs font-medium">视角</div>
                       <div className="text-[10px] leading-5 text-muted-foreground">
@@ -5131,7 +5431,7 @@ export default function HomeCommandSidebar({
                           <select
                             value={effectiveWerewolfNightViewer}
                             onChange={(event) => setWerewolfNightViewer(event.target.value)}
-                            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                            className={cn('h-8 w-full rounded-md border border-input bg-background px-2 text-xs', werewolfMode && 'border-amber-800/30 bg-stone-950/20')}
                           >
                             <option value="">未绑定，只看公开信息</option>
                             {werewolfViewCandidateNames.map((agentName) => (
@@ -5143,12 +5443,12 @@ export default function HomeCommandSidebar({
                         </div>
                       ) : null}
                     </div>
-                    <div className="inline-flex rounded-md border bg-background p-0.5">
+                    <div className={cn('inline-flex rounded-md border bg-background p-0.5', werewolfMode && 'border-amber-800/40 bg-stone-950/20')}>
                       <Button
                         type="button"
                         size="sm"
                         variant={werewolfViewMode === 'night' ? 'default' : 'ghost'}
-                        className="h-7 px-2 text-xs"
+                        className={cn('h-7 px-2 text-xs', werewolfViewMode === 'night' ? werewolfGoldButtonClass : werewolfGhostButtonClass)}
                         onClick={() => setWerewolfViewMode('night')}
                       >
                         黑夜视角
@@ -5157,7 +5457,7 @@ export default function HomeCommandSidebar({
                         type="button"
                         size="sm"
                         variant={werewolfViewMode === 'god' ? 'default' : 'ghost'}
-                        className="h-7 px-2 text-xs"
+                        className={cn('h-7 px-2 text-xs', werewolfViewMode === 'god' ? werewolfGoldButtonClass : werewolfGhostButtonClass)}
                         onClick={() => setWerewolfViewMode('god')}
                       >
                         上帝视角
@@ -5166,7 +5466,7 @@ export default function HomeCommandSidebar({
                   </div>
 
                   {isWerewolfConfigured ? (
-                    <div className="grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-3">
+                    <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-3', werewolfCardClass)}>
                       <div>
                         <div className="text-[10px] text-muted-foreground">当前环节</div>
                         <div className="mt-1 font-medium">{getWerewolfCurrentActionLabel({
@@ -5193,7 +5493,7 @@ export default function HomeCommandSidebar({
                   ) : null}
 
                   {isWerewolfConfigured ? (
-                    <div className="grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-2">
+                    <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-2', werewolfCardClass)}>
                       <div>
                         <div className="text-[10px] text-muted-foreground">警长 / 警徽</div>
                         <div className="mt-1 leading-5">
@@ -5250,7 +5550,7 @@ export default function HomeCommandSidebar({
                             type="button"
                             size="sm"
                             variant="ghost"
-                            className="h-7 px-2 text-xs"
+                            className={cn('h-7 px-2 text-xs', werewolfGhostButtonClass)}
                             onClick={refreshRandomWerewolfPlayers}
                             disabled={collaborationBusy}
                           >
@@ -5258,7 +5558,7 @@ export default function HomeCommandSidebar({
                           </Button>
                         </div>
                       </div>
-                      <div className="grid max-h-44 gap-2 overflow-y-auto rounded-xl border bg-muted/10 p-2 sm:grid-cols-2">
+                      <div className={cn('grid max-h-44 gap-2 overflow-y-auto rounded-xl border bg-muted/10 p-2 sm:grid-cols-2', werewolfCardClass)}>
                         {listTemporaryWerewolfAgentNames().map((agentName) => {
                           const checked = autoWerewolfPlayers.includes(agentName);
                           return (
@@ -5277,7 +5577,7 @@ export default function HomeCommandSidebar({
 
                   {werewolfState?.players?.length ? (
                     <div className="space-y-2">
-                      <div className="rounded-2xl border bg-muted/10 p-3">
+                      <div className={cn('rounded-2xl border bg-muted/10 p-3', werewolfSectionClass)}>
                         <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
                           <span>顺时针发言</span>
                           <span>警长位高亮，死亡席位断线显示</span>
@@ -5345,10 +5645,10 @@ export default function HomeCommandSidebar({
                                 </div>
                               );
                             })}
-                          <div className="absolute left-1/2 top-1/2 flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm">
+                          <div className={cn('absolute left-1/2 top-1/2 flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm', werewolfCardClass)}>
                             {phaseTransitionBanner ? (
                               <div className="absolute inset-0 flex items-center justify-center rounded-full bg-background/88 animate-[fadeIn_220ms_ease-out]">
-                                <div className="rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary shadow-sm">
+                                <div className={cn('rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary shadow-sm', werewolfBadgeClass)}>
                                   {phaseTransitionBanner.label}
                                 </div>
                               </div>
@@ -5369,7 +5669,7 @@ export default function HomeCommandSidebar({
                           </div>
                         </div>
                         {activeRoundtableSeat ? (
-                          <div className={`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`}>
+                          <div className={cn(`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`, werewolfCardClass)}>
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
                                 <div className={`font-medium ${activeRoundtableSeat.nameClass || 'text-foreground'}`}>{activeRoundtableSeat.name}</div>
@@ -5377,7 +5677,7 @@ export default function HomeCommandSidebar({
                                   <div className="text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
                                 ) : null}
                               </div>
-                              <Badge variant="outline" className="text-[9px]">{activeRoundtableSeat.statusLabel}</Badge>
+                              <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>{activeRoundtableSeat.statusLabel}</Badge>
                             </div>
                             <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeRoundtableSeat.detail}</div>
                             {(() => {
@@ -5402,21 +5702,21 @@ export default function HomeCommandSidebar({
                         ) : null}
                       </div>
                       {werewolfState.votes.length > 0 ? (
-                        <div className="rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground">
+                        <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                           最近票流：{werewolfState.votes.slice(-6).map((vote) => `${vote.voter}->${vote.target}`).join('；')}
                         </div>
                       ) : null}
                       {werewolfHistoryEntries.length > 0 ? (
-                        <div className="space-y-2 rounded-lg border bg-muted/10 p-2.5">
+                        <div className={cn('space-y-2 rounded-lg border bg-muted/10 p-2.5', werewolfCardClass)}>
                           <div className="flex items-center justify-between gap-2">
                             <div className="text-[11px] font-medium text-foreground">历史对局记忆</div>
-                            <Badge variant="outline" className="text-[9px]">
+                            <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
                               {werewolfHistoryEntries.length} 条
                             </Badge>
                           </div>
                           <div className="space-y-1.5">
                             {werewolfHistoryEntries.slice(0, 6).map((entry) => (
-                              <div key={entry.id} className="rounded-lg border bg-background/70 p-2 text-[10px] leading-5 text-muted-foreground">
+                              <div key={entry.id} className={cn('rounded-lg border bg-background/70 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                                 <div className="font-medium text-foreground">{entry.boardName} · {entry.result}</div>
                                 <div className="mt-0.5">{entry.summary}</div>
                                 {entry.lessons?.length ? <div className="mt-1 text-[10px]">经验：{entry.lessons.join('；')}</div> : null}
@@ -5426,7 +5726,7 @@ export default function HomeCommandSidebar({
                         </div>
                       ) : null}
                         {werewolfState.lastSummary ? (
-                        <div className="rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground">
+                        <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                           {werewolfState.lastSummary}
                         </div>
                       ) : null}
@@ -5437,7 +5737,7 @@ export default function HomeCommandSidebar({
                       ) : null}
                     </div>
                   ) : (
-                    <div className="rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground">
+                    <div className={cn('rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground', werewolfCardClass)}>
                       {isWerewolfLab
                         ? '请选择板子，系统会随机选择参与人格并分配身份。临时人格不进入业务 Agent 列表。'
                         : '先选择 3 到 6 个 Agent，然后初始化测试局。Supervisor 会作为主持人，不参与玩家列表。'}
@@ -5445,7 +5745,7 @@ export default function HomeCommandSidebar({
                   )}
 
                   {isWerewolfConfigured ? (
-                    <div className="space-y-2 rounded-lg border bg-muted/10 p-3">
+                    <div className={cn('space-y-2 rounded-lg border bg-muted/10 p-3', werewolfCardClass)}>
                       <div className="flex items-center justify-between gap-2">
                         <div>
                           <div className="text-xs font-medium">人工介入</div>
@@ -5453,22 +5753,48 @@ export default function HomeCommandSidebar({
                             当前介入点：{werewolfHumanInterventionLabel}。补充内容会交给 Supervisor 带入下一步。
                           </div>
                         </div>
-                        <Badge variant="outline" className="text-[9px]">
+                        <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
                           {werewolfAutoRunning ? '自动中' : '可暂停'}
                         </Badge>
                       </div>
-                      <Textarea
-                        value={collaborationDraft}
-                        onChange={(event) => setCollaborationDraft(event.target.value)}
-                        placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
-                        className="min-h-[72px]"
-                        disabled={collaborationBusy}
-                      />
-                      {renderMentionSuggestions()}
+                      <div className="relative">
+                        <Textarea
+                          ref={collaborationTextareaRef}
+                          value={collaborationDraft}
+                          onChange={(event) => setCollaborationDraft(event.target.value)}
+                          placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
+                          className="min-h-[72px]"
+                          disabled={collaborationBusy}
+                          onKeyDown={(event) => {
+                            if (mentionSuggestions.length > 0) {
+                              if (event.key === 'ArrowDown') {
+                                event.preventDefault();
+                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+                                return;
+                              }
+                              if (event.key === 'ArrowUp') {
+                                event.preventDefault();
+                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                                return;
+                              }
+                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                                event.preventDefault();
+                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
+                                return;
+                              }
+                              if (event.key === 'Escape') {
+                                event.preventDefault();
+                                setCollaborationDraft((prev) => `${prev} `);
+                              }
+                            }
+                          }}
+                        />
+                        {renderMentionSuggestions()}
+                      </div>
                     </div>
                   ) : null}
 
-                  <div className="grid gap-2 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto]">
+                  <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto]', werewolfCardClass)}>
                     <div className="space-y-1">
                       <div className="text-xs font-medium">推进节奏</div>
                       <div className="text-[10px] leading-5 text-muted-foreground">
@@ -5477,7 +5803,7 @@ export default function HomeCommandSidebar({
                       <select
                         value={werewolfStepDelay}
                         onChange={(event) => setWerewolfStepDelay(Number(event.target.value))}
-                        className="mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                        className={cn('mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs', werewolfMode && 'border-amber-800/30 bg-stone-950/20')}
                         disabled={collaborationBusy}
                       >
                         <option value={600}>快速 · 0.6s</option>
@@ -5490,6 +5816,7 @@ export default function HomeCommandSidebar({
                         type="button"
                         size="sm"
                         variant="outline"
+                        className={werewolfGhostButtonClass}
                         onClick={handleWerewolfAutoRun}
                         disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended'}
                       >
@@ -5499,6 +5826,7 @@ export default function HomeCommandSidebar({
                         type="button"
                         size="sm"
                         variant="outline"
+                        className={werewolfGhostButtonClass}
                         onClick={handleWerewolfPause}
                         disabled={!werewolfAutoRunning && !collaborationBusy}
                       >
@@ -5510,6 +5838,7 @@ export default function HomeCommandSidebar({
                   <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                     <Button
                       type="button"
+                      className={werewolfGoldButtonClass}
                       onClick={handleWerewolfSupervisorStep}
                       disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
                     >
@@ -5519,6 +5848,7 @@ export default function HomeCommandSidebar({
                       type="button"
                       size="sm"
                       variant="outline"
+                      className={werewolfGhostButtonClass}
                       onClick={() => handleWerewolfBoardChange(selectedWerewolfBoard.id)}
                       disabled={collaborationBusy}
                     >

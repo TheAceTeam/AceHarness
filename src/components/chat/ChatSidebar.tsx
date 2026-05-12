@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/dialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
+import { Pin } from 'lucide-react';
 import {
   buildWorkflowConversationDirectory,
   getCreationSessionStatusLabel,
@@ -74,6 +75,17 @@ type WorkflowSessionGroup = {
   agentGroups: WorkflowAgentSessionGroup[];
   pendingCount: number;
 };
+
+function hasWeChatBinding(session?: Pick<SidebarSession, 'sessionWorkbenchState'> | null): boolean {
+  return Boolean(session?.sessionWorkbenchState?.wechatBinding);
+}
+
+function compareSidebarSessions(a: SidebarSession, b: SidebarSession): number {
+  const aPinned = hasWeChatBinding(a);
+  const bPinned = hasWeChatBinding(b);
+  if (aPinned !== bPinned) return aPinned ? -1 : 1;
+  return b.updatedAt - a.updatedAt;
+}
 
 function isActiveRunStatus(status?: string): boolean {
   return status === 'preparing' || status === 'running' || status === 'pending';
@@ -189,7 +201,7 @@ function buildWorkflowAgentGroups(
         const aPending = pendingQuestionsBySessionId.get(a.id)?.length || 0;
         const bPending = pendingQuestionsBySessionId.get(b.id)?.length || 0;
         if (aPending !== bPending) return bPending - aPending;
-        return b.updatedAt - a.updatedAt;
+        return compareSidebarSessions(a, b);
       }),
     }))
     .sort((a, b) => {
@@ -261,8 +273,8 @@ export default function ChatSidebar() {
       const kind = getWorkbenchSessionKind(session);
       return kind === 'run' || kind === 'creation' || workflowRelatedSessionIds.has(session.id);
     };
-    const runs = (sessions as SidebarSession[]).filter(isWorkflowSession);
-    const chat = (sessions as SidebarSession[]).filter((session) => !isWorkflowSession(session));
+    const runs = (sessions as SidebarSession[]).filter(isWorkflowSession).sort(compareSidebarSessions);
+    const chat = (sessions as SidebarSession[]).filter((session) => !isWorkflowSession(session)).sort(compareSidebarSessions);
     return { chat, runs };
   }, [sessions]);
   const baseVisibleSessions = sessionView === 'runs' ? groupedSessions.runs : groupedSessions.chat;
@@ -357,7 +369,7 @@ export default function ChatSidebar() {
             const aPending = pendingQuestionsBySessionId.get(a.id)?.length || 0;
             const bPending = pendingQuestionsBySessionId.get(b.id)?.length || 0;
             if (aPending !== bPending) return bPending - aPending;
-            return b.updatedAt - a.updatedAt;
+            return compareSidebarSessions(a, b);
           }),
         }))
         .map((group) => ({
@@ -365,6 +377,9 @@ export default function ChatSidebar() {
           agentGroups: buildWorkflowAgentGroups(group.sessions, pendingQuestionsBySessionId, workflowBindingByRelatedSessionId),
         }))
         .sort((a, b) => {
+          const aPinned = a.sessions.some((session) => hasWeChatBinding(session));
+          const bPinned = b.sessions.some((session) => hasWeChatBinding(session));
+          if (aPinned !== bPinned) return aPinned ? -1 : 1;
           if (a.pendingCount !== b.pendingCount) return b.pendingCount - a.pendingCount;
           return (b.sessions[0]?.updatedAt || 0) - (a.sessions[0]?.updatedAt || 0);
         });
@@ -379,7 +394,8 @@ export default function ChatSidebar() {
     const relatedToWorkflow = kind === 'run'
       || kind === 'creation'
       || workflowBindingByRelatedSessionId.has(activeSession.id);
-    setSessionView(relatedToWorkflow ? 'runs' : 'chat');
+    const nextView = relatedToWorkflow ? 'runs' : 'chat';
+    setSessionView((prev) => (prev === nextView ? prev : nextView));
   }, [activeSession?.id, activeSession?.workflowBinding, activeSession?.creationSession, workflowBindingByRelatedSessionId]);
 
   useEffect(() => {
@@ -416,12 +432,12 @@ export default function ChatSidebar() {
   useEffect(() => {
     if (sessionView !== 'chat') {
       setManageMode(false);
-      setSelectedSessionIds(new Set());
+      setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
     }
   }, [sessionView]);
 
   useEffect(() => {
-    setSelectedSessionIds(new Set());
+    setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
   }, [sessionSearch]);
 
   const toggleSessionSelected = (sessionId: string, checked: boolean) => {
@@ -1246,6 +1262,7 @@ function SessionItem({
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
+  const isWeChatBound = hasWeChatBinding(session as SidebarSession);
   const summary = session.lastMessage?.slice(0, 40) || '空会话';
   const statusBadge = session.workflowBinding
     ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
@@ -1282,10 +1299,12 @@ function SessionItem({
 
   const row = (
     <div
-      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${!compact ? 'border-b border-border/30' : 'rounded-lg'} hover:bg-muted/50 transition-colors ${
+      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${!compact ? 'border-b border-border/30' : 'rounded-lg'} transition-colors ${
         active
           ? 'border-l-4 border-l-primary bg-primary/10 pl-2 pr-3 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.10)]'
-          : 'border-l-4 border-l-transparent px-3'
+          : isWeChatBound
+            ? 'border-l-4 border-l-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 shadow-[inset_0_0_0_1px_rgba(26,173,25,0.14)] hover:bg-[#1AAD19]/[0.12]'
+            : 'border-l-4 border-l-transparent px-3 hover:bg-muted/50'
       } ${isStreaming ? 'bg-primary/15 ring-1 ring-primary/20' : ''}`}
       onClick={onClick}
     >
@@ -1311,6 +1330,27 @@ function SessionItem({
             </span>
           ) : null}
           <div className="text-sm font-medium truncate">{session.title}</div>
+          {isWeChatBound ? (
+            <>
+              <span
+                className="inline-flex shrink-0 items-center text-[#1AAD19]"
+                title="微信绑定会话"
+                aria-label="微信绑定会话"
+              >
+                <WeChatIcon className="h-3.5 w-3.5" />
+              </span>
+              <span
+                className="inline-flex shrink-0 items-center text-muted-foreground"
+                title="已置顶"
+                aria-label="已置顶"
+              >
+                <Pin className="h-3 w-3 fill-current" />
+              </span>
+              <span className="shrink-0 rounded-full bg-[#1AAD19]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#168C14] dark:text-[#7EE37B]">
+                微信
+              </span>
+            </>
+          ) : null}
           {isStreaming ? (
             <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
               生成中
@@ -1426,5 +1466,19 @@ function SessionItem({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function WeChatIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 1024 1024"
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+    >
+      <path d="M785.066667 578.389333c-22.755556 0-39.822222-17.066667-39.822223-39.822222 0-22.755556 17.066667-39.822222 39.822223-39.822222 22.755556 0 39.822222 17.066667 39.822222 39.822222 0 22.755556-17.066667 39.822222-39.822222 39.822222m-204.8 0c-22.755556 0-39.822222-17.066667-39.822223-39.822222 0-22.755556 17.066667-39.822222 39.822223-39.822222 22.755556 0 39.822222 17.066667 39.822222 39.822222 0 22.755556-17.066667 39.822222-39.822222 39.822222m386.844444 56.888889c0-130.844444-113.777778-238.933333-261.688889-250.311111H682.666667c-153.6 0-278.755556 113.777778-278.755556 250.311111 0 22.755556 5.688889 39.822222 5.688889 62.577778 28.444444 108.088889 142.222222 187.733333 273.066667 187.733333 45.511111 0 85.333333-11.377778 125.155555-28.444444l62.577778 45.511111s17.066667 11.377778 17.066667-11.377778l-17.066667-68.266666c56.888889-45.511111 96.711111-113.777778 96.711111-187.733334" />
+      <path d="M256 356.522667c-22.755556 0-39.822222-17.066667-39.822222-39.822223 0-22.755556 17.066667-39.822222 39.822222-39.822222 22.755556 0 39.822222 17.066667 39.822222 39.822222 0 17.066667-17.066667 39.822222-39.822222 39.822223m250.311111-85.333334c22.755556 0 39.822222 17.066667 39.822222 39.822223 0 22.755556-17.066667 39.822222-39.822222 39.822222-22.755556 0-39.822222-17.066667-39.822222-39.822222 0-22.755556 17.066667-39.822222 39.822222-39.822223m199.111111 96.711111c-22.755556-142.222222-159.288889-250.311111-324.266666-250.311111-176.355556 0-324.266667 130.844444-324.266667 290.133334 0 91.022222 45.511111 170.666667 113.777778 221.866666l-22.755556 91.022223s-5.688889 28.444444 22.755556 17.066666l91.022222-62.577778c39.822222 11.377778 79.644444 22.755556 119.466667 22.755556h11.377777c-5.688889-17.066667-5.688889-39.822222-5.688889-62.577778 0-147.911111 136.533333-273.066667 301.511112-273.066666 5.688889 0 11.377778 0 17.066666 5.688888z" />
+    </svg>
   );
 }

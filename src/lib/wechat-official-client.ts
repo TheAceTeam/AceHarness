@@ -1,6 +1,10 @@
+import React from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { randomBytes, randomUUID } from 'crypto';
 import { setTimeout as sleep } from 'timers/promises';
 import {
+  getWeChatOfficialAccount,
   getWeChatAccountSyncBuf,
   getWeChatContextToken,
   saveWeChatOfficialAccount,
@@ -50,6 +54,65 @@ export interface WeChatBridgeOptions {
   secret: string;
   account: WeChatOfficialAccount;
   onEvent?: (event: string, payload?: Record<string, any>) => void;
+}
+
+function flattenReactText(node: any): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(flattenReactText).join('');
+  if (React.isValidElement(node)) {
+    return flattenReactText((node.props as { children?: any })?.children);
+  }
+  return '';
+}
+
+function normalizePlainText(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+export function sanitizeWeChatPlainText(input: string): string {
+  const markdown = String(input || '').trim();
+  if (!markdown) return '';
+
+  const rendered = (ReactMarkdown as any)({
+    children: markdown,
+    remarkPlugins: [remarkGfm],
+    skipHtml: true,
+    components: {
+      h1: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      h2: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      h3: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      h4: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      h5: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      h6: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      p: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      br: () => '\n',
+      ul: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n'),
+      ol: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n'),
+      li: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n'),
+      blockquote: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n\n'),
+      table: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n'),
+      thead: ({ children }: any) => React.createElement(React.Fragment, null, children),
+      tbody: ({ children }: any) => React.createElement(React.Fragment, null, children),
+      tr: ({ children }: any) => React.createElement(React.Fragment, null, children, '\n'),
+      th: ({ children }: any) => React.createElement(React.Fragment, null, children, ' '),
+      td: ({ children }: any) => React.createElement(React.Fragment, null, children, ' '),
+      a: ({ children }: any) => React.createElement(React.Fragment, null, children),
+      img: () => '',
+      pre: () => '',
+      code: () => '',
+      hr: () => '\n',
+    },
+  });
+
+  return normalizePlainText(flattenReactText(rendered));
 }
 
 function ensureTrailingSlash(url: string): string {
@@ -320,6 +383,11 @@ async function sendText(account: WeChatOfficialAccount, to: string, text: string
     throw new Error(`Missing context_token for ${to}. User must send at least one inbound message first.`);
   }
 
+  const normalizedText = sanitizeWeChatPlainText(text);
+  if (!normalizedText.trim()) {
+    throw new Error('Empty outbound text after WeChat plain-text sanitization.');
+  }
+
   const msg: Record<string, any> = {
     from_user_id: '',
     to_user_id: to,
@@ -327,9 +395,30 @@ async function sendText(account: WeChatOfficialAccount, to: string, text: string
     message_type: 2,
     message_state: 2,
     context_token: contextToken,
-    item_list: [{ type: 1, text_item: { text } }],
+    item_list: [{ type: 1, text_item: { text: normalizedText } }],
   };
   await apiPost(account.baseUrl || ILINK_BASE_URL, EP_SEND_MESSAGE, { msg }, account.token, 15000);
+}
+
+export async function sendWeChatOfficialText(input: {
+  accountId: string;
+  userId: string;
+  text: string;
+}): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const account = await getWeChatOfficialAccount(input.accountId);
+  if (!account) {
+    return { ok: false, error: `WeChat account not found: ${input.accountId}` };
+  }
+  const contextToken = await getWeChatContextToken(account.accountId, input.userId);
+  if (!contextToken) {
+    return { ok: false, error: `Missing context_token for ${input.userId}` };
+  }
+  const text = sanitizeWeChatPlainText(input.text);
+  if (!text) {
+    return { ok: false, error: 'Empty outbound text after sanitization' };
+  }
+  await sendText(account, input.userId, text, contextToken);
+  return { ok: true, text };
 }
 
 async function forwardToAceHarness(options: WeChatBridgeOptions, message: WeChatInboundEnvelope): Promise<any> {

@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { MultiCombobox } from '@/components/ui/combobox';
+import { ModelSelect } from '@/components/ModelSelect';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -51,7 +52,7 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import WorkflowSupervisorChatPanel from '@/components/workflow/WorkflowSupervisorChatPanel';
-import { resolveAgentSelection } from '@/lib/agent-engine-selection';
+import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent-engine-selection';
 import {
   buildWorkflowConversationDirectory,
   getConversationSessionStatusLabel,
@@ -62,6 +63,7 @@ import {
 import { getEngineMeta } from '@/lib/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent-draft';
 import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import type { WorkflowAgentExecutionOverride } from '@/lib/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import styles from './page.module.css';
 
@@ -293,6 +295,7 @@ export default function WorkbenchPage() {
   const [selectedRun, setSelectedRun] = useState<any>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
   const [executionViewTabOverride, setExecutionViewTabOverride] = useState<string | null>(null);
+  const [executionPolicyDialogOpen, setExecutionPolicyDialogOpen] = useState(false);
   const [runDetail, setRunDetail] = useState<any>(null);
   const [viewingHistoryRun, setViewingHistoryRun] = useState(false);
   const [pendingCheckpointPhase, setPendingCheckpointPhase] = useState<string | null>(null);
@@ -342,6 +345,8 @@ export default function WorkbenchPage() {
   const [rehearsalMode, setRehearsalMode] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const [workflowDefaultModel, setWorkflowDefaultModel] = useState('');
+  const [workflowAgentOverrides, setWorkflowAgentOverrides] = useState<Record<string, WorkflowAgentExecutionOverride>>({});
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
   const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
   const [runtimeAgentDraft, setRuntimeAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
@@ -589,6 +594,36 @@ export default function WorkbenchPage() {
     showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
+  const currentWorkflowExecutionPolicy = useMemo(() => ({
+    defaultEngine: engine || '',
+    defaultModel: workflowDefaultModel || '',
+    agentOverrides: workflowAgentOverrides,
+  }), [engine, workflowAgentOverrides, workflowDefaultModel]);
+  const configuredWorkflowOverrideCount = useMemo(
+    () => Object.values(workflowAgentOverrides).filter((value) => value?.enabled).length,
+    [workflowAgentOverrides],
+  );
+  const workflowAgentNames = useMemo(() => {
+    const workflow = editingConfig?.workflow || workflowConfig?.workflow;
+    if (!workflow) return [] as string[];
+    const names = new Set<string>();
+    const addName = (value?: string | null) => {
+      if (value && value.trim()) names.add(value.trim());
+    };
+    const nodes = workflow.mode === 'state-machine'
+      ? (workflow?.states || [])
+      : (workflow?.phases || []);
+    for (const node of nodes) {
+      addName(node?.agent);
+      for (const step of node?.steps || []) {
+        addName(step?.agent);
+      }
+    }
+    const supervisorFromWorkflow = workflow?.supervisor?.agent;
+    const supervisorFromRoles = agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
+    addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
+    return Array.from(names);
+  }, [agentConfigs, editingConfig?.workflow, workflowConfig?.workflow]);
 
   // Explicitly convert viewMode to string for conditional rendering
   const isDesignMode = state.viewMode === 'design';
@@ -1197,7 +1232,16 @@ export default function WorkbenchPage() {
     return names.map((name) => {
       const roleConfig = agentConfigs.find((role: any) => role.name === name);
       const selection = roleConfig
-        ? resolveAgentSelection(roleConfig, { engine: globalEngine, defaultModel: globalDefaultModel }, engine)
+        ? resolveWorkflowAgentSelection(roleConfig, {
+            engine: globalEngine,
+            defaultModel: globalDefaultModel,
+          }, {
+            agentName: name,
+            workflowContext: {
+              engine,
+              executionPolicy: currentWorkflowExecutionPolicy,
+            },
+          })
         : null;
       return {
         name,
@@ -1209,7 +1253,7 @@ export default function WorkbenchPage() {
         sessionId: null,
       };
     });
-  }, [agentConfigs, engine, globalDefaultModel, globalEngine, workflowConfig?.workflow]);
+  }, [agentConfigs, currentWorkflowExecutionPolicy, engine, globalDefaultModel, globalEngine, workflowConfig?.workflow]);
 
   const displayWorkflowAgents = useMemo(() => {
     const runtimeByName = new Map(agents.map((agent) => [agent.name, agent]));
@@ -1247,12 +1291,18 @@ export default function WorkbenchPage() {
     : null;
   const selectedRoleSelection = useMemo(() => {
     if (!selectedRoleConfig) return null;
-    return resolveAgentSelection(
+    return resolveWorkflowAgentSelection(
       selectedRoleConfig,
       { engine: globalEngine, defaultModel: globalDefaultModel },
-      engine,
+      {
+        agentName: selectedRoleConfig.name,
+        workflowContext: {
+          engine,
+          executionPolicy: currentWorkflowExecutionPolicy,
+        },
+      },
     );
-  }, [selectedRoleConfig, globalEngine, globalDefaultModel, engine]);
+  }, [selectedRoleConfig, globalEngine, globalDefaultModel, engine, currentWorkflowExecutionPolicy]);
   const workflowTitle = useMemo(() => {
     if (humanApprovalData) return `待人工审查 · ${workflowBaseTitle}`;
     if (viewingHistoryRun) return `查看运行 · ${workflowBaseTitle}`;
@@ -1909,10 +1959,13 @@ export default function WorkbenchPage() {
         const roleConfig = agentConfigs.find((r: any) => r.name === a.name);
         let model = a.model;
         if (roleConfig?.engineModels) {
-          model = resolveAgentSelection(
+          model = resolveWorkflowAgentSelection(
             roleConfig,
             { engine: globalEngine, defaultModel: globalDefaultModel },
-            workflowConfig?.context?.engine,
+            {
+              agentName: a.name,
+              workflowContext: workflowConfig?.context,
+            },
           ).effectiveModel || model;
         }
         return {
@@ -2058,7 +2111,10 @@ export default function WorkbenchPage() {
       dispatch({ type: 'SET_WORKSPACE_MODE', payload: config.context?.workspaceMode || 'isolated-copy' });
       dispatch({ type: 'SET_REQUIREMENTS', payload: config.context?.requirements || '' });
       dispatch({ type: 'SET_TIMEOUT_MINUTES', payload: config.context?.timeoutMinutes || 30 });
-      dispatch({ type: 'SET_ENGINE', payload: config.context?.engine || '' });
+      const loadedExecutionPolicy = resolveWorkflowExecutionPolicy(config.context);
+      dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
+      setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
+      setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
       dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
 
       // Load available skills
@@ -2292,6 +2348,15 @@ export default function WorkbenchPage() {
     if (!workflowConfig) return;
     setSaving(true);
     try {
+      const normalizedAgentOverrides = Object.fromEntries(
+        Object.entries(workflowAgentOverrides || {})
+          .filter(([, value]) => value?.enabled)
+          .map(([name, value]) => [name, {
+            enabled: true,
+            engine: value.engine || undefined,
+            model: value.model || undefined,
+          }]),
+      );
       const config = {
         ...workflowConfig,
         workflow: editingConfig?.workflow || workflowConfig.workflow,
@@ -2303,6 +2368,11 @@ export default function WorkbenchPage() {
           requirements,
           timeoutMinutes,
           engine: engine || undefined,
+          executionPolicy: {
+            defaultEngine: engine || undefined,
+            defaultModel: workflowDefaultModel || undefined,
+            agentOverrides: normalizedAgentOverrides,
+          },
           skills,
         },
       };
@@ -3604,6 +3674,15 @@ export default function WorkbenchPage() {
     if (!editingConfig) return;
     setSaving(true);
     try {
+      const normalizedAgentOverrides = Object.fromEntries(
+        Object.entries(workflowAgentOverrides || {})
+          .filter(([, value]) => value?.enabled)
+          .map(([name, value]) => [name, {
+            enabled: true,
+            engine: value.engine || undefined,
+            model: value.model || undefined,
+          }]),
+      );
       const config = {
         ...editingConfig,
         context: {
@@ -3613,6 +3692,11 @@ export default function WorkbenchPage() {
           requirements,
           timeoutMinutes,
           engine: engine || undefined,
+          executionPolicy: {
+            defaultEngine: engine || undefined,
+            defaultModel: workflowDefaultModel || undefined,
+            agentOverrides: normalizedAgentOverrides,
+          },
           skills,
         },
       };
@@ -5181,6 +5265,7 @@ export default function WorkbenchPage() {
                                 runId={runId || selectedRun?.id || null}
                                 supervisorAgent={runtimeSupervisorAgent}
                                 supervisorSessionId={runtimeSupervisorSessionId}
+                                mentionCandidates={workflowAgentNames}
                                 pendingHumanQuestion={pendingHumanQuestion}
                                 submittingHumanQuestion={submittingHumanQuestion}
                                 onSubmitHumanQuestion={handleSubmitHumanQuestion}
@@ -5711,16 +5796,30 @@ export default function WorkbenchPage() {
                         <p className="text-xs text-muted-foreground mt-1">配置工作流运行时的基本参数</p>
                       </div>
                       <div className="p-5 space-y-5">
-                        <div>
-                          <Label className="text-sm font-medium">执行引擎</Label>
-                          <div className="mt-2">
-                            <EngineSelect
-                              value={engine}
-                              onChange={(v) => dispatch({ type: 'SET_ENGINE', payload: v })}
-                              allowGlobal
-                            />
+                        <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <Label className="text-sm font-medium">执行策略</Label>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                在这里统一设置当前工作流的默认引擎与模型，并按需覆盖本工作流涉及的 Agent。
+                              </p>
+                              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                <Badge variant="outline">
+                                  默认引擎: {getEngineMeta(engine)?.name || engine || '未设置'}
+                                </Badge>
+                                <Badge variant="outline">
+                                  默认模型: {workflowDefaultModel || globalDefaultModel || '未设置'}
+                                </Badge>
+                                <Badge variant="secondary">
+                                  Agent 覆盖: {configuredWorkflowOverrideCount}
+                                </Badge>
+                              </div>
+                            </div>
+                            <Button type="button" variant="outline" onClick={() => setExecutionPolicyDialogOpen(true)}>
+                              <span className="material-symbols-outlined mr-1 text-sm">tune</span>
+                              配置 Agent 执行策略
+                            </Button>
                           </div>
-                          <p className="text-xs text-muted-foreground mt-1.5">工作流使用的引擎，Agent 会根据引擎自动选择对应模型</p>
                         </div>
 
                         <div>
@@ -6307,6 +6406,158 @@ export default function WorkbenchPage() {
           {renderSpecCodingExplorer()}
         </DialogContent>
       </Dialog>
+      <Dialog open={executionPolicyDialogOpen} onOpenChange={setExecutionPolicyDialogOpen}>
+        <DialogContent className="max-w-4xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
+          <DialogTitle className="sr-only">工作流执行策略</DialogTitle>
+          <div className="flex max-h-[85vh] flex-col">
+            <div className="border-b px-6 py-4">
+              <div className="text-base font-semibold">工作流执行策略</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                为当前工作流设置默认引擎和模型，并仅对本工作流涉及的 Agent 做局部覆盖。
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto px-6 py-5 space-y-6">
+              <section className="space-y-4">
+                <div>
+                  <div className="text-sm font-medium">工作流默认策略</div>
+                  <div className="mt-1 text-xs text-muted-foreground">未单独配置的 Agent 会直接继承这里。</div>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <Label className="text-sm font-medium">默认引擎</Label>
+                    <div className="mt-2">
+                      <EngineSelect
+                        value={engine}
+                        onChange={(value) => dispatch({ type: 'SET_ENGINE', payload: value })}
+                        allowGlobal
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">默认模型</Label>
+                    <div className="mt-2">
+                      <ModelSelect
+                        value={workflowDefaultModel}
+                        onChange={setWorkflowDefaultModel}
+                        engine={engine || globalEngine}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium">当前工作流 Agent 覆盖</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      只列出本工作流实际会用到的 Agent。默认继承工作流策略，只有例外才需要单独配置。
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setWorkflowAgentOverrides({})}
+                    disabled={configuredWorkflowOverrideCount === 0}
+                  >
+                    全部恢复继承
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {workflowAgentNames.map((agentName) => {
+                    const override = workflowAgentOverrides[agentName] || { enabled: false };
+                    const roleConfig = agentConfigs.find((role: any) => role.name === agentName);
+                    const effectiveEngine = override.enabled
+                      ? (override.engine || engine || globalEngine)
+                      : (engine || globalEngine);
+                    return (
+                      <div key={agentName} className="rounded-xl border border-border/60 bg-background/70 p-4">
+                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_180px_minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+                          <div>
+                            <div className="text-sm font-medium">{agentName}</div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {(roleConfig?.team || 'blue')} · {roleConfig?.roleType || 'normal'}
+                            </div>
+                          </div>
+                          <div>
+                            <Label className="text-xs font-medium text-muted-foreground">策略模式</Label>
+                            <Select
+                              value={override.enabled ? 'custom' : 'inherit'}
+                              onValueChange={(value) => {
+                                setWorkflowAgentOverrides((prev) => ({
+                                  ...prev,
+                                  [agentName]: value === 'custom'
+                                    ? {
+                                        enabled: true,
+                                        engine: prev[agentName]?.engine || engine || globalEngine || undefined,
+                                        model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
+                                      }
+                                    : { enabled: false },
+                                }));
+                              }}
+                            >
+                              <SelectTrigger className="mt-2">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="inherit">继承工作流</SelectItem>
+                                <SelectItem value="custom">单独配置</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs font-medium text-muted-foreground">引擎</Label>
+                            <div className="mt-2">
+                              <EngineSelect
+                                value={override.enabled ? (override.engine || '') : ''}
+                                onChange={(value) => setWorkflowAgentOverrides((prev) => ({
+                                  ...prev,
+                                  [agentName]: {
+                                    ...(prev[agentName] || { enabled: true }),
+                                    enabled: true,
+                                    engine: value || undefined,
+                                    model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
+                                  },
+                                }))}
+                                allowGlobal={false}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <Label className="text-xs font-medium text-muted-foreground">模型</Label>
+                            <div className="mt-2">
+                              <ModelSelect
+                                value={override.enabled ? (override.model || '') : ''}
+                                onChange={(value) => setWorkflowAgentOverrides((prev) => ({
+                                  ...prev,
+                                  [agentName]: {
+                                    ...(prev[agentName] || { enabled: true }),
+                                    enabled: true,
+                                    engine: prev[agentName]?.engine || engine || globalEngine || undefined,
+                                    model: value || undefined,
+                                  },
+                                }))}
+                                engine={effectiveEngine}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </div>
+            <div className="border-t px-6 py-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setExecutionPolicyDialogOpen(false)}>
+                关闭
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={specMergeDialogOpen} onOpenChange={setSpecMergeDialogOpen}>
         <DialogContent className="max-w-5xl w-[90vw] h-[80vh] p-0 flex flex-col gap-0">
           <div className="border-b px-4 py-3">

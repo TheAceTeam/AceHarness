@@ -7,6 +7,8 @@ import { parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/app-paths';
 import { resolveWorkflowConfigPath } from '@/lib/workflow-config-path';
 
+const TIMESTAMP_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
+
 /** Resolve the .ace-outputs dir and runs/outputs dir for a given runId */
 async function resolveOutputDirs(runId: string) {
   const state = await loadRunState(runId);
@@ -32,6 +34,29 @@ function safePath(dir: string, file: string): string | null {
   const safe = file.replace(/\.\./g, '');
   const full = resolve(dir, safe);
   return full.startsWith(dir) ? full : null;
+}
+
+function normalizeLookupKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+}
+
+function resolveStepMetadata(
+  logicalName: string,
+  stepMap: Record<string, { agent: string; phaseName: string; role: string }>
+): { resolvedStepName: string; agent: string; phaseName: string; role: string } | null {
+  const direct = stepMap[logicalName] || stepMap[normalizeLookupKey(logicalName)];
+  if (direct) {
+    return { resolvedStepName: logicalName, ...direct };
+  }
+
+  const keys = Object.keys(stepMap).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    if (logicalName.endsWith(`-${key}`)) {
+      return { resolvedStepName: key, ...stepMap[key] };
+    }
+  }
+
+  return null;
 }
 
 export async function GET(
@@ -132,6 +157,8 @@ export async function GET(
       const fileStat = await stat(fullPath);
 
       let baseName = entry.replace(/\.(md|txt)$/, '');
+      const documentKind = TIMESTAMP_PREFIX_RE.test(baseName) ? 'detail' : 'conclusion';
+      const logicalName = documentKind === 'detail' ? baseName.replace(TIMESTAMP_PREFIX_RE, '') : baseName;
       let iteration: number | null = null;
       let stepName = baseName;
 
@@ -148,16 +175,24 @@ export async function GET(
         iteration = 1;
       }
 
-      const info = stepMap[stepName] || { agent: '', phaseName: '', role: '' };
+      const resolved = resolveStepMetadata(logicalName, stepMap);
+      const info = resolved || { resolvedStepName: stepName, agent: '', phaseName: '', role: '' };
+      const groupKey = info.phaseName
+        ? `${info.phaseName}::${info.resolvedStepName}`
+        : logicalName;
 
       files.push({
         filename: entry,
         stepName,
         baseName,
+        logicalName,
         iteration,
         agent: info.agent,
         phaseName: info.phaseName,
         role: info.role,
+        documentKind,
+        groupKey,
+        groupLabel: info.resolvedStepName || logicalName,
         size: fileStat.size,
         modifiedTime: fileStat.mtime.toISOString(),
       });

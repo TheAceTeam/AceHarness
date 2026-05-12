@@ -187,6 +187,15 @@ export interface CollaborationWerewolfState {
     seerTarget?: string;
     deaths?: string[];
   };
+  breakpoint?: {
+    handler?: 'night' | 'sheriff-election' | 'day-speech' | 'last-words' | 'vote';
+    roundId?: string;
+    stepLabel?: string;
+    resumeFrom?: string;
+    failedActor?: string;
+    failedAt?: number;
+    error?: string;
+  };
   memories?: CollaborationWerewolfMemoryEntry[];
 }
 

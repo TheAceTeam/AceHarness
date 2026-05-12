@@ -153,11 +153,10 @@ describe('ChatSidebar', () => {
 
     expect(screen.queryByText('Run Workflow')).toBeNull();
     expect(screen.queryByText('Plain Chat')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /非运行中/ }));
     expect(screen.getByText('Draft Workflow')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
     expect(screen.getByText('工作流设计')).toBeTruthy();
-
-    await user.click(screen.getByRole('button', { name: /非运行中/ }));
 
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
     await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
@@ -239,6 +238,47 @@ describe('ChatSidebar', () => {
 
     expect(screen.getByText('生成中')).toBeTruthy();
     expect(screen.getByLabelText('进行中')).toBeTruthy();
+  });
+
+  test('pins wechat-bound sessions and shows wechat indicators', () => {
+    mockSessions = [
+      {
+        id: 'normal-1',
+        title: 'Normal Session',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now() - 1000,
+        updatedAt: Date.now(),
+        messageCount: 1,
+      },
+      {
+        id: 'wechat-1',
+        title: 'WeChat Session',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now() - 2000,
+        updatedAt: Date.now() - 5000,
+        messageCount: 1,
+        sessionWorkbenchState: {
+          wechatBinding: {
+            integrationId: 'integration-1',
+            integrationName: '微信接入',
+            bindingId: 'binding-1',
+            externalConversationId: 'wechat-conversation-1',
+            bindingType: 'agent-chat',
+            targetLabel: 'WeChat Session',
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    ];
+
+    const { container } = render(<ChatSidebar />);
+
+    const titles = Array.from(container.querySelectorAll('.text-sm.font-medium.truncate'))
+      .map((node) => node.textContent)
+      .filter(Boolean);
+    expect(titles.indexOf('WeChat Session')).toBeLessThan(titles.indexOf('Normal Session'));
+    expect(screen.getByLabelText('微信绑定会话')).toBeTruthy();
+    expect(screen.getByLabelText('已置顶')).toBeTruthy();
   });
 
   test('row menu enters rename mode', async () => {

@@ -28,7 +28,7 @@ import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from './runtime
 import { getRuntimeSkillsDirPath } from './runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from './app-paths';
 import { createDirectoryLinkSync } from './directory-links';
-import { resolveAgentSelection } from './agent-engine-selection';
+import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from './agent-engine-selection';
 import { ensureDefaultSupervisorConfig } from './default-supervisor';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from './chat-persistence';
 import { extractJsonObject as extractStructuredJsonObject } from './result-channel';
@@ -48,10 +48,10 @@ export function resolveAgentModel(roleConfig: any, workflowContext?: any): strin
     // ignore invalid engine config and fall back to defaults
   }
 
-  const resolved = resolveAgentSelection(
+  const resolved = resolveWorkflowAgentSelection(
     roleConfig,
     { engine: globalEngine, defaultModel },
-    workflowContext?.engine,
+    { agentName: roleConfig?.name, workflowContext },
   );
 
   if (!resolved.effectiveEngine) {
@@ -955,7 +955,7 @@ export class WorkflowManager extends EventEmitter {
       this.agentConfigs = await this.loadAgentConfigs();
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
-      await this.initializeEngine(workflowConfig.context?.engine);
+        await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
       await this.syncSkillsToWorkspace(workflowConfig);
@@ -1971,7 +1971,8 @@ export class WorkflowManager extends EventEmitter {
         prompt += `请将你产出的步骤成果详细总结写入以下目录：\n`;
         prompt += `\`${outputDir}/\`\n\n`;
         prompt += `当前步骤的步骤成果详细总结文件名必须是：\`${summaryFileName}\`\n`;
-        prompt += `如果你还需要创建其他附加产物文件，也必须使用时间戳前缀，但后半段名称可以根据内容自行命名；只要不要与当前步骤的步骤成果详细总结重名即可。\n\n`;
+        prompt += `以上规则仅适用于系统要求的“步骤成果详细总结”归档文件。\n`;
+        prompt += `除步骤成果详细总结外，其他正式产物文件（例如代码、设计文档、API 文档、说明文档、脚本、配置等）应严格按照用户要求、任务要求和项目目录约定写入；如果用户要求产出到工作目录，就写入工作目录，不要写入该归档目录。\n\n`;
       }
     }
 
@@ -2476,7 +2477,7 @@ export class WorkflowManager extends EventEmitter {
     console.log(`[WorkflowManager.resume] iterationStates=`, JSON.stringify(runState.iterationStates));
 
     // Initialize engine
-    await this.initializeEngine(workflowConfig.context?.engine);
+    await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
 
     // Load agent configs
     this.agentConfigs = await this.loadAgentConfigs();

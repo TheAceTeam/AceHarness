@@ -39,6 +39,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
 import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
+import { cn } from '@/lib/utils';
 import {
   DEFAULT_WEREWOLF_BOARD_ID,
   TEMP_WEREWOLF_SUPERVISOR,
@@ -183,6 +184,8 @@ function ChatPageContent() {
   const [homeSidebarTab, setHomeSidebarTab] = useState<HomeSidebarTab>('commander');
   const [homeSidebarMode, setHomeSidebarMode] = useState<HomeSidebarMode>('hidden');
   const starterHandledRef = useRef(false);
+  const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
+  const lastHomeSidebarSyncRef = useRef('');
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
     // 已有持久化状态时跳过昂贵的 parseActions 解析
@@ -202,39 +205,51 @@ function ChatPageContent() {
   }, [activeSession?.messages, activeSession?.sessionWorkbenchState?.homeSidebar]);
 
   const latestSidebarHint = activeSession?.sessionWorkbenchState?.homeSidebar || parsedSidebarHint;
+  const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding);
+  const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
+  const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
+  const hasCommanderSidebarContext = hasWorkflowSidebarContext || hasCollaborationSidebarContext;
+  const hasHintSidebarContext = Boolean(
+    latestSidebarHint?.intent
+    || latestSidebarHint?.workflowDraft
+    || latestSidebarHint?.agentDraft
+    || latestSidebarHint?.tabs?.length
+  );
   const derivedHomeSidebarTab = useMemo(
     () => inferHomeSidebarTab(latestSidebarHint, {
-      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
-      hasCreationSession: Boolean(activeSession?.creationSession),
+      hasWorkflowBinding: hasCommanderSidebarContext,
+      hasCreationSession: hasCreationSidebarContext,
     }),
-    [activeSession?.creationSession, activeSession?.workflowBinding, latestSidebarHint]
+    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
   );
   const derivedHomeSidebarMode = useMemo(
     () => inferHomeSidebarMode(latestSidebarHint, {
-      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
-      hasCreationSession: Boolean(activeSession?.creationSession),
+      hasWorkflowBinding: hasCommanderSidebarContext,
+      hasCreationSession: hasCreationSidebarContext,
     }),
-    [activeSession?.creationSession, activeSession?.workflowBinding, latestSidebarHint]
+    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
   );
 
   const sessionScopedSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>();
-    if (activeSession?.workflowBinding) {
+    if (hasCommanderSidebarContext) {
       tabs.add('commander');
+    }
+    if (hasWorkflowSidebarContext) {
       tabs.add('workflow');
     }
-    if (activeSession?.creationSession) {
+    if (hasCreationSidebarContext) {
       tabs.add('workflow');
     }
     for (const tab of latestSidebarHint?.tabs || []) {
-      // commander tab 仅在有 workflowBinding 时才有意义
-      if (tab === 'commander' && !activeSession?.workflowBinding) continue;
+      // commander tab is used by workflow runtime and collaboration/werewolf rooms.
+      if (tab === 'commander' && !hasCommanderSidebarContext) continue;
       tabs.add(tab);
     }
-    if (tabs.size === 0 && activeSession?.workflowBinding) tabs.add('commander');
+    if (tabs.size === 0 && hasCommanderSidebarContext) tabs.add('commander');
     if (tabs.size === 0 && latestSidebarHint) tabs.add(derivedHomeSidebarTab);
     return Array.from(tabs);
-  }, [activeSession?.creationSession, activeSession?.workflowBinding, derivedHomeSidebarTab, latestSidebarHint, latestSidebarHint?.tabs]);
+  }, [derivedHomeSidebarTab, hasCommanderSidebarContext, hasCreationSidebarContext, hasWorkflowSidebarContext, latestSidebarHint, latestSidebarHint?.tabs]);
 
   const availableHomeSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>(sessionScopedSidebarTabs);
@@ -243,6 +258,11 @@ function ChatPageContent() {
     }
     return Array.from(tabs);
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab, sessionScopedSidebarTabs]);
+  const hasHomeSidebarContext = hasWorkflowSidebarContext
+    || hasCreationSidebarContext
+    || hasCollaborationSidebarContext
+    || hasHintSidebarContext;
+  const availableHomeSidebarTabsKey = availableHomeSidebarTabs.join('|');
 
   useEffect(() => {
     if (!parsedSidebarHint) return;
@@ -253,11 +273,6 @@ function ChatPageContent() {
       homeSidebar: parsedSidebarHint,
     }));
   }, [activeSession?.sessionWorkbenchState?.homeSidebar, parsedSidebarHint, setSessionWorkbenchState]);
-
-  useEffect(() => {
-    setHomeSidebarTab((prev) => (prev === derivedHomeSidebarTab ? prev : derivedHomeSidebarTab));
-    setHomeSidebarMode((prev) => (prev === derivedHomeSidebarMode ? prev : derivedHomeSidebarMode));
-  }, [derivedHomeSidebarMode, derivedHomeSidebarTab]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -348,55 +363,35 @@ function ChatPageContent() {
     if (isMobile) return;
 
     const hintedTab = latestSidebarHint?.activeTab;
-    const nextTab = hintedTab && sessionScopedSidebarTabs.includes(hintedTab)
-      ? hintedTab
-      : sessionScopedSidebarTabs[0] || 'commander';
-
-    setHomeSidebarTab(nextTab);
-
-    if (latestSidebarHint?.mode) {
-      setHomeSidebarMode(latestSidebarHint.mode);
-      return;
-    }
-
-    if (sessionScopedSidebarTabs.length > 0) {
-      setHomeSidebarMode('peek');
-      return;
-    }
-
-    setHomeSidebarMode('hidden');
-  }, [activeSession?.id, isMobile, latestSidebarHint?.activeTab, latestSidebarHint?.mode, sessionScopedSidebarTabs]);
-
-  useEffect(() => {
-    if (isMobile) return;
-    const binding = activeSession?.workflowBinding;
-    const creation = activeSession?.creationSession;
-    const hasSidebarContext = Boolean(binding || creation);
-    const hintedTab = latestSidebarHint?.activeTab;
-    const fallbackTab = availableHomeSidebarTabs[0] || null;
     const nextTab = hintedTab && availableHomeSidebarTabs.includes(hintedTab)
       ? hintedTab
-      : fallbackTab;
+      : availableHomeSidebarTabs[0] || derivedHomeSidebarTab;
 
-    if (nextTab) {
-      setHomeSidebarTab((prev) => (prev === nextTab ? prev : nextTab));
+    let nextMode = latestSidebarHint?.mode || derivedHomeSidebarMode;
+    if (nextMode === 'hidden' && hasHomeSidebarContext && availableHomeSidebarTabs.length > 0) {
+      nextMode = 'peek';
+    } else if (!hasHomeSidebarContext && hasMessages) {
+      nextMode = 'hidden';
     }
 
-    if (latestSidebarHint?.mode) {
-      setHomeSidebarMode(latestSidebarHint.mode);
-      return;
-    }
+    const syncSignature = [
+      activeSession?.id || '',
+      nextTab,
+      nextMode,
+      availableHomeSidebarTabsKey,
+      hasHomeSidebarContext ? 'context' : 'empty',
+    ].join('|');
+    if (lastHomeSidebarSyncRef.current === syncSignature) return;
+    lastHomeSidebarSyncRef.current = syncSignature;
 
-    if (hasSidebarContext && availableHomeSidebarTabs.length > 0) {
-      setHomeSidebarMode('peek');
-    } else if (hasMessages) {
-      setHomeSidebarMode('hidden');
-    }
+    setHomeSidebarTab((prev) => (prev === nextTab ? prev : nextTab));
+    setHomeSidebarMode((prev) => (prev === nextMode ? prev : nextMode));
   }, [
-    activeSession?.creationSession,
     activeSession?.id,
-    activeSession?.workflowBinding,
-    availableHomeSidebarTabs,
+    availableHomeSidebarTabsKey,
+    derivedHomeSidebarMode,
+    derivedHomeSidebarTab,
+    hasHomeSidebarContext,
     hasMessages,
     isMobile,
     latestSidebarHint?.activeTab,
@@ -650,11 +645,10 @@ function ChatPageContent() {
     summary?: string;
     shouldOpenModal?: boolean;
   }) => {
-    if (patch.tab) setHomeSidebarTab(patch.tab);
-    if (patch.mode) setHomeSidebarMode(patch.mode);
-    setSessionWorkbenchState((prev) => ({
-      ...(prev || {}),
-      homeSidebar: {
+    if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
+    if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
+    setSessionWorkbenchState((prev) => {
+      const nextHomeSidebar: HomeSidebarHint = {
         type: 'home_sidebar',
         ...(prev?.homeSidebar || {}),
         ...(patch.tab ? { activeTab: patch.tab } : {}),
@@ -664,8 +658,15 @@ function ChatPageContent() {
         ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
         ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
         ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
-      },
-    }));
+      };
+      if (JSON.stringify(prev?.homeSidebar || null) === JSON.stringify(nextHomeSidebar)) {
+        return prev || { homeSidebar: nextHomeSidebar };
+      }
+      return {
+        ...(prev || {}),
+        homeSidebar: nextHomeSidebar,
+      };
+    });
   }, [setSessionWorkbenchState]);
 
   const openHomeSidebar = useCallback((
@@ -684,9 +685,8 @@ function ChatPageContent() {
   }, [applyHomeSidebarState]);
 
   const closeHomeSidebar = useCallback(() => {
-    const hasSidebarContext = Boolean(activeSession?.workflowBinding || activeSession?.creationSession);
-    applyHomeSidebarState({ mode: hasSidebarContext ? 'peek' : 'hidden' });
-  }, [activeSession?.creationSession, activeSession?.workflowBinding, applyHomeSidebarState]);
+    applyHomeSidebarState({ mode: hasHomeSidebarContext ? 'peek' : 'hidden' });
+  }, [applyHomeSidebarState, hasHomeSidebarContext]);
 
   const handleHomeSidebarTabChange = useCallback((tab: HomeSidebarTab) => {
     applyHomeSidebarState({ tab });
@@ -1009,22 +1009,29 @@ function ChatPageContent() {
     });
   }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
   const hiddenMessageCount = Math.max(0, messages.length - recentWindowSize);
-  const historicalMessageItems = hiddenMessageCount > 0
-    ? messages.slice(0, hiddenMessageCount).map((message, index) => ({
+  const historicalMessageItems = useMemo(() => (
+    hiddenMessageCount > 0
+      ? messages.slice(0, hiddenMessageCount).map((message, index) => ({
         key: message.id,
         node: renderedMessages[index],
       }))
-    : [];
-  const recentMessageItems = hiddenMessageCount > 0
-    ? messages.slice(-recentWindowSize).map((message, index) => ({
+      : []
+  ), [hiddenMessageCount, messages, renderedMessages]);
+  const recentMessageItems = useMemo(() => (
+    hiddenMessageCount > 0
+      ? messages.slice(-recentWindowSize).map((message, index) => ({
         key: message.id,
         node: renderedMessages[hiddenMessageCount + index],
       }))
-    : messages.map((message, index) => ({
+      : messages.map((message, index) => ({
         key: message.id,
         node: renderedMessages[index],
-      }));
-  const historicalMessages = hiddenMessageCount > 0 ? renderedMessages.slice(0, hiddenMessageCount) : [];
+      }))
+  ), [hiddenMessageCount, messages, recentWindowSize, renderedMessages]);
+  const historicalMessages = useMemo(
+    () => (hiddenMessageCount > 0 ? renderedMessages.slice(0, hiddenMessageCount) : []),
+    [hiddenMessageCount, renderedMessages]
+  );
 
   useEffect(() => {
     const scroller = scrollContainerRef.current;
@@ -1039,6 +1046,30 @@ function ChatPageContent() {
 
   const activeAgentBinding = activeSession?.agentBinding;
   const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
+  const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+
+    if (isWerewolfLabMode) {
+      if (werewolfPreviousDarkClassRef.current === null) {
+        werewolfPreviousDarkClassRef.current = root.classList.contains('dark');
+      }
+      root.classList.add('dark');
+      return;
+    }
+
+    const previousHadDarkClass = werewolfPreviousDarkClassRef.current;
+    if (previousHadDarkClass === null) return;
+    werewolfPreviousDarkClassRef.current = null;
+    if (previousHadDarkClass) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+  }, [activeSession?.id, isWerewolfLabMode]);
+
   const activeAgentAvatarSrc = activeAgentBinding
     ? resolveAgentAvatarSrc(undefined, activeAgentBinding.agentName, {
         team: activeAgentBinding.team || 'red',
@@ -1047,7 +1078,13 @@ function ChatPageContent() {
     : null;
 
   return (
-    <div ref={containerRef} className="h-screen flex overflow-hidden bg-background">
+    <div
+      ref={containerRef}
+      className={cn(
+        'h-screen flex overflow-hidden bg-background',
+        isWerewolfLabMode && 'werewolf-wood-bg'
+      )}
+    >
       {/* Mobile overlay backdrop */}
       {isMobile && sidebarOpen && (
         <div className="fixed inset-0 bg-black/40 z-30" onClick={() => setSidebarOpen(false)} />
@@ -1076,9 +1113,14 @@ function ChatPageContent() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className={cn('flex-1 flex flex-col min-w-0', isWerewolfLabMode && 'werewolf-wood-main')}>
         {/* Top bar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0">
+        <div
+          className={cn(
+            'flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0',
+            isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
+          )}
+        >
           <div className="flex items-center gap-2">
             <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
               <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
@@ -1144,11 +1186,17 @@ function ChatPageContent() {
         </div>
 
         <div className="flex-1 min-h-0">
-          <ResizablePanelGroup direction="horizontal" className="h-full">
+          <ResizablePanelGroup direction="horizontal" className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}>
             <ResizablePanel defaultSize={homeSidebarMode === 'active' ? 74 : 100} minSize={42}>
-              <div className="flex h-full min-h-0 flex-col">
+              <div className={cn('flex h-full min-h-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
                 <div className="flex-1 relative min-h-0">
-                  <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16">
+                  <div
+                    ref={scrollContainerRef}
+                    className={cn(
+                      'absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16',
+                      isWerewolfLabMode && 'werewolf-wood-main'
+                    )}
+                  >
                     {messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
                         <div className="text-center">
@@ -1211,7 +1259,12 @@ function ChatPageContent() {
                   )}
                 </div>
 
-                <div className="shrink-0 border-t bg-background/80 backdrop-blur px-4 py-3 md:px-8 lg:px-16">
+                <div
+                  className={cn(
+                    'shrink-0 border-t bg-background/80 backdrop-blur px-4 py-3 md:px-8 lg:px-16',
+                    isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
+                  )}
+                >
                   {messages.length > 0 && (
                     <div className="mb-2 max-w-4xl mx-auto">
                       <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
@@ -1293,14 +1346,18 @@ function ChatPageContent() {
                     onExpand={() => openHomeSidebar(homeSidebarTab)}
                     expanded={homeSidebarMode === 'active'}
                     ensureSessionId={createSession}
+                    werewolfMode={isWerewolfLabMode}
                   />
                 </ResizablePanel>
               </>
             ) : homeSidebarMode === 'peek' ? (
-              <div className="hidden lg:flex items-start border-l bg-card/20">
+              <div className={cn('hidden lg:flex items-start border-l bg-card/20', isWerewolfLabMode && 'werewolf-wood-panel border-l-stone-700/60')}>
                 <button
                   type="button"
-                  className="m-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-4 text-[12px] text-muted-foreground transition hover:text-foreground"
+                  className={cn(
+                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-4 text-[12px] text-muted-foreground transition hover:text-foreground',
+                    isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
+                  )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}
                   title="展开首页动态侧边栏"
                 >

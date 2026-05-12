@@ -755,6 +755,16 @@ export const agentApi = {
     return response.json();
   },
 
+  async batchDeleteAgents(names: string[]): Promise<ApiResponse & { updatedCount: number }> {
+    const response = await authFetch(`${API_BASE}/agents/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', names }),
+    });
+    if (!response.ok) throw new Error('批量删除 Agent 失败');
+    return response.json();
+  },
+
   async batchReplaceModel(engine: string | undefined, fromModel: string, toModel: string): Promise<ApiResponse & { updatedCount: number }> {
     const response = await authFetch(`${API_BASE}/agents/batch`, {
       method: 'POST',
@@ -863,6 +873,7 @@ export const agentApi = {
     message: string;
     mode?: 'standalone-chat' | 'workflow-chat';
     sessionId?: string | null;
+    frontendSessionId?: string | null;
     workingDirectory?: string;
     workflowContext?: Record<string, any>;
     temporaryRoleConfig?: Record<string, any>;

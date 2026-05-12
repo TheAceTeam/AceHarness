@@ -14,14 +14,14 @@ let modelLabelPromise: Promise<Map<string, string>> | null = null;
 const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
 const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
 const WEREWOLF_CHAT_COLORS = [
-  { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/25 bg-rose-500/8' },
-  { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/25 bg-sky-500/8' },
-  { avatar: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', name: 'text-emerald-700 dark:text-emerald-300', bubble: 'border-emerald-500/25 bg-emerald-500/8' },
-  { avatar: 'border-violet-500/30 bg-violet-500/15 text-violet-700 dark:text-violet-300', name: 'text-violet-700 dark:text-violet-300', bubble: 'border-violet-500/25 bg-violet-500/8' },
-  { avatar: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300', name: 'text-amber-700 dark:text-amber-300', bubble: 'border-amber-500/25 bg-amber-500/8' },
-  { avatar: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300', name: 'text-cyan-700 dark:text-cyan-300', bubble: 'border-cyan-500/25 bg-cyan-500/8' },
-  { avatar: 'border-lime-500/30 bg-lime-500/15 text-lime-700 dark:text-lime-300', name: 'text-lime-700 dark:text-lime-300', bubble: 'border-lime-500/25 bg-lime-500/8' },
-  { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/25 bg-fuchsia-500/8' },
+  { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/30 bg-rose-50 text-rose-950 dark:bg-rose-950/75 dark:text-rose-100' },
+  { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/30 bg-sky-50 text-sky-950 dark:bg-sky-950/75 dark:text-sky-100' },
+  { avatar: 'border-emerald-500/30 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', name: 'text-emerald-700 dark:text-emerald-300', bubble: 'border-emerald-500/30 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/75 dark:text-emerald-100' },
+  { avatar: 'border-violet-500/30 bg-violet-500/15 text-violet-700 dark:text-violet-300', name: 'text-violet-700 dark:text-violet-300', bubble: 'border-violet-500/30 bg-violet-50 text-violet-950 dark:bg-violet-950/75 dark:text-violet-100' },
+  { avatar: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-300', name: 'text-amber-700 dark:text-amber-300', bubble: 'border-amber-500/30 bg-amber-50 text-amber-950 dark:bg-amber-950/75 dark:text-amber-100' },
+  { avatar: 'border-cyan-500/30 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300', name: 'text-cyan-700 dark:text-cyan-300', bubble: 'border-cyan-500/30 bg-cyan-50 text-cyan-950 dark:bg-cyan-950/75 dark:text-cyan-100' },
+  { avatar: 'border-lime-500/30 bg-lime-500/15 text-lime-700 dark:text-lime-300', name: 'text-lime-700 dark:text-lime-300', bubble: 'border-lime-500/30 bg-lime-50 text-lime-950 dark:bg-lime-950/75 dark:text-lime-100' },
+  { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/30 bg-fuchsia-50 text-fuchsia-950 dark:bg-fuchsia-950/75 dark:text-fuchsia-100' },
 ] as const;
 
 function parseWorkflowEvent(content: string) {
@@ -318,12 +318,12 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
         ? color.avatar
         : 'border-muted bg-muted/70 text-muted-foreground';
   const bubbleClass = isSupervisor
-    ? 'border-amber-500/25 bg-amber-500/8'
+    ? 'border-amber-500/30 bg-amber-50 text-amber-950 dark:bg-amber-950/75 dark:text-amber-100'
     : isSystem
-      ? 'border-muted bg-muted/40'
+      ? 'border-border bg-background text-foreground dark:bg-muted/85 dark:text-foreground'
       : visible
         ? color.bubble
-        : 'border-muted bg-muted/30';
+        : 'border-border bg-background text-foreground dark:bg-muted/85 dark:text-foreground';
   const nameClass = isSupervisor
     ? 'text-amber-700 dark:text-amber-300'
     : isSystem
@@ -368,7 +368,7 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
               </span>
             ) : null}
           </div>
-          <div className="prose-sm prose-neutral max-w-none text-muted-foreground dark:prose-invert [&_p]:my-1">
+          <div className="prose-sm prose-neutral max-w-none text-current dark:prose-invert [&_p]:my-1">
             <Markdown>{visible ? (message.rawContent || message.content) : formatHiddenWerewolfContent(card)}</Markdown>
           </div>
         </div>

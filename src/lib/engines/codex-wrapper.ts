@@ -137,6 +137,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   }
 
   private collectedOutput = '';
+  private lastAgentMessageSnapshot = '';
 
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
@@ -317,14 +318,50 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
           }
           break;
         }
+        case 'item.updated': {
+          const item = event.item;
+          if (item.type === 'agent_message') {
+            const text = item.text || '';
+            if (!text) break;
+            let piece = text;
+            if (this.lastAgentMessageSnapshot && text.startsWith(this.lastAgentMessageSnapshot)) {
+              piece = text.slice(this.lastAgentMessageSnapshot.length);
+            } else if (this.lastAgentMessageSnapshot === text) {
+              piece = '';
+            }
+            if (piece) {
+              const prefix = this.lastBlockWasTool && !piece.startsWith('\n')
+                ? '\n\n<!-- chunk-boundary -->\n\n'
+                : '';
+              this.emitText(prefix + piece);
+            }
+            this.lastAgentMessageSnapshot = text;
+            this.lastBlockWasTool = false;
+          } else if (item.type === 'reasoning') {
+            this.emit('stream', {
+              type: 'thought',
+              content: (item as any).text || '',
+            } as EngineStreamEvent);
+          }
+          break;
+        }
         case 'item.completed': {
           const item = event.item;
           if (item.type === 'agent_message') {
             const text = item.text || '';
-            const prefix = this.lastBlockWasTool && !text.startsWith('\n')
-              ? '\n\n<!-- chunk-boundary -->\n\n'
-              : '';
-            this.emitText(prefix + text);
+            let piece = text;
+            if (this.lastAgentMessageSnapshot && text.startsWith(this.lastAgentMessageSnapshot)) {
+              piece = text.slice(this.lastAgentMessageSnapshot.length);
+            } else if (this.lastAgentMessageSnapshot === text) {
+              piece = '';
+            }
+            if (piece) {
+              const prefix = this.lastBlockWasTool && !piece.startsWith('\n')
+                ? '\n\n<!-- chunk-boundary -->\n\n'
+                : '';
+              this.emitText(prefix + piece);
+            }
+            this.lastAgentMessageSnapshot = text;
             this.lastBlockWasTool = false;
           } else if (item.type === 'reasoning') {
             this.emit('stream', {
@@ -394,6 +431,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     this._abortController = new AbortController();
     this.collectedOutput = '';
     this.lastBlockWasTool = false;
+    this.lastAgentMessageSnapshot = '';
     try {
       const { Codex } = await runtimeImport<typeof import('@openai/codex-sdk')>('@openai/codex-sdk');
       try {
@@ -408,6 +446,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         this.currentThread = null;
         this.collectedOutput = '';
         this.lastBlockWasTool = false;
+        this.lastAgentMessageSnapshot = '';
         return await this.runWithClient(Codex, options, fallbackPath);
       }
     } catch (error: any) {

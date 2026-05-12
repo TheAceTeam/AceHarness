@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,8 +10,6 @@ import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { SingleCombobox } from '@/components/ui/combobox';
-import { EngineSelect } from '@/components/EngineSelect';
-import { getEngineMeta } from '@/lib/engine-metadata';
 import { agentApi } from '@/lib/api';
 import {
   createDeterministicAvatarConfig,
@@ -87,21 +85,9 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [newTag, setNewTag] = useState('');
   const [newCapability, setNewCapability] = useState('');
   const [newConstraint, setNewConstraint] = useState('');
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [editingSubAgent, setEditingSubAgent] = useState<{ name: string; config: SubAgent } | null>(null);
   const [newSubAgentName, setNewSubAgentName] = useState('');
   const [refreshingAvatar, setRefreshingAvatar] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/engine')
-      .then((res) => res.json())
-      .then((data) => {
-        setGlobalEngine(data.engine || '');
-        setGlobalDefaultModel(data.defaultModel || '');
-      })
-      .catch(() => {});
-  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,11 +103,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       alert('至少需要添加一个能力');
       return;
     }
-    if (formData.activeEngine && !formData.engineModels[formData.activeEngine]) {
-      alert('当前启用的引擎必须选择模型');
-      return;
-    }
-
     const dataToSave = { ...formData };
     if (!dataToSave.avatar) {
       dataToSave.avatar = createDeterministicAvatarConfig(dataToSave.name, {
@@ -317,94 +298,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <div>
-            <Label>模型配置 *</Label>
-            <p className="text-xs text-muted-foreground mb-2">选择当前使用的引擎。若跟随系统，则模型也跟随全局默认模型。</p>
-            <div className="space-y-2">
-              <div className="flex gap-2 items-center">
-                <button
-                  type="button"
-                  className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center ${formData.activeEngine === '' ? 'border-primary bg-primary' : 'border-muted-foreground/40'}`}
-                  onClick={() => setFormData({ ...formData, activeEngine: '' })}
-                  title="跟随系统"
-                >
-                  {formData.activeEngine === '' && <span className="w-2 h-2 rounded-full bg-white" />}
-                </button>
-                <div className="w-[130px] shrink-0 text-sm text-muted-foreground">跟随系统</div>
-                <div className="flex-1 text-sm">
-                  <span className="font-medium">{getEngineMeta(globalEngine)?.name || globalEngine || '未设置默认引擎'}</span>
-                  <span className="text-muted-foreground"> / </span>
-                  <span className="font-mono">{globalDefaultModel || '未设置默认模型'}</span>
-                </div>
-              </div>
-              {Object.entries(formData.engineModels).map(([eng, mod]) => (
-                <div key={eng} className="flex gap-2 items-center">
-                  <button
-                    type="button"
-                    className={`shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center ${formData.activeEngine === eng ? 'border-primary bg-primary' : 'border-muted-foreground/40'}`}
-                    onClick={() => setFormData({ ...formData, activeEngine: eng })}
-                    title="设为启用"
-                  >
-                    {formData.activeEngine === eng && <span className="w-2 h-2 rounded-full bg-white" />}
-                  </button>
-                  <div className="w-[130px] shrink-0">
-                    <EngineSelect
-                      value={eng}
-                      onChange={(newEng) => {
-                        if (newEng === eng) return;
-                        const updated = { ...formData.engineModels };
-                        const model = updated[eng];
-                        delete updated[eng];
-                        updated[newEng] = model;
-                        const newActive = formData.activeEngine === eng ? newEng : formData.activeEngine;
-                        setFormData({ ...formData, engineModels: updated, activeEngine: newActive });
-                      }}
-                      allowGlobal
-                    />
-                  </div>
-                  <div className="flex-1">
-                    {eng ? (
-                      <ModelSelect value={mod} onChange={(v) => setFormData({ ...formData, engineModels: { ...formData.engineModels, [eng]: v } })} engine={eng} />
-                    ) : (
-                      <div className="text-sm text-muted-foreground">跟随系统时不支持单独设置模型</div>
-                    )}
-                  </div>
-                  {Object.keys(formData.engineModels).length > 1 && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => {
-                        const updated = { ...formData.engineModels };
-                        delete updated[eng];
-                        const newActive = formData.activeEngine === eng ? Object.keys(updated)[0] : formData.activeEngine;
-                        setFormData({ ...formData, engineModels: updated, activeEngine: newActive });
-                      }}
-                    >
-                      <span className="material-symbols-outlined text-sm text-destructive">delete</span>
-                    </Button>
-                  )}
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const usedEngines = Object.keys(formData.engineModels);
-                  const allEngines = ['claude-code', 'kiro-cli', 'opencode', 'nga', 'codegenie', 'codex', 'cursor', 'cangjie-magic', 'trae-cli'];
-                  const available = allEngines.find(e => !usedEngines.includes(e));
-                  if (available === undefined) return;
-                  const defaultModel = Object.values(formData.engineModels)[0] || '';
-                  setFormData({ ...formData, engineModels: { ...formData.engineModels, [available]: defaultModel } });
-                }}
-              >
-                <span className="material-symbols-outlined text-sm mr-1">add</span>
-                添加引擎
-              </Button>
             </div>
           </div>
 

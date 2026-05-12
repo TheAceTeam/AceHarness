@@ -54,6 +54,23 @@ function buildProviderPayload(integration: ChannelIntegration, input: OutboundCh
 }
 
 export async function sendOutboundChannelMessage(integration: ChannelIntegration, input: OutboundChannelMessage): Promise<{ ok: boolean; status?: number; error?: string }> {
+  if (
+    integration.provider === 'wechat-bridge'
+    && input.binding?.frontendSessionId
+    && input.metadata?.eventType === 'human-question-required'
+  ) {
+    const { sendWeChatNotificationToFrontendSession } = await import('@/lib/wechat-session-notifier');
+    const direct = await sendWeChatNotificationToFrontendSession({
+      frontendSessionId: input.binding.frontendSessionId,
+      text: input.title ? `${input.title}\n${input.text}` : input.text,
+      sourceLabel: '微信审查提醒',
+      syncToChat: true,
+    });
+    if (direct.ok) {
+      return { ok: true, status: 200 };
+    }
+  }
+
   const url = resolveOutboundUrl(integration);
   if (!url) {
     return { ok: false, error: '未配置 outboundWebhookUrl / botWebhookUrl / bridgeCallbackUrl' };

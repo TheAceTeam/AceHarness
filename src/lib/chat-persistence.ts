@@ -99,6 +99,13 @@ export interface ChatSessionSummary {
   visibility?: 'public' | 'private';
 }
 
+function compareChatSessionSummary(a: ChatSessionSummary, b: ChatSessionSummary): number {
+  const aPinned = Boolean(a.sessionWorkbenchState?.wechatBinding);
+  const bPinned = Boolean(b.sessionWorkbenchState?.wechatBinding);
+  if (aPinned !== bPinned) return aPinned ? -1 : 1;
+  return b.updatedAt - a.updatedAt;
+}
+
 async function ensureDir() {
   if (!existsSync(CHAT_DIR)) {
     await mkdir(CHAT_DIR, { recursive: true });
@@ -184,7 +191,7 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
     } catch { /* skip corrupted */ }
   }
 
-  summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+  summaries.sort(compareChatSessionSummary);
   return summaries;
 }
 

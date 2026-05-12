@@ -177,6 +177,18 @@ export const roleConfigSchema = z.object({
   })).optional(),
 });
 
+export const workflowAgentExecutionOverrideSchema = z.object({
+  enabled: z.boolean().default(false),
+  engine: z.string().optional(),
+  model: z.string().optional(),
+});
+
+export const workflowExecutionPolicySchema = z.object({
+  defaultEngine: z.string().optional(),
+  defaultModel: z.string().optional(),
+  agentOverrides: z.record(z.string(), workflowAgentExecutionOverrideSchema).default({}),
+});
+
 // 上下文配置 Schema
 export const contextConfigSchema = z.object({
   projectRoot: z.string().optional(),
@@ -185,6 +197,7 @@ export const contextConfigSchema = z.object({
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
   engine: z.string().optional(), // 工作流级别引擎覆盖
+  executionPolicy: workflowExecutionPolicySchema.optional(),
   skills: z.array(z.string()).optional(), // 启用的 skills 列表
   routerModel: z.string().optional(), // Supervisor-Lite 路由模型（可选）
 });
@@ -216,6 +229,8 @@ export type WorkflowStep = z.infer<typeof workflowStepSchema>;
 export type Checkpoint = z.infer<typeof checkpointSchema>;
 export type WorkflowPhase = z.infer<typeof workflowPhaseSchema>;
 export type RoleConfig = z.infer<typeof roleConfigSchema>;
+export type WorkflowAgentExecutionOverride = z.infer<typeof workflowAgentExecutionOverrideSchema>;
+export type WorkflowExecutionPolicy = z.infer<typeof workflowExecutionPolicySchema>;
 export type ContextConfig = z.infer<typeof contextConfigSchema>;
 export type WorkflowConfig = z.infer<typeof workflowConfigSchema>;
 

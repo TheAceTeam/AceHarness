@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Progress } from '@/components/ui/progress';
 import { copyText } from '@/lib/clipboard';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 // --- Schema Types ---
 
@@ -35,7 +36,7 @@ type Block =
   | { type: 'text'; content: string; maxLines?: number }
   | { type: 'code'; code: string; lang?: string; copyable?: boolean }
   | { type: 'progress'; value: number; max?: number; label?: string }
-  | { type: 'bar-chart'; items: { label: string; value: number; displayValue?: string; color?: string; hint?: string }[]; max?: number }
+  | { type: 'bar-chart'; items: { label: string; value: number; displayValue?: string; color?: string; hint?: string; voters?: { name: string; avatarSrc?: string; weightLabel?: string }[] }[]; max?: number }
   | { type: 'steps'; current: number; total: number }
   | { type: 'tabs'; tabs: { key: string; label: string; blocks: Block[] }[] }
   | { type: 'collapse'; title: string; icon?: string; subtitle?: string; blocks: Block[]; defaultOpen?: boolean }
@@ -236,7 +237,7 @@ function BarChartBlock({
   items,
   max,
 }: {
-  items: { label: string; value: number; displayValue?: string; color?: string; hint?: string }[];
+  items: { label: string; value: number; displayValue?: string; color?: string; hint?: string; voters?: { name: string; avatarSrc?: string; weightLabel?: string }[] }[];
   max?: number;
 }) {
   if (!items?.length) return null;
@@ -258,6 +259,27 @@ function BarChartBlock({
                 style={{ width: `${pct}%` }}
               />
             </div>
+            {item.voters?.length ? (
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {item.voters.map((voter, voterIndex) => (
+                  <div
+                    key={`${item.label}-${voter.name}-${voterIndex}`}
+                    className="group relative"
+                    title={voter.weightLabel ? `${voter.name}（${voter.weightLabel}）` : voter.name}
+                  >
+                    <Avatar className="h-6 w-6 border border-border/70 shadow-sm">
+                      {voter.avatarSrc ? <AvatarImage src={voter.avatarSrc} alt={voter.name} /> : null}
+                      <AvatarFallback className="bg-muted text-[10px] font-medium text-foreground">
+                        {voter.name.slice(0, 1)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md group-hover:block">
+                      {voter.name}{voter.weightLabel ? `（${voter.weightLabel}）` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {item.hint ? (
               <div className="text-[11px] text-muted-foreground">{item.hint}</div>
             ) : null}

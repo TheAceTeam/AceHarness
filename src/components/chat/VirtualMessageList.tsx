@@ -39,6 +39,7 @@ export function VirtualMessageList({
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
+  const itemsKey = useMemo(() => items.map((item) => item.key).join('\u001f'), [items]);
 
   useEffect(() => {
     const next = new Map<string, number>();
@@ -47,7 +48,7 @@ export function VirtualMessageList({
     }
     heightCacheRef.current = next;
     setMeasureVersion((value) => value + 1);
-  }, [estimatedItemHeight, items]);
+  }, [estimatedItemHeight, itemsKey]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -92,7 +93,7 @@ export function VirtualMessageList({
     return () => {
       observers.forEach((observer) => observer.disconnect());
     };
-  }, [items, measureVersion]);
+  }, [itemsKey]);
 
   const layout = useMemo(() => {
     const heights = items.map((item) => heightCacheRef.current.get(item.key) ?? estimatedItemHeight);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readdir, readFile, writeFile } from 'fs/promises';
+import { readdir, readFile, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getRuntimeAgentsDirPath } from '@/lib/runtime-configs';
@@ -14,6 +14,46 @@ export async function POST(request: NextRequest) {
     const yamlFiles = files.filter((f) => f.endsWith('.yaml') || f.endsWith('.yml'));
 
     let updatedCount = 0;
+
+    if (action === 'delete') {
+      const names = Array.isArray(body.names) ? body.names.filter((item: unknown) => typeof item === 'string' && item.trim()) : [];
+      if (names.length === 0) {
+        return NextResponse.json(
+          { error: '缺少待删除 Agent 名称' },
+          { status: 400 }
+        );
+      }
+
+      const normalizedNames = new Set(
+        names
+          .map((name: string) => name.trim())
+          .filter((name: string) => !name.includes('..') && !name.includes('/') && !name.includes('\\'))
+      );
+      if (normalizedNames.size !== names.length) {
+        return NextResponse.json(
+          { error: '包含无效 Agent 名称' },
+          { status: 400 }
+        );
+      }
+
+      for (const file of yamlFiles) {
+        const filepath = resolve(agentsDir, file);
+        const baseName = file.replace(/\.(yaml|yml)$/i, '');
+        if (!normalizedNames.has(baseName)) continue;
+        try {
+          await unlink(filepath);
+          updatedCount++;
+        } catch (error) {
+          console.error(`Failed to delete ${file}:`, error);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `已删除 ${updatedCount} 个 Agent`,
+        updatedCount,
+      });
+    }
 
     for (const file of yamlFiles) {
       try {

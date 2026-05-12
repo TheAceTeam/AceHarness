@@ -458,6 +458,28 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const frontendSessionId = request.nextUrl.searchParams.get('frontendSessionId');
+  const streamScope = request.nextUrl.searchParams.get('streamScope') || undefined;
+  if (frontendSessionId) {
+    const recoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
+    const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
+    const activeChatId = engineState?.chatId || (recoveryKey ? processManager.getActiveStreamChatId(recoveryKey) : undefined);
+    if (!activeChatId) {
+      return NextResponse.json({ killed: true, count: 0 });
+    }
+    const entry = activeChats.get(activeChatId);
+    if (entry?.cancel) {
+      entry.cancel();
+    }
+    activeChats.delete(activeChatId);
+    if (recoveryKey) {
+      processManager.removeActiveStream(recoveryKey);
+    }
+    removeEngineStream(activeChatId);
+    processManager.killProcess(activeChatId);
+    return NextResponse.json({ killed: true, count: 1, chatId: activeChatId });
+  }
+
   const chatId = request.nextUrl.searchParams.get('id');
   if (!chatId) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });

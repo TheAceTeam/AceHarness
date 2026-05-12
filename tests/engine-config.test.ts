@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { getEngineConfigDir, getEngineSkillsSubdir } from '@/lib/engines/engine-config';
-import { resolveAgentSelection } from '@/lib/agent-engine-selection';
+import { resolveAgentSelection, resolveWorkflowAgentSelection } from '@/lib/agent-engine-selection';
 
 describe('engine config', () => {
   test('getEngineConfigDir returns the correct workspace directory for each engine type', () => {
@@ -99,5 +99,66 @@ describe('resolveAgentSelection', () => {
     expect(result.followsSystem).toBe(true);
     expect(result.effectiveEngine).toBe('');
     expect(result.effectiveModel).toBe('');
+  });
+});
+
+describe('resolveWorkflowAgentSelection', () => {
+  test('workflow with no execution policy inherits global engine and default model', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'coder', engineModels: {}, activeEngine: '' },
+      { engine: 'claude-code', defaultModel: 'opus' },
+      { workflowContext: {} },
+    );
+
+    expect(result.followsSystem).toBe(true);
+    expect(result.effectiveEngine).toBe('claude-code');
+    expect(result.effectiveModel).toBe('opus');
+  });
+
+  test('workflow default policy overrides global selection for all agents', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'coder', engineModels: { codex: 'gpt-5-codex' }, activeEngine: '' },
+      { engine: 'claude-code', defaultModel: 'opus' },
+      {
+        workflowContext: {
+          executionPolicy: {
+            defaultEngine: 'codex',
+            defaultModel: 'gpt-5-codex',
+            agentOverrides: {},
+          },
+        },
+      },
+    );
+
+    expect(result.followsSystem).toBe(true);
+    expect(result.effectiveEngine).toBe('codex');
+    expect(result.effectiveModel).toBe('gpt-5-codex');
+  });
+
+  test('workflow agent override wins for the targeted agent only', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'reviewer', engineModels: { cursor: 'cursor-fast' }, activeEngine: '' },
+      { engine: 'claude-code', defaultModel: 'opus' },
+      {
+        workflowContext: {
+          executionPolicy: {
+            defaultEngine: 'codex',
+            defaultModel: 'gpt-5-codex',
+            agentOverrides: {
+              reviewer: {
+                enabled: true,
+                engine: 'cursor',
+                model: 'cursor-fast',
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.followsSystem).toBe(false);
+    expect(result.configuredEngine).toBe('cursor');
+    expect(result.effectiveEngine).toBe('cursor');
+    expect(result.effectiveModel).toBe('cursor-fast');
   });
 });

@@ -12,6 +12,8 @@ export const dynamic = 'force-dynamic';
 const activeAgentStreams = new Map<string, {
   promise: Promise<any>;
   settled: boolean;
+  frontendSessionId?: string | null;
+  agentName?: string;
   cancel?: () => void;
 }>();
 
@@ -22,6 +24,7 @@ type StreamBody = {
   message?: string;
   mode?: 'standalone-chat' | 'workflow-chat';
   sessionId?: string | null;
+  frontendSessionId?: string | null;
   workingDirectory?: string;
   workflowContext?: Record<string, any>;
   temporaryRoleConfig?: Record<string, any>;
@@ -38,6 +41,11 @@ export async function POST(
     const { name } = await params;
     const body = await request.json() as StreamBody;
     const streamId = `agent-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const frontendSessionId = typeof body?.frontendSessionId === 'string' && body.frontendSessionId.trim()
+      ? body.frontendSessionId.trim()
+      : (typeof body?.workflowContext?.frontendSessionId === 'string' && body.workflowContext.frontendSessionId.trim()
+        ? body.workflowContext.frontendSessionId.trim()
+        : null);
     const prepared = await prepareAgentChat({
       agentName: name,
       message: String(body?.message || ''),
@@ -98,6 +106,8 @@ export async function POST(
     const entry = {
       promise: execPromise,
       settled: false,
+      frontendSessionId,
+      agentName: name,
       cancel: () => prepared.engine.cancel(),
     };
     activeAgentStreams.set(streamId, entry);
@@ -191,6 +201,20 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const frontendSessionId = request.nextUrl.searchParams.get('frontendSessionId')?.trim();
+  if (frontendSessionId) {
+    let killed = 0;
+    for (const [streamId, entry] of activeAgentStreams.entries()) {
+      if (entry.frontendSessionId !== frontendSessionId) continue;
+      if (entry.cancel) {
+        entry.cancel();
+      }
+      activeAgentStreams.delete(streamId);
+      killed += 1;
+    }
+    return NextResponse.json({ killed: true, count: killed });
+  }
+
   const streamId = request.nextUrl.searchParams.get('id');
   if (!streamId) {
     return NextResponse.json({ error: 'Missing id' }, { status: 400 });

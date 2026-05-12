@@ -240,6 +240,19 @@ async function apiDeleteSession(id: string): Promise<void> {
   });
 }
 
+async function apiTerminateSessionProcesses(id: string): Promise<void> {
+  await Promise.allSettled([
+    fetch(`/api/chat/stream?frontendSessionId=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }),
+    fetch(`/api/agents/__session__/chat/stream?frontendSessionId=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }),
+  ]);
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const getWorkingDirStorageKey = useCallback(() => {
     if (typeof window === 'undefined') return 'chat-working-directory';
@@ -731,29 +744,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveSession(prev => {
       if (!prev) return prev;
       const updated = updater(prev);
+      if (updated === prev) return prev;
       scheduleSave(updated);
       // Also update summary in sessions list
-      setSessions(list => list.map(s => s.id === updated.id ? {
-        ...s,
-        title: updated.title,
-        updatedAt: updated.updatedAt,
-        messageCount: updated.messages.length,
-        lastMessage: updated.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
-        agentBinding: updated.agentBinding,
-        workflowBinding: updated.workflowBinding,
-        creationSession: updated.creationSession,
-        sessionWorkbenchState: updated.sessionWorkbenchState,
-      } : s));
+      setSessions(list => {
+        let changed = false;
+        const next = list.map(s => {
+          if (s.id !== updated.id) return s;
+          const summary = {
+            ...s,
+            title: updated.title,
+            updatedAt: updated.updatedAt,
+            messageCount: updated.messages.length,
+            lastMessage: updated.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+            agentBinding: updated.agentBinding,
+            workflowBinding: updated.workflowBinding,
+            creationSession: updated.creationSession,
+            sessionWorkbenchState: updated.sessionWorkbenchState,
+          };
+          if (JSON.stringify(summary) === JSON.stringify(s)) return s;
+          changed = true;
+          return summary;
+        });
+        return changed ? next : list;
+      });
       return updated;
     });
   }, [scheduleSave]);
 
   const setSessionWorkbenchState = useCallback((state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => {
-    updateActiveSession((session) => ({
-      ...session,
-      updatedAt: Date.now(),
-      sessionWorkbenchState: typeof state === 'function' ? state(session.sessionWorkbenchState) : state,
-    }));
+    updateActiveSession((session) => {
+      const nextState = typeof state === 'function' ? state(session.sessionWorkbenchState) : state;
+      if (nextState === session.sessionWorkbenchState) return session;
+      if (JSON.stringify(nextState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
+      return {
+        ...session,
+        updatedAt: Date.now(),
+        sessionWorkbenchState: nextState,
+      };
+    });
   }, [updateActiveSession]);
 
   const updateSessionCreationBinding = useCallback(async (
@@ -972,6 +1001,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [model, engine]);
 
   const deleteSession = useCallback((id: string) => {
+    if (activeSessionId === id) {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+      activeChatIdRef.current = null;
+      setLoading(false);
+      setStreamingMessageId(null);
+    }
     setSessions(prev => {
       const next = prev.filter(s => s.id !== id);
       if (activeSessionId === id) {
@@ -981,7 +1019,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-    apiDeleteSession(id).catch(console.error);
+    void apiTerminateSessionProcesses(id)
+      .catch(console.error)
+      .finally(() => {
+        apiDeleteSession(id).catch(console.error);
+      });
   }, [activeSessionId]);
 
   const renameSession = useCallback((id: string, title: string) => {

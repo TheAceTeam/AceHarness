@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '@/contexts/ChatContext';
 import ChatMessage from '@/components/chat/ChatMessage';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
@@ -15,6 +15,7 @@ interface WorkflowSupervisorChatPanelProps {
   runId?: string | null;
   supervisorAgent?: string | null;
   supervisorSessionId?: string | null;
+  mentionCandidates?: string[];
   pendingHumanQuestion?: HumanQuestion | null;
   submittingHumanQuestion?: boolean;
   onSubmitHumanQuestion?: (answer: HumanQuestionAnswer) => Promise<void> | void;
@@ -22,12 +23,30 @@ interface WorkflowSupervisorChatPanelProps {
 
 const noop = () => {};
 
+function getMentionQuery(input: string): string | null {
+  const atIndex = input.lastIndexOf('@');
+  if (atIndex < 0) return null;
+  const tail = input.slice(atIndex + 1);
+  if (/[\s\n\r，。,.!！?？:：；;]/u.test(tail)) return null;
+  return tail;
+}
+
+function insertMention(input: string, mention: string): string {
+  const atIndex = input.lastIndexOf('@');
+  const replacement = `@${mention} `;
+  if (atIndex < 0) return `${input}${replacement}`;
+  const before = input.slice(0, atIndex);
+  const after = input.slice(atIndex + 1).replace(/^[^\s\n\r，。,.!！?？:：；;]*/u, '');
+  return `${before}${replacement}${after}`;
+}
+
 export default function WorkflowSupervisorChatPanel({
   sessionId,
   configFile,
   runId,
   supervisorAgent,
   supervisorSessionId,
+  mentionCandidates = [],
   pendingHumanQuestion,
   submittingHumanQuestion,
   onSubmitHumanQuestion,
@@ -41,7 +60,9 @@ export default function WorkflowSupervisorChatPanel({
     streamingMessageId,
   } = useChat();
   const [draft, setDraft] = useState('');
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -56,6 +77,33 @@ export default function WorkflowSupervisorChatPanel({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length, streamingMessageId]);
+
+  const mentionQuery = getMentionQuery(draft);
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const query = mentionQuery.trim().toLowerCase();
+    const candidates = ['全员', ...mentionCandidates]
+      .filter((name, index, array) => array.indexOf(name) === index);
+    return candidates
+      .filter((name) => !query || name.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [mentionCandidates, mentionQuery]);
+
+  useEffect(() => {
+    setActiveMentionIndex(0);
+  }, [mentionQuery]);
+
+  const applyMention = (mention: string) => {
+    const next = insertMention(draft, mention);
+    setDraft(next);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      const pos = next.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const submit = async () => {
     const text = draft.trim();
@@ -138,19 +186,64 @@ export default function WorkflowSupervisorChatPanel({
           主持；没有新的 @ 时本轮会自然结束。
         </div>
         <div className="flex items-end gap-2">
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="给 Supervisor 发送单聊消息，系统会自动携带当前 workflow / run 上下文..."
-            className="min-h-[64px] resize-none"
-            disabled={!loaded}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                void submit();
-              }
-            }}
-          />
+          <div className="relative flex-1">
+            <Textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="给 Supervisor 发送单聊消息，系统会自动携带当前 workflow / run 上下文..."
+              className="min-h-[64px] resize-none"
+              disabled={!loaded}
+              onKeyDown={(event) => {
+                if (mentionSuggestions.length > 0) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+                    return;
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                    return;
+                  }
+                  if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+                    event.preventDefault();
+                    applyMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setDraft((prev) => `${prev} `);
+                    return;
+                  }
+                }
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
+            />
+            {mentionSuggestions.length > 0 ? (
+              <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
+                <div className="mb-1 text-[10px] text-muted-foreground">@ 提示</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {mentionSuggestions.map((name, index) => (
+                    <Button
+                      key={name}
+                      type="button"
+                      size="sm"
+                      variant={index === activeMentionIndex ? 'secondary' : 'ghost'}
+                      className="h-7 max-w-full px-2 text-xs"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => applyMention(name)}
+                    >
+                      <span className="truncate">@{name}</span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
           <Button className="h-[64px]" onClick={() => void submit()} disabled={!loaded || loading || !draft.trim()}>
             发送
           </Button>
