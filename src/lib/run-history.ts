@@ -118,6 +118,47 @@ function finalizeRanking(items: Record<string, TokenRankingItem>): TokenRankingI
     .slice(0, 10);
 }
 
+export function buildTokenRankingsForRuns(runs: RunSummary[]): {
+  tokenRankingByUser: TokenRankingItem[];
+  tokenRankingByWorkflow: TokenRankingItem[];
+} {
+  const tokenRankingByUserMap: Record<string, TokenRankingItem> = {};
+  const tokenRankingByWorkflowMap: Record<string, TokenRankingItem> = {};
+
+  for (const run of runs) {
+    const ownerName = run.ownerName || run.ownerId || '未知用户';
+    const workflowKey = run.configFile || run.configName || '(unknown)';
+    const workflowName = run.configName || run.configFile || '未知工作流';
+    const usage: TokenUsageSummary = {
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      cacheCreationInputTokens: run.cacheCreationInputTokens,
+      cacheReadInputTokens: run.cacheReadInputTokens,
+    };
+
+    if (!tokenRankingByUserMap[ownerName]) {
+      tokenRankingByUserMap[ownerName] = emptyRankingItem(ownerName);
+    }
+    tokenRankingByUserMap[ownerName].runs += 1;
+    tokenRankingByUserMap[ownerName].totalTokens += run.totalTokens;
+    tokenRankingByUserMap[ownerName].cost += run.cost;
+    addUsage(tokenRankingByUserMap[ownerName], usage);
+
+    if (!tokenRankingByWorkflowMap[workflowKey]) {
+      tokenRankingByWorkflowMap[workflowKey] = emptyRankingItem(workflowName, run.configFile);
+    }
+    tokenRankingByWorkflowMap[workflowKey].runs += 1;
+    tokenRankingByWorkflowMap[workflowKey].totalTokens += run.totalTokens;
+    tokenRankingByWorkflowMap[workflowKey].cost += run.cost;
+    addUsage(tokenRankingByWorkflowMap[workflowKey], usage);
+  }
+
+  return {
+    tokenRankingByUser: finalizeRanking(tokenRankingByUserMap),
+    tokenRankingByWorkflow: finalizeRanking(tokenRankingByWorkflowMap),
+  };
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -242,11 +283,11 @@ export function paginateRuns<T>(items: T[], page: number, pageSize: number) {
 export async function readAllRunsSummary() {
   const runs: RunSummary[] = [];
   const agentUsage: Record<string, { calls: number; cost: number }> = {};
-  const tokenRankingByUserMap: Record<string, TokenRankingItem> = {};
-  const tokenRankingByWorkflowMap: Record<string, TokenRankingItem> = {};
   const users = await loadUsers().catch(() => []);
   const ownerNameById = Object.fromEntries(users.map((user) => [user.id, user.username]));
   const legacyDefaultOwnerName = users.length === 1 ? users[0]?.username || '' : '';
+  const configMetaMap: Record<string, { createdBy?: string }> = await listConfigsWithMeta('workflow').catch(() => ({}));
+  const configNameMap: Record<string, string> = await readAccessibleConfigNameMap('', 'admin').catch(() => ({}));
 
   if (!existsSync(RUNS_DIR)) {
     return {
@@ -280,15 +321,25 @@ export async function readAllRunsSummary() {
   for (const { state } of valid) {
     const { usage, cost } = getRunTokenUsage(state);
     const runTotalTokens = totalTokens(usage);
-    const ownerName = getRunOwnerName(state, ownerNameById, legacyDefaultOwnerName);
-    const ownerId = getRunOwnerId(state);
     const configFile = state.configFile || '';
-    const workflowKey = configFile || '(unknown)';
+    const configMetaOwnerId = stringValue(configMetaMap[configFile]?.createdBy);
+    const stateOwnerId = getRunOwnerId(state);
+    const ownerId = stateOwnerId || configMetaOwnerId;
+    const ownerName = getRunOwnerName(
+      {
+        ...state,
+        runOwnerId: stateOwnerId || configMetaOwnerId,
+        createdBy: stateOwnerId || configMetaOwnerId,
+      },
+      ownerNameById,
+      legacyDefaultOwnerName
+    );
+    const workflowName = configNameMap[configFile] || configFile || '未知工作流';
 
     runs.push({
       id: state.runId || '',
       configFile,
-      configName: configFile,
+      configName: workflowName,
       startTime: state.startTime || '',
       endTime: state.endTime || null,
       status: state.status || 'unknown',
@@ -305,20 +356,9 @@ export async function readAllRunsSummary() {
       ownerName,
     });
 
-    if (!tokenRankingByUserMap[ownerName]) tokenRankingByUserMap[ownerName] = emptyRankingItem(ownerName);
-    tokenRankingByUserMap[ownerName].runs += 1;
-    tokenRankingByUserMap[ownerName].totalTokens += runTotalTokens;
-    tokenRankingByUserMap[ownerName].cost += cost;
-    addUsage(tokenRankingByUserMap[ownerName], usage);
-
-    if (!tokenRankingByWorkflowMap[workflowKey]) {
-      tokenRankingByWorkflowMap[workflowKey] = emptyRankingItem(configFile || '未知工作流', configFile);
-    }
-    tokenRankingByWorkflowMap[workflowKey].runs += 1;
-    tokenRankingByWorkflowMap[workflowKey].totalTokens += runTotalTokens;
-    tokenRankingByWorkflowMap[workflowKey].cost += cost;
-    addUsage(tokenRankingByWorkflowMap[workflowKey], usage);
   }
+
+  const { tokenRankingByUser, tokenRankingByWorkflow } = buildTokenRankingsForRuns(runs);
 
   for (const { state } of valid.slice(0, 50)) {
     if (state.stepLogs) {
@@ -344,7 +384,7 @@ export async function readAllRunsSummary() {
   return {
     runs,
     agentUsage,
-    tokenRankingByUser: finalizeRanking(tokenRankingByUserMap),
-    tokenRankingByWorkflow: finalizeRanking(tokenRankingByWorkflowMap),
+    tokenRankingByUser,
+    tokenRankingByWorkflow,
   };
 }

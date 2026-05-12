@@ -19,6 +19,13 @@ const CREATION_SESSIONS_DIR = getWorkspaceDataFile('workflow-creation-sessions')
 
 const TASK_NUMBER_PATTERN = /^(([A-Za-z]+\d+(?:\.\d+)*|\d+(?:\.\d+)*)\b)\s+(.+)$/;
 
+export interface TasksMarkdownFormatValidation {
+  ok: boolean;
+  errors: string[];
+  taskCount: number;
+  numberedTaskCount: number;
+}
+
 function isSyntheticTaskId(id?: string | null): boolean {
   return typeof id === 'string' && /^task-\d+$/.test(id);
 }
@@ -243,6 +250,55 @@ function parseSpecCodingTasksFromMarkdown(
   }
 
   return buildTree(rawNodes);
+}
+
+export function validateTasksMarkdownFormat(markdown: string): TasksMarkdownFormatValidation {
+  const lines = markdown.split(/\r?\n/);
+  const errors: string[] = [];
+  const taskIds = new Set<string>();
+  let taskCount = 0;
+  let numberedTaskCount = 0;
+
+  lines.forEach((line, index) => {
+    const match = line.match(/^(\s*)-\s+\[([ xX-])\](\*?)\s+(.+?)\s*$/);
+    if (!match) return;
+
+    taskCount += 1;
+    const indent = match[1].length;
+    const rawTitle = stripSpecCodingTaskComment(match[4]);
+    const numbered = rawTitle.match(TASK_NUMBER_PATTERN);
+    if (!numbered) {
+      errors.push(`第 ${index + 1} 行任务缺少稳定编号；请使用如 "T1.1 xxx" 或 "1.1 xxx" 的格式。`);
+      return;
+    }
+    numberedTaskCount += 1;
+
+    if (indent % 2 !== 0) {
+      errors.push(`第 ${index + 1} 行任务缩进不合法；请使用 2 个空格的层级缩进。`);
+    }
+
+    const taskId = numbered[2]?.trim();
+    if (!taskId) {
+      errors.push(`第 ${index + 1} 行任务编号为空。`);
+      return;
+    }
+    if (taskIds.has(taskId)) {
+      errors.push(`任务编号 "${taskId}" 重复；每个任务必须使用唯一编号。`);
+      return;
+    }
+    taskIds.add(taskId);
+  });
+
+  if (taskCount === 0) {
+    errors.push('tasks.md 中没有识别到任务列表；请至少提供一条 checkbox 任务。');
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    taskCount,
+    numberedTaskCount,
+  };
 }
 
 function assignTaskPhasesByCheckpointBoundaries(
@@ -782,6 +838,7 @@ export function buildSpecCodingFromWorkflowConfig(input: {
 
 export function buildCreationSession(input: {
   chatSessionId?: string;
+  homeChatSessionId?: string;
   createdBy?: string;
   status?: CreationSession['status'];
   specCodingStatus?: SpecCodingDocument['status'];
@@ -853,6 +910,7 @@ export function buildCreationSession(input: {
   return {
     id: randomUUID(),
     chatSessionId: input.chatSessionId,
+    homeChatSessionId: input.homeChatSessionId,
     createdBy: input.createdBy,
     status: input.status || 'config-generated',
     workflowName: input.workflowName,
@@ -943,7 +1001,7 @@ export async function listCreationSessions(filter?: { chatSessionId?: string; cr
     try {
       const content = await readFile(resolve(CREATION_SESSIONS_DIR, file), 'utf-8');
       const session = creationSessionSchema.parse(parse(content));
-      if (filter?.chatSessionId && session.chatSessionId !== filter.chatSessionId) continue;
+      if (filter?.chatSessionId && session.chatSessionId !== filter.chatSessionId && session.homeChatSessionId !== filter.chatSessionId) continue;
       if (filter?.createdBy && session.createdBy && session.createdBy !== filter.createdBy) continue;
       sessions.push(syncCreationSessionArtifactSnapshots({
         ...session,

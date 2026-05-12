@@ -26,12 +26,71 @@ import { Badge } from './ui/badge';
 // 进而触发 useMemo 重算与 setNodes 写入新对象 → Maximum update depth exceeded
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
+const EXECUTED_EDGE_COLOR = '#2563eb';
 
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {
   if (name === '__origin__') return '开始';
   if (name === '__human_approval__') return '人工审查';
   return name;
+}
+
+function buildExecutedStateTransitions(history: StateTransitionRecord[]): Array<{
+  from: string;
+  to: string;
+  reason: string;
+}> {
+  const transitions: Array<{ from: string; to: string; reason: string }> = [];
+
+  for (let i = 0; i < history.length; i += 1) {
+    const record = history[i];
+    if (!record || record.from === '__origin__') continue;
+
+    if (record.to === '__human_approval__') {
+      const next = history[i + 1];
+      if (next?.from === '__human_approval__' && next.to && next.to !== '__human_approval__') {
+        transitions.push({
+          from: record.from,
+          to: next.to,
+          reason: next.reason || record.reason || '人工审查后转移',
+        });
+        i += 1;
+      }
+      continue;
+    }
+
+    if (record.from === '__human_approval__') {
+      continue;
+    }
+
+    transitions.push({
+      from: record.from,
+      to: record.to,
+      reason: record.reason || '状态转移',
+    });
+  }
+
+  return transitions;
+}
+
+function buildUniqueExecutedTransitions(history: StateTransitionRecord[]): Array<{
+  from: string;
+  to: string;
+  reason: string;
+  index: number;
+}> {
+  const folded = buildExecutedStateTransitions(history);
+  const seen = new Set<string>();
+  const unique: Array<{ from: string; to: string; reason: string; index: number }> = [];
+
+  folded.forEach((transition, index) => {
+    const key = `${transition.from}->${transition.to}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push({ ...transition, index });
+  });
+
+  return unique;
 }
 
 interface SupervisorFlowRecord {
@@ -520,6 +579,9 @@ function StateMachineDiagramInner({
       : 200;
     nodePositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
 
+    const executedTransitions = buildExecutedStateTransitions(stateHistory);
+    const executedTransitionOverlays = buildUniqueExecutedTransitions(stateHistory);
+
     // 配置的状态转移边
     for (const state of states) {
       if (!state.transitions || !Array.isArray(state.transitions)) {
@@ -536,7 +598,7 @@ function StateMachineDiagramInner({
         edgeSet.add(edgeId);
 
         // 检查这条边是否在历史记录中
-        const historyIndex = stateHistory.findIndex(
+        const historyIndex = executedTransitions.findIndex(
           h => h.from === state.name && h.to === transition.to
         );
         const isInHistory = historyIndex !== -1;
@@ -552,7 +614,7 @@ function StateMachineDiagramInner({
         if (isInHistory) {
           // 已执行的边：粗实线，高亮颜色，动画
           edgeStyle = {
-            stroke: '#3b82f6',
+            stroke: EXECUTED_EDGE_COLOR,
             strokeWidth: 3,
           };
           edgeAnimated = true;
@@ -620,14 +682,8 @@ function StateMachineDiagramInner({
     }
 
     // 添加历史中实际发生但不在配置中的转移（如 __origin__ 或其他动态转移）
-    for (let i = 0; i < stateHistory.length; i++) {
-      const record = stateHistory[i];
-
-      // 跳过 __origin__ 和 __human_approval__ 相关的转移（后面单独处理）
-      if (record.from === '__origin__' || record.to === '__human_approval__' || record.from === '__human_approval__') {
-        continue;
-      }
-
+    for (let i = 0; i < executedTransitions.length; i++) {
+      const record = executedTransitions[i];
       const edgeId = `${record.from}-${record.to}`;
 
       // 如果这条边不在配置的边中，添加它
@@ -653,22 +709,21 @@ function StateMachineDiagramInner({
           label: `${i + 1}. ${record.reason}`,
           type: 'default',
           animated: true,
-          hidden: false,
-          style: {
-            stroke: '#3b82f6',
+            hidden: false,
+            style: {
+            stroke: EXECUTED_EDGE_COLOR,
             strokeWidth: 3,
-            strokeDasharray: '5,5',
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 20,
             height: 20,
-            color: '#3b82f6',
+            color: EXECUTED_EDGE_COLOR,
           },
           labelStyle: {
             fontSize: 11,
             fontWeight: 'bold',
-            fill: '#3b82f6',
+            fill: EXECUTED_EDGE_COLOR,
           },
           labelBgStyle: {
             fill: '#ffffff',
@@ -676,6 +731,42 @@ function StateMachineDiagramInner({
           },
         });
       }
+    }
+
+    for (const overlay of executedTransitionOverlays) {
+      const sourcePos = nodePositions.get(overlay.from);
+      const targetPos = nodePositions.get(overlay.to);
+      let sourceHandle = 'right';
+      let targetHandle = 'left';
+
+      if (sourcePos && targetPos) {
+        const handles = calculateHandlePositions(sourcePos, targetPos);
+        sourceHandle = handles.sourceHandle;
+        targetHandle = handles.targetHandle;
+      }
+
+      edges.push({
+        id: `executed-${overlay.index}-${overlay.from}-${overlay.to}`,
+        source: overlay.from,
+        target: overlay.to,
+        sourceHandle,
+        targetHandle,
+        label: '',
+        type: 'default',
+        animated: true,
+        hidden: false,
+        style: {
+          stroke: EXECUTED_EDGE_COLOR,
+          strokeWidth: 3,
+          zIndex: 20,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 20,
+          height: 20,
+          color: EXECUTED_EDGE_COLOR,
+        },
+      });
     }
 
     // 添加从需要人工审查的状态到人工审查节点的连线
@@ -711,7 +802,7 @@ function StateMachineDiagramInner({
             animated: false,
             hidden: !showAllEdges,
             style: {
-              stroke: '#f97316', // 橙色
+              stroke: '#f97316',
               strokeWidth: 2,
               strokeDasharray: '5,5',
             },
@@ -893,9 +984,9 @@ function StateMachineDiagramInner({
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-green-400" /><span>初始状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-red-400" /><span>终止状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-orange-400" /><span>人工检查点</span></div>
-              <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-blue-500" /><span>已执行路径</span></div>
+              <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[3px] border-blue-600" /><span>已执行路径</span></div>
               <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-500" /><span>当前可用</span></div>
-              <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-400 opacity-40" style={{ borderTop: '1px dashed' }} /><span>未使用路径</span></div>
+              <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[2px] border-dashed border-gray-400 opacity-40" /><span>未使用路径</span></div>
             </div>
             <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-500">
               提示：悬停节点可查看相关路径

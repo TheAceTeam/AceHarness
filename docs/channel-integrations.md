@@ -1,267 +1,152 @@
 # 微信接入
 
-当前版本先把微信接入做顺。页面入口在 `/account/channels`。
+ACEHarness 的微信接入由系统内置的 TypeScript iLink 适配器完成。用户侧只需要在当前对话里点击“微信 Bot / 接入微信”，然后按页面提示扫码确认。
 
-## 你只需要准备这 3 样东西
+扫码完成后，ACEHarness 会自动完成这些事情：
 
-- 一台运行 ACEHarness 的电脑
-- 一个个人微信号
-- 一个正在运行的 workflow
+- 创建或复用当前用户的微信 channel integration
+- 把当前首页对话绑定到这个 channel
+- 保存微信账号 token、同步游标和会话 `context_token`
+- 启动后台长轮询，持续接收微信消息
+- 把 ACEHarness 的回复发回微信
+- 在服务重启后自动恢复有效的微信轮询
 
-ACEHarness 不负责微信扫码和保活，只负责接收桥接器转发过来的标准化消息。
+## 用户流程
 
-## 基础架构
+```mermaid
+sequenceDiagram
+  participant User as 用户
+  participant Page as ACEHarness 页面
+  participant Login as 微信扫码会话
+  participant Bridge as ACEHarness iLink 适配器
+  participant WeChat as 微信 iLink
 
-接入链路分 4 层：
-
-1. 微信适配器  
-   负责扫码登录、保活、从微信收发消息。可以是 OpenClaw、Hermes WeChat Adapter，或你自己的 ClawBot。
-
-2. 桥接协议  
-   负责把微信适配器的消息转成 ACEHarness 能识别的标准 JSON，并接收 ACEHarness 的结构化回包。
-
-3. 会话绑定  
-   一个微信会话固定绑定一个运行时目标：
-   - 一个 workflow run
-   - 或一场 roundtable
-
-4. 运行时对话  
-   workflow 和圆桌都走同一条 webhook 入口，但 roundtable 会返回多角色结构化消息。
-
-## 页面里怎么用
-
-### 第一步：生成接入地址
-
-进入 `/account/channels`，点击“生成微信接入地址”。
-
-系统会生成：
-
-- `Webhook URL`
-- `Shared Secret`
-
-这两个值就是给微信桥接器填的，不需要先配置默认 workflow、圆桌参与者之类的内部参数。
-
-### 第二步：把地址贴到桥接器
-
-桥接器需要把微信消息转成下面这种 JSON，发到 ACEHarness：
-
-```json
-{
-  "secret": "<integration-secret>",
-  "message": {
-    "conversationId": "wechat-room-001",
-    "conversationName": "微信测试群",
-    "userId": "wx-user-001",
-    "userName": "Alice",
-    "text": "/status"
-  }
-}
+  User->>Page: 点击“微信 Bot / 接入微信”
+  Page->>Page: 自动创建 channel 和当前对话绑定
+  Page->>Login: 创建扫码登录会话
+  Login->>WeChat: 获取二维码
+  WeChat-->>Page: 返回二维码页面
+  User->>WeChat: 手机微信扫码并确认
+  Page->>Login: 轮询扫码状态
+  Login-->>Page: 返回已确认的微信账号
+  Page->>Bridge: 启动当前账号的消息轮询
+  Bridge->>WeChat: getupdates 长轮询
 ```
 
-也可以把密钥放到请求头：
+普通接入流程不需要填写桥接参数。页面高级排错信息中展示的内部接入参数，仅用于问题定位。
 
-```text
-x-ace-channel-secret: <integration-secret>
+## 系统原理
+
+微信接入分成三层：
+
+1. iLink 适配层  
+   ACEHarness 直接调用微信 iLink 接口：用二维码完成登录，用 `getupdates` 拉取文本消息，用 `sendmessage` 发送回复。
+
+2. Channel 运行时层  
+   适配器把微信消息转换成 ACEHarness 标准 channel 入站消息，投递到 `/api/channels/inbound/:integrationId`。
+
+3. 对话绑定层  
+   一个微信会话会绑定到一个 ACEHarness 对话目标。当前首页入口会把微信 channel 绑定到当前首页对话，后续微信消息继续进入同一个上下文。
+
+```mermaid
+flowchart LR
+  User["微信用户"]
+  WeChat["微信 iLink"]
+  Adapter["ACEHarness iLink 适配器"]
+  Store[("本地微信账号状态\naccount token / sync buf / context_token")]
+  Channel["Channel Integration"]
+  Inbound["Channel Inbound API"]
+  Binding[("会话绑定")]
+  Chat["ACEHarness 当前对话"]
+
+  User -->|"发送消息"| WeChat
+  Adapter <-->|"二维码登录 / getupdates / sendmessage"| WeChat
+  Adapter --> Store
+  Adapter -->|"标准 channel 消息"| Inbound
+  Channel --> Inbound
+  Inbound --> Binding
+  Binding --> Chat
+  Chat -->|"replyMessages"| Inbound
+  Inbound -->|"结构化回复"| Adapter
+  Adapter -->|"sendmessage"| WeChat
+  WeChat -->|"回复"| User
 ```
 
-### 第三步：在线测试
+## 消息收发流程
 
-页面内置“在线测试”：
+```mermaid
+sequenceDiagram
+  participant User as 微信用户
+  participant WeChat as 微信 iLink
+  participant Adapter as ACEHarness iLink 适配器
+  participant Inbound as Channel Inbound API
+  participant Binding as 会话绑定
+  participant Chat as ACEHarness 对话
 
-- 填一个会话 ID
-- 输入一条消息
-- 点击“发送在线测试消息”
-
-如果当前有运行中的 workflow，系统会优先把这个会话自动绑定到该 workflow。
-
-同一个微信会话一旦绑定成功，后续消息会继续落在这个运行时上下文里，不会在多个 workflow 之间来回跳。
-
-如果你发送 `/roundtable start <议题>`，这个会话会切换为 roundtable 绑定，后续消息继续走该圆桌。
-
-## 运行时支持的消息
-
-- 普通文本：作为实时反馈注入 workflow
-- `/status`
-- `/questions`
-- `/answer <questionId> <内容>`
-- `/roundtable start <议题>`
-
-`/roundtable start` 会直接拉起工作流运行时圆桌会议。
-
-## 结构化回包协议
-
-`POST /api/channels/inbound/:integrationId` 除了兼容旧的 `replies: string[]`，现在还会返回 `replyMessages`：
-
-```json
-{
-  "ok": true,
-  "replies": [
-    "architect: 建议先收敛接口范围。",
-    "default-supervisor: 本轮先冻结需求边界。"
-  ],
-  "replyMessages": [
-    {
-      "kind": "roundtable-message",
-      "speakerType": "agent",
-      "speakerName": "architect",
-      "text": "建议先收敛接口范围。"
-    },
-    {
-      "kind": "roundtable-summary",
-      "speakerType": "supervisor",
-      "speakerName": "default-supervisor",
-      "text": "本轮先冻结需求边界。"
-    }
-  ]
-}
+  User->>WeChat: 发送文本
+  Adapter->>WeChat: getupdates
+  WeChat-->>Adapter: 返回消息、发送人和 context_token
+  Adapter->>Inbound: 投递标准 channel 消息
+  Inbound->>Binding: 查找微信会话绑定
+  Binding-->>Inbound: 返回当前对话目标
+  Inbound->>Chat: 注入用户消息
+  Chat-->>Inbound: 返回 replyMessages
+  Inbound-->>Adapter: 返回结构化回复
+  Adapter->>WeChat: sendmessage
+  WeChat-->>User: 用户收到回复
 ```
 
-桥接器应该优先使用 `replyMessages` 发回微信，`replies` 只作为兼容字段。
+## 重启恢复
 
-## 仓库内置的最小桥接器
+ACEHarness 启动时会恢复有效的微信接入。恢复过程会校验 channel、微信账号和用户归属，校验通过后重新启动对应账号的 `getupdates` 轮询。
 
-仓库里提供了一个最小中继脚本：
+```mermaid
+sequenceDiagram
+  participant Server as ACEHarness 启动
+  participant Restore as 微信恢复器
+  participant Channels as Channel Store
+  participant Accounts as 微信账号状态
+  participant Bridge as iLink 适配器
 
-`scripts/wechat-bridge-relay.mjs`
-
-用途：
-
-- `POST /weixin/event`  
-  接收微信适配器事件，转发到 ACEHarness webhook
-
-- `POST /ace/outbound`  
-  接收 ACEHarness 主动推送的结构化消息
-
-- `GET /healthz`  
-  查看桥接器状态
-
-- `GET /logs`  
-  查看最近的入站/出站日志
-
-桥接器运行时会把入站消息和 ACEHarness 回包同时打印到命令行。
-
-启动方式：
-
-```bash
-ACE_WEBHOOK_URL=http://127.0.0.1:3000/api/channels/inbound/channel-xxx \
-ACE_SECRET=your-secret \
-PORT=8787 \
-npm run wechat:relay
+  Server->>Restore: 调度微信桥接恢复
+  Restore->>Channels: 扫描官方微信 channel
+  Restore->>Accounts: 读取已保存账号
+  Restore->>Restore: 校验账号、用户归属、secret、webhook
+  alt channel 有效
+    Restore->>Bridge: 重新启动 getupdates 轮询
+  else channel 无效
+    Restore->>Channels: 删除 channel integration
+    Restore->>Channels: 删除相关 binding
+  end
 ```
 
-如果要让 ACEHarness 主动把消息推给这个中继器，把渠道集成的 `providerConfig.bridgeCallbackUrl` 或 `outboundWebhookUrl` 设成：
+恢复时会清理无效 channel，而不是只跳过。以下情况会直接删除对应的 `channel-...` 记录及其绑定：
 
-```text
-http://127.0.0.1:8787/ace/outbound
-```
+- channel 没有绑定微信账号
+- 绑定的微信账号不存在
+- 微信账号没有用户归属
+- 微信账号归属和 channel 创建者不一致
+- 同一个微信账号已经被另一个有效 channel 恢复
+- channel 缺少内部 webhook 或 secret
 
-如果你的微信适配器可以发 HTTP webhook，就让它把消息发到：
+删除后，下次服务启动不会再检查这些已判定无效的 channel。
 
-```text
-http://127.0.0.1:8787/weixin/event
-```
+## 多用户规则
 
-## 与 OpenClaw / Hermes 的关系
+微信账号和 channel 都带有创建者归属：
 
-- OpenClaw / Hermes 解决的是“微信账号怎么登录、怎么保活、怎么收发消息”
-- ACEHarness 解决的是“消息进来后绑定哪个 workflow、怎么发起圆桌、怎么处理运行时命令”
+- 扫码登录创建的微信账号会记录 `createdBy`
+- channel integration 会记录 `createdBy`
+- 启动桥接时会校验账号是否属于当前用户
+- 恢复桥接时也会校验账号归属和 channel 归属是否一致
+- 同一个进程内，一个微信账号只允许被一个 channel 轮询
 
-也就是说，ACEHarness 现在的基础层已经适合接在 OpenClaw / Hermes 之后。
+这样可以避免多用户场景下 A 用户的 channel 恢复到 B 用户的微信账号，也避免同一个微信账号被多个 channel 重复拉取消息。
 
-## 优先复用的成熟适配器
+## 能力边界
 
-当前推荐优先级：
+微信接入支持文本消息闭环：扫码登录、保活、接收文本、投递到当前对话、发送文本回复。
 
-1. OpenClaw + `@tencent-weixin/openclaw-weixin`
-2. Hermes + `hermes-wechat`
-3. 其他成熟 `wechaty` 体系适配器
+微信接入流程不处理图片、文件、媒体上传和 typing ticket。
 
-原则是：
-
-- 微信登录、二维码、保活、收发消息尽量复用现成适配器
-- ACEHarness 只负责桥接协议、会话绑定、运行时路由和圆桌输出
-
-但现在仓库里还新增了一条 **ACEHarness 自己的 TS 官方适配器实现**，它是参考 `hermes-wechat` 的 iLink 接入方式做的，不再依赖 patch Hermes。
-
-## ACEHarness 官方适配器（TS）
-
-新增命令：
-
-```bash
-npm run wechat:official -- login
-```
-
-用途：
-
-- 走 iLink Bot API 获取二维码
-- 在命令行打印二维码 URL
-- 如果本机安装了 `qrcode-terminal`，会额外打印 ASCII 二维码
-- 登录成功后把账号信息保存到 ACEHarness 本地数据目录
-
-登录成功后，再启动官方桥接：
-
-```bash
-npm run wechat:official -- bridge --account <accountId> --integration <integrationId> --webhook <webhookUrl> --secret <secret>
-```
-
-这条桥接命令会：
-
-- 用官方 iLink 协议长轮询 `getupdates`
-- 把文本消息转发到 ACEHarness 的渠道 webhook
-- 读取 `replyMessages`
-- 再通过官方 `sendmessage` 发回微信
-
-当前这版先把 **文本消息的官方闭环** 做起来，媒体上传、图片、文件、typing ticket 后续再继续补。
-
-## 二维码登录后继续测试
-
-仓库里提供了一个交互式编排脚本：
-
-`npm run wechat:qr-test`
-
-这个脚本本身不生成二维码，它会直接运行成熟适配器自己的登录命令，让二维码原样打印在当前终端里。你扫码成功后，它再继续后续测试。
-
-### OpenClaw 模式
-
-如果本机已经装好 `openclaw`，可以直接这样跑：
-
-```bash
-WECHAT_PROFILE=openclaw \
-WECHAT_AFTER_LOGIN_COMMAND="npm run wechat:relay" \
-npm run wechat:qr-test
-```
-
-这个流程会依次执行：
-
-1. 安装 `@tencent-weixin/openclaw-weixin`
-2. 启用插件
-3. 运行 `openclaw channels login --channel openclaw-weixin`
-4. 在命令行显示二维码，等你扫码
-5. 登录成功后重启 OpenClaw gateway
-6. 再继续执行 `WECHAT_AFTER_LOGIN_COMMAND`
-
-### 自定义适配器模式
-
-如果你用的是 Hermes 或其他成熟适配器，就把它们自己的登录命令传进来：
-
-```bash
-WECHAT_LOGIN_COMMAND="cd ~/.hermes/hermes-agent && .venv/bin/python /tmp/weixin-login.py" \
-WECHAT_AFTER_LOGIN_COMMAND="npm run wechat:relay" \
-npm run wechat:qr-test
-```
-
-如果你的适配器在登录前还需要预装步骤，可以再补：
-
-```bash
-WECHAT_PREP_COMMAND="your prepare command" \
-WECHAT_LOGIN_COMMAND="your login command" \
-WECHAT_FINALIZE_COMMAND="your finalize command" \
-WECHAT_AFTER_LOGIN_COMMAND="npm run wechat:relay" \
-npm run wechat:qr-test
-```
-
-## 现在这版的边界
-
-- 当前页面已经去掉了默认 workflow、默认绑定类型、圆桌参与者等用户前置配置。
-- 微信扫码登录、保活、消息收发仍由外部微信适配器负责。
-- 如果当前没有运行中的 workflow，自动绑定不会生效，在线测试会返回缺少运行时上下文。
+`scripts/wechat-bridge-relay.mjs` 和外部 webhook bridge 属于兼容能力，用于接入已有自研适配器；扫码接入不需要使用这条路径。

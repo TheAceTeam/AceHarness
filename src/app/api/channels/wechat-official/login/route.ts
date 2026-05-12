@@ -7,7 +7,7 @@ export async function POST(request: NextRequest) {
   if (user instanceof NextResponse) return user;
 
   try {
-    const session = await createWeChatOfficialLoginSession();
+    const session = await createWeChatOfficialLoginSession({ createdBy: user.id });
     return NextResponse.json({ session });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || '创建微信扫码会话失败' }, { status: 500 });

@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth-middleware';
 import { listConfigsWithMeta } from '@/lib/config-metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { applyConfigNamesToRuns, getSafeTime, readAllRunsSummary } from '@/lib/run-history';
+import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run-history';
 
 // ── In-memory cache with background refresh ──
 let cachedResult: any = null;
@@ -23,8 +23,9 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
   ]);
 
   const { configs, configNameMap } = configResult;
-  const { agentUsage, tokenRankingByUser, tokenRankingByWorkflow } = runsResult;
+  const { agentUsage } = runsResult;
   const runs = applyConfigNamesToRuns(runsResult.runs, configNameMap, role);
+  const { tokenRankingByUser, tokenRankingByWorkflow } = buildTokenRankingsForRuns(runs);
 
   const totalRuns = runs.length;
   const completed = runs.filter(r => r.status === 'completed').length;

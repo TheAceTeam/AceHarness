@@ -12,6 +12,23 @@ import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineS
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
 
+function numberOrZero(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function metadataFromAcpUsage(usage: any): EngineResultMetadata {
+  return {
+    ...ZERO_USAGE_METADATA,
+    usage: {
+      input_tokens: numberOrZero(usage?.inputTokens ?? usage?.input_tokens),
+      output_tokens: numberOrZero(usage?.outputTokens ?? usage?.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage?.cachedWriteTokens ?? usage?.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage?.cachedReadTokens ?? usage?.cache_read_input_tokens),
+    },
+  };
+}
+
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
     input_tokens: 0,
@@ -98,7 +115,8 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         }
       }
       console.log(`[${this.getName()}] calling sendPrompt...`);
-      const stopReason = await engine.sendPrompt(fullPrompt);
+      const promptResult = await engine.sendPrompt(fullPrompt);
+      const stopReason = promptResult.stopReason;
       console.log(`[${this.getName()}] sendPrompt returned: stopReason=${stopReason}`);
       this.streaming = false;
 
@@ -110,7 +128,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         output: normalizeEngineOutput(this.collectedOutput),
         sessionId: this.currentSessionId ?? undefined,
         stopReason,
-        metadata: ZERO_USAGE_METADATA
+        metadata: promptResult.usage ? metadataFromAcpUsage(promptResult.usage) : ZERO_USAGE_METADATA
       };
     } catch (error) {
       this.streaming = false;

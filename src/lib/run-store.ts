@@ -17,6 +17,71 @@ export interface RunRecord {
   currentPhase: string | null;
   totalSteps: number;
   completedSteps: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  totalTokens?: number;
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function readTokenUsage(source: any): {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+} {
+  const usage = source?.tokenUsage || source || {};
+  return {
+    inputTokens: numberOrZero(usage.inputTokens),
+    outputTokens: numberOrZero(usage.outputTokens),
+    cacheCreationInputTokens: numberOrZero(usage.cacheCreationInputTokens),
+    cacheReadInputTokens: numberOrZero(usage.cacheReadInputTokens),
+  };
+}
+
+function totalTokens(usage: {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}): number {
+  return usage.inputTokens + usage.outputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens;
+}
+
+function getRunTokenUsage(state: any) {
+  const usage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+  };
+
+  if (Array.isArray(state?.stepLogs) && state.stepLogs.length > 0) {
+    for (const log of state.stepLogs) {
+      const tokenUsage = readTokenUsage(log);
+      usage.inputTokens += tokenUsage.inputTokens;
+      usage.outputTokens += tokenUsage.outputTokens;
+      usage.cacheCreationInputTokens += tokenUsage.cacheCreationInputTokens;
+      usage.cacheReadInputTokens += tokenUsage.cacheReadInputTokens;
+    }
+    return usage;
+  }
+
+  if (Array.isArray(state?.agents)) {
+    for (const agent of state.agents) {
+      const tokenUsage = readTokenUsage(agent);
+      usage.inputTokens += tokenUsage.inputTokens;
+      usage.outputTokens += tokenUsage.outputTokens;
+      usage.cacheCreationInputTokens += tokenUsage.cacheCreationInputTokens;
+      usage.cacheReadInputTokens += tokenUsage.cacheReadInputTokens;
+    }
+  }
+
+  return usage;
 }
 
 async function ensureRunsDir() {
@@ -62,6 +127,7 @@ export async function getRun(id: string): Promise<RunRecord | null> {
     const content = await readFile(stateFile, 'utf-8');
     const state = parse(content);
     const configName = await getConfigName(state.configFile);
+    const usage = getRunTokenUsage(state);
     return {
       id: state.runId,
       configFile: state.configFile,
@@ -72,6 +138,11 @@ export async function getRun(id: string): Promise<RunRecord | null> {
       currentPhase: state.currentPhase || null,
       totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
       completedSteps: state.completedSteps?.length || 0,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
+      totalTokens: totalTokens(usage),
     };
   } catch {
     return null;
@@ -91,6 +162,7 @@ export async function listRuns(): Promise<RunRecord[]> {
       const content = await readFile(stateFile, 'utf-8');
       const state = parse(content);
       const configName = await getConfigName(state.configFile);
+      const usage = getRunTokenUsage(state);
       runs.push({
         id: state.runId,
         configFile: state.configFile,
@@ -101,6 +173,11 @@ export async function listRuns(): Promise<RunRecord[]> {
         currentPhase: state.currentPhase || null,
         totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
         completedSteps: state.completedSteps?.length || 0,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cacheCreationInputTokens: usage.cacheCreationInputTokens,
+        cacheReadInputTokens: usage.cacheReadInputTokens,
+        totalTokens: totalTokens(usage),
       });
     } catch { /* skip corrupted */ }
   }

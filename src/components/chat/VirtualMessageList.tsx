@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 interface VirtualMessageItem {
@@ -14,6 +14,7 @@ interface VirtualMessageListProps {
   estimatedItemHeight?: number;
   overscan?: number;
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
+  itemGap?: number;
 }
 
 function computeOffsetWithinAncestor(element: HTMLElement, ancestor: HTMLElement): number {
@@ -32,23 +33,34 @@ export function VirtualMessageList({
   estimatedItemHeight = 176,
   overscan = 3,
   scrollContainerRef,
+  itemGap = 16,
 }: VirtualMessageListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef(new Map<string, HTMLDivElement | null>());
   const heightCacheRef = useRef(new Map<string, number>());
+  const lastMeasuredWidthRef = useRef(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
+  const [layoutWidth, setLayoutWidth] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
   const itemsKey = useMemo(() => items.map((item) => item.key).join('\u001f'), [items]);
+
+  const measureNode = useCallback((key: string, node: HTMLDivElement | null) => {
+    if (!node) return false;
+    const nextHeight = Math.max(64, Math.ceil(node.getBoundingClientRect().height));
+    if (heightCacheRef.current.get(key) === nextHeight) return false;
+    heightCacheRef.current.set(key, nextHeight);
+    return true;
+  }, []);
 
   useEffect(() => {
     const next = new Map<string, number>();
     for (const item of items) {
-      next.set(item.key, heightCacheRef.current.get(item.key) ?? estimatedItemHeight);
+      next.set(item.key, heightCacheRef.current.get(item.key) ?? (estimatedItemHeight + itemGap));
     }
     heightCacheRef.current = next;
     setMeasureVersion((value) => value + 1);
-  }, [estimatedItemHeight, itemsKey]);
+  }, [estimatedItemHeight, itemGap, itemsKey]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -57,11 +69,16 @@ export function VirtualMessageList({
     const updateViewport = () => {
       if (!root) return;
       const visibleHeight = scrollElement.clientHeight;
+      const nextLayoutWidth = root.clientWidth || scrollElement.clientWidth || 0;
       const nextScrollTop = scrollElement === root
         ? scrollElement.scrollTop
         : scrollElement.scrollTop - computeOffsetWithinAncestor(root, scrollElement);
       setViewportHeight(visibleHeight);
       setScrollTop(nextScrollTop);
+      if (lastMeasuredWidthRef.current !== nextLayoutWidth) {
+        lastMeasuredWidthRef.current = nextLayoutWidth;
+        setLayoutWidth(nextLayoutWidth);
+      }
     };
     updateViewport();
     const resizeObserver = new ResizeObserver(updateViewport);
@@ -82,10 +99,10 @@ export function VirtualMessageList({
       if (!element) continue;
       const observer = new ResizeObserver((entries) => {
         const entry = entries[0];
-        const nextHeight = Math.max(64, Math.ceil(entry.contentRect.height));
-        if (heightCacheRef.current.get(item.key) === nextHeight) return;
-        heightCacheRef.current.set(item.key, nextHeight);
-        setMeasureVersion((value) => value + 1);
+        const target = entry.target as HTMLDivElement | null;
+        if (measureNode(item.key, target)) {
+          setMeasureVersion((value) => value + 1);
+        }
       });
       observer.observe(element);
       observers.set(item.key, observer);
@@ -93,10 +110,10 @@ export function VirtualMessageList({
     return () => {
       observers.forEach((observer) => observer.disconnect());
     };
-  }, [itemsKey]);
+  }, [itemsKey, measureNode]);
 
   const layout = useMemo(() => {
-    const heights = items.map((item) => heightCacheRef.current.get(item.key) ?? estimatedItemHeight);
+    const heights = items.map((item) => heightCacheRef.current.get(item.key) ?? (estimatedItemHeight + itemGap));
     const offsets: number[] = [];
     let totalHeight = 0;
     for (const height of heights) {
@@ -104,7 +121,7 @@ export function VirtualMessageList({
       totalHeight += height;
     }
     return { heights, offsets, totalHeight };
-  }, [estimatedItemHeight, items, measureVersion]);
+  }, [estimatedItemHeight, itemGap, items, measureVersion]);
 
   const range = useMemo(() => {
     if (items.length === 0) return { start: 0, end: -1 };
@@ -133,6 +150,26 @@ export function VirtualMessageList({
       };
     });
   }, [items, layout.offsets, range.end, range.start]);
+  const visibleItemsKey = useMemo(() => visibleItems.map((item) => item.key).join('\u001f'), [visibleItems]);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return;
+    let rafId = window.requestAnimationFrame(() => {
+      let changed = false;
+      for (const item of visibleItems) {
+        const node = itemRefs.current.get(item.key) ?? null;
+        if (measureNode(item.key, node)) {
+          changed = true;
+        }
+      }
+      if (changed) {
+        setMeasureVersion((value) => value + 1);
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [layoutWidth, measureNode, visibleItems, visibleItemsKey]);
 
   return (
     <div ref={rootRef} className={cn('min-h-0', className)}>
@@ -140,12 +177,20 @@ export function VirtualMessageList({
         {visibleItems.map((item) => (
           <div
             key={item.key}
-            ref={(node) => {
-              itemRefs.current.set(item.key, node);
-            }}
             style={{ position: 'absolute', top: item.top, left: 0, right: 0 }}
           >
-            {item.node}
+            <div
+              ref={(node) => {
+                itemRefs.current.set(item.key, node);
+                if (measureNode(item.key, node)) {
+                  setMeasureVersion((value) => value + 1);
+                }
+              }}
+              className="flow-root"
+              style={{ paddingBottom: itemGap }}
+            >
+              {item.node}
+            </div>
           </div>
         ))}
       </div>

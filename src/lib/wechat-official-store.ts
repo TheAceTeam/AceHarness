@@ -7,6 +7,7 @@ export interface WeChatOfficialAccount {
   token: string;
   baseUrl: string;
   userId: string;
+  createdBy?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -29,8 +30,24 @@ async function writeJsonFile(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2), 'utf8');
 }
 
+function normalizeAccounts(raw: unknown): WeChatOfficialAccount[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item) => item && typeof item === 'object')
+    .map((item: any) => ({
+      accountId: typeof item.accountId === 'string' ? item.accountId : '',
+      token: typeof item.token === 'string' ? item.token : '',
+      baseUrl: typeof item.baseUrl === 'string' ? item.baseUrl : '',
+      userId: typeof item.userId === 'string' ? item.userId : '',
+      createdBy: typeof item.createdBy === 'string' ? item.createdBy : undefined,
+      createdAt: typeof item.createdAt === 'number' ? item.createdAt : Date.now(),
+      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+    }))
+    .filter((item) => item.accountId && item.token);
+}
+
 export async function listWeChatOfficialAccounts(): Promise<WeChatOfficialAccount[]> {
-  return readJsonFile<WeChatOfficialAccount[]>(ACCOUNTS_PATH, []);
+  return normalizeAccounts(await readJsonFile<unknown>(ACCOUNTS_PATH, []));
 }
 
 export async function saveWeChatOfficialAccount(input: Omit<WeChatOfficialAccount, 'createdAt' | 'updatedAt'> & Partial<Pick<WeChatOfficialAccount, 'createdAt' | 'updatedAt'>>): Promise<WeChatOfficialAccount> {
@@ -42,7 +59,19 @@ export async function saveWeChatOfficialAccount(input: Omit<WeChatOfficialAccoun
     updatedAt: input.updatedAt || now,
   };
   const index = accounts.findIndex((item) => item.accountId === next.accountId);
-  if (index >= 0) accounts[index] = { ...accounts[index], ...next, createdAt: accounts[index].createdAt, updatedAt: now };
+  if (index >= 0) {
+    const existing = accounts[index];
+    if (existing.createdBy && next.createdBy && existing.createdBy !== next.createdBy) {
+      throw new Error('微信账号已绑定到其他用户');
+    }
+    accounts[index] = {
+      ...existing,
+      ...next,
+      createdBy: next.createdBy || existing.createdBy,
+      createdAt: existing.createdAt,
+      updatedAt: now,
+    };
+  }
   else accounts.push(next);
   await writeJsonFile(ACCOUNTS_PATH, accounts);
   return next;

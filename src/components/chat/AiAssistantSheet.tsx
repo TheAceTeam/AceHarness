@@ -364,7 +364,7 @@ export function AiAssistantSheet({
         : message;
 
       return (
-        <div key={message.id}>
+        <div key={message.id} className="pb-4">
           <ChatMessage
             message={displayMessage}
             isStreaming={streamingMessageId === message.id}
@@ -379,7 +379,7 @@ export function AiAssistantSheet({
             onSaveAsNotebook={(messageId) => openExportDialog(messageId)}
           />
           {onInsertResult && message.role === 'assistant' && resultContent && (
-            <div className="mb-3 -mt-3 ml-10 flex justify-start">
+            <div className="mt-2 ml-10 flex justify-start">
               <Button
                 size="sm"
                 variant="outline"
@@ -525,10 +525,10 @@ export function AiAssistantSheet({
                       }}
                       hiddenContent={
                         historyExpanded
-                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={chatScrollRef} />
+                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={chatScrollRef} itemGap={0} />
                           : historicalMessages
                       }
-                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={chatScrollRef} />}
+                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={chatScrollRef} itemGap={0} />}
                     />
                     {isLoadingCurrentSession && !streamingMessageId && (
                       <div className="text-sm text-muted-foreground px-2 py-1">AI 思考中...</div>

@@ -713,7 +713,10 @@ export const specCodingApi = {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(data?.error || data?.message || '更新 Spec 计划失败');
+      throw Object.assign(
+        new Error(data?.error || data?.message || '更新 Spec 计划失败'),
+        { data }
+      );
     }
     return data;
   },

@@ -25,7 +25,7 @@ export function MessageHistoryCollapse({
   className,
 }: MessageHistoryCollapseProps) {
   if (hiddenCount <= 0) {
-    return <div className={className}>{recentContent}</div>;
+    return <div className={cn('min-h-0', className)}>{recentContent}</div>;
   }
 
   return (
@@ -49,12 +49,12 @@ export function MessageHistoryCollapse({
             </div>
           </div>
           <CollapsibleContent className="border-t border-border/60 px-3 py-3">
-            <div className="space-y-3">{hiddenContent}</div>
+            <div className="min-h-0">{hiddenContent}</div>
           </CollapsibleContent>
         </div>
       </Collapsible>
 
-      <div className="space-y-3">{recentContent}</div>
+      <div className="min-h-0">{recentContent}</div>
     </div>
   );
 }

@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
-import { appendSpecCodingRevision, buildSpecCodingFromWorkflowConfig, loadCreationSession, rebuildSpecCodingPreservingArtifacts, updateCreationSession } from '@/lib/spec-coding-store';
+import {
+  appendSpecCodingRevision,
+  buildSpecCodingFromWorkflowConfig,
+  loadCreationSession,
+  normalizeSpecCodingDocument,
+  rebuildSpecCodingPreservingArtifacts,
+  updateCreationSession,
+  validateTasksMarkdownFormat,
+} from '@/lib/spec-coding-store';
 import { compileStepTaskBindings } from '@/lib/spec-task-binding';
 
 function canAccess(userId: string, createdBy?: string) {
@@ -122,6 +130,14 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     if (patch.specCoding && typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()) {
+      const taskValidation = validateTasksMarkdownFormat(patch.specCoding?.artifacts?.tasks || '');
+      if (!taskValidation.ok) {
+        return NextResponse.json({
+          error: `tasks.md 格式不合法：${taskValidation.errors[0]}`,
+          taskValidation,
+        }, { status: 400 });
+      }
+      patch.specCoding = normalizeSpecCodingDocument(patch.specCoding);
       patch.specCoding = appendSpecCodingRevision(patch.specCoding, {
         summary: patch.revisionSummary.trim(),
         createdBy: auth.id,
@@ -129,7 +145,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         progressSummary: patch.specCodingStatus === 'confirmed'
           ? '计划已确认，可继续整理 workflow 草案。'
           : '创建态 SpecCoding 已根据最新修订说明重新生成，等待再次确认。',
-      });
+        });
     }
 
     if (patch.config && (patch.specCoding || existing.specCoding)) {

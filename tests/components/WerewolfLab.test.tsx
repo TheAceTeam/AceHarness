@@ -13,6 +13,7 @@ const mockToast = vi.fn();
 const mockSetSessionWorkbenchState = vi.fn();
 const mockAppendSessionMessage = vi.fn(async () => {});
 const mockAgentChat = vi.fn();
+const mockStreamChat = vi.fn();
 const mockListAgents = vi.fn(async () => ({ agents: [] as Array<{ name: string; description?: string; status?: string }> }));
 
 vi.mock('next/navigation', () => ({
@@ -64,6 +65,7 @@ vi.mock('@/lib/api', () => ({
   agentApi: {
     listAgents: () => mockListAgents(),
     chat: (...args: any[]) => mockAgentChat(...args),
+    streamChat: (...args: any[]) => mockStreamChat(...args),
     saveAgent: vi.fn(async () => ({})),
     draftAgent: vi.fn(async () => ({ draft: {}, raw: '' })),
   },
@@ -102,6 +104,52 @@ function createWerewolfLabState(): SessionWorkbenchState {
 
 function MockWrapper({ children }: { children: React.ReactNode }) {
   return <div data-testid="mock-wrapper">{children}</div>;
+}
+
+function buildMockWerewolfOutput(agentName: string, payload: { message: string }) {
+  const firstVoteCandidate = payload.message
+    .match(/可投票对象[:：]\s*([^\n\r]+)/)?.[1]
+    ?.split('、')
+    .map((item) => item.trim())
+    .filter(Boolean)[0] || TEMP_WEREWOLF_AGENTS.find((agent) => agent.name !== agentName)?.name || '';
+  const isVote = payload.message.includes('VOTE:') || payload.message.includes('"target"') || payload.message.includes('可选刀口');
+  return isVote
+    ? `VOTE: ${firstVoteCandidate}\nREASON: ${agentName} mock vote reason`
+    : `${agentName} mock speech @${firstVoteCandidate}`;
+}
+
+function createMockAgentStream(output: string, sessionId: string) {
+  const listeners = new Map<string, EventListener[]>();
+  let doneScheduled = false;
+  const scheduleDone = () => {
+    if (doneScheduled) return;
+    doneScheduled = true;
+    window.setTimeout(() => {
+      const doneEvent = new MessageEvent('done', {
+        data: JSON.stringify({
+          output,
+          sessionId,
+          engine: 'mock-wrapper',
+          model: 'mock-agent',
+          isError: false,
+        }),
+      });
+      for (const listener of listeners.get('done') || []) {
+        listener(doneEvent);
+      }
+    }, 0);
+  };
+  const events = {
+    onerror: null as EventListener | null,
+    addEventListener: vi.fn((type: string, listener: EventListener) => {
+      const current = listeners.get(type) || [];
+      listeners.set(type, [...current, listener]);
+      if (type === 'done') scheduleDone();
+    }),
+    close: vi.fn(),
+  };
+
+  return { events };
 }
 
 function renderHomeCommandSidebar(state = createWerewolfLabState()) {
@@ -160,22 +208,17 @@ describe('multi-agent werewolf lab', () => {
     vi.clearAllMocks();
     mockListAgents.mockResolvedValue({ agents: [] });
     mockAgentChat.mockImplementation(async (agentName: string, payload: { message: string }) => {
-      const isVote = payload.message.includes('VOTE:');
-      const firstVoteCandidate = payload.message
-        .match(/可投票对象[:：]\s*([^\n\r]+)/)?.[1]
-        ?.split('、')
-        .map((item) => item.trim())
-        .filter(Boolean)[0] || TEMP_WEREWOLF_AGENTS.find((agent) => agent.name !== agentName)?.name || '';
       return {
-        output: isVote
-          ? `VOTE: ${firstVoteCandidate}\nREASON: ${agentName} mock vote reason`
-          : `${agentName} mock speech @${firstVoteCandidate}`,
+        output: buildMockWerewolfOutput(agentName, payload),
         sessionId: `mock-session-${agentName}`,
         engine: 'mock-wrapper',
         model: 'mock-agent',
         isError: false,
       };
     });
+    mockStreamChat.mockImplementation(async (agentName: string, payload: { message: string }) => (
+      createMockAgentStream(buildMockWerewolfOutput(agentName, payload), `mock-session-${agentName}`)
+    ));
     mockAppendSessionMessage.mockResolvedValue(undefined);
   });
 
@@ -287,7 +330,7 @@ describe('multi-agent werewolf lab', () => {
       'werewolf-session',
       expect.objectContaining({
         role: 'assistant',
-        content: expect.stringContaining('已创建 AI 狼人杀测试局'),
+        content: expect.stringContaining('本局已完成配置'),
         cards: expect.arrayContaining([expect.objectContaining({ type: 'werewolf_speech' })]),
       })
     );
@@ -298,6 +341,8 @@ describe('multi-agent werewolf lab', () => {
     expect(screen.getByText('当前环节')).toBeInTheDocument();
     expect(screen.getByText('正在行动')).toBeInTheDocument();
     expect(screen.getByText('存活情况')).toBeInTheDocument();
+    expect(screen.getAllByText(/身份：/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/身份：隐藏/).length).toBeGreaterThan(0);
     const viewerSelect = screen.getByDisplayValue('未绑定，只看公开信息');
     const firstRenderedAgent = TEMP_WEREWOLF_AGENTS.find((agent) => screen.queryAllByText(agent.name).length > 0);
     expect(firstRenderedAgent).toBeTruthy();
@@ -305,7 +350,6 @@ describe('multi-agent werewolf lab', () => {
     expect(screen.getByText(/黑夜视角绑定：/)).toBeInTheDocument();
     expect(TEMP_WEREWOLF_AGENTS.some((agent) => screen.queryAllByText(agent.name).length > 0)).toBe(true);
     expect(screen.getAllByText(/身份：/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/身份：隐藏/).length).toBeGreaterThan(0);
 
     await user.type(interventionInput, '@');
     expect(screen.getByText('@ 提示')).toBeInTheDocument();
@@ -316,14 +360,16 @@ describe('multi-agent werewolf lab', () => {
     expect(interventionInput).toHaveValue(`@${suggestedPlayer!.name} `);
 
     await user.click(screen.getByRole('button', { name: '上帝视角' }));
-    expect(screen.getByText(/身份：预言家/)).toBeInTheDocument();
+    expect(screen.getByText(/上帝视角会显示所有身份/)).toBeInTheDocument();
+    expect(screen.getAllByText(/身份：(?!隐藏)/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/存活 \d+\/\d+：.*\(.+\)/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /Supervisor 推进第 1 夜/ }));
 
     await user.click(screen.getByRole('button', { name: '上帝视角' }));
     await waitFor(() => {
-      expect(mockAgentChat).toHaveBeenCalled();
-      expect(mockAgentChat.mock.calls.some(([agentName, payload]) => (
+      expect(mockStreamChat).toHaveBeenCalled();
+      expect(mockStreamChat.mock.calls.some(([agentName, payload]) => (
         TEMP_WEREWOLF_AGENTS.some((agent) => agent.name === agentName)
         && payload?.temporaryRoleConfig?.tags?.includes('werewolf-lab')
         && payload?.sessionId === undefined
@@ -367,7 +413,7 @@ describe('multi-agent werewolf lab', () => {
     if (sheriffButton) {
       await user.click(sheriffButton);
       await waitFor(() => {
-        expect(screen.getByText(/警长投票完成|无人竞选警长/)).toBeInTheDocument();
+        expect(screen.getByText(/警长投票完成|警长投票结束|警长竞选结束/)).toBeInTheDocument();
         expect(screen.getByText(/警长 \/ 警徽/)).toBeInTheDocument();
       });
     }
@@ -419,8 +465,11 @@ describe('multi-agent werewolf lab', () => {
         })
       );
       expect(screen.getByText(/最近票流/)).toBeInTheDocument();
-      expect(mockAgentChat.mock.calls.length).toBeGreaterThan(1);
-      expect(mockAgentChat.mock.calls.some(([, payload]) => typeof payload?.sessionId === 'string')).toBe(true);
+      expect(mockStreamChat.mock.calls.length).toBeGreaterThan(1);
+      expect(mockStreamChat.mock.calls.some(([, payload]) => (
+        payload?.frontendSessionId === 'werewolf-session'
+        && payload?.temporaryRoleConfig?.tags?.includes('werewolf-lab')
+      ))).toBe(true);
     });
   });
 });

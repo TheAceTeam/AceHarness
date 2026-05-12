@@ -8,7 +8,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
   try {
     const { id } = await params;
-    const session = await getWeChatOfficialLoginSession(id);
+    const session = await getWeChatOfficialLoginSession(id, { createdBy: user.id });
     if (!session) {
       return NextResponse.json({ error: '扫码会话不存在或已过期' }, { status: 404 });
     }

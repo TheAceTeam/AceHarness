@@ -386,6 +386,7 @@ export const creationSessionStatusSchema = z.enum(['draft', 'confirmed', 'config
 export const creationSessionSchema = z.object({
   id: z.string(),
   chatSessionId: z.string().optional(),
+  homeChatSessionId: z.string().optional(),
   createdBy: z.string().optional(),
   status: creationSessionStatusSchema.default('draft'),
   workflowName: z.string(),
@@ -485,6 +486,11 @@ export const runRecordSchema = z.object({
   currentPhase: z.string().nullable(),
   totalSteps: z.number(),
   completedSteps: z.number(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  cacheCreationInputTokens: z.number().optional(),
+  cacheReadInputTokens: z.number().optional(),
+  totalTokens: z.number().optional(),
 });
 
 export type RunRecord = z.infer<typeof runRecordSchema>;

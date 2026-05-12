@@ -272,6 +272,10 @@ function normalizeQrStatusPayload(statusResp: any): WeChatOfficialQrStatus {
 
 export async function getWeChatOfficialQrStatus(qrcode: string): Promise<WeChatOfficialQrStatus> {
   const statusResp = await apiGetQrStatus(qrcode);
+  return normalizeWeChatOfficialQrStatus(statusResp);
+}
+
+export async function normalizeWeChatOfficialQrStatus(statusResp: any): Promise<WeChatOfficialQrStatus> {
   const normalized = normalizeQrStatusPayload(statusResp);
   const status = normalized.status;
   if (status !== 'confirmed') {
@@ -288,11 +292,22 @@ export async function getWeChatOfficialQrStatus(qrcode: string): Promise<WeChatO
   if (!result.accountId || !result.token) {
     throw new Error('扫码成功但未拿到 accountId / token');
   }
+  return result;
+}
+
+export async function saveConfirmedWeChatOfficialAccount(
+  result: WeChatOfficialQrStatus,
+  input?: { createdBy?: string },
+): Promise<WeChatOfficialQrStatus> {
+  if (result.status !== 'confirmed' || !result.accountId || !result.token) {
+    throw new Error('微信扫码状态未确认，无法保存账号');
+  }
   await saveWeChatOfficialAccount({
     accountId: result.accountId,
     token: result.token,
     baseUrl: result.baseUrl || ILINK_BASE_URL,
     userId: result.userId || '',
+    createdBy: input?.createdBy,
   });
   return result;
 }
@@ -321,6 +336,7 @@ export async function runWeChatOfficialQrLogin(input?: {
     await input?.onStatus?.(status);
 
     if (status === 'confirmed') {
+      await saveConfirmedWeChatOfficialAccount(statusResp);
       const result: WeChatOfficialLoginResult = {
         accountId: String(statusResp.accountId || ''),
         token: String(statusResp.token || ''),

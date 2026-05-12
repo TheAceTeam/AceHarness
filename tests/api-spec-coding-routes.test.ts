@@ -77,6 +77,20 @@ function sessionPayload(workspace: string, overrides: Record<string, any> = {}) 
   };
 }
 
+function withValidTasksArtifact(specCoding: any) {
+  return {
+    ...specCoding,
+    artifacts: {
+      ...(specCoding.artifacts || {}),
+      tasks: [
+        '# tasks.md',
+        '',
+        '- [ ] T1.1 Confirm baseline spec <!-- spec-coding-task:T1.1 -->',
+      ].join('\n'),
+    },
+  };
+}
+
 function idParams(id: string) {
   return { params: Promise.resolve({ id }) };
 }
@@ -212,7 +226,7 @@ describe('spec-coding API routes', () => {
           token: owner.token,
           method: 'PUT',
           json: {
-            specCoding: created.session.specCoding,
+            specCoding: withValidTasksArtifact(created.session.specCoding),
             specCodingStatus: 'confirmed',
             persistMode: 'repository',
             specRoot: '.custom-spec',

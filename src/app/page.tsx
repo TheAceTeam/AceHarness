@@ -10,11 +10,11 @@ import { Input } from '@/components/ui/input';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
 import { workspaceApi, type NotebookScope } from '@/lib/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
 import { useToast } from '@/components/ui/toast';
+import { Switch } from '@/components/ui/switch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ChatSidebar from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
@@ -970,7 +970,8 @@ function ChatPageContent() {
       const isStreaming = msg.id === streamingMessageId;
       let displayMsg = msg;
       let hasSidebarHint = false;
-      if (msg.role === 'assistant') {
+      const isWerewolfMessage = Boolean((msg.cards || []).some((card: any) => card?.type === 'werewolf_speech'));
+      if (msg.role === 'assistant' && !isWerewolfMessage) {
         const raw = msg.rawContent || msg.content || '';
         const normalized = normalizeAssistantDisplay(raw, isStreaming);
         hasSidebarHint = normalized.hasSidebarHint;
@@ -979,7 +980,7 @@ function ChatPageContent() {
         }
       }
       return (
-        <div key={msg.id}>
+        <div key={msg.id} className="pb-4">
           <ChatMessage
             message={displayMsg}
             isStreaming={isStreaming}
@@ -997,7 +998,7 @@ function ChatPageContent() {
             currentUser={currentUser}
           />
           {hasSidebarHint && (
-            <div className="ml-10 -mt-2 mb-2">
+            <div className="mt-2 ml-10">
               <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-medium text-primary">
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>side_navigation</span>
                 已推送侧边栏
@@ -1241,10 +1242,10 @@ function ChatPageContent() {
                       }}
                       hiddenContent={
                         historyExpanded
-                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={scrollContainerRef} />
+                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />
                           : historicalMessages
                       }
-                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} />}
+                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />}
                     />
                     <div ref={messagesEndRef} />
                   </div>

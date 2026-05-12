@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth-middleware';
 import { getChannelIntegration } from '@/lib/channel-store';
-import { startWeChatOfficialBridge } from '@/lib/wechat-official-service';
+import { rememberWeChatOfficialBridge, startWeChatOfficialBridge } from '@/lib/wechat-official-service';
 
 export async function POST(request: NextRequest) {
   const user = await requireAuth(request);
@@ -28,8 +28,14 @@ export async function POST(request: NextRequest) {
       integrationId,
       webhookUrl: `${request.nextUrl.origin}${integration.webhookPath}`,
       secret: integration.secret,
+      createdBy: user.id,
     });
-    return NextResponse.json({ runtime, integration });
+    const rememberedIntegration = await rememberWeChatOfficialBridge({
+      integration,
+      accountId,
+      origin: request.nextUrl.origin,
+    });
+    return NextResponse.json({ runtime, integration: rememberedIntegration });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || '启动微信桥接失败' }, { status: 500 });
   }

@@ -13,7 +13,11 @@ export async function GET(
     const { id } = await params;
     const timeoutRaw = request.nextUrl.searchParams.get('timeoutMs');
     const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
-    const session = await waitForWeChatOfficialLogin(id, Number.isFinite(timeoutMs) ? timeoutMs : undefined);
+    const session = await waitForWeChatOfficialLogin(
+      id,
+      Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+      { createdBy: user.id },
+    );
     if (!session) {
       return NextResponse.json({ error: '扫码会话不存在或已过期' }, { status: 404 });
     }

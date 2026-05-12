@@ -1507,6 +1507,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await saveRunState({
         runId: this.currentRunId,
         configFile: this.currentConfigFile,
+        runOwnerId: this._createdBy,
+        runOwnerName: this._createdByName,
+        createdBy: this._createdBy,
+        createdByName: this._createdByName,
         status: statusToPersist as any,
         statusReason: this.statusReason || undefined,
         startTime: this.runStartTime || new Date().toISOString(),
@@ -1615,7 +1619,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       experience: this.issueTracker.slice(0, 3).map((issue) => `记录 ${issue.type} 类问题的排查与修复路径，避免重复出现。`),
       scoreCards: this.agents.map((agent) => ({
         agent: agent.name,
-        score: agent.status === 'completed' ? 85 : agent.status === 'failed' ? 55 : 70,
+        score: agent.status === 'completed' ? 8.5 : agent.status === 'failed' ? 5.5 : 7.0,
         strengths: agent.completedTasks > 0 ? ['完成了分配步骤'] : [],
         weaknesses: agent.status !== 'completed' ? ['结果仍需进一步验证'] : [],
       })),
@@ -1640,6 +1644,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     const summaryPrompt = [
       '你是 ACEHarness 的工作流指挥官，请输出本次工作流的结算结果。',
       '请严格输出 JSON，不要附加其他说明。',
+      'scoreCards.score 使用 10 分制，范围 0-10，可保留 1 位小数。',
       'JSON 结构：',
       '{"summary":"", "nextFocus":[""], "experience":[""], "scoreCards":[{"agent":"", "score":0, "strengths":[""], "weaknesses":[""]}]}',
       '',
@@ -1670,7 +1675,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
             .filter((item: any) => item && typeof item.agent === 'string')
             .map((item: any) => ({
               agent: item.agent,
-              score: Number.isFinite(item.score) ? Math.max(0, Math.min(100, Number(item.score))) : 70,
+              score: this.normalizeWorkflowScore(item.score),
               strengths: Array.isArray(item.strengths) ? item.strengths.filter((v: unknown) => typeof v === 'string') : [],
               weaknesses: Array.isArray(item.weaknesses) ? item.weaknesses.filter((v: unknown) => typeof v === 'string') : [],
             }))
@@ -1758,7 +1763,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       for (let j = i + 1; j < finalReview.scoreCards.length; j += 1) {
         const left = finalReview.scoreCards[i];
         const right = finalReview.scoreCards[j];
-        const deltaScore = Math.round(((left.score + right.score) / 2 - 65) / 4);
+        const deltaScore = Math.round((((left.score + right.score) / 2) - 6.5) / 0.4);
         relationshipTasks.push(
           upsertRelationshipSignal({
             agent: left.agent,
@@ -1772,6 +1777,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
     await Promise.allSettled(relationshipTasks);
+  }
+
+  private normalizeWorkflowScore(raw: unknown): number {
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric)) return 7.0;
+    const normalized = numeric > 10 ? numeric / 10 : numeric;
+    return Math.round(Math.max(0, Math.min(10, normalized)) * 10) / 10;
   }
 
   /**
@@ -1870,14 +1882,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
         delta: event.content,
         total: retainedPreview,
       });
-      // Persist stream content periodically
-      if (this.currentRunId && fullStreamContent) {
-        const smStepName =
-          options.streamStepName ||
-          options.streamStepLabel ||
-          (this.currentState ? `${this.currentState}-${step}` : step);
-        saveStreamContent(this.currentRunId, smStepName, fullStreamContent).catch(() => {});
-      }
     };
 
     this.currentEngine.on('stream', streamHandler);
@@ -3918,6 +3922,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Restore state
     this.currentRunId = runId;
     this.currentConfigFile = runState.configFile;
+    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
+    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
     this._creationSessionId = runState.creationSessionId;
     this.currentRequirements = runState.requirements || '';
     this.currentState = runState.currentState || null;
@@ -4156,6 +4162,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private lastPreCommandOutput: string | null = null;
   /** Multi-user: createdBy userId, set by workflow start route */
   public _createdBy?: string;
+  public _createdByName?: string;
   /** Multi-user: user's personal directory for isolation */
   public _userPersonalDir?: string;
   /** The isolated working directory for this run (if isolation is active) */
@@ -4291,6 +4298,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     // Restore state up to that point
     this.currentRunId = runId;
     this.currentConfigFile = runState.configFile;
+    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
+    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
     this._creationSessionId = runState.creationSessionId;
     this.currentRequirements = runState.requirements || '';
     this.currentState = stateName;

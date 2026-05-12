@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/table';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { Plus, LogIn, Edit, Trash2, ArrowLeft, ArrowRight, FileText, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
+import { Plus, LogIn, Edit, Trash2, ArrowLeft, ArrowRight, FileText, ArrowDown, ArrowUp, ArrowUpDown, History } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -559,6 +559,12 @@ export default function WorkflowsPage() {
                           </Link>
                         </Button>
                         <Button size="sm" variant="outline" asChild>
+                          <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=history`}>
+                            <History className="w-3 h-3 mr-1" />
+                            历史
+                          </Link>
+                        </Button>
+                        <Button size="sm" variant="outline" asChild>
                           <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
                             <Edit className="w-3 h-3" />
                           </Link>
@@ -622,6 +628,12 @@ export default function WorkflowsPage() {
                       <Link href={`/workbench/${encodeURIComponent(workflow.filename)}`}>
                         <LogIn className="w-3 h-3 mr-1" />
                         进入
+                      </Link>
+                    </Button>
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={`/workbench/${encodeURIComponent(workflow.filename)}?mode=history`}>
+                        <History className="w-3 h-3 mr-1" />
+                        历史
                       </Link>
                     </Button>
                     <Button size="sm" variant="outline" asChild>

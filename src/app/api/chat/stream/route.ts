@@ -4,7 +4,7 @@ import { getOrCreateEngine, getConfiguredEngine } from '@/lib/engines/engine-fac
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
 import { loadChatSettings } from '@/lib/chat-settings';
-import type { Engine } from '@/lib/engines/engine-interface';
+import type { Engine, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import {
   registerEngineStream,
   appendEngineStreamContent,
@@ -31,6 +31,39 @@ const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
 
 const SESSIONS_DIR = getWorkspaceDataFile('chat-sessions');
 const MAX_HISTORY_CHARS = 6000;
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function normalizeUsage(metadata?: EngineResultMetadata): Partial<EngineTokenUsage> | undefined {
+  const usage = metadata?.usage;
+  if (!usage) return undefined;
+  const input = numberOrUndefined((usage as any).input_tokens ?? (usage as any).inputTokens);
+  const output = numberOrUndefined((usage as any).output_tokens ?? (usage as any).outputTokens);
+  const cacheCreation = numberOrUndefined((usage as any).cache_creation_input_tokens ?? (usage as any).cacheCreationInputTokens);
+  const cacheRead = numberOrUndefined((usage as any).cache_read_input_tokens ?? (usage as any).cacheReadInputTokens);
+  const values = [input, output, cacheCreation, cacheRead].filter((value): value is number => value !== undefined);
+  if (values.length === 0 || values.every((value) => value === 0)) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input_tokens: input } : {}),
+    ...(output !== undefined ? { output_tokens: output } : {}),
+    ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
+    ...(cacheRead !== undefined ? { cache_read_input_tokens: cacheRead } : {}),
+  };
+}
+
+function metadataNumber(metadata: EngineResultMetadata | undefined, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    const numeric = numberOrUndefined(value);
+    if (numeric !== undefined) return numeric;
+  }
+  return undefined;
+}
 
 function resolveStreamRecoveryKey(frontendSessionId?: string, streamScope?: string): string | undefined {
   if (!frontendSessionId) return undefined;
@@ -291,12 +324,13 @@ export async function POST(request: NextRequest) {
           throw new Error(result.error);
         }
 
+        const metadata = result.metadata;
         return {
           result: output,
           session_id: result.sessionId,
-          cost_usd: 0,
-          duration_ms: Date.now() - startedAt,
-          usage: undefined,
+          cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd') ?? 0,
+          duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs') ?? (Date.now() - startedAt),
+          usage: normalizeUsage(metadata),
           is_error: !result.success,
           error: result.error || undefined,
         };

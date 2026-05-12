@@ -13,6 +13,7 @@ let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
 const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
 const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
+const RESULT_BLOCK_PATTERN = /<result>[\s\S]*?(?:<\/result>|$)/gi;
 const WEREWOLF_CHAT_COLORS = [
   { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/30 bg-rose-50 text-rose-950 dark:bg-rose-950/75 dark:text-rose-100' },
   { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/30 bg-sky-50 text-sky-950 dark:bg-sky-950/75 dark:text-sky-100' },
@@ -95,7 +96,12 @@ interface ChatMessageProps {
     model?: string;
     costUsd?: number;
     durationMs?: number;
-    usage?: { input_tokens: number; output_tokens: number };
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
     timestamp?: number;
   };
   isStreaming?: boolean;
@@ -304,7 +310,51 @@ function formatHiddenWerewolfContent(card: any): string {
   return '当前视角不可见。切换到上帝视角或绑定相关玩家后可查看。';
 }
 
+function stripResultBlocks(content: string): string {
+  return String(content || '').replace(RESULT_BLOCK_PATTERN, '').trim();
+}
+
+function formatMessageTime(timestamp?: number): string {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatTokenUsage(usage?: ChatMessageProps['message']['usage']): string {
+  if (!usage) return 'Token 未返回';
+  const input = Number.isFinite(usage.input_tokens) ? usage.input_tokens : undefined;
+  const output = Number.isFinite(usage.output_tokens) ? usage.output_tokens : undefined;
+  const cacheRead = Number.isFinite(usage.cache_read_input_tokens) ? usage.cache_read_input_tokens : undefined;
+  const cacheWrite = Number.isFinite(usage.cache_creation_input_tokens) ? usage.cache_creation_input_tokens : undefined;
+  const values = [input, output, cacheRead, cacheWrite].filter((value): value is number => value !== undefined);
+  if (values.length === 0 || values.every((value) => value === 0)) {
+    return 'Token 未返回';
+  }
+  const parts = [
+    input !== undefined ? `${input.toLocaleString()} 输入` : '',
+    output !== undefined ? `${output.toLocaleString()} 输出` : '',
+    cacheRead ? `${cacheRead.toLocaleString()} 缓存读` : '',
+    cacheWrite ? `${cacheWrite.toLocaleString()} 缓存写` : '',
+  ].filter(Boolean);
+  return parts.join(' / ');
+}
+
+function MetadataPill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex min-h-[20px] items-center rounded bg-muted/80 px-1.5 py-0.5 leading-none">
+      {children}
+    </span>
+  );
+}
+
 function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatMessageProps['message']; view?: ChatMessageProps['werewolfView'] }) {
+  const sentAt = formatMessageTime(message.timestamp);
   const color = WEREWOLF_CHAT_COLORS[Math.max(0, Number(card.colorIndex || 0)) % WEREWOLF_CHAT_COLORS.length];
   const isSupervisor = card.speakerType === 'supervisor';
   const isSystem = card.speakerType === 'system';
@@ -335,7 +385,7 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
   const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
   const isPending = message.content?.includes('正在推进') || message.content?.includes('处理中');
   return (
-    <div className="group mb-4 flex items-start gap-2">
+    <div className="group flex items-start gap-2">
       {spriteStyle ? (
         <div
           className="mt-0.5 h-12 w-8 shrink-0 rounded-md border border-amber-500/35 bg-cover shadow-sm"
@@ -369,9 +419,14 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
             ) : null}
           </div>
           <div className="prose-sm prose-neutral max-w-none text-current dark:prose-invert [&_p]:my-1">
-            <Markdown>{visible ? (message.rawContent || message.content) : formatHiddenWerewolfContent(card)}</Markdown>
+            <Markdown>{visible ? message.content : formatHiddenWerewolfContent(card)}</Markdown>
           </div>
         </div>
+        {sentAt ? (
+          <div className="px-1 text-[11px] text-muted-foreground opacity-70">
+            {sentAt}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -410,13 +465,20 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     };
   }, [message.model]);
 
+  const sanitizedRawContent = message.rawContent ? stripResultBlocks(message.rawContent) : '';
+  const trimmedContent = (message.content || '').trim();
+  const sentAt = formatMessageTime(message.timestamp);
+
   if (message.role === 'user') {
     if (isActionTagMessage) {
       return (
-        <div className="group mb-4 flex justify-center">
-          <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs ${actionTagClassName}`}>
-            <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
-            <span className="whitespace-normal break-all">{message.content}</span>
+        <div className="group flex justify-center">
+          <div className="flex flex-col items-center gap-1">
+            <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs ${actionTagClassName}`}>
+              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
+              <span className="whitespace-normal break-all">{message.content}</span>
+            </div>
+            {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
           </div>
           <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
             {onDelete && (
@@ -429,7 +491,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
       );
     }
     return (
-      <div className="group flex justify-end mb-4 items-start gap-2">
+      <div className="group flex justify-end items-start gap-2">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
           {onEditMessage && (
             <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
@@ -460,6 +522,11 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             <Markdown>{message.content}</Markdown>
           </div>
         </div>
+        {sentAt ? (
+          <div className="flex justify-end px-1 text-[11px] text-muted-foreground opacity-70">
+            {sentAt}
+          </div>
+        ) : null}
         </div>
         <UserAvatar user={currentUser} />
       </div>
@@ -468,7 +535,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
 
   if (workflowEvent) {
     return (
-      <div className="group mb-4 flex justify-center">
+      <div className="group flex justify-center">
         <div className="max-w-[86%] rounded-2xl border border-amber-500/25 bg-amber-500/8 px-4 py-3 text-xs text-amber-900 shadow-sm dark:text-amber-100">
           <div className="flex flex-wrap items-center gap-2">
             <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '17px' }}>
@@ -489,6 +556,11 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               {workflowEvent.body}
             </div>
           ) : null}
+          {sentAt ? (
+            <div className="mt-2 text-[11px] text-muted-foreground opacity-70">
+              {sentAt}
+            </div>
+          ) : null}
         </div>
         <div className="ml-2 flex items-start gap-0.5 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
           {onDelete && (
@@ -504,7 +576,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   if (message.role === 'error') {
     const isTimeout = message.content.includes('超时') || message.content.includes('timeout');
     return (
-      <div className="group flex mb-4 items-start gap-1">
+      <div className="group flex items-start gap-1">
         <div className="max-w-[80%] rounded-2xl rounded-bl-sm px-4 py-2.5 bg-destructive/10 text-destructive text-sm">
           <span className="material-symbols-outlined text-sm mr-1 align-middle">{isTimeout ? 'schedule' : 'error'}</span>
           {message.content}
@@ -516,6 +588,11 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               继续
             </button>
           )}
+          {sentAt ? (
+            <div className="mt-1 text-[11px] text-muted-foreground opacity-70">
+              {sentAt}
+            </div>
+          ) : null}
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
           {onDelete && (
@@ -531,7 +608,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   if (werewolfCard) {
     const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
     return (
-      <div className="mb-4">
+      <div>
         <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} />
         {visibleExtraCards.length ? (
           <div className="ml-10 max-w-[85%] space-y-2">
@@ -546,7 +623,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
 
   // Assistant message
   return (
-    <div className="group flex mb-4 items-start gap-2">
+    <div className="group flex items-start gap-2">
       <AssistantAvatar />
       <div className="max-w-[85%] space-y-1">
         {sourceLabel ? (
@@ -563,14 +640,14 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {isStreaming && <ThinkingBot />}
           </div>
         )}
-        {message.rawContent && (
+        {message.rawContent && sanitizedRawContent && sanitizedRawContent !== trimmedContent && (
           <details className="mt-1 rounded-xl border border-border bg-muted/50 text-xs">
             <summary className="cursor-pointer px-3 py-1.5 text-muted-foreground select-none flex items-center gap-1">
               <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>unfold_more</span>
               查看完整内容
             </summary>
             <div className="px-3 py-2 prose-sm prose-neutral dark:prose-invert max-w-none [&_p]:my-1 [&_pre]:bg-background [&_pre]:border [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
-              <Markdown>{message.rawContent}</Markdown>
+              <Markdown>{sanitizedRawContent}</Markdown>
             </div>
           </details>
         )}
@@ -588,19 +665,20 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
         {message.cards?.map((card, i) => (
           <UniversalCard key={i} card={card} onAction={onAction} />
         ))}
-        {(message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
-          <div className="text-xs text-muted-foreground px-1 opacity-60 flex items-center gap-1 flex-wrap">
+        {(sentAt || message.engine || message.model || message.usage || message.costUsd !== undefined || message.durationMs !== undefined) && (
+          <div className="flex flex-wrap items-center gap-1 px-1 text-[11px] text-muted-foreground opacity-70">
+            {sentAt && <span>{sentAt}</span>}
             {message.engine && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-muted/80 font-medium">
+              <MetadataPill>
                 {getEngineDisplayName(message.engine)}
-              </span>
+              </MetadataPill>
             )}
             {message.model && (
-              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-muted/80">
+              <MetadataPill>
                 {modelLabel}
-              </span>
+              </MetadataPill>
             )}
-            {message.usage && <span>{message.usage.input_tokens}↓ {message.usage.output_tokens}↑</span>}
+            <span>{formatTokenUsage(message.usage)}</span>
             {message.costUsd !== undefined && <span>· ${message.costUsd.toFixed(4)}</span>}
             {message.durationMs !== undefined && <span>· {(message.durationMs / 1000).toFixed(1)}s</span>}
           </div>

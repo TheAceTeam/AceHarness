@@ -2,12 +2,13 @@
 import React from 'react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
-import { waitFor, screen } from '@testing-library/react';
+import { cleanup, waitFor, screen } from '@testing-library/react';
 
 const chatContextMock = {
   ...defaultChatContextMock,
   appendSessionMessage: vi.fn(async () => {}),
   updateSessionCreationBinding: vi.fn(async () => {}),
+  appendVisibleSessionTag: vi.fn(async () => {}),
 };
 
 vi.mock('next/dynamic', () => ({
@@ -187,10 +188,15 @@ describe('NewConfigModal backend draft isolation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fetchCalls.length = 0;
+    localStorage.clear();
     localStorage.setItem('auth-token', 'token');
+    chatContextMock.appendSessionMessage.mockClear();
+    chatContextMock.updateSessionCreationBinding.mockClear();
+    chatContextMock.appendVisibleSessionTag.mockClear();
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -206,6 +212,9 @@ describe('NewConfigModal backend draft isolation', () => {
       }
       if (url === '/api/configs/recommendations' && method === 'POST') {
         return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({ sessions: [] });
       }
       if (url === '/api/chat/sessions' && method === 'POST') {
         return createJsonResponse({
@@ -363,5 +372,262 @@ describe('NewConfigModal backend draft isolation', () => {
     expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
     expect(screen.getByDisplayValue('恢复中的工作流')).toBeTruthy();
     expect(screen.getByDisplayValue('resume-workflow.yaml')).toBeTruthy();
+  });
+
+  test('restores unfinished homepage creation by chat session after refresh and keeps visible tags', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({
+          sessions: [{
+            id: 'unfinished-1',
+            status: 'draft',
+            updatedAt: 20,
+          }],
+        });
+      }
+      if (url === '/api/spec-coding/sessions/unfinished-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'unfinished-1',
+            chatSessionId: 'planning-restore',
+            homeChatSessionId: 'parent-1',
+            mode: 'ai-guided',
+            workflowName: '刷新恢复工作流',
+            filename: 'restore-after-refresh.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/restore-after-refresh',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: 1,
+            updatedAt: 20,
+            specCoding: {
+              id: 'spec-unfinished',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 3,
+              planningStage: 'generating-plan',
+              clarificationAnswers: {
+                scope: { optionIds: ['api'], note: '覆盖 API 状态' },
+              },
+            },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-restore' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-restore',
+            title: '创建计划：刷新恢复工作流',
+            model: 'test-model',
+            messages: [{
+              id: 'tag-1',
+              role: 'user',
+              content: '创建工作流 · 刷新恢复工作流 · restore-after-refresh.yaml · 计划生成中',
+              timestamp: 1,
+            }],
+            createdAt: 1,
+            updatedAt: 20,
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [{
+              id: 'tag-parent',
+              role: 'user',
+              content: '创建工作流 · 刷新恢复工作流 · restore-after-refresh.yaml · 计划生成中',
+              timestamp: 1,
+            }],
+            createdAt: 1,
+            updatedAt: 20,
+          },
+        });
+      }
+      if (url === '/api/chat/stream?checkActive=planning-restore&streamScope=workflow-planning' && method === 'GET') {
+        return createJsonResponse({ active: false });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-restore' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ ok: true });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('刷新恢复工作流')).toBeTruthy();
+    });
+    expect(screen.getByText('restore-after-refresh.yaml')).toBeTruthy();
+    expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'unfinished-1', status: 'draft' })
+    );
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'planning-restore',
+      expect.objectContaining({ creationSessionId: 'unfinished-1', status: 'draft' })
+    );
+    expect(chatContextMock.appendVisibleSessionTag).not.toHaveBeenCalled();
+    expect(fetchCalls.find((call) => call.url === '/api/chat/sessions/parent-1' && call.method === 'GET')?.body).toBeUndefined();
+    expect(fetchCalls.some((call) => (
+      call.url === '/api/chat/sessions/parent-1'
+      && call.method === 'PUT'
+      && call.body?.creationSession?.creationSessionId === 'unfinished-1'
+    ))).toBe(true);
+  });
+
+  test('does not restore completed homepage creation and records completion tags for new draft', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({
+          sessions: [{
+            id: 'done-1',
+            status: 'config-generated',
+            workflowName: '已完成工作流',
+            filename: 'done.yaml',
+            updatedAt: 30,
+          }],
+        });
+      }
+      if (url === '/api/chat/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-new',
+            title: body?.title || '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'draft-new',
+            chatSessionId: body?.chatSessionId,
+            homeChatSessionId: body?.homeChatSessionId,
+            filename: body?.filename,
+            workflowName: body?.workflowName,
+            status: 'draft',
+            createdAt: 40,
+            updatedAt: 40,
+            specCoding: { id: 'spec-new' },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-new' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-new',
+            title: '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: 40,
+            updatedAt: 40,
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [{
+              id: 'done-tag',
+              role: 'user',
+              content: '创建工作流 · 已完成工作流 · done.yaml · 配置已生成',
+              timestamp: 30,
+            }],
+            createdAt: 1,
+            updatedAt: 30,
+          },
+        });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-new' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ ok: true });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(true);
+    });
+
+    expect(screen.queryByDisplayValue('已完成工作流')).toBeNull();
+    const createdDraftCall = fetchCalls.find((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST');
+    expect(createdDraftCall?.body.homeChatSessionId).toBe('parent-1');
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'draft-new', status: 'draft' })
+    );
+    expect(chatContextMock.appendVisibleSessionTag).toHaveBeenCalledWith(
+      'parent-1',
+      expect.stringContaining('创建工作流 ·')
+    );
+    expect(chatContextMock.appendVisibleSessionTag).toHaveBeenCalledWith(
+      'parent-1',
+      expect.stringContaining('已开始')
+    );
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions/done-1' && call.method === 'GET')).toBe(false);
   });
 });

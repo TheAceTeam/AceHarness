@@ -71,6 +71,7 @@ export interface CollaborationRoomMessage {
   speakerType: 'human' | 'agent' | 'supervisor' | 'system';
   speakerName: string;
   content: string;
+  rawContent?: string;
   createdAt: number;
   cards?: any[];
   status?: 'pending' | 'done' | 'error';
@@ -206,6 +207,23 @@ export interface CollaborationRoomState {
   messages: CollaborationRoomMessage[];
   rounds: CollaborationRoomRound[];
   agentSessions?: Record<string, string>;
+  werewolfLabConfig?: {
+    defaultEngine?: string;
+    defaultModel?: string;
+    agentOverrides?: Record<string, {
+      enabled?: boolean;
+      engine?: string;
+      model?: string;
+    }>;
+    rehearsal?: Record<string, {
+      status: 'idle' | 'running' | 'ready' | 'failed';
+      sessionId?: string;
+      engine?: string;
+      model?: string;
+      error?: string;
+      checkedAt?: number;
+    }>;
+  };
   werewolf?: CollaborationWerewolfState | null;
   werewolfView?: {
     mode: 'god' | 'night';

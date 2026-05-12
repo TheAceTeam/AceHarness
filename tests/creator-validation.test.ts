@@ -29,7 +29,11 @@ function validStateMachineConfig(projectRoot: string) {
           isInitial: true,
           isFinal: false,
           steps: [{ name: 'Step 1', agent: 'developer', task: 'Start' }],
-          transitions: [{ to: 'Done', condition: { verdict: 'pass' }, priority: 100 }],
+          transitions: [
+            { to: 'Done', condition: { verdict: 'pass' }, priority: 100 },
+            { to: 'Done', condition: { verdict: 'conditional_pass' }, priority: 90 },
+            { to: 'Done', condition: { verdict: 'fail' }, priority: 80 },
+          ],
         },
         {
           name: 'Done',

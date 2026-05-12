@@ -55,4 +55,11 @@ export async function runNodejsInstrumentation() {
   } catch (error) {
     console.error('[ACEHarness] Channel event bridge setup failed:', error);
   }
+
+  try {
+    const { scheduleWeChatOfficialBridgeRestore } = await import('./wechat-official-service');
+    scheduleWeChatOfficialBridgeRestore();
+  } catch (error) {
+    console.error('[ACEHarness] WeChat bridge restore setup failed:', error);
+  }
 }

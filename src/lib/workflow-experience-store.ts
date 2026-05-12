@@ -62,7 +62,7 @@ export async function saveWorkflowFinalReview(review: WorkflowFinalReview): Prom
     review.summary,
     '',
     '## Agent Scores',
-    ...review.scoreCards.map((card) => `- ${card.agent}: ${card.score}\n  - strengths: ${card.strengths.join(' / ') || '无'}\n  - weaknesses: ${card.weaknesses.join(' / ') || '无'}`),
+    ...review.scoreCards.map((card) => `- ${card.agent}: ${card.score}/10\n  - strengths: ${card.strengths.join(' / ') || '无'}\n  - weaknesses: ${card.weaknesses.join(' / ') || '无'}`),
     '',
     '## Next Focus',
     ...review.nextFocus.map((item) => `- ${item}`),

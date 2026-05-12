@@ -16,7 +16,7 @@ import {
 import type { StateTransitionRecord, Issue } from '@/lib/schemas';
 
 // 格式化状态名称，将内部状态名转换为友好显示
-function formatStateName(name: string): string {
+export function formatStateName(name: string): string {
   if (name === '__origin__') return '开始';
   if (name === '__human_approval__') return '人工审查';
   return name;

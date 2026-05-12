@@ -24,6 +24,7 @@ import type {
   SessionUpdate,
   Client,
   Agent,
+  Usage,
 } from '@agentclientprotocol/sdk';
 
 // ============================================================================
@@ -53,6 +54,13 @@ export interface ACPEngineConfig {
 
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
+
+const ACP_STREAM_DEBUG = process.env.ACE_ACP_STREAM_DEBUG === '1';
+
+export interface ACPSendPromptResult {
+  stopReason: ACPStopReason;
+  usage?: Usage | null;
+}
 
 /** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
 function escapeWinCmdToken(s: string): string {
@@ -406,7 +414,7 @@ export class ACPEngine extends EventEmitter {
   /**
    * Send a prompt to the current session
    */
-  async sendPrompt(prompt: string): Promise<ACPStopReason> {
+  async sendPrompt(prompt: string): Promise<ACPSendPromptResult> {
     if (!this.sessionId || !this.connection) throw new Error('No active session');
 
     console.log(`[${this.config.engineType}] sendPrompt: sessionId=${this.sessionId}, promptLength=${prompt.length}`);
@@ -417,7 +425,10 @@ export class ACPEngine extends EventEmitter {
         prompt: [{ type: 'text', text: prompt }],
       });
       console.log(`[${this.config.engineType}] sendPrompt completed: stopReason=${result.stopReason}`);
-      return result.stopReason;
+      return {
+        stopReason: result.stopReason,
+        usage: result.usage,
+      };
     } catch (err) {
       console.error(`[${this.config.engineType}] sendPrompt error:`, err);
       throw err;
@@ -521,7 +532,9 @@ export class ACPEngine extends EventEmitter {
    * Handle session update notifications from the SDK
    */
   private handleSessionUpdate(update: SessionUpdate): void {
-    console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
+    if (ACP_STREAM_DEBUG) {
+      console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
+    }
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         this.emit('user-message', (update as any).content);

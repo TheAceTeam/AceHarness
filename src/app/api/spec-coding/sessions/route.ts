@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
 
     const session = buildCreationSession({
       chatSessionId: body.chatSessionId,
+      homeChatSessionId: typeof body.homeChatSessionId === 'string' ? body.homeChatSessionId : undefined,
       createdBy: auth.id,
       status: body.status,
       specCodingStatus: body.specCodingStatus,

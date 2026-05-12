@@ -744,6 +744,111 @@ function buildClarificationAnswerContext(
     .join('\n');
 }
 
+function clipContextText(input: string | undefined, limit = 220): string {
+  const text = (input || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function PlanningContextSnapshot({
+  workflowName,
+  filename,
+  workingDirectory,
+  workspaceMode,
+  referenceWorkflow,
+  description,
+  requirements,
+  clarificationForm,
+  clarificationAnswers,
+  showClarification,
+}: {
+  workflowName?: string;
+  filename?: string;
+  workingDirectory?: string;
+  workspaceMode?: string;
+  referenceWorkflow?: string;
+  description?: string;
+  requirements?: string;
+  clarificationForm?: ClarificationFormResult | null;
+  clarificationAnswers?: Record<string, ClarificationAnswerValue>;
+  showClarification?: boolean;
+}) {
+  const answerContext = showClarification && clarificationForm
+    ? buildClarificationAnswerContext(clarificationForm.questions || [], clarificationAnswers || {})
+    : '';
+  const baseRows = [
+    { label: '工作流', value: workflowName || '未命名' },
+    { label: '文件名', value: filename || '自动生成' },
+    { label: '工作目录', value: workingDirectory || '未选择' },
+    { label: '运行方式', value: workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行' },
+    { label: '参考工作流', value: referenceWorkflow || '无' },
+  ];
+  const requirementText = clipContextText(requirements || description, 260);
+  const clarificationSummary = [
+    clarificationForm?.summary ? `结论：${clarificationForm.summary}` : '',
+    answerContext,
+    clarificationForm?.missingFields?.length
+      ? `仍缺信息：${clarificationForm.missingFields.slice(0, 4).join('、')}`
+      : '',
+  ].filter(Boolean).join('\n');
+
+  return (
+    <div className={`mt-4 grid gap-3 ${showClarification ? 'lg:grid-cols-2' : ''}`}>
+      <div className="rounded-xl border bg-muted/20 p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+          <span className="material-symbols-outlined text-sm text-amber-500">looks_one</span>
+          步骤 1：基础输入
+        </div>
+        <div className="grid gap-2 text-xs sm:grid-cols-2">
+          {baseRows.map((row) => (
+            <div key={row.label} className="min-w-0">
+              <div className="text-[10px] text-muted-foreground">{row.label}</div>
+              <div className="truncate text-foreground" title={row.value}>{row.value}</div>
+            </div>
+          ))}
+        </div>
+        {requirementText ? (
+          <div className="mt-2 rounded-lg bg-background/70 p-2 text-xs leading-5 text-muted-foreground">
+            {requirementText}
+          </div>
+        ) : null}
+      </div>
+
+      {showClarification ? (
+        <div className="rounded-xl border bg-muted/20 p-3">
+          <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+            <span className="material-symbols-outlined text-sm text-amber-500">looks_two</span>
+            步骤 2：补充问答
+          </div>
+          {clarificationSummary ? (
+            <div className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-background/70 p-2 text-xs leading-5 text-muted-foreground">
+              {clarificationSummary}
+            </div>
+          ) : (
+            <div className="rounded-lg bg-background/70 p-2 text-xs leading-5 text-muted-foreground">
+              暂无补充问答内容。
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PlanningScrollToBottomButton({ show, onClick }: { show: boolean; onClick: () => void }) {
+  if (!show) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="sticky bottom-3 z-10 ml-auto inline-flex items-center gap-1.5 rounded-full border bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur hover:text-foreground"
+    >
+      <span className="material-symbols-outlined text-sm">south</span>
+      回到底部
+    </button>
+  );
+}
+
 function buildPlanTaskAgentMappings(specCoding: any, config: any): PlanTaskAgentMapping[] {
   const phaseById = new Map<string, any>(
     Array.isArray(specCoding?.phases)
@@ -1285,9 +1390,9 @@ export default function NewConfigModal({
   inheritModel = '',
 }: NewConfigModalProps) {
   const { toast } = useToast();
-  const { appendSessionMessage, updateSessionCreationBinding } = useChat();
+  const { appendSessionMessage, updateSessionCreationBinding, appendVisibleSessionTag } = useChat();
   const { resolvedTheme } = useTheme();
-  const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>('phase-based');
+  const [workflowMode, setWorkflowMode] = useState<'phase-based' | 'state-machine' | 'ai-guided'>(initialMode || 'phase-based');
   // Step 1 = form, step 2 = clarification form, step 3 = plan generation, step 4 = plan preview, step 5 = AI workflow creation (ai-guided only)
   const [formStep, setFormStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [previewSession, setPreviewSession] = useState<any | null>(null);
@@ -1326,6 +1431,9 @@ export default function NewConfigModal({
   const [isSavingWorkflowDraft, setIsSavingWorkflowDraft] = useState(false);
   const [backendSessionId, setBackendSessionId] = useState<string | undefined>();
   const streamContentRef = useRef<HTMLDivElement>(null);
+  const streamAutoScrollLockedRef = useRef(false);
+  const streamProgrammaticScrollRef = useRef(false);
+  const [showStreamScrollBtn, setShowStreamScrollBtn] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const chatIdRef = useRef<string | null>(null);
   const retryAttemptedRef = useRef(false);
@@ -1759,12 +1867,46 @@ export default function NewConfigModal({
     }
   }, [clearErrors, setError, toast]);
 
-  // Auto-scroll streaming content
+  const unlockPlanningAutoScroll = useCallback(() => {
+    streamAutoScrollLockedRef.current = false;
+    setShowStreamScrollBtn(false);
+  }, []);
+
+  const scrollPlanningStreamToBottom = useCallback(() => {
+    const scroller = streamContentRef.current;
+    if (!scroller) return;
+    unlockPlanningAutoScroll();
+    streamProgrammaticScrollRef.current = true;
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+    window.setTimeout(() => {
+      streamProgrammaticScrollRef.current = false;
+    }, 500);
+  }, [unlockPlanningAutoScroll]);
+
   useEffect(() => {
-    if (streamContentRef.current) {
-      streamContentRef.current.scrollTop = streamContentRef.current.scrollHeight;
-    }
-  }, [aiMessages, currentStream, currentThinking]);
+    const scroller = streamContentRef.current;
+    if (!scroller) return;
+    const handleScroll = () => {
+      if (streamProgrammaticScrollRef.current) return;
+      const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+      streamAutoScrollLockedRef.current = !nearBottom;
+      setShowStreamScrollBtn(!nearBottom);
+    };
+    scroller.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => scroller.removeEventListener('scroll', handleScroll);
+  }, [formStep, clarificationForm]);
+
+  // Auto-scroll streaming content only while the user stays near the bottom.
+  useEffect(() => {
+    const scroller = streamContentRef.current;
+    if (!scroller || streamAutoScrollLockedRef.current) return;
+    streamProgrammaticScrollRef.current = true;
+    scroller.scrollTop = scroller.scrollHeight;
+    window.setTimeout(() => {
+      streamProgrammaticScrollRef.current = false;
+    }, 100);
+  }, [aiMessages, currentStream, currentThinking, formStep]);
 
   // Focus input when waiting
   useEffect(() => {
@@ -1810,6 +1952,33 @@ export default function NewConfigModal({
       model: aiModelRef.current || undefined,
     }, { backendSessionId: backendSid });
   }, [appendSessionMessage, frontendSessionId]);
+
+  const appendCreationSessionTag = useCallback(async (
+    sessionId: string | null | undefined,
+    label: string
+  ) => {
+    if (!sessionId) return;
+    await appendVisibleSessionTag(sessionId, `${CREATION_SESSION_TAG_PREFIX} ${label}`).catch(() => {});
+  }, [appendVisibleSessionTag]);
+
+  const appendCreationSessionTags = useCallback(async (
+    session: any,
+    stageLabel: string
+  ) => {
+    if (!session?.id) return;
+    const targetChatSessionIds = Array.from(new Set([
+      session?.chatSessionId,
+      planningFrontendSessionId,
+      frontendSessionId,
+    ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+    if (targetChatSessionIds.length === 0) return;
+    const tag = [
+      session.workflowName || '新工作流',
+      session.filename || '未命名配置',
+      stageLabel,
+    ].join(' · ');
+    await Promise.all(targetChatSessionIds.map((sessionId) => appendCreationSessionTag(sessionId, tag)));
+  }, [appendCreationSessionTag, frontendSessionId, planningFrontendSessionId]);
 
   const resetAll = useCallback(() => {
     interruptPlanningRun();
@@ -2152,6 +2321,7 @@ export default function NewConfigModal({
   }, [clearErrors, getValues, setError, toast]);
 
   const bindDraftCreationSessionToChat = useCallback(async (session: any) => {
+    if (!session?.id) return;
     const creationBinding = {
       creationSessionId: session.id,
       filename: session.filename,
@@ -2170,14 +2340,15 @@ export default function NewConfigModal({
 
     await Promise.all(targetChatSessionIds.map(async (targetChatSessionId) => {
       const sessionData = await modalSessionJsonFetch<any>(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`).catch(() => null);
-      if (!sessionData?.session) return;
-      await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          ...sessionData.session,
-          creationSession: creationBinding,
-        }),
-      }).catch(() => {});
+      if (sessionData?.session) {
+        await modalSessionJsonFetch(`/api/chat/sessions/${encodeURIComponent(targetChatSessionId)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...sessionData.session,
+            creationSession: creationBinding,
+          }),
+        }).catch(() => {});
+      }
       await updateSessionCreationBinding(targetChatSessionId, creationBinding).catch(() => {});
     }));
   }, [frontendSessionId, planningFrontendSessionId, updateSessionCreationBinding]);
@@ -2195,6 +2366,7 @@ export default function NewConfigModal({
       method: 'POST',
       body: JSON.stringify({
         chatSessionId: planningSessionId,
+        homeChatSessionId: frontendSessionId || undefined,
         status: 'draft',
         specCodingStatus: 'draft',
         filename: values.filename || generateDefaultFilename(),
@@ -2222,13 +2394,16 @@ export default function NewConfigModal({
     setPlanningFrontendSessionId(planningSessionId);
     draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
+    await appendCreationSessionTags(data.session, '已开始');
     return data.session.id as string;
   }, [
+    appendCreationSessionTags,
     bindDraftCreationSessionToChat,
     buildPreviewConfigFromForm,
     draftCreationSessionId,
     effectiveReferenceWorkflowValue,
     ensurePlanningChatSession,
+    frontendSessionId,
     generateDefaultFilename,
     getValues,
     workflowMode,
@@ -2260,8 +2435,9 @@ export default function NewConfigModal({
     }
     setPreviewConfigValidation(draftData.configValidation || null);
     const sessionPayload = {
-      chatSessionId: targetChatSessionId,
-      status: 'draft',
+        chatSessionId: targetChatSessionId,
+        homeChatSessionId: frontendSessionId || undefined,
+        status: 'draft',
       specCodingStatus: 'draft',
       filename: values.filename,
       workflowName: values.workflowName,
@@ -2304,8 +2480,9 @@ export default function NewConfigModal({
     setDraftCreationSessionId(data.session.id);
     draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
+    await appendCreationSessionTags(data.session, '计划草案已生成');
     return data.session;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const updatePreviewSessionFromPlanDraft = useCallback(async (draft: PlanDraftResult, revisionSummary: string) => {
     if (!previewSession?.id) {
@@ -2340,6 +2517,7 @@ export default function NewConfigModal({
       method: 'PUT',
       body: JSON.stringify({
         chatSessionId: planningFrontendSessionId || previewSession.chatSessionId,
+        homeChatSessionId: frontendSessionId || previewSession.homeChatSessionId || undefined,
         status: 'draft',
         specCodingStatus: 'draft',
         filename: values.filename,
@@ -2375,8 +2553,9 @@ export default function NewConfigModal({
     setPreviewSession(data.session);
     setDraftCreationSessionId(data.session.id);
     await bindDraftCreationSessionToChat(data.session);
+    await appendCreationSessionTags(data.session, '计划草案已修订');
     return data.session;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, getValues, planningFrontendSessionId, previewSession, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
 
   const ensureDraftCreationSession = useCallback(async (chatSessionId?: string | null) => {
     if (draftCreationSessionId && draftSessionCreatedInCurrentOpenRef.current) return draftCreationSessionId;
@@ -2390,6 +2569,7 @@ export default function NewConfigModal({
       method: 'POST',
       body: JSON.stringify({
         chatSessionId: chatSessionId || undefined,
+        homeChatSessionId: frontendSessionId || undefined,
         status: 'draft',
         specCodingStatus: 'draft',
         filename: values.filename,
@@ -2416,8 +2596,9 @@ export default function NewConfigModal({
     setDraftCreationSessionId(data.session.id);
     draftSessionCreatedInCurrentOpenRef.current = true;
     await bindDraftCreationSessionToChat(data.session);
+    await appendCreationSessionTags(data.session, '补充问答中');
     return data.session.id as string;
-  }, [bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, getValues, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, buildPreviewConfigFromForm, createInitialDraftCreationSession, draftCreationSessionId, effectiveReferenceWorkflowValue, frontendSessionId, getValues, workflowMode]);
 
   const persistDraftUiState = useCallback(async (input: {
     formStep: 2 | 3 | 4 | 5;
@@ -2440,13 +2621,97 @@ export default function NewConfigModal({
   }, [ensureDraftCreationSession, planningFrontendSessionId]);
 
   useEffect(() => {
-    if (!isOpen || resumeCreationSessionId || !specPlanningEnabled) return;
+    if (!isOpen || resumeCreationSessionId || !frontendSessionId || draftCreationSessionId || draftBootstrapStartedRef.current || !specPlanningEnabled) return;
+    let cancelled = false;
+    draftBootstrapStartedRef.current = true;
+
+    modalSessionJsonFetch<any>(`/api/spec-coding/sessions?chatSessionId=${encodeURIComponent(frontendSessionId)}`)
+      .then(async (data) => {
+        if (cancelled) return;
+        const resumable = Array.isArray(data?.sessions)
+          ? data.sessions.find((session: any) => (
+              session?.id
+              && ['draft', 'confirmed'].includes(session.status)
+              && !['config-generated', 'run-bound', 'archived'].includes(session.status)
+            ))
+          : null;
+        if (!resumable) {
+          draftBootstrapStartedRef.current = false;
+          await createInitialDraftCreationSession().catch(() => {
+            if (!cancelled) draftBootstrapStartedRef.current = false;
+          });
+          return;
+        }
+
+        const detail = await modalSessionJsonFetch<any>(`/api/spec-coding/sessions/${encodeURIComponent(resumable.id)}`).catch(() => null);
+        if (cancelled) return;
+        if (!detail?.session) {
+          draftBootstrapStartedRef.current = false;
+          await createInitialDraftCreationSession().catch(() => {
+            if (!cancelled) draftBootstrapStartedRef.current = false;
+          });
+          return;
+        }
+        const session = detail.session;
+        beginSessionRestoreGuard();
+        setPreviewSession(session);
+        setPreviewConfigValidation(null);
+        setWorkflowMode(session.mode || 'ai-guided');
+        setDraftCreationSessionId(session.id);
+        draftSessionCreatedInCurrentOpenRef.current = true;
+        if (session.backendSessionId) {
+          setBackendSessionId(session.backendSessionId);
+        }
+        setValue('mode', session.mode || 'ai-guided', { shouldDirty: false, shouldValidate: false });
+        setValue('workflowName', session.workflowName || '', { shouldDirty: false, shouldValidate: false });
+        setValue('filename', session.filename || '', { shouldDirty: false, shouldValidate: false });
+        setValue('referenceWorkflow', session.referenceWorkflow || '', { shouldDirty: false, shouldValidate: false });
+        setValue('workingDirectory', session.workingDirectory || '', { shouldDirty: false, shouldValidate: false });
+        setValue('workspaceMode', session.workspaceMode || 'in-place', { shouldDirty: false, shouldValidate: false });
+        setValue('description', session.description || '', { shouldDirty: false, shouldValidate: false });
+        setValue('requirements', session.requirements || '', { shouldDirty: false, shouldValidate: false });
+        setValue('persistMode', session.specCoding?.persistMode || 'none', { shouldDirty: false, shouldValidate: false });
+        setValue('specRoot', session.specCoding?.specRoot || '.spec', { shouldDirty: false, shouldValidate: false });
+        setPlanningFrontendSessionId((prev) => session.chatSessionId || prev);
+        if (session.uiState?.clarificationForm) {
+          setClarificationForm(session.uiState.clarificationForm);
+          setClarificationAnswers(session.uiState.clarificationAnswers || {});
+          setPlanningStage(session.uiState.planningStage || 'awaiting-answers');
+        } else {
+          setPlanningStage(session.uiState?.planningStage || 'idle');
+        }
+        setFormStep(session.uiState?.formStep || resolveFormStepFromSession(session));
+        await bindDraftCreationSessionToChat(session);
+      })
+      .catch(() => {
+        if (!cancelled) draftBootstrapStartedRef.current = false;
+      });
+
+    return () => {
+      cancelled = true;
+      draftBootstrapStartedRef.current = false;
+    };
+  }, [
+    beginSessionRestoreGuard,
+    bindDraftCreationSessionToChat,
+    createInitialDraftCreationSession,
+    draftCreationSessionId,
+    frontendSessionId,
+    isOpen,
+    resolveFormStepFromSession,
+    resumeCreationSessionId,
+    setValue,
+    specPlanningEnabled,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen || resumeCreationSessionId || !specPlanningEnabled || frontendSessionId) return;
     if (draftCreationSessionId || draftBootstrapStartedRef.current) return;
     draftBootstrapStartedRef.current = true;
     createInitialDraftCreationSession().catch(() => {
       draftBootstrapStartedRef.current = false;
     });
-  }, [createInitialDraftCreationSession, draftCreationSessionId, isOpen, resumeCreationSessionId, specPlanningEnabled]);
+  }, [createInitialDraftCreationSession, draftCreationSessionId, frontendSessionId, isOpen, resumeCreationSessionId, specPlanningEnabled]);
 
   useEffect(() => {
     if (!isOpen || !draftCreationSessionId || restoringSessionRef.current) return;
@@ -2463,6 +2728,7 @@ export default function NewConfigModal({
         method: 'PUT',
         body: JSON.stringify({
           chatSessionId: planningFrontendSessionId || undefined,
+          homeChatSessionId: frontendSessionId || undefined,
           filename: values.filename || generateDefaultFilename(),
           workflowName: values.workflowName || '新工作流',
           referenceWorkflow: effectiveReferenceWorkflowValue,
@@ -2511,6 +2777,7 @@ export default function NewConfigModal({
     workflowNameValue,
     workingDirectoryValue,
     workspaceModeValue,
+    frontendSessionId,
   ]);
 
   const buildClarificationSystemPrompt = useCallback((previewConfig: any) => {
@@ -3196,7 +3463,7 @@ ${recommendationPrompt}
     setClarificationForm(null);
     setClarificationAnswers({});
     retryAttemptedRef.current = false;
-    await ensureDraftCreationSession(targetFrontendSessionId);
+    const activeDraftSessionId = await ensureDraftCreationSession(targetFrontendSessionId);
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
       const startRes = await fetch('/api/chat/stream', {
@@ -3392,6 +3659,14 @@ ${recommendationPrompt}
             clarificationForm: clarification,
             clarificationAnswers: {},
           });
+          if (activeDraftSessionId) {
+            await appendCreationSessionTags({
+              id: activeDraftSessionId,
+              chatSessionId: targetFrontendSessionId,
+              workflowName: values.workflowName,
+              filename: values.filename,
+            }, '等待补充回答');
+          }
           resolve();
         } catch (error) {
           setAiPhase('waiting');
@@ -3422,7 +3697,7 @@ ${recommendationPrompt}
         reject(new Error('计划生成流中断'));
       });
     });
-  }, [appendPlanningAssistantMessage, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
+  }, [appendCreationSessionTags, appendPlanningAssistantMessage, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState]);
 
   const generatePlanWithChatSession = useCallback(async () => {
     const values = getValues();
@@ -3816,6 +4091,14 @@ ${recommendationPrompt}
       clarificationForm,
       clarificationAnswers,
     });
+    if (draftCreationSessionId || previewSession?.id) {
+      await appendCreationSessionTags({
+        id: draftCreationSessionId || previewSession?.id,
+        chatSessionId: planningFrontendSessionId,
+        workflowName: getValues('workflowName'),
+        filename: getValues('filename'),
+      }, '计划生成中');
+    }
 
     try {
       await generatePlanWithChatSession();
@@ -3991,6 +4274,7 @@ ${recommendationPrompt}
         setPreviewSession(result.creationSession);
         setDraftCreationSessionId(result.creationSession.id);
         await bindDraftCreationSessionToChat(result.creationSession).catch(() => {});
+        await appendCreationSessionTags(result.creationSession, '配置已生成');
       }
       setAiFilename(createdFilename);
       setWorkflowDraftConfig(validation.normalized || workflowDraftConfig);
@@ -4044,6 +4328,7 @@ ${recommendationPrompt}
     workflowDraftConfig,
     workflowMode,
     bindDraftCreationSessionToChat,
+    appendCreationSessionTags,
   ]);
 
   // Handle user reply in AI conversation
@@ -4118,6 +4403,10 @@ ${recommendationPrompt}
         return;
       }
       toast('success', result.message || '配置文件已创建');
+      if (result.creationSession) {
+        await bindDraftCreationSessionToChat(result.creationSession).catch(() => {});
+        await appendCreationSessionTags(result.creationSession, '配置已生成');
+      }
       reset();
       onSuccess(values.filename, { creationSession: result.creationSession });
       onClose();
@@ -4209,6 +4498,7 @@ ${recommendationPrompt}
       },
       body: JSON.stringify({
         chatSessionId: planningFrontendSessionId || previewSession?.chatSessionId || undefined,
+        homeChatSessionId: frontendSessionId || previewSession?.homeChatSessionId || undefined,
         status: 'config-generated',
         specCodingStatus: 'confirmed',
         filename,
@@ -4229,37 +4519,14 @@ ${recommendationPrompt}
       const data = await sessionResponse.json().catch(() => null);
       throw new Error(data?.error || '创建创建态会话失败');
     }
-      const sessionResult = await sessionResponse.json();
-    if (frontendSessionId && sessionResult?.session?.specCoding) {
-      await fetch(`/api/chat/sessions/${encodeURIComponent(frontendSessionId)}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          ...(await (async () => {
-            const sessionResp = await fetch(`/api/chat/sessions/${encodeURIComponent(frontendSessionId)}`, {
-              headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
-            const sessionData = await sessionResp.json().catch(() => null);
-            return sessionData?.session || {};
-          })()),
-          creationSession: {
-            creationSessionId: sessionResult.session.id,
-            filename: sessionResult.session.filename,
-            workflowName: sessionResult.session.workflowName,
-            status: sessionResult.session.status,
-            specCodingId: sessionResult.session.specCoding.id,
-            createdAt: sessionResult.session.createdAt,
-            updatedAt: sessionResult.session.updatedAt,
-          },
-        }),
-      }).catch(() => {});
+    const sessionResult = await sessionResponse.json();
+    if (sessionResult?.session?.specCoding) {
+      await bindDraftCreationSessionToChat(sessionResult.session).catch(() => {});
+      await appendCreationSessionTags(sessionResult.session, '配置已生成');
     }
     setPreviewSession(sessionResult.session);
     return sessionResult.session;
-  }, [effectiveReferenceWorkflowValue, frontendSessionId, getValues, previewSession?.id, workflowMode]);
+  }, [appendCreationSessionTags, bindDraftCreationSessionToChat, effectiveReferenceWorkflowValue, frontendSessionId, getValues, planningFrontendSessionId, previewSession, workflowMode]);
 
   const handleAiComplete = async () => {
     const filename = aiFilename;
@@ -4354,7 +4621,21 @@ ${recommendationPrompt}
             <div className="text-xs leading-5 text-muted-foreground">
               AI 会先提出会影响后续计划和 Agent 编排的关键问题。你用表单补全后，系统才会继续生成正式计划。
             </div>
-            <div className="mt-4 flex-1 overflow-y-auto rounded-xl border bg-background p-4">
+            {!clarificationForm ? (
+              <PlanningContextSnapshot
+                workflowName={workflowNameValue}
+                filename={filenameValue}
+                workingDirectory={workingDirectoryValue}
+                workspaceMode={workspaceModeValue}
+                referenceWorkflow={effectiveReferenceWorkflowValue}
+                description={descriptionValue}
+                requirements={requirementsValue}
+              />
+            ) : null}
+            <div
+              ref={!clarificationForm ? streamContentRef : undefined}
+              className="relative mt-4 flex-1 overflow-y-auto rounded-xl border bg-background p-4"
+            >
                 {clarificationForm ? (
                   <div className="space-y-4">
                     <div>
@@ -4483,78 +4764,81 @@ ${recommendationPrompt}
                     </div>
                   </div>
                 ) : (
-                  <div ref={streamContentRef} className="min-h-0 space-y-3 overflow-x-hidden">
-                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
-                      <div className="flex items-center gap-2 font-medium">
-                        {isGeneratingPlan ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" /> : <span className="material-symbols-outlined text-base">help</span>}
-                        {isGeneratingPlan ? 'AI 正在分析并生成补充问答表' : '等待生成补充问答表'}
-                      </div>
-                      <div className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
-                        {isGeneratingPlan ? '下面会实时显示 AI 的分析过程；问题生成完成后，这个过程块会直接替换为问答表。' : '点击“重新提问”后，这里会显示 AI 的完整分析过程。'}
-                      </div>
-                    </div>
-
-                    {aiMessages.map((msg, i) => (
-                      <div key={`${msg.role}-${i}`}>
-                        {msg.role === 'thinking' ? (
-                          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
-                            <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                              <span className="material-symbols-outlined text-sm">psychology</span>
-                              思考过程
-                            </div>
-                            <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-amber-800 dark:text-amber-300">{msg.content}</pre>
-                          </div>
-                        ) : msg.role === 'user' ? null : (
-                          (() => {
-                            const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
-                            return (
-                              <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
-                                {text ? <Markdown>{text}</Markdown> : null}
-                                {cards.map((card, ci) => (
-                                  <UniversalCard key={ci} card={card} />
-                                ))}
-                              </div>
-                            );
-                          })()
-                        )}
-                      </div>
-                    ))}
-
-                    {currentThinking ? (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
-                        <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                          <span className="material-symbols-outlined text-sm">psychology</span>
-                          思考过程<span className="animate-pulse">...</span>
+                  <>
+                    <div className="min-h-0 space-y-3 pb-12">
+                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
+                        <div className="flex items-center gap-2 font-medium">
+                          {isGeneratingPlan ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" /> : <span className="material-symbols-outlined text-base">help</span>}
+                          {isGeneratingPlan ? 'AI 正在分析并生成补充问答表' : '等待生成补充问答表'}
                         </div>
-                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-amber-800 dark:text-amber-300">{currentThinking}</pre>
+                        <div className="mt-1 text-xs text-amber-700/80 dark:text-amber-300/80">
+                          {isGeneratingPlan ? '下面会实时显示 AI 的分析过程；问题生成完成后，这个过程块会直接替换为问答表。' : '点击“重新提问”后，这里会显示 AI 的完整分析过程。'}
+                        </div>
                       </div>
-                    ) : null}
 
-                    {currentStream ? (
-                      (() => {
-                        const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
-                        return (
-                          <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
-                            {text ? <Markdown>{text}</Markdown> : null}
-                            {cards.map((card, ci) => (
-                              <UniversalCard key={ci} card={card} />
-                            ))}
-                            <PlanningThinkingBot />
+                      {aiMessages.map((msg, i) => (
+                        <div key={`${msg.role}-${i}`}>
+                          {msg.role === 'thinking' ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+                              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                                <span className="material-symbols-outlined text-sm">psychology</span>
+                                思考过程
+                              </div>
+                              <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-amber-800 dark:text-amber-300">{msg.content}</pre>
+                            </div>
+                          ) : msg.role === 'user' ? null : (
+                            (() => {
+                              const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
+                              return (
+                                <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
+                                  {text ? <Markdown>{text}</Markdown> : null}
+                                  {cards.map((card, ci) => (
+                                    <UniversalCard key={ci} card={card} />
+                                  ))}
+                                </div>
+                              );
+                            })()
+                          )}
+                        </div>
+                      ))}
+
+                      {currentThinking ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30">
+                          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                            <span className="material-symbols-outlined text-sm">psychology</span>
+                            思考过程<span className="animate-pulse">...</span>
                           </div>
-                        );
-                      })()
-                    ) : null}
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-amber-800 dark:text-amber-300">{currentThinking}</pre>
+                        </div>
+                      ) : null}
 
-                    {isGeneratingPlan && !currentStream ? (
-                      <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
-                        <PlanningThinkingBot />
-                      </div>
-                    ) : null}
+                      {currentStream ? (
+                        (() => {
+                          const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
+                          return (
+                            <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
+                              {text ? <Markdown>{text}</Markdown> : null}
+                              {cards.map((card, ci) => (
+                                <UniversalCard key={ci} card={card} />
+                              ))}
+                              <PlanningThinkingBot />
+                            </div>
+                          );
+                        })()
+                      ) : null}
 
-                    {!aiMessages.length && !currentThinking && !currentStream ? (
-                      <div className="h-full" />
-                    ) : null}
-                  </div>
+                      {isGeneratingPlan && !currentStream ? (
+                        <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
+                          <PlanningThinkingBot />
+                        </div>
+                      ) : null}
+
+                      {!aiMessages.length && !currentThinking && !currentStream ? (
+                        <div className="h-full" />
+                      ) : null}
+                    </div>
+                    <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
+                  </>
                 )}
             </div>
           </div>
@@ -4635,7 +4919,19 @@ ${recommendationPrompt}
             <div className="text-xs leading-5 text-muted-foreground">
               系统正在结合你的补充回答生成正式计划制品。完成后会自动进入确认阶段。
             </div>
-            <div ref={streamContentRef} className="mt-4 min-h-0 flex-1 space-y-3 overflow-auto rounded-xl border bg-background p-4">
+            <div ref={streamContentRef} className="relative mt-4 min-h-0 flex-1 space-y-3 overflow-auto rounded-xl border bg-background p-4 pb-16">
+              <PlanningContextSnapshot
+                workflowName={workflowNameValue}
+                filename={filenameValue}
+                workingDirectory={workingDirectoryValue}
+                workspaceMode={workspaceModeValue}
+                referenceWorkflow={effectiveReferenceWorkflowValue}
+                description={descriptionValue}
+                requirements={requirementsValue}
+                clarificationForm={clarificationForm}
+                clarificationAnswers={clarificationAnswers}
+                showClarification
+              />
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">
                 <div className="flex items-center gap-2 font-medium">
                   {isGeneratingPlan ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" /> : <span className="material-symbols-outlined text-base">map</span>}
@@ -4701,6 +4997,7 @@ ${recommendationPrompt}
                   <PlanningThinkingBot />
                 </div>
               ) : null}
+              <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
             </div>
           </div>
           <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">

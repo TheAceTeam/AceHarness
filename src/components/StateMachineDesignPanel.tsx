@@ -83,6 +83,7 @@ const VERDICT_TRANSITION_PRESETS = [
 ];
 
 type VerdictTransition = typeof VERDICT_TRANSITION_PRESETS[number]['verdict'];
+const REQUIRED_VERDICTS: VerdictTransition[] = ['pass', 'conditional_pass', 'fail'];
 
 const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
 
@@ -159,12 +160,10 @@ function buildVerdictTransitions(
   existingTransitions?: StateTransition[]
 ): StateTransition[] {
   const transitions = Array.isArray(existingTransitions) ? existingTransitions : state.transitions || [];
-  const defaultForwardTarget = states.find((item) => item.name !== state.name)?.name || '';
   return VERDICT_TRANSITION_PRESETS.map((preset) => {
     const existing = transitions.find((transition) => transition.condition?.verdict === preset.verdict);
-    const fallbackTarget = preset.verdict === 'pass' ? defaultForwardTarget : state.name;
     return {
-      to: existing?.to ?? fallbackTarget,
+      to: existing?.to ?? '',
       condition: {
         ...(existing?.condition || {}),
         verdict: preset.verdict,
@@ -173,6 +172,37 @@ function buildVerdictTransitions(
       label: existing?.label || preset.defaultLabel,
     };
   });
+}
+
+function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
+  if (state.isFinal) return [];
+
+  const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+  const stateNames = new Set(states.map((item) => item.name));
+  const errors: string[] = [];
+
+  for (const verdict of REQUIRED_VERDICTS) {
+    const matches = transitions.filter((transition) => transition.condition?.verdict === verdict);
+    if (matches.length === 0) {
+      errors.push(`缺少 ${verdict} 路径`);
+      continue;
+    }
+    if (matches.length > 1) {
+      errors.push(`${verdict} 路径重复`);
+    }
+    if (!matches[0]?.to?.trim()) {
+      errors.push(`${verdict} 未设置目标状态`);
+    } else if (!stateNames.has(matches[0].to)) {
+      errors.push(`${verdict} 指向不存在的状态`);
+    }
+  }
+
+  const nonVerdictTransitions = transitions.filter((transition) => !REQUIRED_VERDICTS.includes(transition.condition?.verdict as VerdictTransition));
+  if (nonVerdictTransitions.length > 0) {
+    errors.push('存在未绑定 verdict 的转移');
+  }
+
+  return errors;
 }
 
 // 可拖拽的步骤行
@@ -248,12 +278,14 @@ function SortableStateListItem({
   state,
   index,
   isSelected,
+  errors,
   onSelect,
   onDelete,
 }: {
   state: StateMachineState;
   index: number;
   isSelected: boolean;
+  errors?: string[];
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -298,8 +330,14 @@ function SortableStateListItem({
         <div className={`text-xs ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {state.steps?.length ?? 0}步 · {state.transitions?.length ?? 0}转移
         </div>
+        {errors && errors.length > 0 ? (
+          <div className={`mt-1 text-[11px] ${isSelected ? 'text-primary-foreground/85' : 'text-red-500'}`}>
+            {errors[0]}
+          </div>
+        ) : null}
       </div>
       <div className="flex gap-0.5 ml-0.5 flex-shrink-0">
+        {errors && errors.length > 0 ? <span className="w-1.5 h-1.5 rounded-full bg-red-500 self-center" title={errors.join('；')} /> : null}
         {state.isInitial && <span className="w-1.5 h-1.5 rounded-full bg-green-400 self-center" title="初始状态" />}
         {state.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-red-400 self-center" title="终止状态" />}
       </div>
@@ -361,16 +399,26 @@ function VerdictTransitionCard({
         </button>
         <div className="min-w-0 flex-1 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
-                <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
+                  <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
+                  {!transition.to ? (
+                    <Badge variant="destructive" className="text-[10px]">
+                      未配置
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="text-xs text-muted-foreground">{preset.description}</div>
+                {!transition.to ? (
+                  <div className="text-xs text-red-500">
+                    该路径还没有配置跳转目标，当前状态将无法通过保存校验。
+                  </div>
+                ) : null}
               </div>
-              <div className="text-xs text-muted-foreground">{preset.description}</div>
-            </div>
-            <div className="rounded-full border bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground">
-              {conditionSummary()}
-            </div>
+              <div className="rounded-full border bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground">
+                {conditionSummary()}
+              </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -534,6 +582,10 @@ export default function StateMachineDesignPanel({
 
   const selectedState = states.find(s => s.name === selectedStateName) ?? null;
   const selectedStateIndex = states.findIndex(s => s.name === selectedStateName);
+  const stateNodeErrors = useMemo(
+    () => Object.fromEntries(states.map((state) => [state.name, getStateNodeErrors(state, states)])),
+    [states]
+  );
   const selectedStateVerdictTransitions = useMemo(
     () => (selectedState && !selectedState.isFinal ? buildVerdictTransitions(selectedState, states, selectedState.transitions) : []),
     [selectedState, states]
@@ -773,6 +825,7 @@ export default function StateMachineDesignPanel({
                     state={state}
                     index={index}
                     isSelected={selectedStateName === state.name}
+                    errors={stateNodeErrors[state.name] || []}
                     onSelect={() => setSelectedStateName(state.name)}
                     onDelete={() => handleDeleteState(state.name)}
                   />
