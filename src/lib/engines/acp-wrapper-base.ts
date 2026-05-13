@@ -8,6 +8,7 @@
 
 import { EventEmitter } from 'events';
 import { ACPEngine, logAcpTiming } from './acp-engine';
+import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
@@ -49,6 +50,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected seenToolIds = new Set<string>();
   protected streaming = false;
   protected collectedOutput = '';
+  protected currentModelId: string | null = null;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
@@ -70,6 +72,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         if (this.engine) {
           try { await this.engine.stop(); } catch {}
         }
+        this.currentModelId = null;
         logAcpTiming(timingLabel, 'wrap.W0_stop_previous_engine', tStop);
 
         const tStart = Date.now();
@@ -89,6 +92,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
           this.currentSessionId = await startedEngine.createSession();
           logAcpTiming(timingLabel, 'wrap.W2_createSession', tSess);
         }
+        this.currentModelId = null;
       }
 
       const engine = this.engine;
@@ -96,10 +100,11 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-      if (options.model) {
+      if (options.model && this.currentModelId !== options.model) {
         const tModel = Date.now();
         try {
           await engine.setModel(options.model);
+          this.currentModelId = options.model;
           logAcpTiming(timingLabel, 'wrap.W3_setModel', tModel);
         } catch (modelErr: any) {
           // Emit the error to the stream so the user sees available models in the UI
@@ -180,6 +185,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       this.engine.cancelSession();
       this.engine.stop();
       this.engine = null;
+      this.currentModelId = null;
     }
   }
 

@@ -221,6 +221,7 @@ async function buildAcpRenderedMessage(
 
     return {
       ACPEngine: MockACPEngine,
+      logAcpTiming: vi.fn(),
     };
   });
 

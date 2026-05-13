@@ -6,6 +6,7 @@ import { getInstallPath, getWorkspaceCacheFile, getWorkspaceSkillPath, getWorksp
 
 const INSTALL_SKILLS_DIR = getInstallPath('skills');
 let seedPromise: Promise<void> | null = null;
+let runtimeSkillsSeeded = false;
 
 /** Dependencies required by aceharness-* skills scripts */
 const SKILL_DEPS = ['yaml', 'zod'];
@@ -65,6 +66,7 @@ async function ensureSkillDeps(): Promise<void> {
 }
 
 export async function ensureRuntimeSkillsSeeded(): Promise<void> {
+  if (runtimeSkillsSeeded) return;
   if (seedPromise) return seedPromise;
 
   seedPromise = (async () => {
@@ -72,6 +74,7 @@ export async function ensureRuntimeSkillsSeeded(): Promise<void> {
     if (!existsSync(INSTALL_SKILLS_DIR)) {
       await mkdir(runtimeSkillsDir, { recursive: true });
       await ensureSkillDeps();
+      runtimeSkillsSeeded = true;
       return;
     }
 
@@ -79,11 +82,13 @@ export async function ensureRuntimeSkillsSeeded(): Promise<void> {
       await mkdir(dirname(runtimeSkillsDir), { recursive: true });
       await cp(INSTALL_SKILLS_DIR, runtimeSkillsDir, { recursive: true, force: false });
       await ensureSkillDeps();
+      runtimeSkillsSeeded = true;
       return;
     }
 
     await copyMissingRecursive(INSTALL_SKILLS_DIR, runtimeSkillsDir);
     await ensureSkillDeps();
+    runtimeSkillsSeeded = true;
   })().finally(() => {
     seedPromise = null;
   });
@@ -128,6 +133,7 @@ export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promis
   }
 
   await ensureSkillDeps();
+  runtimeSkillsSeeded = true;
   return { synced, missing };
 }
 

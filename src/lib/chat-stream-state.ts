@@ -13,6 +13,8 @@ interface EngineStreamState {
 const chatsById = new Map<string, EngineStreamState>();
 const frontendToChatId = new Map<string, string>();
 const backendToChatId = new Map<string, string>();
+const frontendToBackendSessionId = new Map<string, { backendSessionId: string; expiresAt: number }>();
+const FRONTEND_SESSION_REUSE_TTL_MS = 9 * 60 * 1000;
 
 export function registerEngineStream(chatId: string, frontendSessionId?: string, engine?: string, model?: string): void {
   chatsById.set(chatId, {
@@ -40,6 +42,12 @@ export function setEngineStreamSessionId(chatId: string, backendSessionId?: stri
   if (!state) return;
   state.backendSessionId = backendSessionId;
   backendToChatId.set(backendSessionId, chatId);
+  if (state.frontendSessionId) {
+    frontendToBackendSessionId.set(state.frontendSessionId, {
+      backendSessionId,
+      expiresAt: Date.now() + FRONTEND_SESSION_REUSE_TTL_MS,
+    });
+  }
 }
 
 export function setEngineStreamStatus(chatId: string, status: EngineStreamStatus): void {
@@ -62,6 +70,17 @@ export function getEngineStreamByBackendSessionId(backendSessionId: string): Eng
   const chatId = backendToChatId.get(backendSessionId);
   if (!chatId) return undefined;
   return chatsById.get(chatId);
+}
+
+export function getBackendSessionIdByFrontendSessionId(frontendSessionId: string): string | undefined {
+  const entry = frontendToBackendSessionId.get(frontendSessionId);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    frontendToBackendSessionId.delete(frontendSessionId);
+    return undefined;
+  }
+  entry.expiresAt = Date.now() + FRONTEND_SESSION_REUSE_TTL_MS;
+  return entry.backendSessionId;
 }
 
 export function removeEngineStream(chatId: string): void {

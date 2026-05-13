@@ -11,6 +11,15 @@ import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
 
 const SETTINGS_PATH = getWorkspaceDataFile('chat-settings.yaml');
+const CACHE_TTL_MS = 5_000;
+
+let skillsCache: { value: SkillInfo[]; expiresAt: number } | null = null;
+let settingsCache: { value: ChatSettings; expiresAt: number } | null = null;
+
+export function invalidateChatSettingsCache(): void {
+  skillsCache = null;
+  settingsCache = null;
+}
 
 export interface SkillInfo {
   name: string;        // 目录名，如 power-gitcode
@@ -51,8 +60,7 @@ function parseSkillMdBody(content: string): { label: string; description: string
   return { label, description };
 }
 
-/** 扫描 skills/xxx/SKILL.md，发现所有技能并提取元数据 */
-export async function discoverSkills(): Promise<SkillInfo[]> {
+async function discoverSkillsUncached(): Promise<SkillInfo[]> {
   const skills: SkillInfo[] = [];
   try {
     const skillsDir = await getRuntimeSkillsDirPath();
@@ -85,13 +93,30 @@ export async function discoverSkills(): Promise<SkillInfo[]> {
   return skills;
 }
 
+/** 扫描 skills/xxx/SKILL.md，发现所有技能并提取元数据 */
+export async function discoverSkills(): Promise<SkillInfo[]> {
+  const now = Date.now();
+  if (skillsCache && skillsCache.expiresAt > now) {
+    return skillsCache.value;
+  }
+  const value = await discoverSkillsUncached();
+  skillsCache = { value, expiresAt: now + CACHE_TTL_MS };
+  return value;
+}
+
 export async function loadChatSettings(): Promise<ChatSettings> {
+  const now = Date.now();
+  if (settingsCache && settingsCache.expiresAt > now) {
+    return settingsCache.value;
+  }
+
   const discovered = await discoverSkills();
   const discoveredNames = new Set(discovered.map((skill) => skill.name));
   const defaults: Record<string, boolean> = {};
   const DEFAULT_ENABLED = ['aceharness-chat-card'];
   for (const s of discovered) defaults[s.name] = DEFAULT_ENABLED.includes(s.name);
 
+  let value: ChatSettings;
   try {
     const content = await readFile(SETTINGS_PATH, 'utf-8');
     const parsed = parse(content);
@@ -100,13 +125,17 @@ export async function loadChatSettings(): Promise<ChatSettings> {
         ([name, enabled]) => discoveredNames.has(name) && typeof enabled === 'boolean'
       )
     ) as Record<string, boolean>;
-    return { skills: { ...defaults, ...persistedSkills }, workingDirectory: parsed?.workingDirectory };
+    value = { skills: { ...defaults, ...persistedSkills }, workingDirectory: parsed?.workingDirectory };
   } catch {
-    return { skills: defaults };
+    value = { skills: defaults };
   }
+
+  settingsCache = { value, expiresAt: now + CACHE_TTL_MS };
+  return value;
 }
 
 export async function saveChatSettings(settings: ChatSettings): Promise<void> {
   await mkdir(dirname(SETTINGS_PATH), { recursive: true });
   await writeFile(SETTINGS_PATH, stringify(settings), 'utf-8');
+  invalidateChatSettingsCache();
 }

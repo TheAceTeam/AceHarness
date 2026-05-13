@@ -13,6 +13,7 @@ import {
   setEngineStreamStatus,
   getEngineStream,
   getEngineStreamByFrontendSessionId,
+  getBackendSessionIdByFrontendSessionId,
   removeEngineStream,
 } from '@/lib/chat-stream-state';
 import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
@@ -255,6 +256,9 @@ export async function POST(request: NextRequest) {
     systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${typeof extraSystemPrompt === 'string' && extraSystemPrompt.trim() ? `\n\n${extraSystemPrompt.trim()}` : ''}`.trim();
     const configuredEngine = perChatEngine || await getConfiguredEngine();
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
+    if (!validResumeSid && streamRecoveryKey) {
+      validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
+    }
     const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId);
 
     if (isAceTimingDebug()) {

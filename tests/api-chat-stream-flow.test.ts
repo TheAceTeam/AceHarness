@@ -32,6 +32,7 @@ vi.mock('@/lib/chat-stream-state', () => ({
   setEngineStreamStatus: vi.fn(),
   getEngineStream: vi.fn().mockReturnValue(null),
   getEngineStreamByFrontendSessionId: vi.fn().mockReturnValue(null),
+  getBackendSessionIdByFrontendSessionId: vi.fn().mockReturnValue(undefined),
   removeEngineStream: vi.fn(),
 }));
 
