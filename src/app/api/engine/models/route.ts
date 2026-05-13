@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ACPEngine } from '@/lib/engines/acp-engine';
+import { ACPEngine, getAcpModelDiscoveryTimeoutMs } from '@/lib/engines/acp-engine';
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
 import { commandExists } from '@/lib/command-exists';
 
@@ -71,9 +71,17 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    // Set a timeout — if engine doesn't respond in 30s, abort
+    const discoveryMs = getAcpModelDiscoveryTimeoutMs();
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Engine model discovery timed out (30s)')), 30000)
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Engine model discovery timed out (${discoveryMs}ms; set ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS or ACE_ACP_INIT_TIMEOUT_MS / ACE_ACP_NEW_SESSION_TIMEOUT_MS)`
+            )
+          ),
+        discoveryMs
+      )
     );
 
     const discover = async () => {

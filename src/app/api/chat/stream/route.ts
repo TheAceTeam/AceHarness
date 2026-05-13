@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { processManager } from '@/lib/process-manager';
 import { getOrCreateEngine, getConfiguredEngine } from '@/lib/engines/engine-factory';
+import { isAceTimingDebug } from '@/lib/engines/acp-engine';
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
 import { loadChatSettings } from '@/lib/chat-settings';
@@ -200,6 +201,7 @@ export async function POST(request: NextRequest) {
     }
 
     const chatId = `chat-${Date.now()}`;
+    const streamPrepT0 = Date.now();
     const useModel = model || '';
 
     // On resume, skip full system prompt (session already has it).
@@ -255,6 +257,12 @@ export async function POST(request: NextRequest) {
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId);
 
+    if (isAceTimingDebug()) {
+      console.log(
+        `[ACE_TIMING][chat/stream][${chatId}] S0_auth_prompts_pool: ${Date.now() - streamPrepT0}ms (engine=${configuredEngine})`
+      );
+    }
+
     // Ensure engine config dir + skills symlink exists in working directory
     if (engine) {
       const workDir = engineRuntimeDirectory;
@@ -268,6 +276,12 @@ export async function POST(request: NextRequest) {
         const skillsLink = join(configDir, 'skills');
         if (existsSync(skillsDir)) ensureDirectoryLinkSync(skillsDir, skillsLink);
       } catch { /* ignore */ }
+    }
+
+    if (engine && isAceTimingDebug()) {
+      console.log(
+        `[ACE_TIMING][chat/stream][${chatId}] S1_ready_before_execute: ${Date.now() - streamPrepT0}ms (symlink+pool)`
+      );
     }
 
     // Non-Claude engines: stream through Engine wrapper events
@@ -306,6 +320,11 @@ export async function POST(request: NextRequest) {
         sessionId: validResumeSid,
         appendSystemPrompt: !!validResumeSid && !!systemPrompt,
       }).then((result) => {
+        if (isAceTimingDebug()) {
+          console.log(
+            `[ACE_TIMING][chat/stream][${chatId}] S2_engine_execute_wall: ${Date.now() - startedAt}ms (platform overhead ≈ S1; agent+ACP ≈ wrap.W4 / acp.6)`
+          );
+        }
         if (result.sessionId) {
           setEngineStreamSessionId(chatId, result.sessionId);
           if (proc) proc.sessionId = result.sessionId;

@@ -57,6 +57,56 @@ export type ACPStopReason = StopReason;
 
 const ACP_STREAM_DEBUG = process.env.ACE_ACP_STREAM_DEBUG === '1';
 
+/** 打印 ACP / 对话各阶段耗时（与 chat/stream 共用）。`ACE_TIMING_DEBUG=1` 或 `ACE_ACP_TIMING_DEBUG=1` */
+export function isAceTimingDebug(): boolean {
+  return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_ACP_TIMING_DEBUG === '1';
+}
+
+export function logAcpTiming(engineType: string, phase: string, startedAt: number, extra?: string): void {
+  if (!isAceTimingDebug()) return;
+  const ms = Date.now() - startedAt;
+  const tail = extra ? ` | ${extra}` : '';
+  console.log(`[ACE_TIMING][${engineType}] ${phase}: ${ms}ms${tail}`);
+}
+
+const DEFAULT_ACP_PHASE_MS = 30_000;
+const MIN_ACP_PHASE_MS = 1_000;
+const MAX_ACP_PHASE_MS = 900_000;
+
+function parseAcpPhaseTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const n = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_ACP_PHASE_MS, Math.max(MIN_ACP_PHASE_MS, n));
+}
+
+/** Timeout for `connection.initialize` (ms). Env: `ACE_ACP_INIT_TIMEOUT_MS`, default 30000. */
+export function getAcpInitTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 30000. */
+export function getAcpNewSessionTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/** Timeout for `session/load` when resuming (ms). Env: `ACE_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
+export function getAcpLoadSessionTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_LOAD_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/**
+ * Outer timeout for GET /api/engine/models (full start + session + model list).
+ * Env: `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS`; if unset, uses init + newSession + 15s headroom.
+ */
+export function getAcpModelDiscoveryTimeoutMs(): number {
+  const raw = process.env.ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS;
+  if (raw != null && String(raw).trim() !== '') {
+    return parseAcpPhaseTimeoutMs(raw, getAcpInitTimeoutMs() + getAcpNewSessionTimeoutMs() + 15_000);
+  }
+  return getAcpInitTimeoutMs() + getAcpNewSessionTimeoutMs() + 15_000;
+}
+
 export interface ACPSendPromptResult {
   stopReason: ACPStopReason;
   usage?: Usage | null;
@@ -140,6 +190,7 @@ export class ACPEngine extends EventEmitter {
    * Start the ACP engine process
    */
   async start(): Promise<void> {
+    const tStartTotal = Date.now();
     const args = this.buildCommandArgs();
     const commonCliPaths = getCommonCliSearchPaths();
     const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
@@ -159,10 +210,12 @@ export class ACPEngine extends EventEmitter {
 
     console.log(`[${this.config.engineType}] spawning: ${resolvedCommand} ${args.join(' ')}`);
 
+    const tSpawn = Date.now();
     this.process = spawnAcpCli(this.config.engineType, resolvedCommand, args, {
       cwd: this.config.workingDirectory,
       env: childEnv,
     });
+    logAcpTiming(this.config.engineType, 'acp.1_spawn_call_wall', tSpawn);
 
     if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
       throw new Error(`Failed to create ${this.config.engineType} process streams`);
@@ -190,6 +243,7 @@ export class ACPEngine extends EventEmitter {
       this.emit('error', error);
       this.cleanup(`${this.config.engineType} process error: ${error.message}`);
     });
+    const tStreams = Date.now();
     // Convert Node streams to Web streams for the SDK
     const output = Writable.toWeb(this.process.stdin) as WritableStream<Uint8Array>;
     const input = Readable.toWeb(this.process.stdout) as ReadableStream<Uint8Array>;
@@ -253,9 +307,13 @@ export class ACPEngine extends EventEmitter {
         }
       },
     }), stream);
+    logAcpTiming(this.config.engineType, 'acp.2_ndjson_stream_ready', tStreams);
 
     console.log(`[${this.config.engineType}] initializing ACP client...`);
+    const tInit = Date.now();
     await this.initialize();
+    logAcpTiming(this.config.engineType, 'acp.3_initialize_including_rpc', tInit);
+    logAcpTiming(this.config.engineType, 'acp.0_start_process_to_initialized', tStartTotal);
     console.log(`[${this.config.engineType}] ACP client initialized`);
   }
 
@@ -313,8 +371,9 @@ export class ACPEngine extends EventEmitter {
       },
     });
 
-    const initTimeoutMs = 30_000;
+    const initTimeoutMs = getAcpInitTimeoutMs();
     let result;
+    const tInitRpc = Date.now();
     try {
       result = await Promise.race([
         initPromise,
@@ -323,7 +382,7 @@ export class ACPEngine extends EventEmitter {
             () =>
               reject(
                 new Error(
-                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
+                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_INIT_TIMEOUT_MS to increase)`
                 )
               ),
             initTimeoutMs
@@ -333,16 +392,19 @@ export class ACPEngine extends EventEmitter {
     } catch (error) {
       throw this.withAcpDiagnostics('connection.initialize', error);
     }
+    logAcpTiming(this.config.engineType, 'acp.3a_connection.initialize_rpc', tInitRpc);
     this.initialized = true;
     console.log(`[${this.config.engineType}] connection.initialize() done`);
 
     // Cursor ACP requires authenticate after initialize
     if (this.config.engineType === 'cursor') {
+      const tAuth = Date.now();
       try {
         await this.connection.authenticate({ methodId: 'cursor_login' });
       } catch (e) {
         console.log(`[${this.config.engineType}] authenticate: ${e instanceof Error ? e.message : e}`);
       }
+      logAcpTiming(this.config.engineType, 'acp.3b_cursor_authenticate', tAuth);
     }
 
     this.emit('initialized', result);
@@ -359,8 +421,9 @@ export class ACPEngine extends EventEmitter {
       mcpServers: [],
     });
 
-    const sessionTimeoutMs = 30_000;
+    const sessionTimeoutMs = getAcpNewSessionTimeoutMs();
     let result;
+    const tNewSess = Date.now();
     try {
       result = await Promise.race([
         newSessionPromise,
@@ -369,7 +432,7 @@ export class ACPEngine extends EventEmitter {
             () =>
               reject(
                 new Error(
-                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
+                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_NEW_SESSION_TIMEOUT_MS to increase)`
                 )
               ),
             sessionTimeoutMs
@@ -379,6 +442,7 @@ export class ACPEngine extends EventEmitter {
     } catch (error) {
       throw this.withAcpDiagnostics('newSession', error);
     }
+    logAcpTiming(this.config.engineType, 'acp.4_newSession_rpc', tNewSess);
     this.sessionId = result.sessionId;
     this.availableModels = (result.models?.availableModels as any[]) || [];
     console.log(`[${this.config.engineType}] session created: ${this.sessionId}`);
@@ -400,7 +464,33 @@ export class ACPEngine extends EventEmitter {
    */
   async resumeSession(sessionId: string): Promise<string> {
     if (!this.initialized || !this.connection) throw new Error(`${this.config.engineType} not initialized`);
-    const result = await this.connection.loadSession({ sessionId, cwd: this.config.workingDirectory, mcpServers: [] });
+    const loadPromise = this.connection.loadSession({
+      sessionId,
+      cwd: this.config.workingDirectory,
+      mcpServers: [],
+    });
+    const loadTimeoutMs = getAcpLoadSessionTimeoutMs();
+    let result;
+    const tLoad = Date.now();
+    try {
+      result = await Promise.race([
+        loadPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP session/load timeout after ${loadTimeoutMs}ms. sessionId=${sessionId}. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_LOAD_SESSION_TIMEOUT_MS to increase)`
+                )
+              ),
+            loadTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('session/load', error);
+    }
+    logAcpTiming(this.config.engineType, 'acp.4_session_load_rpc', tLoad, `sessionId=${sessionId}`);
     this.sessionId = sessionId;
     this.availableModels = (result.models?.availableModels as any[]) || this.availableModels;
     this.emit('session-resumed', {
@@ -420,10 +510,17 @@ export class ACPEngine extends EventEmitter {
     console.log(`[${this.config.engineType}] sendPrompt: sessionId=${this.sessionId}, promptLength=${prompt.length}`);
 
     try {
+      const tPrompt = Date.now();
       const result = await this.connection.prompt({
         sessionId: this.sessionId,
         prompt: [{ type: 'text', text: prompt }],
       });
+      logAcpTiming(
+        this.config.engineType,
+        'acp.6_prompt_rpc_agent_wall',
+        tPrompt,
+        `stopReason=${result.stopReason ?? 'n/a'} len=${prompt.length}`
+      );
       console.log(`[${this.config.engineType}] sendPrompt completed: stopReason=${result.stopReason}`);
       return {
         stopReason: result.stopReason,
@@ -450,8 +547,10 @@ export class ACPEngine extends EventEmitter {
       throw err;
     }
     console.log(`[${this.config.engineType}] setModel: "${modelId}" -> resolved: "${resolved}"`);
+    const tSet = Date.now();
     try {
       await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId: resolved });
+      logAcpTiming(this.config.engineType, 'acp.5_setSessionModel_rpc', tSet, resolved);
     } catch (err) {
       const modelList = this.availableModels.map(m => `  ${m.modelId} (${m.name})`).join('\n');
       const wrapped = new Error(
