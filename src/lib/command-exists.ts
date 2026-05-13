@@ -4,6 +4,30 @@ import { delimiter, isAbsolute, join } from 'path';
 
 const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
 
+/**
+ * Windows often stores user PATH as "Path" (mixed case). Node usually aliases it, but some
+ * launchers / parent processes only set one of PATH vs Path for child Node—then PATH scanning
+ * and cmd-launched where.exe can disagree with an interactive CMD session.
+ */
+function getProcessPathEnv(): string {
+  if (process.platform !== 'win32') {
+    return process.env.PATH || '';
+  }
+  const path = process.env.PATH || process.env.Path;
+  return path || '';
+}
+
+function windowsEnvForChildProcess(): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return process.env;
+  const mergedPath = getProcessPathEnv();
+  if (!mergedPath) return process.env;
+  return {
+    ...process.env,
+    PATH: mergedPath,
+    Path: mergedPath,
+  };
+}
+
 function defaultWindowsScanDirs(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
   const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
@@ -118,6 +142,7 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
         shell: resolveWindowsCmdShell(),
+        env: windowsEnvForChildProcess(),
       }).trim();
       const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       const preferred = pickPreferredWindowsCommand(lines);
@@ -127,7 +152,7 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
     }
   }
 
-  const pathDirs = (process.env.PATH || '')
+  const pathDirs = getProcessPathEnv()
     .split(delimiter)
     .filter(Boolean);
   const candidates = getExecutableCandidates(command);
@@ -157,6 +182,7 @@ export function commandExists(command: string, extraPaths: string[] = []): boole
       stdio: 'ignore',
       timeout: 5000,
       windowsHide: true,
+      env: process.platform === 'win32' ? windowsEnvForChildProcess() : process.env,
     });
     return true;
   } catch (err: any) {
