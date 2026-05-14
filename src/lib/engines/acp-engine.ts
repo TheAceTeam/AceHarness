@@ -57,9 +57,29 @@ export type ACPStopReason = StopReason;
 
 const ACP_STREAM_DEBUG = process.env.ACE_ACP_STREAM_DEBUG === '1';
 
-/** 打印 ACP / 对话各阶段耗时（与 chat/stream 共用）。`ACE_TIMING_DEBUG=1` 或 `ACE_ACP_TIMING_DEBUG=1` */
+/** `ACE_TIMING_DEBUG` / `ACE_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
+function parseTimingDebugEnv(value: string | undefined): boolean | null {
+  if (value == null) return null;
+  const v = String(value).trim().toLowerCase();
+  if (!v) return null;
+  if (['0', 'false', 'off', 'no'].includes(v)) return false;
+  if (['1', 'true', 'on', 'yes'].includes(v)) return true;
+  return null;
+}
+
+/**
+ * 是否打印 ACP / chat/stream 各阶段 `[ACE_TIMING]` 日志。
+ * - 未设置环境变量且为本地开发（`NODE_ENV` 非 `production` / `test`）时默认开启，便于 `npm run dev` 分析。
+ * - 生产或测试跑法默认关闭；需要时在部署环境设 `ACE_TIMING_DEBUG=1`。
+ * - 任一变量的显式 `0` / `false` / `off` / `no` 会关闭（优先于默认开）。
+ */
 export function isAceTimingDebug(): boolean {
-  return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_ACP_TIMING_DEBUG === '1';
+  const a = parseTimingDebugEnv(process.env.ACE_TIMING_DEBUG);
+  const b = parseTimingDebugEnv(process.env.ACE_ACP_TIMING_DEBUG);
+  if (a === false || b === false) return false;
+  if (a === true || b === true) return true;
+  const nodeEnv = process.env.NODE_ENV;
+  return nodeEnv !== 'production' && nodeEnv !== 'test';
 }
 
 export function logAcpTiming(engineType: string, phase: string, startedAt: number, extra?: string): void {
