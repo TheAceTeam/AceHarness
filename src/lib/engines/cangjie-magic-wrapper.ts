@@ -7,8 +7,8 @@
 
 import { EventEmitter } from 'events';
 import { CangjieMagicEngine } from './cangjie-magic';
-import { detectCangjieHome, isCjpmAvailable, buildCangjieSpawnEnv } from '../cangjie-env';
-import { loadEnvVars, buildEnvObject } from '../env-manager';
+import { detectCangjieHome, isCjpmAvailable, buildCangjieSpawnEnv } from '@/lib/cangjie/env';
+import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 
 const DEFAULT_COMMAND = 'cjpm run --name magic.examples.mcp_server';

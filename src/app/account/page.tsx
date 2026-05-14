@@ -14,7 +14,7 @@ import EnvVarsDialog from '@/components/EnvVarsDialog';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { ArrowLeft, FolderOpen, NotebookTabs, RadioTower } from 'lucide-react';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 
 interface UserInfo {
   id: string;

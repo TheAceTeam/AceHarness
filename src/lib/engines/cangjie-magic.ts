@@ -8,7 +8,7 @@
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { detectCangjieHome, buildCangjieSpawnEnv, buildCjpmShellCommand } from '../cangjie-env';
+import { detectCangjieHome, buildCangjieSpawnEnv, buildCjpmShellCommand } from '@/lib/cangjie/env';
 
 interface CangjieMagicOptions {
   projectDir: string;       // CangjieMagic project directory

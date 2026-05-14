@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getEngineMeta } from '@/lib/engine-metadata';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 interface ModelOption {
@@ -143,6 +143,7 @@ export default function EnginesPage() {
   useDocumentTitle('执行引擎');
   const [currentEngine, setCurrentEngine] = useState<string>('claude-code');
   const [defaultModel, setDefaultModel] = useState<string>('');
+  const [driverSelections, setDriverSelections] = useState<Record<string, 'stdio' | 'sdk'>>({});
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
@@ -171,6 +172,9 @@ export default function EnginesPage() {
   const getModelsForEngine = (engineId: string) =>
     models.filter(m => !m.engines || m.engines.length === 0 || m.engines.includes(engineId));
 
+  const getDriverForEngine = (engineId: string): 'stdio' | 'sdk' =>
+    driverSelections[engineId] || 'sdk';
+
   const loadCurrentEngine = async () => {
     try {
       const response = await fetch('/api/engine');
@@ -180,6 +184,13 @@ export default function EnginesPage() {
       }
       if (data.defaultModel) {
         setDefaultModel(data.defaultModel);
+      }
+      if (data.driver) {
+        setDriverSelections((prev) => ({
+          ...prev,
+          ...(data.drivers || {}),
+          ...(data.engine ? { [data.engine]: data.driver } : {}),
+        }));
       }
     } catch (error) {
       console.error('Failed to load current engine:', error);
@@ -272,6 +283,28 @@ export default function EnginesPage() {
     } catch (error) {
       console.error('Failed to set default model:', error);
       toast('error', '设置默认模型失败');
+    }
+  };
+
+  const handleSetEngineDriver = async (engineId: string, nextDriver: 'stdio' | 'sdk') => {
+    const previousDriver = getDriverForEngine(engineId);
+    setDriverSelections((prev) => ({ ...prev, [engineId]: nextDriver }));
+    try {
+      const response = await fetch('/api/engine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: engineId, driver: nextDriver }),
+      });
+      if (!response.ok) {
+        throw new Error('切换失败');
+      }
+      if (currentEngine === engineId) {
+        broadcastEngineUpdated();
+      }
+      toast('success', `已为 ${engines.find((item) => item.id === engineId)?.name || engineId} 设置 ${nextDriver} 驱动`);
+    } catch (error) {
+      setDriverSelections((prev) => ({ ...prev, [engineId]: previousDriver }));
+      toast('error', error instanceof Error ? error.message : '切换失败');
     }
   };
 
@@ -549,6 +582,39 @@ export default function EnginesPage() {
                   ))}
                 </div>
               </div>
+
+              {engine.status === 'available' && ['claude-code', 'opencode'].includes(engine.id) && (
+                <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">驱动模式：</p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={getDriverForEngine(engine.id) === 'stdio' ? 'default' : 'outline'}
+                      className="flex-1 h-8 text-xs"
+                      onClick={() => handleSetEngineDriver(engine.id, 'stdio')}
+                    >
+                      stdio (ACP)
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={getDriverForEngine(engine.id) === 'sdk' ? 'default' : 'outline'}
+                      className="flex-1 h-8 text-xs"
+                      onClick={() => handleSetEngineDriver(engine.id, 'sdk')}
+                    >
+                      SDK (HTTP)
+                    </Button>
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    {engine.id === 'claude-code'
+                      ? (getDriverForEngine(engine.id) === 'sdk'
+                        ? 'SDK 模式使用 @anthropic-ai/claude-agent-sdk，保持当前 Claude Code 默认接入方式'
+                        : 'stdio 模式通过 claude-agent-acp 走 ACP 协议，适合统一到 ACP 驱动栈')
+                      : (getDriverForEngine(engine.id) === 'sdk'
+                        ? 'SDK 模式通过 HTTP API 通信，一个 server 服务所有会话，更稳定'
+                        : 'stdio 模式通过子进程 stdin/stdout 通信，兼容旧版本')}
+                  </p>
+                </div>
+              )}
 
               {/* Select Button */}
               {engine.status === 'available' && currentEngine !== engine.id && (

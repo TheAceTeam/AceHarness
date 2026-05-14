@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { validateWorkflowDraft, validateAgentDraft, buildDefaultAgentDraft } from '@/lib/creator-validation';
+import { validateWorkflowDraft, validateAgentDraft, buildDefaultAgentDraft } from '@/lib/core/creator-validation';
 import { tmpdir } from 'os';
 import { mkdtempSync } from 'fs';
 import { join } from 'path';

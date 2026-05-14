@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { appendPersistedSpecRevision, classifyPersistedSpecFile } from '@/lib/spec-persistence';
+import { appendPersistedSpecRevision, classifyPersistedSpecFile } from '@/lib/spec/persistence';
 import {
   WORKSPACE_BLOB_PREVIEW_SIZE_LIMIT,
   WORKSPACE_TEXT_FILE_SIZE_LIMIT,
@@ -9,7 +9,7 @@ import {
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
   workspaceErrorResponse,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 const MAX_FILE_SIZE = WORKSPACE_TEXT_FILE_SIZE_LIMIT;
 

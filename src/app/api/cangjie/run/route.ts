@@ -4,8 +4,8 @@ import { tmpdir } from 'os';
 import { resolve, join } from 'path';
 import { spawn } from 'child_process';
 import { NextRequest, NextResponse } from 'next/server';
-import { detectCangjieHome, buildCangjieSpawnEnv, buildCjpmShellCommand } from '@/lib/cangjie-env';
-import { requireAuth } from '@/lib/auth-middleware';
+import { detectCangjieHome, buildCangjieSpawnEnv, buildCjpmShellCommand } from '@/lib/cangjie/env';
+import { requireAuth } from '@/lib/auth/middleware';
 
 interface RunCangjieRequest {
   code: string;

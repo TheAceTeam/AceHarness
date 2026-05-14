@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { parseActions, normalizeAssistantDisplay, isSafeAction, RISK_MAP } from '@/lib/chat-actions';
-import type { ActionBlock } from '@/lib/chat-actions';
+import { parseActions, normalizeAssistantDisplay, isSafeAction, RISK_MAP } from '@/lib/chat/actions';
+import type { ActionBlock } from '@/lib/chat/actions';
 
 describe('parseActions', () => {
   test('extracts action blocks from markdown and removes them from visible text', () => {

@@ -10,13 +10,13 @@ import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { SingleCombobox } from '@/components/ui/combobox';
-import { agentApi } from '@/lib/api';
+import { agentApi } from '@/lib/core/api';
 import {
   createDeterministicAvatarConfig,
   normalizeAgentAvatar,
   resolveAgentAvatarSrc,
   type AgentAvatarConfig,
-} from '@/lib/agent-personas';
+} from '@/lib/agent/personas';
 import { useToast } from '@/components/ui/toast';
 
 interface SubAgent {

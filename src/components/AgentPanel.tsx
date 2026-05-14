@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import Markdown from '@/components/Markdown';
 import styles from '@/app/workbench/[config]/page.module.css';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 
 interface TokenUsage {
   inputTokens: number;

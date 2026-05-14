@@ -11,10 +11,10 @@ import { createRequire } from 'module';
 import { extname } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { findCommand, getCommonCliSearchPaths } from '../command-exists';
-import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
-import { repairWindowsMojibake } from '../mojibake-repair';
-import { readTextFileBestEffort } from '../text-decoding';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
+import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
+import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 
 const requireFromHere = createRequire(__filename);
 
@@ -287,6 +287,12 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       );
     } else if (!this.currentThread) {
       this.currentThread = this.codexInstance.startThread(this.getThreadOptions(options));
+    }
+    if (this.currentThread?.id) {
+      this.emit('stream', {
+        type: 'session',
+        content: this.currentThread.id,
+      } as EngineStreamEvent);
     }
 
     // Build prompt

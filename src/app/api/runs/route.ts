@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listRuns, createRun } from '@/lib/run-store';
-import type { RunRecord } from '@/lib/run-store';
-import { formatTimestamp } from '@/lib/utils';
-import { requireAuth } from '@/lib/auth-middleware';
+import { listRuns, createRun } from '@/lib/run/store';
+import type { RunRecord } from '@/lib/run/store';
+import { formatTimestamp } from '@/lib/core/utils';
+import { requireAuth } from '@/lib/auth/middleware';
 
 export async function GET(request: NextRequest) {
   const user = await requireAuth(request);

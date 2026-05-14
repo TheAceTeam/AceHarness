@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { agentApi, configApi, workflowApi } from '@/lib/api';
+import { agentApi, configApi, workflowApi } from '@/lib/core/api';
 import type {
   CollaborationRoomMessage,
   CollaborationRoomState,
@@ -14,8 +14,8 @@ import type {
   CollaborationWerewolfVote,
   HomeSidebarHint,
   SessionWorkbenchState,
-} from '@/lib/home-sidebar-state';
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+} from '@/lib/core/home-sidebar-state';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import HumanQuestionInbox from '@/components/workflow/HumanQuestionInbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,13 +24,19 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
+import { usePluginRenderers } from '@/hooks/usePluginRenderers';
+import { AgentPanel } from '@/plugins/create-agent/AgentPanel';
+import { WorkflowPanel } from '@/plugins/create-workflow/WorkflowPanel';
+import { CommanderPanel } from '@/plugins/supervisor/CommanderPanel';
+import type { CommanderPanelContext } from '@/plugins/supervisor/types';
+import { ChatroomPanel } from '@/plugins/chatroom/ChatroomPanel';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import {
   buildWorkflowConversationDirectory,
   getCreationSessionStatusLabel,
   type WorkflowCreationBindingLike,
   type WorkflowRunBindingLike,
-} from '@/lib/agent-conversations';
+} from '@/lib/agent/conversations';
 import {
   buildAgentDraftPreview,
   buildAgentSystemPrompt,
@@ -38,7 +44,7 @@ import {
   extractAgentDraftCapabilities,
   mergeAgentDraft,
   type AgentDraftState,
-} from '@/lib/agent-draft';
+} from '@/lib/agent/draft';
 import NewConfigModal from '@/components/NewConfigModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -51,16 +57,18 @@ import {
   TEMP_WEREWOLF_SUPERVISOR,
   WEREWOLF_LAB_BOARDS,
   WEREWOLF_ROLE_PROMPTS,
+  describeWerewolfBoardRoles,
   getTemporaryWerewolfAgent,
+  getWerewolfBoardAbsentRoles,
   getWerewolfLabBoard,
   isTemporaryWerewolfAgent,
   isWerewolfLabTopic,
   listTemporaryWerewolfAgentNames,
-} from '@/lib/werewolf-lab-agents';
-import { WEREWOLF_ROLE_ASSETS, WEREWOLF_ROLEBOOK_ENTRIES, getWerewolfRoleSpriteStyle } from '@/lib/werewolf-role-assets';
-import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
-import { cn } from '@/lib/utils';
-import { extractStructuredResult } from '@/lib/result-channel';
+} from '@/plugins/werewolf/agents';
+import { WEREWOLF_ROLE_ASSETS, WEREWOLF_ROLEBOOK_ENTRIES, getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { cn } from '@/lib/core/utils';
+import { extractStructuredResult } from '@/lib/ai/result-channel';
 type WerewolfHistoryEntry = {
   id: string;
   boardId: string;
@@ -72,7 +80,7 @@ type WerewolfHistoryEntry = {
   generatedAt: string;
 };
 
-type SidebarTab = 'commander' | 'workflow' | 'agent';
+type SidebarTab = 'commander' | 'workflow' | 'agent' | 'chatroom';
 
 type WorkflowSummary = {
   filename: string;
@@ -153,6 +161,7 @@ type WerewolfGuardResult = {
   action: 'guard-action';
   target: string | null;
   reason?: string;
+  display?: string;
 };
 
 type WerewolfWitchResult = {
@@ -160,24 +169,28 @@ type WerewolfWitchResult = {
   save: boolean;
   poisonTarget: string | null;
   reason?: string;
+  display?: string;
 };
 
 type WerewolfSeerResult = {
   action: 'seer-check';
   target: string | null;
   reason?: string;
+  display?: string;
 };
 
 type WerewolfHunterResult = {
   action: 'hunter-shot';
   target: string | null;
   reason?: string;
+  display?: string;
 };
 
 type WerewolfVoteResult = {
   action: 'wolf-vote' | 'day-vote' | 'sheriff-vote';
   target: string | null;
   reason?: string;
+  display?: string;
 };
 
 function buildPreflightWarningDescription(checks: PreflightCheck[]): string {
@@ -558,6 +571,12 @@ function extractWerewolfStructuredResult<T>(text: string, predicate: (parsed: an
   return extractStructuredResult(text, predicate);
 }
 
+function extractWerewolfDisplayPayload(text: string): { display: string } | null {
+  return extractWerewolfStructuredResult(text, (value: any): value is { display: string } => (
+    typeof value?.display === 'string' && value.display.trim().length > 0
+  ));
+}
+
 function isWerewolfGuardResult(value: any): value is WerewolfGuardResult {
   return value?.action === 'guard-action' && (typeof value.target === 'string' || value.target === null);
 }
@@ -582,6 +601,18 @@ function isWerewolfVoteResult(value: any): value is WerewolfVoteResult {
 
 function stripWerewolfResultBlocks(text: string): string {
   return String(text || '').replace(/<result>[\s\S]*?(?:<\/result>|$)/gi, '').trim();
+}
+
+function sanitizeWerewolfDisplayText(text: string): string {
+  return String(text || '')
+    .replace(/<\/p>\s*<p>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?(strong|b)>/gi, '')
+    .replace(/<\/?(em|i)>/gi, '')
+    .replace(/<\/?(p|div|span|ul|ol|li)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function extractAnyWerewolfResult(text: string):
@@ -706,12 +737,52 @@ function buildWerewolfDecisionCard(result: ReturnType<typeof extractAnyWerewolfR
 
 function formatWerewolfMessageForDisplay(content: string): { content: string; result: ReturnType<typeof extractAnyWerewolfResult> } {
   const result = extractAnyWerewolfResult(content);
-  const visibleContent = stripWerewolfResultBlocks(content);
-  const decisionText = formatWerewolfDecisionResult(result);
+  const displayPayload = extractWerewolfDisplayPayload(content);
+  const visibleContent = result?.display
+    ? sanitizeWerewolfDisplayText(result.display)
+    : displayPayload?.display
+      ? sanitizeWerewolfDisplayText(displayPayload.display)
+      : '';
   return {
-    content: [visibleContent, decisionText].filter(Boolean).join('\n\n'),
+    content: visibleContent,
     result,
   };
+}
+
+function WolfPaw({ className = '', delayMs = 0 }: { className?: string; delayMs?: number }) {
+  return (
+    <svg
+      viewBox="0 0 1106 1024"
+      aria-hidden="true"
+      className={className}
+      style={{ animation: `werewolfPawPulse 1.2s ease-in-out ${delayMs}ms infinite` }}
+      fill="currentColor"
+    >
+      <path d="M492.264146 893.926726H402.634679c-17.279934 0-31.289314 7.814687-31.289314 17.442952 0 9.633359 14.00938 17.442952 31.289314 17.442952h4.172248c17.279934 0 31.289314 7.809593 31.289314 17.442952s-14.00938 17.442952-31.289314 17.442952H214.129554c-17.279934 0-31.284219 7.804498-31.284219 17.442951 0 9.633359 14.004286 17.442952 31.284219 17.442952H918.954204c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.638454-14.00938-17.442952-31.289313-17.442951h-53.475078c-17.279934 0-31.289314-7.809593-31.289313-17.442952s14.00938-17.442952 31.289313-17.442952h210.023533c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.628265-14.00938-17.442952-31.289313-17.442952h-15.680317H492.264146zM31.116107 1019.440584c-12.628819 0-22.863308-7.498839-22.863309-16.74503 0-9.236002 10.234489-16.729747 22.863309-16.729747h70.072372c12.628819 0 22.868403 7.493745 22.868403 16.729747 0 9.246191-10.239583 16.74503-22.868403 16.74503H31.116107z" />
+      <path d="M487.404164 354.820308c-208.469765 0-364.294826 214.959928-364.294826 407.138058 0 61.315236 15.568242 103.460546 47.46378 128.906674 33.729493 26.954047 80.902897 30.382525 118.193319 30.382525 26.872538 0 56.124124-2.047917 87.138345-4.223192 71.483499-4.982245 151.596776-4.982245 223.03952 0 31.009126 2.175275 60.311655 4.223191 87.097589 4.223192 81.947232 0 165.652005-18.920305 165.652005-159.289199 0-192.178129-155.779213-407.138058-364.289732-407.138058zM189.029839 473.762492c24.732924-10.122414 43.612474-30.214412 53.113381-56.496009 12.552405-34.697414 8.120346-76.588008-12.180519-114.92786-35.283261-66.628612-113.042962-103.786582-169.630669-80.520823-24.778773 10.127508-43.612474 30.260261-53.159229 56.582613C-5.379602 313.051978-0.942449 354.947666 19.358416 393.323179c27.83027 52.568289 80.61252 87.892304 131.290816 87.892303 13.479571 0 26.414049-2.5115 38.380607-7.45299zM389.802087 347.999013a82.884587 82.884587 0 0 0 16.322201-1.630182C469.951024 333.312089 508.41314 247.768267 493.761876 151.633353 479.15646 55.661458 415.370479-11.425643 351.380725 1.626005c-63.872585 13.021082-102.288852 98.529244-87.642682 194.704912 13.392967 87.887209 66.37899 151.668096 126.064044 151.668096zM967.671186 278.400413c-9.500907-26.276503-28.416117-46.455104-53.154135-56.582613-56.709971-23.352363-134.347408 13.892211-169.630669 80.520823-20.300865 38.380607-24.732924 80.276295-12.180519 114.92786 9.495813 26.281597 28.380457 46.332841 53.113381 56.496009 11.966558 4.900736 24.901036 7.412236 38.416267 7.412236h0.045849c50.642636 0 103.333188-35.318921 131.168553-87.851549 20.295771-38.329664 24.773678-80.230446 12.221273-114.922766zM611.624064 346.368831a82.782701 82.782701 0 0 0 16.281447 1.630182h0.040755c59.59845 0 112.625227-63.780887 126.064043-151.668096 14.64617-96.175668-23.856701-181.68383-87.642682-194.704912-64.076357-13.051648-127.81649 54.035453-142.386245 150.007348-14.727679 96.134914 23.775192 181.678736 87.642682 194.735478z" />
+    </svg>
+  );
+}
+
+function WerewolfSpeakingIndicator({ compact = false }: { compact?: boolean }) {
+  return (
+    <>
+      <style>{`
+        @keyframes werewolfPawPulse {
+          0%, 80%, 100% { opacity: 0.28; transform: translateY(0) scale(0.92); }
+          40% { opacity: 1; transform: translateY(-1px) scale(1); }
+        }
+      `}</style>
+      <div className={`inline-flex items-center gap-2 ${compact ? 'text-[11px]' : 'text-sm'} opacity-90`}>
+        <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={0} />
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={140} />
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={280} />
+        </span>
+        <span>选手正在发言中</span>
+      </div>
+    </>
+  );
 }
 
 function prepareWerewolfMessageForChat(message: CollaborationRoomMessage): CollaborationRoomMessage {
@@ -719,9 +790,13 @@ function prepareWerewolfMessageForChat(message: CollaborationRoomMessage): Colla
   const rawContent = message.rawContent || message.content;
   const formatted = formatWerewolfMessageForDisplay(rawContent);
   const decisionCard = buildWerewolfDecisionCard(formatted.result, message.werewolf.visibility, message.werewolf.audience);
+  const visibleContent = formatted.content
+    || (message.speakerType === 'supervisor' || message.speakerType === 'system'
+      ? stripWerewolfResultBlocks(rawContent)
+      : '');
   return {
     ...message,
-    content: formatted.content || stripWerewolfResultBlocks(message.content) || message.content,
+    content: visibleContent,
     rawContent,
     cards: decisionCard
       ? [decisionCard, ...((message.cards || []).filter((card) => card?.type !== 'werewolf_decision'))]
@@ -729,17 +804,33 @@ function prepareWerewolfMessageForChat(message: CollaborationRoomMessage): Colla
   };
 }
 
+function shouldHideWerewolfMessageFromChat(message: CollaborationRoomMessage): boolean {
+  return message.speakerType === 'agent' && ['sheriff-vote', 'vote', 'wolf-vote'].includes(message.werewolf?.action || '');
+}
+
 function parseWerewolfSheriffWithdrawal(output: string): boolean {
+  // Priority 1: Check structured <result> block for explicit action
+  const resultMatch = output.match(/<result>\s*(\{[\s\S]*?\})\s*<\/result>/);
+  if (resultMatch) {
+    try {
+      const parsed = JSON.parse(resultMatch[1]);
+      if (parsed.action === 'withdraw' || parsed.action === '退水') return true;
+      if (parsed.action === 'stay' || parsed.action === '留警' || parsed.action === 'sheriff-speech') return false;
+    } catch {}
+  }
+  // Priority 2: Fallback to keyword matching with stronger signals (require first-person intent)
   const normalized = output.replace(/\s+/g, '');
-  return [
-    '退水',
-    '退警',
-    '不上警',
-    '不拿警徽',
-    '放弃警长',
-    '我退',
-    '我不竞选警长',
-  ].some((keyword) => normalized.includes(keyword));
+  const strongSignals = [
+    '我选择退水',
+    '我决定退水',
+    '我退水',
+    '我选择退警',
+    '我决定不上警',
+    '我放弃警长',
+    '我不竞选警长了',
+    '我退出竞选',
+  ];
+  return strongSignals.some((keyword) => normalized.includes(keyword.replace(/\s+/g, '')));
 }
 
 function buildWerewolfVoteLines(votes: CollaborationWerewolfVote[], sheriff?: string, badgeDestroyed?: boolean): string[] {
@@ -829,12 +920,12 @@ function extractRoundVotes(messages: CollaborationRoomMessage[], candidates?: st
   const allowed = candidates?.length ? candidates : undefined;
   messages.forEach((message) => {
     if (message.speakerType !== 'agent' && message.speakerType !== 'supervisor') return;
-    const parsed = parseVoteTarget(message.content, allowed || []);
-    if (!parsed) return;
-    if (allowed && !allowed.includes(parsed.target)) return;
+    const structured = extractWerewolfStructuredResult(message.content, isWerewolfVoteResult);
+    if (!structured?.target) return;
+    if (allowed && !allowed.includes(structured.target)) return;
     votes.push({
       voter: message.speakerName,
-      target: parsed.target,
+      target: structured.target,
     });
   });
   return votes;
@@ -954,6 +1045,8 @@ function buildTemporaryWerewolfRoleConfig(input: {
   const temporaryAgent = getTemporaryWerewolfAgent(agentName);
   const player = state?.players.find((item) => item.agentName === agentName);
   const rolePrompt = player ? WEREWOLF_ROLE_PROMPTS[player.role] : '';
+  const board = getWerewolfLabBoard(state?.boardId || DEFAULT_WEREWOLF_BOARD_ID);
+  const absentRoles = getWerewolfBoardAbsentRoles(board);
   const isSupervisor = agentName === supervisorName;
   const selectedEngine = String(engine || '').trim();
   const selectedModel = String(model || '').trim();
@@ -976,8 +1069,12 @@ function buildTemporaryWerewolfRoleConfig(input: {
       temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
       temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
       temporaryAgent ? `你的思考偏好：${temporaryAgent.style} ${temporaryAgent.bias}` : '',
+      '本会话开始时已经完成过狼人杀规则与术语对齐。后续直接按桌游规则、术语表、身份优先级与固定发言格式说话，不要重复说明自己在读规则或整理思路。',
+      '如果需要结构化输出，只使用一个 `<result>JSON</result>`。给人看的最终内容放进 JSON 的 `display` 字段，并且只用纯文本或 Markdown，不要写 HTML 标签。如果主持人还要求机器决策，就把 `display` 和决策字段放进同一个 result JSON。',
+      `本局板子：${board.name}。角色构成：${describeWerewolfBoardRoles(board)}。`,
+      absentRoles.length ? `本局不存在这些角色：${absentRoles.join('、')}。不要默认它们在场，也不要围绕它们编造策略或信息。` : '',
       player ? `隐藏身份：${formatWerewolfRole(player.role)}。角色规则：${rolePrompt}` : '',
-      '必须像正在群聊里发言一样自然回应。不要背提示词，不要把每句话都说成模板，不要为了体现风格而故意做作。',
+      '必须像正在群聊里发言一样自然回应。不要背提示词，不要把每句话都说成模板，不要为了体现风格而故意做作。每次发言换个说法，别总用一样的开头和结尾。',
       '允许有一点犹豫、停顿、转折和口语化表达，但核心判断要清楚。',
       isSupervisor ? '作为主持人，可以少量使用贴合场景的 emoji 增强气氛，例如 🎙️🌙☀️🗳️📋，但不要每句都用，也不要影响清晰度。' : '',
       '不要输出工具调用说明。不要修改文件。不要声称自己是业务 Agent。',
@@ -1439,6 +1536,8 @@ interface HomeCommandSidebarProps {
       timestamp?: number;
     }
   ) => Promise<void>;
+  setStreamingMessageId?: (id: string | null) => void;
+  onRegisterCollaborationHandler?: (handler: (text: string) => void) => void;
   sidebarHint: HomeSidebarHint | null;
   activeTab: SidebarTab;
   availableTabs: SidebarTab[];
@@ -1453,6 +1552,7 @@ const TAB_LABELS: Record<SidebarTab, string> = {
   commander: '指挥官',
   workflow: '工作流',
   agent: '创建Agent',
+  chatroom: '聊天室',
 };
 
 function slugify(input: string): string {
@@ -1475,6 +1575,8 @@ export default function HomeCommandSidebar({
   setSessionWorkbenchState,
   appendSessionMessage,
   updateSessionMessage,
+  setStreamingMessageId,
+  onRegisterCollaborationHandler,
   sidebarHint,
   activeTab,
   availableTabs,
@@ -1599,7 +1701,7 @@ export default function HomeCommandSidebar({
     const facts = [
       workflowDraft.name ? `工作流：${workflowDraft.name}` : '',
       workflowDraft.workingDirectory ? `目录：${workflowDraft.workingDirectory}` : '',
-      workflowDraft.referenceWorkflow ? `参考：${workflowDraft.referenceWorkflow}` : '',
+      workflowDraft.referenceWorkflow ? `模板：${workflowDraft.referenceWorkflow}` : '',
       workflowDraft.workspaceMode ? `模式：${workflowDraft.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place'}` : '',
     ].filter(Boolean);
     return facts.slice(0, 4);
@@ -1880,6 +1982,7 @@ export default function HomeCommandSidebar({
   const appendCollaborationMessageToChat = useCallback((message: CollaborationRoomMessage, state?: CollaborationWerewolfState | null) => {
     const sessionId = activeSessionId || ensureSessionId();
     if (!sessionId || !appendSessionMessage) return;
+    if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
     const role = message.speakerType === 'human' ? 'user' : message.status === 'error' ? 'error' : 'assistant';
     void appendSessionMessage(sessionId, {
@@ -1937,11 +2040,15 @@ export default function HomeCommandSidebar({
   const appendStreamingCollaborationMessage = useCallback((message: CollaborationRoomMessage, state?: CollaborationWerewolfState | null) => {
     const sessionId = activeSessionId || ensureSessionId();
     if (!sessionId || !appendSessionMessage) return;
-    collaborationStreamingMessageIdRef.current = `chat-${message.id}`;
+    if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
+    const chatMessageId = `chat-${message.id}`;
+    collaborationStreamingMessageIdRef.current = chatMessageId;
+    // Mark this message as streaming in the central chat area
+    setStreamingMessageId?.(chatMessageId);
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
     const role = message.speakerType === 'human' ? 'user' : message.status === 'error' ? 'error' : 'assistant';
     void appendSessionMessage(sessionId, {
-      id: `chat-${chatMessage.id}`,
+      id: chatMessageId,
       role,
       content: chatMessage.content,
       rawContent: chatMessage.rawContent || chatMessage.content,
@@ -1957,6 +2064,7 @@ export default function HomeCommandSidebar({
     appendSessionMessage,
     ensureSessionId,
     isWerewolfLab,
+    setStreamingMessageId,
     werewolfState?.players,
   ]);
 
@@ -1964,7 +2072,15 @@ export default function HomeCommandSidebar({
     const sessionId = activeSessionId || ensureSessionId();
     const messageId = `chat-${message.id}`;
     if (!sessionId || !updateSessionMessage) return;
+    if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
+    // Clear streaming indicator when message is complete
+    if (message.status === 'done' || message.status === 'error') {
+      if (collaborationStreamingMessageIdRef.current === messageId) {
+        collaborationStreamingMessageIdRef.current = null;
+        setStreamingMessageId?.(null);
+      }
+    }
     void updateSessionMessage(sessionId, messageId, {
       role: message.status === 'error' ? 'error' : 'assistant',
       content: chatMessage.content,
@@ -1980,6 +2096,7 @@ export default function HomeCommandSidebar({
     activeSessionId,
     ensureSessionId,
     isWerewolfLab,
+    setStreamingMessageId,
     updateSessionMessage,
     werewolfState?.players,
   ]);
@@ -2668,10 +2785,13 @@ export default function HomeCommandSidebar({
             [agentName]: data.sessionId,
           };
         }
+        const rawFinalContent = data?.rawOutput || content || data?.error || '';
         const finalContent = data?.specCodingRevision?.applied
-          ? `${data.output || content || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
-          : (data?.output || content || data?.error || '无输出');
-        const displayContent = formatWerewolfMessageForDisplay(finalContent).content || stripWerewolfResultBlocks(finalContent) || '无输出';
+          ? `${rawFinalContent}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
+          : rawFinalContent;
+        const displayContent = data?.output
+          || formatWerewolfMessageForDisplay(finalContent).content
+          || '';
         const finalMessage = {
           ...baseMessage,
           content: displayContent,
@@ -2903,6 +3023,46 @@ export default function HomeCommandSidebar({
     setCollaborationDraft('');
   }, [appendCollaborationMessageToChat, collaborationDraft, collaborationRoom?.topic, collaborationTopic, selectedCollaborationAgentList, toast, updateCollaborationRoom]);
 
+  // Handler for messages from the main chat input (routed here when collaboration is active)
+  const handleMainChatCollaborationMessage = useCallback((text: string) => {
+    if (!text.trim()) return;
+    const nextTopic = collaborationTopic.trim() || collaborationRoom?.topic || text.slice(0, 60);
+    const hostMessage = createCollaborationMessage({
+      speakerType: 'human',
+      speakerName: '主持人',
+      content: text.trim(),
+      status: 'done',
+    });
+    updateCollaborationRoom((room) => ({
+      ...room,
+      topic: nextTopic,
+      selectedAgents: selectedCollaborationAgentList,
+      messages: [
+        ...(room.messages || []),
+        hostMessage,
+      ],
+    }));
+    appendCollaborationMessageToChat(hostMessage);
+    // Also set as collaborationDraft to trigger agent responses via existing flow
+    setCollaborationDraft(text.trim());
+    // Trigger the group chat handler to call agents
+    setTimeout(() => {
+      setCollaborationDraft('');
+    }, 0);
+  }, [appendCollaborationMessageToChat, collaborationRoom?.topic, collaborationTopic, selectedCollaborationAgentList, updateCollaborationRoom]);
+
+  // Register the handler with the parent (page.tsx)
+  useEffect(() => {
+    if (onRegisterCollaborationHandler && collaborationRoom) {
+      onRegisterCollaborationHandler(handleMainChatCollaborationMessage);
+    }
+    return () => {
+      if (onRegisterCollaborationHandler) {
+        onRegisterCollaborationHandler(() => {});
+      }
+    };
+  }, [onRegisterCollaborationHandler, collaborationRoom, handleMainChatCollaborationMessage]);
+
   const insertCollaborationMention = useCallback((mention: string) => {
     setCollaborationDraft((current) => {
       const next = insertMention(current, mention);
@@ -3088,8 +3248,8 @@ export default function HomeCommandSidebar({
         try {
           const result = await agentApi.chat(agentName, {
             message: agentName === effectiveCollaborationSupervisor
-              ? '这是 AI 狼人杀开局前的会话演练。请只回复 READY。'
-              : '这是 AI 狼人杀开局前的会话演练。请只回复 READY。',
+              ? '这是 AI 狼人杀开局前的会话初始化。现在静默读取一次狼人杀 skill 并内化本局桌游规则、术语和固定发言格式，后续轮次不要再次读取，也不要展示任何读取过程。完成后只输出 `<result>{"kind":"werewolf_init","display":"READY"}</result>`。'
+              : '这是 AI 狼人杀开局前的会话初始化。现在静默读取一次狼人杀 skill 并内化本局桌游规则、术语和固定发言格式，后续轮次不要再次读取，也不要展示任何读取过程。完成后只输出 `<result>{"kind":"werewolf_init","display":"READY"}</result>`。',
             mode: 'standalone-chat',
             sessionId: null,
             workingDirectory: workflowDraft.workingDirectory || undefined,
@@ -3234,6 +3394,8 @@ export default function HomeCommandSidebar({
   }) => {
     const player = input.state.players.find((item) => item.agentName === agentName);
     const temporaryAgent = getTemporaryWerewolfAgent(agentName);
+    const board = getWerewolfLabBoard(input.state.boardId || DEFAULT_WEREWOLF_BOARD_ID);
+    const absentRoles = getWerewolfBoardAbsentRoles(board);
     const alivePlayers = getAliveWerewolfPlayers(input.state).map((item) => item.agentName);
     const wolfPartners = player?.role === 'werewolf'
       ? input.state.players.filter((item) => item.role === 'werewolf' && item.agentName !== agentName).map((item) => item.agentName)
@@ -3264,6 +3426,10 @@ export default function HomeCommandSidebar({
       return [
         `你是主持人 ${agentName}，正在主持一个多 Agent 回合制身份推理测试。`,
         `当前阶段：${input.state.phase}，第 ${input.state.dayNumber} 天。`,
+        '本局规则、术语、桌游流程和主持总结格式都已在初始化阶段内化；当前直接照此推进，不要再次查阅 skill。',
+        '不要展示查阅规则或整理思路的过程。若需要结构化输出，就把最终给人看的主持总结放进 `<result>JSON</result>` 的 `display` 字段，并且只用纯文本或 Markdown，不要写 HTML 标签。',
+        `本局板子：${board.name}。角色构成：${describeWerewolfBoardRoles(board)}。`,
+        absentRoles.length ? `本局不存在这些角色：${absentRoles.join('、')}。主持总结时不要把它们当作场上变量。` : '',
         '请基于最近发言输出主持总结：当前局势、主要矛盾、票型观察、归票建议、下一步主持建议。',
         '语气保持主持人口吻，可少量使用贴合场景的 emoji 增强临场感，但不要过密。',
         '如果这是白天发言收口，请明确指出谁的发言最像归票位、谁在带节奏、谁像冲锋/倒钩位，以及建议把票压到哪几名玩家身上。',
@@ -3307,6 +3473,10 @@ export default function HomeCommandSidebar({
         temporaryAgent ? `你的说话手感：${temporaryAgent.speechStyle} ${temporaryAgent.rhythm}` : '',
         temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
         temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
+        '本局规则、术语和固定投票表达都已在初始化阶段内化；当前直接照此组织你的判断，不要再次查阅 skill。',
+        '不要展示中间推理过程。最终给人看的内容放进 `<result>JSON</result>` 的 `display` 字段，并且只用纯文本或 Markdown，不要写 HTML 标签；投票结算仍按要求输出同一个 `<result>JSON</result>`。',
+        `本局板子：${board.name}。角色构成：${describeWerewolfBoardRoles(board)}。`,
+        absentRoles.length ? `本局不存在这些角色：${absentRoles.join('、')}。推理和投票时不要默认这些角色在场。` : '',
         player ? `你的角色规则：${WEREWOLF_ROLE_PROMPTS[player.role]}` : '',
         wolfPartners.length ? `你的狼队友：${wolfPartners.join('、')}。只有狼人内部会议和狼人视角可见这类信息。` : '',
         `当前阶段：${input.kind === 'wolf-vote' ? '狼人夜间刀口投票' : input.kind === 'sheriff-vote' ? '警长投票' : `投票，第 ${input.state.dayNumber} 天` }。`,
@@ -3324,7 +3494,7 @@ export default function HomeCommandSidebar({
         input.kind === 'wolf-vote'
           ? '请结合白天站边、神职嫌疑、悍跳安排和次日口风需要，给出今夜刀口。'
           : input.kind === 'sheriff-vote'
-            ? '请结合上警发言、退水情况、谁更适合拿警徽和带警徽流，投出你的警长票。警长投票阶段每位存活玩家只有 1 票。'
+            ? '请结合上警发言、退水情况、谁更适合拿警徽和带警徽流，投出你的警长票。规则：只有警下玩家可以投警长票，上警玩家本轮不能投票。'
           : '请注意票型：警长票按 1.5 票结算，普通票按 1 票结算；你的理由要尽量结合警长票、归票、站边和白天发言矛盾。',
         '桌上所有玩家的人格特征都是公开可观察信息，可以把它们作为判断谁像带节奏位、归票位、悍跳位的辅助依据。',
         '',
@@ -3367,10 +3537,14 @@ export default function HomeCommandSidebar({
       temporaryAgent ? `你的说话手感：${temporaryAgent.speechStyle} ${temporaryAgent.rhythm}` : '',
       temporaryAgent ? `你常见的开口方式：${temporaryAgent.opening}` : '',
       temporaryAgent ? `你常见的收口方式：${temporaryAgent.closing}` : '',
+      '本局警上/警下固定发言格式已在初始化阶段内化；当前直接按该格式组织这轮发言，不要再次查阅 skill。',
+      '不要展示整理草稿或中间推理过程。最终给人看的发言放进 `<result>JSON</result>` 的 `display` 字段，并且只用纯文本或 Markdown，不要写 HTML 标签；若当前还要求机器决策，就把发言和决策字段一起放进同一个 result JSON。',
+      `本局板子：${board.name}。角色构成：${describeWerewolfBoardRoles(board)}。`,
+      absentRoles.length ? `本局不存在这些角色：${absentRoles.join('、')}。发言时不要默认这些角色在场，也不要围绕它们组织策略。` : '',
       player ? `你的角色规则：${WEREWOLF_ROLE_PROMPTS[player.role]}` : '',
       wolfPartners.length ? `你的狼队友：${wolfPartners.join('、')}。不要在公开发言里直接暴露狼队关系。` : '',
       `当前阶段：${input.state.phase}，第 ${input.state.dayNumber} 天。`,
-      input.kind === 'sheriff-speech' ? '当前环节：警长竞选发言。你可以说明为什么自己适合拿警徽，也可以选择退水。请顺手点评上警格局、站边与警长票可能流向。' : '',
+      input.kind === 'sheriff-speech' ? '当前环节：警长竞选发言。你可以说明为什么自己适合拿警徽，也可以选择退水。请顺手点评上警格局、站边与警长票可能流向。用你自己的话说，不要套模板，允许口语化、犹豫、转折。\n\n硬性要求：如果你是真预言家，上警发言必须明确起跳自己是预言家，必须报出昨夜查验对象与结果（金水/查杀），必须解释为什么验他，并且必须给出至少一晚警徽流或后续验人方向。不要把自己说成普通好人，更不要只聊场面不报验人。\n\n如果你是狼人，要记住警上发言不是为了说废话，而是为了争夺预言家位、警徽位和白天话语权。你要认真考虑自己这一轮是应该悍跳预言家、报假金水/查杀、留警徽流，还是以强势好人姿态扰乱站边，而不是空泛点评几句就过。与此同时，不要机械地把所有狼人都留在警上，也不要机械地认为警下必须留狼；你需要综合考虑警上人数、警下投票空间、悍跳收益、做身份空间和狼坑暴露风险，再决定自己留警上还是退水。\n\n如果你不是预言家，也不要假装自己报了真实验人；但你仍要明确说明自己为什么上警、你现在站边倾向谁、以及你觉得警徽该给谁。\n\n发言结束后必须在末尾输出 <result>{"action":"stay"}</result> 表示留在警上，或 <result>{"action":"withdraw","reason":"一句话理由"}</result> 表示退水。系统只通过 result 判断你的决定，发言内容中提到退水不算数。' : '',
       input.state.sheriff ? `当前警长：${input.state.sheriff}${input.state.badgeDestroyed ? '（警徽已撕）' : '（持有警徽）'}` : '当前没有警长。',
       `存活玩家：${alivePlayers.join('、')}`,
       `发言顺序：${getWerewolfSpeechOrder(input.state).join(' -> ') || '未定'}`,
@@ -3379,7 +3553,7 @@ export default function HomeCommandSidebar({
         ? '你现在要做守卫夜间决策。回复末尾必须包含 <result>...</result>，其中直接放一个 JSON 对象，例如 {"action":"guard-action","target":"某玩家名","reason":"一句话"}。如果选择空守，target 写 null。'
         : '',
       input.state.currentAction === 'witch-action'
-        ? '你现在要做女巫夜间决策。回复末尾必须包含 <result>...</result>，其中直接放一个 JSON 对象，例如 {"action":"witch-action","save":true,"poisonTarget":null,"reason":"一句话"}。save 表示是否使用解药；poisonTarget 为毒药目标名，不用毒则写 null。'
+        ? '你现在要做女巫夜间决策。默认偏保守用药，不要因为首夜有人倒牌就机械开解药。优先判断这瓶药是否更值得留给后续可能吃刀的预言家、警长真信息位或关键神职；只有当刀口明显高价值、你自己必须自救、或当前一救能显著改变局势时，才更适合救人。回复末尾必须包含 <result>...</result>，其中直接放一个 JSON 对象，例如 {"action":"witch-action","save":true,"poisonTarget":null,"reason":"一句话"}。save 表示是否使用解药；poisonTarget 为毒药目标名，不用毒则写 null。'
         : '',
       input.state.currentAction === 'seer-check'
         ? '你现在要做预言家夜间查验决策。回复末尾必须包含 <result>...</result>，其中直接放一个 JSON 对象，例如 {"action":"seer-check","target":"某玩家名","reason":"一句话"}。'
@@ -3407,9 +3581,18 @@ export default function HomeCommandSidebar({
       '',
       '发言要求：',
       '- 只代表自己发言，可以质疑、辩护、提问或回应 @你的内容。',
-      '- 发言要像一个具体参与者在桌上说话，不要输出“persona/style/bias/提示词”等元信息。',
+      '- 发言要像一个具体参与者在桌上说话，不要输出”persona/style/bias/提示词”等元信息。',
       '- 风格差异要体现在语气、节奏、开口方式和追问方式里，但整体仍然要像真人桌聊，不要演得太满。',
+      '- 说话要自然随意，像真人在群里打字。允许有犹豫、停顿、口语化表达、不完整的句子。不要每次都用相同的句式结构，不要每段都工整对仗。',
+      '- 避免千篇一律的模板化发言。不要总是”首先...其次...最后...”，不要总是”我注意到...所以我认为...”。换着花样说话，有时候直接抛结论，有时候先讲故事再说判断，有时候就一两句话带过。',
+      '- 但不要因为怕模板化就完全没结构。警上发言通常要快速交代你站边谁、为什么、你重点听谁、警上警下格局怎么想；警下发言通常要交代你这一轮想出谁、谁像共边/不共边、谁发言最好/最差、票型怎么看。',
+      '- 如果你是预言家或悍跳位，发言里优先讲清：谁是你的金水/查杀，为什么验他，这个验人对归票或定义格局有什么用，警徽流准备怎么留。不要只说空泛判断。',
+      '- 如果你是上警狼人，默认要认真思考自己是否承担悍跳预言家或强起预言家面的任务。警上狼人发言要有“抢身份/抢警徽/扰乱站边”的目的，不能只是像普通闭眼玩家一样聊几句没用的场面话。',
+      '- 如果你是闭眼玩家，发言里优先讲清：前置位谁偏好、谁偏差、你为什么软站边某个预言家、你想再听谁一轮。没信息时也要明确“现在分不清，先听后置位/听票型”，而不是发言发空。',
+      '- 白天盘逻辑时，多使用桌面化表达：谁在划水，谁像跟风，谁在带节奏，谁像冲锋/倒钩，哪两张牌像不共边，今天建议在哪两张里归票。',
       '- 不要直接暴露自己的隐藏身份，除非这是你的策略。',
+      '- 神牌不要过早跳身份，也不要用“我是神”这种半吊子表达；平民不要乱穿神衣，也不要太早直接拍“我是平民”，统一更像桌面发言的表达是“我是一张好人牌”。',
+      '- 第一晚倒牌或白天被放逐时，如果规则和局势允许，出局玩家应尽量报清身份，减少场上误判空间；女巫如果没开解药，尤其要注意藏好身份。',
       '- 如果你是狼人，可以伪装、保护队友、必要时考虑自爆；如果你是神职，要考虑信息释放节奏；如果你是村民，要根据发言找矛盾。',
       '- 如果当前是狼人夜间内部会议，第一位狼人必须先明确今晚安排：谁更适合悍跳、谁负责冲锋/倒钩、刀口优先级是什么。后续狼人围绕这个安排补充或调整。',
       '- 如果当前主持人要求你在 <result> 中输出 JSON 决策，必须照做；<result> 外可以保留自然语言思考，但最终结算只认 <result> 里的 JSON。',
@@ -3935,9 +4118,22 @@ export default function HomeCommandSidebar({
   const handleWerewolfSheriffElection = useCallback(async () => {
     if (!werewolfState?.players?.length) return;
     const alivePlayers = getAliveWerewolfPlayers(werewolfState).filter((player) => !player.idiotRevealed);
-    const candidates = alivePlayers
-      .filter((player) => ['seer', 'werewolf', 'villager', 'hunter'].includes(player.role))
-      .slice(0, Math.min(4, alivePlayers.length));
+    // Balanced candidate selection: avoid all-wolf or all-seer bias
+    const wolves = alivePlayers.filter((p) => p.role === 'werewolf');
+    const seers = alivePlayers.filter((p) => p.role === 'seer');
+    const others = alivePlayers.filter((p) => !['werewolf', 'seer', 'idiot'].includes(p.role));
+    const pool: typeof alivePlayers = [];
+    // 1-2 wolves (random subset, not all)
+    const shuffledWolves = [...wolves].sort(() => Math.random() - 0.5);
+    pool.push(...shuffledWolves.slice(0, Math.min(Math.random() < 0.5 ? 1 : 2, shuffledWolves.length)));
+    // Seer with ~75% probability
+    if (seers.length && Math.random() < 0.75) pool.push(seers[0]);
+    // Fill remaining from villager/hunter/guard/witch pool
+    const shuffledOthers = [...others].sort(() => Math.random() - 0.5);
+    const remaining = Math.min(4, alivePlayers.length) - pool.length;
+    pool.push(...shuffledOthers.slice(0, Math.max(0, remaining)));
+    // Shuffle final candidate order
+    const candidates = pool.sort(() => Math.random() - 0.5).slice(0, Math.min(4, alivePlayers.length));
     const roundId = `ww-sheriff-${werewolfState.dayNumber}-${Date.now()}`;
     const hostMessage = collaborationDraft.trim() || '警长竞选：先上警举手，再按顺序做上警发言。每名上警玩家只发言一轮，最后一名上警玩家负责归票，提醒场上如何投警长票。';
     const openingMessage = createCollaborationMessage({
@@ -4035,11 +4231,12 @@ export default function HomeCommandSidebar({
       let sheriff: CollaborationWerewolfPlayer | undefined;
       let voteSummaryText = '无人进入警长投票。';
       if (finalCandidates.length > 0) {
+        const sheriffVoters = alivePlayers.filter((player) => !finalCandidates.some((candidate) => candidate.agentName === player.agentName));
         const voteStartMessage = createCollaborationMessage({
           roundId,
           speakerType: 'supervisor',
           speakerName: effectiveCollaborationSupervisor,
-          content: `AI 上帝发言 🗳️：现在开始警长投票。留警上的玩家有 ${finalCandidates.map((player) => player.agentName).join('、')}。请所有存活玩家依次投票。`,
+          content: `AI 上帝发言 🗳️：现在开始警长投票。留警上的玩家有 ${finalCandidates.map((player) => player.agentName).join('、')}。本轮仅警下玩家可以投票：${sheriffVoters.map((player) => player.agentName).join('、') || '无人'}。`,
           status: 'done',
           werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: effectiveCollaborationSupervisor },
         });
@@ -4053,7 +4250,7 @@ export default function HomeCommandSidebar({
         }));
         appendCollaborationMessageToChat(voteStartMessage, werewolfState);
 
-        for (const voter of alivePlayers) {
+        for (const voter of sheriffVoters) {
           const output = await callCollaborationAgent(voter.agentName, buildWerewolfPrompt(voter.agentName, {
             kind: 'sheriff-vote',
             state: {
@@ -4062,7 +4259,7 @@ export default function HomeCommandSidebar({
               currentAction: 'sheriff-vote',
               sheriffCandidates: finalCandidates.map((player) => player.agentName),
             },
-            hostMessage: `当前进行警长投票，仅能从 ${finalCandidates.map((player) => player.agentName).join('、')} 中投一人。`,
+            hostMessage: `当前进行警长投票。你是警下玩家，仅能从 ${finalCandidates.map((player) => player.agentName).join('、')} 中投一人。上警玩家本轮不能投票。`,
             transcript,
           }), roundId, {
             werewolf: { phase: 'day', action: 'sheriff-vote', visibility: 'public', actor: voter.agentName },
@@ -4073,7 +4270,7 @@ export default function HomeCommandSidebar({
               target: structuredVote.target,
               reason: structuredVote.reason || '',
             }
-            : parseVoteTarget(output, finalCandidates.map((player) => player.agentName));
+            : null;
           if (parsedVote) {
             sheriffVotes.push({
               voter: voter.agentName,
@@ -4180,21 +4377,34 @@ export default function HomeCommandSidebar({
       appendCollaborationMessageToChat(resultMessage, nextState);
       toast('success', '警长竞选完成');
     } catch (error: any) {
+      const errorText = error?.message || '未知错误';
       updateCollaborationRoom((room) => ({
         ...room,
+        werewolf: room.werewolf ? {
+          ...room.werewolf,
+          lastError: errorText,
+          breakpoint: buildWerewolfBreakpoint({
+            handler: 'sheriff-election',
+            roundId,
+            stepLabel: `第 ${werewolfState.dayNumber} 天警长竞选`,
+            resumeFrom: 'sheriff-speech',
+            failedActor: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            error: errorText,
+          }),
+        } : room.werewolf,
         messages: [
           ...(room.messages || []),
           createCollaborationMessage({
             roundId,
             speakerType: 'system',
             speakerName: '系统',
-            content: `警长竞选中断：${error?.message || '未知错误'}`,
+            content: `警长竞选中断：${errorText}\n可点击重试继续竞选。`,
             status: 'error',
-            error: error?.message || '未知错误',
+            error: errorText,
           }),
         ],
       }));
-      toast('error', error?.message || '警长竞选失败');
+      toast('error', `${errorText}，可重试警长竞选`);
     } finally {
       setCollaborationBusy(false);
     }
@@ -4378,10 +4588,11 @@ export default function HomeCommandSidebar({
       });
       toast('success', '白天发言轮完成，进入投票阶段');
     } catch (error: any) {
+      const errorText = error?.message || '未知错误';
       updateCollaborationRoom((room) => ({
         ...room,
         rounds: (room.rounds || []).map((round) => round.id === roundId
-          ? { ...round, status: 'failed', completedAt: Date.now(), summary: error?.message || '执行失败' }
+          ? { ...round, status: 'failed', completedAt: Date.now(), summary: errorText }
           : round),
         messages: [
           ...(room.messages || []),
@@ -4389,13 +4600,25 @@ export default function HomeCommandSidebar({
             roundId,
             speakerType: 'system',
             speakerName: '系统',
-            content: `发言轮中断：${error?.message || '未知错误'}`,
+            content: `发言轮中断：${errorText}\n可点击重试继续发言。`,
             status: 'error',
-            error: error?.message || '未知错误',
+            error: errorText,
           }),
         ],
+        werewolf: room.werewolf ? {
+          ...room.werewolf,
+          lastError: errorText,
+          breakpoint: buildWerewolfBreakpoint({
+            handler: 'day-speech',
+            roundId,
+            stepLabel: `第 ${werewolfState.dayNumber} 天发言`,
+            resumeFrom: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            failedActor: room.werewolf?.currentActor || effectiveCollaborationSupervisor,
+            error: errorText,
+          }),
+        } : room.werewolf,
       }));
-      toast('error', error?.message || '发言轮失败');
+      toast('error', `${errorText}，可重试发言轮`);
     } finally {
       setCollaborationBusy(false);
     }
@@ -4422,14 +4645,23 @@ export default function HomeCommandSidebar({
     const witch = alivePlayers.find((player) => player.role === 'witch');
     const guard = alivePlayers.find((player) => player.role === 'guard');
     const roleState = getWerewolfRoleState(werewolfState);
-    const roundId = `ww-night-${werewolfState.dayNumber}-${Date.now()}`;
+    const breakpoint = werewolfState.breakpoint;
+    const isResume = breakpoint?.handler === 'night';
+    const roundId = isResume && breakpoint?.roundId ? breakpoint.roundId : `ww-night-${werewolfState.dayNumber}-${Date.now()}`;
     const hostMessage = collaborationDraft.trim() || `第 ${werewolfState.dayNumber} 夜行动：狼人先进行内部会议，先商量第二天怎么演、怎么站边、刀口怎么服务白天格局，需要时再决定谁悍跳或带节奏；随后守卫守护，狼人落刀，女巫决定是否用药，预言家查验。女巫首夜可以自救。`;
     const wolfCandidates = alivePlayers;
-    let wolfTarget: CollaborationWerewolfPlayer | undefined;
-    let guarded: string | undefined;
-    let saved: string | undefined;
-    let poisoned: string | undefined;
-    let seerTarget: CollaborationWerewolfPlayer | undefined;
+    // Determine which step to resume from
+    const nightStepOrder = ['wolf-meeting', 'guard-action', 'wolf-kill', 'witch-action', 'seer-check'] as const;
+    const resumeFrom = isResume ? (breakpoint?.resumeFrom || 'wolf-meeting') : 'wolf-meeting';
+    const startStepIndex = Math.max(0, nightStepOrder.indexOf(resumeFrom as any));
+    // Restore partial results from previous night state if resuming
+    let wolfTarget: CollaborationWerewolfPlayer | undefined = isResume && werewolfState.night?.wolfTarget
+      ? alivePlayers.find((p) => p.agentName === werewolfState.night?.wolfTarget) : undefined;
+    let guarded: string | undefined = isResume ? werewolfState.night?.guarded : undefined;
+    let saved: string | undefined = isResume ? werewolfState.night?.saved : undefined;
+    let poisoned: string | undefined = isResume ? werewolfState.night?.poisoned : undefined;
+    let seerTarget: CollaborationWerewolfPlayer | undefined = isResume && werewolfState.night?.seerTarget
+      ? alivePlayers.find((p) => p.agentName === werewolfState.night?.seerTarget) : undefined;
     let deaths: string[] = [];
     let nextState: CollaborationWerewolfState = werewolfState;
     let badgeResult: ReturnType<typeof resolveWerewolfBadgeAfterDeaths> = { state: werewolfState };
@@ -4442,12 +4674,19 @@ export default function HomeCommandSidebar({
         werewolf: { phase: 'night', action: 'system', visibility: 'public', actor: effectiveCollaborationSupervisor },
       });
     const nightMessages: CollaborationRoomMessage[] = [openingMessage];
-    updateCollaborationRoom((room) => ({
-      ...room,
-      werewolf: { ...(room.werewolf || werewolfState), phase: 'night', currentAction: 'wolf-meeting', currentActor: effectiveCollaborationSupervisor, lastError: undefined },
-      messages: [...(room.messages || []), openingMessage],
-    }));
-    appendCollaborationMessageToChat(openingMessage, werewolfState);
+    if (!isResume) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: { ...(room.werewolf || werewolfState), phase: 'night', currentAction: 'wolf-meeting', currentActor: effectiveCollaborationSupervisor, lastError: undefined, breakpoint: undefined },
+        messages: [...(room.messages || []), openingMessage],
+      }));
+      appendCollaborationMessageToChat(openingMessage, werewolfState);
+    } else {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: { ...(room.werewolf || werewolfState), phase: 'night', currentAction: resumeFrom as any, currentActor: effectiveCollaborationSupervisor, lastError: undefined, breakpoint: undefined },
+      }));
+    }
     setCollaborationDraft('');
 
     try {
@@ -4476,6 +4715,12 @@ export default function HomeCommandSidebar({
         content: 'AI 上帝发言 🌙：天黑请闭眼。',
         status: 'done',
         werewolf: { phase: 'night', action: 'system', visibility: 'public', actor: effectiveCollaborationSupervisor },
+      }));
+      // --- Wolf Meeting (skip if resuming past this step) ---
+      if (startStepIndex <= nightStepOrder.indexOf('wolf-meeting')) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, currentAction: 'wolf-meeting', currentActor: wolves[0]?.agentName || effectiveCollaborationSupervisor } : room.werewolf,
       }));
       if (wolves.length) {
         pushNightStageMessage(createCollaborationMessage({
@@ -4507,6 +4752,13 @@ export default function HomeCommandSidebar({
           werewolf: { phase: 'night', action: 'wolf-meeting', visibility: 'werewolves', audience: wolves.map((player) => player.agentName), actor: wolf.agentName },
         }));
       }
+      } // end wolf-meeting skip check
+      // --- Wolf Kill Vote (skip if resuming past this step) ---
+      if (startStepIndex <= nightStepOrder.indexOf('wolf-kill')) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, currentAction: 'wolf-kill', currentActor: wolves[0]?.agentName || effectiveCollaborationSupervisor } : room.werewolf,
+      }));
       const wolfVotes: CollaborationWerewolfVote[] = [];
       for (const wolf of wolves) {
         const voteOutput = await callCollaborationAgent(wolf.agentName, buildWerewolfPrompt(wolf.agentName, {
@@ -4523,7 +4775,7 @@ export default function HomeCommandSidebar({
             target: structuredVote.target,
             reason: structuredVote.reason || '',
           }
-          : parseVoteTarget(voteOutput, wolfCandidates.map((player) => player.agentName));
+          : null;
         if (parsedVote) {
           wolfVotes.push({
             voter: wolf.agentName,
@@ -4587,6 +4839,18 @@ export default function HomeCommandSidebar({
       if (!wolfTarget) {
         wolfTarget = pickWerewolfTarget(alivePlayers) || undefined;
       }
+      // Persist wolf-kill result incrementally
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, night: { ...(room.werewolf.night || { round: werewolfState.dayNumber }), wolfTarget: wolfTarget?.agentName } } : room.werewolf,
+      }));
+      } // end wolf-kill skip check
+      // --- Guard Action (skip if resuming past this step) ---
+      if (startStepIndex <= nightStepOrder.indexOf('guard-action')) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, currentAction: 'guard-action', currentActor: guard?.agentName || effectiveCollaborationSupervisor } : room.werewolf,
+      }));
       if (guard) {
         pushNightStageMessage(createCollaborationMessage({
           roundId,
@@ -4626,6 +4890,18 @@ export default function HomeCommandSidebar({
           werewolf: { phase: 'night', action: 'guard-action', visibility: 'private', audience: [guard.agentName], actor: guard.agentName },
         }));
       }
+      // Persist guard result incrementally
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, night: { ...(room.werewolf.night || { round: werewolfState.dayNumber }), guarded } } : room.werewolf,
+      }));
+      } // end guard-action skip check
+      // --- Witch Action (skip if resuming past this step) ---
+      if (startStepIndex <= nightStepOrder.indexOf('witch-action')) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, currentAction: 'witch-action', currentActor: witch?.agentName || effectiveCollaborationSupervisor } : room.werewolf,
+      }));
       if (witch && wolfTarget) {
         pushNightStageMessage(createCollaborationMessage({
           roundId,
@@ -4642,6 +4918,7 @@ export default function HomeCommandSidebar({
             `${wolfTarget.agentName} 今夜被袭击。女巫首夜可以自救。`,
             roleState.witchAntidoteUsed ? '你的解药已经用过。' : '你的解药仍可使用。',
             roleState.witchPoisonUsed ? '你的毒药已经用过。' : '你的毒药仍可使用。',
+            '提醒：不要机械首夜开药。若暂时无法判断刀口是否为高价值神职，通常优先保留解药，留给后续可能吃刀的预言家或关键信息位。',
           ].join('\n'),
           transcript,
         }), roundId, {
@@ -4670,6 +4947,18 @@ export default function HomeCommandSidebar({
           werewolf: { phase: 'night', action: 'witch-action', visibility: 'private', audience: [witch.agentName], actor: witch.agentName },
         }));
       }
+      // Persist witch result incrementally
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, night: { ...(room.werewolf.night || { round: werewolfState.dayNumber }), saved, poisoned } } : room.werewolf,
+      }));
+      } // end witch-action skip check
+      // --- Seer Check (skip if resuming past this step) ---
+      if (startStepIndex <= nightStepOrder.indexOf('seer-check')) {
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, currentAction: 'seer-check', currentActor: seer?.agentName || effectiveCollaborationSupervisor } : room.werewolf,
+      }));
       if (seer) {
         pushNightStageMessage(createCollaborationMessage({
           roundId,
@@ -4700,6 +4989,16 @@ export default function HomeCommandSidebar({
           status: 'done',
           werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
         }));
+        if (seerTarget) {
+          pushNightStageMessage(createCollaborationMessage({
+            roundId,
+            speakerType: 'supervisor',
+            speakerName: effectiveCollaborationSupervisor,
+            content: `AI 上帝发言 🔍：${seerTarget.agentName} 的查验结果为${seerTarget.role === 'werewolf' ? '狼人' : '好人'}。`,
+            status: 'done',
+            werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
+          }));
+        }
         pushNightStageMessage(createCollaborationMessage({
           roundId,
           speakerType: 'supervisor',
@@ -4709,6 +5008,12 @@ export default function HomeCommandSidebar({
           werewolf: { phase: 'night', action: 'seer-check', visibility: 'private', audience: [seer.agentName], actor: seer.agentName },
         }));
       }
+      // Persist seer result incrementally
+      updateCollaborationRoom((room) => ({
+        ...room,
+        werewolf: room.werewolf ? { ...room.werewolf, night: { ...(room.werewolf.night || { round: werewolfState.dayNumber }), seerTarget: seerTarget?.agentName } } : room.werewolf,
+      }));
+      } // end seer-check skip check
       deaths = [
         wolfTarget && wolfTarget.agentName !== guarded && wolfTarget.agentName !== saved ? wolfTarget.agentName : '',
         poisoned || '',
@@ -5206,7 +5511,7 @@ export default function HomeCommandSidebar({
         ...collaborationMessages,
         voteHostMessage,
       ];
-      const votes = [];
+      const votes: CollaborationWerewolfVote[] = [];
       for (const player of alivePlayers) {
         const candidates = alivePlayers.map((item) => item.agentName).filter((name) => name !== player.agentName);
         const output = await callCollaborationAgent(player.agentName, buildWerewolfPrompt(player.agentName, {
@@ -5228,7 +5533,7 @@ export default function HomeCommandSidebar({
             target: structuredVote.target,
             reason: structuredVote.reason || '',
           }
-          : parseVoteTarget(output, candidates);
+          : null;
         if (parsedVote) {
           votes.push({
             voter: player.agentName,
@@ -5505,10 +5810,17 @@ export default function HomeCommandSidebar({
     }));
   }, [updateCollaborationRoom]);
 
+  const autoLastWordsKeyRef = useRef('');
+
   useEffect(() => {
     if (!werewolfAutoRunning || werewolfAutoStopRef.current) return;
     if (collaborationBusy) return;
     if (werewolfState?.phase === 'ended') {
+      setWerewolfAutoRunning(false);
+      return;
+    }
+    // Stop auto-run if a breakpoint with error exists (failure occurred)
+    if (werewolfState?.breakpoint?.error) {
       setWerewolfAutoRunning(false);
       return;
     }
@@ -5546,6 +5858,29 @@ export default function HomeCommandSidebar({
     werewolfStepDelay,
   ]);
 
+  useEffect(() => {
+    if (!isWerewolfLab || collaborationBusy || !werewolfState?.players?.length) return;
+    if (werewolfState.phase !== 'last-words') return;
+    const targets = werewolfState.pendingLastWords || [];
+    const key = `${werewolfState.dayNumber}:${werewolfState.pendingHunterShot || ''}:${targets.join(',')}`;
+    if (!targets.length && !werewolfState.pendingHunterShot) return;
+    if (autoLastWordsKeyRef.current === key) return;
+    autoLastWordsKeyRef.current = key;
+    const timer = window.setTimeout(() => {
+      void handleWerewolfLastWordsRound();
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [
+    collaborationBusy,
+    handleWerewolfLastWordsRound,
+    isWerewolfLab,
+    werewolfState?.dayNumber,
+    werewolfState?.pendingHunterShot,
+    werewolfState?.pendingLastWords,
+    werewolfState?.phase,
+    werewolfState?.players?.length,
+  ]);
+
   const renderMentionSuggestions = () => (
     mentionSuggestions.length > 0 ? (
       <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
@@ -5568,6 +5903,76 @@ export default function HomeCommandSidebar({
       </div>
     ) : null
   );
+
+  // Plugin system: allow external plugins to contribute additional tabs
+  const pluginContext = useMemo(() => ({
+    hasWorkflow: Boolean(binding?.configFile),
+    hasCollaboration: Boolean(collaborationRoom),
+    hasCreation: Boolean(currentCreationSession),
+    werewolfMode: Boolean(werewolfMode),
+    activeIntent: sidebarHint?.intent,
+    activePhase: werewolfState?.phase,
+  }), [binding?.configFile, collaborationRoom, currentCreationSession, werewolfMode, sidebarHint?.intent, werewolfState?.phase]);
+
+  const { isExternalPluginTab, renderActiveTab } = usePluginRenderers(
+    activeTab,
+    {
+      commander: () => null,
+      workflow: () => null,
+      agent: () => null,
+      chatroom: () => (
+        <ChatroomPanel
+          availableAgents={agents.map((a) => ({ name: a.name, description: a.description }))}
+          callAgent={async (agentName, message) => {
+            return callCollaborationAgent(agentName, message);
+          }}
+          toast={toast}
+        />
+      ),
+    },
+    pluginContext,
+  );
+
+  const commanderPanelContext: CommanderPanelContext = {
+    shouldShowWorkflowRuntimePanels, boundHumanQuestions, otherHumanQuestions,
+    unansweredHumanQuestions, answerHumanQuestion, navigateToHumanQuestion,
+    submittingHumanQuestionId, binding, boundCommander, boundWorkflow,
+    effectiveWorkflowTarget, workflowStatus, persistedPreflight, startingWorkflow,
+    handleStartWorkflow, currentCreationSession, effectiveCreationSession,
+    isWerewolfLab, isWerewolfConfigured, werewolfMode, werewolfState,
+    werewolfViewMode, werewolfAutoRunning, werewolfStepDelay,
+    werewolfAdvancedSettingsOpen, werewolfLabConfig, werewolfDefaultEngine,
+    werewolfDefaultModel, werewolfRehearsalStatus, werewolfRehearsing,
+    werewolfHistoryEntries, werewolfRoundtableSeats, workflowRoundtableSeats,
+    activeRoundtableSeat, selectedWerewolfBoard, plannedWerewolfAgents,
+    autoWerewolfPlayers, collaborationRoom, collaborationDraft,
+    collaborationTopic, collaborationBusy, collaborationMessages,
+    collaborationRounds, collaborationTextareaRef, mentionSuggestions,
+    activeMentionIndex, renderMentionSuggestions, phaseTransitionBanner,
+    recentlyEliminatedSeatIds, effectiveWerewolfNightViewer,
+    effectiveWerewolfNightViewerRole, werewolfViewCandidateNames,
+    werewolfNextActionLabel, werewolfHumanInterventionLabel,
+    werewolfSectionClass, werewolfCardClass, werewolfBadgeClass,
+    werewolfGhostButtonClass, werewolfGoldButtonClass,
+    setCollaborationDraft, setCollaborationTopic, setSelectedSeatId,
+    setActiveMentionIndex, setWerewolfAdvancedSettingsOpen,
+    setWerewolfRolebookOpen, setWerewolfStepDelay, setWerewolfDefaultRuntime,
+    setWerewolfAgentOverrideEnabled, setWerewolfAgentOverrideRuntime,
+    handleWerewolfSupervisorStep, handleWerewolfAutoRun, handleWerewolfPause,
+    handleWerewolfBoardChange, handleWorkflowGroupChat,
+    refreshRandomWerewolfPlayers, runWerewolfRehearsal, persistWerewolfView,
+    insertCollaborationMention, updateCollaborationRoom, onQuickPrompt,
+    formatWerewolfRole, formatWerewolfActionLabel, formatSupervisorReviewType,
+    getCreationSessionStatusLabel, getWerewolfCurrentActionLabel,
+    getWerewolfCurrentActorLabel, getWerewolfSpeakerInitial,
+    getWerewolfSpeakerVisual, getWerewolfSurvivalSummary,
+    getWerewolfSpeechOrder, getWerewolfRoleSpriteStyle,
+    canSeeWerewolfMessage, shouldRevealWerewolfRoleForViewer,
+    shouldHideWerewolfMessageFromChat, prepareWerewolfMessageForChat,
+    listTemporaryWerewolfAgentNames, resolveWerewolfAgentRuntimeConfig,
+    workflowRoundtableAgents, preflightChecks, availableCollaborationAgents, reports,
+    engine, model, activeSessionId, router,
+  };
 
   return (
     <>
@@ -5749,1484 +6154,60 @@ export default function HomeCommandSidebar({
           )}
 
           {availableTabs.includes('commander') && activeTab === 'commander' && (
-            <div className="space-y-4">
-              {shouldShowWorkflowRuntimePanels && boundHumanQuestions.length > 0 ? (
-                <HumanQuestionInbox
-                  questions={boundHumanQuestions}
-                  title="当前工作流待审批"
-                  emptyText="当前绑定工作流暂无待审批消息。"
-                  compact={false}
-                  submittingQuestionId={submittingHumanQuestionId}
-                  onSubmit={answerHumanQuestion}
-                />
-              ) : null}
-
-              {shouldShowWorkflowRuntimePanels ? (
-                <HumanQuestionInbox
-                  questions={binding ? otherHumanQuestions : unansweredHumanQuestions}
-                  onNavigate={navigateToHumanQuestion}
-                />
-              ) : null}
-
-              {shouldShowWorkflowRuntimePanels ? (
-              <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-background to-background p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs text-muted-foreground">当前指挥官</p>
-                    <div className="mt-1 text-base font-semibold">{boundCommander || 'default-supervisor'}</div>
-                  </div>
-                  <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-amber-400 to-stone-900 text-white flex items-center justify-center shadow-lg">
-                    <span className="material-symbols-outlined">military_tech</span>
-                  </div>
-                </div>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  指挥官会跟随当前会话最近一次启动的 workflow 运行自动切换，不再要求手动绑定。
-                </p>
-              </div>
-              ) : null}
-
-              <div className="rounded-2xl border p-4 space-y-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">协作室</div>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {isWerewolfLab
-                        ? 'Supervisor 主导回合制流程；人类负责开局、暂停、补充指令和关键节点推进。'
-                        : '由你主持当前议题，点名空闲 Agent 发言，或发起一轮多 Agent 圆桌讨论。'}
-                    </p>
-                  </div>
-                  <Badge variant={collaborationBusy ? 'secondary' : 'outline'}>
-                    {collaborationBusy ? '讨论中' : `${collaborationMessages.length} 条`}
-                  </Badge>
-                </div>
-
-                {!isWerewolfLab ? (
-                  <>
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">议题</label>
-                      <Input
-                        value={collaborationTopic}
-                        onChange={(event) => setCollaborationTopic(event.target.value)}
-                        onBlur={() => {
-                          const topic = collaborationTopic.trim();
-                          if (!topic && !collaborationRoom?.topic) return;
-                          updateCollaborationRoom((room) => ({ ...room, topic }));
-                        }}
-                        placeholder="例如：请评估当前修复方案的风险和下一步动作"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <label className="text-xs text-muted-foreground">本工作流圆桌席位</label>
-                        <Badge variant="outline" className="text-[10px]">
-                          {workflowRoundtableAgents.length} 位
-                        </Badge>
-                      </div>
-                      {workflowRoundtableSeats.length > 0 ? (
-                        <div className="rounded-2xl border bg-muted/10 p-3">
-                          <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
-                            <span>顺时针发言</span>
-                            <span>由被 @ 的 Agent 依次接话</span>
-                          </div>
-                          <div className="relative mx-auto aspect-square max-w-[360px]">
-                            {workflowRoundtableSeats.map((seat, index) => {
-                              const total = workflowRoundtableSeats.length;
-                              const angle = (Math.PI * 2 * index) / Math.max(total, 1) - Math.PI / 2;
-                              const radius = total <= 4 ? 34 : total <= 6 ? 38 : 41;
-                              const x = 50 + radius * Math.cos(angle);
-                              const y = 50 + radius * Math.sin(angle);
-                              const nextAngle = (Math.PI * 2 * ((index + 0.5) % Math.max(total, 1))) / Math.max(total, 1) - Math.PI / 2;
-                              const arrowX = 50 + (radius - 7) * Math.cos(nextAngle);
-                              const arrowY = 50 + (radius - 7) * Math.sin(nextAngle);
-                              return (
-                                <div key={seat.id}>
-                                  {total > 1 ? (
-                                    <div
-                                      className="absolute -translate-x-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70"
-                                      style={{ left: `${arrowX}%`, top: `${arrowY}%` }}
-                                    >
-                                      ↻
-                                    </div>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className="absolute -translate-x-1/2 -translate-y-1/2"
-                                    style={{ left: `${x}%`, top: `${y}%` }}
-                                    onClick={() => setSelectedSeatId(seat.id)}
-                                  >
-                                    <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${seat.active ? 'scale-105' : ''}`}>
-                                      {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
-                                      {seat.seatNumber ? (
-                                        <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
-                                          {seat.seatNumber}
-                                        </span>
-                                      ) : null}
-                                      <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
-                                    </div>
-                                    <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            <div className="absolute left-1/2 top-1/2 flex h-32 w-32 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm">
-                              <div className="text-[10px] text-muted-foreground">当前席位</div>
-                              <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeRoundtableSeat?.nameClass || 'text-foreground'}`}>
-                                {activeRoundtableSeat?.name || '未选中'}
-                              </div>
-                              {activeRoundtableSeat?.seatNumber ? (
-                                <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
-                              ) : null}
-                              <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat?.statusLabel || '待命'}</div>
-                              {activeRoundtableSeat?.meta ? (
-                                <div className="mt-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[9px] text-muted-foreground">
-                                  {activeRoundtableSeat.meta}
-                                </div>
-                              ) : null}
-                            </div>
-                          </div>
-                          {activeRoundtableSeat ? (
-                            <div className={`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`}>
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className={`font-medium ${activeRoundtableSeat.nameClass || 'text-foreground'}`}>{activeRoundtableSeat.name}</div>
-                                  {activeRoundtableSeat.seatNumber ? (
-                                    <div className="text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
-                                  ) : null}
-                                </div>
-                                <Badge variant="outline" className="text-[9px]">{activeRoundtableSeat.subtitle}</Badge>
-                              </div>
-                              <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeRoundtableSeat.detail}</div>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <div className="px-2 py-3 text-xs text-muted-foreground">暂无可用 Agent。</div>
-                      )}
-                      <div className="text-[11px] leading-5 text-muted-foreground">
-                        工作流下的 Agent 天然构成一个群聊圆桌。用 <span className="font-medium">@agent</span> 或 <span className="font-medium">@全员</span> 控制下一轮顺序发言；没有新的 @ 时，本轮自然结束。
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">主持人消息</label>
-                      <div className="relative">
-                        <Textarea
-                          ref={collaborationTextareaRef}
-                          value={collaborationDraft}
-                          onChange={(event) => setCollaborationDraft(event.target.value)}
-                          placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
-                          className="min-h-[86px]"
-                          onKeyDown={(event) => {
-                            if (mentionSuggestions.length > 0) {
-                              if (event.key === 'ArrowDown') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
-                                return;
-                              }
-                              if (event.key === 'ArrowUp') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
-                                return;
-                              }
-                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
-                                event.preventDefault();
-                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
-                                return;
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setCollaborationDraft((prev) => `${prev} `);
-                              }
-                            }
-                          }}
-                        />
-                        {renderMentionSuggestions()}
-                      </div>
-                    </div>
-
-                    <Button
-                      type="button"
-                      className="w-full"
-                      onClick={handleWorkflowGroupChat}
-                      disabled={collaborationBusy || workflowRoundtableAgents.length === 0}
-                    >
-                      {collaborationBusy ? '群聊进行中...' : '发送到工作流群聊'}
-                    </Button>
-                  </>
-                ) : null}
-
-                {isWerewolfLab ? (
-                <div className={cn('rounded-xl border border-dashed p-3 space-y-3', werewolfSectionClass)}>
-                  <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium">AI 狼人杀测试</div>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {isWerewolfLab
-                          ? '先选择板子，由系统随机抽取临时人格；Supervisor 按流程推进，人类只在关键节点接入。'
-                          : '用当前 Agent 做回合制身份推理测试，验证多 Agent 发言、@点名、主持总结和投票结算。'}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className={cn('h-7 gap-1 px-2 text-xs', werewolfGhostButtonClass)}
-                        onClick={() => setWerewolfRolebookOpen(true)}
-                      >
-                        <span className="material-symbols-outlined text-sm">style</span>
-                        角色图鉴
-                      </Button>
-                      <Badge variant={werewolfState?.enabled ? 'secondary' : 'outline'} className={cn('text-[10px]', werewolfBadgeClass)}>
-                        {werewolfState?.enabled ? `${werewolfState.phase} · D${werewolfState.dayNumber}` : '未开始'}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">板子</label>
-                      <select
-                        value={selectedWerewolfBoard.id}
-                        onChange={(event) => handleWerewolfBoardChange(event.target.value)}
-                        disabled={collaborationBusy || Boolean(werewolfState?.players?.length && werewolfState.phase !== 'setup')}
-                        className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      >
-                        {WEREWOLF_LAB_BOARDS.map((board) => (
-                          <option key={board.id} value={board.id}>{board.name}</option>
-                        ))}
-                      </select>
-                      <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                        {selectedWerewolfBoard.description}
-                      </div>
-                      <div className={cn('rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                        规则：{selectedWerewolfBoard.winRuleLabel}。{selectedWerewolfBoard.winRuleDescription}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <label className="text-xs text-muted-foreground">流程</label>
-                        <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
-                          {isWerewolfConfigured ? 'Supervisor 主导中' : '等待确认开局'}
-                        </Badge>
-                      </div>
-                      <div className="grid grid-cols-5 gap-1 text-[10px]">
-                        {[
-                          ['setup', '配置'],
-                          ['night', '黑夜'],
-                          ['sheriff-election', '警长'],
-                          ['last-words', '遗言'],
-                          ['day', '发言'],
-                          ['voting', '投票'],
-                        ].map(([phase, label]) => {
-                          const active = werewolfState?.phase === phase || werewolfState?.currentAction === phase;
-                          return (
-                            <div key={phase} className={cn('rounded-md border px-2 py-1 text-center', active ? 'border-primary bg-primary/10 text-primary' : 'bg-muted/20 text-muted-foreground', werewolfMode && !active ? 'border-amber-800/30 bg-stone-800/15 text-stone-300' : undefined)}>
-                              {label}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                        {isWerewolfConfigured
-                          ? `当前：${selectedWerewolfBoard.name}，第 ${werewolfState?.dayNumber || 1} 天。可以在人工介入里补充指令，再让 Supervisor 推进。`
-                          : `选择板子后会随机选择 ${selectedWerewolfBoard.playerCount} 个临时人格，并按 ${selectedWerewolfBoard.name} 分配身份。`}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={cn('grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto] sm:items-start', werewolfCardClass)}>
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium">视角</div>
-                      <div className="text-[10px] leading-5 text-muted-foreground">
-                        {werewolfViewMode === 'god'
-                          ? '上帝视角会显示所有身份。'
-                          : effectiveWerewolfNightViewer
-                            ? isWerewolfConfigured
-                              ? `黑夜视角绑定：${effectiveWerewolfNightViewer}（${formatWerewolfRole(effectiveWerewolfNightViewerRole || 'villager')}）。狼人视角可见狼队，其余玩家只看自己。`
-                              : `黑夜视角预绑定：${effectiveWerewolfNightViewer}。开局分配身份后会自动沿用。`
-                            : werewolfViewCandidateNames.length
-                              ? '黑夜视角未绑定玩家时，只显示公开信息。请在下方选择一名玩家。'
-                              : '开局后可绑定任意玩家查看其黑夜视角。'}
-                      </div>
-                      {werewolfViewMode === 'night' && werewolfViewCandidateNames.length ? (
-                        <div className="mt-2 grid gap-1.5">
-                          <label className="text-[10px] font-medium text-foreground">选择绑定玩家</label>
-                          <select
-                            value={effectiveWerewolfNightViewer}
-                            onChange={(event) => persistWerewolfView(werewolfViewMode, event.target.value)}
-                            className={cn('h-8 w-full rounded-md border border-input bg-background px-2 text-xs', werewolfMode && 'border-amber-800/30 bg-stone-950/20')}
-                          >
-                            <option value="">未绑定，只看公开信息</option>
-                            {werewolfViewCandidateNames.map((agentName) => (
-                              <option key={agentName} value={agentName}>
-                                {agentName}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className={cn('inline-flex rounded-md border bg-background p-0.5', werewolfMode && 'border-amber-800/40 bg-stone-950/20')}>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={werewolfViewMode === 'night' ? 'default' : 'ghost'}
-                        className={cn('h-7 px-2 text-xs', werewolfViewMode === 'night' ? werewolfGoldButtonClass : werewolfGhostButtonClass)}
-                        onClick={() => persistWerewolfView('night', effectiveWerewolfNightViewer)}
-                      >
-                        黑夜视角
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant={werewolfViewMode === 'god' ? 'default' : 'ghost'}
-                        className={cn('h-7 px-2 text-xs', werewolfViewMode === 'god' ? werewolfGoldButtonClass : werewolfGhostButtonClass)}
-                        onClick={() => persistWerewolfView('god', effectiveWerewolfNightViewer)}
-                      >
-                        上帝视角
-                      </Button>
-                    </div>
-                  </div>
-
-                  {isWerewolfConfigured ? (
-                    <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-3', werewolfCardClass)}>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">当前环节</div>
-                        <div className="mt-1 font-medium">{getWerewolfCurrentActionLabel({
-                          state: werewolfState,
-                          viewMode: werewolfViewMode,
-                          viewer: effectiveWerewolfNightViewer,
-                        })}</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">正在行动</div>
-                        <div className="mt-1 truncate font-medium">{getWerewolfCurrentActorLabel({
-                          state: werewolfState,
-                          viewMode: werewolfViewMode,
-                          viewer: effectiveWerewolfNightViewer,
-                        })}</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">存活情况</div>
-                        <div className="mt-1 line-clamp-3 leading-5">
-                          {getWerewolfSurvivalSummary(werewolfState, werewolfViewMode === 'god' || Boolean(werewolfState?.revealedRoles))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {isWerewolfConfigured ? (
-                    <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 text-xs sm:grid-cols-2', werewolfCardClass)}>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">警长 / 警徽</div>
-                        <div className="mt-1 leading-5">
-                          {werewolfState?.badgeDestroyed
-                            ? '警徽已撕'
-                            : werewolfState?.sheriff
-                              ? `${werewolfState.sheriff} 持有警徽`
-                              : werewolfState?.sheriffElectionDone
-                                ? '本局无警长'
-                                : '待上警举手与警长竞选'}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">发言顺序</div>
-                        <div className="mt-1 line-clamp-3 leading-5">
-                          {werewolfState ? getWerewolfSpeechOrder(werewolfState).join(' -> ') : '未定'}
-                        </div>
-                      </div>
-                      {werewolfViewMode === 'god' && werewolfState?.night ? (
-                        <div className="sm:col-span-2">
-                          <div className="text-[10px] text-muted-foreground">上帝夜间记录</div>
-                          <div className="mt-1 leading-5">
-                            N{werewolfState.night.round}：
-                            {werewolfState.night.guarded ? ` 守护 ${werewolfState.night.guarded};` : ''}
-                            {werewolfState.night.wolfTarget ? ` 狼刀 ${werewolfState.night.wolfTarget};` : ''}
-                            {werewolfState.night.saved ? ` 解药 ${werewolfState.night.saved};` : ''}
-                            {werewolfState.night.poisoned ? ` 毒药 ${werewolfState.night.poisoned};` : ''}
-                            {werewolfState.night.seerTarget ? ` 查验 ${werewolfState.night.seerTarget};` : ''}
-                            {werewolfState.night.deaths?.length ? ` 出局 ${werewolfState.night.deaths.join('、')}` : ' 平安夜'}
-                          </div>
-                        </div>
-                      ) : null}
-                      {werewolfViewMode === 'night' && effectiveWerewolfNightViewerRole === 'witch' && werewolfState?.night?.wolfTarget ? (
-                        <div className="sm:col-span-2">
-                          <div className="text-[10px] text-muted-foreground">女巫夜间已知</div>
-                          <div className="mt-1 leading-5">
-                            今夜被袭击：{werewolfState.night.wolfTarget}
-                            {werewolfState.dayNumber === 1 ? '；首夜可以自救。' : '。'}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  {!isWerewolfConfigured ? (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-xs font-medium">随机角色</div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-[10px] text-muted-foreground">
-                            将启用 {selectedWerewolfBoard.playerCount} / {listTemporaryWerewolfAgentNames().length}
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className={cn('h-7 px-2 text-xs', werewolfGhostButtonClass)}
-                            onClick={refreshRandomWerewolfPlayers}
-                            disabled={collaborationBusy}
-                          >
-                            刷新随机
-                          </Button>
-                        </div>
-                      </div>
-                      <div className={cn('grid max-h-44 gap-2 overflow-y-auto rounded-xl border bg-muted/10 p-2 sm:grid-cols-2', werewolfCardClass)}>
-                        {listTemporaryWerewolfAgentNames().map((agentName) => {
-                          const checked = autoWerewolfPlayers.includes(agentName);
-                          return (
-                            <label key={agentName} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${checked ? 'bg-background' : 'opacity-50'}`}>
-                              <Checkbox
-                                checked={checked}
-                                disabled
-                              />
-                              <span className="min-w-0 flex-1 truncate">{agentName}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className={cn('space-y-3 rounded-xl border bg-muted/10 p-3', werewolfCardClass)}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-medium">高级设置</div>
-                        <div className="text-[10px] leading-5 text-muted-foreground">
-                          支持默认 engine/model，并为每个临时玩家和 Supervisor 单独覆盖。演练会提前创建 session，成功项会保留。
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className={cn('h-7 px-2 text-xs', werewolfGhostButtonClass)}
-                        onClick={() => setWerewolfAdvancedSettingsOpen((prev) => !prev)}
-                      >
-                        {werewolfAdvancedSettingsOpen ? '收起' : '展开'}
-                      </Button>
-                    </div>
-
-                    {werewolfAdvancedSettingsOpen ? (
-                      <div className="space-y-3">
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <div className="space-y-1.5">
-                            <div className="text-[10px] text-muted-foreground">默认引擎</div>
-                            <EngineSelect
-                              value={werewolfDefaultEngine}
-                              onChange={(value) => setWerewolfDefaultRuntime({ engine: value })}
-                              className="h-8"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <div className="text-[10px] text-muted-foreground">默认模型</div>
-                            <ModelSelect
-                              value={werewolfDefaultModel}
-                              onChange={(value) => setWerewolfDefaultRuntime({ model: value })}
-                              className="h-8"
-                              engine={werewolfDefaultEngine}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="space-y-2">
-                          {plannedWerewolfAgents.map((agentName) => {
-                            const override = werewolfLabConfig?.agentOverrides?.[agentName];
-                            const overrideEnabled = override?.enabled === true;
-                            const { effectiveEngine, effectiveModel } = resolveWerewolfAgentRuntimeConfig(agentName);
-                            const rehearsal = werewolfRehearsalStatus[agentName];
-                            const statusLabel = rehearsal?.status === 'ready'
-                              ? '已就绪'
-                              : rehearsal?.status === 'failed'
-                                ? '失败'
-                                : rehearsal?.status === 'running'
-                                  ? '演练中'
-                                  : '未演练';
-                            return (
-                              <div key={agentName} className="rounded-lg border bg-background/70 p-2.5">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <div className="truncate text-xs font-medium">{agentName}</div>
-                                    <div className="text-[10px] text-muted-foreground">
-                                      当前生效：{effectiveEngine || '-'} / {effectiveModel || '-'}
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <Badge variant={rehearsal?.status === 'ready' ? 'secondary' : rehearsal?.status === 'failed' ? 'destructive' : 'outline'} className="text-[9px]">
-                                      {statusLabel}
-                                    </Badge>
-                                    <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                                      <Checkbox
-                                        checked={overrideEnabled}
-                                        onCheckedChange={(checked) => setWerewolfAgentOverrideEnabled(agentName, checked === true)}
-                                      />
-                                      独立配置
-                                    </label>
-                                  </div>
-                                </div>
-                                {overrideEnabled ? (
-                                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                    <EngineSelect
-                                      value={override?.engine || ''}
-                                      onChange={(value) => setWerewolfAgentOverrideRuntime(agentName, { engine: value })}
-                                      className="h-8"
-                                    />
-                                    <ModelSelect
-                                      value={override?.model || ''}
-                                      onChange={(value) => setWerewolfAgentOverrideRuntime(agentName, { model: value })}
-                                      className="h-8"
-                                      engine={override?.engine || effectiveEngine}
-                                    />
-                                  </div>
-                                ) : null}
-                                {rehearsal?.error ? (
-                                  <div className="mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1.5 text-[10px] leading-5 text-destructive">
-                                    {rehearsal.error}
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className={cn('h-8 text-xs', werewolfGhostButtonClass)}
-                            onClick={() => void runWerewolfRehearsal()}
-                            disabled={collaborationBusy || werewolfRehearsing}
-                          >
-                            {werewolfRehearsing ? '演练中...' : '演练并创建 Session'}
-                          </Button>
-                          <div className="text-[10px] text-muted-foreground">
-                            已就绪 {plannedWerewolfAgents.filter((agentName) => werewolfRehearsalStatus[agentName]?.status === 'ready').length} / {plannedWerewolfAgents.length}
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {werewolfState?.players?.length ? (
-                    <div className="space-y-2">
-                      <div className={cn('rounded-2xl border bg-muted/10 p-3', werewolfSectionClass)}>
-                        <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>顺时针发言</span>
-                          <span>警长位高亮，死亡席位断线显示</span>
-                        </div>
-                        <div className="relative mx-auto aspect-square max-w-[420px]">
-                            {werewolfRoundtableSeats.map((seat, index) => {
-                            const total = werewolfRoundtableSeats.length;
-                            const angle = (Math.PI * 2 * index) / Math.max(total, 1) - Math.PI / 2;
-                            const radius = total <= 6 ? 38 : total <= 9 ? 41 : 43;
-                            const x = 50 + radius * Math.cos(angle);
-                            const y = 50 + radius * Math.sin(angle);
-                            const nextAngle = (Math.PI * 2 * ((index + 0.5) % Math.max(total, 1))) / Math.max(total, 1) - Math.PI / 2;
-                            const arrowX = 50 + (radius - 8) * Math.cos(nextAngle);
-                            const arrowY = 50 + (radius - 8) * Math.sin(nextAngle);
-                            const player = werewolfState.players.find((item) => item.agentName === seat.id);
-                            const revealRole = player ? shouldRevealWerewolfRoleForViewer({
-                              player,
-                              state: werewolfState,
-                              viewMode: werewolfViewMode,
-                              viewer: effectiveWerewolfNightViewer,
-                            }) : false;
-                              const roleSpriteStyle = player && revealRole ? getWerewolfRoleSpriteStyle(player.role) : null;
-                              const justEliminated = recentlyEliminatedSeatIds.includes(seat.id);
-                              return (
-                                <div key={seat.id}>
-                                  {total > 1 ? (
-                                    <div
-                                      className="absolute -translate-x-1/2 -translate-y-1/2 text-[11px] text-muted-foreground/70"
-                                      style={{ left: `${arrowX}%`, top: `${arrowY}%` }}
-                                    >
-                                      ↻
-                                    </div>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className="absolute -translate-x-1/2 -translate-y-1/2"
-                                  style={{ left: `${x}%`, top: `${y}%` }}
-                                  onClick={() => setSelectedSeatId(seat.id)}
-                                >
-                                  <div className={`relative flex h-16 w-16 items-center justify-center rounded-full border bg-background transition-all duration-300 hover:scale-105 ${seat.avatarClass} ${seat.ringClass || ''} ${player?.sheriff ? 'ring-2 ring-amber-400/80 shadow-[0_0_0_8px_rgba(251,191,36,0.18)]' : ''} ${seat.active ? 'scale-105' : ''} ${seat.dimmed ? 'opacity-45 grayscale animate-[seatDisconnect_240ms_ease-out_forwards]' : ''} ${justEliminated ? 'animate-[seatFall_1.2s_ease-out]' : ''}`}>
-                                    {seat.speaking ? <span className="absolute inset-[-5px] animate-ping rounded-full border border-primary/40" /> : null}
-                                    {justEliminated ? <span className="absolute inset-[-6px] rounded-full border border-destructive/50 animate-ping" /> : null}
-                                    {seat.seatNumber ? (
-                                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border bg-background px-1 text-[9px] font-semibold text-muted-foreground shadow-sm">
-                                        {seat.seatNumber}
-                                      </span>
-                                    ) : null}
-                                    {player?.sheriff ? (
-                                      <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border border-amber-500/50 bg-amber-500/15 px-1 text-[9px] font-semibold text-amber-700 shadow-sm dark:text-amber-300">
-                                        警
-                                      </span>
-                                    ) : null}
-                                    {roleSpriteStyle ? (
-                                      <span
-                                        className={`h-10 w-8 rounded border border-amber-500/35 bg-cover shadow-sm ${seat.speaking ? 'animate-[spin_6s_linear_infinite]' : ''}`}
-                                        style={roleSpriteStyle}
-                                        aria-label={player ? formatWerewolfRole(player.role) : seat.name}
-                                      />
-                                    ) : (
-                                      <span className={`text-lg font-semibold ${seat.speaking ? 'animate-[spin_4s_linear_infinite]' : ''}`}>{getWerewolfSpeakerInitial(seat.name)}</span>
-                                    )}
-                                  </div>
-                                  <div className={`mt-1 max-w-[92px] truncate text-center text-[10px] font-medium ${seat.nameClass || 'text-foreground'}`}>{seat.name}</div>
-                                </button>
-                                </div>
-                              );
-                            })}
-                          <div className={cn('absolute left-1/2 top-1/2 flex h-36 w-36 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm', werewolfCardClass)}>
-                            {phaseTransitionBanner ? (
-                              <div className="absolute inset-0 flex items-center justify-center rounded-full bg-background/88 animate-[fadeIn_220ms_ease-out]">
-                                <div className={cn('rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-xs font-medium text-primary shadow-sm', werewolfBadgeClass)}>
-                                  {phaseTransitionBanner.label}
-                                </div>
-                              </div>
-                            ) : null}
-                            <div className="text-[10px] text-muted-foreground">当前席位</div>
-                            <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeRoundtableSeat?.nameClass || 'text-foreground'}`}>
-                              {activeRoundtableSeat?.name || '未选中'}
-                            </div>
-                            {activeRoundtableSeat?.seatNumber ? (
-                              <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
-                            ) : null}
-                            <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat?.statusLabel || '待命'}</div>
-                            {activeRoundtableSeat?.meta ? (
-                              <div className="mt-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[9px] text-muted-foreground">
-                                {activeRoundtableSeat.meta}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                        {activeRoundtableSeat ? (
-                          <div className={cn(`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`, werewolfCardClass)}>
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0">
-                                <div className={`font-medium ${activeRoundtableSeat.nameClass || 'text-foreground'}`}>{activeRoundtableSeat.name}</div>
-                                {activeRoundtableSeat.seatNumber ? (
-                                  <div className="text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
-                                ) : null}
-                              </div>
-                              <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>{activeRoundtableSeat.statusLabel}</Badge>
-                            </div>
-                            <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeRoundtableSeat.detail}</div>
-                            {(() => {
-                              const player = werewolfState.players.find((item) => item.agentName === activeRoundtableSeat.id);
-                              if (!player) return null;
-                              const revealRole = shouldRevealWerewolfRoleForViewer({
-                                player,
-                                state: werewolfState,
-                                viewMode: werewolfViewMode,
-                                viewer: effectiveWerewolfNightViewer,
-                              });
-                              return (
-                                <div className="mt-2 text-[10px] text-foreground">
-                                  身份：{revealRole ? formatWerewolfRole(player.role) : '隐藏'}
-                                  {player.sheriff ? ' · 警长' : ''}
-                                  {player.sheriffCandidate ? ' · 上警' : ''}
-                                  {player.idiotRevealed ? ' · 白痴已翻牌' : ''}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        ) : null}
-                      </div>
-                      {werewolfState.votes.length > 0 ? (
-                        <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                          最近票流：{werewolfState.votes.slice(-6).map((vote) => `${vote.voter}->${vote.target}`).join('；')}
-                        </div>
-                      ) : null}
-                      {werewolfHistoryEntries.length > 0 ? (
-                        <div className={cn('space-y-2 rounded-lg border bg-muted/10 p-2.5', werewolfCardClass)}>
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="text-[11px] font-medium text-foreground">历史对局记忆</div>
-                            <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
-                              {werewolfHistoryEntries.length} 条
-                            </Badge>
-                          </div>
-                          <div className="space-y-1.5">
-                            {werewolfHistoryEntries.slice(0, 6).map((entry) => (
-                              <div key={entry.id} className={cn('rounded-lg border bg-background/70 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                                <div className="font-medium text-foreground">{entry.boardName} · {entry.result}</div>
-                                <div className="mt-0.5">{entry.summary}</div>
-                                {entry.lessons?.length ? <div className="mt-1 text-[10px]">经验：{entry.lessons.join('；')}</div> : null}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                        {werewolfState.lastSummary ? (
-                        <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
-                          {werewolfState.lastSummary}
-                        </div>
-                      ) : null}
-                      {werewolfState.lastError ? (
-                        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-[10px] leading-5 text-destructive">
-                          上次推进失败：{werewolfState.lastError}。可点击“{werewolfNextActionLabel}”重试。
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className={cn('rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground', werewolfCardClass)}>
-                      {isWerewolfLab
-                        ? '请选择板子，系统会随机选择参与人格并分配身份。临时人格不进入业务 Agent 列表。'
-                        : '先选择 3 到 6 个 Agent，然后初始化测试局。Supervisor 会作为主持人，不参与玩家列表。'}
-                    </div>
-                  )}
-
-                  {isWerewolfConfigured ? (
-                    <div className={cn('space-y-2 rounded-lg border bg-muted/10 p-3', werewolfCardClass)}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-medium">人工介入</div>
-                          <div className="text-[10px] leading-5 text-muted-foreground">
-                            当前介入点：{werewolfHumanInterventionLabel}。补充内容会交给 Supervisor 带入下一步。
-                          </div>
-                        </div>
-                        <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
-                          {werewolfAutoRunning ? '自动中' : '可暂停'}
-                        </Badge>
-                      </div>
-                      <div className="relative">
-                        <Textarea
-                          ref={collaborationTextareaRef}
-                          value={collaborationDraft}
-                          onChange={(event) => setCollaborationDraft(event.target.value)}
-                          placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
-                          className="min-h-[72px]"
-                          disabled={collaborationBusy}
-                          onKeyDown={(event) => {
-                            if (mentionSuggestions.length > 0) {
-                              if (event.key === 'ArrowDown') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
-                                return;
-                              }
-                              if (event.key === 'ArrowUp') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
-                                return;
-                              }
-                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
-                                event.preventDefault();
-                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
-                                return;
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setCollaborationDraft((prev) => `${prev} `);
-                              }
-                            }
-                          }}
-                        />
-                        {renderMentionSuggestions()}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto]', werewolfCardClass)}>
-                    <div className="space-y-1">
-                      <div className="text-xs font-medium">推进节奏</div>
-                      <div className="text-[10px] leading-5 text-muted-foreground">
-                        自动推进会在每个关键节点停顿，可随时暂停后补充人工指令。
-                      </div>
-                      <select
-                        value={werewolfStepDelay}
-                        onChange={(event) => setWerewolfStepDelay(Number(event.target.value))}
-                        className={cn('mt-1 h-8 w-full rounded-md border border-input bg-background px-2 text-xs', werewolfMode && 'border-amber-800/30 bg-stone-950/20')}
-                        disabled={collaborationBusy}
-                      >
-                        <option value={600}>快速 · 0.6s</option>
-                        <option value={1200}>标准 · 1.2s</option>
-                        <option value={2400}>慢速 · 2.4s</option>
-                      </select>
-                    </div>
-                    <div className="flex items-end gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className={werewolfGhostButtonClass}
-                        onClick={handleWerewolfAutoRun}
-                        disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended'}
-                      >
-                        全流程自动推进
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className={werewolfGhostButtonClass}
-                        onClick={handleWerewolfPause}
-                        disabled={!werewolfAutoRunning && !collaborationBusy}
-                      >
-                        暂停
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <Button
-                      type="button"
-                      className={werewolfGoldButtonClass}
-                      onClick={handleWerewolfSupervisorStep}
-                      disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
-                    >
-                      {collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className={werewolfGhostButtonClass}
-                      onClick={() => handleWerewolfBoardChange(selectedWerewolfBoard.id)}
-                      disabled={collaborationBusy}
-                    >
-                      重置配置
-                    </Button>
-                  </div>
-                  {!isWerewolfLab ? (
-                    <div className="text-[10px] leading-5 text-muted-foreground">
-                      圆桌只会由 <span className="font-mono">@agent</span> 或 <span className="font-mono">@全员</span> 触发；没有新的 @ 时，本轮自然结束。
-                    </div>
-                  ) : null}
-                </div>
-                ) : null}
-
-                {!isWerewolfLab && collaborationMessages.length > 0 ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-medium text-foreground">最近讨论</div>
-                      {collaborationRounds.length > 0 ? (
-                        <Badge variant="outline" className="text-[10px]">回合 {collaborationRounds.length}</Badge>
-                      ) : null}
-                    </div>
-                  <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
-                      {[...collaborationMessages]
-                        .filter((message) => !isWerewolfLab || canSeeWerewolfMessage({
-                          message,
-                          state: werewolfState,
-                          viewMode: werewolfViewMode,
-                          viewer: effectiveWerewolfNightViewer,
-                        }))
-                        .slice(-10)
-                        .map((message) => {
-                        const displayMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
-                        const werewolfVisual = isWerewolfLab
-                          ? getWerewolfSpeakerVisual(message.speakerName, werewolfState?.players)
-                          : null;
-                        const tone =
-                          werewolfVisual
-                            ? werewolfVisual.card
-                            : message.speakerType === 'human'
-                            ? 'border-primary/30 bg-primary/5'
-                            : message.speakerType === 'supervisor'
-                              ? 'border-amber-500/30 bg-amber-500/5'
-                              : message.speakerType === 'system'
-                                ? 'border-muted bg-muted/30'
-                                : 'border-sky-500/25 bg-sky-500/5';
-                        return (
-                          <div key={message.id} className={`rounded-xl border p-3 text-xs ${tone}`}>
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
-                                  werewolfVisual
-                                    ? werewolfVisual.avatar
-                                    : message.speakerType === 'supervisor'
-                                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                                      : message.speakerType === 'system'
-                                        ? 'border-muted bg-muted/60 text-muted-foreground'
-                                        : 'border-primary/30 bg-primary/10 text-primary'
-                                }`}>
-                                  {message.speakerType === 'system' ? '系' : getWerewolfSpeakerInitial(message.speakerName)}
-                                </span>
-                                <div className={`min-w-0 truncate font-medium ${werewolfVisual?.name || 'text-foreground'}`}>
-                                  {message.speakerName}
-                                </div>
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1">
-                                {isWerewolfLab && message.werewolf?.action ? (
-                                  <Badge variant="secondary" className="text-[9px]">
-                                    {formatWerewolfActionLabel(message.werewolf.action)}
-                                  </Badge>
-                                ) : null}
-                                <Badge variant={message.status === 'error' ? 'destructive' : 'outline'} className="text-[9px]">
-                                  {message.speakerType === 'human' ? '主持' : message.speakerType === 'supervisor' ? '总结' : message.speakerType === 'system' ? '系统' : 'Agent'}
-                                </Badge>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {new Date(message.createdAt).toLocaleTimeString()}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="mt-2 whitespace-pre-wrap break-words leading-5 text-muted-foreground">
-                              {displayMessage.content}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : !isWerewolfLab ? (
-                  <div className="rounded-xl border border-dashed p-4 text-xs leading-5 text-muted-foreground">
-                    还没有协作记录。可以先写一条主持人消息，用 @agent 或 @全员 指定下一位发言者。
-                  </div>
-                ) : null}
-              </div>
-
-              {shouldShowWorkflowRuntimePanels ? (
-              <div className="rounded-2xl border p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">工作流状态</span>
-                  <Badge variant="secondary">{workflowStatus?.status || 'idle'}</Badge>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-xl border bg-muted/20 p-3">
-                    <div className="text-[11px] text-muted-foreground">当前阶段</div>
-                    <div className="mt-1 text-sm font-medium">{workflowStatus?.currentPhase || '未开始'}</div>
-                  </div>
-                  <div className="rounded-xl border bg-muted/20 p-3">
-                    <div className="text-[11px] text-muted-foreground">当前步骤</div>
-                    <div className="mt-1 text-sm font-medium">{workflowStatus?.currentStep || '未开始'}</div>
-                  </div>
-                </div>
-                <details className="rounded-xl border bg-muted/10 p-3">
-                  <summary className="cursor-pointer text-xs font-medium text-foreground">展开运行上下文</summary>
-                  <div className="mt-3 text-xs text-muted-foreground space-y-1">
-                    <div>当前会话：{activeSessionId || '未创建'}</div>
-                    <div>运行配置：{boundWorkflow || '尚未通过当前会话启动 workflow'}</div>
-                    <div>候选配置：{effectiveWorkflowTarget || '未选择'}</div>
-                    <div>指挥官：{boundCommander}</div>
-                    {currentCreationSession ? (
-                      <div>创建进度：{currentCreationSession.workflowName} / {getCreationSessionStatusLabel(currentCreationSession.status)}</div>
-                    ) : null}
-                  </div>
-                </details>
-                {workflowStatus?.specCodingSummary ? (
-                  <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">运行绑定的 Spec Coding 制品</div>
-                    <div>版本：v{workflowStatus.specCodingSummary.version}</div>
-                    <div>状态：{workflowStatus.specCodingSummary.status}</div>
-                    {workflowStatus.specCodingSummary.source ? (
-                      <div>来源：{workflowStatus.specCodingSummary.source === 'run' ? 'run snapshot' : 'creation baseline'}</div>
-                    ) : null}
-                    <div>阶段：{workflowStatus.specCodingSummary.phaseCount}</div>
-                    {typeof workflowStatus.specCodingSummary.taskCount === 'number' ? (
-                      <div>任务：{workflowStatus.specCodingSummary.taskCount}</div>
-                    ) : null}
-                    <div>修订：{workflowStatus.specCodingSummary.revisionCount}</div>
-                    {workflowStatus.specCodingSummary.progress?.summary ? (
-                      <div>进度：{workflowStatus.specCodingSummary.progress.summary}</div>
-                    ) : null}
-                    {workflowStatus.specCodingSummary.latestRevision?.summary ? (
-                      <div>最近修订：{workflowStatus.specCodingSummary.latestRevision.summary}</div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {workflowStatus?.latestSupervisorReview?.content ? (
-                  <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">最近一次 Supervisor 审阅</div>
-                    <div>类型：{formatSupervisorReviewType(workflowStatus.latestSupervisorReview.type)}</div>
-                    <div>阶段：{workflowStatus.latestSupervisorReview.stateName}</div>
-                    <div className="leading-5">{workflowStatus.latestSupervisorReview.content}</div>
-                    {workflowStatus.latestSupervisorReview.affectedArtifacts?.length ? (
-                      <div>
-                        影响制品：{workflowStatus.latestSupervisorReview.affectedArtifacts.join('、')}
-                      </div>
-                    ) : null}
-                    {workflowStatus.latestSupervisorReview.impact?.length ? (
-                      <div className="space-y-1 pt-1">
-                        <div className="text-foreground">影响范围</div>
-                        {workflowStatus.latestSupervisorReview.impact.map((item: string) => (
-                          <div key={item}>- {item}</div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {workflowStatus?.finalReview ? (
-                  <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">运行结算</div>
-                    <div>状态：{workflowStatus.finalReview.status}</div>
-                    <div>总评：{workflowStatus.finalReview.summary}</div>
-                    {workflowStatus.finalReview.scoreCards?.length ? (
-                      <div>评分卡：{workflowStatus.finalReview.scoreCards.length}</div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {workflowStatus?.rehearsal?.enabled ? (
-                  <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">演练模式</div>
-                    <div>{workflowStatus.rehearsal.summary}</div>
-                    {workflowStatus.rehearsal.recommendedNextSteps?.length ? (
-                      <div className="space-y-1 pt-1">
-                        {workflowStatus.rehearsal.recommendedNextSteps.map((item: string) => (
-                          <div key={item}>- {item}</div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-                {preflightChecks.length > 0 ? (
-                  <div className="rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-2">
-                    <div className="font-medium text-foreground">最近一次启动前检查</div>
-                    {persistedPreflight?.configFile ? (
-                      <div>目标：{persistedPreflight.configFile}</div>
-                    ) : null}
-                    {persistedPreflight ? (
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant={persistedPreflight.ok ? 'secondary' : 'destructive'}>
-                          {persistedPreflight.ok ? '通过' : '未通过'}
-                        </Badge>
-                        {persistedPreflight.warningCount > 0 ? (
-                          <Badge variant="outline">警告 {persistedPreflight.warningCount}</Badge>
-                        ) : null}
-                        {persistedPreflight.policy?.inferredCommandCount ? (
-                          <Badge variant="outline">推断命令 {persistedPreflight.policy.inferredCommandCount}</Badge>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {persistedPreflight?.checkedAt ? (
-                      <div className="text-[11px] text-muted-foreground">
-                        检查时间：{new Date(persistedPreflight.checkedAt).toLocaleString()}
-                      </div>
-                    ) : null}
-                    {preflightChecks.slice(0, 4).map((check) => (
-                      <div key={check.id} className="rounded-lg border bg-background/70 px-2.5 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span>{check.summary}</span>
-                          <Badge variant={check.status === 'failed' ? 'destructive' : 'outline'}>
-                            {check.category}
-                          </Badge>
-                        </div>
-                        {check.origin === 'inferred' ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">来源：项目默认推断。说明当前 workflow 没显式配置 preflight，系统按项目类型自动补了检查命令。</div>
-                        ) : null}
-                        <div className="mt-1 truncate text-[11px]" title={check.commands[0]?.command || ''}>
-                          {check.commands[0]?.command || ''}
-                        </div>
-                        {check.commands[0]?.exitCode !== undefined && check.commands[0]?.exitCode !== null ? (
-                          <div className="mt-1 text-[11px] text-muted-foreground">
-                            退出码：{check.commands[0]?.exitCode}
-                          </div>
-                        ) : null}
-                        {check.status !== 'passed' ? (
-                          <details className="mt-2 rounded-md border bg-muted/30 px-2.5 py-2">
-                            <summary className="cursor-pointer text-[11px] font-medium text-foreground">
-                              查看失败原因与处理建议
-                            </summary>
-                            <div className="mt-2 space-y-2 text-[11px] text-muted-foreground">
-                              {check.commands[0]?.errorText ? (
-                                <div>
-                                  <div className="font-medium text-foreground">错误摘要</div>
-                                  <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.errorText}</pre>
-                                </div>
-                              ) : null}
-                              {check.commands[0]?.stderr ? (
-                                <div>
-                                  <div className="font-medium text-foreground">标准错误</div>
-                                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.stderr}</pre>
-                                </div>
-                              ) : null}
-                              {check.commands[0]?.stdout ? (
-                                <div>
-                                  <div className="font-medium text-foreground">标准输出</div>
-                                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-background p-2">{check.commands[0]?.stdout}</pre>
-                                </div>
-                              ) : null}
-                              <div className="rounded bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-300">
-                                {check.category === 'compile'
-                                  ? '先确认当前工作目录能否手动执行这条编译命令；如果是推断出来的命令不适合你的项目，可以在 workflow 里显式配置 preCommands 覆盖它。'
-                                  : check.category === 'test'
-                                    ? '先手动执行这条测试命令确认失败原因，再决定是否修复环境、依赖或用更准确的预检查命令替换。'
-                                    : '先手动执行这条命令确认环境与路径是否正确，再决定是否调整 workflow 的预检查命令。'}
-                              </div>
-                            </div>
-                          </details>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-                <div className="pt-2 flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={handleStartWorkflow} disabled={startingWorkflow || !effectiveWorkflowTarget}>
-                    {startingWorkflow ? '检查并启动中...' : '检查并启动'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onQuickPrompt(`请结合当前会话最近对话历史，以指挥官 ${boundCommander || 'default-supervisor'} 的视角，汇报当前会话最新运行 ${boundWorkflow || effectiveWorkflowTarget || '（暂无运行）'} 的进度、风险和下一步建议。`)}
-                  >
-                    询问
-                  </Button>
-                </div>
-              </div>
-              ) : null}
-
-              {shouldShowWorkflowRuntimePanels ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-medium">最近汇报</h3>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onQuickPrompt(`请结合当前会话最近对话历史，以指挥官 ${boundCommander || 'default-supervisor'} 的视角，生成一份结构化进度汇报。`)}
-                  >
-                    立即汇报
-                  </Button>
-                </div>
-                {reports.length === 0 ? (
-                  <div className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
-                    还没有进度汇报。绑定并启动一个工作流后，指挥官会在这里持续汇报。
-                  </div>
-                ) : reports.map((report) => (
-                  <div key={report.id} className="rounded-2xl border p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium">{report.title}</div>
-                      <Badge variant={report.tone === 'warning' ? 'destructive' : 'secondary'}>
-                        {new Date(report.timestamp).toLocaleTimeString()}
-                      </Badge>
-                    </div>
-                    <p className="mt-2 text-xs text-muted-foreground leading-5">{report.content}</p>
-                  </div>
-                ))}
-              </div>
-              ) : null}
-            </div>
+            <CommanderPanel ctx={commanderPanelContext} />
           )}
 
           {availableTabs.includes('workflow') && activeTab === 'workflow' && (
-            <div className="space-y-4">
-              <div className="rounded-2xl border p-4">
-                {isWorkflowCreationCompleted && effectiveCreationSession ? (
-                  <>
-                    <h3 className="text-sm font-medium">工作流已创建</h3>
-                    <p className="mt-2 text-xs text-muted-foreground leading-5">
-                      当前对话已经完成工作流创建。这里保留基础信息和快捷入口，后续编辑直接进入工作流设计页。
-                    </p>
-                    <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                      <div className="font-medium text-foreground">创建结果</div>
-                      <div>工作流：{effectiveCreationSession.workflowName}</div>
-                      <div>配置文件：{effectiveCreationSession.filename}</div>
-                      <div>状态：{getCreationSessionStatusLabel(effectiveCreationSession.status)}</div>
-                      <div>Spec Coding：{effectiveCreationSession.specCodingId}</div>
-                    </div>
-                    {workflowDraft.workingDirectory ? (
-                      <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
-                        <div className="font-medium text-foreground">工作目录</div>
-                        <div className="whitespace-normal break-all">目录：{workflowDraft.workingDirectory}</div>
-                        <div>模式：{workflowDraft.workspaceMode === 'isolated-copy' ? '创建副本工程后执行' : '直接在工作目录执行'}</div>
-                      </div>
-                    ) : null}
-                    <div className="mt-4 flex gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => router.push(`/workbench/${encodeURIComponent(effectiveCreationSession.filename)}?mode=design`)}
-                      >
-                        打开工作流设计页
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => router.push('/workflows')}>
-                        打开工作流页
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <h3 className="text-sm font-medium">AI 引导创建工作流</h3>
-                    <p className="mt-2 text-xs text-muted-foreground leading-5">
-                      从首页打开工作流创建面板，关键上下文会挂在当前对话下，方便回到原对话继续查看和恢复。
-                    </p>
-                    {currentCreationSession ? (
-                      <div className="mt-4 rounded-xl border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
-                        <div className="font-medium text-foreground">当前创建进度</div>
-                        <div>工作流：{currentCreationSession.workflowName}</div>
-                        <div>配置文件：{currentCreationSession.filename}</div>
-                        <div>状态：{getCreationSessionStatusLabel(currentCreationSession.status)}</div>
-                        <div>Spec Coding：{currentCreationSession.specCodingId}</div>
-                      </div>
-                    ) : null}
-                    {workflowDraft.workingDirectory ? (
-                      <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
-                        <div className="font-medium text-foreground">当前识别到的工作目录上下文</div>
-                        <div className="whitespace-normal break-all">目录：{workflowDraft.workingDirectory}</div>
-                        <div>模式：{workflowDraft.workspaceMode === 'isolated-copy' ? '创建副本工程后执行' : '直接在工作目录执行'}</div>
-                      </div>
-                    ) : null}
-                    <div className="mt-4 space-y-3">
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground">工作流名称</label>
-                        <Input
-                          value={workflowDraft.name}
-                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, name: e.target.value }))}
-                          placeholder="例如：移动端重构流程"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground">需求概述</label>
-                        <Textarea
-                          value={workflowDraft.requirements}
-                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, requirements: e.target.value }))}
-                          placeholder="例如：围绕首页重构、状态机工作流改造、Agent 角色化做一套协作流程"
-                          rows={4}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground">补充说明</label>
-                        <Textarea
-                          value={workflowDraft.description}
-                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, description: e.target.value }))}
-                          placeholder="可选：约束、目标目录、验收标准"
-                          rows={3}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground">参考工作流</label>
-                        <SingleCombobox
-                          value={workflowDraft.referenceWorkflow || '__none__'}
-                          onValueChange={(value) => setWorkflowDraft((prev) => ({ ...prev, referenceWorkflow: value === '__none__' ? '' : value }))}
-                          options={[
-                            { value: '__none__', label: '不使用参考工作流' },
-                            ...workflows.map((workflow) => ({
-                              value: workflow.filename,
-                              label: `${workflow.name} (${workflow.filename})`,
-                            })),
-                          ]}
-                          placeholder={loading ? '加载中...' : '选择参考工作流'}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          会沿用参考工作流的结构和 Agent 选用，只更新需求与任务分配。
-                        </p>
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs text-muted-foreground">工作目录</label>
-                        <Input
-                          value={workflowDraft.workingDirectory}
-                          onChange={(e) => setWorkflowDraft((prev) => ({ ...prev, workingDirectory: e.target.value }))}
-                          placeholder="例如：/workspace/project"
-                        />
-                      </div>
-                    </div>
-                    <div className="mt-4 flex gap-2">
-                      <Button size="sm" onClick={() => setWorkflowModalOpen(true)}>创建工作流</Button>
-                      <Button size="sm" variant="outline" onClick={() => router.push('/workflows')}>
-                        打开工作流页
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="rounded-2xl border p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-sm font-medium">当前工作流目标</h3>
-                  <Badge variant="outline">{effectiveWorkflowTarget ? '已锁定' : '待选择'}</Badge>
-                </div>
-                <div className="text-xs text-muted-foreground leading-5">
-                  {effectiveWorkflowTarget
-                    ? `当前会以 ${effectiveWorkflowTarget} 作为运行目标。`
-                    : '当前还没有选中的运行目标，可从下方已有工作流中挑一个，也可以先创建工作流。'}
-                </div>
-                <details className="rounded-xl border bg-muted/10 p-3">
-                  <summary className="cursor-pointer text-xs font-medium text-foreground">展开已有工作流列表</summary>
-                  <div className="mt-3 space-y-3">
-                    {loading ? (
-                      <div className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">加载中...</div>
-                    ) : workflows.length === 0 ? (
-                      <div className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">还没有工作流配置。</div>
-                    ) : workflows.map((workflow) => (
-                      <Button
-                        key={workflow.filename}
-                        variant={selectedWorkflow === workflow.filename || boundWorkflow === workflow.filename ? 'default' : 'outline'}
-                        className="h-auto w-full justify-start rounded-2xl p-4 text-left"
-                        onClick={() => {
-                          setSelectedWorkflow(workflow.filename);
-                          setInspectedWorkflow(workflow);
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium">{workflow.name}</div>
-                            <div className="mt-1 text-xs text-muted-foreground">{workflow.filename}</div>
-                          </div>
-                          <Badge variant="outline">{workflow.mode || 'workflow'}</Badge>
-                        </div>
-                        {workflow.description ? (
-                          <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{workflow.description}</p>
-                        ) : null}
-                      </Button>
-                    ))}
-                  </div>
-                </details>
-              </div>
-            </div>
+            <WorkflowPanel
+              workflowDraft={workflowDraft}
+              setWorkflowDraft={setWorkflowDraft}
+              workflows={workflows}
+              loading={loading}
+              selectedWorkflow={selectedWorkflow}
+              setSelectedWorkflow={setSelectedWorkflow}
+              setInspectedWorkflow={setInspectedWorkflow}
+              boundWorkflow={boundWorkflow}
+              effectiveWorkflowTarget={effectiveWorkflowTarget}
+              currentCreationSession={currentCreationSession}
+              effectiveCreationSession={effectiveCreationSession}
+              isWorkflowCreationCompleted={isWorkflowCreationCompleted}
+              getCreationSessionStatusLabel={getCreationSessionStatusLabel}
+              onOpenModal={() => setWorkflowModalOpen(true)}
+              onOpenWorkflowsPage={() => router.push('/workflows')}
+              onOpenDesignPage={(filename) => router.push("/workbench/" + encodeURIComponent(filename) + "?mode=design")}
+            />
           )}
 
           {availableTabs.includes('agent') && activeTab === 'agent' && (
-            <div className="space-y-4">
-              <div className="rounded-2xl border p-4">
-                <h3 className="text-sm font-medium">AI 引导创建 Agent</h3>
-                <p className="mt-2 text-xs text-muted-foreground leading-5">
-                  右侧触发正式引导弹框，而不是把创建过程塞进聊天气泡。
-                </p>
-                {sidebarHint?.agentDraft?.workingDirectory ? (
-                  <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
-                    <div className="font-medium text-foreground">当前识别到的工程上下文</div>
-                    <div className="whitespace-normal break-all">目录：{sidebarHint.agentDraft.workingDirectory}</div>
-                  </div>
-                ) : null}
-                <div className="mt-4 flex gap-2">
-                  <Button size="sm" onClick={() => setAgentModalOpen(true)}>打开 Agent 引导</Button>
-                  <Button size="sm" variant="outline" onClick={() => router.push('/agents')}>
-                    打开 Agent 页
-                  </Button>
-                </div>
-              </div>
+            <AgentPanel
+              sidebarHint={sidebarHint}
+              agentDraft={agentDraft}
+              setAgentDraft={setAgentDraft}
+              agentDraftPreview={agentDraftPreview}
+              agentDraftRaw={agentDraftRaw}
+              draftingAgent={draftingAgent}
+              creatingAgent={creatingAgent}
+              engine={engine}
+              workflows={workflows}
+              onOpenModal={() => setAgentModalOpen(true)}
+              onOpenAgentsPage={() => router.push('/agents')}
+              onGenerateDraft={handleGenerateAgentDraft}
+              onCreateAgent={handleCreateAgent}
+            />
+          )}
 
-              <div className="rounded-2xl border p-4 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-sm font-medium">当前 Agent 草案焦点</div>
-                  <Badge variant="outline">{agentDraft.displayName ? '已识别' : '待补全'}</Badge>
-                </div>
-                <div className="text-xs text-muted-foreground leading-5">
-                  {agentDraft.mission || '优先收敛名称、职责、工作目录和风格，剩余字段由 AI 草案补齐。'}
-                </div>
-              </div>
+          {/* External plugin tabs (contributed by registered plugins) */}
+          {isExternalPluginTab && renderActiveTab()}
 
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">名称</label>
-                  <Input
-                    value={agentDraft.displayName}
-                    onChange={(e) => setAgentDraft((prev) => ({ ...prev, displayName: e.target.value }))}
-                    placeholder="例如：架构审查官"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">队伍</label>
-                  <SingleCombobox
-                    value={agentDraft.team}
-                    onValueChange={(value) => setAgentDraft((prev) => ({ ...prev, team: value as AgentDraftState['team'] }))}
-                    options={[
-                      { value: 'blue', label: '蓝队（攻击）' },
-                      { value: 'red', label: '红队（防守）' },
-                      { value: 'judge', label: '裁定席' },
-                    ]}
-                    searchable={false}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">职责</label>
-                  <Textarea
-                    value={agentDraft.mission}
-                    onChange={(e) => setAgentDraft((prev) => ({ ...prev, mission: e.target.value }))}
-                    placeholder="例如：负责需求拆解、架构评审和关键风险识别"
-                    rows={3}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">风格</label>
-                  <Input
-                    value={agentDraft.style}
-                    onChange={(e) => setAgentDraft((prev) => ({ ...prev, style: e.target.value }))}
-                    placeholder="例如：冷静、严谨、强势"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">擅长领域</label>
-                  <Textarea
-                    value={agentDraft.specialties}
-                    onChange={(e) => setAgentDraft((prev) => ({ ...prev, specialties: e.target.value }))}
-                    placeholder="例如：架构设计, 评审, 风险识别"
-                    rows={3}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">参考工作流</label>
-                  <SingleCombobox
-                    value={agentDraft.referenceWorkflow || ''}
-                    onValueChange={(value) => setAgentDraft((prev) => ({ ...prev, referenceWorkflow: value || '' }))}
-                    options={[
-                      { value: '', label: '不指定' },
-                      ...workflows.map((workflow) => ({
-                        value: workflow.filename,
-                        label: workflow.name ? `${workflow.name} (${workflow.filename})` : workflow.filename,
-                      })),
-                    ]}
-                    placeholder="可选：参考已有 workflow 角色分工"
-                    searchable
-                  />
-                </div>
-              </div>
-
-              <div className="rounded-2xl border bg-gradient-to-br from-primary/10 via-background to-background p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">{agentDraftPreview?.name || agentDraft.displayName || 'Agent 角色预览'}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {(agentDraftPreview?.team || agentDraft.team)} · {(agentDraftPreview?.activeEngine || engine || 'follow-global')}
-                    </div>
-                  </div>
-                  <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-indigo-600 text-white flex items-center justify-center shadow-lg">
-                    <span className="material-symbols-outlined">smart_toy</span>
-                  </div>
-                </div>
-                <p className="mt-3 text-xs text-muted-foreground leading-5">
-                  {agentDraftPreview?.description || agentDraft.mission || '填写职责后会在这里显示角色卡预览。'}
-                </p>
-                {agentDraftPreview?.capabilities?.length ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {agentDraftPreview.capabilities.slice(0, 4).map((capability) => (
-                      <Badge key={capability} variant="outline">{capability}</Badge>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-
-              {agentDraftPreview ? (
-                <div className="rounded-2xl border p-4 space-y-2">
-                  <div className="text-sm font-medium">AI 草案预览</div>
-                  <div className="text-xs text-muted-foreground break-all">name: {agentDraftPreview.name}</div>
-                  <div className="text-xs text-muted-foreground">team: {agentDraftPreview.team}</div>
-                  <div className="text-xs text-muted-foreground line-clamp-4 whitespace-pre-wrap">
-                    {agentDraftPreview.systemPrompt}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="flex gap-2">
-                <Button className="flex-1" variant="outline" onClick={handleGenerateAgentDraft} disabled={draftingAgent}>
-                  {draftingAgent ? '生成中...' : 'AI生成草案'}
-                </Button>
-                <Button className="flex-1" onClick={handleCreateAgent} disabled={creatingAgent}>
-                  {creatingAgent ? '创建中...' : '保存 Agent 草案'}
-                </Button>
-              </div>
-
-              {agentDraftRaw ? (
-                <details className="rounded-2xl border p-4">
-                  <summary className="cursor-pointer text-sm font-medium">查看原始草案输出</summary>
-                  <pre className="mt-3 whitespace-pre-wrap break-words text-xs text-muted-foreground">{agentDraftRaw}</pre>
-                </details>
-              ) : null}
-            </div>
+          {/* Chatroom tab (built-in plugin with custom renderer) */}
+          {activeTab === 'chatroom' && (
+            <ChatroomPanel
+              availableAgents={agents.map((a) => ({ name: a.name, description: a.description }))}
+              callAgent={async (agentName, message) => {
+                return callCollaborationAgent(agentName, message);
+              }}
+              toast={toast}
+            />
           )}
         </div>
 

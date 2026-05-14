@@ -10,9 +10,9 @@ import { Input } from '@/components/ui/input';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
-import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
+import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
 import { Switch } from '@/components/ui/switch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -26,7 +26,7 @@ import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import AuthGuard from '@/components/AuthGuard';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
+import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   type CollaborationRoomState,
   inferHomeSidebarMode,
@@ -34,17 +34,18 @@ import {
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
-} from '@/lib/home-sidebar-state';
+} from '@/lib/core/home-sidebar-state';
+import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
-import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
-import { cn } from '@/lib/utils';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
+import { cn } from '@/lib/core/utils';
 import {
   DEFAULT_WEREWOLF_BOARD_ID,
   TEMP_WEREWOLF_SUPERVISOR,
   listTemporaryWerewolfAgentNames,
-} from '@/lib/werewolf-lab-agents';
+} from '@/plugins/werewolf/agents';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
@@ -138,7 +139,7 @@ function ChatPageContent() {
   const {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
-    loading, streamingMessageId,
+    loading, sessionLoadingId, streamingMessageId, setStreamingMessageId,
     model, setModel, engine, effectiveEngine, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction,
     skillSettings, setSessionWorkbenchState,
@@ -147,7 +148,7 @@ function ChatPageContent() {
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
-  const [notebookExporting, setNotebookExporting] = useState(false);
+  const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);  const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
   const [exportFileName, setExportFileName] = useState('');
@@ -232,19 +233,23 @@ function ChatPageContent() {
 
   const sessionScopedSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>();
-    if (hasCommanderSidebarContext) {
-      tabs.add('commander');
-    }
-    if (hasWorkflowSidebarContext) {
-      tabs.add('workflow');
-    }
-    if (hasCreationSidebarContext) {
-      tabs.add('workflow');
-    }
-    for (const tab of latestSidebarHint?.tabs || []) {
-      // commander tab is used by workflow runtime and collaboration/werewolf rooms.
-      if (tab === 'commander' && !hasCommanderSidebarContext) continue;
-      tabs.add(tab);
+    // If hint explicitly specifies tabs, use those as the primary source
+    const hintTabs = latestSidebarHint?.tabs || [];
+    if (hintTabs.length > 0) {
+      for (const tab of hintTabs) {
+        if (tab === 'commander' && !hasCommanderSidebarContext) continue;
+        tabs.add(tab);
+      }
+    } else {
+      if (hasCommanderSidebarContext) {
+        tabs.add('commander');
+      }
+      if (hasWorkflowSidebarContext) {
+        tabs.add('workflow');
+      }
+      if (hasCreationSidebarContext) {
+        tabs.add('workflow');
+      }
     }
     if (tabs.size === 0 && hasCommanderSidebarContext) tabs.add('commander');
     if (tabs.size === 0 && latestSidebarHint) tabs.add(derivedHomeSidebarTab);
@@ -703,13 +708,21 @@ function ChatPageContent() {
     unlockAutoScroll();
     setInput('');
     editorRef.current?.clear();
+
+    // Route to collaboration room if active
+    if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
+      collaborationMessageHandlerRef.current(normalized);
+      editorRef.current?.focus();
+      return;
+    }
+
     if (loading) {
       stopStreaming();
       await Promise.resolve();
     }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [deleteMessage, editingMessageId, loading, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, unlockAutoScroll]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -726,35 +739,19 @@ function ChatPageContent() {
   const handleQuickAction = useCallback((prompt: string) => {
     if (prompt === '__HOME_ACTION__:create_workflow') {
       openHomeSidebar('workflow', 'create-workflow', 'clarifying', { shouldOpenModal: true });
-      const hiddenPrompt = [
-        '这是一次来自首页按钮的“创建工作流”界面动作，不是用户新增的一条需求内容。',
-        '你必须只根据当前已有对话历史来提取真实需求、约束、工作目录、参考工作流、目标、范围、技术栈、已有角色分工，不要把本条指令本身写进 workflowDraft.requirements 或 description。',
-        '请把能确认的上下文尽量整理进 home_sidebar：summary、knownFacts、missingFields、questions、recommendedNextAction、workflowDraft。',
-        '如果要输出 shouldOpenModal=true 的 home_sidebar，它必须作为整条回复最后一个 <result> 块输出；输出后不要再追加正文。',
-        '如果信息不足，请先提出最少量的澄清问题，不要编造需求。',
-      ].join('\n');
       unlockAutoScroll();
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
-      void sendMessage(hiddenPrompt, { displayText: '创建工作流' });
       return;
     }
 
     if (prompt === '__HOME_ACTION__:create_agent') {
       openHomeSidebar('agent', 'create-agent', 'clarifying', { shouldOpenModal: true });
-      const hiddenPrompt = [
-        '这是一次来自首页按钮的“创建 Agent”界面动作，不是用户新增的一条职责需求内容。',
-        '你必须只根据当前已有对话历史来提取这个 Agent 的真实职责、风格、能力边界、输入输出、协作对象、参考 workflow 和工作目录，不要把本条指令本身写进 agentDraft.mission 或 style。',
-        '请把能确认的上下文尽量整理进 home_sidebar：summary、knownFacts、missingFields、questions、recommendedNextAction、agentDraft。',
-        '如果要输出 shouldOpenModal=true 的 home_sidebar，它必须作为整条回复最后一个 <result> 块输出；输出后不要再追加正文。',
-        '如果信息不足，请先提出最少量的澄清问题，不要编造职责。',
-      ].join('\n');
       unlockAutoScroll();
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
-      void sendMessage(hiddenPrompt, { displayText: '创建 Agent' });
       return;
     }
 
@@ -803,6 +800,25 @@ function ChatPageContent() {
       return;
     }
 
+    // Plugin intent dispatch — let registered plugins handle their own actions
+    if (prompt.startsWith('__HOME_ACTION__:')) {
+      const actionId = prompt.replace('__HOME_ACTION__:', '');
+      const handled = dispatchHomeAction(actionId, {
+        createSession,
+        setActiveSessionId,
+        setHomeSidebarTab,
+        setHomeSidebarMode,
+        unlockAutoScroll,
+        toast,
+      });
+      if (handled) {
+        unlockAutoScroll();
+        setInput('');
+        editorRef.current?.clear();
+        return;
+      }
+    }
+
     if (prompt && prompt.includes('\n')) {
       setInput(prompt);
       editorRef.current?.setContent(prompt);
@@ -817,7 +833,7 @@ function ChatPageContent() {
       if (loading) stopStreaming();
       sendMessage(prompt);
     }
-  }, [loading, openHomeSidebar, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [loading, openHomeSidebar, stopStreaming, unlockAutoScroll]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
     setDebugMode(checked);
@@ -1198,7 +1214,14 @@ function ChatPageContent() {
                       isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
-                    {messages.length === 0 && !loading && (
+                    {messages.length === 0 && sessionLoadingId === activeSessionId ? (
+                      <div className="flex h-full items-center justify-center">
+                        <div className="flex items-center gap-3 rounded-2xl border bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                          <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
+                          <span>正在加载对话...</span>
+                        </div>
+                      </div>
+                    ) : messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
                         <div className="text-center">
                           <motion.div
@@ -1339,6 +1362,8 @@ function ChatPageContent() {
                     setSessionWorkbenchState={setSessionWorkbenchState}
                     appendSessionMessage={appendSessionMessage}
                     updateSessionMessage={updateSessionMessage}
+                    setStreamingMessageId={setStreamingMessageId}
+                    onRegisterCollaborationHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
                     sidebarHint={latestSidebarHint}
                     activeTab={homeSidebarTab}
                     onTabChange={handleHomeSidebarTabChange}

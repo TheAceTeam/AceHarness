@@ -6,9 +6,9 @@ import { useTheme } from "next-themes"
 import { Loader2, FileCode2, Play } from "lucide-react"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
 import { AnsiLogBlock } from "@/components/AnsiLogBlock"
-import { registerCangjieLanguage } from "@/lib/cangjie-language"
-import { registerCMakeLanguage } from "@/lib/cmake-language"
-import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/api"
+import { registerCangjieLanguage } from "@/lib/cangjie/language"
+import { registerCMakeLanguage } from "@/lib/core/cmake-language"
+import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/core/api"
 import { useToast } from "@/components/ui/toast"
 import {
   Dialog,

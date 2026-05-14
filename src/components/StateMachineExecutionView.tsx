@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { GitBranch, Activity, MessageSquare, CheckCircle2 } from 'lucide-react';
 import StateMachineRuntimePanel, { formatStateName } from './StateMachineRuntimePanel';
 import StateMachineDiagram from './StateMachineDiagram';
-import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/schemas';
+import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;

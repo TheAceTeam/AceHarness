@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { waitForWeChatOfficialLogin } from '@/lib/wechat-official-service';
+import { requireAuth } from '@/lib/auth/middleware';
+import { waitForWeChatOfficialLogin } from '@/lib/channel/wechat/official-service';
 
 export async function GET(
   request: NextRequest,

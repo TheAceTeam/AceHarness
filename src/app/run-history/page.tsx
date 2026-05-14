@@ -32,7 +32,7 @@ import {
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 
 type RunSortKey = 'name' | 'startTime';
 type SortDirection = 'asc' | 'desc';

@@ -9,13 +9,13 @@
 import { EventEmitter } from 'events';
 import { accessSync, constants, existsSync } from 'fs';
 import { createRequire } from 'module';
-import { loadEnvVars, buildEnvObject } from '../env-manager';
-import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
+import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { repairWindowsMojibake } from '../mojibake-repair';
-import { readTextFileBestEffort } from '../text-decoding';
-import { findCommand, getCommonCliSearchPaths } from '../command-exists';
+import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
+import { readTextFileBestEffort } from '@/lib/core/text-decoding';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 
 const requireFromHere = createRequire(__filename);
 
@@ -77,6 +77,16 @@ function metadataFromClaudeResult(result: Record<string, unknown>, resolvedModel
 
 function zeroUsageMetadata(resolvedModel?: string): EngineResultMetadata {
   return resolvedModel ? { ...ZERO_USAGE_METADATA, resolvedModel } : ZERO_USAGE_METADATA;
+}
+
+function looksLikeFatalClaudeErrorOutput(text: string): boolean {
+  return /apierror/i.test(text)
+    && (
+      /context window limit/i.test(text)
+      || /reached (its |the )?context window limit/i.test(text)
+      || /maximum context length/i.test(text)
+      || /prompt is too long/i.test(text)
+    );
 }
 
 function parseToolJson(inputJson: string): Record<string, unknown> | null {
@@ -516,6 +526,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
   // ---- Execute (unified SDK entry) ----
 
   async execute(options: EngineOptions): Promise<EngineResult> {
+    console.log('[claude-code-sdk] execute start');
     this._abortController = new AbortController();
     this._abortReason = null;
     const timeoutMs = options.timeoutMs ?? 60 * 60 * 1000;
@@ -606,6 +617,10 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         // Capture session_id from any message
         if (!capturedSessionId && (msg as any).session_id) {
           capturedSessionId = (msg as any).session_id;
+          this.emit('stream', {
+            type: 'session',
+            content: capturedSessionId,
+          } as EngineStreamEvent);
         }
         if (msg.type === 'assistant') {
           assistantSnapshotCount += 1;
@@ -775,6 +790,15 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             const finalOutput = streamedHasAssistantText
               ? (accumulated || resultText)
               : (resultText || accumulated);
+            if (looksLikeFatalClaudeErrorOutput(finalOutput)) {
+              console.error('[claude-code-sdk] execute failed: fatal API error in result payload');
+              return {
+                success: false,
+                output: normalizeEngineOutput(finalOutput),
+                error: finalOutput.trim() || 'Claude Code fatal API error',
+              };
+            }
+            console.log(`[claude-code-sdk] execute completed: sessionId=${r.session_id || capturedSessionId || ''}, outputLength=${finalOutput.length}`);
             return {
               success: true,
               output: normalizeEngineOutput(finalOutput),
@@ -792,13 +816,17 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
       }
 
       return {
-        success: true,
+        success: !looksLikeFatalClaudeErrorOutput(accumulated),
         output: normalizeEngineOutput(accumulated),
         sessionId: capturedSessionId,
         metadata: zeroUsageMetadata(resolvedModel),
+        ...(looksLikeFatalClaudeErrorOutput(accumulated)
+          ? { error: accumulated.trim() || 'Claude Code fatal API error' }
+          : {}),
       };
     } catch (e: unknown) {
       const isAborted = this._abortController?.signal.aborted;
+      console.error(`[claude-code-sdk] execute failed: ${isAborted ? this.getAbortMessage(timeoutMs) : (e instanceof Error ? e.message : String(e))}`);
       return {
         success: false,
         output: normalizeEngineOutput(accumulated),

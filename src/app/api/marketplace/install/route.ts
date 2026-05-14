@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSkillsTempPath, getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
-import { getInstallPath } from '@/lib/app-paths';
-import { validateSkillFrontmatter } from '@/lib/skill-frontmatter';
-import { MarketplaceClient } from '@/lib/marketplace-client';
-import { validateInstallRequest, validateSkillName } from '@/lib/marketplace-validators';
+import { getSkillsTempPath, getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
+import { getInstallPath } from '@/lib/core/app-paths';
+import { validateSkillFrontmatter } from '@/lib/skill/frontmatter';
+import { MarketplaceClient } from '@/lib/marketplace/client';
+import { validateInstallRequest, validateSkillName } from '@/lib/marketplace/validators';
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';

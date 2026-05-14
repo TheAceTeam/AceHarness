@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { workflowRegistry } from '@/lib/workflow/registry';
 
 export const dynamic = 'force-dynamic';
 

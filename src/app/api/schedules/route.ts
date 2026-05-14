@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { scheduler } from '@/lib/scheduler';
+import { scheduler } from '@/lib/core/scheduler';
 
 export async function GET() {
   try {

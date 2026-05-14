@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
-import { getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted } from '@/lib/runtime-configs';
-import { deleteRunsByConfig } from '@/lib/run-store';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getConfigMeta, deleteConfigMeta } from '@/lib/config/metadata';
+import { getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted } from '@/lib/run/runtime-configs';
+import { deleteRunsByConfig } from '@/lib/run/store';
+import { workflowRegistry } from '@/lib/workflow/registry';
 
 async function stopRunningWorkflow(filename: string): Promise<void> {
   const manager = workflowRegistry.getRunningManager(filename);

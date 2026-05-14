@@ -3,9 +3,9 @@ import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
-import { commandExists } from './lib/command-exists';
+import { commandExists } from '@/lib/core/command-exists';
 import { parse, stringify } from 'yaml';
-import { getModelOptions } from './lib/models';
+import { getModelOptions } from '@/lib/core/models';
 import { ACPEngine } from './lib/engines/acp-engine';
 import {
   getWorkspaceDirectory,
@@ -14,7 +14,7 @@ import {
   getWorkspaceDataDir,
   getRepoRoot,
   getWorkspaceDataFile,
-} from './lib/app-paths';
+} from '@/lib/core/app-paths';
 
 process.chdir(getRepoRoot());
 

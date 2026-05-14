@@ -20,8 +20,8 @@ describe('channel test-send route', () => {
 
   it('sends an outbound test payload through the configured webhook', async () => {
     vi.resetModules();
-    const userStore = await import('../src/lib/user-store');
-    const channelStore = await import('../src/lib/channel-store');
+    const userStore = await import('@/lib/core/user-store');
+    const channelStore = await import('@/lib/channel/store');
     const route = await import('../src/app/api/channels/integrations/[id]/test-send/route');
 
     await userStore.createUser({

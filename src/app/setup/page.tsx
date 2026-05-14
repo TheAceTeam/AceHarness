@@ -10,8 +10,8 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { getConcreteEngines } from '@/lib/engine-metadata';
-import type { ModelOption } from '@/lib/models';
+import { getConcreteEngines } from '@/lib/core/engine-metadata';
+import type { ModelOption } from '@/lib/core/models';
 
 interface DiscoveredSkill {
   name: string;

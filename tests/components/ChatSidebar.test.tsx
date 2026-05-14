@@ -36,7 +36,7 @@ vi.mock('@/contexts/ChatContext', () => ({
   }),
 }));
 
-vi.mock('@/lib/agent-conversations', () => ({
+vi.mock('@/lib/agent/agent-conversations', () => ({
   buildWorkflowConversationDirectory: vi.fn().mockReturnValue([]),
   getConversationSessionStatusLabel: vi.fn().mockReturnValue(''),
   getCreationSessionStatusLabel: vi.fn((status?: string) => {
@@ -285,8 +285,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     expect(screen.getByDisplayValue('Session One')).toBeTruthy();
   });
@@ -295,8 +294,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
     fireEvent.mouseMove(document.body);
 
     expect(screen.getByRole('dialog')).toBeTruthy();
@@ -317,8 +315,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     const input = await screen.findByDisplayValue('Session One');
     await user.clear(input);
@@ -332,8 +329,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     const input = await screen.findByDisplayValue('Session One');
     await user.clear(input);
@@ -362,8 +358,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('删除'));
+    await user.click(screen.getByLabelText('删除 Session One'));
 
     expect(screen.getByText('确认删除对话')).toBeTruthy();
     expect(mockDeleteSession).not.toHaveBeenCalled();

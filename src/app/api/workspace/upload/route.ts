@@ -11,7 +11,7 @@ import {
   isInsidePath,
   resolveWorkspaceRoot,
   workspaceErrorResponse,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 function parseRelativePaths(value: FormDataEntryValue | null, fileCount: number): string[] {
   if (typeof value !== 'string' || !value) return [];

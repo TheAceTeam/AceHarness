@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
+import { requireAuth } from '@/lib/auth/middleware';
 import {
   finalizeAgentChatExecution,
   prepareAgentChat,
   type ExecuteAgentChatInput,
-} from '@/lib/agent-chat-service';
+} from '@/lib/agent/chat-service';
+import { extractStructuredResult } from '@/lib/ai/result-channel';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,13 @@ type StreamBody = {
   workflowContext?: Record<string, any>;
   temporaryRoleConfig?: Record<string, any>;
 };
+
+function hasWerewolfResult(rawOutput: string): boolean {
+  return Boolean(extractStructuredResult<Record<string, any>>(
+    rawOutput,
+    (value: any): value is Record<string, any> => Boolean(value && typeof value === 'object' && !Array.isArray(value)),
+  ));
+}
 
 export async function POST(
   request: NextRequest,
@@ -64,9 +72,11 @@ export async function POST(
         personalDir: user.personalDir,
       },
     } satisfies ExecuteAgentChatInput);
+    const suppressIntermediateStream = prepared.isTemporaryWerewolf;
 
     const onEngineStream = (evt: any) => {
       if (!evt) return;
+      if (suppressIntermediateStream) return;
       if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
         agentStreamEvents.emit(streamId, { type: 'delta', content: evt.content });
       } else if (evt?.type === 'thought' && evt.content) {
@@ -78,18 +88,52 @@ export async function POST(
 
     prepared.engine.on('stream', onEngineStream);
 
-    const execPromise = prepared.engine.execute({
-      agent: prepared.roleConfig.name,
-      step: prepared.mode,
-      prompt: prepared.prompt,
-      systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
-      model: prepared.model,
-      workingDirectory: prepared.workingDirectory,
-      allowedTools: prepared.roleConfig.allowedTools,
-      sessionId: prepared.resumeSessionId || undefined,
-      appendSystemPrompt: Boolean(prepared.resumeSessionId),
-      mcpServers: prepared.roleConfig.mcpServers,
-    }).then(async (result) => {
+    const execPromise = (async () => {
+      if (!prepared.isTemporaryWerewolf) {
+        return prepared.engine.execute({
+          agent: prepared.roleConfig.name,
+          step: prepared.mode,
+          prompt: prepared.prompt,
+          systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
+          model: prepared.model,
+          workingDirectory: prepared.workingDirectory,
+          allowedTools: prepared.roleConfig.allowedTools,
+          sessionId: prepared.resumeSessionId || undefined,
+          appendSystemPrompt: Boolean(prepared.resumeSessionId),
+          mcpServers: prepared.roleConfig.mcpServers,
+        });
+      }
+
+      const maxAttempts = 3;
+      let latestSessionId = prepared.resumeSessionId || undefined;
+      let lastResult: any = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const isRetry = attempt > 0;
+        const result = await prepared.engine.execute({
+          agent: prepared.roleConfig.name,
+          step: isRetry ? `${prepared.mode}-result-retry-${attempt}` : prepared.mode,
+          prompt: isRetry
+            ? [
+                '你上一条回复不合规：缺少 `<result>JSON</result>` 结果块。',
+                '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
+                '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
+                '如果需要给人看的内容，把它放进 `display` 字段；如果这是机器决策回合，也把 action / target / save / poisonTarget / reason 等字段一起放进同一个 JSON。',
+              ].join('\n')
+            : prepared.prompt,
+          systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
+          model: prepared.model,
+          workingDirectory: prepared.workingDirectory,
+          allowedTools: prepared.roleConfig.allowedTools,
+          sessionId: latestSessionId,
+          appendSystemPrompt: false,
+          mcpServers: prepared.roleConfig.mcpServers,
+        });
+        lastResult = result;
+        latestSessionId = result.sessionId || latestSessionId;
+        if (hasWerewolfResult(result.output || '')) return result;
+      }
+      return lastResult;
+    })().then(async (result) => {
       const finalResult = await finalizeAgentChatExecution({
         prepared,
         userMessage: String(body?.message || ''),

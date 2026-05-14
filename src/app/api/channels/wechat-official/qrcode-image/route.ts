@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
+import { requireAuth } from '@/lib/auth/middleware';
 
 const ALLOWED_HOSTS = new Set([
   'liteapp.weixin.qq.com',

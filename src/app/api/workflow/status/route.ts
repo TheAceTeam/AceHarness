@@ -1,22 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { loadRunState } from '@/lib/run-state-persistence';
-import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec-coding-store';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { loadRunState } from '@/lib/run/state-persistence';
+import { loadCreationSession, loadLatestCreationSessionByFilename } from '@/lib/spec/coding-store';
 import {
   findRelevantWorkflowExperiences,
   listWorkflowExperiences,
   loadWorkflowFinalReview,
-} from '@/lib/workflow-experience-store';
-import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
-import { getSpecRootDir } from '@/lib/spec-persistence';
+} from '@/lib/workflow/experience-store';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { getSpecRootDir } from '@/lib/spec/persistence';
 import { resolve } from 'path';
-import type { SpecCodingDocument } from '@/lib/schemas';
+import type { SpecCodingDocument } from '@/lib/core/schemas';
 import {
   listMemoryEntries,
   type MemoryEntry,
-} from '@/lib/workflow-memory-store';
+} from '@/lib/workflow/memory-store';
 
 type WorkflowStructureMapping = {
   mode: 'phase-based' | 'state-machine' | 'unknown';

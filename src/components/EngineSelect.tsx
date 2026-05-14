@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Globe } from 'lucide-react';
 import { SingleCombobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/engine-metadata';
+import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 
 interface EngineSelectProps {
   value: string;

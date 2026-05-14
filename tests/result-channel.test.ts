@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { extractJsonObject, extractStructuredResult, getResultSections } from '@/lib/result-channel';
+import { extractJsonObject, extractStructuredResult, getResultSections } from '@/lib/ai/result-channel';
 
 describe('result-channel', () => {
   test('parses bare json payload', () => {

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/api"
+import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
 import { X, ChevronLeft, ChevronRight } from "lucide-react"
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels"
 import { Button } from "@/components/ui/button"

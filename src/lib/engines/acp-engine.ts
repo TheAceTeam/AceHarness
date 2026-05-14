@@ -10,7 +10,7 @@ import { existsSync } from 'fs';
 import { delimiter as pathDelimiter, join } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
-import { findCommand, getCommonCliSearchPaths } from '../command-exists';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -55,7 +55,7 @@ export interface ACPEngineConfig {
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
 
-const ACP_STREAM_DEBUG = process.env.ACE_ACP_STREAM_DEBUG === '1';
+const ACP_STREAM_DEBUG = true; // Always log ACP stream events for diagnostics
 
 /** `ACE_TIMING_DEBUG` / `ACE_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
 function parseTimingDebugEnv(value: string | undefined): boolean | null {
@@ -343,6 +343,9 @@ export class ACPEngine extends EventEmitter {
   private buildCommandArgs(): string[] {
     const args: string[] = [];
     switch (this.config.engineType) {
+      case 'claude-code-acp':
+        // claude-agent-acp starts ACP stdio mode with no positional subcommand.
+        break;
       case 'opencode':
         args.push('acp', '--cwd', this.config.workingDirectory);
         break;

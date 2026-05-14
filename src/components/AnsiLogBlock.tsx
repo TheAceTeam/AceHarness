@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useMemo } from 'react';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 
 type AnsiStyle = {
   color?: string;

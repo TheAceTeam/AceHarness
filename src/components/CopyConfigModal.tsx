@@ -2,7 +2,7 @@
 
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { copyConfigFormSchema, type CopyConfigForm } from '@/lib/schemas';
+import { copyConfigFormSchema, type CopyConfigForm } from '@/lib/core/schemas';
 import { useToast } from '@/components/ui/toast';
 import {
   Dialog,

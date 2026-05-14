@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { createChannelIntegration, type ChannelDefaultBinding } from '@/lib/channel-store';
-import { getChannelProviderPreset } from '@/lib/channel-providers';
+import { requireAuth } from '@/lib/auth/middleware';
+import { createChannelIntegration, type ChannelDefaultBinding } from '@/lib/channel/store';
+import { getChannelProviderPreset } from '@/lib/channel/providers';
 
 export async function POST(request: NextRequest) {
   const user = await requireAuth(request);

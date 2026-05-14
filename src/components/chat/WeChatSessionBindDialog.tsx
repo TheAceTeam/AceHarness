@@ -7,13 +7,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/toast';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 import {
   channelApi,
   type ChannelBindingRecord,
   type ChannelIntegrationRecord,
   type WeChatOfficialLoginSessionRecord,
-} from '@/lib/api';
+} from '@/lib/core/api';
 import type { ChatSession } from '@/contexts/ChatContext';
 
 interface WeChatSessionBindDialogProps {

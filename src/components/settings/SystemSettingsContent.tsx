@@ -1,9 +1,11 @@
 'use client';
 
+import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -16,7 +18,7 @@ import {
   type SdkCatalogEntry,
   type SdkChannel,
   type SdkOverviewResponse,
-} from '@/lib/api';
+} from '@/lib/core/api';
 
 interface EnvVar {
   key: string;
@@ -26,6 +28,21 @@ interface EnvVar {
 
 interface EnvVarError {
   key?: string;
+}
+
+interface EmailNotificationForm {
+  enabled: boolean;
+  smtpHost: string;
+  smtpPort: string;
+  smtpSecure: boolean;
+  smtpUsername: string;
+  smtpPassword: string;
+  smtpPasswordConfigured: boolean;
+  fromEmail: string;
+  fromName: string;
+  replyTo: string;
+  ccEmails: string;
+  subjectPrefix: string;
 }
 
 function getManagedSourceLabel(source: SdkOverviewResponse['effective']['source']) {
@@ -100,6 +117,22 @@ export default function SystemSettingsContent() {
   const [tokenLoading, setTokenLoading] = useState(true);
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
+  const [emailForm, setEmailForm] = useState<EmailNotificationForm>({
+    enabled: false,
+    smtpHost: '',
+    smtpPort: '465',
+    smtpSecure: true,
+    smtpUsername: '',
+    smtpPassword: '',
+    smtpPasswordConfigured: false,
+    fromEmail: '',
+    fromName: '',
+    replyTo: '',
+    ccEmails: '',
+    subjectPrefix: '',
+  });
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   const managedHomeActive = sdkOverview?.effective.source === 'managed';
 
@@ -175,6 +208,20 @@ export default function SystemSettingsContent() {
     try {
       const settings = await systemSettingsApi.get();
       setGitcodeConfigured(settings.gitcodeTokenConfigured);
+      setEmailForm({
+        enabled: Boolean(settings.emailNotifications?.enabled),
+        smtpHost: settings.emailNotifications?.smtpHost || '',
+        smtpPort: String(settings.emailNotifications?.smtpPort || 465),
+        smtpSecure: settings.emailNotifications?.smtpSecure !== false,
+        smtpUsername: settings.emailNotifications?.smtpUsername || '',
+        smtpPassword: '',
+        smtpPasswordConfigured: Boolean(settings.emailNotifications?.smtpPasswordConfigured),
+        fromEmail: settings.emailNotifications?.fromEmail || '',
+        fromName: settings.emailNotifications?.fromName || '',
+        replyTo: settings.emailNotifications?.replyTo || '',
+        ccEmails: settings.emailNotifications?.ccEmails || '',
+        subjectPrefix: settings.emailNotifications?.subjectPrefix || '',
+      });
     } catch (error: any) {
       const message = error?.message || '加载 GitCode Token 状态失败';
       setTokenError(message);
@@ -268,6 +315,51 @@ export default function SystemSettingsContent() {
     }
   };
 
+  const saveEmailNotifications = async () => {
+    if (emailForm.enabled) {
+      if (!emailForm.smtpHost.trim() || !emailForm.fromEmail.trim()) {
+        setEmailError('启用邮件推送前，请至少填写 SMTP Host 和发件人邮箱');
+        toast('error', '请先补齐邮件配置');
+        return;
+      }
+      const port = Number(emailForm.smtpPort);
+      if (!Number.isFinite(port) || port <= 0) {
+        setEmailError('SMTP Port 必须是有效端口');
+        toast('error', 'SMTP 端口无效');
+        return;
+      }
+    }
+
+    setEmailSaving(true);
+    setEmailError(null);
+    try {
+      await systemSettingsApi.save({
+        emailNotifications: {
+          enabled: emailForm.enabled,
+          smtpHost: emailForm.smtpHost.trim(),
+          smtpPort: Number(emailForm.smtpPort) || 465,
+          smtpSecure: emailForm.smtpSecure,
+          smtpUsername: emailForm.smtpUsername.trim(),
+          smtpPassword: emailForm.smtpPassword.trim() || undefined,
+          fromEmail: emailForm.fromEmail.trim(),
+          fromName: emailForm.fromName.trim(),
+          replyTo: emailForm.replyTo.trim(),
+          ccEmails: emailForm.ccEmails.trim(),
+          subjectPrefix: emailForm.subjectPrefix.trim(),
+        },
+      });
+      setEmailForm((prev) => ({ ...prev, smtpPassword: '', smtpPasswordConfigured: prev.smtpPasswordConfigured || Boolean(prev.smtpPassword.trim()) }));
+      toast('success', emailForm.enabled ? '人工审查邮件推送已保存' : '邮件推送设置已更新');
+      await loadTokenSettings();
+    } catch (error: any) {
+      const message = error?.message || '保存邮件推送配置失败';
+      setEmailError(message);
+      toast('error', message);
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
   const runSdkAction = async (actionKey: string, action: () => Promise<void>, successMessage: string) => {
     setSdkActionKey(actionKey);
     setInstallProgress(null);
@@ -345,6 +437,144 @@ export default function SystemSettingsContent() {
               placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
             />
             <div className="text-sm text-muted-foreground">当前状态：{tokenLoading ? '加载中...' : gitcodeConfigured ? '✓ 已配置' : '未配置'}</div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border bg-card p-6 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">人工审查邮件推送</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                当工作流进入人工审查时，系统会自动给该次运行的发起人发送邮件；如有需要，也可以额外抄送团队邮箱。
+              </p>
+            </div>
+            <Button size="sm" onClick={saveEmailNotifications} disabled={emailSaving || tokenLoading}>
+              {emailSaving ? '保存中...' : '保存邮件配置'}
+            </Button>
+          </div>
+
+          <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium">启用邮件提醒</div>
+                <div className="mt-1 text-xs text-muted-foreground">默认发送给工作流发起人的登录邮箱，适合在微信之外补一条不易错过的提醒。</div>
+              </div>
+              <Switch
+                checked={emailForm.enabled}
+                onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, enabled: checked }))}
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="text-xs text-muted-foreground">
+              当前状态：{emailForm.enabled ? '已启用' : '未启用'}
+              {emailForm.smtpPasswordConfigured ? ' · 已保存 SMTP 密码' : ' · 尚未保存 SMTP 密码'}
+            </div>
+          </div>
+
+          {emailError ? (
+            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{emailError}</div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <div className="text-sm font-medium">SMTP Host</div>
+              <Input
+                value={emailForm.smtpHost}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpHost: event.target.value }))}
+                placeholder="例如：smtp.qq.com"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">SMTP Port</div>
+              <Input
+                value={emailForm.smtpPort}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPort: event.target.value }))}
+                placeholder="465 或 587"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">SMTP 用户名</div>
+              <Input
+                value={emailForm.smtpUsername}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpUsername: event.target.value }))}
+                placeholder="通常是邮箱地址"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">SMTP 密码 / 授权码</div>
+              <Input
+                type="password"
+                value={emailForm.smtpPassword}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, smtpPassword: event.target.value }))}
+                placeholder={emailForm.smtpPasswordConfigured ? '已保存，输入新值可覆盖' : '请输入 SMTP 密码或授权码'}
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">发件人邮箱</div>
+              <Input
+                value={emailForm.fromEmail}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, fromEmail: event.target.value }))}
+                placeholder="例如：notify@example.com"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">发件人名称</div>
+              <Input
+                value={emailForm.fromName}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, fromName: event.target.value }))}
+                placeholder="例如：ACEHarness"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Reply-To</div>
+              <Input
+                value={emailForm.replyTo}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, replyTo: event.target.value }))}
+                placeholder="可选：回复邮箱"
+                disabled={emailSaving}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">主题前缀</div>
+              <Input
+                value={emailForm.subjectPrefix}
+                onChange={(event) => setEmailForm((prev) => ({ ...prev, subjectPrefix: event.target.value }))}
+                placeholder="可选：例如 [ACEHarness]"
+                disabled={emailSaving}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={emailForm.smtpSecure}
+                onCheckedChange={(checked) => setEmailForm((prev) => ({ ...prev, smtpSecure: checked }))}
+                disabled={emailSaving}
+              />
+              <div>
+                <div className="text-sm font-medium">使用 SSL / TLS</div>
+                <div className="text-xs text-muted-foreground">常见情况下，465 建议开启；587 可以关闭后走 STARTTLS。</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-sm font-medium">抄送邮箱</div>
+            <Textarea
+              value={emailForm.ccEmails}
+              onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setEmailForm((prev) => ({ ...prev, ccEmails: event.target.value }))}
+              placeholder="可选，多个邮箱用逗号、分号或换行分隔"
+              rows={3}
+              disabled={emailSaving}
+            />
+            <div className="text-xs text-muted-foreground">不填写时，只发给当前工作流运行的发起人邮箱。</div>
           </div>
         </section>
 

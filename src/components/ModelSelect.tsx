@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Globe } from 'lucide-react';
-import { ModelOption } from '@/lib/models';
+import { ModelOption } from '@/lib/core/models';
 import { SingleCombobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 

@@ -5,9 +5,10 @@ import { MockEngine } from './helpers/mock-engine';
 vi.mock('@/lib/engines/engine-factory', () => ({
   getOrCreateEngine: vi.fn(),
   getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
+  resolveRequestedEngineType: vi.fn().mockResolvedValue('mock-engine'),
 }));
 
-vi.mock('@/lib/process-manager', () => ({
+vi.mock('@/lib/core/process-manager', () => ({
   processManager: {
     registerExternalProcess: vi.fn().mockReturnValue({
       status: 'running',
@@ -25,7 +26,7 @@ vi.mock('@/lib/process-manager', () => ({
   },
 }));
 
-vi.mock('@/lib/chat-stream-state', () => ({
+vi.mock('@/lib/chat/stream-state', () => ({
   registerEngineStream: vi.fn(),
   appendEngineStreamContent: vi.fn(),
   setEngineStreamSessionId: vi.fn(),
@@ -36,18 +37,18 @@ vi.mock('@/lib/chat-stream-state', () => ({
   removeEngineStream: vi.fn(),
 }));
 
-vi.mock('@/lib/chat-settings', () => ({
+vi.mock('@/lib/chat/settings', () => ({
   loadChatSettings: vi.fn().mockResolvedValue({
     skills: {},
     workingDirectory: '/tmp',
   }),
 }));
 
-vi.mock('@/lib/chat-system-prompt', () => ({
+vi.mock('@/lib/chat/system-prompt', () => ({
   buildDashboardSystemPrompt: vi.fn().mockResolvedValue('system prompt'),
 }));
 
-vi.mock('@/lib/auth-middleware', () => ({
+vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: vi.fn().mockResolvedValue({
     id: 'user-1',
     username: 'tester',
@@ -57,13 +58,17 @@ vi.mock('@/lib/auth-middleware', () => ({
   }),
 }));
 
-vi.mock('@/lib/app-paths', () => ({
+vi.mock('@/lib/core/app-paths', () => ({
   getRepoRoot: vi.fn().mockReturnValue('/tmp/repo'),
+  getInstallPath: vi.fn().mockReturnValue('/tmp/install'),
+  getWorkspaceCacheFile: vi.fn().mockReturnValue('/tmp/workspace-cache'),
   getWorkspaceDataFile: vi.fn().mockReturnValue('/tmp/workspace-data'),
+  getWorkspaceSkillPath: vi.fn().mockReturnValue('/tmp/workspace/skills/demo'),
+  getWorkspaceSkillsDir: vi.fn().mockReturnValue('/tmp/workspace/skills'),
   getWorkspaceRoot: vi.fn().mockReturnValue('/tmp/workspace'),
 }));
 
-vi.mock('@/lib/runtime-skills', () => ({
+vi.mock('@/lib/run/runtime-skills', () => ({
   getRuntimeSkillsDirPath: vi.fn().mockResolvedValue('/tmp/skills'),
 }));
 
@@ -71,21 +76,21 @@ vi.mock('@/lib/engines/engine-config', () => ({
   getEngineConfigDir: vi.fn().mockReturnValue('.engine'),
 }));
 
-vi.mock('@/lib/chat-persistence', () => ({
+vi.mock('@/lib/chat/persistence', () => ({
   loadChatSession: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/spec-coding-store', () => ({
+vi.mock('@/lib/spec/coding-store', () => ({
   loadCreationSession: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/workflow-registry', () => ({
+vi.mock('@/lib/workflow/registry', () => ({
   workflowRegistry: {
     getManager: vi.fn(),
   },
 }));
 
-vi.mock('@/lib/run-state-persistence', () => ({
+vi.mock('@/lib/run/state-persistence', () => ({
   loadRunState: vi.fn().mockResolvedValue(null),
 }));
 
@@ -135,8 +140,8 @@ describe('chat stream flow', () => {
   test('POST registers scoped streams separately from the visible frontend session', async () => {
     const engine = new MockEngine({ success: true, output: 'Planning only' });
     const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
-    const { registerEngineStream } = await import('@/lib/chat-stream-state');
-    const { processManager } = await import('@/lib/process-manager');
+    const { registerEngineStream } = await import('@/lib/chat/stream-state');
+    const { processManager } = await import('@/lib/core/process-manager');
     (getOrCreateEngine as any).mockResolvedValue(engine);
 
     const { POST } = await import('@/app/api/chat/stream/route');
@@ -157,7 +162,7 @@ describe('chat stream flow', () => {
   });
 
   test('GET checks active streams by scoped recovery key', async () => {
-    const { getEngineStreamByFrontendSessionId } = await import('@/lib/chat-stream-state');
+    const { getEngineStreamByFrontendSessionId } = await import('@/lib/chat/stream-state');
     (getEngineStreamByFrontendSessionId as any).mockReturnValueOnce({
       chatId: 'chat-scoped',
       frontendSessionId: 'front-1:workflow-planning',

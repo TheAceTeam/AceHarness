@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getChannelIntegration, listChannelBindings, listChannelIntegrations, saveChannelBinding } from '@/lib/channel-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getChannelIntegration, listChannelBindings, listChannelIntegrations, saveChannelBinding } from '@/lib/channel/store';
 
 export async function GET(request: NextRequest) {
   const user = await requireAuth(request);

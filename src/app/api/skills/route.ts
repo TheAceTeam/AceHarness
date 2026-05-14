@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
-import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/runtime-skills';
-import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
+import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
+import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
 
 /** Scan skills/ directory, find xxx/SKILL.md with valid frontmatter */
 async function discoverSkills(skillsDir: string) {
@@ -246,5 +246,46 @@ export async function PATCH(request: NextRequest) {
   } catch (error) {
     console.error('Failed to sync installed skills:', error);
     return NextResponse.json({ error: '同步失败: ' + (error as Error).message }, { status: 500 });
+  }
+}
+
+// DELETE: Remove skills by name
+export async function DELETE(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const skillNames = Array.isArray(body.skills)
+      ? body.skills.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+    if (skillNames.length === 0) {
+      return NextResponse.json({ error: '请选择要删除的 Skill' }, { status: 400 });
+    }
+
+    const skillsDir = await getRuntimeSkillsDirPath();
+    if (!existsSync(skillsDir)) {
+      return NextResponse.json({ error: 'Skills 目录不存在' }, { status: 404 });
+    }
+
+    const deleted: string[] = [];
+    const notFound: string[] = [];
+    for (const name of skillNames) {
+      const skillPath = path.join(skillsDir, name);
+      if (existsSync(skillPath)) {
+        await fs.rm(skillPath, { recursive: true, force: true });
+        deleted.push(name);
+      } else {
+        notFound.push(name);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      deleted,
+      notFound,
+      message: `已删除 ${deleted.length} 个 Skill${notFound.length ? `，${notFound.length} 个未找到` : ''}`,
+    });
+  } catch (error) {
+    console.error('Failed to delete skills:', error);
+    return NextResponse.json({ error: '删除失败: ' + (error as Error).message }, { status: 500 });
   }
 }

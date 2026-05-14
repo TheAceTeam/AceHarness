@@ -13,9 +13,9 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
+import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists, getCommonCliSearchPaths } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */

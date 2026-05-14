@@ -19,7 +19,7 @@ import ReactFlow, {
   ReactFlowProvider,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/schemas';
+import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
 
 // 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，

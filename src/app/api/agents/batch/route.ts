@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { getRuntimeAgentsDirPath } from '@/lib/runtime-configs';
+import { getRuntimeAgentsDirPath } from '@/lib/run/runtime-configs';
 
 export async function POST(request: NextRequest) {
   try {

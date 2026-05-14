@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useTheme } from 'next-themes';
 import { ClipLoader } from 'react-spinners';
 import BrandLoadingScreen from '@/components/BrandLoadingScreen';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type NotebookScope } from '@/lib/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type NotebookScope } from '@/lib/core/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
@@ -18,6 +18,7 @@ import DesignPanel from '@/components/DesignPanel';
 import AgentPanel from '@/components/AgentPanel';
 import AgentConfigPanel from '@/components/AgentConfigPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
+import NewConfigModal from '@/components/NewConfigModal';
 import EditNodeModal from '@/components/EditNodeModal';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
@@ -50,19 +51,20 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import WorkflowSupervisorChatPanel from '@/components/workflow/WorkflowSupervisorChatPanel';
-import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent-engine-selection';
-import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec-task-binding';
+import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
+import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
+import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
   getConversationSessionStatusLabel,
   listSessionsForAgent,
   listSessionsForWorkflow,
   type ChatSessionSummaryLike,
-} from '@/lib/agent-conversations';
-import { getEngineMeta } from '@/lib/engine-metadata';
-import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent-draft';
-import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
-import type { WorkflowAgentExecutionOverride } from '@/lib/schemas';
+} from '@/lib/agent/conversations';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
+import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import styles from './page.module.css';
 
@@ -126,6 +128,38 @@ type RuntimeSpecTask = {
   updatedBy?: string;
   validation?: string;
   children?: RuntimeSpecTask[];
+};
+
+type WorkflowStartRequest = {
+  mode: 'rehearsal' | 'real';
+  skipPreflight?: boolean;
+  preflightChecks?: QualityCheckRecord[];
+};
+
+type WorkflowStartContexts = {
+  globalContext: string;
+  phaseContexts: Record<string, string>;
+};
+
+type MonacoEditorInstance = {
+  getModel: () => any;
+  revealLineInCenter: (lineNumber: number) => void;
+  setPosition: (position: { lineNumber: number; column: number }) => void;
+  focus: () => void;
+  deltaDecorations: (oldDecorations: string[], newDecorations: any[]) => string[];
+};
+
+type MonacoNamespace = {
+  editor: {
+    setModelMarkers: (model: any, owner: string, markers: any[]) => void;
+    MarkerSeverity: { Error: number };
+  };
+  Range: new (
+    startLineNumber: number,
+    startColumn: number,
+    endLineNumber: number,
+    endColumn: number
+  ) => any;
 };
 
 function computeSimpleDiff(base: string, next: string): Array<{ type: 'same' | 'add' | 'remove'; text: string }> {
@@ -416,7 +450,13 @@ export default function WorkbenchPage() {
   const [specRevisionDraft, setSpecRevisionDraft] = useState('');
   const [specRevisionSummary, setSpecRevisionSummary] = useState('');
   const [specTaskFormatErrors, setSpecTaskFormatErrors] = useState<string[]>([]);
+  const [specTaskValidationIssues, setSpecTaskValidationIssues] = useState<TasksMarkdownValidationIssue[]>([]);
+  const [specTaskValidationDetails, setSpecTaskValidationDetails] = useState<string[]>([]);
+  const [activeSpecTaskIssueKey, setActiveSpecTaskIssueKey] = useState<string | null>(null);
   const [savingSpecRevision, setSavingSpecRevision] = useState(false);
+  const specTaskEditorRef = useRef<MonacoEditorInstance | null>(null);
+  const specTaskMonacoRef = useRef<MonacoNamespace | null>(null);
+  const specTaskDecorationIdsRef = useRef<string[]>([]);
   const [specBindingReview, setSpecBindingReview] = useState<{
     validation: StepTaskBindingValidation;
     suggestedConfig: any;
@@ -528,6 +568,10 @@ export default function WorkbenchPage() {
     status: string;
     updatedAt: number;
   } | null>(null);
+  const [creationDrafts, setCreationDrafts] = useState<any[]>([]);
+  const [creationDraftsLoading, setCreationDraftsLoading] = useState(false);
+  const [creationDraftModalOpen, setCreationDraftModalOpen] = useState(false);
+  const [resumeCreationDraftId, setResumeCreationDraftId] = useState<string | null>(null);
   const [specCodingSummary, setSpecCodingSummary] = useState<{
     id: string;
     version: number;
@@ -663,6 +707,10 @@ export default function WorkbenchPage() {
   const [editingContextScope, setEditingContextScope] = useState<'global' | 'phase'>('global');
   const [editingContextPhase, setEditingContextPhase] = useState('');
   const [editingContextValue, setEditingContextValue] = useState('');
+  const [showStartWorkflowDialog, setShowStartWorkflowDialog] = useState(false);
+  const [pendingStartRequest, setPendingStartRequest] = useState<WorkflowStartRequest | null>(null);
+  const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
+  const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
@@ -742,6 +790,15 @@ export default function WorkbenchPage() {
     addName(supervisorFromWorkflow || supervisorFromRoles || 'default-supervisor');
     return Array.from(names);
   }, [agentConfigs, editingConfig?.workflow, workflowConfig?.workflow]);
+  const startContextTargets = useMemo(() => {
+    const workflow = workflowConfig?.workflow;
+    if (!workflow) return [] as string[];
+    if (workflow.mode === 'state-machine') {
+      return (workflow.states || []).map((state: any) => state.name).filter((value: string) => !!value);
+    }
+    return (workflow.phases || []).map((phase: any) => phase.name).filter((value: string) => !!value);
+  }, [workflowConfig]);
+  const startContextScopeLabel = workflowConfig?.workflow?.mode === 'state-machine' ? '状态' : '阶段';
 
   // Explicitly convert viewMode to string for conditional rendering
   const isDesignMode = state.viewMode === 'design';
@@ -795,6 +852,39 @@ export default function WorkbenchPage() {
       workingDirectory: resolvedProjectRoot || prev.workingDirectory || '',
     }));
   }, [resolvedProjectRoot]);
+
+  const loadCreationDrafts = useCallback(async () => {
+    setCreationDraftsLoading(true);
+    try {
+      const data = await specCodingApi.listCreationSessions();
+      setCreationDrafts(Array.isArray(data?.sessions) ? data.sessions : []);
+    } catch {
+      setCreationDrafts([]);
+    } finally {
+      setCreationDraftsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCreationDrafts();
+  }, [loadCreationDrafts]);
+
+  const workbenchCreationDrafts = useMemo(() => {
+    const isResumable = (status: string) => ['draft', 'confirmed'].includes(status) && !['config-generated', 'run-bound', 'archived'].includes(status);
+    const drafts = creationDrafts
+      .filter((session) => session?.id && isResumable(session.status))
+      .map((session) => ({
+        ...session,
+        isRelated: Boolean(
+          (configFile && session.filename === configFile)
+          || (configFile && session.referenceWorkflow === configFile)
+          || (resolvedProjectRoot && session.workingDirectory === resolvedProjectRoot)
+        ),
+      }))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    const related = drafts.filter((session) => session.isRelated);
+    return (related.length ? related : drafts).slice(0, 6);
+  }, [configFile, creationDrafts, resolvedProjectRoot]);
 
   useEffect(() => {
     const handleOpenWorkspacePath = (event: Event) => {
@@ -1065,6 +1155,9 @@ export default function WorkbenchPage() {
     setSpecRevisionDraft(artifact?.content || '');
     setSpecRevisionSummary('');
     setSpecTaskFormatErrors([]);
+    setSpecTaskValidationIssues([]);
+    setSpecTaskValidationDetails([]);
+    setActiveSpecTaskIssueKey(null);
     setSpecArtifactViewMode('edit');
     setSpecCodingExplorerTab('artifacts');
     setSpecCodingModalOpen(true);
@@ -1086,6 +1179,65 @@ export default function WorkbenchPage() {
     a.click();
     URL.revokeObjectURL(url);
   }, []);
+  const focusSpecTaskIssue = useCallback((issue: TasksMarkdownValidationIssue, index: number) => {
+    const editor = specTaskEditorRef.current;
+    const model = editor?.getModel?.();
+    const lineNumber = issue.lineNumber && issue.lineNumber > 0 ? issue.lineNumber : 1;
+    setActiveSpecTaskIssueKey(`${issue.code}:${issue.lineNumber ?? 'global'}:${index}`);
+    if (!editor || !model) return;
+    const lineLength = model.getLineLength?.(lineNumber) ?? 1;
+    editor.revealLineInCenter(lineNumber);
+    editor.setPosition({ lineNumber, column: Math.max(1, lineLength) });
+    editor.focus();
+  }, []);
+
+  useEffect(() => {
+    const editor = specTaskEditorRef.current;
+    const monaco = specTaskMonacoRef.current;
+    const model = editor?.getModel?.();
+    if (!editor || !monaco || !model) return;
+
+    const taskIssues = specRevisionTarget === 'tasks' ? specTaskValidationIssues : [];
+    const markers = taskIssues
+      .filter((issue) => issue.lineNumber && issue.lineNumber > 0)
+      .map((issue) => {
+        const lineNumber = issue.lineNumber as number;
+        const lineLength = model.getLineLength?.(lineNumber) ?? 1;
+        return {
+          startLineNumber: lineNumber,
+          startColumn: 1,
+          endLineNumber: lineNumber,
+          endColumn: Math.max(lineLength, 1),
+          message: issue.suggestion ? `${issue.message}\n建议修改：${issue.suggestion}` : issue.message,
+          severity: monaco.editor.MarkerSeverity.Error,
+        };
+      });
+
+    monaco.editor.setModelMarkers(model, 'spec-task-validation', markers);
+
+    const nextDecorations = taskIssues
+      .filter((issue) => issue.lineNumber && issue.lineNumber > 0)
+      .map((issue, index) => {
+        const lineNumber = issue.lineNumber as number;
+        const key = `${issue.code}:${issue.lineNumber ?? 'global'}:${index}`;
+        return {
+          range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+          options: {
+            isWholeLine: true,
+            className: key === activeSpecTaskIssueKey ? 'ace-spec-task-line-active' : 'ace-spec-task-line-error',
+            glyphMarginClassName: key === activeSpecTaskIssueKey ? 'ace-spec-task-glyph-active' : 'ace-spec-task-glyph-error',
+            linesDecorationsClassName: key === activeSpecTaskIssueKey ? 'ace-spec-task-lines-active' : 'ace-spec-task-lines-error',
+          },
+        };
+      });
+
+    specTaskDecorationIdsRef.current = editor.deltaDecorations(specTaskDecorationIdsRef.current, nextDecorations);
+
+    return () => {
+      monaco.editor.setModelMarkers(model, 'spec-task-validation', []);
+      specTaskDecorationIdsRef.current = editor.deltaDecorations(specTaskDecorationIdsRef.current, []);
+    };
+  }, [activeSpecTaskIssueKey, specRevisionTarget, specTaskValidationIssues]);
   const specCodingCodingSaveDialog = useCallback((artifactKey: SpecCodingArtifactKey) => {
     setSpecCodingArtifactTab(artifactKey);
     setSpecCodingSaveScope('personal');
@@ -1184,6 +1336,9 @@ export default function WorkbenchPage() {
       setSpecCodingArtifactTab(specRevisionTarget);
       setSpecCodingExplorerTab('revisions');
       setSpecTaskFormatErrors([]);
+      setSpecTaskValidationIssues([]);
+      setSpecTaskValidationDetails([]);
+      setActiveSpecTaskIssueKey(null);
       if (isTasksArtifact) {
         const sourceConfig = editingConfig || workflowConfig;
         if (sourceConfig) {
@@ -1203,8 +1358,22 @@ export default function WorkbenchPage() {
       const taskErrors = Array.isArray(error?.data?.taskValidation?.errors)
         ? error.data.taskValidation.errors.filter((item: unknown) => typeof item === 'string')
         : [];
-      if (taskErrors.length > 0) {
+      const taskIssues = Array.isArray(error?.data?.taskValidation?.issues)
+        ? error.data.taskValidation.issues.filter((item: unknown) => item && typeof item === 'object')
+        : [];
+      const validationDetails = Array.isArray(error?.data?.details)
+        ? error.data.details.filter((item: unknown) => typeof item === 'string')
+        : [];
+      if (taskIssues.length > 0 || taskErrors.length > 0) {
         setSpecTaskFormatErrors(taskErrors as string[]);
+        setSpecTaskValidationIssues(taskIssues as TasksMarkdownValidationIssue[]);
+        setSpecTaskValidationDetails([]);
+        setActiveSpecTaskIssueKey(null);
+      } else if (validationDetails.length > 0) {
+        setSpecTaskFormatErrors([]);
+        setSpecTaskValidationIssues([]);
+        setSpecTaskValidationDetails(validationDetails as string[]);
+        setActiveSpecTaskIssueKey(null);
       }
       toast('error', error?.message || '保存 Spec 修订失败');
     } finally {
@@ -2747,15 +2916,37 @@ export default function WorkbenchPage() {
     setEditingName(false);
   };
 
-  const startWorkflow = async (
+  const requestStartWorkflow = useCallback((
     mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
     options?: {
       skipPreflight?: boolean;
       preflightChecks?: QualityCheckRecord[];
     },
   ) => {
+    const nextPhaseDrafts = Object.fromEntries(
+      startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
+    ) as Record<string, string>;
+    setPendingStartRequest({
+      mode,
+      skipPreflight: options?.skipPreflight,
+      preflightChecks: options?.preflightChecks,
+    });
+    setStartGlobalContextDraft(globalContext || '');
+    setStartPhaseContextDrafts(nextPhaseDrafts);
+    setShowStartWorkflowDialog(true);
+  }, [globalContext, phaseContexts, rehearsalMode, startContextTargets]);
+
+  const startWorkflow = async (
+    mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
+    options?: {
+      skipPreflight?: boolean;
+      preflightChecks?: QualityCheckRecord[];
+      initialContexts?: WorkflowStartContexts;
+    },
+  ) => {
     const isRehearsalStart = mode === 'rehearsal';
     const skipPreflight = !!options?.skipPreflight;
+    const initialContexts = options?.initialContexts;
     const normalizedProjectRoot = (projectRoot || '').trim();
     if (!normalizedProjectRoot) {
       toast('error', '项目根目录不能为空');
@@ -2770,6 +2961,14 @@ export default function WorkbenchPage() {
 
     setStarting(true);
     try {
+      const normalizedPhaseContexts = Object.fromEntries(
+        Object.entries(initialContexts?.phaseContexts || {})
+          .map(([name, value]) => [name, value || ''])
+          .filter(([, value]) => value.trim().length > 0)
+      );
+      const normalizedGlobalContext = initialContexts?.globalContext || '';
+      dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: normalizedGlobalContext });
+      dispatch({ type: 'SET_PHASE_CONTEXTS', payload: normalizedPhaseContexts });
       setStartupProgressMode(mode);
       setRehearsalProgressSteps([
         isRehearsalStart
@@ -2840,6 +3039,10 @@ export default function WorkbenchPage() {
         skipPreflight: true,
         rehearsal: isRehearsalStart,
         preflightChecks: preflight.checks || [],
+        initialContexts: {
+          globalContext: normalizedGlobalContext,
+          phaseContexts: normalizedPhaseContexts,
+        },
       });
       setWorkflowFrontendSessionId(startResult.frontendSessionId || null);
       if (isRehearsalStart && (startResult as any).rehearsal) {
@@ -2865,6 +3068,21 @@ export default function WorkbenchPage() {
       setStarting(false);
     }
   };
+
+  const confirmStartWorkflow = useCallback(() => {
+    if (!pendingStartRequest) return;
+    const request = pendingStartRequest;
+    setShowStartWorkflowDialog(false);
+    setPendingStartRequest(null);
+    void startWorkflow(request.mode, {
+      skipPreflight: request.skipPreflight,
+      preflightChecks: request.preflightChecks,
+      initialContexts: {
+        globalContext: startGlobalContextDraft,
+        phaseContexts: startPhaseContextDrafts,
+      },
+    });
+  }, [pendingStartRequest, startGlobalContextDraft, startPhaseContextDrafts, startWorkflow]);
 
   const stopWorkflow = async () => {
     try {
@@ -4500,6 +4718,71 @@ export default function WorkbenchPage() {
     );
   };
 
+  const renderCreationDraftInboxCard = () => {
+    return (
+      <div className="rounded-2xl border bg-background/75 p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>inventory_2</span>
+              <h3 className="text-base font-semibold">创建草稿箱</h3>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              保存补充问答、Spec 规划和 workflow 草案的中间状态，可从这里继续恢复。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => void loadCreationDrafts()}>
+              刷新
+            </Button>
+          </div>
+        </div>
+        {creationDraftsLoading ? (
+          <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+            正在读取创建草稿...
+          </div>
+        ) : workbenchCreationDrafts.length ? (
+          <div className="space-y-2">
+            {workbenchCreationDrafts.map((session) => (
+              <div key={session.id} className="rounded-xl border bg-muted/10 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-medium text-foreground">{session.workflowName || '未命名工作流'}</div>
+                      {session.isRelated ? <Badge variant="secondary" className="text-[10px]">当前工作区</Badge> : null}
+                      <Badge variant="outline" className="text-[10px]">{session.status}</Badge>
+                    </div>
+                    <div className="mt-1 truncate text-[11px] text-muted-foreground">{session.filename || '未命名配置'}</div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
+                      {session.planningEngine ? <span>引擎: {getEngineMeta(session.planningEngine)?.name || session.planningEngine}</span> : null}
+                      {session.planningModel ? <span>模型: {session.planningModel}</span> : null}
+                      {session.updatedAt ? <span>{new Date(session.updatedAt).toLocaleString()}</span> : null}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => {
+                      setResumeCreationDraftId(session.id);
+                      setCreationDraftModalOpen(true);
+                    }}
+                  >
+                    继续创建
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+            暂无可恢复的创建草稿。
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderPersistedSpecCard = () => {
     if (persistMode !== 'repository') {
       return null;
@@ -4944,17 +5227,56 @@ export default function WorkbenchPage() {
               )
             ) : specArtifactViewMode === 'edit' ? (
               <div className="flex h-full min-h-0 flex-col gap-3">
-                {specRevisionTarget === 'tasks' && specTaskFormatErrors.length > 0 ? (
+                {specRevisionTarget === 'tasks' && (specTaskFormatErrors.length > 0 || specTaskValidationIssues.length > 0 || specTaskValidationDetails.length > 0) ? (
                   <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-3">
                     <div className="flex items-center gap-2 text-xs font-medium text-red-600">
                       <span className="material-symbols-outlined" style={{ fontSize: 14 }}>error</span>
-                      tasks.md 格式校验未通过
+                      {specTaskValidationIssues.length > 0 || specTaskFormatErrors.length > 0 ? 'tasks.md 格式校验未通过' : '保存失败，请检查任务文档结构'}
                     </div>
-                    <div className="mt-2 space-y-1 text-[11px] leading-5 text-muted-foreground">
-                      {specTaskFormatErrors.map((message, index) => (
-                        <div key={`spec-task-format-${index}`}>{message}</div>
-                      ))}
-                    </div>
+                    {specTaskValidationIssues.length > 0 ? (
+                      <div className="mt-2 space-y-2">
+                        {specTaskValidationIssues.map((issue, index) => (
+                          <button
+                            key={`spec-task-issue-${index}`}
+                            type="button"
+                            className={`block w-full rounded-lg border bg-background/60 p-2.5 text-left transition-colors hover:bg-background ${
+                              activeSpecTaskIssueKey === `${issue.code}:${issue.lineNumber ?? 'global'}:${index}`
+                                ? 'border-red-500/50 ring-1 ring-red-500/30'
+                                : 'border-red-500/20'
+                            }`}
+                            onClick={() => focusSpecTaskIssue(issue, index)}
+                          >
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium text-foreground">
+                              <span className="rounded bg-red-500/12 px-1.5 py-0.5 text-[10px] text-red-600">
+                                {issue.lineNumber ? `第 ${issue.lineNumber} 行` : '全局'}
+                              </span>
+                              {issue.taskId ? (
+                                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                  {issue.taskId}
+                                </span>
+                              ) : null}
+                              <span>{issue.message}</span>
+                            </div>
+                            {issue.lineContent ? (
+                              <pre className="mt-2 overflow-x-auto rounded bg-muted/70 px-2 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
+                                {issue.lineContent}
+                              </pre>
+                            ) : null}
+                            {issue.suggestion ? (
+                              <div className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                                建议修改：{issue.suggestion}
+                              </div>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-2 space-y-1 text-[11px] leading-5 text-muted-foreground">
+                        {(specTaskFormatErrors.length > 0 ? specTaskFormatErrors : specTaskValidationDetails).map((message, index) => (
+                          <div key={`spec-task-format-${index}`}>{message}</div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ) : null}
                 <div className="grid gap-3 md:grid-cols-[1fr_minmax(0,2fr)]">
@@ -4992,8 +5314,13 @@ export default function WorkbenchPage() {
                     language="markdown"
                     value={specRevisionDraft}
                     onChange={(value) => setSpecRevisionDraft(value || '')}
+                    onMount={(editor, monaco) => {
+                      specTaskEditorRef.current = editor as MonacoEditorInstance;
+                      specTaskMonacoRef.current = monaco as MonacoNamespace;
+                    }}
                     theme={resolvedTheme === 'dark' ? 'vs-dark' : 'vs-light'}
                     options={{
+                      glyphMargin: true,
                       minimap: { enabled: false },
                       wordWrap: 'on',
                       fontSize: 13,
@@ -5156,7 +5483,7 @@ export default function WorkbenchPage() {
             <Button
               size="sm"
               className={`h-7 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`}
-              onClick={() => void startWorkflow()}
+              onClick={() => requestStartWorkflow()}
               disabled={!canStartWorkflow}
             >
               {starting ? (
@@ -5172,7 +5499,7 @@ export default function WorkbenchPage() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => void startWorkflow('real', { skipPreflight: true })}
+                onClick={() => requestStartWorkflow('real', { skipPreflight: true })}
                 disabled={!canStartWorkflow}
                 title="跳过启动前检查，直接创建正式运行"
               >
@@ -7285,6 +7612,32 @@ export default function WorkbenchPage() {
         </DialogContent>
       </Dialog>
       {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
+      <NewConfigModal
+        isOpen={creationDraftModalOpen}
+        onClose={() => {
+          setCreationDraftModalOpen(false);
+          setResumeCreationDraftId(null);
+          void loadCreationDrafts();
+        }}
+        onSuccess={(filename) => {
+          setCreationDraftModalOpen(false);
+          setResumeCreationDraftId(null);
+          void loadCreationDrafts();
+          if (filename && filename !== configFile) {
+            router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
+          }
+        }}
+        resumeCreationSessionId={resumeCreationDraftId}
+        initialMode="ai-guided"
+        initialWorkflowName={workflowConfig?.workflow?.name || ''}
+        initialReferenceWorkflow={configFile}
+        initialDescription={requirements || workflowConfig?.workflow?.description || ''}
+        initialWorkingDirectory={resolvedProjectRoot || ''}
+        initialWorkspaceMode={workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place'}
+        hideAiGuided={false}
+        inheritEngine={globalEngine || engine}
+        inheritModel={globalDefaultModel}
+      />
       <AIAgentCreatorModal
         open={showRuntimeAgentCreator}
         engine={globalEngine || engine}
@@ -7312,6 +7665,82 @@ export default function WorkbenchPage() {
           router.push('/agents');
         }}
       />
+
+      {showStartWorkflowDialog && pendingStartRequest && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={() => {
+            setShowStartWorkflowDialog(false);
+            setPendingStartRequest(null);
+          }}
+        >
+          <div className="w-[760px] max-w-[94vw] rounded-lg border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="border-b p-5">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <span className="material-symbols-outlined text-lg">play_circle</span>
+                {pendingStartRequest.mode === 'rehearsal' ? '启动前上下文确认' : '工作流启动前上下文确认'}
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                在真正启动前，先把全局上下文和{startContextScopeLabel}上下文补齐。保存后会随本次启动一起生效。
+              </p>
+            </div>
+            <div className="max-h-[72vh] space-y-5 overflow-y-auto p-5">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">全局上下文</Label>
+                <Textarea
+                  value={startGlobalContextDraft}
+                  onChange={(e) => setStartGlobalContextDraft(e.target.value)}
+                  placeholder="例如：优先保持现有架构、遇到接口变更先兼容旧调用方、代码风格跟随仓库现状"
+                  rows={5}
+                  className="w-full"
+                />
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <Label className="text-sm font-medium">{startContextScopeLabel}上下文</Label>
+                  <span className="text-xs text-muted-foreground">
+                    当前会按{startContextScopeLabel}注入到对应步骤 prompt
+                  </span>
+                </div>
+                {startContextTargets.length > 0 ? (
+                  <div className="space-y-3">
+                    {startContextTargets.map((name: string) => (
+                      <div key={name} className="rounded-lg border bg-muted/10 p-3">
+                        <div className="mb-2 text-sm font-medium">{name}</div>
+                        <Textarea
+                          value={startPhaseContextDrafts[name] || ''}
+                          onChange={(e) => setStartPhaseContextDrafts((prev) => ({ ...prev, [name]: e.target.value }))}
+                          placeholder={`输入仅对「${name}」生效的上下文`}
+                          rows={3}
+                          className="w-full"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                    当前工作流还没有可编辑的{startContextScopeLabel}节点。
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 border-t p-5">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setShowStartWorkflowDialog(false);
+                  setPendingStartRequest(null);
+                }}
+              >
+                取消
+              </Button>
+              <Button onClick={confirmStartWorkflow} disabled={starting}>
+                {pendingStartRequest.mode === 'rehearsal' ? '开始演练' : '确认启动'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showContextEditor && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowContextEditor(false)}>
@@ -7463,7 +7892,7 @@ export default function WorkbenchPage() {
                 onClick={() => {
                   setRehearsalResultDialogOpen(false);
                   setRehearsalMode(false);
-                  void startWorkflow('real', {
+                  requestStartWorkflow('real', {
                     skipPreflight: true,
                     preflightChecks: preflightChecks.length > 0 ? preflightChecks : displayQualityChecks.filter((check) => check.stateName === '__preflight__'),
                   });

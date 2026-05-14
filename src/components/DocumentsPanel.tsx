@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
-import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/api';
+import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';

@@ -11,7 +11,7 @@ import { ACPEngine, logAcpTiming } from './acp-engine';
 import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
+import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 
 function numberOrZero(value: unknown): number {
   const numeric = Number(value);
@@ -78,7 +78,6 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         const tStart = Date.now();
         await this.startNewEngine(options);
         logAcpTiming(timingLabel, 'wrap.W1_startNewEngine_acp.start', tStart);
-
         const startedEngine = this.engine;
         if (!startedEngine) {
           throw new Error(`[${this.getName()}] engine not initialized`);
@@ -93,6 +92,12 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
           logAcpTiming(timingLabel, 'wrap.W2_createSession', tSess);
         }
         this.currentModelId = null;
+        if (this.currentSessionId) {
+          this.emit('stream', {
+            type: 'session',
+            content: this.currentSessionId,
+          } as EngineStreamEvent);
+        }
       }
 
       const engine = this.engine;
@@ -194,6 +199,30 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     this.engine = new ACPEngine(config);
     this.setupEngineEvents();
     await this.engine.start();
+  }
+
+  /**
+   * Ensure the engine process is running. Reuses the existing process if it's
+   * still alive (just creates a new session on it). Only spawns a new process
+   * if there's no engine or the previous one has exited.
+   */
+  protected async ensureEngine(options: EngineOptions): Promise<void> {
+    // Check if existing engine process is still alive
+    if (this.engine && this.isEngineAlive()) {
+      return; // Reuse existing process — just create/resume session on it
+    }
+    // Engine is dead or doesn't exist — spawn a new one
+    if (this.engine) {
+      try { this.engine.stop(); } catch {}
+    }
+    await this.startNewEngine(options);
+  }
+
+  /** Check if the underlying engine process is still running */
+  private isEngineAlive(): boolean {
+    if (!this.engine) return false;
+    // ACPEngine sets this.process = null in cleanup() when process exits
+    return (this.engine as any).process != null;
   }
 
   protected emitText(content: string, metadata?: unknown): void {

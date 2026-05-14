@@ -4,7 +4,7 @@
  * OpenCode-kernel CLI: `codegenie acp --cwd <dir>` for ACP stdio (same argv shape as opencode).
  */
 
-import { commandExists } from '../command-exists';
+import { commandExists } from '@/lib/core/command-exists';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';

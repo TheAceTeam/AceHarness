@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listOutputFiles, loadRunState } from '@/lib/run-state-persistence';
+import { listOutputFiles, loadRunState } from '@/lib/run/state-persistence';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import { resolveWorkflowConfigPath } from '@/lib/workflow-config-path';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { resolveWorkflowConfigPath } from '@/lib/workflow/config-path';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 

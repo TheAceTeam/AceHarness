@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { handleChannelInbound } from '@/lib/channel-gateway';
+import { handleChannelInbound } from '@/lib/channel/gateway';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ integrationId: string }> }) {
   try {

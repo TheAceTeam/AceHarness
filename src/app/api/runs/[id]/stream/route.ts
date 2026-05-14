@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadStreamContent, loadRunState } from '@/lib/run-state-persistence';
-import { processManager } from '@/lib/process-manager';
+import { loadStreamContent, loadRunState } from '@/lib/run/state-persistence';
+import { processManager } from '@/lib/core/process-manager';
 
 export const dynamic = 'force-dynamic';
 

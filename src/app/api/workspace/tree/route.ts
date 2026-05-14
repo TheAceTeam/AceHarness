@@ -6,7 +6,7 @@ import {
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
   workspaceErrorResponse,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 interface TreeNode {
   name: string;

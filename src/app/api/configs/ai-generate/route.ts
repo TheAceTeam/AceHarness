@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   buildWorkflowExperiencePromptBlock,
   findRelevantWorkflowExperiences,
-} from '@/lib/workflow-experience-store';
+} from '@/lib/workflow/experience-store';
 import {
   buildMemoryPromptBlock,
   listMemoryEntries,
-} from '@/lib/workflow-memory-store';
+} from '@/lib/workflow/memory-store';
 
 interface PhaseTemplate {
   name: string;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { executeAgentChat } from '@/lib/agent-chat-service';
-import type { RoleConfig } from '@/lib/schemas';
+import { requireAuth } from '@/lib/auth/middleware';
+import { executeAgentChat } from '@/lib/agent/chat-service';
+import type { RoleConfig } from '@/lib/core/schemas';
 
 function parseTemporaryRoleConfig(body: any): RoleConfig | null {
   const raw = body?.temporaryRoleConfig;

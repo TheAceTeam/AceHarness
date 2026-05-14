@@ -13,10 +13,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ComboboxPortalProvider } from '@/components/ui/combobox';
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
-import { buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
-import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
+import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 
 const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
 

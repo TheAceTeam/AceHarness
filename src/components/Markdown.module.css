@@ -261,7 +261,7 @@
 :global(.ace-task-line) {
   display: inline-flex;
   width: min(100%, 980px);
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   border-radius: 12px;
   border: 1px solid hsl(var(--border));
@@ -329,6 +329,18 @@
 :global(.ace-task-text) {
   min-width: 0;
   font-weight: 600;
+  white-space: normal;
+}
+
+:global(.ace-task-details) {
+  margin: 8px 0 2px 0;
+  padding-left: 2px;
+}
+
+:global(.ace-task-detail-line) {
+  margin: 4px 0;
+  line-height: 1.75;
+  white-space: pre-wrap;
 }
 
 :global(.ace-task-dot) {

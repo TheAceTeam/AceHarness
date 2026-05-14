@@ -7,8 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/components/ui/toast';
-import { copyText } from '@/lib/clipboard';
-import { channelApi, type ChannelIntegrationRecord } from '@/lib/api';
+import { copyText } from '@/lib/core/clipboard';
+import { channelApi, type ChannelIntegrationRecord } from '@/lib/core/api';
 
 function CommandBlock({ title, content, onCopy }: { title: string; content: string; onCopy: () => void }) {
   return (

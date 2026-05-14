@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { configApi } from '@/lib/api';
+import { configApi, specCodingApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -33,7 +33,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 
 interface WorkflowConfig {
   filename: string;
@@ -50,8 +50,12 @@ interface WorkflowConfig {
 
 type WorkflowSortKey = 'name' | 'createdAt';
 type SortDirection = 'asc' | 'desc';
+type WorkflowsPageTab = 'workflows' | 'drafts';
+type DraftViewMode = 'gallery' | 'table';
+type DraftSortDirection = 'desc' | 'asc';
 
 const VIEW_MODE_KEY = 'aceharness:workflows:view-mode';
+const DRAFT_VIEW_MODE_KEY = 'aceharness:workflows:drafts:view-mode';
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
 
@@ -62,6 +66,22 @@ interface WorkflowPagination {
   pageSize: number;
   unfilteredTotal: number;
 }
+
+type CreationDraftSession = {
+  id: string;
+  filename?: string;
+  workflowName?: string;
+  status: string;
+  mode?: 'phase-based' | 'state-machine' | 'ai-guided';
+  planningEngine?: string;
+  planningModel?: string;
+  createdAt?: number | string;
+  updatedAt?: number | string;
+  uiState?: {
+    formStep?: number;
+    planningStage?: string;
+  };
+};
 
 export default function WorkflowsPage() {
   const router = useRouter();
@@ -84,8 +104,14 @@ export default function WorkflowsPage() {
     unfilteredTotal: 0,
   });
   const [showNewModal, setShowNewModal] = useState(false);
+  const [resumeCreationDraftId, setResumeCreationDraftId] = useState<string | null>(null);
+  const [creationDrafts, setCreationDrafts] = useState<CreationDraftSession[]>([]);
+  const [creationDraftsLoading, setCreationDraftsLoading] = useState(false);
   const [showAIGuide, setShowAIGuide] = useState(false);
   const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
+  const [draftViewMode, setDraftViewMode] = useState<DraftViewMode>('table');
+  const [draftSortDirection, setDraftSortDirection] = useState<DraftSortDirection>('desc');
+  const [activeTab, setActiveTab] = useState<WorkflowsPageTab>('workflows');
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(new Set());
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -98,6 +124,13 @@ export default function WorkflowsPage() {
     try {
       const saved = localStorage.getItem(VIEW_MODE_KEY);
       if (saved === 'gallery' || saved === 'table') setViewMode(saved);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(DRAFT_VIEW_MODE_KEY);
+      if (saved === 'gallery' || saved === 'table') setDraftViewMode(saved);
     } catch {}
   }, []);
 
@@ -141,6 +174,11 @@ export default function WorkflowsPage() {
     try { localStorage.setItem(VIEW_MODE_KEY, mode); } catch {}
   };
 
+  const toggleDraftViewMode = (mode: DraftViewMode) => {
+    setDraftViewMode(mode);
+    try { localStorage.setItem(DRAFT_VIEW_MODE_KEY, mode); } catch {}
+  };
+
   const loadWorkflows = useCallback(async () => {
     try {
       setLoading(true);
@@ -180,6 +218,22 @@ export default function WorkflowsPage() {
   useEffect(() => {
     loadWorkflows();
   }, [loadWorkflows]);
+
+  const loadCreationDrafts = useCallback(async () => {
+    setCreationDraftsLoading(true);
+    try {
+      const data = await specCodingApi.listCreationSessions();
+      setCreationDrafts(Array.isArray(data?.sessions) ? data.sessions : []);
+    } catch {
+      setCreationDrafts([]);
+    } finally {
+      setCreationDraftsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCreationDrafts();
+  }, [loadCreationDrafts]);
 
   const handleAICreate = () => {
     setShowAIGuide(true);
@@ -233,6 +287,27 @@ export default function WorkflowsPage() {
       }
     }
   };
+
+  const handleDeleteCreationDraft = useCallback(async (session: CreationDraftSession) => {
+    const confirmed = await confirm({
+      title: '删除创建草稿',
+      description: `确定要删除草稿 "${session.workflowName || session.filename || session.id}" 吗？此操作无法撤销。`,
+      confirmLabel: '删除',
+      cancelLabel: '取消',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
+    try {
+      await specCodingApi.deleteCreationSession(session.id);
+      toast('success', '创建草稿已删除');
+      if (resumeCreationDraftId === session.id) {
+        setResumeCreationDraftId(null);
+      }
+      void loadCreationDrafts();
+    } catch (error) {
+      toast('error', '删除创建草稿失败');
+    }
+  }, [confirm, loadCreationDrafts, resumeCreationDraftId, toast]);
 
   const toggleSelect = (filename: string) => {
     setSelectedWorkflows((prev) => {
@@ -294,7 +369,29 @@ export default function WorkflowsPage() {
       : <ArrowDown className="h-3.5 w-3.5 text-primary" />;
   };
 
+  const toggleDraftSortDirection = useCallback(() => {
+    setDraftSortDirection((prev) => (prev === 'desc' ? 'asc' : 'desc'));
+  }, []);
+
+  const DraftSortIcon = () => (
+    draftSortDirection === 'asc'
+      ? <ArrowUp className="h-3.5 w-3.5 text-primary" />
+      : <ArrowDown className="h-3.5 w-3.5 text-primary" />
+  );
+
   const displayedWorkflows = workflows;
+  const creationDraftGroups = useMemo(() => {
+    const visibleDrafts = creationDrafts
+      .filter((session) => session?.id && session.status !== 'archived')
+      .sort((a, b) => {
+        const aTime = Number(new Date(a.updatedAt || a.createdAt || 0));
+        const bTime = Number(new Date(b.updatedAt || b.createdAt || 0));
+        return draftSortDirection === 'desc' ? bTime - aTime : aTime - bTime;
+      });
+    const inProgress = visibleDrafts.filter((session) => session.status === 'draft' || session.status === 'confirmed');
+    const completed = visibleDrafts.filter((session) => session.status === 'config-generated' || session.status === 'run-bound');
+    return { inProgress, completed };
+  }, [creationDrafts, draftSortDirection]);
   const allDisplayedWorkflowsSelected = displayedWorkflows.length > 0
     && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
   const totalLabel = useMemo(() => {
@@ -309,6 +406,91 @@ export default function WorkflowsPage() {
     mode === 'state-machine'
       ? 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
       : 'bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  const getCreationStageLabel = (session: CreationDraftSession) => {
+    if (session.status === 'run-bound') return '已生成工作流并启动运行';
+    if (session.status === 'config-generated') return '已生成工作流';
+    const step = session.uiState?.formStep;
+    const labels: Record<number, string> = {
+      1: '填写基础信息',
+      2: '补充问答',
+      3: '生成计划',
+      4: '确认计划',
+      5: '生成工作流',
+    };
+    return labels[step || 1] || '填写基础信息';
+  };
+  const getCreationProgressTone = (session: CreationDraftSession) => (
+    session.status === 'config-generated' || session.status === 'run-bound'
+      ? 'secondary'
+      : 'default'
+  );
+  const renderCreationDraftCard = (session: CreationDraftSession) => (
+    <div key={session.id} className="rounded-2xl border bg-background/80 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium">
+            {session.workflowName || '未命名工作流'}
+          </div>
+          <div className="mt-1 truncate text-xs text-muted-foreground">
+            {session.filename || '未命名配置'}
+          </div>
+        </div>
+        <Badge variant={getCreationProgressTone(session)} className="shrink-0 text-[10px]">
+          {session.status === 'config-generated' || session.status === 'run-bound' ? '已完成' : '进行中'}
+        </Badge>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+        <Badge variant="outline" className="text-[10px]">
+          当前阶段: {getCreationStageLabel(session)}
+        </Badge>
+        <Badge variant="outline" className="text-[10px]">
+          {session.status === 'config-generated' || session.status === 'run-bound' ? '已完成创建工作流' : '未完成创建'}
+        </Badge>
+        {session.mode ? (
+          <Badge variant="outline" className="text-[10px]">
+            {session.mode === 'state-machine' ? '状态机' : session.mode === 'ai-guided' ? 'AI 引导' : '阶段模式'}
+          </Badge>
+        ) : null}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        {session.planningEngine ? <span>引擎: {session.planningEngine}</span> : null}
+        {session.planningModel ? <span>模型: {session.planningModel}</span> : null}
+        {session.updatedAt || session.createdAt ? <span>更新于 {formatWorkflowCreatedAt(session.updatedAt || session.createdAt)}</span> : null}
+      </div>
+      <div className="mt-4 flex justify-between gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive hover:text-destructive"
+          onClick={() => void handleDeleteCreationDraft(session)}
+        >
+          <Trash2 className="mr-1.5 h-4 w-4" />
+          删除
+        </Button>
+        {session.status === 'config-generated' || session.status === 'run-bound' ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => router.push(`/workbench/${encodeURIComponent(session.filename || '')}?mode=design`)}
+            disabled={!session.filename}
+          >
+            打开工作流
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setResumeCreationDraftId(session.id);
+              setShowNewModal(true);
+            }}
+          >
+            继续创建
+          </Button>
+        )}
+      </div>
+    </div>
+  );
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -347,9 +529,65 @@ export default function WorkflowsPage() {
       <div className="container mx-auto px-6 py-8 flex flex-col gap-6">
         {/* Floating filter anchor */}
         <div ref={filterBarAnchorRef} className="h-px" />
-        {floatingFilterBar ? <div style={{ height: filterBarHeight }} /> : null}
+        {floatingFilterBar && activeTab === 'workflows' ? <div style={{ height: filterBarHeight }} /> : null}
+
+        <section className="flex items-center justify-between gap-4">
+          <div className="inline-flex rounded-full border border-border/60 bg-card/70 p-1 shadow-sm backdrop-blur">
+            <Button
+              size="sm"
+              variant={activeTab === 'workflows' ? 'default' : 'ghost'}
+              className="rounded-full px-4"
+              onClick={() => setActiveTab('workflows')}
+            >
+              工作流列表
+            </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'drafts' ? 'default' : 'ghost'}
+              className="rounded-full px-4"
+              onClick={() => setActiveTab('drafts')}
+            >
+              创建草稿箱
+            </Button>
+          </div>
+          {activeTab === 'drafts' ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={draftSortDirection} onValueChange={(value: DraftSortDirection) => setDraftSortDirection(value)}>
+                <SelectTrigger className="h-9 w-[132px] bg-background">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">最近更新</SelectItem>
+                  <SelectItem value="asc">最早更新</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
+                <Button
+                  size="sm"
+                  variant={draftViewMode === 'gallery' ? 'default' : 'ghost'}
+                  className="h-8 rounded-full px-3"
+                  onClick={() => toggleDraftViewMode('gallery')}
+                >
+                  <span className="material-symbols-outlined text-sm">grid_view</span>
+                </Button>
+                <Button
+                  size="sm"
+                  variant={draftViewMode === 'table' ? 'default' : 'ghost'}
+                  className="h-8 rounded-full px-3"
+                  onClick={() => toggleDraftViewMode('table')}
+                >
+                  <span className="material-symbols-outlined text-sm">table_rows</span>
+                </Button>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => void loadCreationDrafts()}>
+                刷新
+              </Button>
+            </div>
+          ) : null}
+        </section>
 
         {/* Filter bar */}
+        {activeTab === 'workflows' ? (
         <section
           className={cn(
             floatingFilterBar
@@ -428,8 +666,9 @@ export default function WorkflowsPage() {
             </div>
           </div>
         </section>
+        ) : null}
         {/* Batch action bar */}
-        {selectedWorkflows.size > 0 && (
+        {activeTab === 'workflows' && selectedWorkflows.size > 0 && (
           <div className="flex items-center gap-4 rounded-[20px] border border-destructive/30 bg-destructive/5 px-5 py-3">
             <span className="text-sm font-medium">已选 {selectedWorkflows.size} 个工作流</span>
             <Button size="sm" variant="destructive" onClick={handleBatchDelete}>
@@ -443,145 +682,145 @@ export default function WorkflowsPage() {
         )}
 
         {/* Content */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="text-muted-foreground">加载中...</div>
-          </div>
-        ) : displayedWorkflows.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <FileText className="w-12 h-12 text-muted-foreground/50 mb-4" />
-            <h3 className="text-lg font-medium mb-2">
-              {pagination.unfilteredTotal === 0 ? '还没有工作流' : '没有匹配的工作流'}
-            </h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              {pagination.unfilteredTotal === 0 ? '创建你的第一个工作流配置' : '尝试调整搜索条件'}
-            </p>
-            {pagination.unfilteredTotal === 0 && (
-              <div className="flex items-center gap-3">
-                <Button size="sm" variant="outline" onClick={handleAICreate}>
-                  <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
-                  AI 创建
-                </Button>
-                <Button onClick={() => setShowNewModal(true)}>
-                  <Plus className="w-4 h-4 mr-2" />
-                  手动创建
-                </Button>
+        {activeTab === 'workflows' ? (
+          <>
+            {loading ? (
+              <div className="flex items-center justify-center py-20">
+                <div className="text-muted-foreground">加载中...</div>
               </div>
-            )}
-          </div>
-        ) : viewMode === 'table' ? (
-          /* Table view */
-          <div className="overflow-hidden rounded-[28px] border border-border/70 bg-card/80 shadow-sm">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">
-                    <Checkbox
-                      checked={allDisplayedWorkflowsSelected}
-                      onCheckedChange={toggleSelectAll}
-                    />
-                  </TableHead>
-                  <TableHead className="min-w-[220px]">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="-ml-3 h-8 gap-1.5 px-2"
-                      onClick={() => handleSort('name')}
-                    >
-                      名称
-                      <SortIcon column="name" />
+            ) : displayedWorkflows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <FileText className="w-12 h-12 text-muted-foreground/50 mb-4" />
+                <h3 className="text-lg font-medium mb-2">
+                  {pagination.unfilteredTotal === 0 ? '还没有工作流' : '没有匹配的工作流'}
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {pagination.unfilteredTotal === 0 ? '创建你的第一个工作流配置' : '尝试调整搜索条件'}
+                </p>
+                {pagination.unfilteredTotal === 0 && (
+                  <div className="flex items-center gap-3">
+                    <Button size="sm" variant="outline" onClick={handleAICreate}>
+                      <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+                      AI 创建
                     </Button>
-                  </TableHead>
-                  <TableHead>文件名</TableHead>
-                  <TableHead className="min-w-[132px] whitespace-nowrap">
-                    <div className="flex items-center gap-2">
-                      <span>模式</span>
-                      <Select value={selectedMode} onValueChange={setSelectedMode}>
-                        <SelectTrigger className="h-8 w-[96px] bg-background">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">全部</SelectItem>
-                          <SelectItem value="state-machine">状态机</SelectItem>
-                          <SelectItem value="phase-based">阶段模式</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </TableHead>
-                  <TableHead className="min-w-[72px] whitespace-normal leading-tight">阶段/状态</TableHead>
-                  <TableHead>步骤</TableHead>
-                  <TableHead className="min-w-[160px] whitespace-nowrap">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="-ml-3 h-8 gap-1.5 px-2"
-                      onClick={() => handleSort('createdAt')}
-                    >
-                      创建时间
-                      <SortIcon column="createdAt" />
+                    <Button onClick={() => setShowNewModal(true)}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      手动创建
                     </Button>
-                  </TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayedWorkflows.map((wf) => (
-                  <TableRow key={wf.filename} data-state={selectedWorkflows.has(wf.filename) ? 'selected' : undefined}>
-                    <TableCell>
-                      <Checkbox
-                        checked={selectedWorkflows.has(wf.filename)}
-                        onCheckedChange={() => toggleSelect(wf.filename)}
-                      />
-                    </TableCell>
-                    <TableCell className="min-w-[200px]">
-                      <div className="font-medium">{wf.name}</div>
-                      {wf.description && (
-                        <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{wf.description}</div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground font-mono">{wf.filename}</TableCell>
-                    <TableCell className="min-w-[92px] whitespace-nowrap">
-                      <Badge className={cn('min-w-[72px] justify-center whitespace-nowrap', modeBadgeClass(wf.mode))}>{modeLabel(wf.mode)}</Badge>
-                    </TableCell>
-                    <TableCell className="min-w-[72px] whitespace-nowrap">{wf.phaseCount ?? 0}</TableCell>
-                    <TableCell>{wf.stepCount ?? 0}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                      {formatWorkflowCreatedAt(wf.createdAt)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-start gap-2">
-                        <Button size="sm" variant="outline" asChild>
-                          <Link href={`/workbench/${encodeURIComponent(wf.filename)}`}>
-                            <LogIn className="w-3 h-3 mr-1" />
-                            进入
-                          </Link>
+                  </div>
+                )}
+              </div>
+            ) : viewMode === 'table' ? (
+              <div className="overflow-hidden rounded-[28px] border border-border/70 bg-card/80 shadow-sm">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">
+                        <Checkbox
+                          checked={allDisplayedWorkflowsSelected}
+                          onCheckedChange={toggleSelectAll}
+                        />
+                      </TableHead>
+                      <TableHead className="min-w-[220px]">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="-ml-3 h-8 gap-1.5 px-2"
+                          onClick={() => handleSort('name')}
+                        >
+                          名称
+                          <SortIcon column="name" />
                         </Button>
-                        <Button size="sm" variant="outline" asChild>
-                          <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=history`}>
-                            <History className="w-3 h-3 mr-1" />
-                            历史
-                          </Link>
+                      </TableHead>
+                      <TableHead>文件名</TableHead>
+                      <TableHead className="min-w-[132px] whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <span>模式</span>
+                          <Select value={selectedMode} onValueChange={setSelectedMode}>
+                            <SelectTrigger className="h-8 w-[96px] bg-background">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">全部</SelectItem>
+                              <SelectItem value="state-machine">状态机</SelectItem>
+                              <SelectItem value="phase-based">阶段模式</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </TableHead>
+                      <TableHead className="min-w-[72px] whitespace-normal leading-tight">阶段/状态</TableHead>
+                      <TableHead>步骤</TableHead>
+                      <TableHead className="min-w-[160px] whitespace-nowrap">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="-ml-3 h-8 gap-1.5 px-2"
+                          onClick={() => handleSort('createdAt')}
+                        >
+                          创建时间
+                          <SortIcon column="createdAt" />
                         </Button>
-                        <Button size="sm" variant="outline" asChild>
-                          <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
-                            <Edit className="w-3 h-3" />
-                          </Link>
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => handleDelete(wf.filename)}>
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : (
-          /* Gallery view */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      </TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {displayedWorkflows.map((wf) => (
+                      <TableRow key={wf.filename} data-state={selectedWorkflows.has(wf.filename) ? 'selected' : undefined}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedWorkflows.has(wf.filename)}
+                            onCheckedChange={() => toggleSelect(wf.filename)}
+                          />
+                        </TableCell>
+                        <TableCell className="min-w-[200px]">
+                          <div className="font-medium">{wf.name}</div>
+                          {wf.description && (
+                            <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{wf.description}</div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground font-mono">{wf.filename}</TableCell>
+                        <TableCell className="min-w-[92px] whitespace-nowrap">
+                          <Badge className={cn('min-w-[72px] justify-center whitespace-nowrap', modeBadgeClass(wf.mode))}>{modeLabel(wf.mode)}</Badge>
+                        </TableCell>
+                        <TableCell className="min-w-[72px] whitespace-nowrap">{wf.phaseCount ?? 0}</TableCell>
+                        <TableCell>{wf.stepCount ?? 0}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                          {formatWorkflowCreatedAt(wf.createdAt)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex justify-start gap-2">
+                            <Button size="sm" variant="outline" asChild>
+                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}`}>
+                                <LogIn className="w-3 h-3 mr-1" />
+                                进入
+                              </Link>
+                            </Button>
+                            <Button size="sm" variant="outline" asChild>
+                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=history`}>
+                                <History className="w-3 h-3 mr-1" />
+                                历史
+                              </Link>
+                            </Button>
+                            <Button size="sm" variant="outline" asChild>
+                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
+                                <Edit className="w-3 h-3" />
+                              </Link>
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => handleDelete(wf.filename)}>
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {displayedWorkflows.map((workflow, index) => (
               <motion.div
                 key={workflow.filename}
@@ -648,49 +887,246 @@ export default function WorkflowsPage() {
                 </div>
               </motion.div>
             ))}
-          </div>
-        )}
+              </div>
+            )}
 
-        {!loading && pagination.total > 0 ? (
-          <section className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-            <div className="text-sm text-muted-foreground">{totalLabel}</div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={pagination.page <= 1}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-              >
-                <ArrowLeft className="mr-1 h-4 w-4" />
-                上一页
-              </Button>
-              <Badge variant="secondary">
-                第 {pagination.page} / {pagination.totalPages} 页
-              </Badge>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={pagination.page >= pagination.totalPages}
-                onClick={() => setPage((current) => current + 1)}
-              >
-                下一页
-                <ArrowRight className="ml-1 h-4 w-4" />
-              </Button>
+            {!loading && pagination.total > 0 ? (
+              <section className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-muted-foreground">{totalLabel}</div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={pagination.page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    <ArrowLeft className="mr-1 h-4 w-4" />
+                    上一页
+                  </Button>
+                  <Badge variant="secondary">
+                    第 {pagination.page} / {pagination.totalPages} 页
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={pagination.page >= pagination.totalPages}
+                    onClick={() => setPage((current) => current + 1)}
+                  >
+                    下一页
+                    <ArrowRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+          </>
+        ) : (
+          <section className="rounded-[24px] border border-border/70 bg-card/70 p-5 shadow-sm backdrop-blur">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary text-[18px]">inventory_2</span>
+                  <h2 className="text-lg font-semibold">创建草稿箱</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  还没创建完的 workflow 草稿、补充问答和 Spec 规划会先落在这里，按需恢复继续做。
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              {creationDraftsLoading ? (
+                <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
+                  正在读取创建草稿...
+                </div>
+              ) : creationDraftGroups.inProgress.length > 0 || creationDraftGroups.completed.length > 0 ? (
+                <div className="space-y-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-medium">进行中</h3>
+                      <Badge variant="outline" className="text-[10px]">{creationDraftGroups.inProgress.length}</Badge>
+                    </div>
+                    {creationDraftGroups.inProgress.length > 0 ? (
+                      draftViewMode === 'table' ? (
+                        <div className="overflow-hidden rounded-[24px] border border-border/70 bg-card/80 shadow-sm">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>名称</TableHead>
+                                <TableHead>文件名</TableHead>
+                                <TableHead>当前阶段</TableHead>
+                                <TableHead>状态</TableHead>
+                                <TableHead className="min-w-[160px] whitespace-nowrap">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="-ml-3 h-8 gap-1.5 px-2"
+                                    onClick={toggleDraftSortDirection}
+                                  >
+                                    最近更新
+                                    <DraftSortIcon />
+                                  </Button>
+                                </TableHead>
+                                <TableHead>操作</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {creationDraftGroups.inProgress.map((session) => (
+                                <TableRow key={session.id}>
+                                  <TableCell className="font-medium">{session.workflowName || '未命名工作流'}</TableCell>
+                                  <TableCell className="font-mono text-sm text-muted-foreground">{session.filename || '未命名配置'}</TableCell>
+                                  <TableCell>{getCreationStageLabel(session)}</TableCell>
+                                  <TableCell>
+                                    <Badge variant={getCreationProgressTone(session)} className="text-[10px]">进行中</Badge>
+                                  </TableCell>
+                                  <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                                    {formatWorkflowCreatedAt(session.updatedAt || session.createdAt)}
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          setResumeCreationDraftId(session.id);
+                                          setShowNewModal(true);
+                                        }}
+                                      >
+                                        继续创建
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:text-destructive"
+                                        onClick={() => void handleDeleteCreationDraft(session)}
+                                      >
+                                        删除
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                          {creationDraftGroups.inProgress.map(renderCreationDraftCard)}
+                        </div>
+                      )
+                    ) : (
+                      <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
+                        当前没有进行中的创建草稿。
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-medium">已完成创建</h3>
+                      <Badge variant="outline" className="text-[10px]">{creationDraftGroups.completed.length}</Badge>
+                    </div>
+                    {creationDraftGroups.completed.length > 0 ? (
+                      draftViewMode === 'table' ? (
+                        <div className="overflow-hidden rounded-[24px] border border-border/70 bg-card/80 shadow-sm">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>名称</TableHead>
+                                <TableHead>文件名</TableHead>
+                                <TableHead>当前阶段</TableHead>
+                                <TableHead>状态</TableHead>
+                                <TableHead className="min-w-[160px] whitespace-nowrap">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="-ml-3 h-8 gap-1.5 px-2"
+                                    onClick={toggleDraftSortDirection}
+                                  >
+                                    最近更新
+                                    <DraftSortIcon />
+                                  </Button>
+                                </TableHead>
+                                <TableHead>操作</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {creationDraftGroups.completed.map((session) => (
+                                <TableRow key={session.id}>
+                                  <TableCell className="font-medium">{session.workflowName || '未命名工作流'}</TableCell>
+                                  <TableCell className="font-mono text-sm text-muted-foreground">{session.filename || '未命名配置'}</TableCell>
+                                  <TableCell>{getCreationStageLabel(session)}</TableCell>
+                                  <TableCell>
+                                    <Badge variant={getCreationProgressTone(session)} className="text-[10px]">已完成</Badge>
+                                  </TableCell>
+                                  <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                                    {formatWorkflowCreatedAt(session.updatedAt || session.createdAt)}
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => router.push(`/workbench/${encodeURIComponent(session.filename || '')}?mode=design`)}
+                                        disabled={!session.filename}
+                                      >
+                                        打开工作流
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-destructive hover:text-destructive"
+                                        onClick={() => void handleDeleteCreationDraft(session)}
+                                      >
+                                        删除
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+                          {creationDraftGroups.completed.map(renderCreationDraftCard)}
+                        </div>
+                      )
+                    ) : (
+                      <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
+                        还没有已完成创建的工作流草稿记录。
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed px-4 py-6 text-sm text-muted-foreground">
+                  暂无创建草稿记录。
+                </div>
+              )}
             </div>
           </section>
-        ) : null}
+        )}
       </div>
 
       {showNewModal && (
         <NewConfigModal
           isOpen={showNewModal}
-          onClose={() => setShowNewModal(false)}
+          onClose={() => {
+            setShowNewModal(false);
+            setResumeCreationDraftId(null);
+            void loadCreationDrafts();
+          }}
           hideAiGuided
           onSuccess={(filename) => {
             setShowNewModal(false);
+            setResumeCreationDraftId(null);
             loadWorkflows();
+            void loadCreationDrafts();
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }}
+          resumeCreationSessionId={resumeCreationDraftId}
         />
       )}
 

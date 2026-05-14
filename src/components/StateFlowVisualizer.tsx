@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { Badge } from './ui/badge';
 import { ArrowRight, TrendingUp, RotateCcw } from 'lucide-react';
-import type { StateTransitionRecord } from '@/lib/schemas';
+import type { StateTransitionRecord } from '@/lib/core/schemas';
 
 const HUMAN_APPROVAL_STATE = '__human_approval__';
 const ORIGIN_STATE = '__origin__';

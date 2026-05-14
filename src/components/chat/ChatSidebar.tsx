@@ -2,17 +2,10 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { useChat } from '@/contexts/ChatContext';
-import { runsApi, workflowApi } from '@/lib/api';
+import { runsApi, workflowApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -36,8 +29,8 @@ import {
   getCreationSessionStatusLabel,
   getWorkbenchSessionKind,
   type ChatSessionSummaryLike,
-} from '@/lib/agent-conversations';
-import type { HumanQuestion } from '@/lib/run-state-persistence';
+} from '@/lib/agent/conversations';
+import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { RobotLogo } from './ChatMessage';
 
 type SkillItem = {
@@ -243,6 +236,9 @@ export default function ChatSidebar() {
     deleteSession,
     renameSession,
     loading,
+    activeStreamingSessionIds = [],
+    recentlyCompletedSessionIds = [],
+    sessionLoadingId,
     skillSettings,
     discoveredSkills,
     toggleSkill,
@@ -633,6 +629,9 @@ export default function ChatSidebar() {
               groups={visibleWorkflowBuckets.active}
               activeSessionId={activeSessionId}
               loading={loading}
+              activeStreamingSessionIds={activeStreamingSessionIds}
+              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSessionClick={setActiveSessionId}
               onDeleteSession={(session) => { void requestDeleteSession(session); }}
@@ -646,6 +645,9 @@ export default function ChatSidebar() {
               groups={visibleWorkflowBuckets.archived}
               activeSessionId={activeSessionId}
               loading={loading}
+              activeStreamingSessionIds={activeStreamingSessionIds}
+              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSessionClick={setActiveSessionId}
               onDeleteSession={(session) => { void requestDeleteSession(session); }}
@@ -661,7 +663,9 @@ export default function ChatSidebar() {
               active={session.id === activeSessionId}
               selectable={manageMode && sessionView === 'chat'}
               selected={selectedSessionIds.has(session.id)}
-              isStreaming={loading && session.id === activeSessionId}
+              isStreaming={activeStreamingSessionIds.includes(session.id) || (loading && session.id === activeSessionId)}
+              isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+              isLoadingSession={sessionLoadingId === session.id}
               onClick={() => setActiveSessionId(session.id)}
               onSelectChange={(checked) => toggleSessionSelected(session.id, checked)}
               onDelete={() => { void requestDeleteSession(session); }}
@@ -986,6 +990,9 @@ function WorkflowBucket({
   groups,
   activeSessionId,
   loading,
+  activeStreamingSessionIds,
+  recentlyCompletedSessionIds,
+  sessionLoadingId,
   pendingQuestionsBySessionId,
   onSessionClick,
   onDeleteSession,
@@ -998,6 +1005,9 @@ function WorkflowBucket({
   groups: WorkflowSessionGroup[];
   activeSessionId: string | null;
   loading: boolean;
+  activeStreamingSessionIds: string[];
+  recentlyCompletedSessionIds: string[];
+  sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
@@ -1052,6 +1062,9 @@ function WorkflowBucket({
               group={group}
               activeSessionId={activeSessionId}
               loading={loading}
+              activeStreamingSessionIds={activeStreamingSessionIds}
+              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSessionClick={onSessionClick}
               onDeleteSession={onDeleteSession}
@@ -1069,6 +1082,9 @@ function WorkflowGroup({
   group,
   activeSessionId,
   loading,
+  activeStreamingSessionIds,
+  recentlyCompletedSessionIds,
+  sessionLoadingId,
   pendingQuestionsBySessionId,
   onSessionClick,
   onDeleteSession,
@@ -1078,6 +1094,9 @@ function WorkflowGroup({
   group: WorkflowSessionGroup;
   activeSessionId: string | null;
   loading: boolean;
+  activeStreamingSessionIds: string[];
+  recentlyCompletedSessionIds: string[];
+  sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
@@ -1122,6 +1141,9 @@ function WorkflowGroup({
               group={agentGroup}
               activeSessionId={activeSessionId}
               loading={loading}
+              activeStreamingSessionIds={activeStreamingSessionIds}
+              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSessionClick={onSessionClick}
               onDeleteSession={onDeleteSession}
@@ -1139,6 +1161,9 @@ function WorkflowAgentGroup({
   group,
   activeSessionId,
   loading,
+  activeStreamingSessionIds,
+  recentlyCompletedSessionIds,
+  sessionLoadingId,
   pendingQuestionsBySessionId,
   onSessionClick,
   onDeleteSession,
@@ -1148,6 +1173,9 @@ function WorkflowAgentGroup({
   group: WorkflowAgentSessionGroup;
   activeSessionId: string | null;
   loading: boolean;
+  activeStreamingSessionIds: string[];
+  recentlyCompletedSessionIds: string[];
+  sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
@@ -1213,7 +1241,9 @@ function WorkflowAgentGroup({
                 active={session.id === activeSessionId}
                 compact
                 attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
-                isStreaming={loading && session.id === activeSessionId}
+                isStreaming={activeStreamingSessionIds.includes(session.id) || (loading && session.id === activeSessionId)}
+                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => onSessionClick(session.id)}
                 onDelete={() => onDeleteSession(session)}
                 onRename={(title) => onRenameSession(session, title)}
@@ -1237,6 +1267,8 @@ function SessionItem({
   selectable = false,
   selected = false,
   isStreaming = false,
+  isRecentlyCompleted = false,
+  isLoadingSession = false,
   attentionCount = 0,
   onClick,
   onSelectChange,
@@ -1253,6 +1285,8 @@ function SessionItem({
   selectable?: boolean;
   selected?: boolean;
   isStreaming?: boolean;
+  isRecentlyCompleted?: boolean;
+  isLoadingSession?: boolean;
   attentionCount?: number;
   onClick: () => void;
   onSelectChange?: (checked: boolean) => void;
@@ -1260,7 +1294,6 @@ function SessionItem({
   onRename: (title: string) => void;
 }) {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
   const isWeChatBound = hasWeChatBinding(session as SidebarSession);
   const summary = session.lastMessage?.slice(0, 40) || '空会话';
@@ -1286,7 +1319,6 @@ function SessionItem({
     setRenameDialogOpen(false);
   };
   const startRenaming = () => {
-    setMenuOpen(false);
     setRenameValue(session.title);
     setRenameDialogOpen(true);
   };
@@ -1305,21 +1337,35 @@ function SessionItem({
           : isWeChatBound
             ? 'border-l-4 border-l-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 shadow-[inset_0_0_0_1px_rgba(26,173,25,0.14)] hover:bg-[#1AAD19]/[0.12]'
             : 'border-l-4 border-l-transparent px-3 hover:bg-muted/50'
-      } ${isStreaming ? 'bg-primary/15 ring-1 ring-primary/20' : ''}`}
-      onClick={onClick}
+      } ${isStreaming || isLoadingSession ? 'bg-primary/15 ring-1 ring-primary/20' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
+      onClick={() => {
+        if (selectable) {
+          onSelectChange?.(!selected);
+          return;
+        }
+        onClick();
+      }}
     >
-      {isStreaming ? (
+      {isStreaming || isLoadingSession ? (
         <div className="pointer-events-none absolute inset-y-0 left-0 w-1 animate-pulse bg-primary" />
+      ) : isRecentlyCompleted ? (
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-emerald-500" />
       ) : null}
       {selectable ? (
-        <input
-          type="checkbox"
+        <button
+          type="button"
           aria-label={`选择 ${session.title}`}
-          checked={selected}
-          onChange={(event) => onSelectChange?.(event.target.checked)}
-          onClick={(event) => event.stopPropagation()}
-          className="mt-1 h-3.5 w-3.5 shrink-0 rounded border-border accent-primary"
-        />
+          aria-pressed={selected}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectChange?.(!selected);
+          }}
+          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
+            selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-transparent hover:border-primary/40'
+          }`}
+        >
+          <span className="material-symbols-outlined text-sm">check</span>
+        </button>
       ) : null}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
@@ -1327,6 +1373,14 @@ function SessionItem({
             <span className="relative flex h-2 w-2 shrink-0" aria-label="进行中">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+            </span>
+          ) : isRecentlyCompleted ? (
+            <span className="inline-flex shrink-0 items-center text-emerald-600 dark:text-emerald-400" aria-label="刚完成">
+              <span className="material-symbols-outlined text-sm">check_circle</span>
+            </span>
+          ) : isLoadingSession ? (
+            <span className="inline-flex shrink-0 items-center text-primary" aria-label="加载中">
+              <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
             </span>
           ) : null}
           <div className="text-sm font-medium truncate">{session.title}</div>
@@ -1355,6 +1409,14 @@ function SessionItem({
             <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
               生成中
             </span>
+          ) : isRecentlyCompleted ? (
+            <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-300">
+              刚完成
+            </span>
+          ) : isLoadingSession ? (
+            <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+              加载中
+            </span>
           ) : null}
           {statusBadge ? (
             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium ${statusBadge.tone}`}>
@@ -1376,36 +1438,34 @@ function SessionItem({
         </div>
       </div>
       {!selectable ? (
-        <DropdownMenu modal={false} open={menuOpen} onOpenChange={setMenuOpen}>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="mt-0.5 h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
-              onClick={(event) => event.stopPropagation()}
-              title="会话操作"
-              aria-label={`更多操作 ${session.title}`}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>more_vert</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-32" onClick={(event) => event.stopPropagation()}>
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault();
-                startRenaming();
-              }}
-            >
-              <span className="material-symbols-outlined mr-2 text-sm">edit</span>
-              重命名
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
-              <span className="material-symbols-outlined mr-2 text-sm">delete</span>
-              删除
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="mt-0.5 flex shrink-0 items-center gap-0">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 opacity-60 hover:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              startRenaming();
+            }}
+            title="重命名会话"
+            aria-label={`重命名 ${session.title}`}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>edit</span>
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 opacity-60 hover:opacity-100 text-destructive hover:text-destructive"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            title="删除会话"
+            aria-label={`删除 ${session.title}`}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>delete</span>
+          </Button>
+        </div>
       ) : null}
     </div>
   );

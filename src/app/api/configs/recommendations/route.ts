@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile, readdir } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { findRelevantWorkflowExperiences } from '@/lib/workflow-experience-store';
-import { listAgentRelationships } from '@/lib/agent-relationship-store';
-import { DEFAULT_SUPERVISOR_NAME } from '@/lib/default-supervisor';
-import { buildRecommendedAgents } from '@/lib/config-recommendations';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { findRelevantWorkflowExperiences } from '@/lib/workflow/experience-store';
+import { listAgentRelationships } from '@/lib/agent/relationship-store';
+import { DEFAULT_SUPERVISOR_NAME } from '@/lib/core/default-supervisor';
+import { buildRecommendedAgents } from '@/lib/config/recommendations';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');

@@ -4,9 +4,9 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import type { ReactNode } from 'react';
-import type { NotebookScope } from '@/lib/api';
+import type { NotebookScope } from '@/lib/core/api';
 import NotebookDirectoryPicker from '@/components/notebook/NotebookDirectoryPicker';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 
 export interface NotebookDirectoryOption {
   path: string;

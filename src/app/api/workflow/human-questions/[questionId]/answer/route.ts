@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow-registry';
-import { loadRunState, type HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/registry';
+import { loadRunState, type HumanQuestionAnswer } from '@/lib/run/state-persistence';
 
 const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
 

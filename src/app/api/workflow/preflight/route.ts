@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { runWorkflowPreflight } from '@/lib/workflow-preflight';
+import { requireAuth } from '@/lib/auth/middleware';
+import { runWorkflowPreflight } from '@/lib/workflow/preflight';
 
 export async function POST(request: NextRequest) {
   const user = await requireAuth(request);

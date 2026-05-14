@@ -2,14 +2,14 @@
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 import {
   getAgentTheme,
   resolveAgentAvatarSrc,
   type AgentAvatarConfig,
   type AgentRoleType,
   type AgentTeam,
-} from '@/lib/agent-personas';
+} from '@/lib/agent/personas';
 
 interface AgentHeroCardProps {
   agent: {

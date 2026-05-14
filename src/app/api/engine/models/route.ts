@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ACPEngine, getAcpModelDiscoveryTimeoutMs } from '@/lib/engines/acp-engine';
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
-import { commandExists } from '@/lib/command-exists';
+import { commandExists } from '@/lib/core/command-exists';
 
 export const dynamic = 'force-dynamic';
 

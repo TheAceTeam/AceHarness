@@ -13,6 +13,7 @@ import {
   Puzzle,
   Search,
   Store,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -23,9 +24,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useToast } from '@/components/ui/toast';
+import { useConfirmDialog } from '@/hooks/useConfirmDialog';
+import ConfirmDialog from '@/components/ConfirmDialog';
 import Markdown from '@/components/Markdown';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
+import { getAllPlugins, registerPlugin, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
 import {
   SkillCard,
   SkillSearch,
@@ -64,7 +68,7 @@ interface SyncStatus {
   aceharnessBuiltin: boolean;
 }
 
-type TabType = 'local' | 'online';
+type TabType = 'local' | 'online' | 'plugins';
 type ViewMode = 'gallery' | 'table';
 type LocalSortKey = 'name' | 'updatedAt' | 'source';
 type SortDirection = 'asc' | 'desc';
@@ -130,8 +134,139 @@ function normalizeMarketplaceSkillKey(value?: string): string {
     .replace(/[_\s]+/g, '-');
 }
 
+function PluginsTab() {
+  const { toast } = useToast();
+  const [plugins, setPlugins] = useState<HomePlugin[]>([]);
+
+  // Load plugin enabled states from localStorage
+  useEffect(() => {
+    const allPlugins = getAllPlugins();
+    try {
+      const saved = localStorage.getItem('aceharness:plugins:disabled');
+      if (saved) {
+        const disabledIds = JSON.parse(saved) as string[];
+        for (const plugin of allPlugins) {
+          if (disabledIds.includes(plugin.id)) {
+            registerPlugin({ ...plugin, enabled: false } as HomePlugin);
+          }
+        }
+      }
+    } catch {}
+    setPlugins(getAllPlugins());
+  }, []);
+
+  const persistDisabledState = (updatedPlugins: HomePlugin[]) => {
+    const disabledIds = updatedPlugins.filter((p) => p.enabled === false).map((p) => p.id);
+    try {
+      localStorage.setItem('aceharness:plugins:disabled', JSON.stringify(disabledIds));
+    } catch {}
+  };
+
+  const handleToggle = (pluginId: string) => {
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) return;
+    const updated = { ...plugin, enabled: plugin.enabled === false ? true : false };
+    registerPlugin(updated as HomePlugin);
+    const next = getAllPlugins();
+    setPlugins(next);
+    persistDisabledState(next);
+    toast('success', `${plugin.name} 已${updated.enabled ? '启用' : '禁用'}`);
+  };
+
+  const handleDelete = (pluginId: string) => {
+    const plugin = plugins.find((p) => p.id === pluginId);
+    if (!plugin) return;
+    unregisterPlugin(pluginId);
+    const next = getAllPlugins();
+    setPlugins(next);
+    persistDisabledState(next);
+    toast('success', `${plugin.name} 已删除`);
+  };
+
+  return (
+    <section className="rounded-[28px] border border-border/70 bg-card/90 p-6 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-card/80">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h3 className="text-lg font-semibold">侧边栏插件</h3>
+          <p className="text-sm text-muted-foreground mt-1">管理首页侧边栏的功能插件，包括快捷操作、Tab 面板和主题</p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {plugins.map((plugin) => (
+          <div
+            key={plugin.id}
+            className="flex items-center justify-between gap-4 rounded-xl border p-4 transition-colors hover:bg-muted/30"
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-sm">{plugin.name}</span>
+                {plugin.version && (
+                  <Badge variant="outline" className="text-xs">{plugin.version}</Badge>
+                )}
+                {plugin.enabled === false && (
+                  <Badge variant="secondary" className="text-xs">已禁用</Badge>
+                )}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {plugin.capabilities.map((cap) => (
+                  <Badge key={cap} variant="outline" className="text-[10px] px-1.5 py-0">{cap}</Badge>
+                ))}
+              </div>
+              {plugin.actions?.items && plugin.actions.items.length > 0 && (
+                <div className="mt-1.5 text-xs text-muted-foreground">
+                  快捷操作：{plugin.actions.items.map((a) => a.label).join('、')}
+                </div>
+              )}
+              {plugin.tab && (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  Tab：{plugin.tab.label}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                size="sm"
+                variant={plugin.enabled !== false ? 'outline' : 'default'}
+                className="h-7 text-xs"
+                onClick={() => handleToggle(plugin.id)}
+              >
+                {plugin.enabled !== false ? '禁用' : '启用'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                onClick={() => handleDelete(plugin.id)}
+                title="删除插件"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        ))}
+
+        {plugins.length === 0 && (
+          <div className="text-center py-12 text-muted-foreground text-sm">
+            暂无已注册的侧边栏插件
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 rounded-xl border border-dashed p-4 text-xs text-muted-foreground leading-6">
+        <p className="font-medium text-foreground mb-1">如何添加新插件</p>
+        <p>1. 在 <code className="bg-muted px-1 rounded">src/plugins/</code> 下创建插件目录</p>
+        <p>2. 使用 <code className="bg-muted px-1 rounded">definePlugin()</code> 定义插件配置</p>
+        <p>3. 在 <code className="bg-muted px-1 rounded">src/lib/sidebar-plugins/registry.ts</code> 中注册</p>
+        <p>4. 详见 <code className="bg-muted px-1 rounded">docs/sidebar-plugins/README.md</code></p>
+      </div>
+    </section>
+  );
+}
+
 export default function SkillsPage() {
   const { toast } = useToast();
+  const { confirm, dialogProps } = useConfirmDialog();
   useDocumentTitle('Skills 管理');
 
   const [activeTab, setActiveTab] = useState<TabType>('local');
@@ -181,7 +316,7 @@ export default function SkillsPage() {
   useEffect(() => {
     try {
       const savedActiveTab = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (savedActiveTab === 'local' || savedActiveTab === 'online') {
+      if (savedActiveTab === 'local' || savedActiveTab === 'online' || savedActiveTab === 'plugins') {
         setActiveTab(savedActiveTab);
       }
       const savedLocalViewMode = localStorage.getItem(LOCAL_VIEW_MODE_KEY);
@@ -322,6 +457,49 @@ export default function SkillsPage() {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleDeleteSkills = async (skillNames: string[]) => {
+    if (skillNames.length === 0) {
+      toast('error', '请先选择要删除的 Skill');
+      return;
+    }
+    const confirmed = await confirm({
+      title: '确认删除',
+      description: `确定要删除 ${skillNames.length} 个 Skill 吗？此操作不可撤销。`,
+      confirmLabel: '删除',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
+    try {
+      const response = await fetch('/api/skills', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skills: skillNames }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        toast('error', data.error || '删除失败');
+        return;
+      }
+      toast('success', data.message || `已删除 ${data.deleted?.length || 0} 个 Skill`);
+      setSelectedForExport((prev) => {
+        const next = new Set(prev);
+        skillNames.forEach((name) => next.delete(name));
+        return next;
+      });
+      await loadSkills();
+    } catch {
+      toast('error', '删除失败');
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedForExport.size === 0) {
+      toast('error', '请先选择要删除的 Skill');
+      return;
+    }
+    await handleDeleteSkills(Array.from(selectedForExport));
   };
 
   const handleExport = async () => {
@@ -674,6 +852,10 @@ export default function SkillsPage() {
                     <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
                     {exporting ? '导出中...' : `导出 (${selectedForExport.size})`}
                   </Button>
+                  <Button size="sm" variant="outline" onClick={handleBatchDelete} disabled={selectedForExport.size === 0} className="text-destructive hover:text-destructive">
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    删除 ({selectedForExport.size})
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
                     <FolderOpen className="w-4 h-4 mr-1" />
                     工作目录
@@ -707,6 +889,15 @@ export default function SkillsPage() {
             >
               <Store className="w-4 h-4 mr-2" />
               Skill 广场
+            </Button>
+            <Button
+              size="sm"
+              variant={activeTab === 'plugins' ? 'default' : 'ghost'}
+              className="rounded-full"
+              onClick={() => setActiveTab('plugins')}
+            >
+              <Puzzle className="w-4 h-4 mr-2" />
+              侧边栏插件
             </Button>
           </div>
         </section>
@@ -874,6 +1065,7 @@ export default function SkillsPage() {
                           </button>
                         </TableHead>
                         <TableHead>状态</TableHead>
+                        <TableHead className="w-[60px]">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -912,6 +1104,17 @@ export default function SkillsPage() {
                               ) : null}
                             </div>
                           </TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteSkills([skill.name])}
+                              title="删除"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -930,8 +1133,15 @@ export default function SkillsPage() {
                       }`}
                       onClick={() => setSelectedSkill(skill)}
                     >
-                      <div className="absolute top-3 right-3" onClick={(e) => { e.stopPropagation(); toggleExportSelection(skill.name); }}>
-                        <div className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer ${
+                      <div className="absolute top-3 right-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="w-5 h-5 rounded flex items-center justify-center text-muted-foreground/60 hover:text-destructive transition-colors"
+                          onClick={() => handleDeleteSkills([skill.name])}
+                          title="删除"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                        <div onClick={() => toggleExportSelection(skill.name)} className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer ${
                           selectedForExport.has(skill.name) ? 'bg-primary border-primary' : 'border-muted-foreground/40'
                         }`}>
                           {selectedForExport.has(skill.name) ? <span className="text-white text-xs">✓</span> : null}
@@ -1021,7 +1231,7 @@ export default function SkillsPage() {
               </div>
             ) : null}
           </>
-        ) : (
+        ) : activeTab === 'online' ? (
           <>
             <section className="sticky top-[4.5rem] z-20 rounded-[28px] border border-border/70 bg-card/90 p-4 shadow-[0_18px_60px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-card/80">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -1189,8 +1399,11 @@ export default function SkillsPage() {
               />
             ) : null}
           </>
-        )}
+        ) : activeTab === 'plugins' ? (
+          <PluginsTab />
+        ) : null}
       </div>
+      {dialogProps && <ConfirmDialog {...dialogProps} />}
     </div>
   );
 }

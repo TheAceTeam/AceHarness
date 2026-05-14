@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
+import { requireAuth } from '@/lib/auth/middleware';
 import {
   appendSpecCodingRevision,
   loadCreationSession,
   normalizeSpecCodingDocument,
   updateCreationSession,
-} from '@/lib/spec-coding-store';
-import { getSpecRootDir, readMasterSpec } from '@/lib/spec-persistence';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+} from '@/lib/spec/coding-store';
+import { getSpecRootDir, readMasterSpec } from '@/lib/spec/persistence';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 function canAccess(userId: string, createdBy?: string) {
   return !createdBy || createdBy === userId;

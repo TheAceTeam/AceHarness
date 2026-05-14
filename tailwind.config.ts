@@ -5,6 +5,8 @@ export default {
   content: [
     './src/app/**/*.{ts,tsx}',
     './src/components/**/*.{ts,tsx}',
+    './src/plugins/**/*.{ts,tsx}',
+    './src/lib/**/*.json',
   ],
   theme: {
     container: {

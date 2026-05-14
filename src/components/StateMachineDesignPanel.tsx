@@ -30,7 +30,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, ArrowRight, Info, RotateCcw } from 'lucide-react';
 import EditNodeModal from './EditNodeModal';
 import StateMachineDiagram from './StateMachineDiagram';
-import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/schemas';
+import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];

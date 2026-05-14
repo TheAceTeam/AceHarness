@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { RefreshCw } from 'lucide-react';
-import type { ModelOption } from '@/lib/models';
+import type { ModelOption } from '@/lib/core/models';
 import { SingleCombobox, type ComboboxGroupDef } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/engine-metadata';
+import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 
 interface Props {
   engine: string;

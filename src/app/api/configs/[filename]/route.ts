@@ -2,14 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readFile, readdir, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getConfigMeta, deleteConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/runtime-configs';
-import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
-import { loadCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
-import { deleteRunsByConfig } from '@/lib/run-store';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getConfigMeta, deleteConfigMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/run/runtime-configs';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { loadCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
+import { deleteRunsByConfig } from '@/lib/run/store';
+import { workflowRegistry } from '@/lib/workflow/registry';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');

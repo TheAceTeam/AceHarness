@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
-import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow-registry';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import { loadRunState, type HumanQuestion } from '@/lib/run-state-persistence';
+import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/registry';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { loadRunState, type HumanQuestion } from '@/lib/run/state-persistence';
 
 const INACTIVE_RUN_STATUSES = new Set(['stopped', 'completed', 'failed', 'crashed']);
 

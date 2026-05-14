@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { buildEnvObject, loadEnvVars } from '@/lib/env-manager';
-import { commandExists, getCommonCliSearchPaths } from '@/lib/command-exists';
-import { detectCangjieHome, buildCangjieSpawnEnv, isCjpmAvailable } from '@/lib/cangjie-env';
+import { buildEnvObject, loadEnvVars } from '@/lib/core/env-manager';
+import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { detectCangjieHome, buildCangjieSpawnEnv, isCjpmAvailable } from '@/lib/cangjie/env';
 import { ClaudeCodeEngineWrapper } from '@/lib/engines/claude-code-wrapper';
 import { KiroCliEngineWrapper } from '@/lib/engines/kiro-cli-wrapper';
 import { OpenCodeEngineWrapper } from '@/lib/engines/opencode-wrapper';

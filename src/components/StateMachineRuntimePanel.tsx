@@ -13,7 +13,7 @@ import {
   Zap,
   TrendingUp,
 } from 'lucide-react';
-import type { StateTransitionRecord, Issue } from '@/lib/schemas';
+import type { StateTransitionRecord, Issue } from '@/lib/core/schemas';
 
 // 格式化状态名称，将内部状态名转换为友好显示
 export function formatStateName(name: string): string {

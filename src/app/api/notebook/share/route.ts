@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
-import { requireAuth } from '@/lib/auth-middleware';
-import { createNotebookShare, getNotebookShare, type NotebookSharePermission } from '@/lib/notebook-share-store';
-import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook-manager';
+import { requireAuth } from '@/lib/auth/middleware';
+import { createNotebookShare, getNotebookShare, type NotebookSharePermission } from '@/lib/notebook/share-store';
+import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook/manager';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);

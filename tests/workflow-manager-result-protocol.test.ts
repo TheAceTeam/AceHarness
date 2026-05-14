@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { WorkflowManager } from '@/lib/workflow-manager';
+import { WorkflowManager } from '@/lib/workflow/manager';
 
 describe('workflow-manager result protocol', () => {
   test('parseStepVerdict accepts bare json verdict objects', () => {

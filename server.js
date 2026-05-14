@@ -87,7 +87,7 @@ const decoding = require('lib0/decoding');
 const {
   getWorkspaceDataFile,
   getWorkspaceNotebookRoot,
-} = require(path.join(__dirname, 'dist/lib/app-paths.js'));
+} = require(path.join(__dirname, 'dist/lib/core/app-paths.js'));
 
 const dev = process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
 const host = process.env.ACE_HOST || '127.0.0.1';

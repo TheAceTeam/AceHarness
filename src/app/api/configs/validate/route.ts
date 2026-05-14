@@ -1,9 +1,9 @@
 import { readFile } from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
-import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
+import { requireAuth } from '@/lib/auth/middleware';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 
 export async function POST(request: NextRequest) {
   try {

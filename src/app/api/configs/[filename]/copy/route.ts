@@ -3,9 +3,9 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getConfigMeta, setConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');

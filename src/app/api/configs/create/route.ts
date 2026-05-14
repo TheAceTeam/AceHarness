@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, access, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { newConfigFormSchema } from '@/lib/schemas';
+import { newConfigFormSchema } from '@/lib/core/schemas';
 import { ZodError } from 'zod';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getConfigMeta, setConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
-import { updateChatSessionCreationBinding } from '@/lib/chat-persistence';
-import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
-import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
+import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 function createDefaultWorkflowGovernance() {
   return {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { loadRoundtable } from '@/lib/roundtable-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { loadRoundtable } from '@/lib/roundtable/store';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireAuth(request);

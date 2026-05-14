@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { MarketplaceClient } from '@/lib/marketplace-client';
+import { MarketplaceClient } from '@/lib/marketplace/client';
 import { CACHE_DURATION } from '@/constants/marketplace';
 
 let categoriesCache: {

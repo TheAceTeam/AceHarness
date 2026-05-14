@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getChannelIntegration, listChannelBindings } from '@/lib/channel-store';
-import { sendOutboundChannelMessage } from '@/lib/channel-delivery';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getChannelIntegration, listChannelBindings } from '@/lib/channel/store';
+import { sendOutboundChannelMessage } from '@/lib/channel/delivery';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await requireAuth(request);

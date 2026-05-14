@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getChannelIntegration } from '@/lib/channel-store';
-import { rememberWeChatOfficialBridge, startWeChatOfficialBridge } from '@/lib/wechat-official-service';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getChannelIntegration } from '@/lib/channel/store';
+import { rememberWeChatOfficialBridge, startWeChatOfficialBridge } from '@/lib/channel/wechat/official-service';
 
 export async function POST(request: NextRequest) {
   const user = await requireAuth(request);

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { buildCreationSession, listCreationSessions, saveCreationSession, loadMasterSpecAsCreationSession, rebuildSpecCodingPreservingArtifacts } from '@/lib/spec-coding-store';
-import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { requireAuth } from '@/lib/auth/middleware';
+import { buildCreationSession, listCreationSessions, saveCreationSession, loadMasterSpecAsCreationSession, rebuildSpecCodingPreservingArtifacts } from '@/lib/spec/coding-store';
+import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request);
@@ -63,11 +63,14 @@ export async function POST(request: NextRequest) {
       workflowName: body.workflowName,
       mode: body.mode,
       referenceWorkflow: body.referenceWorkflow,
+      planningEngine: typeof body.planningEngine === 'string' ? body.planningEngine : undefined,
+      planningModel: typeof body.planningModel === 'string' ? body.planningModel : undefined,
       workingDirectory: body.workingDirectory,
       workspaceMode: body.workspaceMode,
       description: body.description,
       requirements: body.requirements,
       clarification: body.clarification,
+      stageSessions: body.stageSessions,
       uiState: body.uiState,
       config: body.config,
       specCoding,

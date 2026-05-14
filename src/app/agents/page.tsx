@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { agentApi } from '@/lib/api';
+import { agentApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -30,9 +30,9 @@ import {
 import {
   listSessionsForAgent,
   type ChatSessionSummaryLike,
-} from '@/lib/agent-conversations';
-import { cn } from '@/lib/utils';
-import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
+} from '@/lib/agent/conversations';
+import { cn } from '@/lib/core/utils';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 
 interface AgentConfig {

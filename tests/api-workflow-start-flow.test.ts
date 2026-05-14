@@ -2,36 +2,36 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-helpers';
 
 // Mock all heavy dependencies before importing the route
-vi.mock('@/lib/auth-middleware', () => ({
+vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: vi.fn(),
 }));
 
-vi.mock('@/lib/workflow-preflight', () => ({
+vi.mock('@/lib/workflow/preflight', () => ({
   runWorkflowPreflight: vi.fn(),
 }));
 
-vi.mock('@/lib/workflow-registry', () => ({
+vi.mock('@/lib/workflow/registry', () => ({
   workflowRegistry: {
     getManager: vi.fn(),
   },
 }));
 
-vi.mock('@/lib/run-store', () => ({
+vi.mock('@/lib/run/store', () => ({
   createRun: vi.fn(),
 }));
 
-vi.mock('@/lib/run-state-persistence', () => ({
+vi.mock('@/lib/run/state-persistence', () => ({
   saveRunState: vi.fn(),
 }));
 
-vi.mock('@/lib/spec-coding-store', () => ({
+vi.mock('@/lib/spec/coding-store', () => ({
   loadCreationSession: vi.fn(),
   loadLatestCreationSessionByFilename: vi.fn().mockResolvedValue(null),
   cloneSpecCodingForRun: vi.fn(),
   updateCreationSession: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/chat-persistence', () => ({
+vi.mock('@/lib/chat/chat-persistence', () => ({
   appendChatSessionMessage: vi.fn().mockResolvedValue(undefined),
   loadChatSession: vi.fn().mockResolvedValue(null),
   saveChatSession: vi.fn().mockResolvedValue(undefined),
@@ -39,7 +39,7 @@ vi.mock('@/lib/chat-persistence', () => ({
   updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/runtime-configs', () => ({
+vi.mock('@/lib/run/runtime-configs', () => ({
   getRuntimeWorkflowConfigPath: vi.fn().mockResolvedValue('/tmp/config.yaml'),
 }));
 
@@ -62,7 +62,7 @@ describe('workflow start flow', () => {
   });
 
   test('returns 401 when no auth token', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     const { NextResponse } = await import('next/server');
     (requireAuth as any).mockResolvedValue(
       NextResponse.json({ error: 'unauthorized' }, { status: 401 })
@@ -79,7 +79,7 @@ describe('workflow start flow', () => {
   });
 
   test('returns 400 when configFile is missing', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
     const { POST } = await import('@/app/api/workflow/start/route');
@@ -93,10 +93,10 @@ describe('workflow start flow', () => {
   });
 
   test('returns 412 when preflight fails', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
-    const { runWorkflowPreflight } = await import('@/lib/workflow-preflight');
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
     (runWorkflowPreflight as any).mockResolvedValue({
       ok: false,
       failedCount: 2,
@@ -117,7 +117,7 @@ describe('workflow start flow', () => {
   });
 
   test('skips preflight when skipPreflight is true', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
     const mockManager = {
@@ -125,10 +125,10 @@ describe('workflow start flow', () => {
       start: vi.fn().mockResolvedValue(undefined),
       emit: vi.fn(),
     };
-    const { workflowRegistry } = await import('@/lib/workflow-registry');
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
-    const { runWorkflowPreflight } = await import('@/lib/workflow-preflight');
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
 
     const { POST } = await import('@/app/api/workflow/start/route');
     const response = await POST(makeRequest('/api/workflow/start', {
@@ -143,10 +143,10 @@ describe('workflow start flow', () => {
   });
 
   test('rehearsal mode returns runId with rehearsal.enabled=true', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
-    const { runWorkflowPreflight } = await import('@/lib/workflow-preflight');
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
     (runWorkflowPreflight as any).mockResolvedValue({
       ok: true,
       failedCount: 0,
@@ -169,10 +169,10 @@ describe('workflow start flow', () => {
   });
 
   test('returns 409 when workflow is already running', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
-    const { runWorkflowPreflight } = await import('@/lib/workflow-preflight');
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
     (runWorkflowPreflight as any).mockResolvedValue({
       ok: true,
       failedCount: 0,
@@ -184,7 +184,7 @@ describe('workflow start flow', () => {
       getStatus: vi.fn().mockReturnValue({ status: 'running' }),
       start: vi.fn(),
     };
-    const { workflowRegistry } = await import('@/lib/workflow-registry');
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
     const { POST } = await import('@/app/api/workflow/start/route');
@@ -199,10 +199,10 @@ describe('workflow start flow', () => {
   });
 
   test('normal start calls manager.start()', async () => {
-    const { requireAuth } = await import('@/lib/auth-middleware');
+    const { requireAuth } = await import('@/lib/auth/middleware');
     (requireAuth as any).mockResolvedValue({ id: 'user-1', personalDir: '/tmp' });
 
-    const { runWorkflowPreflight } = await import('@/lib/workflow-preflight');
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
     (runWorkflowPreflight as any).mockResolvedValue({
       ok: true,
       failedCount: 0,
@@ -215,7 +215,7 @@ describe('workflow start flow', () => {
       start: vi.fn().mockResolvedValue(undefined),
       emit: vi.fn(),
     };
-    const { workflowRegistry } = await import('@/lib/workflow-registry');
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
     (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
 
     const { POST } = await import('@/app/api/workflow/start/route');
@@ -232,6 +232,11 @@ describe('workflow start flow', () => {
     // manager.start() is called asynchronously (fire-and-forget)
     // Wait a tick for the async call
     await new Promise((r) => setTimeout(r, 10));
-    expect(mockManager.start).toHaveBeenCalledWith('test.yaml', undefined, [{ name: 'env', ok: true }]);
+    expect(mockManager.start).toHaveBeenCalledWith(
+      'test.yaml',
+      undefined,
+      [{ name: 'env', ok: true }],
+      { globalContext: '', phaseContexts: {} }
+    );
   });
 });

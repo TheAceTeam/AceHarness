@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { workspaceApi, type TreeNode, type WorkspaceTreeResponse } from '@/lib/api';
+import { workspaceApi, type TreeNode, type WorkspaceTreeResponse } from '@/lib/core/api';
 import DirectoryTreePicker from '@/components/common/DirectoryTreePicker';
 
 interface WorkspaceDirectoryPickerProps {

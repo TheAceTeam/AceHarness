@@ -13,7 +13,7 @@ describe('agents batch route', () => {
   test('set-model-policy updates agents without existing strategy', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       vi.resetModules();
-      const { getRuntimeAgentsDirPath } = await import('@/lib/runtime-configs');
+      const { getRuntimeAgentsDirPath } = await import('@/lib/run/runtime-configs');
       const agentsDir = await getRuntimeAgentsDirPath();
       await mkdir(agentsDir, { recursive: true });
 

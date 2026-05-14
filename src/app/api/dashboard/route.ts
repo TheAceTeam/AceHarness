@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { listConfigsWithMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run-history';
+import { requireAuth } from '@/lib/auth/middleware';
+import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run/history';
 
 // ── In-memory cache with background refresh ──
 let cachedResult: any = null;

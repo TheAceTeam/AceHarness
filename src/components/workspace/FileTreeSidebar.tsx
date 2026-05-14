@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { ChevronDown, ChevronRight, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp } from "lucide-react"
-import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/api"
+import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -22,7 +22,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu"
-import { cn } from "@/lib/utils"
+import { cn } from "@/lib/core/utils"
 import { useToast } from "@/components/ui/toast"
 import { useConfirmDialog } from "@/hooks/useConfirmDialog"
 import ConfirmDialog from "@/components/ConfirmDialog"

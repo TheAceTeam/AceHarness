@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { appendWerewolfHistory, listWerewolfHistory } from '@/lib/werewolf-history-store';
+import { appendWerewolfHistory, listWerewolfHistory } from '@/plugins/werewolf/history-store';
 
 export async function GET(request: NextRequest) {
   try {

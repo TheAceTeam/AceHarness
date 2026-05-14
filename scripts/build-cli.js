@@ -10,10 +10,10 @@ const srcDir = path.join(root, 'src');
 
 const files = [
   path.join(srcDir, 'cli.ts'),
-  path.join(srcDir, 'lib', 'app-paths.ts'),
-  path.join(srcDir, 'lib', 'command-exists.ts'),
-  path.join(srcDir, 'lib', 'models.ts'),
-  path.join(srcDir, 'lib', 'runtime-configs.ts'),
+  path.join(srcDir, 'lib', 'core', 'app-paths.ts'),
+  path.join(srcDir, 'lib', 'core', 'command-exists.ts'),
+  path.join(srcDir, 'lib', 'core', 'models.ts'),
+  path.join(srcDir, 'lib', 'run', 'runtime-configs.ts'),
   path.join(srcDir, 'lib', 'engines', 'acp-engine.ts'),
 ];
 

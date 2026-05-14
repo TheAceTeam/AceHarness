@@ -4,18 +4,18 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
-import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
-import { extractSpecCodingRevisionCommand } from '@/lib/spec-coding-revision-protocol';
-import { extractStructuredResult } from '@/lib/result-channel';
+import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
+import { extractSpecCodingRevisionCommand } from '@/lib/spec/coding-revision-protocol';
+import { extractStructuredResult } from '@/lib/ai/result-channel';
 import {
   extractClarificationFormResult,
   extractPlanDraftResult,
   extractWorkflowDraftPreview,
-} from '@/lib/ai-result-normalizers';
-import { applyAiSpecCodingDraft } from '@/lib/ai-draft-utils';
-import { validateWorkflowDraft } from '@/lib/creator-validation';
-import { buildCreationSession } from '@/lib/spec-coding-store';
-import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/schemas';
+} from '@/lib/ai/result-normalizers';
+import { applyAiSpecCodingDraft } from '@/lib/ai/draft-utils';
+import { validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { buildCreationSession } from '@/lib/spec/coding-store';
+import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/core/schemas';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -124,7 +124,7 @@ function baseSpecCoding(projectRoot: string) {
 
 async function buildCodexRenderedMessage(events: any[]) {
   vi.resetModules();
-  vi.doMock('@/lib/command-exists', () => ({
+  vi.doMock('@/lib/core/command-exists', () => ({
     findCommand: vi.fn(() => '/usr/local/bin/codex'),
     commandExists: vi.fn(() => true),
     getCommonCliSearchPaths: vi.fn(() => []),

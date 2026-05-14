@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { workflowRegistry } from '@/lib/workflow/registry';
 
 export async function POST(request: NextRequest) {
   try {

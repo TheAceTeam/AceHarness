@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/auth-middleware';
-import { removeSdk } from '@/lib/cangjie-sdk-manager';
+import { requireAdmin } from '@/lib/auth/middleware';
+import { removeSdk } from '@/lib/cangjie/sdk-manager';
 
 export async function DELETE(request: NextRequest) {
   const auth = await requireAdmin(request);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { extractRoundtableMentions } from '@/lib/roundtable-manager';
+import { extractRoundtableMentions } from '@/lib/roundtable/manager';
 
 describe('roundtable mention order', () => {
   test('keeps explicit @agent order instead of participant list order', () => {

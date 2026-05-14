@@ -7,9 +7,9 @@ import rehypeRaw from 'rehype-raw';
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
 import { useToast } from '@/components/ui/toast';
-import { workspaceApi } from '@/lib/api';
-import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook-markdown';
-import { copyText } from '@/lib/clipboard';
+import { workspaceApi } from '@/lib/core/api';
+import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook/markdown';
+import { copyText } from '@/lib/core/clipboard';
 import { AnsiLogBlock } from '@/components/AnsiLogBlock';
 import { Button } from '@/components/ui/button';
 import styles from './Markdown.module.css';
@@ -687,32 +687,56 @@ function renderTaskStatusLines(content: string): string {
   let inCodeBlock = false;
   let fenceWidth = 0;
   let fenceChar: '`' | '~' | null = null;
+  const rendered: string[] = [];
 
-  return lines.map((line) => {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     if (!inCodeBlock) {
       const fenceOpen = line.match(/^(`{3,}|~{3,})/);
       if (fenceOpen) {
         inCodeBlock = true;
         fenceWidth = fenceOpen[1].length;
         fenceChar = fenceOpen[1][0] as '`' | '~';
-        return line;
+        rendered.push(line);
+        continue;
       }
 
       const taskLine = line.match(/^(\s*)-\s+\[([ xX-])\]\s+(.+)$/);
-      if (!taskLine) return line;
+      if (!taskLine) {
+        rendered.push(line);
+        continue;
+      }
 
       const marker = taskLine[2].toLowerCase();
       const body = taskLine[3];
       const bodyWithoutComment = body.replace(/\s*<!--[\s\S]*?-->\s*$/g, '').trim();
       const escapedBody = escapeHtml(bodyWithoutComment);
+      const detailLines: string[] = [];
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        if (!nextLine.trim()) break;
+        if (/^\s*-\s+\[([ xX-])\]\s+/.test(nextLine)) break;
+        if (/^(#{1,6})\s+/.test(nextLine)) break;
+        if (/^(`{3,}|~{3,})/.test(nextLine)) break;
+        detailLines.push(nextLine.trim());
+        i += 1;
+      }
+
+      const detailBlock = detailLines.length > 0
+        ? `\n${taskLine[1]}  <div class="ace-task-details">${detailLines.map((item) => `<div class="ace-task-detail-line">${escapeHtml(item)}</div>`).join('')}</div>`
+        : '';
 
       if (marker === 'x') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>`;
+        rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+        continue;
       }
       if (marker === '-') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>`;
+        rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+        continue;
       }
-      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>`;
+      rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+      continue;
     }
 
     const closeRe = fenceChar === '~' ? /^(~{3,})\s*$/ : /^(`{3,})\s*$/;
@@ -721,8 +745,10 @@ function renderTaskStatusLines(content: string): string {
       inCodeBlock = false;
       fenceChar = null;
     }
-    return line;
-  }).join('\n');
+    rendered.push(line);
+  }
+
+  return rendered.join('\n');
 }
 
 function stripHiddenSpecCodingComments(content: string): string {
@@ -806,7 +832,7 @@ export default function Markdown({ children }: { children?: string | null }) {
         }
 
         if (!cangjieLanguageRegistered) {
-          const mod = await import('@/lib/cangjie-highlight');
+          const mod = await import('@/lib/cangjie/highlight');
           if (cancelled) return;
           const cangjie = mod.default || mod;
           if (typeof cangjie === 'function') {

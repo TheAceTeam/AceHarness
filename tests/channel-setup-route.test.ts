@@ -14,7 +14,7 @@ describe('channel setup route', () => {
 
   it('creates a one-click integration with webhook secret and default binding', async () => {
     vi.resetModules();
-    const userStore = await import('../src/lib/user-store');
+    const userStore = await import('@/lib/core/user-store');
     const route = await import('../src/app/api/channels/setup/route');
 
     await userStore.createUser({

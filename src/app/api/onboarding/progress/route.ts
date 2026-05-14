@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
+import { requireAuth } from '@/lib/auth/middleware';
 import {
   getProgressByUser,
   upsertProgress,
@@ -7,7 +7,7 @@ import {
   type OnboardingPhase,
   type AdminChecks,
   type MemberChecks,
-} from '@/lib/onboarding-store';
+} from '@/lib/core/onboarding-store';
 
 export const dynamic = 'force-dynamic';
 

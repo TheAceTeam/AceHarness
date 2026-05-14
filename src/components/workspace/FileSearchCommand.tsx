@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { File } from "lucide-react"
-import { type TreeNode } from "@/lib/api"
+import { type TreeNode } from "@/lib/core/api"
 import {
   CommandDialog,
   CommandEmpty,

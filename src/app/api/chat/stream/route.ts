@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { processManager } from '@/lib/process-manager';
-import { getOrCreateEngine, getConfiguredEngine } from '@/lib/engines/engine-factory';
+import { processManager } from '@/lib/core/process-manager';
+import { getOrCreateEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
 import { isAceTimingDebug } from '@/lib/engines/acp-engine';
-import { getEngineConfigDir } from '@/lib/engines/engine-config';
-import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
-import { loadChatSettings } from '@/lib/chat-settings';
 import type { Engine, EngineResultMetadata, EngineTokenUsage } from '@/lib/engines/engine-interface';
 import {
   registerEngineStream,
@@ -15,24 +12,13 @@ import {
   getEngineStreamByFrontendSessionId,
   getBackendSessionIdByFrontendSessionId,
   removeEngineStream,
-} from '@/lib/chat-stream-state';
-import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/app-paths';
-import { getRuntimeSkillsDirPath } from '@/lib/runtime-skills';
-import { ensureDirectoryLinkSync } from '@/lib/directory-links';
-import { loadChatSession } from '@/lib/chat-persistence';
-import { loadCreationSession } from '@/lib/spec-coding-store';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { requireAuth } from '@/lib/auth-middleware';
-import { readFile } from 'fs/promises';
-import { resolve } from 'path';
+} from '@/lib/chat/stream-state';
+import { getWorkspaceRoot } from '@/lib/core/app-paths';
+import { requireAuth } from '@/lib/auth/middleware';
 import { EventEmitter } from 'events';
+import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
 
 export const dynamic = 'force-dynamic';
-
-const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
-
-const SESSIONS_DIR = getWorkspaceDataFile('chat-sessions');
-const MAX_HISTORY_CHARS = 6000;
 
 function numberOrUndefined(value: unknown): number | undefined {
   const numeric = Number(value);
@@ -73,104 +59,6 @@ function resolveStreamRecoveryKey(frontendSessionId?: string, streamScope?: stri
   return normalizedScope ? `${frontendSessionId}:${normalizedScope}` : frontendSessionId;
 }
 
-/**
- * Load chat history from a frontend session file and format as context summary.
- * Returns empty string if session not found or no messages.
- */
-async function loadChatHistory(frontendSessionId: string): Promise<string> {
-  try {
-    const filePath = resolve(SESSIONS_DIR, `${frontendSessionId}.json`);
-    const content = await readFile(filePath, 'utf-8');
-    const session = JSON.parse(content);
-    const messages: { role: string; content: string }[] = session.messages || [];
-    if (messages.length === 0) return '';
-
-    // Build a condensed history: keep role + truncated content
-    let history = '';
-    for (const msg of messages) {
-      if (!msg.content) continue;
-      const role = msg.role === 'user' ? '用户' : msg.role === 'assistant' ? 'AI' : '系统';
-      // Truncate long messages, remove action/result card blocks to save tokens
-      let text = msg.content
-        .replace(/<result>[\s\S]*?<\/result>/gi, '[result block]')
-        .replace(/```(?:action|card)\s*\n[\s\S]*?```/g, '[action/card block]')
-        .replace(/<\/?result>/g, '')
-        .trim();
-      if (text.length > 500) text = text.slice(0, 500) + '...';
-      history += `${role}: ${text}\n\n`;
-      if (history.length > MAX_HISTORY_CHARS) break;
-    }
-    if (!history) return '';
-    return `\n\n## 之前的对话记录（会话已过期重建，以下是历史上下文）\n${history.slice(0, MAX_HISTORY_CHARS)}`;
-  } catch {
-    return '';
-  }
-}
-
-async function buildBoundSessionContext(frontendSessionId?: string): Promise<string> {
-  if (!frontendSessionId) return '';
-
-  try {
-    const session = await loadChatSession(frontendSessionId);
-    if (!session) return '';
-
-    const sections: string[] = [];
-
-    if (session.creationSession) {
-      const creationRecord = await loadCreationSession(session.creationSession.creationSessionId);
-      const specCoding = creationRecord?.specCoding;
-      const latestRevision = specCoding?.revisions?.at(-1);
-
-      sections.push([
-        '### 创建态绑定',
-        `- 工作流: ${session.creationSession.workflowName}`,
-        `- 配置文件: ${session.creationSession.filename}`,
-        `- 创建状态: ${session.creationSession.status}`,
-        `- SpecCoding ID: ${session.creationSession.specCodingId}`,
-        specCoding ? `- SpecCoding 版本: v${specCoding.version}` : '',
-        specCoding?.status ? `- SpecCoding 状态: ${specCoding.status}` : '',
-        specCoding?.summary ? `- SpecCoding 摘要: ${specCoding.summary}` : '',
-        specCoding?.progress?.summary ? `- SpecCoding 进度: ${specCoding.progress.summary}` : '',
-        latestRevision?.summary ? `- 最近修订: ${latestRevision.summary}` : '',
-      ].filter(Boolean).join('\n'));
-    }
-
-    if (session.workflowBinding) {
-      const manager = await workflowRegistry.getManager(session.workflowBinding.configFile);
-      const status = manager.getStatus();
-      const runState = session.workflowBinding.runId
-        ? await import('@/lib/run-state-persistence').then((mod) => mod.loadRunState(session.workflowBinding!.runId)).catch(() => null)
-        : null;
-      const specCoding = runState?.runSpecCoding || null;
-      const latestRevision = specCoding?.revisions?.at(-1);
-
-      sections.push([
-        '### 运行态绑定',
-        `- 配置文件: ${session.workflowBinding.configFile}`,
-        `- Run ID: ${session.workflowBinding.runId}`,
-        `- 当前 Supervisor: ${session.workflowBinding.supervisorAgent || 'default-supervisor'}`,
-        session.workflowBinding.supervisorSessionId ? `- Supervisor Session: ${session.workflowBinding.supervisorSessionId}` : '',
-        status?.status ? `- 运行状态: ${status.status}` : '',
-        status?.currentPhase ? `- 当前阶段: ${status.currentPhase}` : '',
-        status?.currentStep ? `- 当前步骤: ${status.currentStep}` : '',
-        specCoding ? `- 运行关联 SpecCoding: v${specCoding.version} / ${specCoding.status}` : '',
-        specCoding?.progress?.summary ? `- SpecCoding 执行进度: ${specCoding.progress.summary}` : '',
-        latestRevision?.summary ? `- SpecCoding 最近修订: ${latestRevision.summary}` : '',
-      ].filter(Boolean).join('\n'));
-    }
-
-    if (sections.length === 0) return '';
-
-    return [
-      '## 当前会话绑定上下文',
-      '以下信息来自当前首页会话已绑定的创建态或运行态上下文。用户未明确切换对象时，默认优先基于这些绑定对象回答，不要反复追问“是哪个 workflow / supervisor”。',
-      ...sections,
-    ].join('\n\n');
-  } catch {
-    return '';
-  }
-}
-
 // Track active chat streams
 const activeChats = new Map<string, {
   promise: Promise<any>;
@@ -196,6 +84,7 @@ export async function POST(request: NextRequest) {
       mode,
       workingDirectory,
       extraSystemPrompt,
+      skills,
     } = await request.json();
     if (!message?.trim()) {
       return NextResponse.json({ error: '消息不能为空' }, { status: 400 });
@@ -205,31 +94,16 @@ export async function POST(request: NextRequest) {
     const streamPrepT0 = Date.now();
     const useModel = model || '';
 
-    // On resume, skip full system prompt (session already has it).
-    // Only send a lightweight skill-status reminder if skills changed.
-    let systemPrompt = '';
     const isResume = !!sessionId;
-    if (mode === 'dashboard') {
-      const settings = await loadChatSettings();
-      const enabledSkills = Object.entries(settings.skills)
-        .filter(([, v]) => v)
-        .map(([k]) => k);
-      if (isResume) {
-        // Lightweight reminder — just list enabled skill names
-        systemPrompt = enabledSkills.length > 0
-          ? `当前启用的 Skills: ${enabledSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`
-          : '';
-      } else {
-        const requiredSkills = ['aceharness-workflow-creator'];
-        const merged = [...enabledSkills];
-        for (const s of requiredSkills) {
-          if (!merged.includes(s)) merged.push(s);
-        }
-        systemPrompt = await buildDashboardSystemPrompt(merged, { personalDir: auth.personalDir });
-      }
-    } else if (!isResume) {
-      systemPrompt = DEFAULT_PROMPT;
-    }
+    const { systemPrompt } = await buildChatRequestContext({
+      mode,
+      sessionId,
+      frontendSessionId,
+      workingDirectory,
+      extraSystemPrompt,
+      requestedSkills: skills as RequestedSkillsInput,
+      personalDir: auth.personalDir,
+    });
 
     // If resuming, trust the session ID directly — don't waste 10s on a probe.
     // If the session is actually expired, Claude CLI will fail fast and we retry
@@ -238,23 +112,8 @@ export async function POST(request: NextRequest) {
     if (isResume) {
       validResumeSid = sessionId;
     }
-
-    const chatSettings = mode === 'dashboard' ? await loadChatSettings() : null;
-    const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
     const engineRuntimeDirectory = getWorkspaceRoot();
-    const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings?.workingDirectory || engineRuntimeDirectory;
-    const runtimeEnvPrompt = [
-      '## 运行目录信息',
-      `ACEFlow 安装目录: ${getRepoRoot()}`,
-      `系统数据保存目录: ${engineRuntimeDirectory}`,
-      '系统数据保存目录中包含 ACEHarness 的全局安装技能、工作流与对话的历史记录、Agent 配置等运行时数据。',
-      `当前工作目录(用户语义目录): ${resolvedWorkingDirectory}`,
-      `AI 运行目录(实际 cwd): ${engineRuntimeDirectory}`,
-      '执行文件读写/命令时，请优先基于“当前工作目录(用户语义目录)”使用绝对路径。',
-    ].join('\n');
-    const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
-    systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${typeof extraSystemPrompt === 'string' && extraSystemPrompt.trim() ? `\n\n${extraSystemPrompt.trim()}` : ''}`.trim();
-    const configuredEngine = perChatEngine || await getConfiguredEngine();
+    const configuredEngine = await resolveRequestedEngineType(perChatEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     if (!validResumeSid && streamRecoveryKey) {
       validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
@@ -269,17 +128,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure engine config dir + skills symlink exists in working directory
     if (engine) {
-      const workDir = engineRuntimeDirectory;
-      try {
-        const { existsSync, mkdirSync } = await import('fs');
-        const { join, resolve } = await import('path');
-        const engineConfigDir = getEngineConfigDir(configuredEngine);
-        const configDir = join(resolve(workDir), engineConfigDir);
-        const skillsDir = await getRuntimeSkillsDirPath();
-        if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-        const skillsLink = join(configDir, 'skills');
-        if (existsSync(skillsDir)) ensureDirectoryLinkSync(skillsDir, skillsLink);
-      } catch { /* ignore */ }
+      await ensureEngineRuntimeSkillsAvailable(configuredEngine, engineRuntimeDirectory);
     }
 
     if (engine && isAceTimingDebug()) {
@@ -304,6 +153,10 @@ export async function POST(request: NextRequest) {
           appendEngineStreamContent(chatId, evt.content);
           processManager.appendStreamContent(chatId, evt.content);
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
+        } else if (evt?.type === 'session' && evt.content) {
+          setEngineStreamSessionId(chatId, evt.content);
+          if (proc) proc.sessionId = evt.content;
+          engineStreamEvents.emit(chatId, { type: 'session', sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
         } else if (evt?.type === 'error' && evt.content) {
@@ -404,14 +257,16 @@ export async function GET(request: NextRequest) {
   if (checkSession) {
     const recoveryKey = resolveStreamRecoveryKey(checkSession, streamScope);
     const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
-    if (engineState && engineState.status === 'running') {
+    if (engineState) {
       return NextResponse.json({
-        active: true,
+        active: engineState.status === 'running',
+        found: true,
         chatId: engineState.chatId,
         streamContent: engineState.streamContent || '',
         status: engineState.status,
         engine: engineState.engine || '',
         model: engineState.model || '',
+        backendSessionId: engineState.backendSessionId || '',
       });
     }
 
@@ -420,6 +275,7 @@ export async function GET(request: NextRequest) {
       const proc = processManager.getProcess(activeChatId);
       return NextResponse.json({
         active: true,
+        found: true,
         chatId: activeChatId,
         streamContent: proc?.streamContent || '',
         status: proc?.status || 'running',
@@ -464,6 +320,8 @@ export async function GET(request: NextRequest) {
         if (!evt) return;
         if (evt.type === 'delta') {
           send('delta', { content: evt.content });
+        } else if (evt.type === 'session') {
+          send('session', { sessionId: evt.sessionId });
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
@@ -472,6 +330,9 @@ export async function GET(request: NextRequest) {
       };
 
       const state = getEngineStream(chatId);
+      if (state?.backendSessionId) {
+        send('session', { sessionId: state.backendSessionId });
+      }
       if (state?.streamContent) {
         send('delta', { content: state.streamContent });
       }
@@ -517,6 +378,7 @@ export async function GET(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const frontendSessionId = request.nextUrl.searchParams.get('frontendSessionId');
   const streamScope = request.nextUrl.searchParams.get('streamScope') || undefined;
+  const preserveSession = request.nextUrl.searchParams.get('preserveSession') === '1';
   if (frontendSessionId) {
     const recoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     const engineState = recoveryKey ? getEngineStreamByFrontendSessionId(recoveryKey) : undefined;
@@ -532,9 +394,13 @@ export async function DELETE(request: NextRequest) {
     if (recoveryKey) {
       processManager.removeActiveStream(recoveryKey);
     }
-    removeEngineStream(activeChatId);
+    if (!preserveSession) {
+      removeEngineStream(activeChatId);
+    } else if (engineState) {
+      setEngineStreamStatus(activeChatId, 'killed');
+    }
     processManager.killProcess(activeChatId);
-    return NextResponse.json({ killed: true, count: 1, chatId: activeChatId });
+    return NextResponse.json({ killed: true, count: 1, chatId: activeChatId, preserved: preserveSession });
   }
 
   const chatId = request.nextUrl.searchParams.get('id');
@@ -551,7 +417,11 @@ export async function DELETE(request: NextRequest) {
   if (state?.frontendSessionId) {
     processManager.removeActiveStream(state.frontendSessionId);
   }
-  removeEngineStream(chatId);
+  if (!preserveSession) {
+    removeEngineStream(chatId);
+  } else if (state) {
+    setEngineStreamStatus(chatId, 'killed');
+  }
   processManager.killProcess(chatId);
-  return NextResponse.json({ killed: true });
+  return NextResponse.json({ killed: true, preserved: preserveSession });
 }

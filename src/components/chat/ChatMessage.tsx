@@ -1,13 +1,15 @@
 'use client';
 
-import { ActionState } from '@/lib/chat-actions';
+import { ActionState } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useState } from 'react';
-import { getEngineDisplayName } from '@/lib/engine-metadata';
+import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { getWerewolfRoleSpriteStyle } from '@/lib/werewolf-role-assets';
+import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
+import { copyText } from '@/lib/core/clipboard';
+import { useToast } from '@/components/ui/toast';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
@@ -353,7 +355,43 @@ function MetadataPill({ children }: { children: React.ReactNode }) {
   );
 }
 
-function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatMessageProps['message']; view?: ChatMessageProps['werewolfView'] }) {
+function WolfPaw({ className = '', delayMs = 0 }: { className?: string; delayMs?: number }) {
+  return (
+    <svg
+      viewBox="0 0 1106 1024"
+      aria-hidden="true"
+      className={className}
+      style={{ animation: `werewolfPawPulse 1.2s ease-in-out ${delayMs}ms infinite` }}
+      fill="currentColor"
+    >
+      <path d="M492.264146 893.926726H402.634679c-17.279934 0-31.289314 7.814687-31.289314 17.442952 0 9.633359 14.00938 17.442952 31.289314 17.442952h4.172248c17.279934 0 31.289314 7.809593 31.289314 17.442952s-14.00938 17.442952-31.289314 17.442952H214.129554c-17.279934 0-31.284219 7.804498-31.284219 17.442951 0 9.633359 14.004286 17.442952 31.284219 17.442952H918.954204c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.638454-14.00938-17.442952-31.289313-17.442951h-53.475078c-17.279934 0-31.289314-7.809593-31.289313-17.442952s14.00938-17.442952 31.289313-17.442952h210.023533c17.279934 0 31.289314-7.809593 31.289313-17.442952 0-9.628265-14.00938-17.442952-31.289313-17.442952h-15.680317H492.264146zM31.116107 1019.440584c-12.628819 0-22.863308-7.498839-22.863309-16.74503 0-9.236002 10.234489-16.729747 22.863309-16.729747h70.072372c12.628819 0 22.868403 7.493745 22.868403 16.729747 0 9.246191-10.239583 16.74503-22.868403 16.74503H31.116107z" />
+      <path d="M487.404164 354.820308c-208.469765 0-364.294826 214.959928-364.294826 407.138058 0 61.315236 15.568242 103.460546 47.46378 128.906674 33.729493 26.954047 80.902897 30.382525 118.193319 30.382525 26.872538 0 56.124124-2.047917 87.138345-4.223192 71.483499-4.982245 151.596776-4.982245 223.03952 0 31.009126 2.175275 60.311655 4.223191 87.097589 4.223192 81.947232 0 165.652005-18.920305 165.652005-159.289199 0-192.178129-155.779213-407.138058-364.289732-407.138058zM189.029839 473.762492c24.732924-10.122414 43.612474-30.214412 53.113381-56.496009 12.552405-34.697414 8.120346-76.588008-12.180519-114.92786-35.283261-66.628612-113.042962-103.786582-169.630669-80.520823-24.778773 10.127508-43.612474 30.260261-53.159229 56.582613C-5.379602 313.051978-0.942449 354.947666 19.358416 393.323179c27.83027 52.568289 80.61252 87.892304 131.290816 87.892303 13.479571 0 26.414049-2.5115 38.380607-7.45299zM389.802087 347.999013a82.884587 82.884587 0 0 0 16.322201-1.630182C469.951024 333.312089 508.41314 247.768267 493.761876 151.633353 479.15646 55.661458 415.370479-11.425643 351.380725 1.626005c-63.872585 13.021082-102.288852 98.529244-87.642682 194.704912 13.392967 87.887209 66.37899 151.668096 126.064044 151.668096zM967.671186 278.400413c-9.500907-26.276503-28.416117-46.455104-53.154135-56.582613-56.709971-23.352363-134.347408 13.892211-169.630669 80.520823-20.300865 38.380607-24.732924 80.276295-12.180519 114.92786 9.495813 26.281597 28.380457 46.332841 53.113381 56.496009 11.966558 4.900736 24.901036 7.412236 38.416267 7.412236h0.045849c50.642636 0 103.333188-35.318921 131.168553-87.851549 20.295771-38.329664 24.773678-80.230446 12.221273-114.922766zM611.624064 346.368831a82.782701 82.782701 0 0 0 16.281447 1.630182h0.040755c59.59845 0 112.625227-63.780887 126.064043-151.668096 14.64617-96.175668-23.856701-181.68383-87.642682-194.704912-64.076357-13.051648-127.81649 54.035453-142.386245 150.007348-14.727679 96.134914 23.775192 181.678736 87.642682 194.735478z" />
+    </svg>
+  );
+}
+
+function WerewolfSpeakingIndicator({ compact = false }: { compact?: boolean }) {
+  return (
+    <>
+      <style>{`
+        @keyframes werewolfPawPulse {
+          0%, 80%, 100% { opacity: 0.28; transform: translateY(0) scale(0.92); }
+          40% { opacity: 1; transform: translateY(-1px) scale(1); }
+        }
+      `}</style>
+      <div className={`inline-flex items-center gap-2 ${compact ? 'text-[11px]' : 'text-sm'} opacity-90`}>
+        <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300">
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={0} />
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={140} />
+          <WolfPaw className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} delayMs={280} />
+        </span>
+        <span>选手正在发言中</span>
+      </div>
+    </>
+  );
+}
+
+function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card: any; message: ChatMessageProps['message']; view?: ChatMessageProps['werewolfView']; isStreaming?: boolean }) {
   const sentAt = formatMessageTime(message.timestamp);
   const color = WEREWOLF_CHAT_COLORS[Math.max(0, Number(card.colorIndex || 0)) % WEREWOLF_CHAT_COLORS.length];
   const isSupervisor = card.speakerType === 'supervisor';
@@ -383,44 +421,86 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
         : 'text-muted-foreground';
   const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
   const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
-  const isPending = message.content?.includes('正在推进') || message.content?.includes('处理中');
+  const isPending = isStreaming || message.content?.includes('正在推进') || message.content?.includes('处理中');
+  const visibleContent = visible ? (message.content || '') : formatHiddenWerewolfContent(card);
+  const hasVisibleContent = Boolean(visibleContent.trim());
+  const roleBadgeText = visible
+    ? (card.roleLabel || (isSupervisor ? '法官' : isSystem ? '系统' : '玩家'))
+    : '夜间行动';
+  const visibilityLabel = visible && card.visibility && card.visibility !== 'public'
+    ? (card.visibility === 'werewolves' ? '狼队可见' : card.visibility === 'private' ? '私聊' : '上帝')
+    : null;
+  const bubbleShellClass = isSupervisor
+    ? 'border-amber-400/35 bg-[linear-gradient(145deg,rgba(66,42,17,0.96),rgba(33,24,16,0.96))] text-amber-50 shadow-[0_18px_36px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,236,179,0.14)]'
+    : isSystem
+      ? 'border-slate-400/20 bg-[linear-gradient(145deg,rgba(32,38,54,0.95),rgba(20,24,37,0.95))] text-slate-100 shadow-[0_16px_30px_rgba(0,0,0,0.32),inset_0_1px_0_rgba(255,255,255,0.06)]'
+      : visible
+        ? `${bubbleClass} shadow-[0_18px_36px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,240,196,0.12)]`
+        : 'border-border bg-[linear-gradient(145deg,rgba(40,44,56,0.95),rgba(25,27,35,0.95))] text-foreground shadow-[0_16px_30px_rgba(0,0,0,0.28)]';
+  const roleBadgeClass = isSupervisor
+    ? 'border-amber-400/30 bg-amber-400/12 text-amber-100'
+    : isSystem
+      ? 'border-slate-300/15 bg-slate-300/10 text-slate-100'
+      : visible
+        ? 'border-amber-300/20 bg-black/20 text-amber-50'
+        : 'border-slate-300/15 bg-slate-300/10 text-slate-100';
+  const avatarShellClass = spriteStyle
+    ? 'border-amber-300/45 shadow-[0_10px_24px_rgba(0,0,0,0.36),0_0_0_4px_rgba(251,191,36,0.08)]'
+    : `${avatarClass} shadow-[0_10px_24px_rgba(0,0,0,0.32),0_0_0_4px_rgba(251,191,36,0.06)]`;
   return (
-    <div className="group flex items-start gap-2">
+    <div className="group flex items-start gap-3">
       {spriteStyle ? (
         <div
-          className="mt-0.5 h-12 w-8 shrink-0 rounded-md border border-amber-500/35 bg-cover shadow-sm"
+          className={`mt-1 h-14 w-10 shrink-0 rounded-[20px] border bg-cover ${avatarShellClass} ${isPending ? 'animate-pulse' : ''}`}
           style={spriteStyle}
           title={visible ? (card.roleLabel || card.speakerName) : undefined}
         />
       ) : (
-        <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
+        <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarShellClass} ${isPending ? 'animate-pulse' : ''}`}>
           {visible ? (isSystem ? '系' : getWerewolfInitial(card.speakerName || 'A')) : '隐'}
         </div>
       )}
       <div className="max-w-[85%] space-y-1">
-        <div className={`rounded-2xl rounded-bl-sm border px-4 py-2.5 text-sm ${bubbleClass}`}>
-          <div className="mb-1 flex flex-wrap items-center gap-1.5">
-            <span className={`font-medium ${nameClass}`}>{displayName}</span>
+        <div className={`relative overflow-hidden rounded-[28px] rounded-bl-[16px] border px-4 py-3 text-sm ${bubbleShellClass}`}>
+          <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
+          <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className={`font-semibold tracking-[0.02em] ${nameClass}`}>{displayName}</span>
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${roleBadgeClass}`}>
+              <span className="text-[11px]">{isSupervisor ? '✦' : isSystem ? '•' : visible ? '☽' : '◌'}</span>
+              <span>{roleBadgeText}</span>
+            </span>
             {displayActionLabel ? (
-              <span className="rounded-full border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <span className="rounded-full border border-white/10 bg-background/25 px-2 py-0.5 text-[10px] text-current/80">
                 {displayActionLabel}
               </span>
             ) : null}
             {isPending ? (
-              <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-300/15 bg-amber-300/10 px-2 py-0.5 text-[10px] text-amber-100">
                 <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
                 推进中
               </span>
             ) : null}
-            {visible && card.visibility && card.visibility !== 'public' ? (
-              <span className="rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-                {card.visibility === 'werewolves' ? '狼队可见' : card.visibility === 'private' ? '私聊' : '上帝'}
+            {visibilityLabel ? (
+              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] text-current/80">
+                {visibilityLabel}
               </span>
             ) : null}
           </div>
-          <div className="prose-sm prose-neutral max-w-none text-current dark:prose-invert [&_p]:my-1">
-            <Markdown>{visible ? message.content : formatHiddenWerewolfContent(card)}</Markdown>
-          </div>
+          {isStreaming && !hasVisibleContent ? (
+            <div className="flex min-h-[56px] items-center">
+              <WerewolfSpeakingIndicator />
+            </div>
+          ) : (
+            <div className="prose-sm prose-neutral max-w-none leading-6 text-current/95 dark:prose-invert [&_p]:my-1">
+              <Markdown>{visibleContent}</Markdown>
+              {isStreaming ? (
+                <div className="mt-3 inline-flex rounded-full border border-current/15 bg-background/30 px-2 py-1 opacity-85">
+                  <WerewolfSpeakingIndicator compact />
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
         {sentAt ? (
           <div className="px-1 text-[11px] text-muted-foreground opacity-70">
@@ -433,6 +513,7 @@ function WerewolfChatBubble({ card, message, view }: { card: any; message: ChatM
 }
 
 export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, werewolfView, currentUser }: ChatMessageProps) {
+  const { toast } = useToast();
   const [modelLabel, setModelLabel] = useState(message.model || '');
   const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
   const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
@@ -468,6 +549,15 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   const sanitizedRawContent = message.rawContent ? stripResultBlocks(message.rawContent) : '';
   const trimmedContent = (message.content || '').trim();
   const sentAt = formatMessageTime(message.timestamp);
+  const copyMessageContent = async () => {
+    const text = (message.rawContent || message.content || '').trim();
+    if (!text) {
+      toast('warning', '当前消息没有可复制的内容');
+      return;
+    }
+    const ok = await copyText(text);
+    toast(ok ? 'success' : 'error', ok ? '已复制消息内容' : '复制失败');
+  };
 
   if (message.role === 'user') {
     if (isActionTagMessage) {
@@ -481,6 +571,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
           </div>
           <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
+            <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+            </button>
             {onDelete && (
               <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
@@ -493,6 +586,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     return (
       <div className="group flex justify-end items-start gap-2">
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
+          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+          </button>
           {onEditMessage && (
             <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>edit</span>
@@ -563,6 +659,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           ) : null}
         </div>
         <div className="ml-2 flex items-start gap-0.5 pt-1 opacity-0 transition-opacity group-hover:opacity-100">
+          <button onClick={() => { void copyMessageContent(); }} className="rounded p-1 text-muted-foreground hover:bg-muted" title="复制">
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+          </button>
           {onDelete && (
             <button onClick={() => onDelete(message.id)} className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" title="删除">
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
@@ -595,6 +694,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           ) : null}
         </div>
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
+          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+            <span className="material-symbols-outlined text-sm">content_copy</span>
+          </button>
           {onDelete && (
             <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
               <span className="material-symbols-outlined text-sm">delete</span>
@@ -609,7 +711,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
     return (
       <div>
-        <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} />
+        <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
         {visibleExtraCards.length ? (
           <div className="ml-10 max-w-[85%] space-y-2">
             {visibleExtraCards.map((card, index) => (
@@ -686,6 +788,9 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
       </div>
       {!isStreaming && (
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
+          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+            <span className="material-symbols-outlined text-sm">content_copy</span>
+          </button>
           {onSaveAsNotebook && (
             <button onClick={() => onSaveAsNotebook(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="另存为 Notebook">
               <span className="material-symbols-outlined text-sm">note_add</span>

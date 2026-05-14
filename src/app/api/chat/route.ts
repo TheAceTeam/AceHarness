@@ -1,38 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createEngine, getConfiguredEngine } from '@/lib/engines/engine-factory';
-import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
-import { loadChatSettings } from '@/lib/chat-settings';
-import { getWorkspaceRoot } from '@/lib/app-paths';
+import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
+import { getWorkspaceRoot } from '@/lib/core/app-paths';
+import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
 
-const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
 const CHAT_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, model, engine: requestedEngine, sessionId, mode } = await request.json();
+    const {
+      message,
+      model,
+      engine: requestedEngine,
+      sessionId,
+      frontendSessionId,
+      mode,
+      workingDirectory,
+      extraSystemPrompt,
+      skills,
+    } = await request.json();
 
     if (!message?.trim()) {
       return NextResponse.json({ error: '消息不能为空' }, { status: 400 });
     }
 
     const useModel = model || '';
+    const { systemPrompt } = await buildChatRequestContext({
+      mode,
+      sessionId,
+      frontendSessionId,
+      workingDirectory,
+      extraSystemPrompt,
+      requestedSkills: skills as RequestedSkillsInput,
+    });
 
-    // Build system prompt based on mode
-    let systemPrompt = DEFAULT_PROMPT;
-    if (mode === 'dashboard') {
-      const settings = await loadChatSettings();
-      const enabledSkills = Object.entries(settings.skills)
-        .filter(([, v]) => v)
-        .map(([k]) => k);
-      systemPrompt = await buildDashboardSystemPrompt(enabledSkills);
-    }
-
-    const engineType = requestedEngine || await getConfiguredEngine();
+    const engineType = await resolveRequestedEngineType(requestedEngine);
     const engine = await createEngine(engineType);
 
     if (!engine) {
       return NextResponse.json({ error: '引擎不可用，请检查配置' }, { status: 500 });
     }
+
+    await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot());
 
     const chunks: string[] = [];
     engine.on('stream', (event: any) => {

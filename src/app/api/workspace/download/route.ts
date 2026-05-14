@@ -11,7 +11,7 @@ import {
   resolveWorkspaceRoot,
   sanitizeDownloadName,
   workspaceErrorResponse,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 async function collectArchiveFiles(root: string, dirPath: string): Promise<Array<{ fullPath: string; entryName: string; size: number }>> {
   const files: Array<{ fullPath: string; entryName: string; size: number }> = [];

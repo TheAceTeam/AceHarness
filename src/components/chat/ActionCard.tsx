@@ -1,6 +1,6 @@
 'use client';
 
-import { ActionState, RISK_MAP } from '@/lib/chat-actions';
+import { ActionState, RISK_MAP } from '@/lib/chat/actions';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import ResultRenderer from './ResultRenderer';

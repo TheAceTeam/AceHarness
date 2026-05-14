@@ -21,10 +21,16 @@ const DEFAULT_SCAN_DIRS = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
 
 function defaultWindowsScanDirs() {
   const out = [];
+  out.push(join(process.cwd(), 'node_modules', '.bin'));
+  if (process.env.INIT_CWD) out.push(join(process.env.INIT_CWD, 'node_modules', '.bin'));
   if (process.env.APPDATA) out.push(join(process.env.APPDATA, 'npm'));
   if (process.env.LOCALAPPDATA) out.push(join(process.env.LOCALAPPDATA, 'Programs'));
   out.push('C:\\Program Files\\nodejs');
   return out;
+}
+
+function localNodeBinDirs() {
+  return [join(process.cwd(), 'node_modules', '.bin'), process.env.INIT_CWD ? join(process.env.INIT_CWD, 'node_modules', '.bin') : ''].filter(Boolean);
 }
 
 function existsNamedInDir(dir, name) {
@@ -62,7 +68,7 @@ function commandExistsLikeServer(name, extraDirs = DEFAULT_SCAN_DIRS) {
       return false;
     }
   }
-  const dirs = extraDirs.length > 0 ? extraDirs : DEFAULT_SCAN_DIRS;
+  const dirs = extraDirs.length > 0 ? [...localNodeBinDirs(), ...extraDirs] : [...localNodeBinDirs(), ...DEFAULT_SCAN_DIRS];
   const pathAugmented = [...dirs, process.env.PATH || ''].filter(Boolean).join(pathDelimiter);
   try {
     execSync(`command -v ${name}`, {
@@ -181,6 +187,18 @@ function tryClaudeSdk() {
   }
 }
 
+function tryOpenCodeSdk() {
+  try {
+    const r = spawnSync(process.execPath, ['-e', "require('@opencode-ai/sdk'); console.log('ok')"], {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 function printHeader(title) {
   console.log(`\n${'='.repeat(60)}\n${title}\n${'='.repeat(60)}`);
 }
@@ -231,7 +249,18 @@ async function main() {
 
     if (engine === 'claude-code') {
       const sdk = tryClaudeSdk();
-      console.log(`  claude-code (SDK): ${sdk ? '可用 @anthropic-ai/claude-agent-sdk' : '不可用（未安装依赖或无法 require）'}`);
+      const stdio = commandExistsLikeServer('claude-agent-acp');
+      console.log(`  claude-code (sdk): ${sdk ? '可用 @anthropic-ai/claude-agent-sdk' : '不可用（未安装依赖或无法 require）'}`);
+      console.log(`  claude-code (stdio): ${stdio ? '可用 claude-agent-acp' : '不可用（未找到 claude-agent-acp）'}`);
+      if (isWin) console.log(`  where.exe claude-agent-acp: ${whereExe('claude-agent-acp').join(' | ') || '(未找到)'}`);
+      continue;
+    }
+
+    if (engine === 'opencode') {
+      const sdk = tryOpenCodeSdk();
+      const stdio = commandExistsLikeServer('opencode');
+      console.log(`  opencode (sdk): ${sdk ? '可用 @opencode-ai/sdk' : '不可用（未安装依赖或无法 require）'}`);
+      console.log(`  opencode (stdio): ${stdio ? '可用 opencode CLI' : '不可用（未找到 opencode CLI）'}`);
       continue;
     }
 

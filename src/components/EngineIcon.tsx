@@ -1,6 +1,6 @@
 import type * as React from 'react'
-import { cn } from '@/lib/utils'
-import { getEngineMeta } from '@/lib/engine-metadata'
+import { cn } from '@/lib/core/utils'
+import { getEngineMeta } from '@/lib/core/engine-metadata'
 
 interface EngineIconProps {
   engineId: string

@@ -12,7 +12,7 @@ import { Extension } from '@tiptap/core';
 import { useEffect, forwardRef, useImperativeHandle, useRef, useState, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { createPortal } from 'react-dom';
-import { uploadImageFile } from '@/lib/client-image-upload';
+import { uploadImageFile } from '@/lib/core/client-image-upload';
 
 export interface RichTextEditorHandle {
   clear: () => void;

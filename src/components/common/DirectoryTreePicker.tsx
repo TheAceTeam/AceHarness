@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, ChevronRight, Folder, FolderOpen, HardDrive, House, Loader2, LocateFixed } from 'lucide-react';
-import type { TreeNode } from '@/lib/api';
-import { cn } from '@/lib/utils';
+import type { TreeNode } from '@/lib/core/api';
+import { cn } from '@/lib/core/utils';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -85,6 +85,11 @@ export default function DirectoryTreePicker({
   const [pathInput, setPathInput] = useState(value);
   const [draftValue, setDraftValue] = useState(value);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
+  const latestValueRef = useRef(value);
+
+  useEffect(() => {
+    latestValueRef.current = value;
+  }, [value]);
 
   const handleLoadChildren = useCallback(async (path: string) => {
     setLoadingPaths((prev) => new Set(prev).add(path));
@@ -156,7 +161,9 @@ export default function DirectoryTreePicker({
 
   useEffect(() => {
     void refreshRoot();
-  }, [refreshRoot]);
+    // Only do the initial preload once. Re-rendering parents should not collapse the tree.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setPathInput(value);
@@ -168,12 +175,13 @@ export default function DirectoryTreePicker({
     let cancelled = false;
 
     const syncOnOpen = async () => {
-      setPathInput(value);
-      setDraftValue(value);
+      const latestValue = latestValueRef.current;
+      setPathInput(latestValue);
+      setDraftValue(latestValue);
       await refreshRoot();
       if (cancelled) return;
-      if (value) {
-        await expandPath(value);
+      if (latestValue) {
+        await expandPath(latestValue);
       } else {
         setExpanded(new Set(['']));
       }
@@ -185,7 +193,7 @@ export default function DirectoryTreePicker({
       cancelled = true;
       setLocatingPath(false);
     };
-  }, [expandPath, open, refreshRoot, value]);
+  }, [expandPath, open, refreshRoot]);
 
   const hasNodeInTree = useMemo(() => {
     if (!draftValue) return true;

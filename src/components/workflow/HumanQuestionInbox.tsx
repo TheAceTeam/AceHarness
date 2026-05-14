@@ -1,6 +1,6 @@
 'use client';
 
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 
 interface HumanQuestionInboxProps {

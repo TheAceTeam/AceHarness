@@ -9,7 +9,7 @@ import {
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
   workspaceErrorResponse,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 async function ensureDestinationAvailable(fullPath: string): Promise<void> {
   try {

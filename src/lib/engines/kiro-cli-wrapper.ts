@@ -9,7 +9,7 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
-import { commandExists, getCommonCliSearchPaths } from '../command-exists';
+import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 
 export class KiroCliEngineWrapper extends ACPWrapperBase {
   getName(): string {

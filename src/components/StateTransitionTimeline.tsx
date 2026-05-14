@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { Badge } from './ui/badge';
 import { ArrowRight, Clock, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
-import type { StateTransitionRecord } from '@/lib/schemas';
+import type { StateTransitionRecord } from '@/lib/core/schemas';
 
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {

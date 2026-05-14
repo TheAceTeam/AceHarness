@@ -66,17 +66,17 @@ vi.mock('@/components/ui/combobox', () => ({
   ),
 }));
 
-vi.mock('@/lib/chat-actions', () => ({
+vi.mock('@/lib/chat/chat-actions', () => ({
   parseActions: () => ({ text: '', actions: [], cards: [], sidebarHints: [] }),
 }));
 
-vi.mock('@/lib/ai-result-normalizers', () => ({
+vi.mock('@/lib/ai/result-normalizers', () => ({
   extractClarificationFormResult: () => null,
   extractPlanDraftResult: () => null,
   extractWorkflowDraftPreview: () => ({ filename: '', config: null, yaml: '', parseError: '' }),
 }));
 
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/core/api', () => ({
   agentApi: {
     listAgents: vi.fn(async () => ({ agents: [] })),
   },

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parse } from 'yaml';
 import { readFile, readdir, stat } from 'fs/promises';
 import path from 'path';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 
 interface TokenUsageLike {
   inputTokens?: number;

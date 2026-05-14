@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { extractJsonObject as extractStructuredJsonObject } from '@/lib/result-channel';
-import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
-import { loadChatSettings } from '@/lib/chat-settings';
-import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
-import { createDeterministicAvatarConfig } from '@/lib/agent-personas';
+import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
+import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type EngineType } from '@/lib/engines/engine-factory';
+import { loadChatSettings } from '@/lib/chat/settings';
+import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
+import { createDeterministicAvatarConfig } from '@/lib/agent/personas';
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
 import {
   buildWorkflowExperiencePromptBlock,
   findRelevantWorkflowExperiences,
-} from '@/lib/workflow-experience-store';
+} from '@/lib/workflow/experience-store';
 import {
   buildMemoryPromptBlock,
   listMemoryEntries,
-} from '@/lib/workflow-memory-store';
-import { getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { listAgentRelationships } from '@/lib/agent-relationship-store';
-import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/creator-validation';
+} from '@/lib/workflow/memory-store';
+import { getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { listAgentRelationships } from '@/lib/agent/relationship-store';
+import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/core/creator-validation';
 
 type AgentDraftRecommendation = {
   experiences: Array<{
@@ -311,7 +311,9 @@ export async function POST(request: NextRequest) {
       '- 不要输出 markdown',
     ].join('\n');
 
-    const engineType = requestedEngine || await getConfiguredEngine();
+    const engineType = requestedEngine
+      ? await resolveRequestedEngineType(requestedEngine)
+      : await getConfiguredEngine();
     const engine = await createEngine(engineType);
     if (!engine) {
       const draft = fallbackDraft({ displayName, team, mission, style, specialties, engine: requestedEngine, model: requestedModel });

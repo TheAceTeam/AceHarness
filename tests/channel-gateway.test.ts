@@ -18,9 +18,9 @@ describe('channel gateway', () => {
 
   it('auto-creates workflow binding and returns status summary for /status', async () => {
     vi.resetModules();
-    const channelStore = await import('../src/lib/channel-store');
-    const gateway = await import('../src/lib/channel-gateway');
-    const registryModule = await import('../src/lib/workflow-registry');
+    const channelStore = await import('@/lib/channel/store');
+    const gateway = await import('@/lib/channel/gateway');
+    const registryModule = await import('@/lib/workflow/registry');
 
     const integration = await channelStore.createChannelIntegration({
       name: 'Webhook',
@@ -63,10 +63,10 @@ describe('channel gateway', () => {
 
   it('auto-binds to an owned running workflow even without default binding', async () => {
     vi.resetModules();
-    const channelStore = await import('../src/lib/channel-store');
-    const gateway = await import('../src/lib/channel-gateway');
-    const registryModule = await import('../src/lib/workflow-registry');
-    const runStateModule = await import('../src/lib/run-state-persistence');
+    const channelStore = await import('@/lib/channel/store');
+    const gateway = await import('@/lib/channel/gateway');
+    const registryModule = await import('@/lib/workflow/registry');
+    const runStateModule = await import('@/lib/run/state-persistence');
 
     const integration = await channelStore.createChannelIntegration({
       name: 'WeChat',
@@ -129,10 +129,10 @@ describe('channel gateway', () => {
 
   it('switches the conversation binding to roundtable after /roundtable start', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/user-store', () => ({
+    vi.doMock('@/lib/core/user-store', () => ({
       getUserById: vi.fn(async () => ({ id: 'user-1', username: 'alice', personalDir: aceHome })),
     }));
-    vi.doMock('../src/lib/roundtable-manager', () => ({
+    vi.doMock('@/lib/roundtable/manager', () => ({
       startRoundtable: vi.fn(async () => ({
         id: 'roundtable-1',
         topic: '讨论当前风险',
@@ -146,9 +146,9 @@ describe('channel gateway', () => {
       continueRoundtable: vi.fn(),
     }));
 
-    const channelStore = await import('../src/lib/channel-store');
-    const gateway = await import('../src/lib/channel-gateway');
-    const registryModule = await import('../src/lib/workflow-registry');
+    const channelStore = await import('@/lib/channel/store');
+    const gateway = await import('@/lib/channel/gateway');
+    const registryModule = await import('@/lib/workflow/registry');
 
     const integration = await channelStore.createChannelIntegration({
       name: 'Webhook',

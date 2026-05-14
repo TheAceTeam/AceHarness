@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Progress } from '@/components/ui/progress';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 // --- Schema Types ---

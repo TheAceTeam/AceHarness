@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '@/contexts/ChatContext';
 import ChatMessage from '@/components/chat/ChatMessage';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run-state-persistence';
+import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';

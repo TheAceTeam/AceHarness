@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { workspaceApi, type NotebookScope, type TreeNode } from '@/lib/api';
+import { workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import DirectoryTreePicker from '@/components/common/DirectoryTreePicker';
 
 interface NotebookDirectoryPickerProps {

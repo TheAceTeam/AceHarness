@@ -37,8 +37,8 @@ describe('wechat official service', () => {
       return new Response('{}', { status: 404 });
     }));
 
-    const service = await import('../src/lib/wechat-official-service');
-    const store = await import('../src/lib/wechat-official-store');
+    const service = await import('@/lib/channel/wechat/official-service');
+    const store = await import('@/lib/channel/wechat/official-store');
 
     const session = await service.createWeChatOfficialLoginSession({ createdBy: 'user-1' });
     const confirmed = await service.getWeChatOfficialLoginSession(session.id, { createdBy: 'user-1' });
@@ -51,18 +51,18 @@ describe('wechat official service', () => {
 
   it('restores only valid bridges and removes invalid restore channels', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/wechat-official-client', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../src/lib/wechat-official-client')>();
+    vi.doMock('@/lib/channel/wechat/official-client', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/channel/wechat/official-client')>();
       return {
         ...actual,
         runWeChatOfficialBridge: vi.fn(() => new Promise<void>(() => {})),
       };
     });
 
-    const channelStore = await import('../src/lib/channel-store');
-    const accountStore = await import('../src/lib/wechat-official-store');
-    const client = await import('../src/lib/wechat-official-client');
-    const service = await import('../src/lib/wechat-official-service');
+    const channelStore = await import('@/lib/channel/store');
+    const accountStore = await import('@/lib/channel/wechat/official-store');
+    const client = await import('@/lib/channel/wechat/official-client');
+    const service = await import('@/lib/channel/wechat/official-service');
 
     await accountStore.saveWeChatOfficialAccount({
       accountId: 'bot-owned',
@@ -151,16 +151,16 @@ describe('wechat official service', () => {
 
   it('rejects starting the same official account on multiple integrations in one process', async () => {
     vi.resetModules();
-    vi.doMock('../src/lib/wechat-official-client', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../src/lib/wechat-official-client')>();
+    vi.doMock('@/lib/channel/wechat/official-client', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('@/lib/channel/wechat/official-client')>();
       return {
         ...actual,
         runWeChatOfficialBridge: vi.fn(() => new Promise<void>(() => {})),
       };
     });
 
-    const accountStore = await import('../src/lib/wechat-official-store');
-    const service = await import('../src/lib/wechat-official-service');
+    const accountStore = await import('@/lib/channel/wechat/official-store');
+    const service = await import('@/lib/channel/wechat/official-service');
 
     await accountStore.saveWeChatOfficialAccount({
       accountId: 'bot-single',

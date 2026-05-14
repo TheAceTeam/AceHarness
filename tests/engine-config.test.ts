@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { getEngineConfigDir, getEngineSkillsSubdir } from '@/lib/engines/engine-config';
-import { resolveAgentSelection, resolveWorkflowAgentSelection } from '@/lib/agent-engine-selection';
+import { resolveAgentSelection, resolveWorkflowAgentSelection } from '@/lib/agent/engine-selection';
 
 describe('engine config', () => {
   test('getEngineConfigDir returns the correct workspace directory for each engine type', () => {
     expect(getEngineConfigDir('claude-code')).toBe('.claude');
+    expect(getEngineConfigDir('claude-code-acp')).toBe('.claude');
     expect(getEngineConfigDir('kiro-cli')).toBe('.kiro');
     expect(getEngineConfigDir('opencode')).toBe('.opencode');
     expect(getEngineConfigDir('codex')).toBe('.codex');
@@ -20,6 +21,7 @@ describe('engine config', () => {
 
   test('getEngineSkillsSubdir appends /skills to the engine config directory', () => {
     expect(getEngineSkillsSubdir('claude-code')).toBe('.claude/skills');
+    expect(getEngineSkillsSubdir('claude-code-acp')).toBe('.claude/skills');
     expect(getEngineSkillsSubdir('kiro-cli')).toBe('.kiro/skills');
     expect(getEngineSkillsSubdir('opencode')).toBe('.opencode/skills');
     expect(getEngineSkillsSubdir('codex')).toBe('.codex/skills');

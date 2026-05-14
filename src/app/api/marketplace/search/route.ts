@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { adaptMatrixSkills } from '@/lib/marketplace-adapter';
-import { MarketplaceClient } from '@/lib/marketplace-client';
-import { validateSearchRequest } from '@/lib/marketplace-validators';
+import { adaptMatrixSkills } from '@/lib/marketplace/adapter';
+import { MarketplaceClient } from '@/lib/marketplace/client';
+import { validateSearchRequest } from '@/lib/marketplace/validators';
 import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
 
 export async function POST(request: NextRequest) {

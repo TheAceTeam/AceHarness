@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 
 interface UserInfo {
   id: string;

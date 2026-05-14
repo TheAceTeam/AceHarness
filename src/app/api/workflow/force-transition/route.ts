@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow-registry';
-import { loadRunState } from '@/lib/run-state-persistence';
+import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
+import { loadRunState } from '@/lib/run/state-persistence';
 
 export async function POST(request: NextRequest) {
   try {

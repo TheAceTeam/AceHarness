@@ -2,12 +2,12 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
 
 // Mock all heavy external dependencies
-vi.mock('@/lib/run-store', () => ({
+vi.mock('@/lib/run/store', () => ({
   createRun: vi.fn().mockResolvedValue(undefined),
   updateRun: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/run-state-persistence', () => ({
+vi.mock('@/lib/run/state-persistence', () => ({
   saveRunState: vi.fn().mockResolvedValue(undefined),
   saveProcessOutput: vi.fn().mockResolvedValue(undefined),
   saveStreamContent: vi.fn().mockResolvedValue(undefined),
@@ -15,7 +15,7 @@ vi.mock('@/lib/run-state-persistence', () => ({
   loadStepOutputs: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@/lib/process-manager', () => ({
+vi.mock('@/lib/core/process-manager', () => ({
   processManager: {
     registerExternalProcess: vi.fn().mockReturnValue({
       status: 'running',
@@ -35,33 +35,33 @@ vi.mock('@/lib/process-manager', () => ({
   },
 }));
 
-vi.mock('@/lib/workflow-experience-store', () => ({
+vi.mock('@/lib/workflow/workflow-experience-store', () => ({
   appendWorkflowExperience: vi.fn().mockResolvedValue(undefined),
   buildWorkflowExperiencePromptBlock: vi.fn().mockReturnValue(''),
   findRelevantWorkflowExperiences: vi.fn().mockResolvedValue([]),
   saveWorkflowFinalReview: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/workflow-memory-store', () => ({
+vi.mock('@/lib/workflow/workflow-memory-store', () => ({
   appendMemoryEntries: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/agent-relationship-store', () => ({
+vi.mock('@/lib/agent/agent-relationship-store', () => ({
   upsertRelationshipSignal: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/chat-persistence', () => ({
+vi.mock('@/lib/chat/chat-persistence', () => ({
   updateChatSessionCreationBinding: vi.fn().mockResolvedValue(undefined),
   updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/default-supervisor', () => ({
+vi.mock('@/lib/core/default-supervisor', () => ({
   DEFAULT_SUPERVISOR_NAME: 'default-supervisor',
   ensureDefaultSupervisorConfig: vi.fn(),
   resolveWorkflowSupervisorAgent: vi.fn().mockReturnValue('default-supervisor'),
 }));
 
-vi.mock('@/lib/spec-coding-store', () => ({
+vi.mock('@/lib/spec/coding-store', () => ({
   appendSpecCodingRevision: vi.fn(),
   appendSupervisorSpecCodingRevision: vi.fn(),
   cloneSpecCodingForRun: vi.fn(),
@@ -71,7 +71,7 @@ vi.mock('@/lib/spec-coding-store', () => ({
   updateSpecCodingTaskStatuses: vi.fn(),
 }));
 
-vi.mock('@/lib/spec-persistence', () => ({
+vi.mock('@/lib/spec/persistence', () => ({
   ensureSpecDirStructure: vi.fn().mockResolvedValue(undefined),
   getSpecRootDir: vi.fn().mockReturnValue('/tmp/spec'),
   writeDeltaSpec: vi.fn().mockResolvedValue(undefined),
@@ -88,25 +88,35 @@ vi.mock('@/lib/engines/engine-config', () => ({
   getEngineSkillsSubdir: vi.fn().mockReturnValue('skills'),
 }));
 
-vi.mock('@/lib/runtime-configs', () => ({
+vi.mock('@/lib/run/runtime-configs', () => ({
   getRuntimeAgentsDirPath: vi.fn().mockReturnValue('/tmp/agents'),
   getRuntimeWorkflowConfigPath: vi.fn().mockResolvedValue('/tmp/config.yaml'),
 }));
 
-vi.mock('@/lib/runtime-skills', () => ({
+vi.mock('@/lib/run/runtime-skills', () => ({
   getRuntimeSkillsDirPath: vi.fn().mockResolvedValue('/tmp/skills'),
 }));
 
-vi.mock('@/lib/app-paths', () => ({
+vi.mock('@/lib/core/app-paths', () => ({
+  getInstallPath: vi.fn((...segments: string[]) => ['/tmp/install', ...segments].join('/')),
+  getInstallConfigsDir: vi.fn().mockReturnValue('/tmp/install/configs'),
+  getInstallConfigPath: vi.fn((...segments: string[]) => ['/tmp/install/configs', ...segments].join('/')),
+  getRepoRoot: vi.fn().mockReturnValue('/tmp/install'),
+  getWorkspaceCacheFile: vi.fn((...segments: string[]) => ['/tmp/workspace/cache', ...segments].join('/')),
+  getWorkspaceConfigFile: vi.fn((...segments: string[]) => ['/tmp/workspace/config', ...segments].join('/')),
+  getWorkspaceDataFile: vi.fn((...segments: string[]) => ['/tmp/workspace/data', ...segments].join('/')),
+  getWorkspaceLogFile: vi.fn((...segments: string[]) => ['/tmp/workspace/logs', ...segments].join('/')),
+  getWorkspaceSkillPath: vi.fn((...segments: string[]) => ['/tmp/workspace/skills', ...segments].join('/')),
+  getWorkspaceSkillsDir: vi.fn().mockReturnValue('/tmp/workspace/skills'),
   getWorkspaceRoot: vi.fn().mockReturnValue('/tmp/workspace'),
   getWorkspaceRunsDir: vi.fn().mockReturnValue('/tmp/runs'),
 }));
 
-vi.mock('@/lib/workflow-manager', () => ({
+vi.mock('@/lib/workflow/manager', () => ({
   resolveAgentModel: vi.fn().mockReturnValue('test-model'),
 }));
 
-vi.mock('@/lib/utils', () => ({
+vi.mock('@/lib/core/utils', () => ({
   formatTimestamp: vi.fn().mockReturnValue('2024-01-01-000000'),
 }));
 
@@ -185,7 +195,7 @@ function makeConfig(overrides: Record<string, any> = {}) {
 
 // --- Helper to set up manager internal state ---
 async function createManagerForTest(engine: MockEngine) {
-  const { StateMachineWorkflowManager } = await import('@/lib/state-machine-workflow-manager');
+  const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
   const manager = new StateMachineWorkflowManager();
 
   // Set up minimum internal state
@@ -294,6 +304,24 @@ describe('parseVerdict', () => {
     const parseVerdict = (manager as any).parseVerdict.bind(manager);
     expect(parseVerdict('')).toBe('fail');
     expect(parseVerdict('   ')).toBe('fail');
+  });
+});
+
+describe('engine-level failure detection', () => {
+  test('treats Claude context window limit as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('ApiError: the model has reached its context window limit')).toBe(true);
+  });
+
+  test('stops the workflow when an engine returns a context-window error as plain output', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: 'ApiError: the model has reached its context window limit',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/context window limit/i);
   });
 });
 

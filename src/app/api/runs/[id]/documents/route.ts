@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadRunState } from '@/lib/run-state-persistence';
+import { loadRunState } from '@/lib/run/state-persistence';
 import { readdir, stat, readFile, rename, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { parse } from 'yaml';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import { resolveWorkflowConfigPath } from '@/lib/workflow-config-path';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { resolveWorkflowConfigPath } from '@/lib/workflow/config-path';
 
 const TIMESTAMP_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
 
