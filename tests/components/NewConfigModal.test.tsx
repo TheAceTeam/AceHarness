@@ -719,7 +719,7 @@ describe('NewConfigModal backend draft isolation', () => {
     });
   });
 
-  test('resolves formStep to 4 when specCoding has real artifacts (version > 1)', async () => {
+  test('resolves formStep to 4 when uiState.formStep was persisted as 4', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const method = (init?.method || 'GET').toUpperCase();
@@ -784,7 +784,7 @@ describe('NewConfigModal backend draft isolation', () => {
             },
             config: { workflow: { mode: 'state-machine', states: [{ name: '需求分析', steps: [{ agent: 'architect' }] }] } },
             uiState: {
-              formStep: 1,
+              formStep: 4,
               planningStage: 'idle',
               clarificationAnswers: {},
             },
@@ -809,7 +809,7 @@ describe('NewConfigModal backend draft isolation', () => {
       />
     );
 
-    // Should resolve to step 4 (real specCoding with version > 1) instead of stale step 1
+    // Should resolve to step 4: Math.max(uiState.formStep=4, resolve=3) = 4
     await waitFor(() => {
       expect(screen.getByText('返回修改')).toBeTruthy();
     });

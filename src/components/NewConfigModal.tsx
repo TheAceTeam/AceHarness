@@ -1510,11 +1510,6 @@ export default function NewConfigModal({
     if (session.status === 'confirmed' || session.status === 'config-generated' || session.status === 'run-bound') {
       return 4;
     }
-    if (session?.specCoding && session.status === 'draft') {
-      const arts = session.specCoding.artifacts;
-      const artLen = (arts?.requirements?.length || 0) + (arts?.design?.length || 0) + (arts?.tasks?.length || 0);
-      if (session.specCoding.version > 1 || artLen > 500) return 4;
-    }
     if (session.stageSessions?.specPlanning) return 3;
     if (session.stageSessions?.clarification) return 2;
     return 1;
