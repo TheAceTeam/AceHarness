@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { buildEnvObject, loadEnvVars } from '@/lib/core/env-manager';
-import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { detectCangjieHome, buildCangjieSpawnEnv, isCjpmAvailable } from '@/lib/cangjie/env';
 import { ClaudeCodeEngineWrapper } from '@/lib/engines/claude-code-wrapper';
 import { KiroCliEngineWrapper } from '@/lib/engines/kiro-cli-wrapper';
@@ -78,7 +78,13 @@ describe('wrapper availability in current environment', () => {
 
   test('codegenie matches CLI discovery availability', async () => {
     const wrapper = new CodegenieEngineWrapper();
-    const expected = commandExists('codegenie');
+    const explicit = process.env.ACEH_CODEGENIE_COMMAND?.trim();
+    const binary = explicit
+      ? findCommand(explicit, getCommonCliSearchPaths()) ||
+        findCommand('codegenie', getCommonCliSearchPaths()) ||
+        'codegenie'
+      : findCommand('codegenie', getCommonCliSearchPaths()) || 'codegenie';
+    const expected = commandExists(binary, getCommonCliSearchPaths());
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
   });
 

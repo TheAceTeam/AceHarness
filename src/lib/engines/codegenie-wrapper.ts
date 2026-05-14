@@ -2,12 +2,22 @@
  * CodeGenie Engine Wrapper
  *
  * OpenCode-kernel CLI: `codegenie acp --cwd <dir>` for ACP stdio (same argv shape as opencode).
+ * 本机未进 PATH 时：设 `ACEH_CODEGENIE_COMMAND` 为可执行文件绝对路径或文件名（会在常见目录中查找）。
  */
 
-import { commandExists } from '@/lib/core/command-exists';
+import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
+
+function resolveCodegenieCommand(): string {
+  const explicit = process.env.ACEH_CODEGENIE_COMMAND?.trim();
+  if (explicit) {
+    const resolved = findCommand(explicit, getCommonCliSearchPaths());
+    if (resolved) return resolved;
+  }
+  return findCommand('codegenie', getCommonCliSearchPaths()) || 'codegenie';
+}
 
 export class CodegenieEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -17,7 +27,7 @@ export class CodegenieEngineWrapper extends ACPWrapperBase {
   protected getACPConfig(options: EngineOptions): ACPEngineConfig {
     return {
       engineType: 'codegenie',
-      command: 'codegenie',
+      command: resolveCodegenieCommand(),
       workingDirectory: options.workingDirectory,
       agentName: options.agent,
       model: options.model,
@@ -26,6 +36,6 @@ export class CodegenieEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('codegenie');
+    return commandExists(resolveCodegenieCommand(), getCommonCliSearchPaths());
   }
 }

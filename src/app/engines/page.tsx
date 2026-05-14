@@ -234,7 +234,7 @@ export default function EnginesPage() {
         'cangjie-magic': '请在环境变量中配置 CANGJIE_HOME、CANGJIE_MAGIC_PATH、OPENSSL_PATH、CANGJIE_STDX_PATH',
         'opencode': '安装方法：npm install -g opencode-ai',
         'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
-        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH（参见 CodeGenie 官方安装说明）',
+        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，可设置环境变量 ACEH_CODEGENIE_COMMAND 指向可执行文件（参见 CodeGenie 官方安装说明）',
         'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
       };
       const hint = hints[engineId] || '请确保已安装相应的命令行工具';
