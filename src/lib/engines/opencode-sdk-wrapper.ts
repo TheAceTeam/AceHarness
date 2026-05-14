@@ -7,9 +7,45 @@
 
 import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
-import type { AssistantMessage, OpencodeClient, Part, SessionCreateResponse, SessionPromptResponse } from '@opencode-ai/sdk';
 import { normalizeEngineOutput } from './engine-output';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+
+type TextPart = {
+  type: 'text';
+  text: string;
+};
+
+type Part = TextPart | {
+  type: string;
+  [key: string]: unknown;
+};
+
+type AssistantMessage = {
+  parts?: Part[];
+};
+
+type SessionCreateResponse = {
+  id?: string;
+};
+
+type SessionPromptResponse = {
+  info?: AssistantMessage;
+  parts?: Part[];
+};
+
+type OpencodeClient = {
+  session: {
+    create(options: {
+      body: Record<string, never>;
+      query?: { directory: string };
+    }): Promise<{ data?: SessionCreateResponse; error?: unknown }>;
+    prompt(options: {
+      path: { id: string };
+      body: { parts: Array<{ type: 'text'; text: string }> };
+      query?: { directory: string };
+    }): Promise<{ data?: SessionPromptResponse; error?: unknown }>;
+  };
+};
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
@@ -24,6 +60,13 @@ let serverInstance: { url: string; close: () => void } | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
 let clientInstance: OpencodeClient | null = null;
 
+function requireClient(): OpencodeClient {
+  if (!clientInstance) {
+    throw new Error('[opencode-sdk] client not initialized');
+  }
+  return clientInstance;
+}
+
 async function ensureServer(): Promise<{ client: OpencodeClient; url: string }> {
   if (clientInstance && serverInstance) {
     return { client: clientInstance, url: serverInstance.url };
@@ -31,7 +74,7 @@ async function ensureServer(): Promise<{ client: OpencodeClient; url: string }> 
 
   if (serverStarting) {
     const server = await serverStarting;
-    return { client: clientInstance, url: server.url };
+    return { client: requireClient(), url: server.url };
   }
 
   serverStarting = (async () => {
@@ -42,14 +85,14 @@ async function ensureServer(): Promise<{ client: OpencodeClient; url: string }> 
       hostname: '127.0.0.1',
     });
     serverInstance = result.server;
-    clientInstance = result.client;
+    clientInstance = result.client as unknown as OpencodeClient;
     console.log(`[opencode-sdk] server started at ${result.server.url}`);
     return result.server;
   })();
 
   const server = await serverStarting;
   serverStarting = null;
-  return { client: clientInstance, url: server.url };
+  return { client: requireClient(), url: server.url };
 }
 
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {

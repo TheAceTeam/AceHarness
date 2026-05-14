@@ -663,7 +663,7 @@ export default function ChatSidebar() {
               active={session.id === activeSessionId}
               selectable={manageMode && sessionView === 'chat'}
               selected={selectedSessionIds.has(session.id)}
-              isStreaming={activeStreamingSessionIds.includes(session.id) || (loading && session.id === activeSessionId)}
+              isStreaming={activeStreamingSessionIds.includes(session.id)}
               isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
               isLoadingSession={sessionLoadingId === session.id}
               onClick={() => setActiveSessionId(session.id)}
@@ -1241,7 +1241,7 @@ function WorkflowAgentGroup({
                 active={session.id === activeSessionId}
                 compact
                 attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
-                isStreaming={activeStreamingSessionIds.includes(session.id) || (loading && session.id === activeSessionId)}
+                isStreaming={activeStreamingSessionIds.includes(session.id)}
                 isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
                 isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => onSessionClick(session.id)}

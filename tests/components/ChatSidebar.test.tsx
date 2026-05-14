@@ -16,6 +16,7 @@ let mockSessions: any[] = [
   { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
 ];
 let mockLoading = false;
+let mockActiveStreamingSessionIds: string[] = [];
 let mockSkillSettings: Record<string, boolean> = {};
 let mockDiscoveredSkills: any[] = [];
 
@@ -29,6 +30,8 @@ vi.mock('@/contexts/ChatContext', () => ({
     deleteSession: mockDeleteSession,
     renameSession: mockRenameSession,
     loading: mockLoading,
+    activeStreamingSessionIds: mockActiveStreamingSessionIds,
+    recentlyCompletedSessionIds: [],
     skillSettings: mockSkillSettings,
     discoveredSkills: mockDiscoveredSkills,
     toggleSkill: mockToggleSkill,
@@ -70,6 +73,7 @@ describe('ChatSidebar', () => {
       { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
     ];
     mockLoading = false;
+    mockActiveStreamingSessionIds = [];
     mockSkillSettings = {};
     mockDiscoveredSkills = [];
   });
@@ -232,7 +236,7 @@ describe('ChatSidebar', () => {
   });
 
   test('marks the active loading session as streaming', () => {
-    mockLoading = true;
+    mockActiveStreamingSessionIds = ['sess-1'];
 
     render(<ChatSidebar />);
 

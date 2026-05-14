@@ -4941,7 +4941,7 @@ ${recommendationPrompt}
   };
 
   const handleClose = () => {
-    if (formStep >= 2 && formStep <= 5) {
+    if (formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5) {
       void persistDraftUiState({
         formStep,
         planningStage,

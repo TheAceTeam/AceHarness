@@ -649,11 +649,25 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const currentEngine = cleaned.engine || globalEngineRef.current || '';
         const currentModel = cleaned.model || '';
         if (checkData.active && checkData.chatId && streamEngine === currentEngine && streamModel === currentModel) {
-          // Always create a fresh assistant message for recovery — never reuse an existing one
-          // to avoid overwriting completed historical messages with new streaming content
-          const recoveryMsg = { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
-          cleaned.messages.push(recoveryMsg);
-          setActiveSession(reparseSession(cleaned));
+          const initialStreamContent = checkData.streamContent || '';
+          const { text: initialCleanText } = parseActions(initialStreamContent);
+          const lastAssistantMessage = [...cleaned.messages].reverse().find((message) => message.role === 'assistant');
+          const lastAssistantContent = (lastAssistantMessage?.content || '').trim();
+          const lastAssistantRawContent = (lastAssistantMessage?.rawContent || '').trim();
+          const canReuseLastAssistant = Boolean(
+            lastAssistantMessage && (
+              !lastAssistantContent
+              || (initialCleanText && initialCleanText.startsWith(lastAssistantContent))
+              || (lastAssistantRawContent && initialStreamContent.startsWith(lastAssistantRawContent))
+            )
+          );
+          const recoveryMsg = canReuseLastAssistant && lastAssistantMessage
+            ? lastAssistantMessage
+            : { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
+          const recoveredSession = canReuseLastAssistant
+            ? cleaned
+            : { ...cleaned, messages: [...cleaned.messages, recoveryMsg] };
+          setActiveSession(reparseSession(recoveredSession));
 
             setLoading(true);
             markSessionStreaming(activeSessionId);
@@ -662,8 +676,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             attachedStreamingSessionIdRef.current = activeSessionId;
 
             // Pre-fill with accumulated content
-            if (checkData.streamContent) {
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(checkData.streamContent);
+            if (initialStreamContent) {
+              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(initialStreamContent);
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               setActiveSession(prev => {
                 if (!prev) return prev;
@@ -681,10 +695,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             // Connect SSE to continue receiving deltas
             const es = new EventSource(`/api/chat/stream?id=${checkData.chatId}`);
             activeEventSourceRef.current = es;
-            let accumulated = checkData.streamContent || '';
+            let accumulated = initialStreamContent;
+            let initialSnapshotReplayPending = Boolean(initialStreamContent);
 
             es.addEventListener('delta', (e) => {
               const { content } = JSON.parse(e.data);
+              if (initialSnapshotReplayPending && content === initialStreamContent) {
+                initialSnapshotReplayPending = false;
+                return;
+              }
+              initialSnapshotReplayPending = false;
               accumulated += content;
               const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
