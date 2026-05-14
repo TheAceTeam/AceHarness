@@ -96,7 +96,16 @@ function transpileFile(inputPath) {
 
   ensureDir(path.dirname(outputPath));
   const banner = isCliEntry ? '#!/usr/bin/env node\n' : '';
-  fs.writeFileSync(outputPath, banner + result.outputText, 'utf8');
+  // Resolve @/ path aliases to relative paths for Node.js runtime
+  let outputCode = result.outputText;
+  const outputDir = path.dirname(outputPath);
+  outputCode = outputCode.replace(/require\("@\/([^"]+)"\)/g, (_match, importPath) => {
+    const absoluteTarget = path.join(distDir, importPath);
+    let rel = path.relative(outputDir, absoluteTarget).replace(/\\/g, '/');
+    if (!rel.startsWith('.')) rel = './' + rel;
+    return `require("${rel}")`;
+  });
+  fs.writeFileSync(outputPath, banner + outputCode, 'utf8');
   if (isCliEntry) {
     fs.chmodSync(outputPath, 0o755);
   }

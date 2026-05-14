@@ -6,6 +6,7 @@ import React from 'react';
 
 const mockCreateSession = vi.fn(() => 'new-session-id');
 const mockDeleteSession = vi.fn();
+const mockDeleteSessions = vi.fn();
 const mockRenameSession = vi.fn();
 const mockSetActiveSessionId = vi.fn();
 const mockToggleSkill = vi.fn();
@@ -28,6 +29,7 @@ vi.mock('@/contexts/ChatContext', () => ({
     setActiveSessionId: mockSetActiveSessionId,
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
+    deleteSessions: mockDeleteSessions,
     renameSession: mockRenameSession,
     loading: mockLoading,
     activeStreamingSessionIds: mockActiveStreamingSessionIds,
@@ -221,18 +223,17 @@ describe('ChatSidebar', () => {
 
     expect(screen.queryByLabelText('选择 Session One')).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: '对话管理' }));
+    await user.click(screen.getByRole('button', { name: '批量管理' }));
     await user.click(screen.getByLabelText('选择 Session One'));
     await user.click(screen.getByLabelText('选择 Session Two'));
     await user.click(screen.getByRole('button', { name: /删除/ }));
 
     expect(screen.getByText('将删除选中的 2 个对话，删除后无法恢复。')).toBeTruthy();
-    expect(mockDeleteSession).not.toHaveBeenCalled();
+    expect(mockDeleteSessions).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: '删除' }));
 
-    expect(mockDeleteSession).toHaveBeenCalledWith('sess-1');
-    expect(mockDeleteSession).toHaveBeenCalledWith('sess-2');
+    expect(mockDeleteSessions).toHaveBeenCalledWith(['sess-1', 'sess-2']);
   });
 
   test('marks the active loading session as streaming', () => {

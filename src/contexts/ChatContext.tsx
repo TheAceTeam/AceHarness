@@ -101,6 +101,7 @@ interface DashboardChatContextType {
     messages?: Array<Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>>;
   }) => string;
   deleteSession: (id: string) => void;
+  deleteSessions: (ids: string[]) => void;
   renameSession: (id: string, title: string) => void;
   setActiveSessionId: (id: string) => void;
   sendMessage: (text: string, options?: { displayText?: string }) => Promise<void>;
@@ -147,7 +148,7 @@ interface DashboardChatContextType {
 const DashboardChatContext = createContext<DashboardChatContextType>({
   isOpen: false, openChat: () => {}, closeChat: () => {}, toggleChat: () => {},
   sessions: [], activeSessionId: null, activeSession: null,
-  createSession: () => '', deleteSession: () => {}, renameSession: () => {},
+  createSession: () => '', deleteSession: () => {}, deleteSessions: () => {}, renameSession: () => {},
   setActiveSessionId: () => {},
   sendMessage: async () => {}, stopStreaming: () => {},
   deleteMessage: () => {}, retryFromMessage: () => {}, continueFromMessage: async () => {},
@@ -249,6 +250,17 @@ async function apiDeleteSession(id: string): Promise<void> {
   });
 }
 
+async function apiBatchDeleteSessions(ids: string[]): Promise<void> {
+  const res = await fetch('/api/chat/sessions/batch-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok && res.status !== 207) {
+    throw new Error('批量删除会话失败');
+  }
+}
+
 async function apiTerminateSessionProcesses(id: string): Promise<void> {
   await Promise.allSettled([
     fetch(`/api/chat/stream?frontendSessionId=${encodeURIComponent(id)}`, {
@@ -260,6 +272,10 @@ async function apiTerminateSessionProcesses(id: string): Promise<void> {
       headers: getAuthHeaders(),
     }),
   ]);
+}
+
+async function apiTerminateSessionsProcesses(ids: string[]): Promise<void> {
+  await Promise.allSettled(ids.map((id) => apiTerminateSessionProcesses(id)));
 }
 
 export function ChatProvider({ children }: { children: ReactNode }) {
@@ -1182,6 +1198,41 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
   }, [activeSessionId]);
 
+  const deleteSessions = useCallback((ids: string[]) => {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    if (uniqueIds.length === 0) return;
+    const deleting = new Set(uniqueIds);
+    const deletingActive = activeSessionId ? deleting.has(activeSessionId) : false;
+    if (deletingActive) {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+      activeChatIdRef.current = null;
+      setLoading(false);
+      setStreamingMessageId(null);
+    }
+    setActiveStreamingSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
+    setRecentlyCompletedSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
+    setSessions(prev => {
+      const next = prev.filter(s => !deleting.has(s.id));
+      if (deletingActive) {
+        const nextId = next.length > 0 ? next[0].id : null;
+        setActiveSessionId(nextId);
+        if (!nextId) setActiveSession(null);
+      }
+      return next;
+    });
+    void apiTerminateSessionsProcesses(uniqueIds)
+      .catch(console.error)
+      .finally(() => {
+        apiBatchDeleteSessions(uniqueIds).catch(async (error) => {
+          console.error(error);
+          await Promise.allSettled(uniqueIds.map((id) => apiDeleteSession(id)));
+        });
+      });
+  }, [activeSessionId]);
+
   const renameSession = useCallback((id: string, title: string) => {
     if (activeSession?.id === id) {
       updateActiveSession(s => ({ ...s, title, updatedAt: Date.now() }));
@@ -2000,7 +2051,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     <DashboardChatContext.Provider value={{
       isOpen, openChat, closeChat, toggleChat,
       sessions, activeSessionId, activeSession,
-      createSession, deleteSession, renameSession, setActiveSessionId,
+      createSession, deleteSession, deleteSessions, renameSession, setActiveSessionId,
       sendMessage, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
       loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId, model, setModel: handleSetModel,
       engine, effectiveEngine, setEngine: handleSetEngine,

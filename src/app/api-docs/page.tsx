@@ -198,6 +198,7 @@ const API_DATA: ApiCategory[] = [
       { method: 'GET', path: '/api/chat/sessions/:id', description: '获取指定会话', response: '{ session }' },
       { method: 'PUT', path: '/api/chat/sessions/:id', description: '更新会话', requestBody: '{ [key]: any }', response: '{ ok }' },
       { method: 'DELETE', path: '/api/chat/sessions/:id', description: '删除会话', response: '{ ok }' },
+      { method: 'POST', path: '/api/chat/sessions/batch-delete', description: '批量删除会话', requestBody: '{ ids: string[] }', response: '{ ok, deleted, deletedCount, missing, forbidden }' },
       { method: 'GET', path: '/api/chat/settings', description: '获取对话设置', response: '{ skills, discoveredSkills }' },
       {
         method: 'PUT',

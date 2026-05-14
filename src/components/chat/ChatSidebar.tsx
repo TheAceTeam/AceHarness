@@ -6,6 +6,8 @@ import { runsApi, workflowApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import type { CheckedState } from '@radix-ui/react-checkbox';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -226,6 +228,73 @@ function getWorkflowSessionBucket(input: {
   return 'archived';
 }
 
+function getSelectionState(sessionIds: string[], selectedSessionIds: Set<string>): CheckedState {
+  if (sessionIds.length === 0) return false;
+  const selectedCount = sessionIds.filter((id) => selectedSessionIds.has(id)).length;
+  if (selectedCount === 0) return false;
+  if (selectedCount === sessionIds.length) return true;
+  return 'indeterminate';
+}
+
+function checkedStateToBoolean(checked: CheckedState): boolean {
+  return checked === true;
+}
+
+function getUniqueSessionIds(sessions: Pick<SidebarSession, 'id'>[]): string[] {
+  return Array.from(new Set(sessions.map((session) => session.id).filter(Boolean)));
+}
+
+function getDeleteConfirmationDescription(input: {
+  view: 'chat' | 'runs';
+  sessions: SidebarSession[];
+  pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
+  activeStreamingSessionIds: string[];
+  sessionLoadingId: string | null;
+  runStatusById: Record<string, string>;
+}): string {
+  const {
+    view,
+    sessions,
+    pendingQuestionsBySessionId,
+    activeStreamingSessionIds,
+    sessionLoadingId,
+    runStatusById,
+  } = input;
+  if (view === 'chat') {
+    return `将删除选中的 ${sessions.length} 个对话，删除后无法恢复。`;
+  }
+
+  const workflowCounts = new Map<string, number>();
+  let runningCount = 0;
+  let pendingCount = 0;
+  let streamingCount = 0;
+  let wechatCount = 0;
+  for (const session of sessions) {
+    const workflowName = getWorkflowSessionName(session);
+    workflowCounts.set(workflowName, (workflowCounts.get(workflowName) || 0) + 1);
+    const runId = session.workflowBinding?.runId;
+    if (runId && isActiveRunStatus(runStatusById[runId])) runningCount += 1;
+    pendingCount += pendingQuestionsBySessionId.get(session.id)?.length || 0;
+    if (activeStreamingSessionIds.includes(session.id) || sessionLoadingId === session.id) streamingCount += 1;
+    if (hasWeChatBinding(session)) wechatCount += 1;
+  }
+  const workflowSummary = Array.from(workflowCounts.entries())
+    .slice(0, 4)
+    .map(([name, count]) => `${name}：${count} 个会话`)
+    .join('；');
+  const moreCount = workflowCounts.size > 4 ? `；另有 ${workflowCounts.size - 4} 个工作流` : '';
+  const riskLines = [
+    `将删除选中的 ${sessions.length} 个工作流对话，删除后无法恢复。`,
+    workflowSummary ? `涉及 ${workflowSummary}${moreCount}。` : '',
+    '只删除首页对话记录，不会删除工作流配置、运行历史和产物。',
+    runningCount > 0 ? `其中 ${runningCount} 个属于运行中工作流。` : '',
+    streamingCount > 0 ? `其中 ${streamingCount} 个正在生成或加载，删除会先尝试停止关联会话进程。` : '',
+    pendingCount > 0 ? `其中包含 ${pendingCount} 个待审入口，删除会移除首页入口但不会自动处理待审。` : '',
+    wechatCount > 0 ? `其中 ${wechatCount} 个绑定了微信入口，删除会移除该会话入口。` : '',
+  ].filter(Boolean);
+  return riskLines.join('\n');
+}
+
 export default function ChatSidebar() {
   const {
     sessions,
@@ -234,6 +303,7 @@ export default function ChatSidebar() {
     setActiveSessionId,
     createSession,
     deleteSession,
+    deleteSessions,
     renameSession,
     loading,
     activeStreamingSessionIds = [],
@@ -293,7 +363,6 @@ export default function ChatSidebar() {
   }, [baseVisibleSessions, normalizedSearch]);
   const isFilteredEmpty = normalizedSearch.length > 0 && visibleSessions.length === 0;
   const selectedVisibleCount = visibleSessions.filter((session) => selectedSessionIds.has(session.id)).length;
-  const allVisibleSelected = visibleSessions.length > 0 && selectedVisibleCount === visibleSessions.length;
   const pendingQuestionsBySessionId = useMemo(() => {
     const map = new Map<string, HumanQuestion[]>();
     for (const question of pendingHumanQuestions) {
@@ -383,6 +452,8 @@ export default function ChatSidebar() {
 
     return buckets;
   }, [activeSessionId, pendingQuestionsBySessionId, runStatusById, visibleSessions, workflowBindingByRelatedSessionId]);
+  const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
+  const selectedVisibleState = getSelectionState(visibleSessionIds, selectedSessionIds);
 
   useEffect(() => {
     if (!activeSession) return;
@@ -418,19 +489,12 @@ export default function ChatSidebar() {
   }, []);
 
   useEffect(() => {
-    const visibleIds = new Set(groupedSessions.chat.map((session) => session.id));
+    const visibleIds = new Set(baseVisibleSessions.map((session) => session.id));
     setSelectedSessionIds((prev) => {
       const next = new Set([...prev].filter((id) => visibleIds.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [groupedSessions.chat]);
-
-  useEffect(() => {
-    if (sessionView !== 'chat') {
-      setManageMode(false);
-      setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
-    }
-  }, [sessionView]);
+  }, [baseVisibleSessions]);
 
   useEffect(() => {
     setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
@@ -445,24 +509,41 @@ export default function ChatSidebar() {
     });
   };
 
+  const setSessionIdsSelected = (sessionIds: string[], checked: boolean) => {
+    setSelectedSessionIds((prev) => {
+      const next = new Set(prev);
+      sessionIds.forEach((id) => {
+        if (checked) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
+  };
+
   const toggleAllVisibleSelected = (checked: boolean) => {
-    setSelectedSessionIds(checked ? new Set(visibleSessions.map((session) => session.id)) : new Set());
+    setSelectedSessionIds(checked ? new Set(visibleSessionIds) : new Set());
   };
 
   const deleteSelectedSessions = async () => {
-    const ids = visibleSessions
-      .map((session) => session.id)
-      .filter((id) => selectedSessionIds.has(id));
+    const selectedSessions = (visibleSessions as SidebarSession[]).filter((session) => selectedSessionIds.has(session.id));
+    const ids = getUniqueSessionIds(selectedSessions);
     if (ids.length === 0) return;
     const ok = await confirm({
-      title: '确认删除对话',
-      description: `将删除选中的 ${ids.length} 个对话，删除后无法恢复。`,
+      title: sessionView === 'runs' ? '确认删除工作流对话' : '确认删除对话',
+      description: getDeleteConfirmationDescription({
+        view: sessionView,
+        sessions: selectedSessions,
+        pendingQuestionsBySessionId,
+        activeStreamingSessionIds,
+        sessionLoadingId,
+        runStatusById,
+      }),
       confirmLabel: '删除',
       cancelLabel: '取消',
       variant: 'destructive',
     });
     if (!ok) return;
-    ids.forEach((id) => deleteSession(id));
+    deleteSessions(ids);
     setSelectedSessionIds(new Set());
     setManageMode(false);
   };
@@ -505,7 +586,6 @@ export default function ChatSidebar() {
               manageMode ? 'text-primary ring-1 ring-primary/20' : ''
             }`}
             onClick={() => {
-              setSessionView('chat');
               setManageMode((prev) => {
                 if (prev) setSelectedSessionIds(new Set());
                 return !prev;
@@ -515,7 +595,7 @@ export default function ChatSidebar() {
             <span className="material-symbols-outlined text-sm" aria-hidden="true">
               {manageMode ? 'done' : 'checklist'}
             </span>
-            {manageMode ? '完成管理' : '对话管理'}
+            {manageMode ? '完成管理' : '批量管理'}
           </Button>
         </div>
       </div>
@@ -584,21 +664,20 @@ export default function ChatSidebar() {
           </div>
         </div>
 
-        {manageMode && sessionView === 'chat' && visibleSessions.length > 0 && (
+        {manageMode && visibleSessions.length > 0 && (
           <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                aria-label="选择全部对话"
-                checked={allVisibleSelected}
-                onChange={(event) => toggleAllVisibleSelected(event.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border accent-primary"
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                aria-label={sessionView === 'runs' ? '选择全部工作流对话' : '选择全部对话'}
+                checked={selectedVisibleState}
+                onCheckedChange={(checked) => toggleAllVisibleSelected(checkedStateToBoolean(checked))}
+                className="h-3.5 w-3.5"
               />
               <span>全选</span>
               {selectedVisibleCount > 0 ? (
                 <span className="text-primary">已选 {selectedVisibleCount}</span>
               ) : null}
-            </label>
+            </div>
             <Button
               type="button"
               size="sm"
@@ -627,12 +706,15 @@ export default function ChatSidebar() {
               title="运行中"
               icon="radio_button_checked"
               groups={visibleWorkflowBuckets.active}
+              selectable={manageMode}
+              selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
               activeStreamingSessionIds={activeStreamingSessionIds}
               recentlyCompletedSessionIds={recentlyCompletedSessionIds}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
+              onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
               onSessionClick={setActiveSessionId}
               onDeleteSession={(session) => { void requestDeleteSession(session); }}
               onRenameSession={(session, title) => renameSession(session.id, title)}
@@ -643,12 +725,15 @@ export default function ChatSidebar() {
               title="非运行中"
               icon="inventory_2"
               groups={visibleWorkflowBuckets.archived}
+              selectable={manageMode}
+              selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
               activeStreamingSessionIds={activeStreamingSessionIds}
               recentlyCompletedSessionIds={recentlyCompletedSessionIds}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
+              onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
               onSessionClick={setActiveSessionId}
               onDeleteSession={(session) => { void requestDeleteSession(session); }}
               onRenameSession={(session, title) => renameSession(session.id, title)}
@@ -988,12 +1073,15 @@ function WorkflowBucket({
   title,
   icon,
   groups,
+  selectable,
+  selectedSessionIds,
   activeSessionId,
   loading,
   activeStreamingSessionIds,
   recentlyCompletedSessionIds,
   sessionLoadingId,
   pendingQuestionsBySessionId,
+  onSelectSessions,
   onSessionClick,
   onDeleteSession,
   onRenameSession,
@@ -1003,12 +1091,15 @@ function WorkflowBucket({
   title: string;
   icon: string;
   groups: WorkflowSessionGroup[];
+  selectable: boolean;
+  selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
   activeStreamingSessionIds: string[];
   recentlyCompletedSessionIds: string[];
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
+  onSelectSessions: (sessionIds: string[], checked: boolean) => void;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
   onRenameSession: (session: SidebarSession, title: string) => void;
@@ -1018,6 +1109,8 @@ function WorkflowBucket({
   const [open, setOpen] = useState(defaultOpen);
   const sessionCount = groups.reduce((sum, group) => sum + group.sessions.length, 0);
   const pendingCount = groups.reduce((sum, group) => sum + group.pendingCount, 0);
+  const bucketSessionIds = useMemo(() => getUniqueSessionIds(groups.flatMap((group) => group.sessions)), [groups]);
+  const bucketSelectionState = getSelectionState(bucketSessionIds, selectedSessionIds);
 
   useEffect(() => {
     if (pendingCount > 0 || defaultOpen || forceOpen) setOpen(true);
@@ -1037,14 +1130,24 @@ function WorkflowBucket({
 
   return (
     <div className="mb-3 rounded-xl border bg-background/70">
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
-        <span className="material-symbols-outlined text-sm text-primary">{icon}</span>
-        <span className="min-w-0 flex-1 text-xs font-semibold text-foreground">{title}</span>
+      <div className="flex w-full items-center gap-2 px-3 py-2 text-left">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
+          <span className="material-symbols-outlined text-sm text-primary">{icon}</span>
+          <span className="min-w-0 flex-1 text-xs font-semibold text-foreground">{title}</span>
+        </button>
+        {selectable ? (
+          <Checkbox
+            aria-label={`选择${title}全部工作流对话`}
+            checked={bucketSelectionState}
+            onCheckedChange={(checked) => onSelectSessions(bucketSessionIds, checkedStateToBoolean(checked))}
+            className="h-3.5 w-3.5"
+          />
+        ) : null}
         {pendingCount > 0 ? (
           <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300">
             待审 {pendingCount}
@@ -1053,19 +1156,22 @@ function WorkflowBucket({
         <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
           {sessionCount}
         </span>
-      </button>
+      </div>
       {open ? (
         <div className="space-y-2 border-t border-border/40 p-2">
           {groups.map((group) => (
             <WorkflowGroup
               key={group.key}
               group={group}
+              selectable={selectable}
+              selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
               activeStreamingSessionIds={activeStreamingSessionIds}
               recentlyCompletedSessionIds={recentlyCompletedSessionIds}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
+              onSelectSessions={onSelectSessions}
               onSessionClick={onSessionClick}
               onDeleteSession={onDeleteSession}
               onRenameSession={onRenameSession}
@@ -1080,24 +1186,30 @@ function WorkflowBucket({
 
 function WorkflowGroup({
   group,
+  selectable,
+  selectedSessionIds,
   activeSessionId,
   loading,
   activeStreamingSessionIds,
   recentlyCompletedSessionIds,
   sessionLoadingId,
   pendingQuestionsBySessionId,
+  onSelectSessions,
   onSessionClick,
   onDeleteSession,
   onRenameSession,
   forceOpen = false,
 }: {
   group: WorkflowSessionGroup;
+  selectable: boolean;
+  selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
   activeStreamingSessionIds: string[];
   recentlyCompletedSessionIds: string[];
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
+  onSelectSessions: (sessionIds: string[], checked: boolean) => void;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
   onRenameSession: (session: SidebarSession, title: string) => void;
@@ -1106,6 +1218,8 @@ function WorkflowGroup({
   const hasActiveSession = group.sessions.some((session) => session.id === activeSessionId);
   const [open, setOpen] = useState(hasActiveSession || group.pendingCount > 0 || forceOpen);
   const agentCount = group.agentGroups.length;
+  const groupSessionIds = useMemo(() => getUniqueSessionIds(group.sessions), [group.sessions]);
+  const groupSelectionState = getSelectionState(groupSessionIds, selectedSessionIds);
 
   useEffect(() => {
     if (hasActiveSession || group.pendingCount > 0 || forceOpen) setOpen(true);
@@ -1113,17 +1227,27 @@ function WorkflowGroup({
 
   return (
     <div className={`rounded-lg border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-muted/10'}`}>
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
-        <span className="material-symbols-outlined text-sm text-muted-foreground">account_tree</span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium text-foreground">{group.name}</div>
-          <div className="truncate text-[10px] text-muted-foreground">{group.configFile}</div>
-        </div>
+      <div className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
+          <span className="material-symbols-outlined text-sm text-muted-foreground">account_tree</span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-foreground">{group.name}</div>
+            <div className="truncate text-[10px] text-muted-foreground">{group.configFile}</div>
+          </div>
+        </button>
+        {selectable ? (
+          <Checkbox
+            aria-label={`选择工作流 ${group.name}`}
+            checked={groupSelectionState}
+            onCheckedChange={(checked) => onSelectSessions(groupSessionIds, checkedStateToBoolean(checked))}
+            className="h-3.5 w-3.5"
+          />
+        ) : null}
         {group.pendingCount > 0 ? (
           <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 dark:text-amber-300">
             ping {group.pendingCount}
@@ -1132,19 +1256,22 @@ function WorkflowGroup({
         <span className="rounded-full bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground">
           {agentCount}/{group.sessions.length}
         </span>
-      </button>
+      </div>
       {open ? (
         <div className="space-y-1 border-t border-border/40 p-1.5">
           {group.agentGroups.map((agentGroup) => (
             <WorkflowAgentGroup
               key={agentGroup.key}
               group={agentGroup}
+              selectable={selectable}
+              selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
               activeStreamingSessionIds={activeStreamingSessionIds}
               recentlyCompletedSessionIds={recentlyCompletedSessionIds}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
+              onSelectSessions={onSelectSessions}
               onSessionClick={onSessionClick}
               onDeleteSession={onDeleteSession}
               onRenameSession={onRenameSession}
@@ -1159,24 +1286,30 @@ function WorkflowGroup({
 
 function WorkflowAgentGroup({
   group,
+  selectable,
+  selectedSessionIds,
   activeSessionId,
   loading,
   activeStreamingSessionIds,
   recentlyCompletedSessionIds,
   sessionLoadingId,
   pendingQuestionsBySessionId,
+  onSelectSessions,
   onSessionClick,
   onDeleteSession,
   onRenameSession,
   forceOpen = false,
 }: {
   group: WorkflowAgentSessionGroup;
+  selectable: boolean;
+  selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
   activeStreamingSessionIds: string[];
   recentlyCompletedSessionIds: string[];
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
+  onSelectSessions: (sessionIds: string[], checked: boolean) => void;
   onSessionClick: (sessionId: string) => void;
   onDeleteSession: (session: SidebarSession) => void;
   onRenameSession: (session: SidebarSession, title: string) => void;
@@ -1192,6 +1325,8 @@ function WorkflowAgentGroup({
         ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
         : 'bg-amber-500/10 text-amber-700 dark:text-amber-300';
   const targetSessionId = group.sessions[0]?.id || group.sessionId || null;
+  const agentSessionIds = useMemo(() => getUniqueSessionIds(group.sessions), [group.sessions]);
+  const agentSelectionState = getSelectionState(agentSessionIds, selectedSessionIds);
 
   useEffect(() => {
     if (hasActiveSession || group.pendingCount > 0 || forceOpen) setOpen(true);
@@ -1199,26 +1334,36 @@ function WorkflowAgentGroup({
 
   return (
     <div className={`rounded-md border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-background/70'}`}>
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
-        onClick={() => {
-          if (group.sessions.length === 1 && !open && targetSessionId) {
-            onSessionClick(targetSessionId);
-          }
-          setOpen((value) => !value);
-        }}
-      >
-        <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
-        <span className="material-symbols-outlined text-sm text-muted-foreground">
-          {group.role === 'Supervisor' ? 'admin_panel_settings' : group.role === '创建' ? 'edit_note' : group.role === '运行' ? 'route' : 'smart_toy'}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[11px] font-medium text-foreground">{group.label}</div>
-          <div className="truncate text-[9px] text-muted-foreground">
-            {group.sessionId || (group.connected ? '已绑定会话' : '等待首次对话')}
+      <div className="flex w-full items-center gap-2 px-2 py-1.5 text-left">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => {
+            if (group.sessions.length === 1 && !open && targetSessionId) {
+              onSessionClick(targetSessionId);
+            }
+            setOpen((value) => !value);
+          }}
+        >
+          <span className="material-symbols-outlined text-sm text-muted-foreground">{open ? 'expand_more' : 'chevron_right'}</span>
+          <span className="material-symbols-outlined text-sm text-muted-foreground">
+            {group.role === 'Supervisor' ? 'admin_panel_settings' : group.role === '创建' ? 'edit_note' : group.role === '运行' ? 'route' : 'smart_toy'}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[11px] font-medium text-foreground">{group.label}</div>
+            <div className="truncate text-[9px] text-muted-foreground">
+              {group.sessionId || (group.connected ? '已绑定会话' : '等待首次对话')}
+            </div>
           </div>
-        </div>
+        </button>
+        {selectable && agentSessionIds.length > 0 ? (
+          <Checkbox
+            aria-label={`选择 ${group.label}`}
+            checked={agentSelectionState}
+            onCheckedChange={(checked) => onSelectSessions(agentSessionIds, checkedStateToBoolean(checked))}
+            className="h-3.5 w-3.5"
+          />
+        ) : null}
         <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[8px] font-medium ${roleTone}`}>
           {group.role}
         </span>
@@ -1230,7 +1375,7 @@ function WorkflowAgentGroup({
         <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[8px] text-muted-foreground">
           {group.sessions.length || '待'}
         </span>
-      </button>
+      </div>
       {open ? (
         <div className="border-t border-border/40 pl-3">
           {group.sessions.length > 0 ? (
@@ -1240,11 +1385,14 @@ function WorkflowAgentGroup({
                 session={session}
                 active={session.id === activeSessionId}
                 compact
+                selectable={selectable}
+                selected={selectedSessionIds.has(session.id)}
                 attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
                 isStreaming={activeStreamingSessionIds.includes(session.id)}
                 isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
                 isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => onSessionClick(session.id)}
+                onSelectChange={(checked) => onSelectSessions([session.id], checked)}
                 onDelete={() => onDeleteSession(session)}
                 onRename={(title) => onRenameSession(session, title)}
               />
@@ -1352,20 +1500,15 @@ function SessionItem({
         <div className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-emerald-500" />
       ) : null}
       {selectable ? (
-        <button
-          type="button"
+        <Checkbox
           aria-label={`选择 ${session.title}`}
-          aria-pressed={selected}
+          checked={selected}
+          onCheckedChange={(checked) => onSelectChange?.(checkedStateToBoolean(checked))}
           onClick={(event) => {
             event.stopPropagation();
-            onSelectChange?.(!selected);
           }}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-            selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-transparent hover:border-primary/40'
-          }`}
-        >
-          <span className="material-symbols-outlined text-sm">check</span>
-        </button>
+          className="mt-0.5 h-4 w-4"
+        />
       ) : null}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
