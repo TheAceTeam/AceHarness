@@ -68,7 +68,7 @@ export function formatLargeContent(
   const label = opts.summaryLabel || '查看内容';
 
   if (content.length <= LARGE_CONTENT_CHAR_THRESHOLD && lines.length <= LARGE_CONTENT_LINE_THRESHOLD) {
-    return `\n<details><summary>${label} (${lines.length} 行)</summary>\n\n${htmlCodeBlock(content, opts.lang)}\n\n</details>\n`;
+    return `\n<details><summary>${label} (${lines.length} 行)</summary>\n\n${fenced(content, opts.lang)}\n\n</details>\n`;
   }
 
   // 大内容：有文件路径时用链接，否则截断
@@ -77,7 +77,7 @@ export function formatLargeContent(
   }
 
   const truncated = lines.slice(0, LARGE_CONTENT_LINE_THRESHOLD).join('\n');
-  return `\n<details><summary>${label} (前 ${LARGE_CONTENT_LINE_THRESHOLD}/${lines.length} 行)</summary>\n\n${htmlCodeBlock(truncated, opts.lang)}\n\n</details>\n\n> ⚠️ 输出已截断，共 ${lines.length} 行 (${(content.length / 1024).toFixed(0)} KB)\n`;
+  return `\n<details><summary>${label} (前 ${LARGE_CONTENT_LINE_THRESHOLD}/${lines.length} 行)</summary>\n\n${fenced(truncated, opts.lang)}\n\n</details>\n\n> ⚠️ 输出已截断，共 ${lines.length} 行 (${(content.length / 1024).toFixed(0)} KB)\n`;
 }
 
 export function formatTextContent(

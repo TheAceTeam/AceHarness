@@ -26,7 +26,7 @@ import ResizablePanels from '@/components/ResizablePanels';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { MultiCombobox } from '@/components/ui/combobox';
+import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
 import { ModelSelect } from '@/components/ModelSelect';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -7182,154 +7182,156 @@ export default function WorkbenchPage() {
       </Dialog>
       <Dialog open={executionPolicyDialogOpen} onOpenChange={setExecutionPolicyDialogOpen}>
         <DialogContent className="max-w-4xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
-          <DialogTitle className="sr-only">工作流引擎与模型</DialogTitle>
-          <div className="flex max-h-[85vh] flex-col">
-            <div className="border-b px-6 py-4">
-              <div className="text-base font-semibold">工作流引擎与模型</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                为当前工作流设置默认引擎和模型，并仅对本工作流涉及的 Agent 做局部覆盖。
+          <ComboboxPortalProvider>
+            <DialogTitle className="sr-only">工作流引擎与模型</DialogTitle>
+            <div className="flex max-h-[85vh] flex-col">
+              <div className="border-b px-6 py-4">
+                <div className="text-base font-semibold">工作流引擎与模型</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  为当前工作流设置默认引擎和模型，并仅对本工作流涉及的 Agent 做局部覆盖。
+                </div>
               </div>
-            </div>
-            <div className="flex-1 overflow-auto px-6 py-5 space-y-6">
-              <section className="space-y-4">
-                <div>
-                  <div className="text-sm font-medium">工作流默认策略</div>
-                  <div className="mt-1 text-xs text-muted-foreground">未单独配置的 Agent 会直接继承这里。</div>
-                </div>
-                <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex-1 overflow-auto px-6 py-5 space-y-6">
+                <section className="space-y-4">
                   <div>
-                    <Label className="text-sm font-medium">默认引擎</Label>
-                    <div className="mt-2">
-                      <EngineSelect
-                        value={engine}
-                        onChange={(value) => dispatch({ type: 'SET_ENGINE', payload: value })}
-                        allowGlobal
-                      />
+                    <div className="text-sm font-medium">工作流默认策略</div>
+                    <div className="mt-1 text-xs text-muted-foreground">未单独配置的 Agent 会直接继承这里。</div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <Label className="text-sm font-medium">默认引擎</Label>
+                      <div className="mt-2">
+                        <EngineSelect
+                          value={engine}
+                          onChange={(value) => dispatch({ type: 'SET_ENGINE', payload: value })}
+                          allowGlobal
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm font-medium">默认模型</Label>
+                      <div className="mt-2">
+                        <ModelSelect
+                          value={workflowDefaultModel}
+                          onChange={setWorkflowDefaultModel}
+                          engine={engine || globalEngine}
+                          allowGlobal
+                        />
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <Label className="text-sm font-medium">默认模型</Label>
-                    <div className="mt-2">
-                      <ModelSelect
-                        value={workflowDefaultModel}
-                        onChange={setWorkflowDefaultModel}
-                        engine={engine || globalEngine}
-                        allowGlobal
-                      />
-                    </div>
-                  </div>
-                </div>
-              </section>
+                </section>
 
-              <section className="space-y-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-medium">当前工作流 Agent 覆盖</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      只列出本工作流实际会用到的 Agent。默认继承工作流策略，只有例外才需要单独配置。
+                <section className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">当前工作流 Agent 覆盖</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        只列出本工作流实际会用到的 Agent。默认继承工作流策略，只有例外才需要单独配置。
+                      </div>
                     </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setWorkflowAgentOverrides({})}
+                      disabled={configuredWorkflowOverrideCount === 0}
+                    >
+                      全部恢复继承
+                    </Button>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setWorkflowAgentOverrides({})}
-                    disabled={configuredWorkflowOverrideCount === 0}
-                  >
-                    全部恢复继承
-                  </Button>
-                </div>
-                <div className="space-y-3">
-                  {workflowAgentNames.map((agentName) => {
-                    const override = workflowAgentOverrides[agentName] || { enabled: false };
-                    const roleConfig = agentConfigs.find((role: any) => role.name === agentName);
-                    const effectiveEngine = override.enabled
-                      ? (override.engine || engine || globalEngine)
-                      : (engine || globalEngine);
-                    return (
-                      <div key={agentName} className="rounded-xl border border-border/60 bg-background/70 p-4">
-                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_180px_minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
-                          <div>
-                            <div className="text-sm font-medium">{agentName}</div>
-                            <div className="mt-1 text-xs text-muted-foreground">
-                              {(roleConfig?.team || 'blue')} · {roleConfig?.roleType || 'normal'}
+                  <div className="space-y-3">
+                    {workflowAgentNames.map((agentName) => {
+                      const override = workflowAgentOverrides[agentName] || { enabled: false };
+                      const roleConfig = agentConfigs.find((role: any) => role.name === agentName);
+                      const effectiveEngine = override.enabled
+                        ? (override.engine || engine || globalEngine)
+                        : (engine || globalEngine);
+                      return (
+                        <div key={agentName} className="rounded-xl border border-border/60 bg-background/70 p-4">
+                          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_180px_minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
+                            <div>
+                              <div className="text-sm font-medium">{agentName}</div>
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {(roleConfig?.team || 'blue')} · {roleConfig?.roleType || 'normal'}
+                              </div>
                             </div>
-                          </div>
-                          <div>
-                            <Label className="text-xs font-medium text-muted-foreground">策略模式</Label>
-                            <Select
-                              value={override.enabled ? 'custom' : 'inherit'}
-                              onValueChange={(value) => {
-                                setWorkflowAgentOverrides((prev) => ({
-                                  ...prev,
-                                  [agentName]: value === 'custom'
-                                    ? {
-                                        enabled: true,
-                                        engine: prev[agentName]?.engine || engine || globalEngine || undefined,
-                                        model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
-                                      }
-                                    : { enabled: false },
-                                }));
-                              }}
-                            >
-                              <SelectTrigger className="mt-2">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="inherit">继承工作流</SelectItem>
-                                <SelectItem value="custom">单独配置</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div>
-                            <Label className="text-xs font-medium text-muted-foreground">引擎</Label>
-                            <div className="mt-2">
-                              <EngineSelect
-                                value={override.enabled ? (override.engine || '') : ''}
-                                onChange={(value) => setWorkflowAgentOverrides((prev) => ({
-                                  ...prev,
-                                  [agentName]: {
-                                    ...(prev[agentName] || { enabled: true }),
-                                    enabled: true,
-                                    engine: value || undefined,
-                                    model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
-                                  },
-                                }))}
-                                allowGlobal={false}
-                              />
+                            <div>
+                              <Label className="text-xs font-medium text-muted-foreground">策略模式</Label>
+                              <Select
+                                value={override.enabled ? 'custom' : 'inherit'}
+                                onValueChange={(value) => {
+                                  setWorkflowAgentOverrides((prev) => ({
+                                    ...prev,
+                                    [agentName]: value === 'custom'
+                                      ? {
+                                          enabled: true,
+                                          engine: prev[agentName]?.engine || engine || globalEngine || undefined,
+                                          model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
+                                        }
+                                      : { enabled: false },
+                                  }));
+                                }}
+                              >
+                                <SelectTrigger className="mt-2">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="inherit">继承工作流</SelectItem>
+                                  <SelectItem value="custom">单独配置</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </div>
-                          </div>
-                          <div>
-                            <Label className="text-xs font-medium text-muted-foreground">模型</Label>
-                            <div className="mt-2">
-                              <ModelSelect
-                                value={override.enabled ? (override.model || '') : ''}
-                                onChange={(value) => setWorkflowAgentOverrides((prev) => ({
-                                  ...prev,
-                                  [agentName]: {
-                                    ...(prev[agentName] || { enabled: true }),
-                                    enabled: true,
-                                    engine: prev[agentName]?.engine || engine || globalEngine || undefined,
-                                    model: value || undefined,
-                                  },
-                                }))}
-                                engine={effectiveEngine}
-                              />
+                            <div>
+                              <Label className="text-xs font-medium text-muted-foreground">引擎</Label>
+                              <div className="mt-2">
+                                <EngineSelect
+                                  value={override.enabled ? (override.engine || '') : ''}
+                                  onChange={(value) => setWorkflowAgentOverrides((prev) => ({
+                                    ...prev,
+                                    [agentName]: {
+                                      ...(prev[agentName] || { enabled: true }),
+                                      enabled: true,
+                                      engine: value || undefined,
+                                      model: prev[agentName]?.model || workflowDefaultModel || globalDefaultModel || undefined,
+                                    },
+                                  }))}
+                                  allowGlobal={false}
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-xs font-medium text-muted-foreground">模型</Label>
+                              <div className="mt-2">
+                                <ModelSelect
+                                  value={override.enabled ? (override.model || '') : ''}
+                                  onChange={(value) => setWorkflowAgentOverrides((prev) => ({
+                                    ...prev,
+                                    [agentName]: {
+                                      ...(prev[agentName] || { enabled: true }),
+                                      enabled: true,
+                                      engine: prev[agentName]?.engine || engine || globalEngine || undefined,
+                                      model: value || undefined,
+                                    },
+                                  }))}
+                                  engine={effectiveEngine}
+                                />
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
+                      );
+                    })}
+                  </div>
+                </section>
+              </div>
+              <div className="border-t px-6 py-4 flex justify-end gap-2">
+                <Button type="button" variant="ghost" onClick={() => setExecutionPolicyDialogOpen(false)}>
+                  关闭
+                </Button>
+              </div>
             </div>
-            <div className="border-t px-6 py-4 flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setExecutionPolicyDialogOpen(false)}>
-                关闭
-              </Button>
-            </div>
-          </div>
+          </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
 

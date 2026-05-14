@@ -630,4 +630,266 @@ describe('NewConfigModal backend draft isolation', () => {
     );
     expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions/done-1' && call.method === 'GET')).toBe(false);
   });
+
+  test('resolves formStep from stageSessions when uiState.formStep is stale (step 1 but clarification exists)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/stale-step-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'stale-step-1',
+            chatSessionId: 'planning-stale',
+            mode: 'ai-guided',
+            workflowName: '步骤回退测试',
+            filename: 'stale-step.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/stale',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: {
+                frontendSessionId: 'planning-stale',
+                backendSessionId: 'backend-1',
+                updatedAt: Date.now(),
+              },
+              specPlanning: {
+                frontendSessionId: 'planning-stale',
+                backendSessionId: 'backend-1',
+                updatedAt: Date.now(),
+              },
+            },
+            specCoding: {
+              id: 'spec-stale',
+              version: 1,
+              status: 'draft',
+              title: '新工作流 SpecCoding',
+              persistMode: 'none',
+              artifacts: {
+                requirements: '# 需求文档：新工作流\n\n## 简介\n新工作流 的需求澄清',
+                design: '# 设计文档：新工作流\n\n## 概述\n使用 状态机 workflow',
+                tasks: '',
+              },
+              phases: [],
+              assignments: [],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+            },
+            uiState: {
+              formStep: 1,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/stale-step-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'stale-step-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="stale-step-1"
+      />
+    );
+
+    // Should resolve to step 3 (specPlanning exists) instead of stale step 1
+    await waitFor(() => {
+      expect(screen.getByText('计划生成')).toBeTruthy();
+    });
+  });
+
+  test('resolves formStep to 4 when specCoding has real artifacts (version > 1)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/real-spec-1' && method === 'GET') {
+        const longContent = 'A'.repeat(300);
+        return createJsonResponse({
+          session: {
+            id: 'real-spec-1',
+            chatSessionId: 'planning-real',
+            mode: 'ai-guided',
+            workflowName: '真实Spec测试',
+            filename: 'real-spec.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/real',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+              specPlanning: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+            },
+            specCoding: {
+              id: 'spec-real',
+              version: 2,
+              status: 'draft',
+              title: '真实Spec',
+              summary: '真实Spec 的创建期设计草案',
+              persistMode: 'none',
+              artifacts: {
+                requirements: longContent,
+                design: longContent,
+                tasks: longContent,
+              },
+              phases: [{ id: 's1', title: '需求分析', objective: '分析', ownerAgents: ['architect'], status: 'pending' }],
+              assignments: [{ agent: 'architect', responsibility: '负责需求分析', phaseIds: ['s1'] }],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+              workflowName: '真实Spec测试',
+              goals: ['测试'],
+              nonGoals: [],
+              constraints: [],
+              requirements: [],
+              checkpoints: [],
+              progress: { overallStatus: 'pending', completedPhaseIds: [], activePhaseId: 's1', summary: '' },
+            },
+            workflowDraftSummary: {
+              mode: 'state-machine',
+              nodes: [{ name: '需求分析', detail: '分析', ownerAgents: ['architect'] }],
+              assignments: [{ agent: 'architect', responsibility: '负责需求分析' }],
+              sourceSummary: '草案已生成',
+            },
+            config: { workflow: { mode: 'state-machine', states: [{ name: '需求分析', steps: [{ agent: 'architect' }] }] } },
+            uiState: {
+              formStep: 1,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/real-spec-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'real-spec-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="real-spec-1"
+      />
+    );
+
+    // Should resolve to step 4 (real specCoding with version > 1) instead of stale step 1
+    await waitFor(() => {
+      expect(screen.getByText('返回修改')).toBeTruthy();
+    });
+  });
+
+  test('handleNextStep does not jump to step 4 when previewSession has skeleton specCoding', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/skeleton-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'skeleton-1',
+            chatSessionId: 'planning-skel',
+            mode: 'ai-guided',
+            workflowName: '骨架测试',
+            filename: 'skeleton-test.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/skeleton',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求描述至少五个字',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: { frontendSessionId: 'planning-skel', backendSessionId: 'b1', updatedAt: Date.now() },
+            },
+            specCoding: {
+              id: 'spec-skel',
+              version: 1,
+              status: 'draft',
+              title: '新工作流 SpecCoding',
+              persistMode: 'none',
+              artifacts: { requirements: '# 需求文档', design: '', tasks: '' },
+              phases: [],
+              assignments: [],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+            },
+            uiState: {
+              formStep: 1,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/skeleton-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'skeleton-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="skeleton-1"
+      />
+    );
+
+    // Should resolve to step 2 (clarification exists, spec is skeleton) not step 4
+    await waitFor(() => {
+      expect(screen.getByText('补充问答')).toBeTruthy();
+    });
+    // Should NOT show step 4 content
+    expect(screen.queryByText('返回修改')).toBeNull();
+  });
 });

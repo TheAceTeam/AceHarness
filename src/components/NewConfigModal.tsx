@@ -1504,14 +1504,19 @@ export default function NewConfigModal({
   const backendSessionModelRef = useRef(inheritModel);
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
-    if (!session?.specCoding) return 1;
-    if (session.status === 'draft') return 4;
     if (session.mode === 'ai-guided' && session.status === 'confirmed') {
       return 5;
     }
     if (session.status === 'confirmed' || session.status === 'config-generated' || session.status === 'run-bound') {
       return 4;
     }
+    if (session?.specCoding && session.status === 'draft') {
+      const arts = session.specCoding.artifacts;
+      const artLen = (arts?.requirements?.length || 0) + (arts?.design?.length || 0) + (arts?.tasks?.length || 0);
+      if (session.specCoding.version > 1 || artLen > 500) return 4;
+    }
+    if (session.stageSessions?.specPlanning) return 3;
+    if (session.stageSessions?.clarification) return 2;
     return 1;
   }, []);
 
@@ -1573,6 +1578,9 @@ export default function NewConfigModal({
     return '';
   }, [creationRecommendations?.referenceWorkflow, referenceWorkflowMode, referenceWorkflowValue]);
   const recommendedAgents = creationRecommendations?.recommendedAgents || [];
+  const handleWorkingDirectoryChange = useCallback((path: string) => {
+    setValue('workingDirectory', path, { shouldDirty: true, shouldValidate: true });
+  }, [setValue]);
   const recommendedSupervisorAgent = creationRecommendations?.recommendedSupervisorAgent || 'default-supervisor';
   const creationDialogClassName = creationFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
@@ -1731,7 +1739,7 @@ export default function NewConfigModal({
           setClarificationAnswers(session.uiState.clarificationAnswers || {});
           setPlanningStage(session.uiState.planningStage || 'awaiting-answers');
         }
-        setFormStep(session.uiState?.formStep || resolveFormStepFromSession(session));
+        setFormStep(Math.max(session.uiState?.formStep || 1, resolveFormStepFromSession(session)) as 1 | 2 | 3 | 4 | 5);
       })
       .catch(() => {});
 
@@ -2964,7 +2972,7 @@ export default function NewConfigModal({
         } else {
           setPlanningStage(session.uiState?.planningStage || 'idle');
         }
-        setFormStep(session.uiState?.formStep || resolveFormStepFromSession(session));
+        setFormStep(Math.max(session.uiState?.formStep || 1, resolveFormStepFromSession(session)) as 1 | 2 | 3 | 4 | 5);
         await bindDraftCreationSessionToChat(session);
       })
       .catch(() => {
@@ -3030,7 +3038,7 @@ export default function NewConfigModal({
           specRoot,
           config,
           uiState: {
-            formStep: formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5 ? formStep : 1,
+            formStep: formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5 ? formStep : undefined,
             planningStage,
             clarificationForm: clarificationForm || undefined,
             clarificationAnswers,
@@ -4570,8 +4578,12 @@ ${recommendationPrompt}
         return;
       }
       if (previewSession) {
-        setFormStep(4);
-        return;
+        const resolvedStep = resolveFormStepFromSession(previewSession);
+        if (resolvedStep >= 4) {
+          setFormStep(4);
+          return;
+        }
+        // spec not fully generated — restart from clarification
       }
       await generateClarificationWithChatSession();
     } catch (error: any) {
@@ -4941,16 +4953,18 @@ ${recommendationPrompt}
   };
 
   const handleClose = () => {
-    if (formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5) {
+    const isStreaming = aiPhase === 'streaming';
+    if (formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5 || isStreaming) {
       void persistDraftUiState({
-        formStep,
+        formStep: (formStep === 2 || formStep === 3 || formStep === 4 || formStep === 5) ? formStep : 2 as 2,
         planningStage,
         clarificationForm,
         clarificationAnswers,
       });
     }
-    if (aiPhase === 'streaming') {
+    if (isStreaming) {
       detachStreamSubscription();
+      toast('info', '生成仍在后台运行中，可稍后从草稿箱继续');
     }
     onClose();
   };
@@ -6786,7 +6800,7 @@ ${recommendationPrompt}
             <WorkspaceDirectoryPicker
               workspaceRoot="/"
               value={workingDirectoryValue || ''}
-              onChange={(path) => setValue('workingDirectory', path, { shouldDirty: true, shouldValidate: true })}
+              onChange={handleWorkingDirectoryChange}
               autoSelectRootWhenEmpty
               className={errors.workingDirectory ? 'rounded-md border border-destructive p-1' : undefined}
             />

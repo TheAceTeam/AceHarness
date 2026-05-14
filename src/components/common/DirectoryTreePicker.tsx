@@ -86,10 +86,21 @@ export default function DirectoryTreePicker({
   const [draftValue, setDraftValue] = useState(value);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const latestValueRef = useRef(value);
+  const openRef = useRef(open);
+  const initializedOpenRef = useRef(false);
+  const refreshRootRef = useRef<((options?: { resetExpanded?: boolean }) => Promise<void>) | null>(null);
+  const expandPathRef = useRef<((rawPath: string) => Promise<void>) | null>(null);
 
   useEffect(() => {
     latestValueRef.current = value;
   }, [value]);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (!open) {
+      initializedOpenRef.current = false;
+    }
+  }, [open]);
 
   const handleLoadChildren = useCallback(async (path: string) => {
     setLoadingPaths((prev) => new Set(prev).add(path));
@@ -108,13 +119,16 @@ export default function DirectoryTreePicker({
     }
   }, [loadChildren]);
 
-  const refreshRoot = useCallback(async () => {
+  const refreshRoot = useCallback(async (options?: { resetExpanded?: boolean }) => {
+    const resetExpanded = options?.resetExpanded ?? false;
     setLoadingRoot(true);
     try {
       const nodes = await loadRoot();
       setLoadError(null);
       setTree(sortTree(nodes || []));
-      setExpanded(new Set(['']));
+      if (resetExpanded) {
+        setExpanded(new Set(['']));
+      }
     } catch (error: any) {
       setTree([]);
       setExpanded(new Set(['']));
@@ -146,12 +160,17 @@ export default function DirectoryTreePicker({
     }
   }, [handleLoadChildren]);
 
+  useEffect(() => {
+    refreshRootRef.current = refreshRoot;
+    expandPathRef.current = expandPath;
+  }, [expandPath, refreshRoot]);
+
   const applyPath = useCallback(async (input: string, resolver?: (input: string) => Promise<PathResolution> | PathResolution) => {
     const resolved = await normalizeResolution(input, resolver);
     const normalizedPath = normalizePickerPath(resolved.path || '');
     setDraftValue(normalizedPath);
     setPathInput(resolved.root ? `${resolved.root}${normalizedPath ? `/${normalizedPath}` : ''}` : (resolved.path || ''));
-    await refreshRoot();
+    await refreshRoot({ resetExpanded: true });
     if (normalizedPath) {
       await expandPath(normalizedPath);
     } else {
@@ -166,22 +185,24 @@ export default function DirectoryTreePicker({
   }, []);
 
   useEffect(() => {
+    if (openRef.current) return;
     setPathInput(value);
     setDraftValue(value);
   }, [value]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || initializedOpenRef.current) return;
+    initializedOpenRef.current = true;
     let cancelled = false;
 
     const syncOnOpen = async () => {
       const latestValue = latestValueRef.current;
       setPathInput(latestValue);
       setDraftValue(latestValue);
-      await refreshRoot();
+      await refreshRootRef.current?.({ resetExpanded: true });
       if (cancelled) return;
       if (latestValue) {
-        await expandPath(latestValue);
+        await expandPathRef.current?.(latestValue);
       } else {
         setExpanded(new Set(['']));
       }
@@ -193,7 +214,7 @@ export default function DirectoryTreePicker({
       cancelled = true;
       setLocatingPath(false);
     };
-  }, [expandPath, open, refreshRoot]);
+  }, [open]);
 
   const hasNodeInTree = useMemo(() => {
     if (!draftValue) return true;
