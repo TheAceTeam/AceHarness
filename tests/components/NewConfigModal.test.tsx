@@ -811,7 +811,7 @@ describe('NewConfigModal backend draft isolation', () => {
 
     // Should resolve to step 4: Math.max(uiState.formStep=4, resolve=3) = 4
     await waitFor(() => {
-      expect(screen.getByText('返回修改')).toBeTruthy();
+      expect(screen.getByText('返回计划')).toBeTruthy();
     });
   });
 

@@ -5786,7 +5786,7 @@ ${recommendationPrompt}
           >
             <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="icon" onClick={() => setFormStep(1)} disabled={isRevisingPlan} title="返回修改需求">
+                <Button type="button" variant="ghost" size="icon" onClick={() => setFormStep(3)} disabled={isRevisingPlan} title="返回计划生成">
                   <span className="material-symbols-outlined">arrow_back</span>
                 </Button>
                 <DialogTitle>确认计划</DialogTitle>
@@ -6026,8 +6026,8 @@ ${recommendationPrompt}
             </div>
 
             <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-              <Button type="button" variant="outline" onClick={() => setFormStep(1)} disabled={isRevisingPlan}>
-                返回修改
+              <Button type="button" variant="outline" onClick={() => setFormStep(3)} disabled={isRevisingPlan}>
+                返回计划
               </Button>
               <Button type="button" onClick={handleConfirmPreview} disabled={isSubmitting || isRevisingPlan}>
                 {isRevisingPlan ? '计划修订生成中...' : workflowMode === 'ai-guided' ? '确认并进入 Workflow 草案' : '确认并创建配置'}
