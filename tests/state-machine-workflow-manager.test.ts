@@ -194,6 +194,22 @@ function makeConfig(overrides: Record<string, any> = {}) {
 }
 
 // --- Helper to set up manager internal state ---
+function makeAgentState(name: string) {
+  return {
+    name,
+    team: '',
+    model: 'test-model',
+    status: 'idle',
+    currentTask: null,
+    completedTasks: 0,
+    tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+    costUsd: 0,
+    sessionId: null,
+    lastOutput: '',
+    summary: '',
+  };
+}
+
 async function createManagerForTest(engine: MockEngine) {
   const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
   const manager = new StateMachineWorkflowManager();
@@ -207,21 +223,7 @@ async function createManagerForTest(engine: MockEngine) {
   (manager as any).currentRequirements = 'Build a feature';
   (manager as any).workflowName = 'Test Workflow';
   (manager as any).runStartTime = new Date().toISOString();
-  (manager as any).agents = [
-    {
-      name: 'developer',
-      team: '',
-      model: 'test-model',
-      status: 'idle',
-      currentTask: null,
-      completedTasks: 0,
-      tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-      costUsd: 0,
-      sessionId: null,
-      lastOutput: '',
-      summary: '',
-    },
-  ];
+  (manager as any).agents = [makeAgentState('developer')];
   (manager as any).agentConfigs = [
     { name: 'developer', systemPrompt: 'You are a developer' },
   ];
@@ -343,6 +345,102 @@ describe('state machine execution flow', () => {
     const result = await (manager as any).executeState(state, config, 'Build a feature');
     expect(result.stepOutputs).toHaveLength(1);
     expect(result.stepOutputs[0]).toContain('Step completed');
+  });
+
+  test('agentInstanceId is used as the engine execution identity', async () => {
+    const engine = new MockEngine({ success: true, output: 'Step completed by runtime instance' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('developer-1'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'developer-1', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.stepOutputs[0]).toContain('runtime instance');
+    expect(engine.calls[0].options.agent).toBe('developer-1');
+    expect((manager as any).stepLogs[0].agent).toBe('developer-1');
+  });
+
+  test('supervisor cannot substitute a normal workflow step runtime agent', async () => {
+    const engine = new MockEngine({ success: true, output: 'Supervisor should not run this step' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('default-supervisor'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'default-supervisor', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect(result.stepOutputs[0]).toContain('Supervisor');
+    expect(engine.calls).toHaveLength(0);
+    expect((manager as any).completedSteps).not.toContain('设计-design-step');
+  });
+
+  test('supervisor review text is rejected as a normal step output', async () => {
+    const supervisorReview = [
+      '当前阶段结论：建议继续留在方案设计。',
+      '是否建议继续迭代：是。',
+      '下一步指导意见：让 architect 产出 design.md。',
+      '下一步只做一件事：把统一事实基线固化成设计约束，然后输出 2-3 个方案对比。',
+      '重点锁定搜索入口、数据契约、结果规则、恢复逻辑这四项契约。',
+      '风险点只保留两个：不要默认跨会话历史搜索，不要默认结果可跳到命中消息。',
+    ].join('\n');
+    const engine = new MockEngine({ success: true, output: supervisorReview });
+    const manager = await createManagerForTest(engine);
+    (manager as any).latestSupervisorReview = {
+      type: 'state-review',
+      stateName: '方案设计',
+      content: supervisorReview,
+      timestamp: new Date().toISOString(),
+    };
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '方案设计',
+            isInitial: true,
+            steps: [
+              { name: '搜索方案设计', agent: 'developer', task: 'Design search', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect(result.stepOutputs[0]).toContain('Supervisor 审阅内容');
+    expect((manager as any).completedSteps).not.toContain('方案设计-搜索方案设计');
+    expect((manager as any).stepLogs[0].status).toBe('failed');
   });
 
   test('verdict=pass transitions to next state', async () => {

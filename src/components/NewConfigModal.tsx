@@ -33,12 +33,11 @@ import Markdown from './Markdown';
 import UniversalCard from './chat/cards/UniversalCard';
 import { ThinkingBot } from './chat/ChatMessage';
 import { MessageHistoryCollapse } from './chat/MessageHistoryCollapse';
-import { parseActions } from '@/lib/chat/actions';
+import { getStreamingResultDisplay, parseActions } from '@/lib/chat/actions';
 import {
   extractClarificationFormResult,
   extractPlanDraftResult,
   extractWorkflowDraftPreview,
-  getStructuredResultStreamPreview,
   type ClarificationAnswerValue,
   type ClarificationFormResult,
   type ClarificationQuestionItem,
@@ -476,8 +475,23 @@ function stripResultBlocksForDisplay(markdown: string) {
 }
 
 function getDisplayContentForAiStream(markdown: string) {
-  const preview = getStructuredResultStreamPreview(markdown);
-  return preview.hasResult ? preview.text : stripResultBlocksForDisplay(markdown);
+  return stripResultBlocksForDisplay(markdown);
+}
+
+function StreamingResultDetails({ content }: { content?: string }) {
+  const result = getStreamingResultDisplay(content || '');
+  if (!result) return null;
+  return (
+    <details className="rounded-md border bg-background/80 text-xs">
+      <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-muted-foreground">
+        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>data_object</span>
+        <span>结构化结果生成中</span>
+      </summary>
+      <pre className="mx-3 mb-3 max-h-72 overflow-auto rounded-md border bg-muted/60 p-3 font-mono text-[11px] leading-5 text-foreground whitespace-pre-wrap break-words">
+        {result.text}
+      </pre>
+    </details>
+  );
 }
 
 function formatWorkflowCondition(condition: any): string {
@@ -5343,6 +5357,7 @@ ${recommendationPrompt}
                                     {cards.map((card, ci) => (
                                       <UniversalCard key={ci} card={card} />
                                     ))}
+                                    <StreamingResultDetails content={currentStream} />
                                     <PlanningThinkingBot />
                                   </div>
                                 );
@@ -5494,6 +5509,7 @@ ${recommendationPrompt}
                             {cards.map((card, ci) => (
                               <UniversalCard key={ci} card={card} />
                             ))}
+                            <StreamingResultDetails content={currentStream} />
                             <PlanningThinkingBot />
                           </div>
                         );
@@ -5624,6 +5640,7 @@ ${recommendationPrompt}
                             {cards.map((card, ci) => (
                               <UniversalCard key={ci} card={card} />
                             ))}
+                            <StreamingResultDetails content={currentStream} />
                             <PlanningThinkingBot />
                           </div>
                         );
@@ -6494,6 +6511,7 @@ ${recommendationPrompt}
                                 {cards.map((card, ci) => (
                                   <UniversalCard key={ci} card={card} />
                                 ))}
+                                <StreamingResultDetails content={currentStream} />
                                 <PlanningThinkingBot />
                               </div>
                             );

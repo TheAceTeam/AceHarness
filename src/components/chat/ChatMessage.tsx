@@ -1,6 +1,6 @@
 'use client';
 
-import { ActionState } from '@/lib/chat/actions';
+import { ActionState, getStreamingResultDisplay } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
@@ -10,7 +10,6 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
-import { getStructuredResultStreamPreview } from '@/lib/ai/result-normalizers';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
@@ -324,9 +323,23 @@ function formatHiddenWerewolfContent(card: any): string {
 
 function stripResultBlocks(content: string): string {
   const input = String(content || '');
-  const preview = getStructuredResultStreamPreview(input);
-  if (preview.hasResult) return preview.text;
   return input.replace(RESULT_BLOCK_PATTERN, '').trim();
+}
+
+function StreamingResultBlock({ rawContent }: { rawContent?: string }) {
+  const result = getStreamingResultDisplay(rawContent || '');
+  if (!result) return null;
+  return (
+    <details className="mt-1 rounded-xl border border-border bg-background/80 text-xs shadow-sm">
+      <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-muted-foreground">
+        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>data_object</span>
+        <span>结构化结果生成中</span>
+      </summary>
+      <pre className="mx-3 mb-3 max-h-72 overflow-auto rounded-md border bg-muted/60 p-3 text-[11px] leading-5 text-foreground">
+        <code className="block whitespace-pre-wrap break-words font-mono">{result.text}</code>
+      </pre>
+    </details>
+  );
 }
 
 function formatMessageTime(timestamp?: number): string {
@@ -862,6 +875,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {isStreaming && <ThinkingBot />}
           </div>
         )}
+        {isStreaming && <StreamingResultBlock rawContent={message.rawContent || message.content} />}
         {message.rawContent && sanitizedRawContent && sanitizedRawContent !== trimmedContent && (
           <details className="mt-1 rounded-xl border border-border bg-muted/50 text-xs">
             <summary className="cursor-pointer px-3 py-1.5 text-muted-foreground select-none flex items-center gap-1">

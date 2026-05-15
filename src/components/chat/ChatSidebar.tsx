@@ -525,7 +525,10 @@ export default function ChatSidebar() {
   };
 
   const deleteSelectedSessions = async () => {
-    const selectedSessions = (visibleSessions as SidebarSession[]).filter((session) => selectedSessionIds.has(session.id));
+    const visibleSessionById = new Map((visibleSessions as SidebarSession[]).map((session) => [session.id, session]));
+    const selectedSessions = Array.from(selectedSessionIds)
+      .map((sessionId) => visibleSessionById.get(sessionId))
+      .filter((session): session is SidebarSession => Boolean(session));
     const ids = getUniqueSessionIds(selectedSessions);
     if (ids.length === 0) return;
     const ok = await confirm({

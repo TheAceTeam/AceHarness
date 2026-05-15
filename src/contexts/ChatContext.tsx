@@ -696,17 +696,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
             // Pre-fill with accumulated content
             if (initialStreamContent) {
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(initialStreamContent);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+              const { text: cleanText } = parseActions(initialStreamContent);
               setActiveSession(prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(prev.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : prev.sessionWorkbenchState,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, cards: newCards.length > 0 ? newCards : m.cards } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: initialStreamContent } : m),
                 };
               });
             }
@@ -725,18 +720,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               initialSnapshotReplayPending = false;
               accumulated += content;
-              const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               setActiveSession(prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(prev.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : prev.sessionWorkbenchState,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, cards: newCards.length > 0 ? newCards : m.cards } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulated } : m),
                 };
               });
             });
@@ -1342,24 +1332,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             es.addEventListener('delta', (e) => {
               const { content } = JSON.parse(e.data);
               accumulated += content;
-              // Extract cards in real-time so they render immediately without waiting for stream to finish
-              const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-              updateActiveSession(s => {
-                const existingMsg = s.messages.find(m => m.id === followUpMsgId);
-                const existingCards: any[] = existingMsg?.cards || [];
-                const existingKeys = new Set(existingCards.map((c: any) => c.header?.title));
-                const uniqueNewCards = newCards.filter((c: any) => !existingKeys.has(c.header?.title));
-                return {
-                  ...s,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(s.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : s.sessionWorkbenchState,
-                  messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, cards: [...existingCards, ...uniqueNewCards] } : m),
-                };
-              });
+              updateActiveSession(s => ({
+                ...s,
+                messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+              }));
             });
 
             es.addEventListener('done', (e) => {
@@ -1693,25 +1671,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             resetInactivityTimer();
             const { content } = JSON.parse(e.data);
             accumulated += content;
-            // Extract cards in real-time so they render immediately without waiting for stream to finish
-            const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+            const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-            updateActiveSession(s => {
-              const existingMsg = s.messages.find(m => m.id === assistantMsgId);
-              const existingCards: any[] = existingMsg?.cards || [];
-              // Merge cards by header.title to avoid duplicates
-              const existingKeys = new Set(existingCards.map((c: any) => c.header?.title));
-              const uniqueNewCards = newCards.filter((c: any) => !existingKeys.has(c.header?.title));
-              return {
-                ...s,
-                sessionWorkbenchState: latestSidebarHint ? {
-                  ...(s.sessionWorkbenchState || {}),
-                  homeSidebar: latestSidebarHint,
-                } : s.sessionWorkbenchState,
-                messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, cards: [...existingCards, ...uniqueNewCards] } : m),
-              };
-            });
+            updateActiveSession(s => ({
+              ...s,
+              messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+            }));
           });
 
           es.addEventListener('done', (e) => {

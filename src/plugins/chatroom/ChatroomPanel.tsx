@@ -657,6 +657,7 @@ export function ChatroomPanel({
       speakerName: CHATROOM_HOST_NAME,
       content: [
         '@用户，我收到你的开场要求，现在开始控场。',
+        `开场要求：${hostMessage}`,
         kickoffParticipants.length
           ? `我会先点名 ${kickoffParticipants.join('、')}，按当前议题推进讨论。`
           : '当前还没有可点名成员。',

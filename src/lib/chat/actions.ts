@@ -5,7 +5,6 @@
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/core/api';
 import { getWorkspaceSkillPath } from '@/lib/core/app-paths';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
-import { getStructuredResultStreamPreview } from '@/lib/ai/result-normalizers';
 import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 
 // Action 类型枚举
@@ -372,6 +371,69 @@ function getDanglingResultRanges(markdown: string): Array<[number, number]> {
   return ranges;
 }
 
+function getResultBodySections(markdown: string): Array<{
+  start: number;
+  end: number;
+  bodyStart: number;
+  bodyEnd: number;
+  body: string;
+  complete: boolean;
+}> {
+  const sections: Array<{
+    start: number;
+    end: number;
+    bodyStart: number;
+    bodyEnd: number;
+    body: string;
+    complete: boolean;
+  }> = [];
+  const codeBlockRanges = getFencedCodeBlockRanges(markdown);
+  const openRegex = /<result>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = openRegex.exec(markdown)) !== null) {
+    if (isInsideCodeBlock(match.index, codeBlockRanges)) continue;
+
+    const start = match.index;
+    const bodyStart = start + match[0].length;
+    const closeIndex = markdown.toLowerCase().indexOf('</result>', bodyStart);
+    if (closeIndex === -1) {
+      sections.push({
+        start,
+        end: markdown.length,
+        bodyStart,
+        bodyEnd: markdown.length,
+        body: markdown.slice(bodyStart),
+        complete: false,
+      });
+      break;
+    }
+
+    const end = closeIndex + '</result>'.length;
+    sections.push({
+      start,
+      end,
+      bodyStart,
+      bodyEnd: closeIndex,
+      body: markdown.slice(bodyStart, closeIndex),
+      complete: true,
+    });
+    openRegex.lastIndex = end;
+  }
+  return sections;
+}
+
+export function getStreamingResultDisplay(markdown: string): { text: string; complete: boolean } | null {
+  const sections = getResultBodySections(String(markdown || ''));
+  if (sections.length === 0) return null;
+  const last = sections[sections.length - 1];
+  const body = last.body.trim();
+  if (!body) return null;
+  return {
+    text: body,
+    complete: last.complete,
+  };
+}
+
 function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
   if (!obj || typeof obj !== 'object') return false;
   if (obj.type !== undefined && obj.type !== 'home_sidebar') return false;
@@ -408,6 +470,170 @@ function isHomeSidebarHintLike(obj: any): obj is HomeSidebarHint {
     && listOfStringsValid(obj.questions)
     && nextActionValid
     && shouldOpenModalValid;
+}
+
+const MACHINE_RESULT_KINDS = new Set([
+  'card',
+  'home_sidebar',
+  'clarification_form',
+  'plan_draft',
+  'workflow_draft',
+  'spec_coding_revision',
+  'spec-coding-revision',
+]);
+
+function getMachineResultKind(obj: any): string {
+  const raw = typeof obj?.kind === 'string'
+    ? obj.kind
+    : typeof obj?.type === 'string'
+      ? obj.type
+      : '';
+  return raw.trim().toLowerCase();
+}
+
+function collectMachinePayload(
+  parsed: any,
+  lang: string,
+  cards: any[],
+  sidebarHints: HomeSidebarHint[],
+  options: { allowLegacyShape?: boolean } = {},
+): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+
+  const kind = getMachineResultKind(parsed);
+  if (kind === 'card') {
+    if (isCardLike(parsed.payload)) {
+      cards.push(validateCard(parsed.payload));
+    } else if (isCardLike(parsed)) {
+      cards.push(validateCard(parsed));
+    }
+    return true;
+  }
+
+  if (kind === 'home_sidebar') {
+    if (isHomeSidebarHintLike(parsed.payload)) {
+      sidebarHints.push(parsed.payload);
+    } else if (isHomeSidebarHintLike(parsed)) {
+      sidebarHints.push(parsed);
+    }
+    return true;
+  }
+
+  if (MACHINE_RESULT_KINDS.has(kind)) {
+    return true;
+  }
+
+  if (lang === 'card' && isCardLike(parsed)) {
+    cards.push(validateCard(parsed));
+    return true;
+  }
+
+  if (options.allowLegacyShape) {
+    if (isCardLike(parsed)) {
+      cards.push(validateCard(parsed));
+      return true;
+    }
+    if (isHomeSidebarHintLike(parsed)) {
+      sidebarHints.push(parsed);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function getFencedCodeBlocks(markdown: string): Array<{ start: number; end: number; lang: string; content: string }> {
+  const blocks: Array<{ start: number; end: number; lang: string; content: string }> = [];
+  const openRegex = /^([ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)/gm;
+  let match: RegExpExecArray | null;
+  while ((match = openRegex.exec(markdown)) !== null) {
+    const start = match.index;
+    const marker = match[2];
+    const markerChar = marker[0];
+    const markerWidth = marker.length;
+    const info = (match[3] || '').trim();
+    const lineEnd = markdown.indexOf('\n', openRegex.lastIndex);
+    const openingLineEnd = lineEnd === -1 ? markdown.length : lineEnd + 1;
+    const [lang = ''] = info.split(/\s+/, 1);
+
+    const sameLineClosing = info.match(/^([A-Za-z0-9_-]+)\s+([\s\S]*?)\s*(`{3,}|~{3,})\s*$/);
+    if (sameLineClosing && sameLineClosing[3][0] === markerChar && sameLineClosing[3].length >= markerWidth) {
+      blocks.push({
+        start,
+        end: openingLineEnd,
+        lang: sameLineClosing[1].toLowerCase(),
+        content: sameLineClosing[2],
+      });
+      openRegex.lastIndex = openingLineEnd;
+      continue;
+    }
+
+    const closeRegex = new RegExp(`^[ \\t]{0,3}${markerChar}{${markerWidth},}[ \\t]*$`, 'gm');
+    closeRegex.lastIndex = openingLineEnd;
+    const close = closeRegex.exec(markdown);
+    if (!close) {
+      blocks.push({
+        start,
+        end: markdown.length,
+        lang: lang.toLowerCase(),
+        content: markdown.slice(openingLineEnd),
+      });
+      openRegex.lastIndex = markdown.length;
+      break;
+    }
+
+    const closeLineEnd = markdown.indexOf('\n', close.index + close[0].length);
+    const end = closeLineEnd === -1 ? close.index + close[0].length : closeLineEnd + 1;
+    blocks.push({
+      start,
+      end,
+      lang: lang.toLowerCase(),
+      content: markdown.slice(openingLineEnd, close.index).replace(/\r?\n$/, ''),
+    });
+    openRegex.lastIndex = end;
+  }
+  return blocks;
+}
+
+function collectMachineJsonFenceRemovals(
+  markdown: string,
+  cards: any[],
+  sidebarHints: HomeSidebarHint[],
+  skipRanges: Array<[number, number]> = [],
+): Array<[number, number]> {
+  const removals: Array<[number, number]> = [];
+  for (const block of getFencedCodeBlocks(markdown)) {
+    if (skipRanges.some(([start, end]) => block.start >= start && block.start < end)) continue;
+    if (block.lang !== 'json' && block.lang !== 'card') continue;
+    const parsed = extractResultJsonObject(block.content);
+    if (!collectMachinePayload(parsed, block.lang, cards, sidebarHints)) continue;
+    removals.push([block.start, block.end]);
+  }
+  return removals;
+}
+
+function applyRemovalRanges(markdown: string, removals: Array<[number, number]>): string {
+  if (removals.length === 0) return markdown;
+
+  const sorted = removals
+    .map(([start, end]) => [Math.max(0, start), Math.min(markdown.length, end)] as [number, number])
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const merged: Array<[number, number]> = [];
+  for (const [start, end] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      merged.push([start, end]);
+    }
+  }
+
+  let text = markdown;
+  for (const [start, end] of merged.sort((a, b) => b[0] - a[0])) {
+    text = text.substring(0, start) + text.substring(end);
+  }
+  return text;
 }
 
 /** 从 AI 回复 markdown 中提取 action blocks 和 card blocks */
@@ -471,21 +697,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     let sectionHasStructured = false;
     const trimmedContent = section.content.trim();
     const rootParsed = trimmedContent.startsWith('```') ? null : extractResultJsonObject(section.content);
-    if (rootParsed) {
-      if (rootParsed.kind === 'card' && isCardLike(rootParsed.payload)) {
-        cards.push(validateCard(rootParsed.payload));
-        sectionHasStructured = true;
-      } else if (rootParsed.kind === 'home_sidebar' && isHomeSidebarHintLike(rootParsed.payload)) {
-        sidebarHints.push(rootParsed.payload);
-        sectionHasStructured = true;
-      } else if (isCardLike(rootParsed)) {
-        cards.push(validateCard(rootParsed));
-        sectionHasStructured = true;
-      } else if (isHomeSidebarHintLike(rootParsed)) {
-        sidebarHints.push(rootParsed);
-        sectionHasStructured = true;
-      }
-    }
+    sectionHasStructured = collectMachinePayload(rootParsed, 'json', cards, sidebarHints, { allowLegacyShape: true });
 
     const codeBlockRegex = /```(card|json)\s*/g;
     let match: RegExpExecArray | null;
@@ -518,19 +730,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
 
       try {
         const parsed = JSON.parse(jsonStr);
-        if (parsed?.kind === 'card' && isCardLike(parsed.payload)) {
-          cards.push(validateCard(parsed.payload));
-          sectionHasStructured = true;
-        } else if (parsed?.kind === 'home_sidebar' && isHomeSidebarHintLike(parsed.payload)) {
-          sidebarHints.push(parsed.payload);
-          sectionHasStructured = true;
-        } else if (isCardLike(parsed)) {
-          cards.push(validateCard(parsed));
-          sectionHasStructured = true;
-        } else if (isHomeSidebarHintLike(parsed)) {
-          sidebarHints.push(parsed);
-          sectionHasStructured = true;
-        }
+        sectionHasStructured = collectMachinePayload(parsed, match[1], cards, sidebarHints, { allowLegacyShape: true }) || sectionHasStructured;
 
         // Any card/json code block inside <result> is machine-readable output.
         // Non-visual JSON (for example workflow_draft/plan_draft) is consumed by
@@ -558,15 +758,22 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     }
   }
 
-  for (const range of getDanglingResultRanges(markdown)) {
+  const danglingResultRanges = getDanglingResultRanges(markdown);
+  for (const range of danglingResultRanges) {
     removals.push(range);
   }
 
-  // Remove matched blocks from text (in reverse order to preserve indices)
-  let text = markdown;
-  for (const [start, end] of removals.sort((a, b) => b[0] - a[0])) {
-    text = text.substring(0, start) + text.substring(end);
-  }
+  removals.push(...collectMachineJsonFenceRemovals(
+    markdown,
+    cards,
+    sidebarHints,
+    [
+      ...resultSections.map((section) => [section.start, section.end] as [number, number]),
+      ...danglingResultRanges,
+    ],
+  ));
+
+  let text = applyRemovalRanges(markdown, removals);
   text = stripDanglingTrailingFence(text);
 
   return { text: text.trim(), actions, cards, sidebarHints, resultPlainTexts: resultPlainTexts.filter(Boolean) };
@@ -578,8 +785,8 @@ export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
   hasSidebarHint: boolean;
 } {
   const content = String(raw || '');
-  const resultPreview = getStructuredResultStreamPreview(content);
-  if (!resultPreview.hasResult) {
+  const hasMachineResult = getResultBodySections(content).length > 0;
+  if (!hasMachineResult) {
     return {
       visibleText: streaming ? stripIncompleteStreamingFence(content) : content,
       hasMachineResult: false,
@@ -589,7 +796,7 @@ export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
 
   const parsed = parseActions(content);
   return {
-    visibleText: parsed.cards.length > 0 ? parsed.text : (resultPreview.text || parsed.text),
+    visibleText: parsed.text,
     hasMachineResult: true,
     hasSidebarHint: streaming ? false : parsed.sidebarHints.length > 0,
   };

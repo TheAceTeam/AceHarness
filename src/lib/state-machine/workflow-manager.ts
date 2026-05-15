@@ -220,6 +220,10 @@ function getStepRuntimeAgentName(step: WorkflowStep): string {
   return step.agentInstanceId || step.agent;
 }
 
+function normalizeGuardText(value: string | null | undefined): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
 export function groupStateStepsIntoSegments(steps: WorkflowStep[]): StepSegment[] {
   const segments: StepSegment[] = [];
   let i = 0;
@@ -346,6 +350,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private currentEngine: Engine | null = null;
   /** Current engine type */
   private engineType: EngineType = 'claude-code';
+  private engineExecutionTail: Promise<void> = Promise.resolve();
   /** Optional frontend chat session to auto-bind with this run */
   public _frontendSessionId?: string;
   /** Explicit creation session to bind to the next run */
@@ -362,6 +367,21 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
   constructor() {
     super();
+  }
+
+  private async withEngineExecutionLock<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.engineExecutionTail.catch(() => {});
+    let release!: () => void;
+    const current = new Promise<void>((resolveLock) => {
+      release = resolveLock;
+    });
+    this.engineExecutionTail = previous.then(() => current);
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   async loadAgentConfigs(): Promise<void> {
@@ -1835,106 +1855,107 @@ export class StateMachineWorkflowManager extends EventEmitter {
     model: string,
     options: any
   ): Promise<EngineJsonResult> {
-    if (!this.currentEngine) {
-      throw new Error(`引擎未初始化 (engineType=${this.engineType})`);
-    }
-
-    // Use alternative engine (Kiro CLI, etc.)
-
-    const displayStep =
-      options.streamStepName || options.streamStepLabel || step;
-
-    // Register process in processManager so it's visible to the frontend
-    const proc = processManager.registerExternalProcess(
-      processId,
-      agent,
-      displayStep,
-      options.runId,
-      options.stepId
-    );
-    (proc as any)._cancelFn = () => {
-      try {
-        this.currentEngine?.cancel();
-      } catch {
-        // Best-effort cancellation; process state is still marked as killed.
+    return this.withEngineExecutionLock(async () => {
+      if (!this.currentEngine) {
+        throw new Error(`引擎未初始化 (engineType=${this.engineType})`);
       }
-    };
 
-    let fullStreamContent = '';
+      const engine = this.currentEngine;
+      const displayStep =
+        options.streamStepName || options.streamStepLabel || step;
 
-    const streamHandler = (event: EngineStreamEvent) => {
-      // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
-      // not accumulated into streamContent.
-      if (event.type === 'thought') {
+      // Register process in processManager so it's visible to the frontend.
+      const proc = processManager.registerExternalProcess(
+        processId,
+        agent,
+        displayStep,
+        options.runId,
+        options.stepId
+      );
+      (proc as any)._cancelFn = () => {
+        try {
+          engine.cancel();
+        } catch {
+          // Best-effort cancellation; process state is still marked as killed.
+        }
+      };
+
+      let fullStreamContent = '';
+
+      const streamHandler = (event: EngineStreamEvent) => {
+        // 'thought' events are forwarded separately (matching Claude Code's { thinking } field),
+        // not accumulated into streamContent.
+        if (event.type === 'thought') {
+          processManager.emit('stream', {
+            id: processId,
+            step: displayStep,
+            thinking: event.content,
+          });
+          return;
+        }
+
+        // Only accumulate 'text' events into the preview stream.
+        if (event.type !== 'text') return;
+
+        fullStreamContent += event.content;
+        const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
         processManager.emit('stream', {
           id: processId,
           step: displayStep,
-          thinking: event.content,
+          delta: event.content,
+          total: retainedPreview,
         });
-        return;
-      }
-
-      // Only accumulate 'text' events into the preview stream.
-      if (event.type !== 'text') return;
-
-      fullStreamContent += event.content;
-      const retainedPreview = processManager.appendStreamContent(processId, event.content) || event.content;
-      processManager.emit('stream', {
-        id: processId,
-        step: displayStep,
-        delta: event.content,
-        total: retainedPreview,
-      });
-    };
-
-    this.currentEngine.on('stream', streamHandler);
-
-    try {
-      const result = await this.currentEngine.execute({
-        agent, step, prompt, systemPrompt, model,
-        workingDirectory: options.workingDirectory,
-        allowedTools: options.allowedTools,
-        timeoutMs: options.timeoutMs,
-        sessionId: options.resumeSessionId,
-        appendSystemPrompt: options.appendSystemPrompt,
-        runId: options.runId,
-      });
-
-      // Mark process as completed
-      const rawProc = processManager.getProcessRaw(processId);
-      if (rawProc) {
-        rawProc.status = 'completed';
-        rawProc.endTime = new Date();
-        processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
-        rawProc.sessionId = result.sessionId;
-      }
-
-      // If engine reports failure, throw so the step is marked as failed
-      if (!result.success) {
-        const errorMsg = result.error || '引擎执行失败（无输出）';
-        if (rawProc) {
-          rawProc.status = 'failed';
-          processManager.setProcessError(processId, errorMsg);
-        }
-        throw new Error(`${this.engineType} 引擎执行失败: ${errorMsg}`);
-      }
-
-      const metadata = result.metadata;
-      const usage = normalizeEngineUsage(metadata);
-
-      return {
-        result: result.output,
-        session_id: result.sessionId || '',
-        is_error: false,
-        cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
-        duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
-        duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
-        num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
-        usage,
       };
-    } finally {
-      this.currentEngine.off('stream', streamHandler);
-    }
+
+      engine.on('stream', streamHandler);
+
+      try {
+        const result = await engine.execute({
+          agent, step, prompt, systemPrompt, model,
+          workingDirectory: options.workingDirectory,
+          allowedTools: options.allowedTools,
+          timeoutMs: options.timeoutMs,
+          sessionId: options.resumeSessionId,
+          appendSystemPrompt: options.appendSystemPrompt,
+          runId: options.runId,
+        });
+
+        // Mark process as completed
+        const rawProc = processManager.getProcessRaw(processId);
+        if (rawProc) {
+          rawProc.status = 'completed';
+          rawProc.endTime = new Date();
+          processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
+          rawProc.sessionId = result.sessionId;
+        }
+
+        // If engine reports failure, throw so the step is marked as failed
+        if (!result.success) {
+          const errorMsg = result.error || '引擎执行失败（无输出）';
+          if (rawProc) {
+            rawProc.status = 'failed';
+            processManager.setProcessError(processId, errorMsg);
+          }
+          throw new Error(`${this.engineType} 引擎执行失败: ${errorMsg}`);
+        }
+
+        const metadata = result.metadata;
+        const usage = normalizeEngineUsage(metadata);
+
+        return {
+          result: result.output,
+          session_id: result.sessionId || '',
+          is_error: false,
+          cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
+          duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
+          duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
+          num_turns: metadataNumber(metadata, 'num_turns', 'numTurns'),
+          usage,
+        };
+      } finally {
+        engine.off('stream', streamHandler);
+      }
+    });
   }
 
   private initializeAgents(workflowConfig: StateMachineWorkflowConfig): void {
@@ -2756,6 +2777,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     extraContext?: string
   ): Promise<string> {
     const runtimeAgentName = getStepRuntimeAgentName(step);
+    this.assertValidStepRuntimeAgent(step, state, runtimeAgentName);
     const agent = this.agents.find(a => a.name === runtimeAgentName);
     if (!agent) {
       throw new Error(`找不到 agent: ${runtimeAgentName}`);
@@ -2779,8 +2801,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.agentFlow.push({
       id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: 'stream',
-      fromAgent: step.agent,
-      toAgent: step.agent,
+      fromAgent: runtimeAgentName,
+      toAgent: runtimeAgentName,
       message: `开始执行步骤: ${step.name}`,
       stateName: state.name,
       stepName: step.name,
@@ -2794,7 +2816,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       id: stepId,
       state: state.name,
       step: step.name,
-      agent: step.agent,
+      agent: runtimeAgentName,
     });
     await this.appendSupervisorChatEvent({
       type: 'step-start',
@@ -2815,7 +2837,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
             {
               stateName: state.name,
               stepName: step.name,
-              agent: step.agent,
+              agent: runtimeAgentName,
             }
           );
           this.lastPreCommandOutput = preOutput.text || null;
@@ -2835,6 +2857,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (isEngineLevelFailure(output)) {
         throw new Error(output.trim() || '引擎返回致命错误输出');
       }
+      this.assertStepOutputIsNotSupervisorReview(step, state, runtimeAgentName, output);
       const conclusion = compactStepConclusion(stepResult.lastRoundOutput || output);
 
       agent.status = 'completed';
@@ -2848,7 +2871,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
         agent.sessionId = stepResult.sessionId;
       }
       this.markStepInactive(stepKey);
-      this.completedSteps.push(stepKey);
+      if (!this.completedSteps.includes(stepKey)) {
+        this.completedSteps.push(stepKey);
+      }
       this.removeCurrentProcess(stepId);
       this.markBoundSpecTasksForStep({
         step,
@@ -2901,12 +2926,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const currentStepIndex = state.steps.findIndex(s => s.name === step.name);
       if (currentStepIndex >= 0 && currentStepIndex < state.steps.length - 1) {
         const nextStep = state.steps[currentStepIndex + 1];
-        if (nextStep && nextStep.agent !== step.agent) {
+        const nextRuntimeAgentName = nextStep ? getStepRuntimeAgentName(nextStep) : '';
+        if (nextStep && nextRuntimeAgentName !== runtimeAgentName) {
           this.agentFlow.push({
             id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             type: 'stream',
-            fromAgent: step.agent,
-            toAgent: nextStep.agent,
+            fromAgent: runtimeAgentName,
+            toAgent: nextRuntimeAgentName,
             message: `步骤流转: ${step.name} -> ${nextStep.name}`,
             stateName: state.name,
             stepName: step.name,
@@ -2986,6 +3012,53 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
 
       throw error;
+    }
+  }
+
+  private assertValidStepRuntimeAgent(step: WorkflowStep, state: StateMachineState, runtimeAgentName: string): void {
+    const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    if (runtimeAgentName === supervisorName && step.agent !== supervisorName) {
+      throw new Error(
+        `状态机执行身份非法：Supervisor "${supervisorName}" 不能替代步骤 "${state.name}/${step.name}" 的 Agent "${step.agent}"`
+      );
+    }
+  }
+
+  private assertStepOutputIsNotSupervisorReview(
+    step: WorkflowStep,
+    state: StateMachineState,
+    runtimeAgentName: string,
+    output: string,
+  ): void {
+    const supervisorName = this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    if (runtimeAgentName === supervisorName || step.agent === supervisorName) return;
+
+    const normalized = normalizeGuardText(output);
+    if (!normalized) return;
+
+    const latestReview = this.latestSupervisorReview;
+    const latestReviewText = normalizeGuardText(latestReview?.content);
+    if (
+      latestReviewText.length > 80
+      && (
+        latestReviewText === normalized
+        || (normalized.length <= latestReviewText.length + 500 && latestReviewText.includes(normalized))
+        || (latestReviewText.length <= normalized.length + 500 && normalized.includes(latestReviewText))
+      )
+    ) {
+      throw new Error(
+        `状态机输出归属异常：步骤 "${state.name}/${step.name}" 收到了 Supervisor 审阅内容，拒绝标记为完成`
+      );
+    }
+
+    const looksLikeSupervisorReview =
+      normalized.includes('当前阶段结论')
+      && normalized.includes('是否建议继续迭代')
+      && normalized.includes('下一步指导意见');
+    if (looksLikeSupervisorReview) {
+      throw new Error(
+        `状态机输出归属异常：步骤 "${state.name}/${step.name}" 的输出疑似 Supervisor 阶段审阅，拒绝标记为完成`
+      );
     }
   }
 
@@ -3503,7 +3576,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       try {
         result = await this.executeWithEngine(
           currentProcessId,
-          step.agent,
+          runtimeAgentName,
           step.name,
           currentPrompt,
           systemPrompt,
