@@ -33,6 +33,31 @@ type PreflightCommand = {
   origin: 'workflow' | 'inferred';
 };
 
+export async function getWorkflowPreflightPlan(configFile: string, personalDir: string): Promise<{
+  cwd: string;
+  commands: PreflightCommand[];
+  policy: {
+    blockOnFailure: boolean;
+    allowOnWarning: boolean;
+    inferredCommandCount: number;
+  };
+}> {
+  const configPath = await getRuntimeWorkflowConfigPath(configFile);
+  const raw = await readFile(configPath, 'utf-8');
+  const config = parse(raw) as any;
+  const cwd = resolveProjectRoot(personalDir, config?.context?.projectRoot);
+  const commands = await collectPreflightCommands(config, cwd);
+  return {
+    cwd,
+    commands,
+    policy: {
+      blockOnFailure: true,
+      allowOnWarning: true,
+      inferredCommandCount: commands.filter((command) => command.origin === 'inferred').length,
+    },
+  };
+}
+
 async function inferProjectPreflightCommands(cwd: string): Promise<PreflightCommand[]> {
   const commands: PreflightCommand[] = [];
   let packageJson: any = null;
@@ -114,11 +139,7 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
     inferredCommandCount: number;
   };
 }> {
-  const configPath = await getRuntimeWorkflowConfigPath(configFile);
-  const raw = await readFile(configPath, 'utf-8');
-  const config = parse(raw) as any;
-  const cwd = resolveProjectRoot(personalDir, config?.context?.projectRoot);
-  const commands = await collectPreflightCommands(config, cwd);
+  const { cwd, commands, policy } = await getWorkflowPreflightPlan(configFile, personalDir);
 
   if (commands.length === 0) {
     return {
@@ -127,11 +148,7 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
       checks: [],
       failedCount: 0,
       warningCount: 0,
-      policy: {
-        blockOnFailure: true,
-        allowOnWarning: true,
-        inferredCommandCount: 0,
-      },
+      policy,
     };
   }
 
@@ -196,10 +213,6 @@ export async function runWorkflowPreflight(configFile: string, personalDir: stri
     checks,
     failedCount,
     warningCount,
-    policy: {
-      blockOnFailure: true,
-      allowOnWarning: true,
-      inferredCommandCount: checks.filter((check) => check.origin === 'inferred').length,
-    },
+    policy,
   };
 }

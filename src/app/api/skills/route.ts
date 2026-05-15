@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { existsSync } from 'fs';
+import { createReadStream, existsSync } from 'fs';
+import unzipper from 'unzipper';
 import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
 
@@ -93,10 +94,12 @@ export async function POST(request: NextRequest) {
     // Unzip
     const extractDir = path.join(tmpDir, 'extracted');
     await fs.mkdir(extractDir, { recursive: true });
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-    await execAsync(`unzip -o "${zipPath}" -d "${extractDir}"`, { maxBuffer: 50 * 1024 * 1024 });
+    await new Promise<void>((resolve, reject) => {
+      createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: extractDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
 
     type SkillImportCandidate = {
       sourceDir: string;

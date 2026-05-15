@@ -289,6 +289,7 @@ export async function POST(request: NextRequest) {
     (manager as any)._frontendSessionId = workflowChatSessionId;
     (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
     (manager as any)._initialContexts = initialContexts;
+    const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
     await appendChatSessionMessage(workflowChatSessionId, {
       role: 'assistant',
       content: [
@@ -299,7 +300,7 @@ export async function POST(request: NextRequest) {
         '</workflow-event>',
       ].join('\n'),
     }, { dedupeKey: `${Date.now()}-workflow-run-starting` }).catch(() => {});
-    (manager as any).start(configFile, undefined, preflightChecks, initialContexts).catch((err: any) => {
+    (manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId).catch((err: any) => {
       console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
       // Ensure status reflects the failure so frontend can detect it
       try {
@@ -312,6 +313,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: '工作流已启动',
+      runId,
       frontendSessionId: workflowChatSessionId,
     });
   } catch (error: any) {

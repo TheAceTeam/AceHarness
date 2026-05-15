@@ -1083,9 +1083,28 @@ export async function loadLatestCreationSessionByFilename(filename: string): Pro
 export async function updateCreationSession(id: string, patch: Partial<CreationSession>): Promise<CreationSession | null> {
   const existing = await loadCreationSession(id);
   if (!existing) return null;
+  const mergedSpecCoding = patch.specCoding
+    ? {
+        ...existing.specCoding,
+        ...patch.specCoding,
+        progress: patch.specCoding.progress
+          ? {
+              ...existing.specCoding.progress,
+              ...patch.specCoding.progress,
+            }
+          : existing.specCoding.progress,
+        artifacts: patch.specCoding.artifacts
+          ? {
+              ...existing.specCoding.artifacts,
+              ...patch.specCoding.artifacts,
+            }
+          : existing.specCoding.artifacts,
+      }
+    : existing.specCoding;
   const next = creationSessionSchema.parse({
     ...existing,
     ...patch,
+    specCoding: mergedSpecCoding,
     id: existing.id,
     updatedAt: Date.now(),
   });

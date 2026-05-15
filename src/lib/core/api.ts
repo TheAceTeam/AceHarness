@@ -18,8 +18,12 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, headers }).then(res => {
     if (res.status === 401 && typeof window !== 'undefined') {
       localStorage.removeItem('auth-token');
+      localStorage.removeItem('auth-user');
       // Dispatch a custom event so AuthGuard / page can react
       window.dispatchEvent(new CustomEvent('auth:expired'));
+      if (window.location.pathname !== '/login') {
+        window.location.replace('/login');
+      }
     }
     return res;
   });
@@ -1086,6 +1090,30 @@ export const runsApi = {
 };
 
 export const workflowApi = {
+  async preflightPreview(configFile: string): Promise<{
+    cwd: string;
+    commands: Array<{
+      command: string;
+      origin: 'workflow' | 'inferred';
+    }>;
+    policy: {
+      blockOnFailure: boolean;
+      allowOnWarning: boolean;
+      inferredCommandCount: number;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/workflow/preflight`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configFile }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || '获取启动前检查预览失败');
+    }
+    return data;
+  },
+
   async preflight(configFile: string): Promise<{
     ok: boolean;
     cwd: string;
@@ -1155,7 +1183,7 @@ export const workflowApi = {
         errorText?: string | null;
       }>;
     }>;
-  }): Promise<ApiResponse & { frontendSessionId?: string | null }> {
+  }): Promise<ApiResponse & { runId?: string | null; frontendSessionId?: string | null }> {
     const response = await authFetch(`${API_BASE}/workflow/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

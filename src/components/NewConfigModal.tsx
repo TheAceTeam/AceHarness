@@ -38,6 +38,7 @@ import {
   extractClarificationFormResult,
   extractPlanDraftResult,
   extractWorkflowDraftPreview,
+  getStructuredResultStreamPreview,
   type ClarificationAnswerValue,
   type ClarificationFormResult,
   type ClarificationQuestionItem,
@@ -352,13 +353,31 @@ function computeSimpleDiff(base: string, next: string): Array<{ type: 'same' | '
   return rows;
 }
 
-async function modalAuthJsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+async function modalAuthFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
   const response = await fetch(url, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers || {}),
+    },
+  });
+  if (response.status === 401 && typeof window !== 'undefined') {
+    localStorage.removeItem('auth-token');
+    localStorage.removeItem('auth-user');
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+    if (window.location.pathname !== '/login') {
+      window.location.replace('/login');
+    }
+  }
+  return response;
+}
+
+async function modalAuthJsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await modalAuthFetch(url, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
       ...(init?.headers || {}),
     },
   });
@@ -454,6 +473,11 @@ function stripResultBlocksForDisplay(markdown: string) {
   return stripUnclosedResultTail(markdown)
     .replace(/<result>[\s\S]*?<\/result>/gi, '')
     .trim();
+}
+
+function getDisplayContentForAiStream(markdown: string) {
+  const preview = getStructuredResultStreamPreview(markdown);
+  return preview.hasResult ? preview.text : stripResultBlocksForDisplay(markdown);
 }
 
 function formatWorkflowCondition(condition: any): string {
@@ -1995,7 +2019,7 @@ export default function NewConfigModal({
       );
     }
 
-    const { text, cards } = parseActions(stripResultBlocksForDisplay(msg.content));
+    const { text, cards } = parseActions(getDisplayContentForAiStream(msg.content));
     return (
       <div key={`${msg.role}-${index}`} className="space-y-3 rounded-lg border bg-muted/50 p-4">
         {text ? <Markdown>{text}</Markdown> : null}
@@ -2331,15 +2355,14 @@ export default function NewConfigModal({
     const workflowDraftAttempt = options?.workflowDraftAttempt || 0;
 
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
       const targetFrontendSessionId = await ensurePlanningChatSession();
       await persistStageSessionBinding('workflowDraft', {
         frontendSessionId: targetFrontendSessionId,
         backendSessionId: sessionId || backendSessionId,
       });
-      const startRes = await fetch('/api/chat/stream', {
+      const startRes = await modalAuthFetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
           model: aiModelRef.current,
@@ -3440,10 +3463,9 @@ export default function NewConfigModal({
         setCurrentStream('');
         setCurrentThinking('');
 
-        const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const startRes = await fetch('/api/chat/stream', {
+      const startRes = await modalAuthFetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message,
             model: aiModelRef.current,
@@ -3772,10 +3794,9 @@ ${recommendationPrompt}
       backendSessionId: backendSessionId,
     });
 
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const startRes = await fetch('/api/chat/stream', {
+    const startRes = await modalAuthFetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: clarificationRequestMessage,
         model: aiModelRef.current,
@@ -3870,10 +3891,9 @@ ${recommendationPrompt}
               ].join('\n');
 
               try {
-                const retryToken = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-                const retryRes = await fetch('/api/chat/stream', {
+                const retryRes = await modalAuthFetch('/api/chat/stream', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', ...(retryToken ? { Authorization: `Bearer ${retryToken}` } : {}) },
+                  headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     message: retryMessage,
                     model: aiModelRef.current,
@@ -4060,10 +4080,9 @@ ${recommendationPrompt}
       setCurrentStream('');
       setCurrentThinking('');
 
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const startRes = await fetch('/api/chat/stream', {
+      const startRes = await modalAuthFetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
           model: aiModelRef.current,
@@ -4719,12 +4738,10 @@ ${recommendationPrompt}
 
     setIsSavingWorkflowDraft(true);
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const response = await fetch('/api/configs/create', {
+      const response = await modalAuthFetch('/api/configs/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           ...values,
@@ -4881,12 +4898,10 @@ ${recommendationPrompt}
     }
 
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-      const response = await fetch('/api/configs/create', {
+      const response = await modalAuthFetch('/api/configs/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           ...values,
@@ -5001,10 +5016,7 @@ ${recommendationPrompt}
   };
 
   const createCreationSessionForExistingConfig = useCallback(async (filename: string) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const configResponse = await fetch(`/api/configs/${encodeURIComponent(filename)}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const configResponse = await modalAuthFetch(`/api/configs/${encodeURIComponent(filename)}`);
     if (!configResponse.ok) {
       throw new Error('读取已生成工作流配置失败');
     }
@@ -5012,13 +5024,12 @@ ${recommendationPrompt}
     const values = getValues();
     const { persistMode, specRoot } = normalizePersistSpecValues(values);
     const targetSessionId = previewSession?.id;
-    const sessionResponse = await fetch(targetSessionId
+    const sessionResponse = await modalAuthFetch(targetSessionId
       ? `/api/spec-coding/sessions/${encodeURIComponent(targetSessionId)}`
       : '/api/spec-coding/sessions', {
       method: targetSessionId ? 'PUT' : 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         chatSessionId: planningFrontendSessionId || previewSession?.chatSessionId || undefined,
@@ -5325,7 +5336,7 @@ ${recommendationPrompt}
                             ) : null}
                             {currentStream ? (
                               (() => {
-                                const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
+                                const { text, cards } = parseActions(getDisplayContentForAiStream(currentStream));
                                 return (
                                   <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                                     {text ? <Markdown>{text}</Markdown> : null}
@@ -5476,7 +5487,7 @@ ${recommendationPrompt}
                     ) : null}
                     {currentStream ? (
                       (() => {
-                        const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
+                        const { text, cards } = parseActions(getDisplayContentForAiStream(currentStream));
                         return (
                           <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                             {text ? <Markdown>{text}</Markdown> : null}
@@ -5606,7 +5617,7 @@ ${recommendationPrompt}
                     )}
                     {currentStream && (
                       (() => {
-                        const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
+                        const { text, cards } = parseActions(getDisplayContentForAiStream(currentStream));
                         return (
                           <div className="space-y-3 rounded-lg border bg-muted/50 p-4">
                             {text && <Markdown>{text}</Markdown>}
@@ -6476,7 +6487,7 @@ ${recommendationPrompt}
                         ) : null}
                         {currentStream ? (
                           (() => {
-                            const { text, cards } = parseActions(stripResultBlocksForDisplay(currentStream));
+                            const { text, cards } = parseActions(getDisplayContentForAiStream(currentStream));
                             return (
                               <div className="space-y-3 rounded-md border bg-background p-3">
                                 {text ? <Markdown>{text}</Markdown> : null}

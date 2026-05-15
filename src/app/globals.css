@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
+  pointer-events: none;
+}
+
 html {
   scrollbar-gutter: stable;
 }

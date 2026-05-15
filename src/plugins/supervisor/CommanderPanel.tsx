@@ -1,17 +1,30 @@
 // @ts-nocheck
 'use client';
 
+import { useRef } from 'react';
 import { cn } from '@/lib/core/utils';
 import { Button } from '@/components/ui/button';
+import { EngineSelect } from '@/components/EngineSelect';
 import { Input } from '@/components/ui/input';
+import { ModelSelect } from '@/components/ModelSelect';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { SingleCombobox } from '@/components/ui/combobox';
+import { CollaborationRoomSurface } from '@/components/collaboration/CollaborationRoomSurface';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import HumanQuestionInbox from '@/components/workflow/HumanQuestionInbox';
 import { WEREWOLF_ROLE_ASSETS, WEREWOLF_ROLEBOOK_ENTRIES } from '@/plugins/werewolf/role-assets';
 import { WEREWOLF_LAB_BOARDS, TEMP_WEREWOLF_AGENTS, describeWerewolfBoardRoles, getWerewolfBoardAbsentRoles } from '@/plugins/werewolf/agents';
+import {
+  getCollaborationInitials,
+  getCollaborationMessageKindLabel,
+  getCollaborationSpeakerAvatarSrc,
+  getVisibleWerewolfMessages,
+  handleCollaborationMentionKeyDown,
+  renderWerewolfSurfaceMessage,
+  shouldShowWerewolfSummaryCard,
+} from './collaboration-surface-adapters';
 import type { CommanderPanelContext } from './types';
 
 export interface CommanderPanelProps {
@@ -25,6 +38,7 @@ export interface CommanderPanelProps {
  * and Werewolf Lab UI. All state is received via the ctx prop.
  */
 export function CommanderPanel({ ctx }: CommanderPanelProps) {
+  const collaborationBottomRef = useRef<HTMLDivElement | null>(null);
   const {
     shouldShowWorkflowRuntimePanels, boundHumanQuestions, otherHumanQuestions,
     unansweredHumanQuestions, answerHumanQuestion, navigateToHumanQuestion,
@@ -66,6 +80,21 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
     workflowRoundtableAgents, preflightChecks, availableCollaborationAgents, reports,
     effectiveEngine, engine, model, activeSessionId, router,
   } = ctx;
+
+  const visibleCollaborationMessages = [...collaborationMessages].slice(-10);
+  const visibleWerewolfMessages = getVisibleWerewolfMessages({
+    collaborationMessages,
+    shouldHideWerewolfMessageFromChat,
+    canSeeWerewolfMessage,
+    werewolfState,
+    werewolfViewMode,
+    effectiveWerewolfNightViewer,
+  });
+  const shouldShowWerewolfLastSummary = shouldShowWerewolfSummaryCard({
+    lastSummary: werewolfState?.lastSummary,
+    visibleWerewolfMessages,
+    prepareWerewolfMessageForChat,
+  });
 
   return (
     <div className="space-y-4">
@@ -228,51 +257,35 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">主持人消息</label>
-                      <div className="relative">
-                        <Textarea
-                          ref={collaborationTextareaRef}
-                          value={collaborationDraft}
-                          onChange={(event) => setCollaborationDraft(event.target.value)}
-                          placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
-                          className="min-h-[86px]"
-                          onKeyDown={(event) => {
-                            if (mentionSuggestions.length > 0) {
-                              if (event.key === 'ArrowDown') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
-                                return;
-                              }
-                              if (event.key === 'ArrowUp') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
-                                return;
-                              }
-                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
-                                event.preventDefault();
-                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
-                                return;
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setCollaborationDraft((prev) => `${prev} `);
-                              }
-                            }
-                          }}
-                        />
-                        {renderMentionSuggestions()}
-                      </div>
-                    </div>
-
-                    <Button
-                      type="button"
-                      className="w-full"
-                      onClick={handleWorkflowGroupChat}
-                      disabled={collaborationBusy || workflowRoundtableAgents.length === 0}
-                    >
-                      {collaborationBusy ? '群聊进行中...' : '发送到工作流群聊'}
-                    </Button>
+                    <CollaborationRoomSurface
+                      messages={visibleCollaborationMessages}
+                      draft={collaborationDraft}
+                      onDraftChange={setCollaborationDraft}
+                      onSubmit={handleWorkflowGroupChat}
+                      submitLabel={collaborationBusy ? '群聊进行中...' : '发送到工作流群聊'}
+                      submitDisabled={collaborationBusy || workflowRoundtableAgents.length === 0}
+                      placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
+                      mentionTargets={workflowRoundtableAgents}
+                      onInsertMention={insertCollaborationMention}
+                      inputRef={collaborationTextareaRef}
+                      bottomRef={collaborationBottomRef}
+                      emptyText="还没有协作记录。可以先写一条主持人消息，用 @agent 或 @全员 指定下一位发言者。"
+                      helperText="工作流下的 Agent 天然构成一个群聊圆桌。用 @agent 或 @全员 控制下一轮顺序发言；没有新的 @ 时，本轮自然结束。"
+                      composerOverlay={renderMentionSuggestions()}
+                      onTextareaKeyDown={(event) => {
+                        handleCollaborationMentionKeyDown({
+                          event,
+                          mentionSuggestions,
+                          activeMentionIndex,
+                          setActiveMentionIndex,
+                          insertMention: insertCollaborationMention,
+                          setDraft: setCollaborationDraft,
+                        });
+                      }}
+                      getSpeakerAvatarSrc={getCollaborationSpeakerAvatarSrc}
+                      getInitials={getCollaborationInitials}
+                      getMessageKindLabel={getCollaborationMessageKindLabel}
+                    />
                   </>
                 ) : null}
 
@@ -790,7 +803,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                           </div>
                         </div>
                       ) : null}
-                        {werewolfState.lastSummary ? (
+                        {shouldShowWerewolfLastSummary ? (
                         <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                           {werewolfState.lastSummary}
                         </div>
@@ -810,53 +823,57 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                   )}
 
                   {isWerewolfConfigured ? (
-                    <div className={cn('space-y-2 rounded-lg border bg-muted/10 p-3', werewolfCardClass)}>
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-medium">人工介入</div>
-                          <div className="text-[10px] leading-5 text-muted-foreground">
-                            当前介入点：{werewolfHumanInterventionLabel}。补充内容会交给 Supervisor 带入下一步。
+                    <CollaborationRoomSurface
+                      messages={visibleWerewolfMessages}
+                      draft={collaborationDraft}
+                      onDraftChange={setCollaborationDraft}
+                      onSubmit={handleWerewolfSupervisorStep}
+                      submitLabel={collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
+                      submitDisabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
+                      placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
+                      mentionTargets={[]}
+                      onInsertMention={insertCollaborationMention}
+                      inputRef={collaborationTextareaRef}
+                      bottomRef={collaborationBottomRef}
+                      emptyText="还没有狼人杀记录。开始开局后，这里会显示回合消息、发言、票流和系统结算。"
+                      helperText={`当前介入点：${werewolfHumanInterventionLabel}。补充内容会交给 Supervisor 带入下一步。`}
+                      customControls={
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-medium">人工介入</div>
+                            <div className="text-[10px] leading-5 text-muted-foreground">
+                              Supervisor 主导回合推进；你可以在关键节点补充约束、追问方向或暂停观察。
+                            </div>
                           </div>
+                          <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
+                            {werewolfAutoRunning ? '自动中' : '可暂停'}
+                          </Badge>
                         </div>
-                        <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
-                          {werewolfAutoRunning ? '自动中' : '可暂停'}
-                        </Badge>
-                      </div>
-                      <div className="relative">
-                        <Textarea
-                          ref={collaborationTextareaRef}
-                          value={collaborationDraft}
-                          onChange={(event) => setCollaborationDraft(event.target.value)}
-                          placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
-                          className="min-h-[72px]"
-                          disabled={collaborationBusy}
-                          onKeyDown={(event) => {
-                            if (mentionSuggestions.length > 0) {
-                              if (event.key === 'ArrowDown') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
-                                return;
-                              }
-                              if (event.key === 'ArrowUp') {
-                                event.preventDefault();
-                                setActiveMentionIndex((prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length);
-                                return;
-                              }
-                              if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
-                                event.preventDefault();
-                                insertCollaborationMention(mentionSuggestions[activeMentionIndex] || mentionSuggestions[0]);
-                                return;
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setCollaborationDraft((prev) => `${prev} `);
-                              }
-                            }
-                          }}
-                        />
-                        {renderMentionSuggestions()}
-                      </div>
-                    </div>
+                      }
+                      composerOverlay={renderMentionSuggestions()}
+                      onTextareaKeyDown={(event) => {
+                        handleCollaborationMentionKeyDown({
+                          event,
+                          mentionSuggestions,
+                          activeMentionIndex,
+                          setActiveMentionIndex,
+                          insertMention: insertCollaborationMention,
+                          setDraft: setCollaborationDraft,
+                        });
+                      }}
+                      renderMessage={(message) => renderWerewolfSurfaceMessage({
+                        message,
+                        werewolfState,
+                        prepareWerewolfMessageForChat,
+                        getWerewolfSpeakerVisual,
+                        getWerewolfSpeakerInitial,
+                        formatWerewolfRole,
+                        formatWerewolfActionLabel,
+                      })}
+                      getSpeakerAvatarSrc={getCollaborationSpeakerAvatarSrc}
+                      getInitials={getCollaborationInitials}
+                      getMessageKindLabel={getCollaborationMessageKindLabel}
+                    />
                   ) : null}
 
                   <div className={cn('grid gap-2 rounded-lg border bg-muted/10 p-3 sm:grid-cols-[1fr_auto]', werewolfCardClass)}>
@@ -901,14 +918,16 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                   </div>
 
                   <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <Button
-                      type="button"
-                      className={werewolfGoldButtonClass}
-                      onClick={handleWerewolfSupervisorStep}
-                      disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
-                    >
-                      {collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
-                    </Button>
+                    {!isWerewolfConfigured ? (
+                      <Button
+                        type="button"
+                        className={werewolfGoldButtonClass}
+                        onClick={handleWerewolfSupervisorStep}
+                        disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
+                      >
+                        {collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
+                      </Button>
+                    ) : null}
                     <Button
                       type="button"
                       size="sm"
@@ -928,106 +947,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                 </div>
                 ) : null}
 
-                {!isWerewolfLab && collaborationMessages.length > 0 ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-medium text-foreground">最近讨论</div>
-                      {collaborationRounds.length > 0 ? (
-                        <Badge variant="outline" className="text-[10px]">回合 {collaborationRounds.length}</Badge>
-                      ) : null}
-                    </div>
-                  <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
-                      {[...collaborationMessages]
-                        .filter((message) => !isWerewolfLab || !shouldHideWerewolfMessageFromChat(message))
-                        .filter((message) => !isWerewolfLab || canSeeWerewolfMessage({
-                          message,
-                          state: werewolfState,
-                          viewMode: werewolfViewMode,
-                          viewer: effectiveWerewolfNightViewer,
-                        }))
-                        .slice(-10)
-                        .map((message) => {
-                        const displayMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
-                        const werewolfVisual = isWerewolfLab
-                          ? getWerewolfSpeakerVisual(message.speakerName, werewolfState?.players)
-                          : null;
-                        const werewolfPlayer = werewolfState?.players?.find((item) => item.agentName === message.speakerName);
-                        const isStreamingPlaceholder = message.status === 'pending' && !displayMessage.content.trim();
-                        const tone =
-                          werewolfVisual
-                            ? `${werewolfVisual.card} shadow-[0_14px_30px_rgba(0,0,0,0.28)]`
-                            : message.speakerType === 'human'
-                            ? 'border-primary/30 bg-primary/5'
-                            : message.speakerType === 'supervisor'
-                              ? 'border-amber-500/30 bg-amber-500/5'
-                              : message.speakerType === 'system'
-                                ? 'border-muted bg-muted/30'
-                                : 'border-sky-500/25 bg-sky-500/5';
-                        return (
-                          <div key={message.id} className={`relative overflow-hidden rounded-[24px] border p-3 text-xs ${tone}`}>
-                            <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
-                            {werewolfVisual ? <span className="pointer-events-none absolute -left-1 top-7 h-3.5 w-3.5 rotate-45 border-b border-l border-current/10 bg-inherit" /> : null}
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold shadow-[0_8px_18px_rgba(0,0,0,0.24)] ${
-                                  werewolfVisual
-                                    ? `${werewolfVisual.avatar} ${message.status === 'pending' ? 'animate-pulse shadow-[0_0_0_4px_rgba(251,191,36,0.08)]' : ''}`
-                                    : message.speakerType === 'supervisor'
-                                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                                      : message.speakerType === 'system'
-                                        ? 'border-muted bg-muted/60 text-muted-foreground'
-                                        : 'border-primary/30 bg-primary/10 text-primary'
-                                }`}>
-                                  {message.speakerType === 'system' ? '系' : getWerewolfSpeakerInitial(message.speakerName)}
-                                </span>
-                                <div className="min-w-0">
-                                  <div className={`truncate font-semibold ${werewolfVisual?.name || 'text-foreground'}`}>{message.speakerName}</div>
-                                  {werewolfVisual ? (
-                                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
-                                      <span className="rounded-full border border-white/10 bg-black/15 px-1.5 py-0.5 text-[9px] text-current/80">
-                                        {werewolfPlayer ? formatWerewolfRole(werewolfPlayer.role) : '玩家'}
-                                      </span>
-                                      {message.werewolf?.visibility && message.werewolf.visibility !== 'public' ? (
-                                        <span className="rounded-full border border-white/10 bg-black/15 px-1.5 py-0.5 text-[9px] text-current/80">
-                                          {message.werewolf.visibility === 'werewolves' ? '狼队可见' : message.werewolf.visibility === 'private' ? '私聊' : '上帝'}
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              </div>
-                              <div className="flex shrink-0 items-center gap-1">
-                                {isWerewolfLab && message.werewolf?.action ? (
-                                  <Badge variant="secondary" className="border-white/10 bg-background/25 text-[9px] text-current/85">
-                                    {formatWerewolfActionLabel(message.werewolf.action)}
-                                  </Badge>
-                                ) : null}
-                                <Badge variant={message.status === 'error' ? 'destructive' : 'outline'} className="text-[9px]">
-                                  {message.speakerType === 'human' ? '主持' : message.speakerType === 'supervisor' ? '总结' : message.speakerType === 'system' ? '系统' : 'Agent'}
-                                </Badge>
-                                <span className="text-[10px] text-muted-foreground">
-                                  {new Date(message.createdAt).toLocaleTimeString()}
-                                </span>
-                              </div>
-                            </div>
-                            <div className={`mt-2 whitespace-pre-wrap break-words leading-6 text-muted-foreground ${isStreamingPlaceholder ? 'flex min-h-[56px] items-center justify-center' : ''}`}>
-                              {message.status === 'pending' ? (
-                                <div className="mb-2 flex items-center text-[11px] text-muted-foreground/80">
-                                  <WerewolfSpeakingIndicator compact />
-                                </div>
-                              ) : null}
-                              {!isStreamingPlaceholder ? displayMessage.content : null}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : !isWerewolfLab ? (
-                  <div className="rounded-xl border border-dashed p-4 text-xs leading-5 text-muted-foreground">
-                    还没有协作记录。可以先写一条主持人消息，用 @agent 或 @全员 指定下一位发言者。
-                  </div>
-                ) : null}
+                {null}
               </div>
 
               {shouldShowWorkflowRuntimePanels ? (

@@ -140,6 +140,7 @@ describe('workflow start flow', () => {
     expect(runWorkflowPreflight).not.toHaveBeenCalled();
     const json = await responseJson(response);
     expect(json.success).toBe(true);
+    expect(json.runId).toBeTruthy();
   });
 
   test('rehearsal mode returns runId with rehearsal.enabled=true', async () => {
@@ -228,6 +229,7 @@ describe('workflow start flow', () => {
     const json = await responseJson(response);
     expect(json.success).toBe(true);
     expect(json.message).toContain('启动');
+    expect(json.runId).toBeTruthy();
 
     // manager.start() is called asynchronously (fire-and-forget)
     // Wait a tick for the async call
@@ -236,7 +238,8 @@ describe('workflow start flow', () => {
       'test.yaml',
       undefined,
       [{ name: 'env', ok: true }],
-      { globalContext: '', phaseContexts: {} }
+      { globalContext: '', phaseContexts: {} },
+      json.runId
     );
   });
 });

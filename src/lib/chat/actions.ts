@@ -5,6 +5,7 @@
 import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/core/api';
 import { getWorkspaceSkillPath } from '@/lib/core/app-paths';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
+import { getStructuredResultStreamPreview } from '@/lib/ai/result-normalizers';
 import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
 
 // Action 类型枚举
@@ -577,8 +578,8 @@ export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
   hasSidebarHint: boolean;
 } {
   const content = String(raw || '');
-  const hasMachineResult = getResultSections(content).length > 0 || getDanglingResultRanges(content).length > 0;
-  if (!hasMachineResult) {
+  const resultPreview = getStructuredResultStreamPreview(content);
+  if (!resultPreview.hasResult) {
     return {
       visibleText: streaming ? stripIncompleteStreamingFence(content) : content,
       hasMachineResult: false,
@@ -588,7 +589,7 @@ export function normalizeAssistantDisplay(raw: string, streaming: boolean): {
 
   const parsed = parseActions(content);
   return {
-    visibleText: parsed.text,
+    visibleText: parsed.cards.length > 0 ? parsed.text : (resultPreview.text || parsed.text),
     hasMachineResult: true,
     hasSidebarHint: streaming ? false : parsed.sidebarHints.length > 0,
   };

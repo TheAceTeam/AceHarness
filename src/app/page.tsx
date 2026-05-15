@@ -57,6 +57,7 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 });
 
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
+const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
@@ -64,6 +65,9 @@ const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEd
 const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
+const DEFAULT_HOME_SIDEBAR_SIZE = 26;
+const MIN_HOME_SIDEBAR_SIZE = 20;
+const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
@@ -139,7 +143,7 @@ function ChatPageContent() {
   const {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
-    loading, sessionLoadingId, streamingMessageId, setStreamingMessageId,
+    loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction,
     skillSettings, setSessionWorkbenchState,
@@ -184,6 +188,12 @@ function ChatPageContent() {
   const [currentUser, setCurrentUser] = useState<{ username: string; email: string; role: 'admin' | 'user'; avatar?: string } | null>(null);
   const [homeSidebarTab, setHomeSidebarTab] = useState<HomeSidebarTab>('commander');
   const [homeSidebarMode, setHomeSidebarMode] = useState<HomeSidebarMode>('hidden');
+  const [homeSidebarSize, setHomeSidebarSize] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_HOME_SIDEBAR_SIZE;
+    const saved = Number(window.localStorage.getItem(HOME_SIDEBAR_WIDTH_STORAGE_KEY) || '');
+    if (!Number.isFinite(saved)) return DEFAULT_HOME_SIDEBAR_SIZE;
+    return Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, saved));
+  });
   const starterHandledRef = useRef(false);
   const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
   const lastHomeSidebarSyncRef = useRef('');
@@ -697,6 +707,42 @@ function ChatPageContent() {
     applyHomeSidebarState({ tab });
   }, [applyHomeSidebarState]);
 
+  const handleHomeSidebarLayout = useCallback((layout: Record<string, number> | number[]) => {
+    if (homeSidebarMode !== 'active') return;
+    const nextSize = Array.isArray(layout)
+      ? layout[1]
+      : layout['home-command-sidebar-panel'];
+    if (!Number.isFinite(nextSize)) return;
+    const clamped = Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, nextSize));
+    setHomeSidebarSize((prev) => Math.abs(prev - clamped) < 0.1 ? prev : clamped);
+    try {
+      window.localStorage.setItem(HOME_SIDEBAR_WIDTH_STORAGE_KEY, clamped.toFixed(2));
+    } catch {}
+  }, [homeSidebarMode]);
+
+  const mainInputMentionItems = useMemo(() => {
+    const room = activeSession?.sessionWorkbenchState?.collaborationRoom;
+    if (!room || !hasCollaborationSidebarContext) return [];
+    const names = new Set<string>();
+    if (homeSidebarTab === 'chatroom') {
+      names.add('全员');
+      names.add('AI 百灵鸟');
+      (room.chatroom?.participants || []).forEach((participant) => {
+        const name = String(participant || '').trim();
+        if (name) names.add(name);
+      });
+      (room.selectedAgents || []).forEach((name) => {
+        if (name) names.add(name);
+      });
+    } else if (homeSidebarTab === 'commander' || homeSidebarTab === 'workflow') {
+      names.add('全员');
+      (room.selectedAgents || []).forEach((name) => {
+        if (name) names.add(name);
+      });
+    }
+    return Array.from(names);
+  }, [activeSession?.sessionWorkbenchState?.collaborationRoom, hasCollaborationSidebarContext, homeSidebarTab]);
+
   const submitMessage = useCallback(async (text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
@@ -711,6 +757,14 @@ function ChatPageContent() {
 
     // Route to collaboration room if active
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
+      if (homeSidebarTab === 'chatroom' && activeSessionId && appendSessionMessage) {
+        await appendSessionMessage(activeSessionId, {
+          role: 'user',
+          content: normalized,
+          rawContent: normalized,
+          timestamp: Date.now(),
+        });
+      }
       collaborationMessageHandlerRef.current(normalized);
       editorRef.current?.focus();
       return;
@@ -722,7 +776,7 @@ function ChatPageContent() {
     }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [activeSessionId, appendSessionMessage, deleteMessage, editingMessageId, hasCollaborationSidebarContext, homeSidebarTab, loading, sendMessage, stopStreaming, unlockAutoScroll]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -964,10 +1018,34 @@ function ChatPageContent() {
     return callbacks;
   }, [messages, confirmAction, rejectAction, undoActionById, retryAction]);
 
+  const handleQuoteMessage = useCallback((messageId: string) => {
+    const message = messages.find((item) => item.id === messageId);
+    if (!message) return;
+    const collaborationCard = (message.cards || []).find((card: any) => card?.type === 'collaboration_speech');
+    const speakerName = collaborationCard?.speakerName
+      || (message.role === 'user' ? '用户' : message.role === 'assistant' ? 'AI' : '错误');
+    const sourceText = String(message.content || message.rawContent || '').trim();
+    if (!sourceText) return;
+    const quotedText = sourceText
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .slice(0, 30)
+      .map((line) => `> ${line}`)
+      .join('\n');
+    const prefix = editorRef.current?.isEmpty() ? '' : '\n\n';
+    const quoteMarkdown = `${prefix}> **${speakerName}：**\n${quotedText}\n\n`;
+    editorRef.current?.insertMarkdown(quoteMarkdown);
+    editorRef.current?.focus();
+  }, [messages]);
+
+  const isChatroomCentralTranscript = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
     streamingMessageId,
     forceFullWindow: Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled),
-  }), [messages, streamingMessageId, activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled]);
+    ...(isChatroomCentralTranscript
+      ? { minRecentMessages: 100, maxRecentMessages: 100, targetWeight: Number.MAX_SAFE_INTEGER }
+      : {}),
+  }), [messages, streamingMessageId, activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled, isChatroomCentralTranscript]);
 
   const renderedMessages = useMemo(() => {
     const hiddenCount = Math.max(0, messages.length - recentWindowSize);
@@ -1010,6 +1088,7 @@ function ChatPageContent() {
             onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
             onContinue={msg.role === 'error' ? continueFromMessage : undefined}
             onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+            onQuoteMessage={handleQuoteMessage}
             werewolfView={activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolfView}
             currentUser={currentUser}
           />
@@ -1024,7 +1103,7 @@ function ChatPageContent() {
         </div>
       );
     });
-  }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
+  }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook, handleQuoteMessage]);
   const hiddenMessageCount = Math.max(0, messages.length - recentWindowSize);
   const historicalMessageItems = useMemo(() => (
     hiddenMessageCount > 0
@@ -1203,8 +1282,12 @@ function ChatPageContent() {
         </div>
 
         <div className="flex-1 min-h-0">
-          <ResizablePanelGroup direction="horizontal" className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}>
-            <ResizablePanel defaultSize={homeSidebarMode === 'active' ? 74 : 100} minSize={42}>
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
+            onLayoutChanged={handleHomeSidebarLayout}
+          >
+            <ResizablePanel id="home-main-panel" defaultSize={homeSidebarMode === 'active' ? `${100 - homeSidebarSize}%` : '100%'} minSize="42%">
               <div className={cn('flex h-full min-h-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
                 <div className="flex-1 relative min-h-0">
                   <div
@@ -1303,10 +1386,12 @@ function ChatPageContent() {
                         onChange={(markdown) => setInput(markdown)}
                         placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
                         minHeight={76}
+                        className="[&_.ProseMirror]:text-[13px] [&_.ProseMirror]:leading-5 [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
                         disabled={false}
                         autoFocus={false}
                         showFullscreenToggle={!isMobile}
                         showToolbar={false}
+                        mentionItems={mainInputMentionItems}
                         trimPastedTrailingNewlines
                         footerContent={(
                           <>
@@ -1348,8 +1433,10 @@ function ChatPageContent() {
                 />
 
                 <ResizablePanel
-                  defaultSize={26}
-                  minSize={20}
+                  id="home-command-sidebar-panel"
+                  defaultSize={`${homeSidebarSize}%`}
+                  minSize={`${MIN_HOME_SIDEBAR_SIZE}%`}
+                  maxSize={`${MAX_HOME_SIDEBAR_SIZE}%`}
                   className="hidden lg:block"
                 >
                   <HomeCommandSidebar
@@ -1363,6 +1450,8 @@ function ChatPageContent() {
                     appendSessionMessage={appendSessionMessage}
                     updateSessionMessage={updateSessionMessage}
                     setStreamingMessageId={setStreamingMessageId}
+                    markSessionStreaming={markSessionStreaming}
+                    unmarkSessionStreaming={unmarkSessionStreaming}
                     onRegisterCollaborationHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
                     sidebarHint={latestSidebarHint}
                     activeTab={homeSidebarTab}
@@ -1399,26 +1488,45 @@ function ChatPageContent() {
 
         {/* Edit Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+            <DialogContent
+            className="max-w-2xl overflow-hidden p-0 flex flex-col gap-0"
+            resizableHeight
+            defaultHeight={500}
+            minHeight={360}
+            maxHeight={820}
+            onPointerDownOutside={(event) => {
+              const target = event.target as HTMLElement | null;
+              if (target?.closest('[data-rich-text-editor-fullscreen]')) {
+                event.preventDefault();
+              }
+            }}
+            onInteractOutside={(event) => {
+              const target = event.target as HTMLElement | null;
+              if (target?.closest('[data-rich-text-editor-fullscreen]')) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <DialogHeader className="border-b px-6 py-4">
               <DialogTitle>编辑消息</DialogTitle>
             </DialogHeader>
-            <div className="min-h-[200px]">
+            <div className="min-h-0 flex-1 px-6 py-4">
               {editDialogOpen && (
                 <RichTextEditor
                   ref={editEditorRef}
                   content={editContent}
                   onChange={(markdown) => setEditContent(markdown)}
                   placeholder="输入消息内容..."
-                  minHeight={200}
-                  maxHeight={400}
+                  minHeight={280}
+                  maxHeight={340}
                   autoFocus
                   showFullscreenToggle={true}
                   showToolbar={false}
+                  className="h-full"
                 />
               )}
             </div>
-            <DialogFooter>
+            <DialogFooter className="border-t px-6 py-4">
               <Button variant="outline" onClick={handleCancelEdit}>取消</Button>
               <Button onClick={handleConfirmEdit}>发送</Button>
             </DialogFooter>
@@ -1426,11 +1534,17 @@ function ChatPageContent() {
         </Dialog>
 
         <Dialog open={debugMode} onOpenChange={setDebugMode}>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
+          <DialogContent
+            className="max-w-3xl overflow-hidden p-0 flex flex-col gap-0"
+            resizableHeight
+            defaultHeight={620}
+            minHeight={360}
+            maxHeight={900}
+          >
+            <DialogHeader className="border-b px-6 py-4">
               <DialogTitle>System Prompt（实时）</DialogTitle>
             </DialogHeader>
-            <pre className="max-h-[60vh] overflow-y-auto rounded-xl border bg-black p-4 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
+            <pre className="min-h-0 flex-1 overflow-y-auto bg-black px-6 py-5 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
               {debugLoading ? '加载中...' : (debugPrompt || '')}
             </pre>
           </DialogContent>

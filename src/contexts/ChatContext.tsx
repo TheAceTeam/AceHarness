@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
-import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions } from '@/lib/chat/actions';
+import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 
 // --- Types ---
@@ -115,6 +115,8 @@ interface DashboardChatContextType {
   sessionLoadingId: string | null;
   streamingMessageId: string | null;
   setStreamingMessageId: (id: string | null) => void;
+  markSessionStreaming: (sessionId: string | null | undefined) => void;
+  unmarkSessionStreaming: (sessionId: string | null | undefined) => void;
   model: string;
   setModel: (m: string) => void;
   engine: string;
@@ -153,6 +155,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   sendMessage: async () => {}, stopStreaming: () => {},
   deleteMessage: () => {}, retryFromMessage: () => {}, continueFromMessage: async () => {},
   loading: false, activeStreamingSessionIds: [], recentlyCompletedSessionIds: [], sessionLoadingId: null, streamingMessageId: null, setStreamingMessageId: () => {},
+  markSessionStreaming: () => {}, unmarkSessionStreaming: () => {},
   model: '', setModel: () => {},
   engine: '', effectiveEngine: '', setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
@@ -722,7 +725,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               initialSnapshotReplayPending = false;
               accumulated += content;
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               setActiveSession(prev => {
                 if (!prev) return prev;
@@ -781,7 +785,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   } : prev.sessionWorkbenchState,
                   messages: prev.messages.map(m => m.id === recoveryMsg.id ? {
                     ...m, content: cleanText,
-                    rawContent: cards.length > 0 ? fullText : m.rawContent,
+                    rawContent: fullText !== cleanText ? fullText : m.rawContent,
                     cards: cards.length > 0 ? cards : m.cards,
                     costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
                   } : m),
@@ -1339,7 +1343,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const { content } = JSON.parse(e.data);
               accumulated += content;
               // Extract cards in real-time so they render immediately without waiting for stream to finish
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+              const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               updateActiveSession(s => {
                 const existingMsg = s.messages.find(m => m.id === followUpMsgId);
@@ -1379,7 +1384,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 } : s.sessionWorkbenchState,
                 messages: s.messages.map(m => m.id === followUpMsgId ? {
                   ...m, content: cleanText,
-                  rawContent: (newCards.length > 0 || newActionStates.length > 0) ? fullText : undefined,
+                  rawContent: fullText !== cleanText ? fullText : undefined,
                   actions: newActionStates.length > 0 ? newActionStates : undefined,
                   cards: newCards.length > 0 ? newCards : undefined,
                 } : m),
@@ -1427,7 +1432,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                             ...(s.sessionWorkbenchState || {}),
                             homeSidebar: latestSidebarHint,
                           } : s.sessionWorkbenchState,
-                          messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, cards: newCards } : m),
+                          messages: s.messages.map(m => m.id === followUpMsgId ? {
+                            ...m,
+                            content: cleanText,
+                            rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
+                            cards: newCards,
+                          } : m),
                         }));
                       }
                     })
@@ -1595,15 +1605,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             homeSidebar: latestSidebarHint,
           } : s.sessionWorkbenchState,
           updatedAt: Date.now(),
-          messages: s.messages.map((m) => m.id === assistantMsgId
-            ? {
-                ...m,
-                role: result.isError ? 'error' as const : 'assistant' as const,
-                content: parsed.text,
-                rawContent: parsed.cards.length > 0 ? responseContent : m.rawContent,
-                cards: parsed.cards.length > 0 ? parsed.cards : undefined,
-                engine: result.engine || m.engine,
-                model: result.model || m.model,
+                messages: s.messages.map((m) => m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      role: result.isError ? 'error' as const : 'assistant' as const,
+                      content: parsed.text,
+                      rawContent: responseContent !== parsed.text ? responseContent : m.rawContent,
+                      cards: parsed.cards.length > 0 ? parsed.cards : undefined,
+                      engine: result.engine || m.engine,
+                      model: result.model || m.model,
               }
             : m),
         }));
@@ -1684,7 +1694,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const { content } = JSON.parse(e.data);
             accumulated += content;
             // Extract cards in real-time so they render immediately without waiting for stream to finish
-            const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
+            const { text: parsedText, cards: newCards, sidebarHints } = parseActions(accumulated);
+            const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
             updateActiveSession(s => {
               const existingMsg = s.messages.find(m => m.id === assistantMsgId);
@@ -1835,6 +1846,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         } : s.sessionWorkbenchState,
                         messages: s.messages.map(m => m.id === assistantMsgId ? {
                           ...m, content: cleanText,
+                          rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
                           actions: newActionStates.length > 0 ? newActionStates : m.actions,
                           cards: newCards.length > 0 ? newCards : m.cards,
                         } : m),
@@ -2012,6 +2024,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             ...m,
             role: 'assistant' as const,
             content: cleanText,
+            rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
             actions: newActionStates.length > 0 ? newActionStates : undefined,
             cards: newCards.length > 0 ? newCards : undefined,
           } : m),
@@ -2053,7 +2066,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sessions, activeSessionId, activeSession,
       createSession, deleteSession, deleteSessions, renameSession, setActiveSessionId,
       sendMessage, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
-      loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId, model, setModel: handleSetModel,
+      loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
+      markSessionStreaming, unmarkSessionStreaming, model, setModel: handleSetModel,
       engine, effectiveEngine, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,

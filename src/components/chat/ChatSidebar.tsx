@@ -741,22 +741,24 @@ export default function ChatSidebar() {
             />
           </div>
         ) : (
-          visibleSessions.map(session => (
-            <SessionItem
-              key={session.id}
-              session={session}
-              active={session.id === activeSessionId}
-              selectable={manageMode && sessionView === 'chat'}
-              selected={selectedSessionIds.has(session.id)}
-              isStreaming={activeStreamingSessionIds.includes(session.id)}
-              isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
-              isLoadingSession={sessionLoadingId === session.id}
-              onClick={() => setActiveSessionId(session.id)}
-              onSelectChange={(checked) => toggleSessionSelected(session.id, checked)}
-              onDelete={() => { void requestDeleteSession(session); }}
-              onRename={(title) => renameSession(session.id, title)}
-            />
-          ))
+          <div className="mx-2 my-2 overflow-hidden rounded-2xl border border-border/45 bg-background/35 shadow-sm">
+            {visibleSessions.map(session => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                active={session.id === activeSessionId}
+                selectable={manageMode && sessionView === 'chat'}
+                selected={selectedSessionIds.has(session.id)}
+                isStreaming={activeStreamingSessionIds.includes(session.id)}
+                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isLoadingSession={sessionLoadingId === session.id}
+                onClick={() => setActiveSessionId(session.id)}
+                onSelectChange={(checked) => toggleSessionSelected(session.id, checked)}
+                onDelete={() => { void requestDeleteSession(session); }}
+                onRename={(title) => renameSession(session.id, title)}
+              />
+            ))}
+          </div>
         )}
       </div>
       {/* Skills 入口 */}
@@ -1479,13 +1481,13 @@ function SessionItem({
 
   const row = (
     <div
-      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${!compact ? 'border-b border-border/30' : 'rounded-lg'} transition-colors ${
+      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-xl' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
         active
-          ? 'border-l-4 border-l-primary bg-primary/10 pl-2 pr-3 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.10)]'
+          ? 'bg-primary/10 px-3 shadow-[inset_3px_0_0_hsl(var(--primary))]'
           : isWeChatBound
-            ? 'border-l-4 border-l-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 shadow-[inset_0_0_0_1px_rgba(26,173,25,0.14)] hover:bg-[#1AAD19]/[0.12]'
-            : 'border-l-4 border-l-transparent px-3 hover:bg-muted/50'
-      } ${isStreaming || isLoadingSession ? 'bg-primary/15 ring-1 ring-primary/20' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
+            ? 'bg-[#1AAD19]/[0.08] px-3 shadow-[inset_3px_0_0_#1AAD19] hover:bg-[#1AAD19]/[0.12]'
+            : 'px-3 hover:bg-muted/55'
+      } ${isStreaming ? 'bg-primary/15 ring-1 ring-primary/20' : isLoadingSession ? 'bg-muted/45' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
       onClick={() => {
         if (selectable) {
           onSelectChange?.(!selected);
@@ -1494,10 +1496,10 @@ function SessionItem({
         onClick();
       }}
     >
-      {isStreaming || isLoadingSession ? (
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-1 animate-pulse bg-primary" />
+      {isStreaming ? (
+        <div className="pointer-events-none absolute inset-y-3 left-2 w-1 rounded-full animate-pulse bg-primary" />
       ) : isRecentlyCompleted ? (
-        <div className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-emerald-500" />
+        <div className="pointer-events-none absolute inset-y-3 left-2 w-1 rounded-full bg-emerald-500" />
       ) : null}
       {selectable ? (
         <Checkbox
@@ -1581,11 +1583,11 @@ function SessionItem({
         </div>
       </div>
       {!selectable ? (
-        <div className="mt-0.5 flex shrink-0 items-center gap-0">
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-0 rounded-full bg-background/90 opacity-0 shadow-sm ring-1 ring-border/60 backdrop-blur transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6 opacity-60 hover:opacity-100"
+            className="h-7 w-7 rounded-full text-muted-foreground hover:bg-background/80 hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
               startRenaming();
@@ -1598,7 +1600,7 @@ function SessionItem({
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6 opacity-60 hover:opacity-100 text-destructive hover:text-destructive"
+            className="h-7 w-7 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
             onClick={(event) => {
               event.stopPropagation();
               onDelete();

@@ -478,6 +478,32 @@ describe('normalizeAssistantDisplay', () => {
       hasSidebarHint: false,
     });
   });
+
+  test('previews streamed structured result content instead of blanking assistant display', () => {
+    const payload = {
+      kind: 'plan_draft',
+      payload: {
+        summary: '生成正式计划',
+        goals: ['展示流式预览'],
+        artifacts: {
+          requirements: '# requirements.md\n\n- 必须在流式阶段可见',
+          design: '# design.md\n\n~~~mermaid\nflowchart TD\n  A --> B\n~~~',
+          tasks: '# tasks.md\n\n- [ ] T1.1 验证预览',
+        },
+      },
+    };
+    const body = JSON.stringify(payload, null, 2);
+    const raw = `AI 正在生成正式计划制品\n<result>\n${body.slice(0, body.indexOf('T1.1') + 4)}`;
+    const normalized = normalizeAssistantDisplay(raw, true);
+
+    expect(normalized.hasMachineResult).toBe(true);
+    expect(normalized.visibleText).toContain('AI 正在生成正式计划制品');
+    expect(normalized.visibleText).toContain('## 计划摘要');
+    expect(normalized.visibleText).toContain('# requirements.md');
+    expect(normalized.visibleText).toContain('```mermaid');
+    expect(normalized.visibleText).not.toContain('<result>');
+    expect(normalized.visibleText).not.toContain('"kind"');
+  });
 });
 
 describe('isSafeAction', () => {

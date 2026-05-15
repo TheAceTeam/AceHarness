@@ -7,17 +7,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { SingleCombobox } from '@/components/ui/combobox';
 import type { HomeSidebarHint } from '@/lib/core/home-sidebar-state';
-import type { AgentDraftState } from '@/lib/agent/draft';
+import { formatAgentDraftText, type AgentDraftState } from '@/lib/agent/draft';
 
 export type { AgentDraftState };
 
 export interface AgentDraftPreview {
-  name?: string;
-  team?: string;
-  activeEngine?: string;
-  description?: string;
-  capabilities?: string[];
-  systemPrompt?: string;
+  name?: unknown;
+  team?: unknown;
+  activeEngine?: unknown;
+  description?: unknown;
+  capabilities?: unknown[];
+  systemPrompt?: unknown;
 }
 
 export interface AgentPanelProps {
@@ -51,6 +51,16 @@ export function AgentPanel({
   onGenerateDraft,
   onCreateAgent,
 }: AgentPanelProps) {
+  const sidebarWorkingDirectory = formatAgentDraftText(sidebarHint?.agentDraft?.workingDirectory);
+  const previewName = formatAgentDraftText(agentDraftPreview?.name);
+  const previewTeam = formatAgentDraftText(agentDraftPreview?.team);
+  const previewActiveEngine = formatAgentDraftText(agentDraftPreview?.activeEngine);
+  const previewDescription = formatAgentDraftText(agentDraftPreview?.description);
+  const previewSystemPrompt = formatAgentDraftText(agentDraftPreview?.systemPrompt);
+  const previewCapabilities = (agentDraftPreview?.capabilities || [])
+    .map((capability) => formatAgentDraftText(capability).trim())
+    .filter(Boolean);
+
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border p-4">
@@ -58,10 +68,10 @@ export function AgentPanel({
         <p className="mt-2 text-xs text-muted-foreground leading-5">
           右侧触发正式引导弹框，而不是把创建过程塞进聊天气泡。
         </p>
-        {sidebarHint?.agentDraft?.workingDirectory ? (
+        {sidebarWorkingDirectory ? (
           <div className="mt-4 rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground space-y-1">
             <div className="font-medium text-foreground">当前识别到的工程上下文</div>
-            <div className="whitespace-normal break-all">目录：{sidebarHint.agentDraft.workingDirectory}</div>
+            <div className="whitespace-normal break-all">目录：{sidebarWorkingDirectory}</div>
           </div>
         ) : null}
         <div className="mt-4 flex gap-2">
@@ -156,9 +166,9 @@ export function AgentPanel({
       <div className="rounded-2xl border bg-gradient-to-br from-primary/10 via-background to-background p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium">{agentDraftPreview?.name || agentDraft.displayName || 'Agent 角色预览'}</div>
+            <div className="text-sm font-medium">{previewName || agentDraft.displayName || 'Agent 角色预览'}</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              {(agentDraftPreview?.team || agentDraft.team)} · {(agentDraftPreview?.activeEngine || engine || 'follow-global')}
+              {(previewTeam || agentDraft.team)} · {(previewActiveEngine || engine || 'follow-global')}
             </div>
           </div>
           <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-sky-400 to-indigo-600 text-white flex items-center justify-center shadow-lg">
@@ -166,11 +176,11 @@ export function AgentPanel({
           </div>
         </div>
         <div className="mt-3 text-xs text-muted-foreground leading-5 line-clamp-3">
-          {agentDraftPreview?.description || agentDraft.mission || '填写职责后会在这里显示角色卡预览。'}
+          {previewDescription || agentDraft.mission || '填写职责后会在这里显示角色卡预览。'}
         </div>
-        {agentDraftPreview?.capabilities?.length ? (
+        {previewCapabilities.length ? (
           <div className="mt-3 flex flex-wrap gap-1">
-            {agentDraftPreview.capabilities.slice(0, 4).map((capability) => (
+            {previewCapabilities.slice(0, 4).map((capability) => (
               <Badge key={capability} variant="outline">{capability}</Badge>
             ))}
           </div>
@@ -180,10 +190,10 @@ export function AgentPanel({
       {agentDraftPreview ? (
         <div className="rounded-2xl border p-4 space-y-2">
           <div className="text-sm font-medium">AI 草案预览</div>
-          <div className="text-xs text-muted-foreground break-all">name: {agentDraftPreview.name}</div>
-          <div className="text-xs text-muted-foreground">team: {agentDraftPreview.team}</div>
+          <div className="text-xs text-muted-foreground break-all">name: {previewName}</div>
+          <div className="text-xs text-muted-foreground">team: {previewTeam}</div>
           <div className="text-xs text-muted-foreground line-clamp-4 whitespace-pre-wrap">
-            {agentDraftPreview.systemPrompt}
+            {previewSystemPrompt}
           </div>
         </div>
       ) : null}

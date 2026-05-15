@@ -827,6 +827,7 @@ export class WorkflowManager extends EventEmitter {
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
     initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string> },
+    requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
       throw new Error('已有工作流正在运行');
@@ -875,7 +876,7 @@ export class WorkflowManager extends EventEmitter {
       const totalSteps = workflowConfig.workflow.phases.reduce(
         (sum, p) => sum + p.steps.length, 0
       );
-      const runId = `run-${formatTimestamp()}`;
+      const runId = requestedRunId || `run-${formatTimestamp()}`;
       this.currentRunId = runId;
 
       try {

@@ -72,7 +72,15 @@ export default function WorkflowSupervisorChatPanel({
   }, [activeSessionId, sessionId, setActiveSessionId]);
 
   const loaded = Boolean(sessionId && activeSession?.id === sessionId);
-  const messages = loaded ? activeSession?.messages || [] : [];
+  const messages = useMemo(() => {
+    if (!loaded) return [];
+    return (activeSession?.messages || []).filter((message) => {
+      const hasVisibleContent = Boolean((message.content || '').trim());
+      const hasAttachments = Boolean(message.actions?.length || message.cards?.length);
+      if (hasVisibleContent || hasAttachments) return true;
+      return message.id === streamingMessageId;
+    });
+  }, [activeSession?.messages, loaded, streamingMessageId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });

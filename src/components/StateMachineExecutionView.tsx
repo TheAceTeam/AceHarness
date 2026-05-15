@@ -5,10 +5,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
-import { GitBranch, Activity, MessageSquare, CheckCircle2 } from 'lucide-react';
+import { GitBranch, Activity, MessageSquare, CheckCircle2, Maximize2, X } from 'lucide-react';
 import StateMachineRuntimePanel, { formatStateName } from './StateMachineRuntimePanel';
 import StateMachineDiagram from './StateMachineDiagram';
+import AgentFormationDiagram from './AgentFormationDiagram';
 import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
+import type { AgentAvatarConfig, AgentRoleType, AgentTeam } from '@/lib/agent/personas';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;
@@ -147,6 +149,13 @@ interface StateMachineExecutionViewProps {
   supervisorFooter?: ReactNode;
   activeTabOverride?: string | null;
   hasPendingHumanQuestion?: boolean;
+  formationAgents?: Array<{
+    name: string;
+    team?: AgentTeam;
+    roleType?: AgentRoleType;
+    avatar?: AgentAvatarConfig | string | null;
+  }>;
+  supervisorAgent?: string | null;
 
   // 回调
   onStateClick?: (stateName: string) => void;
@@ -178,6 +187,8 @@ export default function StateMachineExecutionView({
   supervisorFooter,
   activeTabOverride,
   hasPendingHumanQuestion,
+  formationAgents = [],
+  supervisorAgent,
   onStateClick,
   onStepClick,
   onForceTransition,
@@ -185,6 +196,8 @@ export default function StateMachineExecutionView({
   const [activeTab, setActiveTab] = useState('overview');
   const [flowKindFilter, setFlowKindFilter] = useState<'all' | 'supervisor' | 'agent' | 'state' | 'concurrency'>('all');
   const [supervisorTimelineOpen, setSupervisorTimelineOpen] = useState(false);
+  const [supervisorPanelTab, setSupervisorPanelTab] = useState<'formation' | 'human' | 'timeline' | 'summary'>('human');
+  const [formationFullscreenOpen, setFormationFullscreenOpen] = useState(false);
 
   useEffect(() => {
     if (activeTabOverride) {
@@ -200,10 +213,30 @@ export default function StateMachineExecutionView({
     }
   }, [activeTabOverride]);
 
+  useEffect(() => {
+    if (hasPendingHumanQuestion) {
+      setSupervisorPanelTab('human');
+    }
+  }, [hasPendingHumanQuestion]);
+
   const handleOverviewStateClick = (stateName: string) => {
     setActiveTab('trace');
     onStateClick?.(stateName);
   };
+
+  const renderFormationDiagram = (className?: string) => (
+    <div className={className}>
+      <AgentFormationDiagram
+        states={states}
+        agents={formationAgents}
+        supervisorAgent={supervisorAgent}
+        currentStep={currentStep}
+        activeSteps={activeSteps}
+        status={status}
+        className={className ? 'h-full' : undefined}
+      />
+    </div>
+  );
 
   const visibleConcurrencyGroups = activeConcurrencyGroups.filter((group) => group.status === 'running');
   const concurrencyGroupsToDisplay = visibleConcurrencyGroups.length > 0
@@ -762,32 +795,77 @@ export default function StateMachineExecutionView({
               </div>
             </div>
 
-            {supervisorInteractionPanel ? (
-              supervisorInteractionPanel
-            ) : (
-              <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  当前没有待人工回复
-                </div>
-              </div>
-            )}
-
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold">会话记录</h3>
+                  <h3 className="font-semibold">Supervisor 面板</h3>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    默认聚焦当前圆桌会话与人工处理入口，编队状态和会话记录按需展开。
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px]">{supervisorTimeline.length} 条</Badge>
-                  <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSupervisorTimelineOpen(true)}>
-                    打开会话记录
-                  </Button>
-                </div>
+                <Tabs value={supervisorPanelTab} onValueChange={(value) => setSupervisorPanelTab(value as typeof supervisorPanelTab)} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:grid-cols-4">
+                    <TabsTrigger value="human" className={hasPendingHumanQuestion ? 'text-amber-700' : ''}>圆桌会议</TabsTrigger>
+                    <TabsTrigger value="formation">编队状态</TabsTrigger>
+                    <TabsTrigger value="timeline">会话记录</TabsTrigger>
+                    <TabsTrigger value="summary">结算总结</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="human" className="mt-4">
+                    {supervisorInteractionPanel ? (
+                      supervisorInteractionPanel
+                    ) : (
+                      <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                          当前没有待人工回复
+                        </div>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="formation" className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium">Agent 编队状态图</div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">{formationAgents.length} 个参与者</Badge>
+                        <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setFormationFullscreenOpen(true)}>
+                          <Maximize2 className="mr-1 h-3.5 w-3.5" />
+                          全屏查看
+                        </Button>
+                      </div>
+                    </div>
+                    {renderFormationDiagram()}
+                  </TabsContent>
+
+                  <TabsContent value="timeline" className="mt-4">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold">会话记录</h3>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">{supervisorTimeline.length} 条</Badge>
+                          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSupervisorTimelineOpen(true)}>
+                            打开会话记录
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="summary" className="mt-4">
+                    {supervisorFooter ? (
+                      supervisorFooter
+                    ) : (
+                      <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                        当前还没有可展示的结算总结
+                      </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
               </div>
             </div>
-
-            {supervisorFooter}
           </div>
         </TabsContent>
 
@@ -941,6 +1019,37 @@ export default function StateMachineExecutionView({
                 暂无 Supervisor 会话记录。
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={formationFullscreenOpen} onOpenChange={setFormationFullscreenOpen}>
+        <DialogContent className="max-w-none w-[96vw] h-[92vh] p-0 flex flex-col gap-0">
+          <DialogTitle className="sr-only">Agent 编队状态图</DialogTitle>
+          <div className="border-b px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">Agent 编队状态图</h3>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  以全屏视图查看 Supervisor 与各 Agent 的当前编队和运行态。
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px]">{formationAgents.length} 个参与者</Badge>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setFormationFullscreenOpen(false)}
+                  aria-label="关闭编队状态图全屏视图"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden p-5">
+            {renderFormationDiagram('h-full')}
           </div>
         </DialogContent>
       </Dialog>

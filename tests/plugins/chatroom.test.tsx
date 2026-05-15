@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ChatroomPanel } from '@/plugins/chatroom/ChatroomPanel';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
+import type { CollaborationRoomState } from '@/lib/core/home-sidebar-state';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -16,21 +17,83 @@ const mockAgents = [
   { name: 'Agent-Gamma', description: '测试工程师' },
 ];
 
+const mockToast = vi.fn();
 const mockCallAgent = vi.fn(async (agentName: string, message: string) => {
-  return `${agentName} 的回复：这是一个很好的观点，我认为我们应该继续讨论。`;
+  if (message.includes('输出收束总结')) {
+    return '共识：先做状态归一。\n分歧：是否先上投票。\n风险：体验和架构互相牵制。\n下一步：先重构 chatroom 状态。';
+  }
+  if (message.includes('聊天室正在就议题')) {
+    return '方案A\n理由：优先保守推进。';
+  }
+  if (message.includes('@Agent-Beta')) {
+    return `${agentName} 我先给观点，并请 @Agent-Beta 补充实现风险。`;
+  }
+  return `${agentName} 的回复：我支持先做结构重建。`;
 });
 
-const mockToast = vi.fn();
+function createEmptyRoom(): CollaborationRoomState {
+  return {
+    topic: '',
+    selectedAgents: [],
+    mode: 'roundtable',
+    messages: [],
+    rounds: [],
+    agentSessions: {},
+    chatroom: null,
+  };
+}
+
+function renderPanel() {
+  function Harness() {
+    const [room, setRoom] = React.useState<CollaborationRoomState>(createEmptyRoom());
+    const updateRoom = React.useCallback((updater: (room: CollaborationRoomState) => CollaborationRoomState) => {
+      setRoom((prev) => updater(prev));
+    }, []);
+
+    return (
+      <ChatroomPanel
+        availableAgents={mockAgents}
+        room={room}
+        updateRoom={updateRoom}
+        callAgent={mockCallAgent}
+        toast={mockToast}
+      />
+    );
+  }
+
+  return render(<Harness />);
+}
+
+async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole('button', { name: '新增成员' }));
+  const input = await screen.findByPlaceholderText('例如：一辩架构师');
+  await user.clear(input);
+  await user.type(input, name);
+  await user.click(screen.getByRole('button', { name: '添加成员' }));
+}
 
 describe('chatroom plugin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.scrollTo = vi.fn();
+    if (!Element.prototype.hasPointerCapture) {
+      Element.prototype.hasPointerCapture = () => false;
+    }
+    if (!Element.prototype.setPointerCapture) {
+      Element.prototype.setPointerCapture = () => {};
+    }
+    if (!Element.prototype.releasePointerCapture) {
+      Element.prototype.releasePointerCapture = () => {};
+    }
+    if (!Element.prototype.scrollIntoView) {
+      Element.prototype.scrollIntoView = () => {};
+    }
   });
 
   test('QuickActions shows chatroom action', () => {
     const onAction = vi.fn();
     render(<QuickActions onAction={onAction} />);
-    expect(screen.getByText('Agent 聊天室')).toBeInTheDocument();
+    expect(screen.getByText('Agent 剧场')).toBeInTheDocument();
   });
 
   test('QuickActionsBar shows chatroom in expanded section', async () => {
@@ -38,163 +101,127 @@ describe('chatroom plugin', () => {
     const onAction = vi.fn();
     render(<QuickActionsBar onAction={onAction} />);
 
-    // Not visible initially
-    expect(screen.queryByRole('button', { name: /Agent 聊天室/ })).toBeNull();
-
-    // Expand
+    expect(screen.queryByRole('button', { name: /Agent 剧场/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /快捷操作/ }));
-    expect(screen.getByRole('button', { name: /Agent 聊天室/ })).toBeInTheDocument();
-
-    // Click triggers correct action
-    await user.click(screen.getByRole('button', { name: /Agent 聊天室/ }));
+    expect(screen.getByRole('button', { name: /Agent 剧场/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Agent 剧场/ }));
     expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:chatroom');
   });
 
-  test('setup phase: select agents and start chatroom', async () => {
+  test('setup phase creates a product-style chatroom workspace', async () => {
     const user = userEvent.setup();
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
+    renderPanel();
 
-    // Shows setup UI
-    expect(screen.getByText('创建 Agent 聊天室')).toBeInTheDocument();
-    expect(screen.getByText('Agent-Alpha')).toBeInTheDocument();
-    expect(screen.getByText('Agent-Beta')).toBeInTheDocument();
-    expect(screen.getByText('Agent-Gamma')).toBeInTheDocument();
+    expect(screen.getByText('安排聊天室成员')).toBeInTheDocument();
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构 chatroom 为产品级');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
 
-    // Select 2 agents
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]); // Alpha
-    await user.click(checkboxes[1]); // Beta
-    expect(screen.getByText('已选择 2 个 Agent')).toBeInTheDocument();
-
-    // Enter topic
-    const topicInput = screen.getByPlaceholderText(/如何设计/);
-    await user.type(topicInput, '微服务架构设计');
-
-    // Start chatroom
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
-
-    // Should transition to chatting phase
-    expect(screen.getByText('当前话题')).toBeInTheDocument();
-    expect(screen.getByText('微服务架构设计')).toBeInTheDocument();
-    expect(screen.getByText('2 人')).toBeInTheDocument();
-    expect(mockToast).toHaveBeenCalledWith('success', expect.stringContaining('聊天室已创建'));
+    expect(await screen.findByText('重构 chatroom 为产品级')).toBeInTheDocument();
+    expect(screen.getByText('2 位成员')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith('success', 'Agent 剧场已创建');
   });
 
-  test('chatting phase: send message and get agent responses', async () => {
+  test('temporary participant is added into the left list and auto-selected', async () => {
     const user = userEvent.setup();
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
+    renderPanel();
 
-    // Setup chatroom
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]);
-    await user.click(checkboxes[1]);
-    await user.type(screen.getByPlaceholderText(/如何设计/), '测试话题');
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
+    await user.click(screen.getByRole('button', { name: '新增成员' }));
+    const nameInput = await screen.findByPlaceholderText('例如：一辩架构师');
+    await user.clear(nameInput);
+    await user.type(nameInput, '反方架构师');
+    const dialog = screen.getByRole('dialog', { name: '新增聊天室成员' });
+    await user.click(within(dialog).getAllByRole('combobox')[0]);
+    await user.click(await screen.findByText('临时人格'));
+    await user.type(
+      await screen.findByPlaceholderText(/描述这个成员的立场、关注点和表达方式/),
+      '反方辩手，专门从风险和反例出发质疑方案。'
+    );
+    await user.click(screen.getByRole('button', { name: '添加成员' }));
 
-    // Send a message
-    const textarea = screen.getByPlaceholderText(/发送消息/);
-    await user.type(textarea, '大家怎么看这个问题？');
-    await user.click(screen.getByRole('button', { name: '发送' }));
+    expect(screen.getAllByText('反方架构师').length).toBeGreaterThan(0);
 
-    // Wait for agent responses (both agents should respond sequentially)
+    await addMember(user, 'Agent-Alpha');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '临时参与者测试');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+
+    expect(await screen.findByText('临时参与者测试')).toBeInTheDocument();
+    expect(screen.getByText('2 位成员')).toBeInTheDocument();
+  });
+
+  test('sending a facilitated round runs agent replies and summary', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构 chatroom 为产品级');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+
+    const textarea = await screen.findByPlaceholderText(/输入 AI 百灵鸟/);
+    await user.type(textarea, '@Agent-Alpha 先说你对架构的判断');
+    await user.click(screen.getByRole('button', { name: '发起本轮' }));
+
     await waitFor(() => {
       expect(mockCallAgent).toHaveBeenCalled();
-      expect(screen.getByText(/你：/)).toBeInTheDocument();
+      expect(screen.getByText(/先说你对架构的判断/)).toBeInTheDocument();
     });
-    await waitFor(() => {
-      // At least one agent responded
-      expect(screen.getAllByText(/的回复/).length).toBeGreaterThanOrEqual(1);
-    }, { timeout: 3000 });
-  });
-
-  test('chatting phase: @mention targets specific agent', async () => {
-    const user = userEvent.setup();
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
-
-    // Setup
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]);
-    await user.click(checkboxes[1]);
-    await user.type(screen.getByPlaceholderText(/如何设计/), '测试');
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
-
-    // Send @mention message
-    const textarea = screen.getByPlaceholderText(/发送消息/);
-    await user.type(textarea, '@Agent-Alpha 你怎么看？');
-    await user.click(screen.getByRole('button', { name: '发送' }));
 
     await waitFor(() => {
-      // Only Alpha should respond
-      expect(mockCallAgent).toHaveBeenCalledTimes(1);
-      expect(mockCallAgent).toHaveBeenCalledWith('Agent-Alpha', expect.any(String));
+      expect(
+        mockCallAgent.mock.calls.some(
+          ([agentName, message]) => agentName === 'Agent-Alpha' && String(message).includes('输出收束总结')
+        )
+      ).toBe(true);
     });
   });
 
-  test('chatting phase: @mention buttons insert mention', async () => {
+  test('mention buttons insert targets into the composer', async () => {
     const user = userEvent.setup();
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
+    renderPanel();
 
-    // Setup
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]);
-    await user.click(checkboxes[1]);
-    await user.type(screen.getByPlaceholderText(/如何设计/), '测试');
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '测试 mention');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
 
-    // Click @mention button
-    await user.click(screen.getByRole('button', { name: '@Agent-Alpha' }));
-    const textarea = screen.getByPlaceholderText(/发送消息/) as HTMLTextAreaElement;
+    await user.click(await screen.findByRole('button', { name: '@Agent-Alpha' }));
+    const textarea = screen.getByPlaceholderText(/输入 AI 百灵鸟/) as HTMLTextAreaElement;
     expect(textarea.value).toContain('@Agent-Alpha');
   });
 
-  test('voting: agents vote on a question', async () => {
+  test('vote dialog collects results and closes the active vote', async () => {
     const user = userEvent.setup();
-    // Mock agent to return a vote option
-    mockCallAgent.mockImplementation(async (name, msg) => {
-      if (msg.includes('选项')) return '方案A';
-      return `${name} 回复`;
-    });
+    renderPanel();
 
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
-
-    // Setup
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]);
-    await user.click(checkboxes[1]);
-    await user.type(screen.getByPlaceholderText(/如何设计/), '测试');
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
-
-    // Mock window.prompt for vote
-    const promptMock = vi.spyOn(window, 'prompt');
-    promptMock.mockReturnValueOnce('用哪个方案？');
-    promptMock.mockReturnValueOnce('方案A, 方案B');
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '测试投票');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
 
     await user.click(screen.getByRole('button', { name: '发起投票' }));
+    await user.type(screen.getByPlaceholderText(/例如：chatroom 第一优先级/), '先做哪一步？');
+    await user.type(screen.getByPlaceholderText(/每行一个选项/), '方案A\n方案B');
+    await user.click(screen.getByRole('button', { name: '开始投票' }));
 
     await waitFor(() => {
       expect(mockCallAgent).toHaveBeenCalled();
-      expect(screen.getByText(/投票结果/)).toBeInTheDocument();
+      expect(screen.getByText(/投票结束：?「先做哪一步？」/)).toBeInTheDocument();
       expect(mockToast).toHaveBeenCalledWith('success', '投票完成');
     });
-
-    promptMock.mockRestore();
   });
 
-  test('reset: end chatroom returns to setup', async () => {
+  test('ending room returns to setup mode', async () => {
     const user = userEvent.setup();
-    render(<ChatroomPanel availableAgents={mockAgents} callAgent={mockCallAgent} toast={mockToast} />);
+    renderPanel();
 
-    // Setup and start
-    const checkboxes = screen.getAllByRole('checkbox');
-    await user.click(checkboxes[0]);
-    await user.click(checkboxes[1]);
-    await user.type(screen.getByPlaceholderText(/如何设计/), '测试');
-    await user.click(screen.getByRole('button', { name: /创建聊天室/ }));
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '结束房间');
+    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.click(await screen.findByRole('button', { name: '结束房间' }));
 
-    // End chatroom
-    await user.click(screen.getByRole('button', { name: '结束聊天室' }));
-
-    // Back to setup
-    expect(screen.getByText('创建 Agent 聊天室')).toBeInTheDocument();
+    expect(screen.getByText('安排聊天室成员')).toBeInTheDocument();
   });
 });

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { agentApi, configApi, workflowApi } from '@/lib/core/api';
 import type {
+  CollaborationChatroomState,
   CollaborationRoomMessage,
   CollaborationRoomState,
   CollaborationWerewolfAction,
@@ -30,6 +31,7 @@ import { WorkflowPanel } from '@/plugins/create-workflow/WorkflowPanel';
 import { CommanderPanel } from '@/plugins/supervisor/CommanderPanel';
 import type { CommanderPanelContext } from '@/plugins/supervisor/types';
 import { ChatroomPanel } from '@/plugins/chatroom/ChatroomPanel';
+import { createInitialChatroomState } from '@/plugins/chatroom/types';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import {
   buildWorkflowConversationDirectory,
@@ -248,10 +250,18 @@ function mergeCollaborationRoom(
     messages: patch.messages ?? prev?.messages ?? [],
     rounds: patch.rounds ?? prev?.rounds ?? [],
     agentSessions: patch.agentSessions ?? prev?.agentSessions ?? {},
+    chatroom: patch.chatroom ?? prev?.chatroom ?? null,
     werewolfLabConfig: patch.werewolfLabConfig ?? prev?.werewolfLabConfig,
     werewolf: patch.werewolf ?? prev?.werewolf ?? null,
     werewolfView: patch.werewolfView ?? prev?.werewolfView,
   };
+}
+
+function ensureCollaborationChatroom(room: CollaborationRoomState): CollaborationChatroomState {
+  return room.chatroom || createInitialChatroomState({
+    topic: room.topic || '',
+    participants: room.selectedAgents || [],
+  });
 }
 
 function areStringSetsEqual(set: Set<string>, values: string[]): boolean {
@@ -1537,6 +1547,8 @@ interface HomeCommandSidebarProps {
     }
   ) => Promise<void>;
   setStreamingMessageId?: (id: string | null) => void;
+  markSessionStreaming?: (sessionId: string | null | undefined) => void;
+  unmarkSessionStreaming?: (sessionId: string | null | undefined) => void;
   onRegisterCollaborationHandler?: (handler: (text: string) => void) => void;
   sidebarHint: HomeSidebarHint | null;
   activeTab: SidebarTab;
@@ -1576,6 +1588,8 @@ export default function HomeCommandSidebar({
   appendSessionMessage,
   updateSessionMessage,
   setStreamingMessageId,
+  markSessionStreaming,
+  unmarkSessionStreaming,
   onRegisterCollaborationHandler,
   sidebarHint,
   activeTab,
@@ -1642,6 +1656,8 @@ export default function HomeCommandSidebar({
   const [phaseTransitionBanner, setPhaseTransitionBanner] = useState<{ key: string; label: string } | null>(null);
   const collaborationPendingMessageIdRef = useRef<string | null>(null);
   const collaborationStreamingMessageIdRef = useRef<string | null>(null);
+  const collaborationStreamingSessionIdRef = useRef<string | null>(null);
+  const chatroomMainInputHandlerRef = useRef<((text: string) => void) | null>(null);
   const previousAliveSeatIdsRef = useRef<string[]>([]);
   const previousPhaseRef = useRef<string>('');
   const lastStatusSignatureRef = useRef('');
@@ -1984,6 +2000,26 @@ export default function HomeCommandSidebar({
     if (!sessionId || !appendSessionMessage) return;
     if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
+    const collaborationCard = !isWerewolfLab ? {
+      type: 'collaboration_speech',
+      speakerName: chatMessage.speakerName,
+      speakerType: chatMessage.speakerType,
+      actionLabel: chatMessage.chatroom?.kind === 'summary'
+        ? '总结'
+        : chatMessage.chatroom?.kind === 'vote-result'
+          ? '票决'
+          : chatMessage.chatroom?.kind === 'vote'
+            ? '投票'
+            : chatMessage.chatroom?.kind === 'topic-change'
+              ? '议题'
+              : chatMessage.chatroom?.kind === 'setup'
+                ? '开场'
+                : chatMessage.chatroom?.kind === 'host'
+                  ? '控场'
+                  : chatMessage.speakerType === 'system'
+                    ? '系统'
+                    : 'Agent',
+    } : null;
     const role = message.speakerType === 'human' ? 'user' : message.status === 'error' ? 'error' : 'assistant';
     void appendSessionMessage(sessionId, {
       id: `chat-${chatMessage.id}`,
@@ -1995,7 +2031,7 @@ export default function HomeCommandSidebar({
       model: chatMessage.model,
       cards: isWerewolfLab
         ? [createWerewolfChatCard(chatMessage, state?.players || werewolfState?.players), ...((chatMessage.cards || []).filter(Boolean))]
-        : chatMessage.cards,
+        : [...(collaborationCard ? [collaborationCard] : []), ...((chatMessage.cards || []).filter(Boolean))],
     });
   }, [
     activeSessionId,
@@ -2043,9 +2079,31 @@ export default function HomeCommandSidebar({
     if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
     const chatMessageId = `chat-${message.id}`;
     collaborationStreamingMessageIdRef.current = chatMessageId;
+    collaborationStreamingSessionIdRef.current = sessionId;
     // Mark this message as streaming in the central chat area
     setStreamingMessageId?.(chatMessageId);
+    markSessionStreaming?.(sessionId);
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
+    const collaborationCard = !isWerewolfLab ? {
+      type: 'collaboration_speech',
+      speakerName: chatMessage.speakerName,
+      speakerType: chatMessage.speakerType,
+      actionLabel: chatMessage.chatroom?.kind === 'summary'
+        ? '总结'
+        : chatMessage.chatroom?.kind === 'vote-result'
+          ? '票决'
+          : chatMessage.chatroom?.kind === 'vote'
+            ? '投票'
+            : chatMessage.chatroom?.kind === 'topic-change'
+              ? '议题'
+              : chatMessage.chatroom?.kind === 'setup'
+                ? '开场'
+                : chatMessage.chatroom?.kind === 'host'
+                  ? '控场'
+                  : chatMessage.speakerType === 'system'
+                    ? '系统'
+                    : 'Agent',
+    } : null;
     const role = message.speakerType === 'human' ? 'user' : message.status === 'error' ? 'error' : 'assistant';
     void appendSessionMessage(sessionId, {
       id: chatMessageId,
@@ -2057,29 +2115,53 @@ export default function HomeCommandSidebar({
       model: chatMessage.model,
       cards: isWerewolfLab
         ? [createWerewolfChatCard(chatMessage, state?.players || werewolfState?.players), ...((chatMessage.cards || []).filter(Boolean))]
-        : chatMessage.cards,
-    });
+        : [...(collaborationCard ? [collaborationCard] : []), ...((chatMessage.cards || []).filter(Boolean))],
+      });
   }, [
     activeSessionId,
     appendSessionMessage,
     ensureSessionId,
     isWerewolfLab,
+    markSessionStreaming,
     setStreamingMessageId,
     werewolfState?.players,
   ]);
 
   const updateStreamingCollaborationMessage = useCallback((message: CollaborationRoomMessage, state?: CollaborationWerewolfState | null) => {
-    const sessionId = activeSessionId || ensureSessionId();
+    const sessionId = collaborationStreamingSessionIdRef.current || activeSessionId || ensureSessionId();
     const messageId = `chat-${message.id}`;
     if (!sessionId || !updateSessionMessage) return;
     if (isWerewolfLab && shouldHideWerewolfMessageFromChat(message)) return;
     const chatMessage = isWerewolfLab ? prepareWerewolfMessageForChat(message) : message;
+    const collaborationCard = !isWerewolfLab ? {
+      type: 'collaboration_speech',
+      speakerName: chatMessage.speakerName,
+      speakerType: chatMessage.speakerType,
+      actionLabel: chatMessage.chatroom?.kind === 'summary'
+        ? '总结'
+        : chatMessage.chatroom?.kind === 'vote-result'
+          ? '票决'
+          : chatMessage.chatroom?.kind === 'vote'
+            ? '投票'
+            : chatMessage.chatroom?.kind === 'topic-change'
+              ? '议题'
+              : chatMessage.chatroom?.kind === 'setup'
+                ? '开场'
+                : chatMessage.chatroom?.kind === 'host'
+                  ? '控场'
+                  : chatMessage.speakerType === 'system'
+                    ? '系统'
+                    : 'Agent',
+    } : null;
     // Clear streaming indicator when message is complete
     if (message.status === 'done' || message.status === 'error') {
       if (collaborationStreamingMessageIdRef.current === messageId) {
         collaborationStreamingMessageIdRef.current = null;
         setStreamingMessageId?.(null);
       }
+      const streamingSessionId = collaborationStreamingSessionIdRef.current || sessionId;
+      collaborationStreamingSessionIdRef.current = null;
+      unmarkSessionStreaming?.(streamingSessionId);
     }
     void updateSessionMessage(sessionId, messageId, {
       role: message.status === 'error' ? 'error' : 'assistant',
@@ -2090,13 +2172,14 @@ export default function HomeCommandSidebar({
       timestamp: chatMessage.createdAt,
       cards: isWerewolfLab
         ? [createWerewolfChatCard(chatMessage, state?.players || werewolfState?.players), ...((chatMessage.cards || []).filter(Boolean))]
-        : chatMessage.cards,
+        : [...(collaborationCard ? [collaborationCard] : []), ...((chatMessage.cards || []).filter(Boolean))],
     });
   }, [
     activeSessionId,
     ensureSessionId,
     isWerewolfLab,
     setStreamingMessageId,
+    unmarkSessionStreaming,
     updateSessionMessage,
     werewolfState?.players,
   ]);
@@ -2369,52 +2452,68 @@ export default function HomeCommandSidebar({
     try {
       setStartingWorkflow(true);
       const sessionId = activeSessionId || ensureSessionId();
-      const preflight = await workflowApi.preflight(targetWorkflow);
-      setPreflightChecks(preflight.checks || []);
-      setSessionWorkbenchState((prev) => ({
-        ...(prev || {}),
-        latestPreflight: {
-          configFile: targetWorkflow,
-          checkedAt: Date.now(),
-          ok: preflight.ok,
-          failedCount: preflight.failedCount,
-          warningCount: preflight.warningCount,
-          policy: preflight.policy,
-          checks: (preflight.checks || []).slice(0, 8).map((check) => ({
-            id: check.id,
-            category: check.category,
-            status: check.status,
-            origin: check.origin,
-            summary: check.summary,
-            command: check.commands?.[0]?.command || '',
-            exitCode: check.commands?.[0]?.exitCode ?? null,
-            stdout: check.commands?.[0]?.stdout || '',
-            stderr: check.commands?.[0]?.stderr || '',
-            errorText: check.commands?.[0]?.errorText || '',
-          })),
-        },
-      }));
-      if (!preflight.ok) {
-        toast('error', `启动前检查未通过：${preflight.failedCount} 项失败`);
-        return;
-      }
-      if (preflight.warningCount > 0) {
-        const confirmed = await confirm({
-          title: '启动前检查存在警告',
-          description: buildPreflightWarningDescription(preflight.checks || []),
-          confirmLabel: '继续启动',
-          cancelLabel: '取消',
+      let approvedPreflightChecks: Awaited<ReturnType<typeof workflowApi.preflight>>['checks'] = [];
+      const preview = await workflowApi.preflightPreview(targetWorkflow);
+      if ((preview.commands || []).length > 0) {
+        const approved = await confirm({
+          title: '确认执行启动前检查命令',
+          description: `以下命令将在服务器侧于目录 ${preview.cwd} 中执行。确认无误后再继续：\n\n${preview.commands.map((item, index) => `${index + 1}. ${item.command}${item.origin === 'inferred' ? '  [推断]' : '  [配置]'}`).join('\n')}`,
+          confirmLabel: '确认执行',
+          cancelLabel: '跳过检查并继续',
           variant: 'default',
         });
-        if (!confirmed) {
-          toast('warning', '已取消启动，可先处理 preflight 警告');
-          return;
+        if (!approved) {
+          toast('warning', '已跳过启动前检查');
+        } else {
+          const preflight = await workflowApi.preflight(targetWorkflow);
+          approvedPreflightChecks = preflight.checks || [];
+          setPreflightChecks(preflight.checks || []);
+          setSessionWorkbenchState((prev) => ({
+            ...(prev || {}),
+            latestPreflight: {
+              configFile: targetWorkflow,
+              checkedAt: Date.now(),
+              ok: preflight.ok,
+              failedCount: preflight.failedCount,
+              warningCount: preflight.warningCount,
+              policy: preflight.policy,
+              checks: (preflight.checks || []).slice(0, 8).map((check) => ({
+                id: check.id,
+                category: check.category,
+                status: check.status,
+                origin: check.origin,
+                summary: check.summary,
+                command: check.commands?.[0]?.command || '',
+                exitCode: check.commands?.[0]?.exitCode ?? null,
+                stdout: check.commands?.[0]?.stdout || '',
+                stderr: check.commands?.[0]?.stderr || '',
+                errorText: check.commands?.[0]?.errorText || '',
+              })),
+            },
+          }));
+          if (!preflight.ok) {
+            toast('error', `启动前检查未通过：${preflight.failedCount} 项失败`);
+            return;
+          }
+          if (preflight.warningCount > 0) {
+            const confirmed = await confirm({
+              title: '启动前检查存在警告',
+              description: buildPreflightWarningDescription(preflight.checks || []),
+              confirmLabel: '继续启动',
+              cancelLabel: '取消',
+              variant: 'default',
+            });
+            if (!confirmed) {
+              toast('warning', '已取消启动，可先处理 preflight 警告');
+              return;
+            }
+          }
         }
       }
       await workflowApi.start(targetWorkflow, sessionId || undefined, {
         creationSessionId: runCreationSessionId,
         skipPreflight: true,
-        preflightChecks: preflight.checks || [],
+        preflightChecks: approvedPreflightChecks,
       });
       toast('success', `已启动工作流：${targetWorkflow}`);
       router.push(`/workbench/${encodeURIComponent(targetWorkflow)}?mode=run`);
@@ -2687,11 +2786,17 @@ export default function HomeCommandSidebar({
     specCodingDetails: workflowStatus?.specCodingDetails || null,
     collaborationTopic: collaborationTopic.trim() || collaborationRoom?.topic || '',
     collaborationSpeaker: agentName,
+    executionPolicy: collaborationRoom?.chatroom?.settings ? {
+      defaultEngine: collaborationRoom.chatroom.settings.defaultEngine || '',
+      defaultModel: collaborationRoom.chatroom.settings.defaultModel || '',
+      agentOverrides: collaborationRoom.chatroom.settings.agentOverrides || {},
+    } : undefined,
   }), [
     binding?.runId,
     binding?.supervisorSessionId,
     boundCommander,
     boundWorkflow,
+    collaborationRoom?.chatroom?.settings,
     collaborationRoom?.topic,
     collaborationTopic,
     effectiveWorkflowTarget,
@@ -2702,7 +2807,7 @@ export default function HomeCommandSidebar({
     agentName: string,
     message: string,
     roundId?: string,
-    messagePatch?: Pick<CollaborationRoomMessage, 'werewolf'>
+    messagePatch?: Pick<CollaborationRoomMessage, 'werewolf' | 'chatroom'>
   ) => {
     const { effectiveEngine, effectiveModel } = resolveWerewolfAgentRuntimeConfig(agentName);
     if (!effectiveEngine || !effectiveModel) {
@@ -2722,6 +2827,7 @@ export default function HomeCommandSidebar({
       speakerName: agentName,
       content: '',
       status: 'pending',
+      chatroom: messagePatch?.chatroom,
       werewolf: messagePatch?.werewolf,
     });
     updateCollaborationRoom((room) => ({
@@ -2870,7 +2976,8 @@ export default function HomeCommandSidebar({
     agentName: string,
     message: string,
     roundId?: string,
-    messagePatch?: Pick<CollaborationRoomMessage, 'werewolf'>
+    messagePatch?: Pick<CollaborationRoomMessage, 'werewolf' | 'chatroom'>,
+    temporaryRoleConfig?: Record<string, any>
   ) => {
     if (isWerewolfLab || isTemporaryWerewolfAgent(agentName) || agentName === TEMP_WEREWOLF_SUPERVISOR.name) {
       return callWerewolfLabAgent(agentName, message, roundId, messagePatch);
@@ -2884,6 +2991,7 @@ export default function HomeCommandSidebar({
       speakerName: agentName,
       content: '',
       status: 'pending',
+      chatroom: messagePatch?.chatroom,
       werewolf: messagePatch?.werewolf,
     });
     updateCollaborationRoom((room) => ({
@@ -2896,11 +3004,18 @@ export default function HomeCommandSidebar({
     appendStreamingCollaborationMessage(baseMessage, werewolfState);
     const stream = await agentApi.streamChat(agentName, {
       message,
-      mode: 'workflow-chat',
+      mode: temporaryRoleConfig ? 'standalone-chat' : 'workflow-chat',
       sessionId: existingSession || undefined,
       frontendSessionId: activeSessionId || undefined,
       workingDirectory: workflowDraft.workingDirectory || undefined,
-      workflowContext: buildCollaborationWorkflowContext(agentName),
+      workflowContext: temporaryRoleConfig ? {
+        frontendSessionId: activeSessionId || undefined,
+        collaborationTopic: collaborationTopic.trim() || collaborationRoom?.topic || '',
+        collaborationSpeaker: agentName,
+        roundId,
+        temporaryLab: 'chatroom',
+      } : buildCollaborationWorkflowContext(agentName),
+      temporaryRoleConfig: temporaryRoleConfig || undefined,
     });
     return await new Promise<string>((resolve, reject) => {
       let content = '';
@@ -2990,7 +3105,10 @@ export default function HomeCommandSidebar({
     boundCommander,
     buildCollaborationWorkflowContext,
     callWerewolfLabAgent,
+    collaborationRoom?.topic,
+    collaborationTopic,
     isWerewolfLab,
+    activeSessionId,
     updateCollaborationRoom,
     updateStreamingCollaborationMessage,
     werewolfState,
@@ -3026,6 +3144,10 @@ export default function HomeCommandSidebar({
   // Handler for messages from the main chat input (routed here when collaboration is active)
   const handleMainChatCollaborationMessage = useCallback((text: string) => {
     if (!text.trim()) return;
+    if (activeTab === 'chatroom' && chatroomMainInputHandlerRef.current) {
+      chatroomMainInputHandlerRef.current(text.trim());
+      return;
+    }
     const nextTopic = collaborationTopic.trim() || collaborationRoom?.topic || text.slice(0, 60);
     const hostMessage = createCollaborationMessage({
       speakerType: 'human',
@@ -3049,7 +3171,7 @@ export default function HomeCommandSidebar({
     setTimeout(() => {
       setCollaborationDraft('');
     }, 0);
-  }, [appendCollaborationMessageToChat, collaborationRoom?.topic, collaborationTopic, selectedCollaborationAgentList, updateCollaborationRoom]);
+  }, [activeTab, appendCollaborationMessageToChat, collaborationRoom?.topic, collaborationTopic, selectedCollaborationAgentList, updateCollaborationRoom]);
 
   // Register the handler with the parent (page.tsx)
   useEffect(() => {
@@ -5923,9 +6045,11 @@ export default function HomeCommandSidebar({
       chatroom: () => (
         <ChatroomPanel
           availableAgents={agents.map((a) => ({ name: a.name, description: a.description }))}
-          callAgent={async (agentName, message) => {
-            return callCollaborationAgent(agentName, message);
-          }}
+          room={collaborationRoom}
+          updateRoom={updateCollaborationRoom}
+          callAgent={async (agentName, message, roundId, messagePatch, temporaryRoleConfig) => (
+            callCollaborationAgent(agentName, message, roundId, messagePatch, temporaryRoleConfig)
+          )}
           toast={toast}
         />
       ),
@@ -6203,9 +6327,15 @@ export default function HomeCommandSidebar({
           {activeTab === 'chatroom' && (
             <ChatroomPanel
               availableAgents={agents.map((a) => ({ name: a.name, description: a.description }))}
-              callAgent={async (agentName, message) => {
-                return callCollaborationAgent(agentName, message);
+              room={collaborationRoom}
+              updateRoom={updateCollaborationRoom}
+              appendToCentralChat={appendCollaborationMessageToChat}
+              onRegisterMainInputHandler={(handler) => {
+                chatroomMainInputHandlerRef.current = handler;
               }}
+              callAgent={async (agentName, message, roundId, messagePatch, temporaryRoleConfig) => (
+                callCollaborationAgent(agentName, message, roundId, messagePatch, temporaryRoleConfig)
+              )}
               toast={toast}
             />
           )}

@@ -10,6 +10,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
+import { getStructuredResultStreamPreview } from '@/lib/ai/result-normalizers';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
@@ -117,6 +118,7 @@ interface ChatMessageProps {
   onEditMessage?: (messageId: string) => void;
   onContinue?: (messageId: string) => void; // For timeout recovery
   onSaveAsNotebook?: (messageId: string) => void;
+  onQuoteMessage?: (messageId: string) => void;
   werewolfView?: {
     mode: 'god' | 'night';
     viewer?: string;
@@ -291,6 +293,14 @@ function getWerewolfExtraCards(message: ChatMessageProps['message']) {
   return (message.cards || []).filter((card) => card?.type !== 'werewolf_speech');
 }
 
+function getCollaborationCard(message: ChatMessageProps['message']) {
+  return (message.cards || []).find((card) => card?.type === 'collaboration_speech') || null;
+}
+
+function getCollaborationExtraCards(message: ChatMessageProps['message']) {
+  return (message.cards || []).filter((card) => card?.type !== 'collaboration_speech');
+}
+
 function getWerewolfInitial(name: string): string {
   return name.replace(/\s+/g, '').slice(0, 1) || '?';
 }
@@ -313,7 +323,10 @@ function formatHiddenWerewolfContent(card: any): string {
 }
 
 function stripResultBlocks(content: string): string {
-  return String(content || '').replace(RESULT_BLOCK_PATTERN, '').trim();
+  const input = String(content || '');
+  const preview = getStructuredResultStreamPreview(input);
+  if (preview.hasResult) return preview.text;
+  return input.replace(RESULT_BLOCK_PATTERN, '').trim();
 }
 
 function formatMessageTime(timestamp?: number): string {
@@ -512,12 +525,62 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, werewolfView, currentUser }: ChatMessageProps) {
+function CollaborationChatBubble({ card, message, isStreaming = false }: { card: any; message: ChatMessageProps['message']; isStreaming?: boolean }) {
+  const sentAt = formatMessageTime(message.timestamp);
+  const speakerType = card?.speakerType || 'agent';
+  const isSupervisor = speakerType === 'supervisor';
+  const isSystem = speakerType === 'system';
+  const avatarClass = isSupervisor
+    ? 'border-sky-400/30 bg-sky-500/15 text-sky-700 dark:text-sky-300'
+    : isSystem
+      ? 'border-slate-400/20 bg-slate-500/10 text-slate-600 dark:text-slate-300'
+      : 'border-violet-400/25 bg-violet-500/12 text-violet-700 dark:text-violet-300';
+  const bubbleClass = isSupervisor
+    ? 'border-sky-400/25 bg-sky-50 text-sky-950 dark:bg-sky-950/45 dark:text-sky-50'
+    : isSystem
+      ? 'border-border bg-muted/60 text-foreground dark:bg-muted/70'
+      : 'border-violet-400/20 bg-violet-50 text-violet-950 dark:bg-violet-950/35 dark:text-violet-50';
+  const nameClass = isSupervisor
+    ? 'text-sky-700 dark:text-sky-300'
+    : isSystem
+      ? 'text-muted-foreground'
+      : 'text-violet-700 dark:text-violet-300';
+  const initial = String(card?.speakerName || 'A').replace(/\s+/g, '').slice(0, 1) || 'A';
+  return (
+    <div className="group flex items-start gap-3">
+      <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold shadow-sm ${avatarClass}`}>
+        {isSystem ? '系' : initial}
+      </div>
+      <div className="max-w-[85%] space-y-1">
+        <div className={`rounded-[24px] rounded-bl-[14px] border px-4 py-3 shadow-sm ${bubbleClass}`}>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className={`font-semibold ${nameClass}`}>{card?.speakerName || 'Agent'}</span>
+            {card?.actionLabel ? (
+              <span className="rounded-full border border-current/15 bg-background/50 px-2 py-0.5 text-[10px] text-current/80">
+                {card.actionLabel}
+              </span>
+            ) : null}
+          </div>
+          <div className="prose-sm prose-neutral max-w-none leading-6 text-current dark:prose-invert [&_p]:my-1">
+            <Markdown>{message.content || ''}</Markdown>
+          </div>
+          {isStreaming ? <div className="mt-2 text-[11px] opacity-70">生成中...</div> : null}
+        </div>
+        {sentAt ? (
+          <div className="px-1 text-[11px] text-muted-foreground opacity-70">{sentAt}</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, werewolfView, currentUser }: ChatMessageProps) {
   const { toast } = useToast();
   const [modelLabel, setModelLabel] = useState(message.model || '');
   const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
   const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
   const werewolfCard = message.role === 'assistant' ? getWerewolfCard(message) : null;
+  const collaborationCard = message.role === 'assistant' ? getCollaborationCard(message) : null;
   const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
   const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
   const actionTagClassName = isWorkflowActionTag
@@ -558,6 +621,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     const ok = await copyText(text);
     toast(ok ? 'success' : 'error', ok ? '已复制消息内容' : '复制失败');
   };
+  const actionBarClass = 'h-7 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5';
 
   if (message.role === 'user') {
     if (isActionTagMessage) {
@@ -569,42 +633,27 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
               <span className="whitespace-normal break-all">{message.content}</span>
             </div>
             {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
-          </div>
-          <div className="ml-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-            <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
-            </button>
-            {onDelete && (
-              <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
-                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+            <div className={`${actionBarClass} justify-center`}>
+              <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
               </button>
-            )}
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="引用">
+                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>format_quote</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
+                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       );
     }
     return (
       <div className="group flex justify-end items-start gap-2">
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
-          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
-          </button>
-          {onEditMessage && (
-            <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>edit</span>
-            </button>
-          )}
-          {onRetryFromMessage && (
-            <button onClick={() => onRetryFromMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="重试">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>refresh</span>
-            </button>
-          )}
-          {onDelete && (
-            <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
-            </button>
-          )}
-        </div>
         <div className="max-w-[78%] space-y-1">
           {sourceLabel ? (
             <div className="flex justify-end">
@@ -623,6 +672,31 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {sentAt}
           </div>
         ) : null}
+        <div className={`${actionBarClass} justify-end`}>
+          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+          </button>
+          {onQuoteMessage && (
+            <button onClick={() => onQuoteMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="引用">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>format_quote</span>
+            </button>
+          )}
+          {onEditMessage && (
+            <button onClick={() => onEditMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="编辑">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>edit</span>
+            </button>
+          )}
+          {onRetryFromMessage && (
+            <button onClick={() => onRetryFromMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="重试">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>refresh</span>
+            </button>
+          )}
+          {onDelete && (
+            <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
+            </button>
+          )}
+        </div>
         </div>
         <UserAvatar user={currentUser} />
       </div>
@@ -697,6 +771,16 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
             <span className="material-symbols-outlined text-sm">content_copy</span>
           </button>
+          {onQuoteMessage && (
+            <button onClick={() => onQuoteMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="引用">
+              <span className="material-symbols-outlined text-sm">format_quote</span>
+            </button>
+          )}
+          {!isStreaming && onSaveAsNotebook && (
+            <button onClick={() => onSaveAsNotebook(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="另存为 Notebook">
+              <span className="material-symbols-outlined text-sm">note_add</span>
+            </button>
+          )}
           {onDelete && (
             <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
               <span className="material-symbols-outlined text-sm">delete</span>
@@ -723,11 +807,47 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     );
   }
 
+  if (collaborationCard) {
+    const extraCards = getCollaborationExtraCards(message);
+    return (
+      <div className="group">
+        <CollaborationChatBubble card={collaborationCard} message={message} isStreaming={isStreaming} />
+        <div className={`ml-10 ${actionBarClass}`}>
+          <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
+            <span className="material-symbols-outlined text-sm">content_copy</span>
+          </button>
+          {onQuoteMessage && (
+            <button onClick={() => onQuoteMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="引用">
+              <span className="material-symbols-outlined text-sm">format_quote</span>
+            </button>
+          )}
+          {!isStreaming && onSaveAsNotebook && (
+            <button onClick={() => onSaveAsNotebook(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="另存为 Notebook">
+              <span className="material-symbols-outlined text-sm">note_add</span>
+            </button>
+          )}
+          {onDelete && (
+            <button onClick={() => onDelete(message.id)} className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive" title="删除">
+              <span className="material-symbols-outlined text-sm">delete</span>
+            </button>
+          )}
+        </div>
+        {extraCards.length ? (
+          <div className="ml-10 max-w-[85%] space-y-2">
+            {extraCards.map((card, index) => (
+              <UniversalCard key={index} card={card} onAction={onAction} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   // Assistant message
   return (
-    <div className="group flex items-start gap-2">
-      <AssistantAvatar />
-      <div className="max-w-[85%] space-y-1">
+      <div className="group flex items-start gap-2">
+        <AssistantAvatar />
+      <div className="max-w-[85%] min-w-0 space-y-1">
         {sourceLabel ? (
           <div>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
@@ -785,12 +905,16 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             {message.durationMs !== undefined && <span>· {(message.durationMs / 1000).toFixed(1)}s</span>}
           </div>
         )}
-      </div>
-      {!isStreaming && (
-        <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 pt-1">
+        {!isStreaming && (
+        <div className={`${actionBarClass} justify-start`}>
           <button onClick={() => { void copyMessageContent(); }} className="p-1 rounded hover:bg-muted text-muted-foreground" title="复制">
             <span className="material-symbols-outlined text-sm">content_copy</span>
           </button>
+          {onQuoteMessage && (
+            <button onClick={() => onQuoteMessage(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="引用">
+              <span className="material-symbols-outlined text-sm">format_quote</span>
+            </button>
+          )}
           {onSaveAsNotebook && (
             <button onClick={() => onSaveAsNotebook(message.id)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="另存为 Notebook">
               <span className="material-symbols-outlined text-sm">note_add</span>
@@ -803,6 +927,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           )}
         </div>
       )}
+      </div>
     </div>
   );
 });

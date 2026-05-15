@@ -208,7 +208,6 @@ export default function WorkflowsPage() {
         return next.size === prev.size ? prev : next;
       });
     } catch (error) {
-      console.error('Failed to load workflows:', error);
       toast('error', '无法加载工作流列表');
     } finally {
       setLoading(false);

@@ -82,6 +82,24 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 
     const body = await request.json();
     const patch = { ...body } as Record<string, any>;
+    if (patch.specCoding) {
+      patch.specCoding = {
+        ...existing.specCoding,
+        ...patch.specCoding,
+        progress: patch.specCoding.progress
+          ? {
+              ...existing.specCoding.progress,
+              ...patch.specCoding.progress,
+            }
+          : existing.specCoding.progress,
+        artifacts: patch.specCoding.artifacts
+          ? {
+              ...existing.specCoding.artifacts,
+              ...patch.specCoding.artifacts,
+            }
+          : existing.specCoding.artifacts,
+      };
+    }
     const rawPersistMode = patch.persistMode ?? patch.specCoding?.persistMode;
     const incomingPersistMode = rawPersistMode === 'repository'
       ? 'repository'

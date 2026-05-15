@@ -78,6 +78,14 @@ export interface CollaborationRoomMessage {
   error?: string | null;
   engine?: string;
   model?: string;
+  chatroom?: {
+    kind?: 'setup' | 'host' | 'agent' | 'system' | 'summary' | 'vote' | 'vote-result' | 'topic-change';
+    mode?: CollaborationChatroomMode;
+    voteId?: string;
+    mentions?: string[];
+    participants?: string[];
+    summaryTitle?: string;
+  };
   werewolf?: {
     phase?: CollaborationWerewolfPhase;
     action?: CollaborationWerewolfAction;
@@ -95,6 +103,93 @@ export interface CollaborationRoomRound {
   startedAt: number;
   completedAt?: number;
   summary?: string;
+}
+
+export type CollaborationChatroomStatus = 'setup' | 'running' | 'voting' | 'summarizing' | 'ended';
+export type CollaborationChatroomMode = 'broadcast' | 'mention-driven' | 'facilitated';
+
+export interface CollaborationChatroomRound {
+  id: string;
+  title?: string;
+  topic: string;
+  mode: CollaborationChatroomMode;
+  participants: string[];
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  summary?: string;
+  messageIds?: string[];
+}
+
+export interface CollaborationChatroomVote {
+  id: string;
+  question: string;
+  options: string[];
+  votes: Record<string, string>;
+  reasons?: Record<string, string>;
+  status: 'open' | 'closed';
+  allowAbstain?: boolean;
+  createdAt: number;
+  completedAt?: number;
+}
+
+export interface CollaborationChatroomSummary {
+  id: string;
+  roundId?: string;
+  title: string;
+  content: string;
+  generatedBy?: string;
+  createdAt: number;
+}
+
+export interface CollaborationChatroomTemporaryAgent {
+  id: string;
+  name: string;
+  personaPrompt: string;
+  engine?: string;
+  model?: string;
+  createdAt: number;
+}
+
+export interface CollaborationChatroomParticipant {
+  id: string;
+  name: string;
+  sourceType: 'agent' | 'custom';
+  sourceAgent?: string;
+  personaPrompt?: string;
+  useDefaultModel?: boolean;
+  engine?: string;
+  model?: string;
+  createdAt: number;
+}
+
+export interface CollaborationAgentExecutionOverride {
+  enabled?: boolean;
+  engine?: string;
+  model?: string;
+}
+
+export interface CollaborationChatroomState {
+  status: CollaborationChatroomStatus;
+  topic: string;
+  participants: string[];
+  facilitator?: string;
+  rounds: CollaborationChatroomRound[];
+  activeRoundId?: string;
+  activeVote?: CollaborationChatroomVote | null;
+  voteHistory: CollaborationChatroomVote[];
+  summaries: CollaborationChatroomSummary[];
+  settings: {
+    responseMode: CollaborationChatroomMode;
+    maxTurnsPerRound: number;
+    maxRepliesPerAgent: number;
+    autoSummarize: boolean;
+    defaultEngine?: string;
+    defaultModel?: string;
+    agentOverrides?: Record<string, CollaborationAgentExecutionOverride>;
+  };
+  participantRoster?: CollaborationChatroomParticipant[];
+  temporaryAgents?: CollaborationChatroomTemporaryAgent[];
 }
 
 export type CollaborationWerewolfPhase = 'setup' | 'night' | 'last-words' | 'day' | 'voting' | 'ended';
@@ -207,6 +302,7 @@ export interface CollaborationRoomState {
   messages: CollaborationRoomMessage[];
   rounds: CollaborationRoomRound[];
   agentSessions?: Record<string, string>;
+  chatroom?: CollaborationChatroomState | null;
   werewolfLabConfig?: {
     defaultEngine?: string;
     defaultModel?: string;

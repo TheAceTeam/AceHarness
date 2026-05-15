@@ -24,6 +24,7 @@ import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
 import ResizablePanels from '@/components/ResizablePanels';
 import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
@@ -40,6 +41,7 @@ import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -63,6 +65,7 @@ import {
 } from '@/lib/agent/conversations';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
@@ -134,6 +137,7 @@ type WorkflowStartRequest = {
   mode: 'rehearsal' | 'real';
   skipPreflight?: boolean;
   preflightChecks?: QualityCheckRecord[];
+  preflightPreview?: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null;
 };
 
 type WorkflowStartContexts = {
@@ -698,19 +702,21 @@ export default function WorkbenchPage() {
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
   const [showContextEditor, setShowContextEditor] = useState(false);
+  const [contextEditorGlobalDraft, setContextEditorGlobalDraft] = useState('');
+  const [contextEditorPhaseDrafts, setContextEditorPhaseDrafts] = useState<Record<string, string>>({});
+  const [contextEditorFocusTarget, setContextEditorFocusTarget] = useState('');
+  const [savingContextEditor, setSavingContextEditor] = useState(false);
   const [showPromptAnalysis, setShowPromptAnalysis] = useState(false);
   const [analyzingRunId, setAnalyzingRunId] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<any[]>([]);
   const [analysisSummary, setAnalysisSummary] = useState<any | null>(null);
   const [selectedOptimizations, setSelectedOptimizations] = useState<Set<number>>(new Set());
   const [applyingOptimization, setApplyingOptimization] = useState(false);
-  const [editingContextScope, setEditingContextScope] = useState<'global' | 'phase'>('global');
-  const [editingContextPhase, setEditingContextPhase] = useState('');
-  const [editingContextValue, setEditingContextValue] = useState('');
   const [showStartWorkflowDialog, setShowStartWorkflowDialog] = useState(false);
   const [pendingStartRequest, setPendingStartRequest] = useState<WorkflowStartRequest | null>(null);
   const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
   const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
+  const [startContextFocusTarget, setStartContextFocusTarget] = useState('');
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
@@ -1770,6 +1776,37 @@ export default function WorkbenchPage() {
     const remainder = displayWorkflowAgents.filter((agent) => !workflowDirectory.some((entry) => entry.label === agent.name));
     return [...ordered, ...remainder];
   }, [displayWorkflowAgents, workflowDirectory]);
+  const supervisorFormationAgents = useMemo(() => {
+    const names = new Set<string>();
+    const result: Array<{
+      name: string;
+      team?: any;
+      roleType?: any;
+      avatar?: any;
+    }> = [];
+
+    const pushAgent = (name?: string | null, fallback?: { team?: any; roleType?: any }) => {
+      const trimmed = name?.trim();
+      if (!trimmed || names.has(trimmed)) return;
+      names.add(trimmed);
+      const roleConfig = agentConfigs.find((role: any) => role.name === trimmed);
+      const runtimeAgent = orderedWorkflowAgents.find((agent) => agent.name === trimmed);
+      result.push({
+        name: trimmed,
+        team: roleConfig?.team || runtimeAgent?.team || fallback?.team || 'blue',
+        roleType: roleConfig?.roleType || fallback?.roleType || 'normal',
+        avatar: roleConfig?.avatar,
+      });
+    };
+
+    pushAgent(runtimeSupervisorAgent, { team: 'black-gold', roleType: 'supervisor' });
+    orderedWorkflowAgents.forEach((agent) => {
+      if (agent.name !== runtimeSupervisorAgent) {
+        pushAgent(agent.name);
+      }
+    });
+    return result;
+  }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent]);
   const workflowTokenAnalytics = useMemo(() => {
     const stepNameToPhase = new Map<string, string>();
     if (workflowConfig?.workflow?.mode === 'state-machine') {
@@ -2238,6 +2275,37 @@ export default function WorkbenchPage() {
     setHumanApprovalMinimizedPulse(false);
   }, []);
 
+  const clearTransientRunUiState = useCallback(() => {
+    setSelectedRun(null);
+    setRunDetail(null);
+    setViewingHistoryRun(false);
+    setPendingCheckpointPhase(null);
+    setFullStepOutput(null);
+    setMarkdownModal(null);
+    setActiveSteps([]);
+    setActiveConcurrencyGroups([]);
+    setPersistedStepLogs([]);
+    setRunStatusReason(null);
+    setSmStateHistory([]);
+    setSmIssueTracker([]);
+    setSmTransitionCount(0);
+    setSupervisorFlow([]);
+    setAgentFlow([]);
+    setRunStartTime(null);
+    setRunEndTime(null);
+    setFinalReview(null);
+    setQualityChecks([]);
+    setMemoryLayers(null);
+    setLatestSupervisorReview(null);
+    setRehearsalInfo(null);
+    dispatch({ type: 'SET_SELECTED_STEP', payload: null });
+    dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
+    dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: '' });
+    dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: false });
+    clearPendingHumanQuestion();
+    clearHumanApprovalData();
+  }, [clearHumanApprovalData, clearPendingHumanQuestion, dispatch]);
+
   const minimizeHumanApprovalDialog = useCallback(() => {
     if (!humanApprovalData && !pendingHumanQuestion) return;
     setHumanApprovalMinimized(true);
@@ -2639,9 +2707,9 @@ export default function WorkbenchPage() {
         setAvailableSkills(skillsData.skills?.map((s: any) => ({ name: s.name, description: s.description })) || []);
       } catch { /* ignore */ }
     } catch (error: any) {
-      console.error('加载工作流配置失败:', error);
+      const message = error?.message || '加载失败';
       if (!background) {
-        setLoadError(error.message || '加载失败');
+        setLoadError(message);
       }
     } finally {
       if (!background) {
@@ -2916,7 +2984,7 @@ export default function WorkbenchPage() {
     setEditingName(false);
   };
 
-  const requestStartWorkflow = useCallback((
+  const requestStartWorkflow = useCallback(async (
     mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
     options?: {
       skipPreflight?: boolean;
@@ -2926,15 +2994,26 @@ export default function WorkbenchPage() {
     const nextPhaseDrafts = Object.fromEntries(
       startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
     ) as Record<string, string>;
+    let preflightPreview: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null = null;
+    if (!options?.skipPreflight) {
+      try {
+        preflightPreview = await workflowApi.preflightPreview(configFile);
+      } catch (error: any) {
+        toast('error', error?.message || '获取启动前检查预览失败');
+        return;
+      }
+    }
     setPendingStartRequest({
       mode,
       skipPreflight: options?.skipPreflight,
       preflightChecks: options?.preflightChecks,
+      preflightPreview,
     });
     setStartGlobalContextDraft(globalContext || '');
     setStartPhaseContextDrafts(nextPhaseDrafts);
+    setStartContextFocusTarget(startContextTargets[0] || '');
     setShowStartWorkflowDialog(true);
-  }, [globalContext, phaseContexts, rehearsalMode, startContextTargets]);
+  }, [configFile, globalContext, phaseContexts, rehearsalMode, startContextTargets, toast]);
 
   const startWorkflow = async (
     mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
@@ -3022,16 +3101,9 @@ export default function WorkbenchPage() {
         }
         addLog('system', 'warning', `启动前检查存在 ${preflight.warningCount} 项警告，已人工确认后继续执行`);
       }
-      setViewingHistoryRun(false);
+      clearTransientRunUiState();
       dispatch({ type: 'RESET_RUN' });
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
-      setPersistedStepLogs([]);
-      setRunStatusReason(null);
-      setSmStateHistory([]);
-      setSmIssueTracker([]);
-      setSmTransitionCount(0);
-      setSupervisorFlow([]);
-      setAgentFlow([]);
       setWorkflowFrontendSessionId(null);
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
       setRehearsalProgressSteps((prev) => [...prev, isRehearsalStart ? '已通过检查，正在创建演练运行并等待结果' : '已通过检查，正在创建正式运行']);
@@ -3044,6 +3116,11 @@ export default function WorkbenchPage() {
           phaseContexts: normalizedPhaseContexts,
         },
       });
+      if (!isRehearsalStart && startResult.runId) {
+        dispatch({ type: 'SET_RUN_ID', payload: startResult.runId });
+        dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
+        updateUrl({ mode: 'run', run: startResult.runId });
+      }
       setWorkflowFrontendSessionId(startResult.frontendSessionId || null);
       if (isRehearsalStart && (startResult as any).rehearsal) {
         setRehearsalProgressSteps((prev) => [...prev, '演练执行完成，正在整理结果']);
@@ -3069,13 +3146,13 @@ export default function WorkbenchPage() {
     }
   };
 
-  const confirmStartWorkflow = useCallback(() => {
+  const confirmStartWorkflow = useCallback((preflightMode: 'run' | 'skip' = 'run') => {
     if (!pendingStartRequest) return;
     const request = pendingStartRequest;
     setShowStartWorkflowDialog(false);
     setPendingStartRequest(null);
     void startWorkflow(request.mode, {
-      skipPreflight: request.skipPreflight,
+      skipPreflight: request.skipPreflight || preflightMode === 'skip',
       preflightChecks: request.preflightChecks,
       initialContexts: {
         globalContext: startGlobalContextDraft,
@@ -3821,30 +3898,430 @@ export default function WorkbenchPage() {
     }
   };
 
-  const openContextEditor = (scope: 'global' | 'phase', phase?: string) => {
-    setEditingContextScope(scope);
-    setEditingContextPhase(phase || '');
-    setEditingContextValue(
-      scope === 'global' ? globalContext : (phase ? phaseContexts[phase] || '' : '')
-    );
+  const openContextEditor = (_scope: 'global' | 'phase' = 'global', phase?: string) => {
+    const nextPhaseDrafts = Object.fromEntries(
+      startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
+    ) as Record<string, string>;
+    setContextEditorGlobalDraft(globalContext || '');
+    setContextEditorPhaseDrafts(nextPhaseDrafts);
+    setContextEditorFocusTarget(phase || '');
     setShowContextEditor(true);
   };
 
   const saveContext = async () => {
     try {
+      setSavingContextEditor(true);
       const rid = runId || initialRunId || selectedRun?.id;
-      await workflowApi.setContext(editingContextScope, editingContextValue, editingContextPhase || undefined, rid || undefined, configFile);
-      if (editingContextScope === 'global') {
-        dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: editingContextValue });
-      } else if (editingContextPhase) {
-        dispatch({ type: 'SET_PHASE_CONTEXT', payload: { phase: editingContextPhase, context: editingContextValue } });
+
+      await workflowApi.setContext('global', contextEditorGlobalDraft, undefined, rid || undefined, configFile);
+      dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: contextEditorGlobalDraft });
+
+      for (const name of startContextTargets) {
+        const nextValue = contextEditorPhaseDrafts[name] || '';
+        await workflowApi.setContext('phase', nextValue, name, rid || undefined, configFile);
+        dispatch({ type: 'SET_PHASE_CONTEXT', payload: { phase: name, context: nextValue } });
       }
+
       setShowContextEditor(false);
       toast('success', '上下文已保存');
     } catch (error: any) {
       toast('error', `保存失败: ${error.message}`);
+    } finally {
+      setSavingContextEditor(false);
     }
   };
+
+  function ContextWorkspaceDialog(props: {
+    title: string;
+    description: string;
+    modeLabel: string;
+    globalDraft: string;
+    onGlobalDraftChange: (value: string) => void;
+    phaseDrafts: Record<string, string>;
+    onPhaseDraftChange: (name: string, value: string) => void;
+    focusTarget: string;
+    onFocusTargetChange: (value: string) => void;
+    footerText: string;
+    actionLabel: string;
+    actionBusyLabel: string;
+    actionBusy?: boolean;
+    actionDisabled?: boolean;
+    preflightPreview?: Awaited<ReturnType<typeof workflowApi.preflightPreview>> | null;
+    onCancel: () => void;
+    onSkipPreflight?: () => void;
+    onConfirm: () => void;
+  }) {
+    const [activeTab, setActiveTab] = useState<'overview' | 'global' | 'state'>('state');
+    const startupFlowEnabled = Boolean(props.preflightPreview || props.onSkipPreflight);
+    const [startupStep, setStartupStep] = useState<'context' | 'preflight'>(startupFlowEnabled ? 'context' : 'preflight');
+    const filledCount = startContextTargets.filter((name: string) => (props.phaseDrafts[name] || '').trim().length > 0).length;
+    const coverage = startContextTargets.length > 0 ? Math.round((filledCount / startContextTargets.length) * 100) : 0;
+    const currentTarget = props.focusTarget || startContextTargets[0] || '';
+    const currentTargetValue = currentTarget ? (props.phaseDrafts[currentTarget] || '') : '';
+    const previewCommands = props.preflightPreview?.commands || [];
+    const workflowCommandCount = previewCommands.filter((item) => item.origin === 'workflow').length;
+    const inferredCommandCount = previewCommands.filter((item) => item.origin === 'inferred').length;
+
+    return (
+      <div className="flex max-h-[92vh] w-[1120px] max-w-full flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl sm:rounded-3xl">
+        <div className="shrink-0 border-b border-border/70 bg-muted/20 px-4 py-4 sm:px-6 sm:py-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/15 bg-primary/10 text-primary shadow-sm">
+                  <span className="material-symbols-outlined text-[22px]">tune</span>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold">{props.title}</h3>
+                  <p className="mt-1 max-w-[720px] text-sm leading-6 text-muted-foreground">{props.description}</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline" className="h-6 rounded-full px-2.5 text-[10px]">全局 1 项</Badge>
+              <Badge variant="outline" className="h-6 rounded-full px-2.5 text-[10px]">{startContextScopeLabel} {startContextTargets.length} 项</Badge>
+              <Badge variant="secondary" className="h-6 rounded-full px-2.5 text-[10px]">{props.modeLabel}</Badge>
+            </div>
+          </div>
+
+          {startupFlowEnabled ? (
+            <div className="mt-5 flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${startupStep === 'context' ? 'border-primary bg-primary text-primary-foreground' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'}`}>
+                    1
+                  </div>
+                  <div className="text-sm font-medium">填写上下文</div>
+                </div>
+                <div className="h-px w-8 bg-border" />
+                <div className="flex items-center gap-2">
+                  <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${startupStep === 'preflight' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground'}`}>
+                    2
+                  </div>
+                  <div className="text-sm font-medium">确认检查与启动方式</div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {startupStep === 'context' ? (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Global</div>
+              <div className="mt-1 text-sm font-semibold">共享背景</div>
+              <div className="mt-1 text-xs text-muted-foreground">影响所有步骤的全局约束</div>
+            </div>
+            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{startContextScopeLabel}</div>
+              <div className="mt-1 text-sm font-semibold">局部注入</div>
+              <div className="mt-1 text-xs text-muted-foreground">只进入对应节点的 prompt</div>
+            </div>
+            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Coverage</div>
+              <div className="mt-1 text-sm font-semibold">{filledCount}/{startContextTargets.length || 0} 已填写</div>
+              <div className="mt-2"><Progress value={coverage} className="h-1.5" /></div>
+            </div>
+            <div className="rounded-2xl border border-border/60 bg-background/85 px-4 py-3">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Focus</div>
+              <div className="mt-1 truncate text-sm font-semibold">{currentTarget || `未选择${startContextScopeLabel}`}</div>
+              <div className="mt-1 text-xs text-muted-foreground">优先编辑高风险或高不确定节点</div>
+            </div>
+          </div>
+          ) : null}
+        </div>
+
+        {startupStep === 'context' ? (
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[280px,minmax(0,1fr)] xl:grid-cols-[320px,minmax(0,1fr)]">
+          <div className="min-h-0 overflow-hidden border-b border-border/70 bg-muted/10 lg:border-b-0 lg:border-r">
+            <div className="flex h-full min-h-0 flex-col p-4">
+              <div className="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">状态导航</div>
+              <Command className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
+                <CommandInput placeholder={`搜索${startContextScopeLabel}...`} />
+                <CommandList className="min-h-0 flex-1 overflow-y-auto">
+                  <CommandEmpty>没有匹配的{startContextScopeLabel}</CommandEmpty>
+                  <CommandGroup heading={`${startContextScopeLabel}列表`}>
+                    {startContextTargets.map((name: string, index: number) => {
+                      const filled = (props.phaseDrafts[name] || '').trim().length > 0;
+                      const selected = currentTarget === name;
+                      return (
+                        <CommandItem
+                          key={`context-target-${name}`}
+                          value={`${name} ${index + 1}`}
+                          onSelect={() => {
+                            props.onFocusTargetChange(name);
+                            setActiveTab('state');
+                          }}
+                          className={`cursor-pointer rounded-xl border px-3 py-3 transition-colors hover:bg-muted/40 ${selected ? 'border-blue-500/40 bg-blue-50 dark:bg-blue-950/20' : 'border-transparent'}`}
+                        >
+                          <div className="flex w-full items-center gap-3">
+                            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-semibold ${selected ? 'bg-blue-600 text-white' : 'bg-muted text-muted-foreground'}`}>
+                              {index + 1}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-sm font-medium">{name}</div>
+                              <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                                <span>{filled ? '已填写' : '待补充'}</span>
+                                <span className={`h-2 w-2 rounded-full ${filled ? 'bg-emerald-500' : 'bg-muted-foreground/35'}`} />
+                              </div>
+                            </div>
+                          </div>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </div>
+          </div>
+
+          <div className="min-h-0 min-w-0 overflow-hidden bg-background">
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="flex h-full flex-col">
+              <div className="shrink-0 border-b border-border/70 px-4 py-4 sm:px-5">
+                <TabsList className="grid w-full grid-cols-3 rounded-2xl sm:max-w-[420px]">
+                  <TabsTrigger value="overview" className="rounded-xl">总览</TabsTrigger>
+                  <TabsTrigger value="global" className="rounded-xl">全局</TabsTrigger>
+                  <TabsTrigger value="state" className="rounded-xl">{startContextScopeLabel}</TabsTrigger>
+                </TabsList>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5 sm:py-5">
+                <TabsContent value="overview" className="mt-0">
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+                      <div className="text-sm font-semibold">填写建议</div>
+                      <div className="mt-3 space-y-3 text-sm leading-6 text-muted-foreground">
+                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">全局上下文写不变约束、兼容策略和统一交付边界。</div>
+                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">{startContextScopeLabel}上下文写局部输入、特殊注意事项和额外检查点。</div>
+                        <div className="rounded-2xl border border-border/60 bg-background/80 p-3">优先补齐高风险节点，避免每个节点都复制同一段全局说明。</div>
+                      </div>
+                    </div>
+                    <div className="rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-semibold">覆盖率</div>
+                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{coverage}%</Badge>
+                      </div>
+                      <div className="mt-4"><Progress value={coverage} className="h-2" /></div>
+                      <div className="mt-4 space-y-2">
+                        {startContextTargets.slice(0, 6).map((name: string) => {
+                          const filled = (props.phaseDrafts[name] || '').trim().length > 0;
+                          return (
+                            <button
+                              key={`context-summary-${name}`}
+                              type="button"
+                              onClick={() => {
+                                props.onFocusTargetChange(name);
+                                setActiveTab('state');
+                              }}
+                              className="flex w-full items-center justify-between rounded-2xl border border-border/60 bg-background/80 px-3 py-2 text-left text-sm hover:bg-muted/40"
+                            >
+                              <span className="truncate">{name}</span>
+                              <Badge variant={filled ? 'secondary' : 'outline'} className="rounded-full px-2 text-[10px]">
+                                {filled ? '已填' : '空白'}
+                              </Badge>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  {props.preflightPreview && props.preflightPreview.commands.length > 0 ? (
+                    <div className="mt-4 rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold">启动前检查命令</div>
+                          <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                            以下命令会在服务器侧于目录 {props.preflightPreview.cwd} 中执行。你可以直接执行，也可以跳过本次检查。
+                          </div>
+                        </div>
+                        <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">
+                          {props.preflightPreview.commands.length} 条
+                        </Badge>
+                      </div>
+                      <div className="mt-4 space-y-2">
+                        {props.preflightPreview.commands.map((item, index) => (
+                          <div key={`preflight-preview-${index}-${item.command}`} className="rounded-2xl border border-border/60 bg-background/80 px-3 py-2">
+                            <div className="flex items-start justify-between gap-3">
+                              <code className="min-w-0 flex-1 whitespace-pre-wrap break-all text-xs leading-5 text-foreground">{item.command}</code>
+                              <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0 rounded-full px-2 text-[10px]">
+                                {item.origin === 'inferred' ? '推断' : '配置'}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </TabsContent>
+
+                <TabsContent value="global" className="mt-0">
+                  <div className="rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">全局上下文</Label>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">所有步骤都能看到。适合写共享原则，不适合堆局部执行细节。</p>
+                      </div>
+                      <Badge variant="secondary" className="rounded-full px-2.5 text-[10px]">共享</Badge>
+                    </div>
+                    <Textarea
+                      value={props.globalDraft}
+                      onChange={(e) => props.onGlobalDraftChange(e.target.value)}
+                      placeholder="例如：优先保持现有架构、接口变更先兼容旧调用方、代码风格跟随仓库现状"
+                      rows={16}
+                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm sm:min-h-[320px] lg:min-h-[420px]"
+                    />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="state" className="mt-0">
+                  <div className="rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <Label className="text-sm font-medium">{currentTarget || `当前${startContextScopeLabel}`}</Label>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          这里只编辑当前选中的{startContextScopeLabel}，内容只会注入对应节点。
+                        </p>
+                      </div>
+                      {currentTarget ? (
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{startContextScopeLabel}</Badge>
+                          <Badge variant={(currentTargetValue || '').trim() ? 'secondary' : 'outline'} className="rounded-full px-2.5 text-[10px]">
+                            {(currentTargetValue || '').trim() ? '已填写' : '待补充'}
+                          </Badge>
+                        </div>
+                      ) : null}
+                    </div>
+                    <Textarea
+                      value={currentTargetValue}
+                      onChange={(e) => {
+                        if (!currentTarget) return;
+                        props.onPhaseDraftChange(currentTarget, e.target.value);
+                      }}
+                      placeholder={currentTarget ? `输入仅对「${currentTarget}」生效的上下文` : `先从左侧选择一个${startContextScopeLabel}`}
+                      rows={16}
+                      disabled={!currentTarget}
+                      className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm disabled:opacity-60 sm:min-h-[320px] lg:min-h-[420px]"
+                    />
+                  </div>
+                </TabsContent>
+              </div>
+            </Tabs>
+          </div>
+        </div>
+        ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto bg-background px-4 py-4 sm:px-6 sm:py-6">
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-amber-500/30 bg-amber-500/8 p-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-amber-500/35 bg-amber-500/15 text-amber-700">
+                  <span className="material-symbols-outlined text-[18px]">warning</span>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <span>危险提醒</span>
+                    <Badge variant="outline" className="rounded-full border-amber-500/35 bg-amber-500/10 px-2 text-[10px] text-amber-700">
+                      请仔细确认
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-sm leading-6 text-muted-foreground">
+                    启动前检查命令会在服务器侧执行，工作目录为 <code className="rounded bg-background px-1.5 py-0.5 text-xs">{props.preflightPreview?.cwd || projectRoot || '未提供'}</code>。
+                    确认这些命令符合预期后再执行；如果你暂时不想运行检查，可以直接跳过。
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Commands</div>
+                <div className="mt-1 text-2xl font-semibold">{previewCommands.length}</div>
+                <div className="mt-1 text-xs text-muted-foreground">本次将展示的 preflight 命令总数</div>
+              </div>
+              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Workflow</div>
+                <div className="mt-1 text-2xl font-semibold">{workflowCommandCount}</div>
+                <div className="mt-1 text-xs text-muted-foreground">直接来自当前 workflow 配置</div>
+              </div>
+              <div className="rounded-2xl border border-border/60 bg-card/90 p-4 shadow-sm">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">Inferred</div>
+                <div className="mt-1 text-2xl font-semibold">{inferredCommandCount}</div>
+                <div className="mt-1 text-xs text-muted-foreground">系统按项目特征自动推断</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-border/60 bg-card/90 p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">启动前检查命令</div>
+                  <div className="mt-1 text-xs text-muted-foreground">下一步请选择：暂不启动、跳过检查直接启动，或先执行这些检查再启动。</div>
+                </div>
+                <Badge variant="outline" className="rounded-full px-2.5 text-[10px]">{previewCommands.length} 条</Badge>
+              </div>
+              <div className="mt-4 space-y-2">
+                {previewCommands.length > 0 ? previewCommands.map((item, index) => (
+                  <div key={`preflight-preview-${index}-${item.command}`} className="rounded-2xl border border-border/60 bg-background/80 px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 text-[11px] text-muted-foreground">命令 {index + 1}</div>
+                        <pre className="overflow-x-auto rounded-xl border border-amber-500/20 bg-slate-950 px-3 py-2 text-xs leading-6 text-slate-100">
+                          <code className="whitespace-pre-wrap break-all">{item.command}</code>
+                        </pre>
+                      </div>
+                      <Badge variant={item.origin === 'inferred' ? 'outline' : 'secondary'} className="shrink-0 rounded-full px-2 text-[10px]">
+                        {item.origin === 'inferred' ? '推断' : '配置'}
+                      </Badge>
+                    </div>
+                  </div>
+                )) : (
+                  <div className="rounded-2xl border border-dashed border-border/60 bg-background/60 px-4 py-4 text-sm text-muted-foreground">
+                    当前没有需要执行的 preflight 命令。你可以直接启动。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        )}
+
+        <div className="shrink-0 border-t border-border/70 bg-muted/15 px-4 py-4 sm:px-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs leading-5 text-muted-foreground sm:max-w-[55%]">{props.footerText}</div>
+          <div className="flex flex-wrap justify-end gap-2 sm:gap-3">
+            {startupFlowEnabled ? (
+              startupStep === 'context' ? (
+                <>
+                  <Button variant="secondary" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                  <Button onClick={() => setStartupStep('preflight')} disabled={props.actionDisabled}>
+                    下一步
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="secondary" onClick={() => setStartupStep('context')} disabled={props.actionBusy}>上一步</Button>
+                  <Button variant="ghost" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                  {props.onSkipPreflight ? (
+                    <Button variant="outline" onClick={props.onSkipPreflight} disabled={props.actionBusy}>
+                      跳过检查启动
+                    </Button>
+                  ) : null}
+                  <Button onClick={props.onConfirm} disabled={props.actionDisabled}>
+                    {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
+                  </Button>
+                </>
+              )
+            ) : (
+              <>
+                <Button variant="secondary" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                <Button onClick={props.onConfirm} disabled={props.actionDisabled}>
+                  {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
+                </Button>
+              </>
+            )}
+          </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleRerunFromStep = async (stepName: string) => {
     const rid = runId || selectedRun?.id;
@@ -5780,6 +6257,10 @@ export default function WorkbenchPage() {
                           const roleConfig = agentConfigs.find((role: any) => role.name === agent.name);
                           const entry = workflowDirectory.find((item) => item.label === agent.name);
                           const relatedSession = listSessionsForAgent(workflowRelatedSessions, agent.name)[0];
+                          const avatarSrc = resolveAgentAvatarSrc(roleConfig?.avatar, agent.name, {
+                            team: roleConfig?.team || agent.team || 'blue',
+                            roleType: roleConfig?.roleType || 'normal',
+                          });
                           return (
                             <tr
                               key={agent.name}
@@ -5788,13 +6269,12 @@ export default function WorkbenchPage() {
                             >
                               <td className="py-2 pr-2">
                                 <div className="flex items-center gap-2">
-                                  {roleConfig?.avatar ? (
-                                    <span className="text-base">{roleConfig.avatar}</span>
-                                  ) : (
-                                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-bold text-primary">
+                                  <Avatar className="h-6 w-6 ring-1 ring-border/60">
+                                    <AvatarImage src={avatarSrc} alt={agent.name} className="object-cover" />
+                                    <AvatarFallback className="bg-primary/10 text-[10px] font-bold text-primary">
                                       {agent.name.charAt(0).toUpperCase()}
-                                    </span>
-                                  )}
+                                    </AvatarFallback>
+                                  </Avatar>
                                   <div className="min-w-0">
                                     <div className="font-medium text-foreground truncate max-w-[140px]">{agent.name}</div>
                                     {roleConfig?.roleType && (
@@ -5943,6 +6423,8 @@ export default function WorkbenchPage() {
                             supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
                             activeTabOverride={executionViewTabOverride}
                             hasPendingHumanQuestion={!!pendingHumanQuestion}
+                            formationAgents={supervisorFormationAgents}
+                            supervisorAgent={runtimeSupervisorAgent}
                             onStateClick={(s) => setFocusedState(s)}
                             onStepClick={(step) => selectStep(step)}
                             onForceTransition={handleForceTransition}
@@ -7669,108 +8151,66 @@ export default function WorkbenchPage() {
       />
 
       {showStartWorkflowDialog && pendingStartRequest && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
-          onClick={() => {
-            setShowStartWorkflowDialog(false);
-            setPendingStartRequest(null);
-          }}
-        >
-          <div className="w-[760px] max-w-[94vw] rounded-lg border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="border-b p-5">
-              <h3 className="text-lg font-semibold flex items-center gap-2">
-                <span className="material-symbols-outlined text-lg">play_circle</span>
-                {pendingStartRequest.mode === 'rehearsal' ? '启动前上下文确认' : '工作流启动前上下文确认'}
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                在真正启动前，先把全局上下文和{startContextScopeLabel}上下文补齐。保存后会随本次启动一起生效。
-              </p>
-            </div>
-            <div className="max-h-[72vh] space-y-5 overflow-y-auto p-5">
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">全局上下文</Label>
-                <Textarea
-                  value={startGlobalContextDraft}
-                  onChange={(e) => setStartGlobalContextDraft(e.target.value)}
-                  placeholder="例如：优先保持现有架构、遇到接口变更先兼容旧调用方、代码风格跟随仓库现状"
-                  rows={5}
-                  className="w-full"
-                />
-              </div>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <Label className="text-sm font-medium">{startContextScopeLabel}上下文</Label>
-                  <span className="text-xs text-muted-foreground">
-                    当前会按{startContextScopeLabel}注入到对应步骤 prompt
-                  </span>
-                </div>
-                {startContextTargets.length > 0 ? (
-                  <div className="space-y-3">
-                    {startContextTargets.map((name: string) => (
-                      <div key={name} className="rounded-lg border bg-muted/10 p-3">
-                        <div className="mb-2 text-sm font-medium">{name}</div>
-                        <Textarea
-                          value={startPhaseContextDrafts[name] || ''}
-                          onChange={(e) => setStartPhaseContextDrafts((prev) => ({ ...prev, [name]: e.target.value }))}
-                          placeholder={`输入仅对「${name}」生效的上下文`}
-                          rows={3}
-                          className="w-full"
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                    当前工作流还没有可编辑的{startContextScopeLabel}节点。
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 border-t p-5">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setShowStartWorkflowDialog(false);
-                  setPendingStartRequest(null);
-                }}
-              >
-                取消
-              </Button>
-              <Button onClick={confirmStartWorkflow} disabled={starting}>
-                {pendingStartRequest.mode === 'rehearsal' ? '开始演练' : '确认启动'}
-              </Button>
-            </div>
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-3 sm:p-6"
+        onClick={() => {
+          setShowStartWorkflowDialog(false);
+          setPendingStartRequest(null);
+        }}
+      >
+          <div className="mx-auto w-fit max-w-[96vw]" onClick={(e) => e.stopPropagation()}>
+            <ContextWorkspaceDialog
+              title={pendingStartRequest.mode === 'rehearsal' ? '启动前上下文确认' : '工作流启动前上下文确认'}
+              description={`在真正启动前，把本次运行的全局背景和${startContextScopeLabel}约束补齐，后续执行会直接复用这些信息。`}
+              modeLabel={pendingStartRequest.mode === 'rehearsal' ? '演练启动' : '正式启动'}
+              globalDraft={startGlobalContextDraft}
+              onGlobalDraftChange={setStartGlobalContextDraft}
+              phaseDrafts={startPhaseContextDrafts}
+              onPhaseDraftChange={(name, value) => setStartPhaseContextDrafts((prev) => ({ ...prev, [name]: value }))}
+              focusTarget={startContextFocusTarget}
+              onFocusTargetChange={setStartContextFocusTarget}
+              footerText={pendingStartRequest.preflightPreview?.commands?.length
+                ? '先补齐本次启动上下文，再到下一步确认危险命令和最终启动方式。'
+                : '留空的项会沿用当前已保存内容；这里只覆盖你本次确认后提交的文本。'}
+              actionLabel={pendingStartRequest.preflightPreview?.commands?.length
+                ? (pendingStartRequest.mode === 'rehearsal' ? '执行检查并开始演练' : '执行检查并直接启动')
+                : (pendingStartRequest.mode === 'rehearsal' ? '开始演练' : '确认启动')}
+              actionBusyLabel="启动中..."
+              actionBusy={starting}
+              actionDisabled={starting}
+              preflightPreview={pendingStartRequest.preflightPreview}
+              onCancel={() => {
+                setShowStartWorkflowDialog(false);
+                setPendingStartRequest(null);
+              }}
+              onSkipPreflight={pendingStartRequest.preflightPreview?.commands?.length ? () => confirmStartWorkflow('skip') : undefined}
+              onConfirm={() => confirmStartWorkflow('run')}
+            />
           </div>
         </div>
       )}
 
       {showContextEditor && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowContextEditor(false)}>
-          <div className="bg-card rounded-lg w-[600px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b">
-              <h3 className="text-lg font-semibold">
-                <span className="material-symbols-outlined text-lg mr-2 align-middle">edit_note</span>
-                {editingContextScope === 'global' ? '全局上下文' : `阶段上下文 — ${editingContextPhase}`}
-              </h3>
-            </div>
-            <div className="p-5">
-              <p className="text-sm text-muted-foreground mb-3">
-                {editingContextScope === 'global'
-                  ? '全局上下文将注入到所有步骤的 prompt 中'
-                  : `此上下文将注入到「${editingContextPhase}」阶段所有步骤的 prompt 中`}
-              </p>
-              <Textarea
-                value={editingContextValue}
-                onChange={(e) => setEditingContextValue(e.target.value)}
-                placeholder="输入上下文信息，例如：注意代码风格要符合项目规范..."
-                rows={6}
-                className="w-full"
-              />
-            </div>
-            <div className="p-5 border-t flex gap-3 justify-end">
-              <Button variant="secondary" onClick={() => setShowContextEditor(false)}>取消</Button>
-              <Button onClick={saveContext}>保存</Button>
-            </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-3 sm:p-6" onClick={() => setShowContextEditor(false)}>
+          <div className="mx-auto w-fit max-w-[96vw]" onClick={(e) => e.stopPropagation()}>
+            <ContextWorkspaceDialog
+              title="上下文工作台"
+              description={`统一编辑全局上下文和${startContextScopeLabel}上下文。保存后会立即更新当前 run 的 prompt 注入内容。`}
+              modeLabel="运行中可修改"
+              globalDraft={contextEditorGlobalDraft}
+              onGlobalDraftChange={setContextEditorGlobalDraft}
+              phaseDrafts={contextEditorPhaseDrafts}
+              onPhaseDraftChange={(name, value) => setContextEditorPhaseDrafts((prev) => ({ ...prev, [name]: value }))}
+              focusTarget={contextEditorFocusTarget}
+              onFocusTargetChange={setContextEditorFocusTarget}
+              footerText="保存会逐项更新当前运行上下文，后续步骤会按新内容继续执行。"
+              actionLabel="保存"
+              actionBusyLabel="保存中..."
+              actionBusy={savingContextEditor}
+              actionDisabled={savingContextEditor}
+              onCancel={() => setShowContextEditor(false)}
+              onConfirm={saveContext}
+            />
           </div>
         </div>
       )}
