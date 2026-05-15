@@ -19,6 +19,7 @@ declare module '@opencode-ai/sdk' {
       path: { id: string };
       body: {
         model?: { providerID: string; modelID: string };
+        variant?: string;
         parts: Array<{ type: 'text'; text: string }>;
       };
       query?: { directory?: string };

@@ -47,6 +47,7 @@ type CodegenieSdkClient = {
       path: { id: string };
       body: {
         model?: { providerID: string; modelID: string };
+        variant?: string;
         parts: Array<{ type: 'text'; text: string }>;
       };
       query?: { directory?: string };
@@ -320,7 +321,8 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
       const promptResult = await client.session.prompt({
         path: { id: this.currentSessionId },
         body: {
-          ...(model ? { model } : {}),
+          ...(model ? { model: model.model } : {}),
+          ...(model?.variant ? { variant: model.variant } : {}),
           parts: [{ type: 'text', text: fullPrompt }],
         },
         query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
@@ -386,13 +388,18 @@ function getSessionId(session: SessionCreateResponse | undefined): string | null
   return typeof session.id === 'string' ? session.id : null;
 }
 
-function parseProviderModel(modelId: string | undefined): { providerID: string; modelID: string } | null {
+function parseProviderModel(modelId: string | undefined): { model: { providerID: string; modelID: string }; variant?: string } | null {
   const raw = String(modelId || '').trim();
   if (!raw || !raw.includes('/')) return null;
-  const [providerID, ...rest] = raw.split('/');
-  const modelID = rest.join('/');
+  const segments = raw.split('/').filter(Boolean);
+  const [providerID, ...rest] = segments;
+  const knownVariants = new Set(['minimal', 'low', 'medium', 'high', 'max']);
+  const maybeVariant = rest.length > 1 ? rest[rest.length - 1] : undefined;
+  const variant = maybeVariant && knownVariants.has(maybeVariant) ? maybeVariant : undefined;
+  const modelSegments = variant ? rest.slice(0, -1) : rest;
+  const modelID = modelSegments.join('/');
   if (!providerID || !modelID) return null;
-  return { providerID, modelID };
+  return { model: { providerID, modelID }, ...(variant ? { variant } : {}) };
 }
 
 function extractOutput(data: SessionPromptResponse | undefined): string {
