@@ -34,6 +34,9 @@ type SessionPromptResponse = {
 };
 
 type OpencodeClient = {
+  config?: {
+    get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+  };
   session: {
     create(options: {
       body: Record<string, never>;

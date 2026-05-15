@@ -42,6 +42,11 @@ export const ENGINE_META: Record<EngineType, EngineMeta> = {
     name: 'CodeGenie',
     iconPath: '/engines/opencode.svg',
   },
+  'codegenie-sdk': {
+    id: 'codegenie-sdk',
+    name: 'CodeGenie (SDK)',
+    iconPath: '/engines/opencode.svg',
+  },
   codex: {
     id: 'codex',
     name: 'Codex',

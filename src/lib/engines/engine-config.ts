@@ -13,6 +13,7 @@ const ENGINE_CONFIG_DIRS: Record<string, string> = {
   'opencode-sdk': '.opencode',
   'nga': '.opencode',
   'codegenie': '.opencode',
+  'codegenie-sdk': '.opencode',
   'codex': '.codex',
   'cursor': '.cursor',
   'cangjie-magic': '.claude',

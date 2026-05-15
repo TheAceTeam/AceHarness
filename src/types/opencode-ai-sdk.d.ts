@@ -17,14 +17,24 @@ declare module '@opencode-ai/sdk' {
     get(id: string): Promise<Session>;
     prompt(options: {
       path: { id: string };
-      body: { parts: Array<{ type: 'text'; text: string }> };
+      body: {
+        model?: { providerID: string; modelID: string };
+        parts: Array<{ type: 'text'; text: string }>;
+      };
       query?: { directory?: string };
     }): Promise<{ data?: unknown; error?: unknown }>;
   }
 
   interface OpencodeClient {
+    config?: {
+      get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+    };
     session: SessionApi;
   }
+
+  export function createOpencodeClient(options: {
+    baseUrl: string;
+  }): OpencodeClient;
 
   export function createOpencode(options?: {
     port?: number;

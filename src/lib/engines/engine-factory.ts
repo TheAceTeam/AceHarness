@@ -19,14 +19,15 @@ import { ClaudeCodeAcpEngineWrapper } from './claude-code-acp-wrapper';
 import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
+import { CodegenieSdkEngineWrapper } from './codegenie-sdk-wrapper';
 
-export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'trae-cli';
+export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli';
 export type EngineDriver = 'stdio' | 'sdk';
 
 interface EngineConfig {
   engine: EngineType;
   driver?: EngineDriver;
-  drivers?: Partial<Record<'claude-code' | 'opencode', EngineDriver>>;
+  drivers?: Partial<Record<'claude-code' | 'opencode' | 'codegenie', EngineDriver>>;
   updatedAt?: string;
 }
 
@@ -36,15 +37,17 @@ export interface EngineAvailabilityReport {
   drivers?: Partial<Record<EngineDriver, boolean>>;
 }
 
-const DRIVER_CAPABLE_ENGINES = new Set<EngineType | 'claude-code' | 'opencode'>(['claude-code', 'opencode']);
-const DEFAULT_DRIVER_BY_ENGINE: Partial<Record<EngineType | 'claude-code' | 'opencode', EngineDriver>> = {
+const DRIVER_CAPABLE_ENGINES = new Set<EngineType | 'claude-code' | 'opencode' | 'codegenie'>(['claude-code', 'opencode', 'codegenie']);
+const DEFAULT_DRIVER_BY_ENGINE: Partial<Record<EngineType | 'claude-code' | 'opencode' | 'codegenie', EngineDriver>> = {
   'claude-code': 'sdk',
   'opencode': 'sdk',
+  'codegenie': 'stdio',
 };
 
 const EFFECTIVE_TO_LOGICAL_ENGINE: Partial<Record<EngineType, EngineType>> = {
   'claude-code-acp': 'claude-code',
   'opencode-sdk': 'opencode',
+  'codegenie-sdk': 'codegenie',
 };
 
 export function getLogicalEngineId(engine?: string | null): EngineType | null {
@@ -79,6 +82,10 @@ export function resolveEffectiveEngine(engine?: string | null, driver?: string |
 
   if (normalizedEngine === 'opencode') {
     return normalizedDriver === 'sdk' ? 'opencode-sdk' : 'opencode';
+  }
+
+  if (normalizedEngine === 'codegenie') {
+    return normalizedDriver === 'sdk' ? 'codegenie-sdk' : 'codegenie';
   }
 
   return normalizedEngine as EngineType;
@@ -126,11 +133,11 @@ async function selectPreferredEffectiveEngine(engine: EngineType, configuredDriv
 }
 
 function getConfiguredDriver(config: EngineConfig | null, engine?: string | null): EngineDriver | undefined {
-  const normalizedEngine = String(engine || '').trim() as 'claude-code' | 'opencode' | EngineType | '';
+  const normalizedEngine = String(engine || '').trim() as 'claude-code' | 'opencode' | 'codegenie' | EngineType | '';
   if (!normalizedEngine || !supportsDriverSelection(normalizedEngine)) {
     return undefined;
   }
-  const mapped = config?.drivers?.[normalizedEngine as 'claude-code' | 'opencode'];
+  const mapped = config?.drivers?.[normalizedEngine as 'claude-code' | 'opencode' | 'codegenie'];
   return normalizeDriverSelection(normalizedEngine, mapped ?? config?.driver);
 }
 
@@ -321,10 +328,22 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
     case 'codegenie':
       const codegenieEngine = new CodegenieEngineWrapper();
       if (!(await codegenieEngine.isAvailable())) {
-        console.warn('[EngineFactory] CodeGenie is not available');
-        return null;
+        console.warn('[EngineFactory] CodeGenie stdio is not available, trying SDK fallback');
+        return await createEngine('codegenie-sdk');
       }
       return codegenieEngine;
+
+    case 'codegenie-sdk':
+      const codegenieSdkEngine = new CodegenieSdkEngineWrapper();
+      if (!(await codegenieSdkEngine.isAvailable())) {
+        console.warn('[EngineFactory] CodeGenie SDK is not available, trying stdio fallback');
+        if (type === 'codegenie-sdk') {
+          const fallback = new CodegenieEngineWrapper();
+          if (await fallback.isAvailable()) return fallback;
+        }
+        return null;
+      }
+      return codegenieSdkEngine;
 
     case 'trae-cli':
       const traeEngine = new TraeCliEngineWrapper();
@@ -377,6 +396,10 @@ export async function isEngineAvailable(type: EngineType): Promise<boolean> {
       const codegenieCheck = new CodegenieEngineWrapper();
       return await codegenieCheck.isAvailable();
 
+    case 'codegenie-sdk':
+      const codegenieSdkCheck = new CodegenieSdkEngineWrapper();
+      return await codegenieSdkCheck.isAvailable();
+
     case 'codex':
       const codexCheck = new CodexEngineWrapper();
       return await codexCheck.isAvailable();
@@ -410,6 +433,16 @@ export async function getEngineAvailabilityReport(type: EngineType | string): Pr
   if (engine === 'opencode') {
     const stdio = await new OpenCodeEngineWrapper().isAvailable();
     const sdk = await new OpenCodeSdkEngineWrapper().isAvailable();
+    return {
+      engine,
+      available: sdk || stdio,
+      drivers: { sdk, stdio },
+    };
+  }
+
+  if (engine === 'codegenie') {
+    const stdio = await new CodegenieEngineWrapper().isAvailable();
+    const sdk = await new CodegenieSdkEngineWrapper().isAvailable();
     return {
       engine,
       available: sdk || stdio,
