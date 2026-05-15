@@ -6,71 +6,30 @@
  */
 
 import { EventEmitter } from 'events';
-import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-
-type TextPart = {
-  type: 'text';
-  text: string;
-};
-
-type Part = TextPart | {
-  type: string;
-  [key: string]: unknown;
-};
-
-type AssistantMessage = {
-  parts?: Part[];
-};
-
-type SessionCreateResponse = {
-  id?: string;
-};
-
-type SessionPromptResponse = {
-  info?: AssistantMessage;
-  parts?: Part[];
-};
-
-type OpencodeClient = {
-  config?: {
-    get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
-  };
-  session: {
-    create(options: {
-      body: Record<string, never>;
-      query?: { directory: string };
-    }): Promise<{ data?: SessionCreateResponse; error?: unknown }>;
-    prompt(options: {
-      path: { id: string };
-      body: { parts: Array<{ type: 'text'; text: string }> };
-      query?: { directory: string };
-    }): Promise<{ data?: SessionPromptResponse; error?: unknown }>;
-  };
-};
-
-const ZERO_USAGE_METADATA: EngineResultMetadata = {
-  usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-  cost_usd: 0,
-  duration_ms: 0,
-  duration_api_ms: 0,
-  num_turns: 0,
-};
+import {
+  buildFullPrompt,
+  getSessionId,
+  type OpenCodeHttpClient,
+  sendPromptWithOpenCodeHttp,
+  ZERO_USAGE_METADATA,
+} from './opencode-http-adapter';
 
 /** Singleton server instance shared across all sessions */
 let serverInstance: { url: string; close: () => void } | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
-let clientInstance: OpencodeClient | null = null;
+let clientInstance: OpenCodeHttpClient | null = null;
 
-function requireClient(): OpencodeClient {
+function requireClient(): OpenCodeHttpClient {
   if (!clientInstance) {
     throw new Error('[opencode-sdk] client not initialized');
   }
   return clientInstance;
 }
 
-async function ensureServer(): Promise<{ client: OpencodeClient; url: string }> {
+async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string }> {
   if (clientInstance && serverInstance) {
     return { client: clientInstance, url: serverInstance.url };
   }
@@ -88,7 +47,7 @@ async function ensureServer(): Promise<{ client: OpencodeClient; url: string }> 
       hostname: '127.0.0.1',
     });
     serverInstance = result.server;
-    clientInstance = result.client as unknown as OpencodeClient;
+    clientInstance = result.client as unknown as OpenCodeHttpClient;
     console.log(`[opencode-sdk] server started at ${result.server.url}`);
     return result.server;
   })();
@@ -117,7 +76,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
     this.abortController = new AbortController();
 
     try {
-      const { client } = await ensureServer();
+      const { client, url } = await ensureServer();
 
       // Create or resume session
       if (options.sessionId) {
@@ -144,49 +103,21 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         content: this.currentSessionId,
       } as EngineStreamEvent);
 
-      // Build prompt with system prompt prepended on first turn
-      let fullPrompt = options.prompt;
-      if (options.systemPrompt) {
-        fullPrompt = `<system>\n${options.systemPrompt}\n</system>\n\n${options.prompt}`;
-      }
+      const fullPrompt = buildFullPrompt(options);
 
-      // Send prompt and stream response
       console.log(`[opencode-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
-      const promptResult = await client.session.prompt({
-        path: { id: this.currentSessionId },
-        body: {
-          parts: [
-            {
-              type: 'text',
-              text: fullPrompt,
-            },
-          ],
-        },
-        query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
+      const output = await sendPromptWithOpenCodeHttp({
+        engineName: 'opencode-sdk',
+        client,
+        sessionId: this.currentSessionId,
+        fullPrompt,
+        eventBaseUrl: url,
+        workingDirectory: options.workingDirectory,
+        timeoutMs: options.timeoutMs,
+        signal: this.abortController.signal,
+        emit: (event) => this.emit('stream', event),
       });
-
-      if (promptResult.error) {
-        const errorMsg = typeof promptResult.error === 'string'
-          ? promptResult.error
-          : JSON.stringify(promptResult.error);
-        return {
-          success: false,
-          output: '',
-          error: errorMsg,
-          sessionId: this.currentSessionId,
-          metadata: ZERO_USAGE_METADATA,
-        };
-      }
-
-      // Extract output from response
-      const data = promptResult.data;
-      const output = this.extractOutput(data);
       this.collectedOutput = output;
-
-      // Emit as stream event for UI
-      if (output) {
-        this.emit('stream', { type: 'text', content: output } as EngineStreamEvent);
-      }
 
       const durationMs = Date.now() - startTime;
       console.log(`[opencode-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
@@ -217,18 +148,6 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
     this.abortController = null;
   }
 
-  private extractOutput(data: SessionPromptResponse | undefined): string {
-    if (!data) return '';
-
-    const assistantInfo = data.info as AssistantMessage | undefined;
-    if (assistantInfo?.parts?.length) return collectTextFromParts(assistantInfo.parts);
-    if (Array.isArray(data.parts)) {
-      const text = collectTextFromParts(data.parts);
-      if (text) return text;
-    }
-    return '';
-  }
-
   /** Clean up the shared server (call on app shutdown) */
   static shutdown(): void {
     if (serverInstance) {
@@ -237,16 +156,4 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       clientInstance = null;
     }
   }
-}
-
-function getSessionId(session: SessionCreateResponse | undefined): string | null {
-  if (!session || typeof session !== 'object' || !('id' in session)) return null;
-  return typeof session.id === 'string' ? session.id : null;
-}
-
-function collectTextFromParts(parts: Part[]): string {
-  return parts
-    .filter((part): part is Extract<Part, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('');
 }

@@ -10,65 +10,24 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
-import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-
-type TextPart = {
-  type: 'text';
-  text: string;
-};
-
-type Part = TextPart | {
-  type: string;
-  [key: string]: unknown;
-};
-
-type SessionCreateResponse = {
-  id?: string;
-};
-
-type SessionPromptResponse = {
-  info?: { parts?: Part[]; error?: unknown };
-  parts?: Part[];
-  [key: string]: unknown;
-};
-
-type CodegenieSdkClient = {
-  config?: {
-    get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
-  };
-  session: {
-    create(options: {
-      body: Record<string, never>;
-      query?: { directory?: string };
-    }): Promise<{ data?: SessionCreateResponse; error?: unknown }>;
-    prompt(options: {
-      path: { id: string };
-      body: {
-        model?: { providerID: string; modelID: string };
-        variant?: string;
-        parts: Array<{ type: 'text'; text: string }>;
-      };
-      query?: { directory?: string };
-    }): Promise<{ data?: SessionPromptResponse; error?: unknown }>;
-  };
-};
+import {
+  buildFullPrompt,
+  formatError,
+  getSessionId,
+  type OpenCodeHttpClient,
+  sendPromptWithOpenCodeHttp,
+  ZERO_USAGE_METADATA,
+} from './opencode-http-adapter';
 
 type ManagedServer = {
   url: string;
   close: () => void;
 };
 
-const ZERO_USAGE_METADATA: EngineResultMetadata = {
-  usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-  cost_usd: 0,
-  duration_ms: 0,
-  duration_api_ms: 0,
-  num_turns: 0,
-};
-
-let clientInstance: CodegenieSdkClient | null = null;
+let clientInstance: OpenCodeHttpClient | null = null;
 let clientBaseUrl: string | null = null;
 let managedServer: ManagedServer | null = null;
 let serverStarting: Promise<ManagedServer> | null = null;
@@ -233,7 +192,7 @@ function closeChildTree(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
-async function ensureClient(): Promise<{ client: CodegenieSdkClient; baseUrl: string }> {
+async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: string }> {
   const externalBaseUrl = getBaseUrl();
   const baseUrl = externalBaseUrl || (await ensureManagedServer()).url;
 
@@ -247,7 +206,7 @@ async function ensureClient(): Promise<{ client: CodegenieSdkClient; baseUrl: st
   }
 
   const { createOpencodeClient } = await import('@opencode-ai/sdk');
-  const client = createOpencodeClient({ baseUrl }) as unknown as CodegenieSdkClient;
+  const client = createOpencodeClient({ baseUrl }) as unknown as OpenCodeHttpClient;
   const configResult = await client.config?.get?.({});
   if (configResult?.error) {
     throw new Error(`CodeGenie SDK config.get failed: ${formatError(configResult.error)}`);
@@ -311,38 +270,28 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         content: this.currentSessionId,
       } as EngineStreamEvent);
 
-      let fullPrompt = options.prompt;
-      if (options.systemPrompt) {
-        fullPrompt = `<system>\n${options.systemPrompt}\n</system>\n\n${options.prompt}`;
-      }
+      const fullPrompt = buildFullPrompt(options);
 
       console.log(`[codegenie-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
       const model = parseProviderModel(options.model);
-      const promptResult = await client.session.prompt({
-        path: { id: this.currentSessionId },
-        body: {
+      const output = await sendPromptWithOpenCodeHttp({
+        engineName: 'codegenie-sdk',
+        client,
+        sessionId: this.currentSessionId,
+        fullPrompt,
+        eventBaseUrl: baseUrl,
+        promptBodyExtras: {
           ...(model ? { model: model.model } : {}),
           ...(model?.variant ? { variant: model.variant } : {}),
-          parts: [{ type: 'text', text: fullPrompt }],
         },
-        query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
+        workingDirectory: options.workingDirectory,
+        timeoutMs: options.timeoutMs,
+        emit: (event) => this.emit('stream', event),
       });
-
-      if (promptResult.error) {
-        throw new Error(`CodeGenie SDK prompt failed: ${formatError(promptResult.error)}`);
-      }
-      if (promptResult.data?.info?.error) {
-        throw new Error(`CodeGenie SDK agent failed: ${formatError(promptResult.data.info.error)}`);
-      }
-
-      const output = extractOutput(promptResult.data);
       if (!output.trim()) {
         throw new Error('CodeGenie SDK prompt returned empty output');
       }
       this.collectedOutput = output;
-      if (output) {
-        this.emit('stream', { type: 'text', content: output } as EngineStreamEvent);
-      }
 
       const durationMs = Date.now() - startedAt;
       console.log(`[codegenie-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
@@ -383,11 +332,6 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
   }
 }
 
-function getSessionId(session: SessionCreateResponse | undefined): string | null {
-  if (!session || typeof session !== 'object') return null;
-  return typeof session.id === 'string' ? session.id : null;
-}
-
 function parseProviderModel(modelId: string | undefined): { model: { providerID: string; modelID: string }; variant?: string } | null {
   const raw = String(modelId || '').trim();
   if (!raw || !raw.includes('/')) return null;
@@ -400,42 +344,4 @@ function parseProviderModel(modelId: string | undefined): { model: { providerID:
   const modelID = modelSegments.join('/');
   if (!providerID || !modelID) return null;
   return { model: { providerID, modelID }, ...(variant ? { variant } : {}) };
-}
-
-function extractOutput(data: SessionPromptResponse | undefined): string {
-  if (!data) return '';
-  const direct = collectTextFromParts(data.info?.parts) || collectTextFromParts(data.parts);
-  if (direct) return direct;
-  return collectTextDeep(data);
-}
-
-function collectTextFromParts(parts: Part[] | undefined): string {
-  if (!Array.isArray(parts)) return '';
-  return parts
-    .filter((part): part is TextPart => part?.type === 'text' && typeof (part as any).text === 'string')
-    .map((part) => part.text)
-    .join('');
-}
-
-function collectTextDeep(value: unknown): string {
-  if (!value || typeof value !== 'object') return '';
-  if (Array.isArray(value)) {
-    return value.map(collectTextDeep).filter(Boolean).join('');
-  }
-  const record = value as Record<string, unknown>;
-  if (record.type === 'text' && typeof record.text === 'string') return record.text;
-  for (const key of ['parts', 'content', 'message', 'info', 'data']) {
-    const text = collectTextDeep(record[key]);
-    if (text) return text;
-  }
-  return '';
-}
-
-function formatError(error: unknown): string {
-  if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }

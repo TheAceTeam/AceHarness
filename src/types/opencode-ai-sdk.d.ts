@@ -24,12 +24,35 @@ declare module '@opencode-ai/sdk' {
       };
       query?: { directory?: string };
     }): Promise<{ data?: unknown; error?: unknown }>;
+    promptAsync(options: {
+      path: { id: string };
+      body: {
+        model?: { providerID: string; modelID: string };
+        variant?: string;
+        parts: Array<{ type: 'text'; text: string }>;
+      };
+      query?: { directory?: string };
+    }): Promise<{ data?: unknown; error?: unknown }>;
+  }
+
+  interface EventApi {
+    subscribe(options?: {
+      signal?: AbortSignal;
+      cache?: RequestCache;
+      headers?: HeadersInit;
+      query?: { directory?: string };
+      onSseEvent?: (event: { data?: any }) => void;
+      onSseError?: (error: unknown) => void;
+    }): Promise<{
+      stream?: AsyncIterable<unknown>;
+    }>;
   }
 
   interface OpencodeClient {
     config?: {
       get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
     };
+    event?: EventApi;
     session: SessionApi;
   }
 
