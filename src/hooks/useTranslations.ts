@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import enMessages from '../../messages/en.json';
 import zhMessages from '../../messages/zh.json';
 
@@ -45,7 +45,7 @@ export function useTranslations() {
     return () => window.removeEventListener('storage', handleStorage);
   }, []);
 
-  const t = (key: string): string => {
+  const t = useCallback((key: string): string => {
     const keys = key.split('.');
     let value: any = messages[locale];
 
@@ -54,7 +54,7 @@ export function useTranslations() {
     }
 
     return value || key;
-  };
+  }, [locale]);
 
   return { t, locale };
 }

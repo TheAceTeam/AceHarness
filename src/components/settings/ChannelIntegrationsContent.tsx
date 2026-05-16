@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,7 +35,7 @@ export default function ChannelIntegrationsContent() {
   const [inboundResult, setInboundResult] = useState('');
   const [inboundTesting, setInboundTesting] = useState(false);
 
-  const loadIntegrations = async () => {
+  const loadIntegrations = useCallback(async () => {
     setLoading(true);
     try {
       const data = await channelApi.listIntegrations();
@@ -51,11 +51,11 @@ export default function ChannelIntegrationsContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [toast]);
 
   useEffect(() => {
     void loadIntegrations();
-  }, []);
+  }, [loadIntegrations]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {

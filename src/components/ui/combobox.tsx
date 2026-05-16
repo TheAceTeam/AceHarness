@@ -350,7 +350,7 @@ function MultiCombobox({
   emptyText = '无匹配项',
 }: MultiComboboxProps) {
   const selectedItems = React.useMemo(
-    () => options.filter(o => value.includes(o.value)),
+    () => options.filter(o => value?.includes(o.value)),
     [options, value],
   );
 

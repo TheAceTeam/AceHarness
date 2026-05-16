@@ -574,7 +574,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         editor.chain().focus().insertContent(content, { contentType: 'markdown' }).run();
       }
     },
-  }), [editor, safeFocus]);
+  }), [editor, getMarkdownWithImageLocalPaths, safeFocus]);
 
   const editorWrapperRef = useRef<HTMLDivElement>(null);
 

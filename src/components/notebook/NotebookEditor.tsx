@@ -162,7 +162,7 @@ export function NotebookEditor({
       toast('error', message);
       return { output: message, success: false };
     }
-  }, [filePath, toast]);
+  }, [toast]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([editorContent], { type: 'text/markdown;charset=utf-8' });

@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -171,7 +171,7 @@ export default function SystemSettingsContent() {
     setVarErrors((prev) => nextVars.map((_, index) => prev[index] || {}));
   };
 
-  const loadEnvVars = async () => {
+  const loadEnvVars = useCallback(async () => {
     setEnvLoading(true);
     setEnvError(null);
     try {
@@ -185,9 +185,9 @@ export default function SystemSettingsContent() {
     } finally {
       setEnvLoading(false);
     }
-  };
+  }, [toast]);
 
-  const loadSdkOverview = async () => {
+  const loadSdkOverview = useCallback(async () => {
     setSdkLoading(true);
     setSdkError(null);
     try {
@@ -200,9 +200,9 @@ export default function SystemSettingsContent() {
     } finally {
       setSdkLoading(false);
     }
-  };
+  }, [toast]);
 
-  const loadTokenSettings = async () => {
+  const loadTokenSettings = useCallback(async () => {
     setTokenLoading(true);
     setTokenError(null);
     try {
@@ -229,13 +229,13 @@ export default function SystemSettingsContent() {
     } finally {
       setTokenLoading(false);
     }
-  };
+  }, [toast]);
 
   useEffect(() => {
-    loadEnvVars();
-    loadSdkOverview();
-    loadTokenSettings();
-  }, []);
+    void loadEnvVars();
+    void loadSdkOverview();
+    void loadTokenSettings();
+  }, [loadEnvVars, loadSdkOverview, loadTokenSettings]);
 
   const updateVar = (index: number, patch: Partial<EnvVar>) => {
     setVars((prev) => {

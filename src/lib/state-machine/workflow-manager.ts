@@ -3397,7 +3397,6 @@ export class StateMachineWorkflowManager extends EventEmitter {
     for (let i = 0; i < commands.length; i++) {
       const cmd = commands[i];
       results.push(`\n[${i + 1}] $ ${cmd}\n工作目录: ${cwd}\n`);
-      // eslint-disable-next-line no-await-in-loop
       const { stdout, stderr, exitCode, errorText } = await new Promise<{
         stdout: string;
         stderr: string;

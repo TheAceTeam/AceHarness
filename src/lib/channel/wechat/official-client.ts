@@ -470,7 +470,6 @@ export async function runWeChatOfficialBridge(options: WeChatBridgeOptions): Pro
     accountId: options.account.accountId,
   });
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const result = await getUpdates(options.account).catch((error) => {
       options.onEvent?.('poll-error', { error: error instanceof Error ? error.message : String(error) });

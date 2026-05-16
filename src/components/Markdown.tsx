@@ -436,6 +436,38 @@ function RunnableCodeBlock({ code, language }: { code: string; language: string 
   );
 }
 
+function MarkdownDetails({ node, children, ...props }: any) {
+  const [open, setOpen] = useState(Boolean(props.open));
+
+  if (node?.properties?.[NOTEBOOK_OUTPUT_ATTR] === 'true') {
+    return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
+  }
+
+  const parts = Children.toArray(children);
+  const summaryNode = parts.find(isSummaryElement) || null;
+  const bodyText = parts
+    .filter((child) => child !== summaryNode && typeof child === 'string')
+    .join('')
+    .trim();
+  const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
+
+  return (
+    <details
+      className="my-2 overflow-hidden rounded-md border border-border/50 bg-muted/20"
+      {...props}
+      onToggle={(event: any) => {
+        setOpen(Boolean(event.currentTarget?.open));
+        props.onToggle?.(event);
+      }}
+    >
+      {summaryNode}
+      {(bodyText || bodyNodes.length > 0) ? (
+        <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
+      ) : null}
+    </details>
+  );
+}
+
 const components = {
   code({ className, children, ...props }: any) {
     const language = normalizeFenceLanguage(className);
@@ -512,35 +544,8 @@ const components = {
       </a>
     );
   },
-  details({ node, children, ...props }: any) {
-    if (node?.properties?.[NOTEBOOK_OUTPUT_ATTR] === 'true') {
-      return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
-    }
-
-    const [open, setOpen] = useState(Boolean(props.open));
-    const parts = Children.toArray(children);
-    const summaryNode = parts.find(isSummaryElement) || null;
-    const bodyText = parts
-      .filter((child) => child !== summaryNode && typeof child === 'string')
-      .join('')
-      .trim();
-    const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
-
-    return (
-      <details
-        className="my-2 overflow-hidden rounded-md border border-border/50 bg-muted/20"
-        {...props}
-        onToggle={(event: any) => {
-          setOpen(Boolean(event.currentTarget?.open));
-          props.onToggle?.(event);
-        }}
-      >
-        {summaryNode}
-        {(bodyText || bodyNodes.length > 0) ? (
-          <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
-        ) : null}
-      </details>
-    );
+  details(props: any) {
+    return <MarkdownDetails {...props} />;
   },
   summary({ node: _node, children, ...props }: any) {
     return (
