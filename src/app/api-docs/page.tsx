@@ -128,6 +128,59 @@ const API_DATA: ApiCategory[] = [
     ],
   },
   {
+    name: 'Model Monitor', icon: 'monitoring',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/api/models/probes/query?provider=anthropic&status=operational&historyLimit=60',
+        description: '对外只读的模型探针查询接口，用于获取当前监控快照、分组信息与历史结果',
+        response: '{ probes: ModelProbeSummary[], summary: ModelProbeListSummary, filters }',
+        exampleResponse: JSON.stringify({
+          probes: [
+            {
+              id: 'probe-1',
+              groupId: 'group-1',
+              groupName: 'Anthropic Production',
+              name: 'Claude Sonnet Production',
+              engine: 'claude-code',
+              driver: 'sdk',
+              model: 'claude-sonnet-4-20250514',
+              endpoints: ['anthropic'],
+              status: 'operational',
+              intervalMinutes: 5,
+              latestRun: {
+                finishedAt: '2026-05-16T23:04:57.000Z',
+                responseLatencyMs: 4337,
+                availabilityCheckMs: 340,
+                success: true,
+              },
+            },
+          ],
+          summary: {
+            total: 1,
+            enabled: 1,
+            operational: 1,
+            degraded: 0,
+            down: 0,
+            paused: 0,
+            unknown: 0,
+            running: 0,
+            minIntervalMinutes: 5,
+          },
+          filters: {
+            provider: 'anthropic',
+            status: 'operational',
+            historyLimit: 60,
+          },
+        }, null, 2),
+        notes: [
+          '这是对外唯一开放的模型探针 API。',
+          '创建、批量添加、触发探测、拆分/合并分组等管理能力只在内部页面使用，不对外暴露到文档。',
+        ],
+      },
+    ],
+  },
+  {
     name: 'Engine', icon: 'memory',
     endpoints: [
       { method: 'GET', path: '/api/engine', description: '获取当前执行引擎', response: '{ engine, defaultModel }' },

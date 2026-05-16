@@ -9,6 +9,7 @@ import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
 import {
   buildFullPrompt,
   getSessionId,
@@ -42,9 +43,21 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
   serverStarting = (async () => {
     const { createOpencode } = await import('@opencode-ai/sdk');
     console.log('[opencode-sdk] starting HTTP server...');
+
+    // Load user-configured environment variables
+    const serverEnv = { ...process.env };
+    try {
+      const userEnvVars = await loadEnvVars();
+      const userEnv = buildEnvObject(userEnvVars);
+      Object.assign(serverEnv, userEnv);
+    } catch {
+      // Ignore env loading errors
+    }
+
     const result = await createOpencode({
       port: 0,
       hostname: '127.0.0.1',
+      env: serverEnv,
     });
     serverInstance = result.server;
     clientInstance = result.client as unknown as OpenCodeHttpClient;

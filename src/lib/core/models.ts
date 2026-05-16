@@ -9,6 +9,10 @@ export interface ModelOption {
   costMultiplier: number;
   endpoints: string[];
   engines?: string[];
+  contextWindow?: number;
+  status?: 'active' | 'inactive';
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface ModelsConfig {

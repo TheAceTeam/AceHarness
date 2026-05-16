@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
+import { recordModelProbeObservation } from '@/lib/models/probes';
 
 const CHAT_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -37,6 +38,14 @@ export async function POST(request: NextRequest) {
     const engine = await createEngine(engineType);
 
     if (!engine) {
+      void recordModelProbeObservation({
+        engine: engineType,
+        model: useModel,
+        success: false,
+        source: 'chat',
+        engineAvailable: false,
+        error: '引擎不可用，请检查配置',
+      }).catch(() => {});
       return NextResponse.json({ error: '引擎不可用，请检查配置' }, { status: 500 });
     }
 
@@ -47,6 +56,7 @@ export async function POST(request: NextRequest) {
       if (event.type === 'text') chunks.push(event.content);
     });
 
+    const executeStartedAt = Date.now();
     const result = await new Promise<any>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         engine.cancel();
@@ -65,7 +75,29 @@ export async function POST(request: NextRequest) {
         .then(resolve)
         .catch(reject)
         .finally(() => clearTimeout(timeoutId));
+    }).catch((error) => {
+      void recordModelProbeObservation({
+        engine: engineType,
+        model: useModel,
+        success: false,
+        source: 'chat',
+        responseLatencyMs: Date.now() - executeStartedAt,
+        totalDurationMs: Date.now() - executeStartedAt,
+        error: error instanceof Error ? error.message : String(error),
+      }).catch(() => {});
+      throw error;
     });
+
+    void recordModelProbeObservation({
+      engine: engineType,
+      model: typeof result.metadata?.resolvedModel === 'string' ? result.metadata.resolvedModel : useModel,
+      success: Boolean(result.success),
+      source: 'chat',
+      responseLatencyMs: Date.now() - executeStartedAt,
+      totalDurationMs: Date.now() - executeStartedAt,
+      outputPreview: result.output || chunks.join(''),
+      error: result.success ? undefined : (result.error || '聊天请求返回异常状态'),
+    }).catch(() => {});
 
     // Brief delay to allow final stream events to flush before cleanup
     await new Promise(r => setTimeout(r, 1000));

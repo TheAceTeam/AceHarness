@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ModelOption } from '@/lib/core/models';
 import { SingleCombobox, type ComboboxGroupDef } from '@/components/ui/combobox';
@@ -73,7 +73,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const effectiveEngine = engine || globalEngine;
   const globalEngineInfo = getEngineMeta(globalEngine);
   const globalLabel = globalEngineInfo?.name || globalEngine;
-  const isEngineSelectable = (engineId: string) => engineAvailability[engineId] !== false;
+  const isEngineSelectable = useCallback((engineId: string) => engineAvailability[engineId] !== false, [engineAvailability]);
 
   // Composite value: "engineId::modelValue" — empty engineId = follow system
   const compositeValue = `${engine}::${model}`;
@@ -115,7 +115,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     }
 
     return result;
-  }, [models, globalEngine, globalLabel, isModelCompatible, engineAvailability]);
+  }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible]);
 
   const modelLabel = models.find(m => m.value === model)?.label || model || '选择模型';
   const triggerLabel = modelLabel;

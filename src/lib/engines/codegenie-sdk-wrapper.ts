@@ -13,6 +13,7 @@ import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
 import {
   buildFullPrompt,
   formatError,
@@ -103,11 +104,21 @@ async function startManagedServer(): Promise<ManagedServer> {
 
   console.log(`[codegenie-sdk] starting managed CodeGenie server: ${command} ${args.join(' ')}`);
 
+  // Load user-configured environment variables
+  const spawnEnv = { ...process.env };
+  try {
+    const userEnvVars = await loadEnvVars();
+    const userEnv = buildEnvObject(userEnvVars);
+    Object.assign(spawnEnv, userEnv);
+  } catch {
+    // Ignore env loading errors
+  }
+
   return await new Promise<ManagedServer>((resolve, reject) => {
     let settled = false;
     const child = spawn(command, args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: spawnEnv,
       shell: process.platform === 'win32',
       windowsHide: true,
     });

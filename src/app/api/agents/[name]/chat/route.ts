@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/middleware';
 import { executeAgentChat } from '@/lib/agent/chat-service';
 import type { RoleConfig } from '@/lib/core/schemas';
+import { recordModelProbeObservation } from '@/lib/models/probes';
 
 function parseTemporaryRoleConfig(body: any): RoleConfig | null {
   const raw = body?.temporaryRoleConfig;
@@ -52,6 +53,7 @@ export async function POST(
         { status: 400 }
       );
     }
+    const executeStartedAt = Date.now();
     const result = await executeAgentChat({
       agentName: name,
       message: String(body?.message || ''),
@@ -68,6 +70,16 @@ export async function POST(
         personalDir: user.personalDir,
       },
     });
+    void recordModelProbeObservation({
+      engine: result.engine || '',
+      model: result.model || '',
+      success: !result.isError,
+      source: 'agent-chat',
+      responseLatencyMs: Date.now() - executeStartedAt,
+      totalDurationMs: Date.now() - executeStartedAt,
+      outputPreview: result.output || result.rawOutput || '',
+      error: result.isError ? (result.error || 'Agent 对话失败') : undefined,
+    }).catch(() => {});
     if (!result.ok && !result.output) {
       return NextResponse.json(
         { error: result.error || 'Agent 对话失败', sessionId: result.sessionId || null },

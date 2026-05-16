@@ -15,6 +15,7 @@ import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists'
 import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
+import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
 
 const requireFromHere = createRequire(__filename);
 
@@ -267,15 +268,25 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return `\n\n**📝 文件变更**\n${parts.join('')}`;
   }
 
-  private createCodexClient(Codex: any, codexPathOverride?: string | null): any {
+  private async createCodexClient(Codex: any, codexPathOverride?: string | null): Promise<any> {
+    // Load user-configured environment variables
+    const clientEnv = { ...process.env };
+    try {
+      const userEnvVars = await loadEnvVars();
+      const userEnv = buildEnvObject(userEnvVars);
+      Object.assign(clientEnv, userEnv);
+    } catch {
+      // Ignore env loading errors
+    }
+
     return codexPathOverride
-      ? new Codex({ codexPathOverride })
-      : new Codex();
+      ? new Codex({ codexPathOverride, env: clientEnv })
+      : new Codex({ env: clientEnv });
   }
 
   private async runWithClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<EngineResult> {
     if (!this.codexInstance || codexPathOverride) {
-      this.codexInstance = this.createCodexClient(Codex, codexPathOverride);
+      this.codexInstance = await this.createCodexClient(Codex, codexPathOverride);
       this.currentThread = null;
     }
 
