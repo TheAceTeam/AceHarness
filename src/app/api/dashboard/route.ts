@@ -8,12 +8,17 @@ import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsD
 import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run/history';
 
 // ── In-memory cache with background refresh ──
-let cachedResult: any = null;
-let cacheTimestamp = 0;
+const cachedResults = new Map<string, { result: any; ts: number }>();
 const CACHE_TTL = 10_000; // 10s — background refresh interval
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
-let isRefreshing = false;
+const refreshPromises = new Map<string, Promise<void>>();
 const IS_BUILD_PHASE = process.env.NEXT_PHASE === 'phase-production-build';
+const DASHBOARD_USER_TOKEN_LIMIT = 8;
+const DASHBOARD_WORKFLOW_TOKEN_LIMIT = 10;
+
+function getDashboardCacheKey(userId: string, role: 'admin' | 'user'): string {
+  return role === 'admin' ? 'admin' : `user:${userId}`;
+}
 
 async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin') {
   const [configResult, agentCount, runsResult] = await Promise.all([
@@ -25,7 +30,7 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
   const { configs, configNameMap } = configResult;
   const { agentUsage } = runsResult;
   const runs = applyConfigNamesToRuns(runsResult.runs, configNameMap, role);
-  const { tokenRankingByUser, tokenRankingByWorkflow } = buildTokenRankingsForRuns(runs);
+  const tokenRankings = buildTokenRankingsForRuns(runs);
 
   const totalRuns = runs.length;
   const completed = runs.filter(r => r.status === 'completed').length;
@@ -91,41 +96,62 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
       startTime: r.startTime, status: r.status, currentPhase: r.currentPhase,
     })),
     agentUsageData: topAgents,
-    tokenRankingByUser,
-    tokenRankingByWorkflow,
+    tokenRankingByUser: tokenRankings.tokenRankingByUser.slice(0, DASHBOARD_USER_TOKEN_LIMIT),
+    tokenRankingByWorkflow: tokenRankings.tokenRankingByWorkflow.slice(0, DASHBOARD_WORKFLOW_TOKEN_LIMIT),
     activityData,
   };
 }
 
-async function refreshCache() {
-  if (isRefreshing) return;
-  isRefreshing = true;
-  try {
-    cachedResult = await computeDashboardData();
-    cacheTimestamp = Date.now();
-  } catch (e) {
-    if (!IS_BUILD_PHASE) {
-      console.error('[dashboard cache] refresh failed:', e);
+async function refreshCache(userId = '', role: 'admin' | 'user' = 'admin') {
+  const key = getDashboardCacheKey(userId, role);
+  const inFlight = refreshPromises.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const result = await computeDashboardData(userId, role);
+      cachedResults.set(key, { result, ts: Date.now() });
+    } catch (e) {
+      if (!IS_BUILD_PHASE) {
+        console.error('[dashboard cache] refresh failed:', e);
+      }
     }
-  } finally {
-    isRefreshing = false;
-  }
+  })().finally(() => {
+    refreshPromises.delete(key);
+  });
+
+  refreshPromises.set(key, promise);
+  return promise;
 }
 
 // Start background refresh timer on first import
 if (!IS_BUILD_PHASE && !refreshTimer) {
   refreshTimer = setInterval(() => {
-    refreshCache().catch(() => {});
+    refreshCache('', 'admin').catch(() => {});
   }, CACHE_TTL);
   // Don't block module load — kick off first refresh async
-  refreshCache().catch(() => {});
+  refreshCache('', 'admin').catch(() => {});
 }
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
+    const key = getDashboardCacheKey(auth.id, auth.role);
+    const cached = cachedResults.get(key);
+    const now = Date.now();
+
+    if (cached && now - cached.ts < CACHE_TTL) {
+      return NextResponse.json(cached.result);
+    }
+
+    if (cached) {
+      refreshCache(auth.id, auth.role).catch(() => {});
+      return NextResponse.json(cached.result);
+    }
+
     const result = await computeDashboardData(auth.id, auth.role);
+    cachedResults.set(key, { result, ts: now });
     return NextResponse.json(result);
   } catch (error: any) {
     return NextResponse.json(

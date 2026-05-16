@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -62,13 +62,15 @@ function UsersContent() {
   const [resetError, setResetError] = useState('');
   const { confirm, dialogProps } = useConfirmDialog();
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-  const jsonHeaders = { ...headers, 'Content-Type': 'application/json' };
+  const getAuthHeaders = useCallback((includeJson = false): Record<string, string> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+    return includeJson ? { ...authHeaders, 'Content-Type': 'application/json' } : authHeaders;
+  }, []);
 
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
-      const res = await fetch('/api/users', { headers });
+      const res = await fetch('/api/users', { headers: getAuthHeaders() });
       if (res.status === 403) { router.push('/'); return; }
       const data = await res.json();
       const nextUsers = data.users || [];
@@ -77,15 +79,15 @@ function UsersContent() {
         detail: nextUsers.filter((user: UserInfo) => user.status === 'pending').length,
       }));
     } catch {} finally { setLoading(false); }
-  };
+  }, [getAuthHeaders, router]);
 
   useEffect(() => {
-    fetch('/api/auth/me', { headers }).then(r => r.json()).then(d => {
+    void fetch('/api/auth/me', { headers: getAuthHeaders() }).then(r => r.json()).then(d => {
       setCurrentUser(d.user);
       if (d.user?.role !== 'admin') router.push('/');
     });
-    loadUsers();
-  }, []);
+    void loadUsers();
+  }, [getAuthHeaders, loadUsers, router]);
 
   const filteredUsers = useMemo(() => {
     if (!searchQuery) return users;
@@ -117,7 +119,7 @@ function UsersContent() {
     if (editingUser) {
       // Update
       const res = await fetch(`/api/users/${editingUser.id}`, {
-        method: 'PUT', headers: jsonHeaders,
+        method: 'PUT', headers: getAuthHeaders(true),
         body: JSON.stringify({ username: form.username, email: form.email, role: form.role, personalDir: form.personalDir, avatar: form.avatar }),
       });
       const data = await res.json();
@@ -128,14 +130,14 @@ function UsersContent() {
         setFormError('所有字段不能为空'); return;
       }
       const res = await fetch('/api/users', {
-        method: 'POST', headers: jsonHeaders,
+        method: 'POST', headers: getAuthHeaders(true),
         body: JSON.stringify(form),
       });
       const data = await res.json();
       if (!res.ok) { setFormError(data.error); return; }
     }
     setDialogOpen(false);
-    loadUsers();
+    void loadUsers();
   };
 
   const handleDelete = async (id: string) => {
@@ -146,15 +148,15 @@ function UsersContent() {
       variant: 'destructive',
     });
     if (!ok) return;
-    await fetch(`/api/users/${id}`, { method: 'DELETE', headers });
-    loadUsers();
+    await fetch(`/api/users/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+    void loadUsers();
   };
 
   const handleResetPassword = async () => {
     setResetError('');
     if (resetPwd.length < 6) { setResetError('密码至少6个字符'); return; }
     const res = await fetch(`/api/users/${resetUserId}`, {
-      method: 'PUT', headers: jsonHeaders,
+      method: 'PUT', headers: getAuthHeaders(true),
       body: JSON.stringify({ resetPassword: resetPwd }),
     });
     const data = await res.json();
@@ -174,10 +176,10 @@ function UsersContent() {
     if (!ok) return;
     await fetch(`/api/users/${user.id}`, {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: getAuthHeaders(true),
       body: JSON.stringify({ reviewAction }),
     });
-    loadUsers();
+    void loadUsers();
   };
 
   const statusLabel = (status: UserInfo['status']) => {

@@ -493,35 +493,31 @@ export default function WorkflowsPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/dashboard">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  返回首页
-                </Link>
-              </Button>
-              <div className="h-6 w-px bg-border" />
-              <div>
-                <h1 className="text-2xl font-bold">工作流管理</h1>
-                <p className="text-xs text-muted-foreground">管理和配置工作流 · 代码生产黑灯车间</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <LanguageToggle />
-              <ThemeToggle />
-              <Button size="sm" variant="outline" onClick={handleAICreate}>
-                <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
-                AI 创建
-              </Button>
-              <Button onClick={() => setShowNewModal(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                手动创建
-              </Button>
-            </div>
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/dashboard">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              返回首页
+            </Link>
+          </Button>
+          <div className="h-6 w-px bg-border" />
+          <div>
+            <h1 className="text-2xl font-bold">工作流管理</h1>
+            <p className="text-xs text-muted-foreground">管理和配置工作流 · 代码生产黑灯车间</p>
           </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <LanguageToggle />
+          <ThemeToggle />
+          <Button size="sm" variant="outline" onClick={handleAICreate}>
+            <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+            AI 创建
+          </Button>
+          <Button onClick={() => setShowNewModal(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            手动创建
+          </Button>
         </div>
       </header>
 
@@ -819,6 +815,31 @@ export default function WorkflowsPage() {
                 </Table>
               </div>
             ) : (
+              <>
+              {displayedWorkflows.length > 0 && (
+                <div className="mb-3 flex items-center">
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                    onClick={toggleSelectAll}
+                  >
+                    <span
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary ${
+                        allDisplayedWorkflowsSelected
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-transparent'
+                      }`}
+                    >
+                      {allDisplayedWorkflowsSelected && (
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M8.5 2.5L3.8 7.5L1.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </span>
+                    {allDisplayedWorkflowsSelected ? '取消全选' : '全选当前页'}
+                  </button>
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {displayedWorkflows.map((workflow, index) => (
               <motion.div
@@ -887,6 +908,7 @@ export default function WorkflowsPage() {
               </motion.div>
             ))}
               </div>
+              </>
             )}
 
             {!loading && pagination.total > 0 ? (

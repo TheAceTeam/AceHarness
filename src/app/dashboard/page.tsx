@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
@@ -16,6 +16,7 @@ import NewConfigModal from '@/components/NewConfigModal';
 import UserMenu from '@/components/UserMenu';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import pkgJson from '../../../package.json';
 
 interface DashboardStats {
   totalRuns: number;
@@ -40,6 +41,10 @@ interface TokenRankingItem {
   cacheReadInputTokens: number;
   cost: number;
 }
+
+const WORKFLOW_TOKEN_RANKING_HREF = '/run-history?view=token-ranking&dimension=workflow&sortKey=totalTokens&sortDirection=desc&page=1';
+const DASHBOARD_CACHE_KEY = 'dashboard-cache';
+const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -90,35 +95,10 @@ export default function DashboardPage() {
     } catch {}
   }, []);
 
-  const CACHE_KEY = 'dashboard-cache';
-  const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-  useEffect(() => {
-    // Try to load from cache first for instant render
-    try {
-      const raw = sessionStorage.getItem(CACHE_KEY);
-      if (raw) {
-        const cached = JSON.parse(raw);
-        if (Date.now() - cached.ts < CACHE_TTL) {
-          setStats(cached.stats);
-          setConfigs(cached.configs);
-          setRecentRuns(cached.recentRuns);
-          setRunningRuns(cached.runningRuns);
-          setAgentUsageData(cached.agentUsageData || []);
-          setActivityData(cached.activityData || []);
-          setTokenRankingByUser(cached.tokenRankingByUser || []);
-          setTokenRankingByWorkflow(cached.tokenRankingByWorkflow || []);
-          setLoading(false);
-        }
-      }
-    } catch {}
-    loadDashboardData();
-  }, []);
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = useCallback(async () => {
     try {
       setLoading(true);
-      const weekDays = [0,1,2,3,4,5,6].map(i => t(`dashboard.weekdays.${i}`));
+      const weekDays = [0, 1, 2, 3, 4, 5, 6].map((i) => t(`dashboard.weekdays.${i}`));
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
       const res = await fetch('/api/dashboard', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -132,7 +112,6 @@ export default function DashboardPage() {
       if (!res.ok) throw new Error('Dashboard API failed');
       const data = await res.json();
 
-      // Handle null or missing data gracefully
       if (!data || !data.stats) {
         console.warn('Dashboard API returned incomplete data');
         return;
@@ -146,16 +125,14 @@ export default function DashboardPage() {
       setTokenRankingByUser(data.tokenRankingByUser || []);
       setTokenRankingByWorkflow(data.tokenRankingByWorkflow || []);
 
-      // Map server dayOfWeek to localized weekday names
       const actData = (data.activityData || []).map((d: any) => ({
         name: weekDays[d.dayOfWeek],
         runs: d.runs,
       }));
       setActivityData(actData);
 
-      // Write cache for instant render on next visit
       try {
-        sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+        sessionStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify({
           ts: Date.now(),
           stats: data.stats,
           configs: data.configs || [],
@@ -167,13 +144,34 @@ export default function DashboardPage() {
           activityData: actData,
         }));
       } catch {}
-
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [router, t]);
+
+  useEffect(() => {
+    // Try to load from cache first for instant render
+    try {
+      const raw = sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (Date.now() - cached.ts < DASHBOARD_CACHE_TTL) {
+          setStats(cached.stats);
+          setConfigs(cached.configs);
+          setRecentRuns(cached.recentRuns);
+          setRunningRuns(cached.runningRuns);
+          setAgentUsageData(cached.agentUsageData || []);
+          setActivityData(cached.activityData || []);
+          setTokenRankingByUser(cached.tokenRankingByUser || []);
+          setTokenRankingByWorkflow(cached.tokenRankingByWorkflow || []);
+          setLoading(false);
+        }
+      }
+    } catch {}
+    void loadDashboardData();
+  }, [loadDashboardData]);
 
   const StatCard = ({ icon: Icon, label, value, trend, color }: any) => (
     <motion.div
@@ -221,12 +219,29 @@ export default function DashboardPage() {
     </motion.button>
   );
 
-  const TokenRankingList = ({ title, items }: { title: string; items: TokenRankingItem[] }) => (
+  const TokenRankingList = ({
+    title,
+    items,
+    actionHref,
+    actionLabel,
+  }: {
+    title: string;
+    items: TokenRankingItem[];
+    actionHref?: string;
+    actionLabel?: string;
+  }) => (
     <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
-      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <Cpu className="w-5 h-5 text-primary" />
-        {title}
-      </h3>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-lg font-semibold">
+          <Cpu className="w-5 h-5 text-primary" />
+          {title}
+        </h3>
+        {actionHref && actionLabel ? (
+          <Button variant="ghost" size="sm" className="h-8 px-2.5 text-xs" asChild>
+            <Link href={actionHref}>{actionLabel}</Link>
+          </Button>
+        ) : null}
+      </div>
       {items.length > 0 ? (
         <div className="space-y-3">
           {items.map((item, index) => {
@@ -364,6 +379,9 @@ export default function DashboardPage() {
                     {t('dashboard.title')}
                   </h1>
                   <p className="text-xs text-muted-foreground">{t('dashboard.subtitle')}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground/70">
+                    {t('dashboard.versionLabel')} v{pkgJson.version}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -504,7 +522,12 @@ export default function DashboardPage() {
             </h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
-              <TokenRankingList title={t('dashboard.tokenRanking.byWorkflow')} items={tokenRankingByWorkflow} />
+              <TokenRankingList
+                title={t('dashboard.tokenRanking.byWorkflow')}
+                items={tokenRankingByWorkflow}
+                actionHref={WORKFLOW_TOKEN_RANKING_HREF}
+                actionLabel={t('dashboard.tokenRanking.viewAll')}
+              />
             </div>
           </motion.div>
 

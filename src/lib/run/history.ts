@@ -40,7 +40,10 @@ export interface RunSummary extends TokenUsageSummary {
   ownerName: string;
 }
 
-export type RunSortKey = 'name' | 'startTime';
+export type HistoryView = 'runs' | 'token-ranking';
+export type TokenRankingDimension = 'workflow' | 'user';
+export type RunSortKey = 'name' | 'startTime' | 'totalTokens' | 'cost';
+export type TokenRankingSortKey = 'name' | 'totalTokens' | 'runs' | 'cost';
 export type SortDirection = 'asc' | 'desc';
 
 export function getSafeTime(value: unknown): number {
@@ -111,14 +114,17 @@ function roundMoney(value: number): number {
   return Math.round(value * 10000) / 10000;
 }
 
-function finalizeRanking(items: Record<string, TokenRankingItem>): TokenRankingItem[] {
-  return Object.values(items)
+function finalizeRanking(items: Record<string, TokenRankingItem>, limit?: number): TokenRankingItem[] {
+  const sorted = Object.values(items)
     .map((item) => ({ ...item, cost: roundMoney(item.cost) }))
-    .sort((a, b) => b.totalTokens - a.totalTokens || b.runs - a.runs)
-    .slice(0, 10);
+    .sort((a, b) => b.totalTokens - a.totalTokens || b.runs - a.runs);
+  return typeof limit === 'number' ? sorted.slice(0, Math.max(0, limit)) : sorted;
 }
 
-export function buildTokenRankingsForRuns(runs: RunSummary[]): {
+export function buildTokenRankingsForRuns(
+  runs: RunSummary[],
+  options: { limit?: number } = {}
+): {
   tokenRankingByUser: TokenRankingItem[];
   tokenRankingByWorkflow: TokenRankingItem[];
 } {
@@ -154,8 +160,8 @@ export function buildTokenRankingsForRuns(runs: RunSummary[]): {
   }
 
   return {
-    tokenRankingByUser: finalizeRanking(tokenRankingByUserMap),
-    tokenRankingByWorkflow: finalizeRanking(tokenRankingByWorkflowMap),
+    tokenRankingByUser: finalizeRanking(tokenRankingByUserMap, options.limit),
+    tokenRankingByWorkflow: finalizeRanking(tokenRankingByWorkflowMap, options.limit),
   };
 }
 
@@ -259,9 +265,52 @@ export function sortRuns(runs: RunSummary[], sortKey: RunSortKey, sortDirection:
       return (getSafeTime(a.startTime) - getSafeTime(b.startTime)) * direction;
     }
 
+    if (sortKey === 'totalTokens') {
+      const tokenDiff = a.totalTokens - b.totalTokens;
+      if (tokenDiff !== 0) return tokenDiff * direction;
+      return a.configName.localeCompare(b.configName, 'zh-CN') * direction;
+    }
+
+    if (sortKey === 'cost') {
+      const costDiff = a.cost - b.cost;
+      if (costDiff !== 0) return costDiff * direction;
+      return a.configName.localeCompare(b.configName, 'zh-CN') * direction;
+    }
+
     const timeDiff = getSafeTime(a.startTime) - getSafeTime(b.startTime);
     if (timeDiff !== 0) return timeDiff * direction;
     return a.configName.localeCompare(b.configName, 'zh-CN') * direction;
+  });
+}
+
+export function sortTokenRankings(
+  items: TokenRankingItem[],
+  sortKey: TokenRankingSortKey,
+  sortDirection: SortDirection
+): TokenRankingItem[] {
+  const direction = sortDirection === 'asc' ? 1 : -1;
+  return [...items].sort((a, b) => {
+    if (sortKey === 'name') {
+      const nameDiff = a.name.localeCompare(b.name, 'zh-CN');
+      if (nameDiff !== 0) return nameDiff * direction;
+      return (a.totalTokens - b.totalTokens) * direction;
+    }
+
+    if (sortKey === 'runs') {
+      const runsDiff = a.runs - b.runs;
+      if (runsDiff !== 0) return runsDiff * direction;
+      return (a.totalTokens - b.totalTokens) * direction;
+    }
+
+    if (sortKey === 'cost') {
+      const costDiff = a.cost - b.cost;
+      if (costDiff !== 0) return costDiff * direction;
+      return (a.totalTokens - b.totalTokens) * direction;
+    }
+
+    const tokenDiff = a.totalTokens - b.totalTokens;
+    if (tokenDiff !== 0) return tokenDiff * direction;
+    return a.name.localeCompare(b.name, 'zh-CN') * direction;
   });
 }
 

@@ -6,8 +6,37 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   pointer-events: none;
 }
 
+/* Prevent layout shift when scrollbar appears/disappears */
 html {
-  scrollbar-gutter: stable;
+  overflow-y: scroll;
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* Override react-remove-scroll-bar's padding and margin since we have a permanent scrollbar */
+/* The library injects a <style> with body[data-scroll-locked] { margin-right: 15px !important } */
+/* We need higher specificity to override it */
+html body {
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+html body[data-scroll-locked] {
+  overflow: hidden !important;
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+/* Override the injected .width-before-scroll-bar and .right-scroll-bar-position */
+html body .width-before-scroll-bar {
+  margin-right: 0px !important;
+}
+
+html body .right-scroll-bar-position {
+  right: 0px !important;
 }
 
 @layer base {

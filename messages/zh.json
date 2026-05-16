@@ -2,6 +2,7 @@
   "dashboard": {
     "title": "ACEHarness 控制中心",
     "subtitle": "Your team of AIs, collaborating to get work done.",
+    "versionLabel": "当前版本",
     "stats": {
       "totalRuns": "总运行次数",
       "successRate": "成功率",
@@ -16,6 +17,7 @@
       "title": "Token 使用排行",
       "byUser": "用户维度",
       "byWorkflow": "工作流维度",
+      "viewAll": "全部",
       "totalTokens": "总 Token",
       "runs": "运行次数",
       "cost": "费用",

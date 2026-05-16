@@ -2,6 +2,7 @@
   "dashboard": {
     "title": "ACEHarness Control Center",
     "subtitle": "Full-Lifecycle Multi-Agent Orchestration System",
+    "versionLabel": "Current version",
     "stats": {
       "totalRuns": "Total Runs",
       "successRate": "Success Rate",
@@ -16,6 +17,7 @@
       "title": "Token Usage Ranking",
       "byUser": "By User",
       "byWorkflow": "By Workflow",
+      "viewAll": "All",
       "totalTokens": "Total Tokens",
       "runs": "Runs",
       "cost": "Cost",
