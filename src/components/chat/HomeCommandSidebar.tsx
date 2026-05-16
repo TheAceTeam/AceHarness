@@ -1437,7 +1437,7 @@ function getMentionQuery(input: string): string | null {
 
 function insertMention(input: string, mention: string): string {
   const atIndex = input.lastIndexOf('@');
-  const replacement = `@${mention} `;
+  const replacement = `<mention id="${mention}" label="${mention}" /> `;
   if (atIndex < 0) return `${input}${replacement}`;
   const before = input.slice(0, atIndex);
   const after = input.slice(atIndex + 1).replace(/^[^\s\n\r，。,.!！?？:：；;]*/u, '');

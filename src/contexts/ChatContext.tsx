@@ -335,22 +335,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }).catch(() => {});
   }, []);
 
-  const handleSetEngine = useCallback((e: string) => {
-    setEngineState(e);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('chat-engine', e);
-    }
-    updateActiveSession(s => ({ ...s, engine: e }));
-  }, []);
-
-  const handleSetModel = useCallback((m: string) => {
-    setModel(m);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('chat-model', m);
-    }
-    updateActiveSession(s => ({ ...s, model: m }));
-  }, []);
-
   // Load global engine config and default model on mount, and keep it in sync with engine settings page
   useEffect(() => {
     refreshGlobalEngineConfig();
@@ -864,13 +848,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [
-    activeSession?.workflowBinding?.configFile,
-    activeSession?.workflowBinding?.runId,
-    activeSession?.sessionWorkbenchState?.wechatBinding?.bindingId,
-    activeSessionId,
-    reparseSession,
-  ]);
+  }, [activeSession, activeSessionId, reparseSession]);
 
   // Debounced persist to server
   const pendingSessionRef = useRef<ChatSession | null>(null);
@@ -937,6 +915,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return updated;
     });
   }, [scheduleSave]);
+
+  const handleSetEngine = useCallback((e: string) => {
+    setEngineState(e);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat-engine', e);
+    }
+    updateActiveSession(s => ({ ...s, engine: e }));
+  }, [updateActiveSession]);
+
+  const handleSetModel = useCallback((m: string) => {
+    setModel(m);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat-model', m);
+    }
+    updateActiveSession(s => ({ ...s, model: m }));
+  }, [updateActiveSession]);
 
   const setSessionWorkbenchState = useCallback((state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => {
     updateActiveSession((session) => {
@@ -1433,7 +1427,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       setStreamingMessageId(null);
     }
-  }, [updateAction, model, updateActiveSession]);
+  }, [effectiveEngine, enrichAction, model, updateAction, updateActiveSession, workingDirectory]);
 
   const interruptCurrentStream = useCallback(() => {
     const activeChatId = activeChatIdRef.current;

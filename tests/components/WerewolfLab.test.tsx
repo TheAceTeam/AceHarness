@@ -367,7 +367,7 @@ describe('multi-agent werewolf lab', () => {
     const suggestedPlayer = TEMP_WEREWOLF_AGENTS.find((agent) => screen.queryByRole('button', { name: `@${agent.name}` }));
     expect(suggestedPlayer).toBeTruthy();
     await user.click(screen.getByRole('button', { name: `@${suggestedPlayer!.name}` }));
-    expect(interventionInput).toHaveValue(`@${suggestedPlayer!.name} `);
+    expect(interventionInput).toHaveValue(`<mention id="${suggestedPlayer!.name}" label="${suggestedPlayer!.name}" /> `);
 
     await user.click(screen.getByRole('button', { name: '上帝视角' }));
     expect(screen.getByText(/上帝视角会显示所有身份/)).toBeInTheDocument();

@@ -463,7 +463,7 @@ export default function ChatSidebar() {
       || workflowBindingByRelatedSessionId.has(activeSession.id);
     const nextView = relatedToWorkflow ? 'runs' : 'chat';
     setSessionView((prev) => (prev === nextView ? prev : nextView));
-  }, [activeSession?.id, activeSession?.workflowBinding, activeSession?.creationSession, workflowBindingByRelatedSessionId]);
+  }, [activeSession, workflowBindingByRelatedSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1555,7 +1555,7 @@ function SessionItem({
           ) : null}
           {isStreaming ? (
             <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
-              生成中
+              发言中
             </span>
           ) : isRecentlyCompleted ? (
             <span className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 dark:text-emerald-300">

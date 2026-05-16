@@ -333,7 +333,7 @@ function StreamingResultBlock({ rawContent }: { rawContent?: string }) {
     <details className="mt-1 rounded-xl border border-border bg-background/80 text-xs shadow-sm">
       <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-muted-foreground">
         <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>data_object</span>
-        <span>结构化结果生成中</span>
+        <span>结构化结果发言中</span>
       </summary>
       <pre className="mx-3 mb-3 max-h-72 overflow-auto rounded-md border bg-muted/60 p-3 text-[11px] leading-5 text-foreground">
         <code className="block whitespace-pre-wrap break-words font-mono">{result.text}</code>
@@ -577,7 +577,7 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
           <div className="prose-sm prose-neutral max-w-none leading-6 text-current dark:prose-invert [&_p]:my-1">
             <Markdown>{message.content || ''}</Markdown>
           </div>
-          {isStreaming ? <div className="mt-2 text-[11px] opacity-70">生成中...</div> : null}
+          {isStreaming ? <div className="mt-2 text-[11px] opacity-70">发言中...</div> : null}
         </div>
         {sentAt ? (
           <div className="px-1 text-[11px] text-muted-foreground opacity-70">{sentAt}</div>

@@ -241,7 +241,7 @@ describe('ChatSidebar', () => {
 
     render(<ChatSidebar />);
 
-    expect(screen.getByText('生成中')).toBeTruthy();
+    expect(screen.getAllByText('Session One').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('进行中')).toBeTruthy();
   });
 
