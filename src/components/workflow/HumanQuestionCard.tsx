@@ -61,21 +61,14 @@ export default function HumanQuestionCard({
   onSubmit,
   onNavigate,
 }: HumanQuestionCardProps) {
-  const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => buildDefaultAnswer(question));
+  const defaultAnswer = useMemo(() => buildDefaultAnswer(question), [question]);
+  const [answer, setAnswer] = useState<HumanQuestionAnswer>(() => defaultAnswer);
   const options: Array<{ label: string; value: string; description?: string }> = question.answerSchema.options || question.availableStates?.map((state) => ({ label: state, value: state })) || [];
   const ready = useMemo(() => isAnswerReady(question, answer), [answer, question]);
 
   useEffect(() => {
-    setAnswer(buildDefaultAnswer(question));
-  }, [
-    question.id,
-    question.status,
-    question.answerSchema.type,
-    question.answerSchema.required,
-    question.suggestedNextState,
-    question.availableStates,
-    question.answerSchema.options,
-  ]);
+    setAnswer(defaultAnswer);
+  }, [defaultAnswer]);
 
   const toggleOption = (value: string, checked: boolean) => {
     const current = new Set(answer.selectedOptions || []);

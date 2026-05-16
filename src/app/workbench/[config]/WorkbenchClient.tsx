@@ -6492,6 +6492,9 @@ export default function WorkbenchPage() {
                       {selectedStep.role === 'attacker' ? 'swords' : selectedStep.role === 'judge' ? 'gavel' : 'shield'}
                     </span>
                     <span className="text-sm font-semibold flex-1">{selectedStep.name}</span>
+                    {selectedStep.agent && (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{selectedStep.agent}</Badge>
+                    )}
                     {selectedRoleConfig && (
                       <Badge className={selectedRoleConfig.team === 'blue' ? 'bg-blue-500/20 text-blue-400' : selectedRoleConfig.team === 'red' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}>{selectedRoleConfig.team}</Badge>
                     )}
@@ -6734,7 +6737,8 @@ export default function WorkbenchPage() {
                 onSelectPersistedStep={selectStepByLogName}
                 onViewPersistedStepOutput={openPersistedStepLogModal}
                 systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
-                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt} />
+                iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
+                compact={!!selectedStep} />
               ) : (<div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
             </div>
                   </>);

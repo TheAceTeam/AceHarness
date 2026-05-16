@@ -6,7 +6,4 @@
  * that mirror the parent component's internal types.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-empty-interface
-export interface CommanderPanelContext {
-  [key: string]: any;
-}
+export type CommanderPanelContext = Record<string, any>;

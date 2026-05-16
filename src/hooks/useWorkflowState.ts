@@ -213,7 +213,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_CHECKPOINT_MESSAGE': return { ...state, checkpointMessage: action.payload };
     case 'SET_CHECKPOINT_IS_ITERATIVE': return { ...state, checkpointIsIterative: action.payload };
     case 'SET_ACTIVE_TAB': return { ...state, activeTab: action.payload };
-    case 'SET_SELECTED_AGENT': return { ...state, selectedAgent: action.payload };
+    case 'SET_SELECTED_AGENT': return { ...state, selectedAgent: action.payload, selectedStep: null };
     case 'SET_SELECTED_STEP': return { ...state, selectedStep: action.payload };
     case 'SET_PROJECT_ROOT': return { ...state, projectRoot: action.payload };
     case 'SET_WORKSPACE_MODE': return { ...state, workspaceMode: action.payload };

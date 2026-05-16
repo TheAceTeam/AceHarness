@@ -1,57 +1,46 @@
-## Aceharness 工作流创建（aceharness-workflow-creator 技能）
+# ACEHarness Workflow Creator - 输出协议
 
-**触发场景：**
-- 创建工作流 / 新建 workflow / 写工作流配置
-- 需要 state-machine / phase-based 编排
-- 用户给出复杂目标，希望拆成多 Agent、多阶段推进
+## 你的任务
 
-## 核心规则
+根据用户描述的测试/评审流程，生成一个 ACEHarness 状态机工作流配置。
 
-- 创建前必须收集目标、范围、工作目录、验收约束
-- 不要直接用 bash 创建 YAML 代替 UI 创建流程
-- 需要写入后校验时，使用本 skill 的校验脚本
-- 用户未明确要求隔离执行时，优先 `context.workspaceMode: in-place`
+## 输出格式
 
-## 输出协议
+你必须输出一个 `<result>` 标签，内部是单行 JSON（不要换行）：
 
-**本 skill 的所有结构化输出都必须遵守系统级 `<result>` 协议。**
+```
+<result>
+{"kind":"workflow_draft","payload":{"filename":"xxx.yaml","summary":"一句话描述","config":{"workflow":{"states":[...]},"context":{"projectRoot":"/绝对路径","workspaceMode":"in-place"}}}}
+</result>
+```
 
-| 上下文 | 阶段 | 输出格式 |
-|--------|------|----------|
-| 首页聊天 | 收集需求/澄清 | `<result>` 内输出 `{"kind":"home_sidebar","payload":{...}}` |
-| 首页聊天 | 方案预览 | `<result>` 内输出 `{"kind":"card","payload":{...}}` |
-| 创建弹窗 | 补充问答 | `<result>` 内输出 `{"kind":"clarification_form","payload":{...}}` |
-| 创建弹窗 | 正式计划 | `<result>` 内输出 `{"kind":"plan_draft","payload":{...}}` |
-| 创建弹窗 | YAML 草案 | `<result>` 内输出 `{"kind":"workflow_draft","payload":{...}}` |
+## 完整输出示例
 
-约束：
+以下是一个最简单的合法输出：
 
-- `<result>` 内只能放一个 JSON 对象
-- 不要在 `<result>` 内使用 fenced code block
-- 不要在 `<result>` 外输出结构化卡片或 JSON
-- `<result>` 内直接放 JSON，禁止 fenced 围栏
+<result>
+{"kind":"workflow_draft","payload":{"filename":"simple-review.yaml","summary":"简单代码审查流程","config":{"workflow":{"states":[{"name":"审查","isInitial":true,"steps":[{"name":"审查代码","agent":"reviewer","prompt":"审查代码质量和规范"}],"transitions":[{"to":"完成","condition":{"verdict":"pass"}},{"to":"完成","condition":{"verdict":"conditional_pass"}},{"to":"审查","condition":{"verdict":"fail"}}]},{"name":"完成","isFinal":true,"steps":[],"transitions":[]}]},"context":{"projectRoot":"/Users/example/project","workspaceMode":"in-place"}}}}
+</result>
 
-## 工作方式
+## 禁止事项
 
-1. 收集需求  
-   先确认问题、目标、工作目录、范围边界、参考 workflow、是否隔离执行。
+1. **不要**在 `<result>` 外面输出 JSON
+2. **不要**输出多个 `<result>` 标签
+3. **不要**在 JSON 中使用注释
+4. **不要**把 `isInitial` 写成 `initial`，不要把 `isFinal` 写成 `final`
+5. **不要**把转移的 `to` 写成 `target`
 
-2. 查询资源  
-   查看可用 Agent 和参考 workflow。除非用户明确指定，优先帮助用户创建 `state-machine` 工作流。
+## 输出前检查清单
 
-3. 确认关键信息  
-   包括：工作目录、主要产物、成功标准、参考结构、workspaceMode。
+在输出 `<result>` 之前，逐条检查：
 
-4. 设计方案  
-   首页聊天里可以用 `kind=card` 预览方案；真正驱动首页右侧侧边栏时用 `kind=home_sidebar`。
-
-5. 生成草案并校验  
-   生成 `kind=workflow_draft` 后由系统解析和校验；写入流程仍走 UI。
-
-## Agent 团队
-
-- defender（红队）: 设计、实现、测试、文档
-- attacker（蓝队）: 挑战方案、找风险
-- judge（裁判）: 评审和定稿
-
-详细 YAML 规范、验证规则和设计原则，查 `skills/aceharness-workflow-creator/SKILL.md`。
+- [ ] kind 是 `"workflow_draft"` ？
+- [ ] payload 中有 filename（.yaml 结尾）、summary、config ？
+- [ ] config 中有 workflow 和 context ？
+- [ ] context.projectRoot 以 `/` 开头 ？
+- [ ] 恰好 1 个状态有 `isInitial: true` ？（注意是 isInitial，不是 initial）
+- [ ] 至少 1 个状态有 `isFinal: true` ？（注意是 isFinal，不是 final）
+- [ ] 每个非终止状态有恰好 3 条转移（pass / conditional_pass / fail）？
+- [ ] 每条转移的 `to` 指向已存在的状态名 ？（注意是 to，不是 target）
+- [ ] 终止状态的 steps 和 transitions 都是空数组 `[]` ？
+- [ ] JSON 格式正确，没有多余逗号、没有注释 ？

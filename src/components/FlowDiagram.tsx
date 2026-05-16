@@ -135,16 +135,16 @@ export default function FlowDiagram({
   workflow, currentPhase, currentStep, agents, completedSteps,
   failedSteps = [], iterationStates = {}, onSelectStep, onSelectPhase, onSelectCheckpoint, pendingCheckpointPhase,
 }: FlowDiagramProps) {
-  const getAgentTeam = (agentName: string) => {
+  const getAgentTeam = useCallback((agentName: string) => {
     return agents?.find((a) => a.name === agentName)?.team || 'red';
-  };
+  }, [agents]);
 
-  const getStepStatus = (step: Step) => {
+  const getStepStatus = useCallback((step: Step) => {
     if (failedSteps?.includes(step.name)) return 'failed';
     if (currentStep === step.name) return 'running';
     if (completedSteps?.includes(step.name)) return 'completed';
     return 'pending';
-  };
+  }, [completedSteps, currentStep, failedSteps]);
 
   // Horizontal column layout: phases as columns, steps stacked vertically
   // Checkpoints placed horizontally between phase columns
@@ -645,7 +645,7 @@ export default function FlowDiagram({
     });
 
     return { nodes, edges };
-  }, [workflow, currentPhase, currentStep, completedSteps, failedSteps, agents, iterationStates]);
+  }, [workflow, currentPhase, currentStep, completedSteps, failedSteps, agents, getAgentTeam, getStepStatus, iterationStates, pendingCheckpointPhase]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

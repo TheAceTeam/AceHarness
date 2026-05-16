@@ -129,13 +129,13 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
   if (!projectRoot) {
     pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 不能为空');
   } else if (!isAbsolute(projectRoot)) {
-    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须是绝对路径');
+    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须是绝对路径，必须以 / 开头，例如 "/Users/xxx/project" 或 "/home/user/repo"');
   } else if (!existsSync(projectRoot)) {
-    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 指向的目录不存在');
+    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 指向的目录不存在，请确认路径正确且目录已创建');
   } else {
     try {
       if (!statSync(projectRoot).isDirectory()) {
-        pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须指向目录');
+        pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须指向目录，不能是文件路径');
       }
     } catch {
       pushIssue(issues, 'error', ['context', 'projectRoot'], '无法访问 context.projectRoot');
@@ -161,17 +161,17 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
       }
       for (const transition of state.transitions || []) {
         if (!stateNames.has(transition.to) && !(workflowAny.states || []).some((item: any) => item.name === transition.to)) {
-          pushIssue(issues, 'error', ['workflow', 'states', state.name, 'transitions'], `状态 "${state.name}" 的转移目标 "${transition.to}" 不存在`);
+          pushIssue(issues, 'error', ['workflow', 'states', state.name, 'transitions'], `状态 "${state.name}" 的转移目标 "${transition.to}" 不存在。当前已定义的状态: [${[...stateNames].join(', ')}]。修复方法：将 to 改为已定义的状态名之一`);
         }
       }
     }
     const initialCount = (workflowAny.states || []).filter((state: any) => state.isInitial).length;
     const finalCount = (workflowAny.states || []).filter((state: any) => state.isFinal).length;
     if (initialCount !== 1) {
-      pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须且只能有一个初始状态');
+      pushIssue(issues, 'error', ['workflow', 'states'], `状态机必须且只能有一个初始状态（isInitial: true），当前有 ${initialCount} 个。修复方法：确保有且仅有一个状态设置 isInitial: true`);
     }
     if (finalCount < 1) {
-      pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态');
+      pushIssue(issues, 'error', ['workflow', 'states'], '状态机必须至少有一个终止状态（isFinal: true）。修复方法：添加一个 {"name": "完成", "isFinal": true, "steps": [], "transitions": []} 状态');
     }
     for (const state of workflowAny.states || []) {
       if (state.isFinal && Array.isArray(state.transitions) && state.transitions.length > 0) {
@@ -205,14 +205,14 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
             issues,
             'error',
             ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 缺少 ${verdict} 转移路径`
+            `状态 "${state.name}" 缺少 ${verdict} 转移路径。每个非终止状态必须有 pass、conditional_pass、fail 三条转移。修复方法：添加 {"to": "<目标状态名>", "condition": {"verdict": "${verdict}"}}`
           );
         } else if (matches.length > 1) {
           pushIssue(
             issues,
             'error',
             ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 的 ${verdict} 转移路径重复，必须且只能保留一条`
+            `状态 "${state.name}" 的 ${verdict} 转移路径重复（共 ${matches.length} 条），必须且只能保留一条。修复方法：删除多余的 ${verdict} 转移`
           );
         }
       }

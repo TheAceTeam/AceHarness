@@ -102,7 +102,7 @@ export function extractWorkflowDraftPreview(markdown: string, fallbackFilename?:
         filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
         summary: typeof parsed.summary === 'string' ? parsed.summary : '',
         config: null,
-        parseError: 'workflow_draft.config 缺失或不是对象',
+        parseError: 'workflow_draft.config 缺失或不是对象。payload 中必须包含 "config" 字段且值为对象，格式: {"kind":"workflow_draft","payload":{"filename":"xxx.yaml","summary":"...","config":{"workflow":{...},"context":{...}}}}',
       };
     }
     return {
