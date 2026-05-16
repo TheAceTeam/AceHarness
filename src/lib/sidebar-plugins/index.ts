@@ -39,6 +39,7 @@ export {
   registerPlugin,
   unregisterPlugin,
   getAllPlugins,
+  applyDisabledPluginIds,
   getCategories,
   getActions,
   getPinnedActions,

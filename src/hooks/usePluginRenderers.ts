@@ -39,7 +39,7 @@ export function usePluginRenderers(
   builtinRenderers: TabRenderers,
   pluginContext: PluginContext,
 ): UsePluginRenderersResult {
-  const plugins = useMemo(() => getAllPlugins(), []);
+  const plugins = getAllPlugins();
 
   // Collect all available tabs: built-in + plugin-contributed
   const availableTabIds = useMemo(() => {

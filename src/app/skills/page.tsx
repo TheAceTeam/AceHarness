@@ -28,8 +28,9 @@ import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import Markdown from '@/components/Markdown';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
-import { getAllPlugins, registerPlugin, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
+import { getAllPlugins, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
 import {
   SkillCard,
   SkillSearch,
@@ -137,49 +138,36 @@ function normalizeMarketplaceSkillKey(value?: string): string {
 function PluginsTab() {
   const { toast } = useToast();
   const [plugins, setPlugins] = useState<HomePlugin[]>([]);
+  const { disabledPluginIds, loading, save, version } = useSidebarPluginPreferences();
 
-  // Load plugin enabled states from localStorage
   useEffect(() => {
-    const allPlugins = getAllPlugins();
-    try {
-      const saved = localStorage.getItem('aceharness:plugins:disabled');
-      if (saved) {
-        const disabledIds = JSON.parse(saved) as string[];
-        for (const plugin of allPlugins) {
-          if (disabledIds.includes(plugin.id)) {
-            registerPlugin({ ...plugin, enabled: false } as HomePlugin);
-          }
-        }
-      }
-    } catch {}
-    setPlugins(getAllPlugins());
-  }, []);
+    setPlugins(getAllPlugins({ includeDisabled: true }));
+  }, [version]);
 
-  const persistDisabledState = (updatedPlugins: HomePlugin[]) => {
-    const disabledIds = updatedPlugins.filter((p) => p.enabled === false).map((p) => p.id);
-    try {
-      localStorage.setItem('aceharness:plugins:disabled', JSON.stringify(disabledIds));
-    } catch {}
-  };
-
-  const handleToggle = (pluginId: string) => {
+  const handleToggle = async (pluginId: string) => {
     const plugin = plugins.find((p) => p.id === pluginId);
     if (!plugin) return;
-    const updated = { ...plugin, enabled: plugin.enabled === false ? true : false };
-    registerPlugin(updated as HomePlugin);
-    const next = getAllPlugins();
-    setPlugins(next);
-    persistDisabledState(next);
-    toast('success', `${plugin.name} 已${updated.enabled ? '启用' : '禁用'}`);
+
+    const nextDisabledIds = disabledPluginIds.includes(pluginId)
+      ? disabledPluginIds.filter((id) => id !== pluginId)
+      : [...disabledPluginIds, pluginId];
+
+    try {
+      const savedDisabledIds = await save(nextDisabledIds);
+      const next = getAllPlugins({ includeDisabled: true });
+      setPlugins(next);
+      toast('success', `${plugin.name} 已${savedDisabledIds.includes(pluginId) ? '禁用' : '启用'}`);
+    } catch (error: any) {
+      toast('error', error?.message || '保存插件状态失败');
+    }
   };
 
   const handleDelete = (pluginId: string) => {
     const plugin = plugins.find((p) => p.id === pluginId);
     if (!plugin) return;
     unregisterPlugin(pluginId);
-    const next = getAllPlugins();
+    const next = getAllPlugins({ includeDisabled: true });
     setPlugins(next);
-    persistDisabledState(next);
     toast('success', `${plugin.name} 已删除`);
   };
 
@@ -229,6 +217,7 @@ function PluginsTab() {
                 size="sm"
                 variant={plugin.enabled !== false ? 'outline' : 'default'}
                 className="h-7 text-xs"
+                disabled={loading}
                 onClick={() => handleToggle(plugin.id)}
               >
                 {plugin.enabled !== false ? '禁用' : '启用'}
@@ -778,20 +767,6 @@ export default function SkillsPage() {
     }));
   }, [installedSkillKeySet, onlineSkills]);
 
-  const localSummaryLabel = useMemo(() => {
-    if (!localPagination.total) return '暂无 Skills';
-    const start = (localPagination.page - 1) * localPagination.pageSize + 1;
-    const end = Math.min(localPagination.page * localPagination.pageSize, localPagination.total);
-    return `显示 ${start}-${end} / ${localPagination.total} 个 Skills`;
-  }, [localPagination]);
-
-  const onlineSummaryLabel = useMemo(() => {
-    if (!totalItems) return '暂无应用市场 Skill';
-    const start = (onlinePage - 1) * onlinePageSize + 1;
-    const end = Math.min(onlinePage * onlinePageSize, totalItems);
-    return `显示 ${start}-${end} / ${totalItems} 个 Skills`;
-  }, [onlinePage, onlinePageSize, totalItems]);
-
   const getDisplayDescription = (skill: LocalSkill) => skill.descriptionZh || skill.description;
 
   const handleLocalSort = (key: LocalSortKey) => {
@@ -818,54 +793,50 @@ export default function SkillsPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
-        <div className="container mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/dashboard">
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  返回首页
-                </Link>
-              </Button>
-              <div className="h-6 w-px bg-border" />
-              <div>
-                <h1 className="text-2xl font-bold">Skills 管理</h1>
-                <p className="text-xs text-muted-foreground">统一管理本地 Skills 与应用市场安装</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              {activeTab === 'local' ? (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".zip"
-                    className="hidden"
-                    onChange={handleUploadZip}
-                  />
-                  <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                    <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
-                    {uploading ? '导入中...' : '上传 Skill'}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting || selectedForExport.size === 0}>
-                    <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
-                    {exporting ? '导出中...' : `导出 (${selectedForExport.size})`}
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={handleBatchDelete} disabled={selectedForExport.size === 0} className="text-destructive hover:text-destructive">
-                    <Trash2 className="w-4 h-4 mr-1" />
-                    删除 ({selectedForExport.size})
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
-                    <FolderOpen className="w-4 h-4 mr-1" />
-                    工作目录
-                  </Button>
-                </>
-              ) : null}
-              <LanguageToggle />
-              <ThemeToggle />
-            </div>
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/dashboard">
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              返回首页
+            </Link>
+          </Button>
+          <div className="h-6 w-px bg-border" />
+          <div>
+            <h1 className="text-2xl font-bold">Skills 管理</h1>
+            <p className="text-xs text-muted-foreground">统一管理本地 Skills 与应用市场安装</p>
           </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {activeTab === 'local' ? (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip"
+                className="hidden"
+                onChange={handleUploadZip}
+              />
+              <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
+                {uploading ? '导入中...' : '上传 Skill'}
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting || selectedForExport.size === 0}>
+                <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
+                {exporting ? '导出中...' : `导出 (${selectedForExport.size})`}
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleBatchDelete} disabled={selectedForExport.size === 0} className="text-destructive hover:text-destructive">
+                <Trash2 className="w-4 h-4 mr-1" />
+                删除 ({selectedForExport.size})
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
+                <FolderOpen className="w-4 h-4 mr-1" />
+                工作目录
+              </Button>
+            </>
+          ) : null}
+          <LanguageToggle />
+          <ThemeToggle />
         </div>
       </header>
 
@@ -933,7 +904,6 @@ export default function SkillsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 flex-wrap">
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">{localSummaryLabel}</span>
                   {localViewMode === 'gallery' ? (
                     <>
                       <Select value={localSortKey} onValueChange={(value) => setLocalSortKey(value as LocalSortKey)}>
@@ -955,18 +925,6 @@ export default function SkillsPage() {
                       </Button>
                     </>
                   ) : null}
-                  <Select value={String(localPageSize)} onValueChange={(value) => setLocalPageSize(Number(value))}>
-                    <SelectTrigger className="h-9 w-[112px] bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PAGE_SIZE_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={String(option)}>
-                          {option} / 页
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                   <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
                     <Button
                       size="sm"
@@ -1122,6 +1080,43 @@ export default function SkillsPage() {
                 </div>
                 </div>
               ) : (
+                <>
+                {localPagination.items.length > 0 && (
+                  <div className="mb-3 flex items-center">
+                    <button
+                      type="button"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                      onClick={() => {
+                        const allNames = localPagination.items.map((s) => s.name);
+                        const allSelected = allNames.every((n) => selectedForExport.has(n));
+                        setSelectedForExport((prev) => {
+                          const next = new Set(prev);
+                          if (allSelected) {
+                            allNames.forEach((n) => next.delete(n));
+                          } else {
+                            allNames.forEach((n) => next.add(n));
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <span
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary ${
+                          localPagination.items.length > 0 && localPagination.items.every((s) => selectedForExport.has(s.name))
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-transparent'
+                        }`}
+                      >
+                        {localPagination.items.every((s) => selectedForExport.has(s.name)) && (
+                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8.5 2.5L3.8 7.5L1.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                      </span>
+                      {localPagination.items.every((s) => selectedForExport.has(s.name)) ? '取消全选' : '全选当前页'}
+                    </button>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {localPagination.items.map((skill) => (
                     <motion.div
@@ -1173,6 +1168,7 @@ export default function SkillsPage() {
                     </motion.div>
                   ))}
                 </div>
+                </>
               )}
             </section>
 
@@ -1243,19 +1239,6 @@ export default function SkillsPage() {
                   />
                 </div>
                 <div className="flex items-center gap-4 flex-wrap">
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">{onlineSummaryLabel}</span>
-                  <Select value={String(onlinePageSize)} onValueChange={(value) => setOnlinePageSize(Number(value))}>
-                    <SelectTrigger className="h-9 w-[112px] bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PAGE_SIZE_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={String(option)}>
-                          {option} / 页
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                   <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
                     <Button
                       size="sm"

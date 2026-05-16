@@ -26,13 +26,15 @@ const jsonManifests: HomePluginManifest[] = [
   coreOptimize,
 ] as HomePluginManifest[];
 
-let fullPlugins: HomePlugin[] = [
+const defaultFullPlugins: HomePlugin[] = [
   supervisorPlugin,
   werewolfPlugin,
   createWorkflowPlugin,
   createAgentPlugin,
   chatroomPlugin,
 ];
+
+let fullPlugins: HomePlugin[] = defaultFullPlugins.map((plugin) => ({ ...plugin }));
 
 // ─── Plugin CRUD ───
 
@@ -46,8 +48,26 @@ export function unregisterPlugin(id: string): void {
   fullPlugins = fullPlugins.filter((p) => p.id !== id);
 }
 
-export function getAllPlugins(): HomePlugin[] {
+export function getAllPlugins(options?: { includeDisabled?: boolean }): HomePlugin[] {
+  if (options?.includeDisabled) {
+    return [...fullPlugins];
+  }
   return fullPlugins.filter((p) => p.enabled !== false);
+}
+
+export function applyDisabledPluginIds(disabledPluginIds: string[]): void {
+  const disabled = new Set(disabledPluginIds);
+  const currentById = new Map(fullPlugins.map((plugin) => [plugin.id, plugin]));
+  const sourcePlugins = [
+    ...defaultFullPlugins,
+    ...fullPlugins.filter((plugin) => !defaultFullPlugins.some((builtin) => builtin.id === plugin.id)),
+  ];
+
+  fullPlugins = sourcePlugins.map((plugin) => ({
+    ...(currentById.get(plugin.id) || plugin),
+    ...plugin,
+    enabled: plugin.enabled === false ? false : !disabled.has(plugin.id),
+  }));
 }
 
 export function getAllManifests(): HomePluginManifest[] {

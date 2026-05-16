@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import {
@@ -149,7 +149,7 @@ const ACTION_GUIDES: Record<string, {
 export default function QuickActions({ onAction, skillSettings }: QuickActionsProps) {
   const [guideAction, setGuideAction] = useState<HomePluginQuickAction | null>(null);
   const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
-  const actionsGrouped = useMemo(() => getActionsGrouped(), []);
+  const actionsGrouped = getActionsGrouped();
 
   const handleActionClick = (action: HomePluginQuickAction) => {
     if (action.prompt.startsWith('__HOME_ACTION__:')) {
@@ -274,8 +274,8 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
 /** Compact horizontal bar version — shown above input when messages exist */
 export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) {
   const [expanded, setExpanded] = useState(false);
-  const pinnedActions = useMemo(() => getPinnedActions(), []);
-  const collapsibleActions = useMemo(() => getCollapsibleActions(), []);
+  const pinnedActions = getPinnedActions();
+  const collapsibleActions = getCollapsibleActions();
 
   return (
     <div className="w-full">

@@ -14,6 +14,14 @@ const ADMIN_FILE = getWorkspaceDataFile('admin.json');
 export type UserRole = 'admin' | 'user';
 export type UserStatus = 'pending' | 'active' | 'rejected';
 
+export interface UserSidebarPluginPreferences {
+  disabledIds: string[];
+}
+
+export interface UserPreferences {
+  sidebarPlugins?: UserSidebarPluginPreferences;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -34,6 +42,7 @@ export interface User {
   rejectedAt?: number;
   rejectedBy?: string;
   reviewNote?: string;
+  preferences?: UserPreferences;
 }
 
 export type PublicUser = Omit<User, 'passwordHash' | 'salt' | 'answerHash'>;
@@ -51,11 +60,20 @@ function hashAnswer(answer: string, salt: string): string {
 }
 
 function normalizeLoadedUser(user: any): User {
+  const disabledIds = Array.isArray(user?.preferences?.sidebarPlugins?.disabledIds)
+    ? user.preferences.sidebarPlugins.disabledIds.filter((item: unknown) => typeof item === 'string')
+    : [];
   return {
     ...user,
     role: user.role === 'admin' ? 'admin' : 'user',
     status: user.status === 'pending' || user.status === 'rejected' ? user.status : 'active',
     personalDir: user.personalDir || '',
+    preferences: {
+      ...user.preferences,
+      sidebarPlugins: {
+        disabledIds,
+      },
+    },
   };
 }
 
@@ -237,6 +255,29 @@ export async function updateUser(
     await assertUserUniqueness(users, { username: nextUsername, email: nextEmail }, id);
 
     Object.assign(users[idx], patch);
+    await saveUsers(users);
+    return toPublicUser(users[idx]);
+  });
+}
+
+export async function getUserSidebarPluginDisabledIds(userId: string): Promise<string[]> {
+  const user = await getUserById(userId);
+  if (!user) throw new Error('用户不存在');
+  return user.preferences?.sidebarPlugins?.disabledIds || [];
+}
+
+export async function updateUserSidebarPluginDisabledIds(userId: string, disabledIds: string[]): Promise<PublicUser> {
+  return withLock(async () => {
+    const users = await loadUsers();
+    const idx = users.findIndex((u) => u.id === userId);
+    if (idx === -1) throw new Error('用户不存在');
+
+    users[idx].preferences = {
+      ...(users[idx].preferences || {}),
+      sidebarPlugins: {
+        disabledIds: Array.from(new Set(disabledIds.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))),
+      },
+    };
     await saveUsers(users);
     return toPublicUser(users[idx]);
   });

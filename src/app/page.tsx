@@ -16,6 +16,7 @@ import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, creat
 import { useToast } from '@/components/ui/toast';
 import { Switch } from '@/components/ui/switch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import ChatSidebar from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage, { RobotLogo } from '@/components/chat/ChatMessage';
@@ -46,6 +47,7 @@ import {
   TEMP_WEREWOLF_SUPERVISOR,
   listTemporaryWerewolfAgentNames,
 } from '@/plugins/werewolf/agents';
+import pkgJson from '../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
@@ -140,6 +142,7 @@ function ChatPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  useSidebarPluginPreferences();
   const {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
@@ -1331,6 +1334,14 @@ function ChatPageContent() {
                               ? `当前正在与 Agent「${activeAgentBinding.agentName}」对话`
                               : '通过对话实现全流程 Multi-Agent 智能编排'}
                           </motion.p>
+                          <motion.span
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ delay: 0.2 }}
+                            className="mt-1 text-xs text-muted-foreground/60"
+                          >
+                            v{pkgJson.version}
+                          </motion.span>
                         </div>
                         <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} />
                       </div>
