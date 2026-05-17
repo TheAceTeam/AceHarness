@@ -15,7 +15,7 @@
     },
     "tokenRanking": {
       "title": "Token Usage Ranking",
-      "sectionSubtitle": "Keep workflows, individual runs, and user distribution in one analytical surface with less visual switching.",
+      "sectionSubtitle": "View workflow, run, and user token distribution in one place.",
       "byUser": "By User",
       "byWorkflow": "By Workflow",
       "userSubtitle": "See overall token share and spend distribution by user.",

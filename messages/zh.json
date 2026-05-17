@@ -15,7 +15,7 @@
     },
     "tokenRanking": {
       "title": "Token 使用排行",
-      "sectionSubtitle": "把多条工作流、单次运行和用户分布放到同一个分析视图里，减少来回切换。",
+      "sectionSubtitle": "集中查看工作流、运行记录与用户 Token 分布。",
       "byUser": "用户维度",
       "byWorkflow": "工作流维度",
       "userSubtitle": "按用户查看整体 token 占比和消耗分布。",

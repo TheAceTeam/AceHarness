@@ -490,6 +490,7 @@ export type PromptInputProps = Omit<
   HTMLAttributes<HTMLFormElement>,
   "onSubmit" | "onError"
 > & {
+  disabled?: boolean;
   // e.g., "image/*" or leave undefined for any
   accept?: string;
   multiple?: boolean;
@@ -513,6 +514,7 @@ export type PromptInputProps = Omit<
 
 export const PromptInput = ({
   className,
+  disabled = false,
   accept,
   multiple,
   globalDrop,
@@ -909,6 +911,7 @@ export const PromptInput = ({
         accept={accept}
         aria-label="Upload files"
         className="hidden"
+        disabled={disabled}
         multiple={multiple}
         onChange={handleChange}
         ref={inputRef}
@@ -921,7 +924,9 @@ export const PromptInput = ({
         ref={formRef}
         {...props}
       >
-        <InputGroup className="overflow-hidden">{children}</InputGroup>
+        <fieldset className="contents" disabled={disabled}>
+          <InputGroup className="overflow-hidden">{children}</InputGroup>
+        </fieldset>
       </form>
     </>
   );
