@@ -298,6 +298,16 @@ export default function ModelsPage() {
   const [selectedStatus, setSelectedStatus] = useState<string[]>([]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<Model | null>(null);
+  const [creatingModel, setCreatingModel] = useState(false);
+  const [newModel, setNewModel] = useState<Omit<Model, 'createdAt' | 'updatedAt'>>({
+    id: '',
+    name: '',
+    endpoints: [],
+    engines: [],
+    status: 'active',
+    costMultiplier: 1,
+    contextWindow: undefined,
+  });
   const [activeTab, setActiveTab] = useState<'catalog' | 'probe'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('models-active-tab');
@@ -446,13 +456,21 @@ export default function ModelsPage() {
     });
   }, []);
 
+  const allPaginatedSelected = paginatedModels.length > 0
+    && paginatedModels.every((model) => selectedModels.has(model.id));
+  const hasPartialPaginatedSelection = paginatedModels.some((model) => selectedModels.has(model.id)) && !allPaginatedSelected;
+
   const toggleSelectAll = useCallback(() => {
-    if (selectedModels.size === paginatedModels.length) {
-      setSelectedModels(new Set());
-    } else {
-      setSelectedModels(new Set(paginatedModels.map((m) => m.id)));
-    }
-  }, [selectedModels, paginatedModels]);
+    setSelectedModels((prev) => {
+      const next = new Set(prev);
+      if (allPaginatedSelected) {
+        paginatedModels.forEach((model) => next.delete(model.id));
+      } else {
+        paginatedModels.forEach((model) => next.add(model.id));
+      }
+      return next;
+    });
+  }, [allPaginatedSelected, paginatedModels]);
 
   const handleDelete = (model: Model) => {
     setModels((prev) => prev.filter((m) => m.id !== model.id));
@@ -481,6 +499,27 @@ export default function ModelsPage() {
     setEditingModel(null);
   };
 
+  const handleCreateSave = async () => {
+    if (!newModel.id || !newModel.name) return;
+    try {
+      const res = await fetch('/api/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newModel),
+      });
+      if (res.ok) {
+        await loadModelsFromApi();
+      } else {
+        const now = new Date().toISOString();
+        setModels((prev) => [...prev, { ...newModel, createdAt: now, updatedAt: now } as Model]);
+      }
+    } catch {
+      const now = new Date().toISOString();
+      setModels((prev) => [...prev, { ...newModel, createdAt: now, updatedAt: now } as Model]);
+    }
+    setCreatingModel(false);
+  };
+
   const activeFilterCount = selectedEndpoints.length + selectedEngines.length + selectedStatus.length;
 
   return (
@@ -500,7 +539,10 @@ export default function ModelsPage() {
           </div>
         </div>
         {activeTab === 'catalog' ? (
-          <Button size="sm" className="gap-1.5 rounded-lg">
+          <Button size="sm" className="gap-1.5 rounded-lg" onClick={() => {
+            setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+            setCreatingModel(true);
+          }}>
             <Plus className="h-4 w-4" />
             新建模型
           </Button>
@@ -515,7 +557,7 @@ export default function ModelsPage() {
           </TabsList>
         </div>
 
-        <TabsContent value="catalog" className="mt-0 min-h-0 flex-1">
+        <TabsContent value="catalog" className="mt-0 min-h-0 flex-1 pb-28">
           <div className="flex-1 overflow-y-auto px-6 py-6">
             <div ref={filterBarAnchorRef} className="h-px" />
 
@@ -635,44 +677,6 @@ export default function ModelsPage() {
                     </Button>
                   )}
 
-                  {selectedModels.size > 0 && (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="h-8 gap-1.5 rounded-lg text-xs"
-                      onClick={() => setDeleteDialogOpen(true)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      批量删除 ({selectedModels.size})
-                    </Button>
-                  )}
-
-                  {viewMode === 'gallery' && paginatedModels.length > 0 && (
-                    <button
-                      type="button"
-                      className={cn(
-                        'inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors',
-                        'hover:bg-accent hover:text-accent-foreground'
-                      )}
-                      onClick={toggleSelectAll}
-                    >
-                      <span
-                        className={cn(
-                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary',
-                          paginatedModels.length > 0 && selectedModels.size === paginatedModels.length
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-transparent'
-                        )}
-                      >
-                        {paginatedModels.length > 0 && selectedModels.size === paginatedModels.length && (
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M8.5 2.5L3.8 7.5L1.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        )}
-                      </span>
-                      {selectedModels.size === paginatedModels.length ? '取消全选' : '全选当前页'}
-                    </button>
-                  )}
                 </div>
               </div>
             </section>
@@ -721,8 +725,7 @@ export default function ModelsPage() {
                           <TableHead className="w-10">
                             <Checkbox
                               checked={
-                                paginatedModels.length > 0 &&
-                                selectedModels.size === paginatedModels.length
+                                allPaginatedSelected ? true : hasPartialPaginatedSelection ? 'indeterminate' : false
                               }
                               onCheckedChange={toggleSelectAll}
                             />
@@ -799,6 +802,47 @@ export default function ModelsPage() {
           />
         </TabsContent>
       </Tabs>
+
+      {activeTab === 'catalog' && paginatedModels.length > 0 ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+            <div
+              className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+              role="button"
+              tabIndex={0}
+              onClick={toggleSelectAll}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleSelectAll();
+                }
+              }}
+            >
+              <Checkbox
+                checked={allPaginatedSelected ? true : hasPartialPaginatedSelection ? 'indeterminate' : false}
+                aria-label={allPaginatedSelected ? '取消全选当前页模型' : '全选当前页模型'}
+                className="mr-2 h-4 w-4 rounded-[5px] border-border bg-background"
+                onCheckedChange={toggleSelectAll}
+              />
+              {allPaginatedSelected ? '取消全选' : '全选当前页'}
+            </div>
+            <div className="px-3 text-sm font-medium text-foreground/80">
+              已选 {selectedModels.size} 项
+            </div>
+            {selectedModels.size > 0 ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="rounded-full px-4 text-destructive hover:text-destructive"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                批量删除
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent>
@@ -887,6 +931,79 @@ export default function ModelsPage() {
             </Button>
             <Button onClick={handleEditSave}>
               保存
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={creatingModel} onOpenChange={setCreatingModel}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>新建模型</DialogTitle>
+            <DialogDescription>
+              添加一个新的模型配置。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">模型名称</label>
+              <Input
+                value={newModel.name}
+                onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                placeholder="例如: Claude 3.5 Sonnet"
+              />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">模型 ID</label>
+              <Input
+                value={newModel.id}
+                onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
+                placeholder="例如: claude-3-5-sonnet"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">启用状态</label>
+              <Switch
+                checked={newModel.status === 'active'}
+                onCheckedChange={(checked: boolean) =>
+                  setNewModel({ ...newModel, status: checked ? 'active' : 'inactive' })
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">费用倍率</label>
+              <Input
+                type="number"
+                step="0.1"
+                min="0"
+                value={newModel.costMultiplier}
+                onChange={(e) =>
+                  setNewModel({ ...newModel, costMultiplier: parseFloat(e.target.value) || 0 })
+                }
+              />
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">上下文窗口</label>
+              <Input
+                type="number"
+                step="1000"
+                min="0"
+                value={newModel.contextWindow ?? ''}
+                onChange={(e) =>
+                  setNewModel({
+                    ...newModel,
+                    contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                  })
+                }
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreatingModel(false)}>
+              取消
+            </Button>
+            <Button onClick={handleCreateSave} disabled={!newModel.id || !newModel.name}>
+              创建
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -532,6 +533,20 @@ export default function SkillsPage() {
     });
   };
 
+  const toggleSelectAllLocalPage = () => {
+    const allNames = localPagination.items.map((s) => s.name);
+    const allSelected = allNames.length > 0 && allNames.every((n) => selectedForExport.has(n));
+    setSelectedForExport((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        allNames.forEach((n) => next.delete(n));
+      } else {
+        allNames.forEach((n) => next.add(n));
+      }
+      return next;
+    });
+  };
+
   const syncInstalledSkills = async (skillNames: string[], successMessage?: string) => {
     const names = Array.from(new Set(skillNames.filter(Boolean)));
     if (names.length === 0) {
@@ -753,6 +768,10 @@ export default function SkillsPage() {
       items: sortedLocalSkills.slice(start, end),
     };
   }, [localPage, localPageSize, sortedLocalSkills]);
+  const allLocalPageSelected = localPagination.items.length > 0
+    && localPagination.items.every((skill) => selectedForExport.has(skill.name));
+  const hasPartialLocalPageSelection = localPagination.items.some((skill) => selectedForExport.has(skill.name))
+    && !allLocalPageSelected;
 
   useEffect(() => {
     if (localPage !== localPagination.page) {
@@ -821,14 +840,6 @@ export default function SkillsPage() {
                 <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
                 {uploading ? '导入中...' : '上传 Skill'}
               </Button>
-              <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting || selectedForExport.size === 0}>
-                <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
-                {exporting ? '导出中...' : `导出 (${selectedForExport.size})`}
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleBatchDelete} disabled={selectedForExport.size === 0} className="text-destructive hover:text-destructive">
-                <Trash2 className="w-4 h-4 mr-1" />
-                删除 ({selectedForExport.size})
-              </Button>
               <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
                 <FolderOpen className="w-4 h-4 mr-1" />
                 工作目录
@@ -840,7 +851,7 @@ export default function SkillsPage() {
         </div>
       </header>
 
-      <div className="container mx-auto px-6 py-8 flex flex-col gap-6">
+      <div className="container mx-auto px-6 py-8 pb-28 flex flex-col gap-6">
         <section className="rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-sm backdrop-blur">
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -1083,38 +1094,30 @@ export default function SkillsPage() {
                 <>
                 {localPagination.items.length > 0 && (
                   <div className="mb-3 flex items-center">
-                    <button
-                      type="button"
-                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-                      onClick={() => {
-                        const allNames = localPagination.items.map((s) => s.name);
-                        const allSelected = allNames.every((n) => selectedForExport.has(n));
-                        setSelectedForExport((prev) => {
-                          const next = new Set(prev);
-                          if (allSelected) {
-                            allNames.forEach((n) => next.delete(n));
-                          } else {
-                            allNames.forEach((n) => next.add(n));
-                          }
-                          return next;
-                        });
+                    <div
+                      className="inline-flex h-8 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
+                      role="button"
+                      tabIndex={0}
+                      onClick={toggleSelectAllLocalPage}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          toggleSelectAllLocalPage();
+                        }
                       }}
                     >
-                      <span
-                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary ${
-                          localPagination.items.length > 0 && localPagination.items.every((s) => selectedForExport.has(s.name))
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-transparent'
-                        }`}
-                      >
-                        {localPagination.items.every((s) => selectedForExport.has(s.name)) && (
-                          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M8.5 2.5L3.8 7.5L1.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        )}
-                      </span>
-                      {localPagination.items.every((s) => selectedForExport.has(s.name)) ? '取消全选' : '全选当前页'}
-                    </button>
+                      <Checkbox
+                        checked={allLocalPageSelected ? true : hasPartialLocalPageSelection ? 'indeterminate' : false}
+                        aria-label={
+                          allLocalPageSelected
+                            ? '取消全选当前页技能'
+                            : '全选当前页技能'
+                        }
+                        className="h-4 w-4 rounded-[5px]"
+                        onCheckedChange={toggleSelectAllLocalPage}
+                      />
+                      {allLocalPageSelected ? '取消全选' : '全选当前页'}
+                    </div>
                   </div>
                 )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -1386,6 +1389,51 @@ export default function SkillsPage() {
           <PluginsTab />
         ) : null}
       </div>
+      {activeTab === 'local' && localPagination.items.length > 0 ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+            <div
+              className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+              role="button"
+              tabIndex={0}
+              onClick={toggleSelectAllLocalPage}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleSelectAllLocalPage();
+                }
+              }}
+            >
+              <Checkbox
+                checked={allLocalPageSelected ? true : hasPartialLocalPageSelection ? 'indeterminate' : false}
+                aria-label={
+                  allLocalPageSelected
+                    ? '取消全选当前页技能'
+                    : '全选当前页技能'
+                }
+                className="mr-2 h-4 w-4 rounded-[5px] border-border bg-background"
+                onCheckedChange={toggleSelectAllLocalPage}
+              />
+              {allLocalPageSelected ? '取消全选' : '全选当前页'}
+            </div>
+            <div className="px-3 text-sm font-medium text-foreground/80">
+              已选 {selectedForExport.size} 项
+            </div>
+            {selectedForExport.size > 0 ? (
+              <>
+                <Button size="sm" variant="outline" className="rounded-full px-4" onClick={handleExport} disabled={exporting}>
+                  <Download className={`mr-2 h-4 w-4 ${exporting ? 'animate-bounce' : ''}`} />
+                  {exporting ? '导出中...' : '导出'}
+                </Button>
+                <Button size="sm" variant="outline" className="rounded-full px-4 text-destructive hover:text-destructive" onClick={handleBatchDelete}>
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  批量删除
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {dialogProps && <ConfirmDialog {...dialogProps} />}
     </div>
   );

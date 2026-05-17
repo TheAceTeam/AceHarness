@@ -49,7 +49,6 @@ type FormationNodeData = {
   isSupervisor?: boolean;
   status?: AgentFormationDiagramProps['status'];
   width?: number;
-  targetSide?: Position;
 };
 
 const SUPERVISOR_ID = 'formation-supervisor';
@@ -137,13 +136,21 @@ function buildActiveStepMap(
   return map;
 }
 
-function getTargetSideFromAngle(angle: number): Position {
-  const normalized = ((angle % (Math.PI * 2)) + (Math.PI * 2)) % (Math.PI * 2);
-  const degrees = normalized * 180 / Math.PI;
-  if (degrees >= 45 && degrees < 135) return Position.Top;
-  if (degrees >= 135 && degrees < 225) return Position.Left;
-  if (degrees >= 225 && degrees < 315) return Position.Bottom;
-  return Position.Right;
+function getSourceHandleId(angle: number): string {
+  const degrees = ((angle * 180 / Math.PI) % 360 + 360) % 360;
+  if (degrees >= 45 && degrees < 135) return 'source-bottom';
+  if (degrees >= 135 && degrees < 225) return 'source-left';
+  if (degrees >= 225 && degrees < 315) return 'source-top';
+  return 'source-right';
+}
+
+function getTargetHandleId(angle: number): string {
+  const opposite = angle + Math.PI;
+  const degrees = ((opposite * 180 / Math.PI) % 360 + 360) % 360;
+  if (degrees >= 45 && degrees < 135) return 'target-bottom';
+  if (degrees >= 135 && degrees < 225) return 'target-left';
+  if (degrees >= 225 && degrees < 315) return 'target-top';
+  return 'target-right';
 }
 
 const AgentFormationNode = memo(function AgentFormationNode({ data }: NodeProps<FormationNodeData>) {
@@ -224,18 +231,20 @@ const AgentFormationNode = memo(function AgentFormationNode({ data }: NodeProps<
         />
       ) : null}
       {!data.isSupervisor ? (
-        <Handle
-          type="target"
-          position={data.targetSide || Position.Top}
-          className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0"
-        />
+        <>
+          <Handle type="target" id="target-top" position={Position.Top} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="target" id="target-bottom" position={Position.Bottom} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="target" id="target-left" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="target" id="target-right" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+        </>
       ) : null}
       {data.isSupervisor ? (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0"
-        />
+        <>
+          <Handle type="source" id="source-top" position={Position.Top} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="source" id="source-bottom" position={Position.Bottom} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="source" id="source-left" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+          <Handle type="source" id="source-right" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-transparent !opacity-0" />
+        </>
       ) : null}
 
       <div className="flex items-center gap-3">
@@ -320,7 +329,6 @@ function buildGraph(
       type: 'formationNode',
       position: { x: 0, y: 0 },
       zIndex: 2,
-      sourcePosition: Position.Bottom,
       data: {
         name: supervisorName,
         team: supervisorConfig?.team || 'black-gold',
@@ -336,6 +344,8 @@ function buildGraph(
     },
   ];
 
+  const edges: Edge[] = [];
+
   workerAgents.forEach((agent, index) => {
     const ringIndex = Math.floor(index / ringCapacity);
     const indexInRing = index % ringCapacity;
@@ -344,14 +354,12 @@ function buildGraph(
     const angle = (-Math.PI / 2) + (indexInRing / Math.max(countInRing, 1)) * Math.PI * 2;
     const x = Math.cos(angle) * radius;
     const y = Math.sin(angle) * radius + 70;
-    const targetPosition = getTargetSideFromAngle(angle + Math.PI);
 
     nodes.push({
       id: `formation-agent:${agent.name}`,
       type: 'formationNode',
       position: { x, y },
       zIndex: 2,
-      targetPosition,
       data: {
         name: agent.name,
         team: agent.team || 'blue',
@@ -361,42 +369,43 @@ function buildGraph(
         activeStep: activeStepMap.get(agent.name) || null,
         status,
         width: estimateNodeWidth(agent.name),
-        targetSide: targetPosition,
       },
       draggable: false,
     });
-  });
 
-  const edges: Edge[] = workerAgents.map((agent) => ({
-    id: `formation-edge:${supervisorName}->${agent.name}`,
-    source: SUPERVISOR_ID,
-    target: `formation-agent:${agent.name}`,
-    type: 'straight',
-    zIndex: 0,
-    animated: activeStepMap.has(agent.name) || status === 'running' || status === 'waiting',
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: activeStepMap.has(agent.name)
-        ? status === 'waiting'
-          ? '#f59e0b'
-          : status === 'failed'
-            ? '#ef4444'
-            : '#22d3ee'
-        : '#94a3b8',
-    },
-    style: {
-      stroke: activeStepMap.has(agent.name)
-        ? status === 'waiting'
-          ? '#f59e0b'
-          : status === 'failed'
-            ? '#ef4444'
-            : '#22d3ee'
-        : '#94a3b8',
-      strokeWidth: activeStepMap.has(agent.name) ? 3 : 1.6,
-      strokeDasharray: activeStepMap.has(agent.name) ? '10 6' : '6 8',
-      opacity: activeStepMap.has(agent.name) ? 0.95 : 0.55,
-    },
-  }));
+    edges.push({
+      id: `formation-edge:${supervisorName}->${agent.name}`,
+      source: SUPERVISOR_ID,
+      target: `formation-agent:${agent.name}`,
+      sourceHandle: getSourceHandleId(angle),
+      targetHandle: getTargetHandleId(angle),
+      type: 'default',
+      zIndex: 0,
+      animated: activeStepMap.has(agent.name) || status === 'running' || status === 'waiting',
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: activeStepMap.has(agent.name)
+          ? status === 'waiting'
+            ? '#f59e0b'
+            : status === 'failed'
+              ? '#ef4444'
+              : '#22d3ee'
+          : '#94a3b8',
+      },
+      style: {
+        stroke: activeStepMap.has(agent.name)
+          ? status === 'waiting'
+            ? '#f59e0b'
+            : status === 'failed'
+              ? '#ef4444'
+              : '#22d3ee'
+          : '#94a3b8',
+        strokeWidth: activeStepMap.has(agent.name) ? 3 : 1.6,
+        strokeDasharray: activeStepMap.has(agent.name) ? '10 6' : '6 8',
+        opacity: activeStepMap.has(agent.name) ? 0.95 : 0.55,
+      },
+    });
+  });
 
   return { nodes, edges };
 }
@@ -447,9 +456,9 @@ function AgentFormationDiagramInner(props: AgentFormationDiagramProps) {
         panOnDrag
         edgesFocusable={false}
         edgesUpdatable={false}
-        zoomOnScroll={false}
-        zoomOnPinch={false}
-        zoomOnDoubleClick={false}
+        zoomOnScroll
+        zoomOnPinch
+        zoomOnDoubleClick
         proOptions={{ hideAttribution: true }}
       >
         <Controls showInteractive={false} />

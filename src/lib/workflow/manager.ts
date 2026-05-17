@@ -328,7 +328,14 @@ export class WorkflowManager extends EventEmitter {
       if (!existsSync(workspaceSkillsDir)) {
         try {
           createDirectoryLinkSync(serverSkillsDir, workspaceSkillsDir);
-        } catch { /* ignore */ }
+        } catch {
+          try {
+            await cp(serverSkillsDir, workspaceSkillsDir, { recursive: true, force: true });
+            console.log(`[WF-Skills] 已复制整个 skills 目录 → ${workspaceSkillsDir}`);
+          } catch (e2) {
+            console.warn('[WF-Skills] 同步 skills 目录失败:', e2);
+          }
+        }
       }
       return;
     }

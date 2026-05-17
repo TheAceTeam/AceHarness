@@ -72,7 +72,7 @@ export function AgentHeroCard({ agent, selected, compact = false, className, onC
     >
       <div className={cn('absolute border border-border/50', compact ? 'inset-[7px] rounded-[10px]' : 'inset-[8px] rounded-[10px]')} />
       <div className={cn('absolute inset-x-0 top-0 bg-gradient-to-r', compact ? 'h-[2px]' : 'h-[3px]', theme.accent)} />
-      <div className={cn('absolute right-3 top-3 text-[9px] uppercase tracking-[0.24em] text-muted-foreground/40', compact && 'hidden')}>
+      <div className="hidden">
         Unit
       </div>
 

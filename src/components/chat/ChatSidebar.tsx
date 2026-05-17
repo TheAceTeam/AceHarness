@@ -603,7 +603,7 @@ export default function ChatSidebar() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="home-chat-scroll flex-1 overflow-y-auto">
         <div className="border-b border-border/40 px-3 py-2">
           <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
             <Button
@@ -612,7 +612,7 @@ export default function ChatSidebar() {
               variant="ghost"
               className={`h-7 justify-center gap-1 px-2 text-xs ${
                 sessionView === 'chat'
-                  ? 'bg-background text-primary shadow-sm ring-1 ring-primary/20 hover:bg-background'
+                  ? 'bg-background text-primary ring-1 ring-primary/20 hover:bg-background'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setSessionView('chat')}
@@ -629,7 +629,7 @@ export default function ChatSidebar() {
               variant="ghost"
               className={`h-7 justify-center gap-1 px-2 text-xs ${
                 sessionView === 'runs'
-                  ? 'bg-background text-primary shadow-sm ring-1 ring-primary/20 hover:bg-background'
+                  ? 'bg-background text-primary ring-1 ring-primary/20 hover:bg-background'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setSessionView('runs')}
@@ -744,7 +744,7 @@ export default function ChatSidebar() {
             />
           </div>
         ) : (
-          <div className="mx-2 my-2 overflow-hidden rounded-2xl border border-border/45 bg-background/35 shadow-sm">
+          <div className="home-chat-sidebar-card mx-2 my-2 overflow-hidden rounded-2xl border border-border/45 bg-background/35">
             {visibleSessions.map(session => (
               <SessionItem
                 key={session.id}
@@ -856,7 +856,7 @@ function SkillManagerModal({
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-card rounded-lg w-[560px] max-w-[90vw] max-h-[75vh] flex flex-col border shadow-xl"
+        className="bg-card rounded-lg w-[560px] max-w-[90vw] max-h-[75vh] flex flex-col border"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -928,7 +928,7 @@ function SkillManagerModal({
         </div>
 
         {/* Skills List */}
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
+        <div className="home-chat-scroll flex-1 overflow-y-auto px-4 pb-4">
           {filtered.length === 0 ? (
             <div className="py-10 text-center text-xs text-muted-foreground">没有匹配的技能</div>
           ) : (
@@ -1017,8 +1017,8 @@ function EmptySessionState({
 
   return (
     <div className="px-3 py-6">
-      <div className="flex flex-col items-center justify-center rounded-xl border border-border/70 bg-background/80 px-4 py-6 text-center shadow-sm backdrop-blur-sm transition-transform hover:-translate-y-0.5">
-        <div className="mb-4 w-24 animate-[botBounce_2.5s_ease-in-out_infinite] drop-shadow-sm">
+      <div className="flex flex-col items-center justify-center rounded-xl border border-border/70 bg-background/80 px-4 py-6 text-center backdrop-blur-sm transition-transform hover:-translate-y-0.5">
+        <div className="mb-4 w-24 animate-[botBounce_2.5s_ease-in-out_infinite]">
           <svg viewBox="0 0 100 110" fill="none" xmlns="http://www.w3.org/2000/svg" className="block h-auto w-full">
             <defs>
               <linearGradient id="emptyBodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -1134,7 +1134,7 @@ function WorkflowBucket({
   }
 
   return (
-    <div className="mb-3 rounded-xl border bg-background/70">
+    <div className="home-chat-sidebar-card mb-3 rounded-xl border bg-background/70">
       <div className="flex w-full items-center gap-2 px-3 py-2 text-left">
         <button
           type="button"
@@ -1231,7 +1231,7 @@ function WorkflowGroup({
   }, [forceOpen, group.pendingCount, hasActiveSession]);
 
   return (
-    <div className={`rounded-lg border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-muted/10'}`}>
+    <div className={`home-chat-sidebar-card rounded-lg border ${group.pendingCount > 0 ? 'border-amber-500/30 bg-amber-500/5' : 'bg-muted/10'}`}>
       <div className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
         <button
           type="button"
@@ -1484,11 +1484,11 @@ function SessionItem({
 
   const row = (
     <div
-      className={`group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-xl' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
+      className={`home-chat-session-row group relative flex items-start gap-2 overflow-hidden py-2.5 cursor-pointer ${compact ? 'rounded-xl' : 'border-b border-border/35 last:border-b-0'} transition-colors duration-150 ${
         active
-          ? 'bg-primary/10 px-3 shadow-[inset_3px_0_0_hsl(var(--primary))]'
+          ? 'border-l-[3px] border-primary bg-primary/10 px-3'
           : isWeChatBound
-            ? 'bg-[#1AAD19]/[0.08] px-3 shadow-[inset_3px_0_0_#1AAD19] hover:bg-[#1AAD19]/[0.12]'
+            ? 'border-l-[3px] border-[#1AAD19] bg-[#1AAD19]/[0.08] px-3 hover:bg-[#1AAD19]/[0.12]'
             : 'px-3 hover:bg-muted/55'
       } ${isStreaming ? 'bg-primary/15 ring-1 ring-primary/20' : isLoadingSession ? 'bg-muted/45' : isRecentlyCompleted ? 'bg-emerald-500/10 ring-1 ring-emerald-500/20' : ''}`}
       onClick={() => {
@@ -1499,9 +1499,7 @@ function SessionItem({
         onClick();
       }}
     >
-      {isStreaming ? (
-        <div className="pointer-events-none absolute inset-y-3 left-2 w-1 rounded-full animate-pulse bg-primary" />
-      ) : isRecentlyCompleted ? (
+      {isRecentlyCompleted ? (
         <div className="pointer-events-none absolute inset-y-3 left-2 w-1 rounded-full bg-emerald-500" />
       ) : null}
       {selectable ? (
@@ -1586,7 +1584,7 @@ function SessionItem({
         </div>
       </div>
       {!selectable ? (
-        <div className="absolute right-2 top-2 z-10 flex items-center gap-0 rounded-full bg-background/90 opacity-0 shadow-sm ring-1 ring-border/60 backdrop-blur transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-0 rounded-full bg-background/92 opacity-0 ring-1 ring-border/60 backdrop-blur transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
           <Button
             size="icon"
             variant="ghost"

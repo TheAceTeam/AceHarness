@@ -57,8 +57,8 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
     const result = await createOpencode({
       port: 0,
       hostname: '127.0.0.1',
-      env: serverEnv,
-    });
+      ...(serverEnv && { env: serverEnv } as any),
+    } as any);
     serverInstance = result.server;
     clientInstance = result.client as unknown as OpenCodeHttpClient;
     console.log(`[opencode-sdk] server started at ${result.server.url}`);

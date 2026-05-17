@@ -393,6 +393,8 @@ export default function WorkflowsPage() {
   }, [creationDrafts, draftSortDirection]);
   const allDisplayedWorkflowsSelected = displayedWorkflows.length > 0
     && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
+  const hasPartialDisplayedWorkflowSelection = displayedWorkflows.some((workflow) => selectedWorkflows.has(workflow.filename))
+    && !allDisplayedWorkflowsSelected;
   const totalLabel = useMemo(() => {
     if (!pagination.total) return '暂无工作流';
     const start = (pagination.page - 1) * pagination.pageSize + 1;
@@ -521,7 +523,7 @@ export default function WorkflowsPage() {
         </div>
       </header>
 
-      <div className="container mx-auto px-6 py-8 flex flex-col gap-6">
+      <div className="container mx-auto px-6 py-8 pb-28 flex flex-col gap-6">
         {/* Floating filter anchor */}
         <div ref={filterBarAnchorRef} className="h-px" />
         {floatingFilterBar && activeTab === 'workflows' ? <div style={{ height: filterBarHeight }} /> : null}
@@ -662,20 +664,6 @@ export default function WorkflowsPage() {
           </div>
         </section>
         ) : null}
-        {/* Batch action bar */}
-        {activeTab === 'workflows' && selectedWorkflows.size > 0 && (
-          <div className="flex items-center gap-4 rounded-[20px] border border-destructive/30 bg-destructive/5 px-5 py-3">
-            <span className="text-sm font-medium">已选 {selectedWorkflows.size} 个工作流</span>
-            <Button size="sm" variant="destructive" onClick={handleBatchDelete}>
-              <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-              批量删除
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setSelectedWorkflows(new Set())}>
-              取消选择
-            </Button>
-          </div>
-        )}
-
         {/* Content */}
         {activeTab === 'workflows' ? (
           <>
@@ -712,7 +700,7 @@ export default function WorkflowsPage() {
                     <TableRow>
                       <TableHead className="w-12">
                         <Checkbox
-                          checked={allDisplayedWorkflowsSelected}
+                          checked={allDisplayedWorkflowsSelected ? true : hasPartialDisplayedWorkflowSelection ? 'indeterminate' : false}
                           onCheckedChange={toggleSelectAll}
                         />
                       </TableHead>
@@ -816,30 +804,6 @@ export default function WorkflowsPage() {
               </div>
             ) : (
               <>
-              {displayedWorkflows.length > 0 && (
-                <div className="mb-3 flex items-center">
-                  <button
-                    type="button"
-                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-                    onClick={toggleSelectAll}
-                  >
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border border-primary ${
-                        allDisplayedWorkflowsSelected
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-transparent'
-                      }`}
-                    >
-                      {allDisplayedWorkflowsSelected && (
-                        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M8.5 2.5L3.8 7.5L1.5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      )}
-                    </span>
-                    {allDisplayedWorkflowsSelected ? '取消全选' : '全选当前页'}
-                  </button>
-                </div>
-              )}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {displayedWorkflows.map((workflow, index) => (
               <motion.div
@@ -1209,6 +1173,42 @@ export default function WorkflowsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {activeTab === 'workflows' && displayedWorkflows.length > 0 ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+            <div
+              className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+              role="button"
+              tabIndex={0}
+              onClick={toggleSelectAll}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleSelectAll();
+                }
+              }}
+            >
+              <Checkbox
+                checked={allDisplayedWorkflowsSelected ? true : hasPartialDisplayedWorkflowSelection ? 'indeterminate' : false}
+                aria-label={allDisplayedWorkflowsSelected ? '取消全选当前页工作流' : '全选当前页工作流'}
+                className="mr-2 h-4 w-4 rounded-[5px] border-border bg-background"
+                onCheckedChange={toggleSelectAll}
+              />
+              {allDisplayedWorkflowsSelected ? '取消全选' : '全选当前页'}
+            </div>
+            <div className="px-3 text-sm font-medium text-foreground/80">
+              已选 {selectedWorkflows.size} 项
+            </div>
+            {selectedWorkflows.size > 0 ? (
+              <Button size="sm" variant="outline" className="rounded-full px-4 text-destructive hover:text-destructive" onClick={handleBatchDelete}>
+                <Trash2 className="mr-2 h-4 w-4" />
+                批量删除
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

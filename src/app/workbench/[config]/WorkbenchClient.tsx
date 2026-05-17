@@ -435,6 +435,7 @@ export default function WorkbenchPage() {
   const [pageLoading, setPageLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(initialMode === 'history');
   const [historyRuns, setHistoryRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
   const [focusedState, setFocusedState] = useState<string | null>(null); // 用于流程图视图跳转
@@ -2209,10 +2210,15 @@ export default function WorkbenchPage() {
   };
 
   const loadHistory = async () => {
+    setHistoryLoading(true);
     try {
       const { runs } = await runsApi.listByConfig(configFile);
       setHistoryRuns(runs);
-    } catch { /* ignore */ }
+    } catch {
+      setHistoryRuns([]);
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
   const loadContexts = async () => {
@@ -7128,7 +7134,9 @@ export default function WorkbenchPage() {
             )}
           </div>
           <div className="flex-1 overflow-auto p-4">
-            {historyRuns.length === 0 ? (
+            {historyLoading ? (
+              <BrandLoadingScreen message="正在加载运行记录..." fullscreen={false} />
+            ) : historyRuns.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                 <span className="material-symbols-outlined text-5xl mb-4">history</span>
                 <p>暂无运行记录</p>

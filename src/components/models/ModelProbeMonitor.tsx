@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
-  Check,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -22,7 +21,18 @@ import {
   XCircle,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -59,6 +69,7 @@ type SortMode = 'custom' | 'group' | 'name';
 type AvailabilityWindow = 7 | 15 | 30;
 type ProbeFormMode = 'single' | 'batch';
 type ProbeDriver = 'auto' | 'sdk' | 'stdio';
+type GroupActionMode = 'split' | 'merge';
 
 interface SingleProbeFormState {
   name: string;
@@ -81,6 +92,12 @@ interface BatchProbeFormState {
   note: string;
   search: string;
   selectedModelIds: string[];
+}
+
+interface GroupActionDialogState {
+  open: boolean;
+  mode: GroupActionMode;
+  groupName: string;
 }
 
 const POLL_INTERVAL_MS = 30_000;
@@ -164,6 +181,14 @@ function createEmptyBatchForm(): BatchProbeFormState {
     note: '',
     search: '',
     selectedModelIds: [],
+  };
+}
+
+function createGroupActionState(mode: GroupActionMode, groupName: string): GroupActionDialogState {
+  return {
+    open: true,
+    mode,
+    groupName,
   };
 }
 
@@ -359,6 +384,8 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
   const [batchLeftSelection, setBatchLeftSelection] = useState<string[]>([]);
   const [batchRightSelection, setBatchRightSelection] = useState<string[]>([]);
   const [selectedProbeIds, setSelectedProbeIds] = useState<Set<string>>(new Set());
+  const [groupActionDialog, setGroupActionDialog] = useState<GroupActionDialogState | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const isAdmin = currentUser?.role === 'admin';
@@ -732,7 +759,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     );
   }, []);
 
-  const splitSelectedProbes = useCallback(async () => {
+  const openSplitSelectedProbes = useCallback(() => {
     if (!isAdmin) {
       toast('warning', '仅管理员可拆分分组');
       return;
@@ -747,13 +774,21 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '拆分时请选择同一个分组里的模型');
       return;
     }
-    const nextGroupName = window.prompt('新分组名称', `${selected[0].groupName} - Split`);
-    if (!nextGroupName?.trim()) return;
+    setGroupActionDialog(createGroupActionState('split', `${selected[0].groupName} - Split`));
+  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
 
+  const splitSelectedProbes = useCallback(async () => {
+    const nextGroupName = groupActionDialog?.groupName.trim();
+    if (!nextGroupName) {
+      toast('warning', '请输入新分组名称');
+      return;
+    }
+    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
-      await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName.trim());
+      await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
       setSelectedProbeIds(new Set());
+      setGroupActionDialog(null);
       toast('success', '已拆分为新分组');
       await loadProbes(false, true);
     } catch (error) {
@@ -761,9 +796,9 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, isAdmin, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
 
-  const mergeSelectedProbes = useCallback(async () => {
+  const openMergeSelectedProbes = useCallback(() => {
     if (!isAdmin) {
       toast('warning', '仅管理员可合并分组');
       return;
@@ -778,13 +813,21 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
       toast('warning', '合并时请至少选择两个不同分组里的模型');
       return;
     }
-    const nextGroupName = window.prompt('合并后的分组名称', 'Merged Group');
-    if (!nextGroupName?.trim()) return;
+    setGroupActionDialog(createGroupActionState('merge', 'Merged Group'));
+  }, [data?.probes, isAdmin, selectedProbeIds, toast]);
 
+  const mergeSelectedProbes = useCallback(async () => {
+    const nextGroupName = groupActionDialog?.groupName.trim();
+    if (!nextGroupName) {
+      toast('warning', '请输入合并后的分组名称');
+      return;
+    }
+    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
     try {
       setRefreshing(true);
-      await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName.trim());
+      await patchSelectedProbesGroup(selected.map((probe) => probe.id), nextGroupName);
       setSelectedProbeIds(new Set());
+      setGroupActionDialog(null);
       toast('success', '已合并为新分组');
       await loadProbes(false, true);
     } catch (error) {
@@ -792,11 +835,61 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
     } finally {
       setRefreshing(false);
     }
-  }, [data?.probes, isAdmin, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+  }, [data?.probes, groupActionDialog?.groupName, loadProbes, patchSelectedProbesGroup, selectedProbeIds, toast]);
+
+  const deleteSelectedProbes = useCallback(async () => {
+    if (!isAdmin) {
+      toast('warning', '仅管理员可删除探针');
+      return;
+    }
+    const selected = (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id));
+    if (selected.length === 0) {
+      toast('warning', '请先选择要删除的探针');
+      return;
+    }
+
+    try {
+      setRefreshing(true);
+      await Promise.all(
+        selected.map(async (probe) => {
+          const res = await authFetch(`/api/models/probes/${probe.id}`, { method: 'DELETE' });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json?.error || `删除探针「${probe.name}」失败`);
+        })
+      );
+      setBulkDeleteOpen(false);
+      setSelectedProbeIds(new Set());
+      toast('success', `已删除 ${selected.length} 个探针`);
+      await loadProbes(false, true);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '批量删除探针失败');
+    } finally {
+      setRefreshing(false);
+    }
+  }, [data?.probes, isAdmin, loadProbes, selectedProbeIds, toast]);
+
+  const selectedProbes = useMemo(
+    () => (data?.probes || []).filter((probe) => selectedProbeIds.has(probe.id)),
+    [data?.probes, selectedProbeIds]
+  );
+  const allProbeIds = useMemo(
+    () => (data?.probes || []).map((probe) => probe.id),
+    [data?.probes]
+  );
+  const allSelected = allProbeIds.length > 0 && selectedProbeIds.size === allProbeIds.length;
+  const hasPartialProbeSelection = selectedProbeIds.size > 0 && !allSelected;
+
+  const toggleSelectAllProbes = useCallback(() => {
+    setSelectedProbeIds((prev) => {
+      if (allProbeIds.length === 0) return prev;
+      if (prev.size === allProbeIds.length) return new Set();
+      return new Set(allProbeIds);
+    });
+  }, [allProbeIds]);
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="flex-1 overflow-y-auto px-6 py-6 pb-32">
         <section
           className="overflow-hidden rounded-[32px] border border-border/60 bg-background/90"
           style={{
@@ -819,10 +912,10 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
               </p>
             </div>
 
-            <div className="flex w-full flex-col gap-4 lg:max-w-[430px]">
-              <div className="flex items-center justify-between rounded-full border border-border/60 bg-background/90 px-5 py-3">
+            <div className="flex w-full flex-col gap-4 lg:max-w-[520px]">
+              <div className="flex flex-col gap-3 rounded-[24px] border border-border/60 bg-background/90 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-sm font-medium text-muted-foreground">排序</span>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button
                     size="sm"
                     variant={sortMode === 'custom' ? 'default' : 'ghost'}
@@ -850,9 +943,9 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                 </div>
               </div>
 
-              <div className="flex items-center justify-between rounded-full border border-border/60 bg-background/90 px-5 py-3">
+              <div className="flex flex-col gap-3 rounded-[24px] border border-border/60 bg-background/90 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-sm font-medium text-muted-foreground">可用性区间</span>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {AVAILABILITY_WINDOWS.map((days) => (
                     <Button
                       key={days}
@@ -867,33 +960,16 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                 </div>
               </div>
 
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="inline-flex items-center gap-3 rounded-full border border-emerald-500/15 bg-background/90 px-5 py-3 text-lg font-semibold">
                   <span className="h-4 w-4 rounded-full bg-emerald-500 shadow-[0_0_0_6px_rgba(34,197,94,0.12)]" />
                   {overallHealthLabel(data)}
                 </div>
                 {isAdmin ? (
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <Button size="sm" className="rounded-full px-4" onClick={() => openCreateDialog('batch')}>
+                      <Plus className="mr-2 h-4 w-4" />
                       添加
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full px-4"
-                      onClick={splitSelectedProbes}
-                      disabled={selectedProbeIds.size === 0}
-                    >
-                      拆分分组
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full px-4"
-                      onClick={mergeSelectedProbes}
-                      disabled={selectedProbeIds.size < 2}
-                    >
-                      合并分组
                     </Button>
                   </div>
                 ) : (
@@ -987,55 +1063,51 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
 
                       return (
                         <article key={probe.id} className="rounded-[24px] border border-border/70 bg-background/90 p-4 shadow-[0_4px_18px_rgba(15,23,42,0.04)]">
-                          <div className="flex items-start justify-between gap-4">
+                          <div className="flex flex-col gap-4">
+                            <div className="flex items-start justify-between gap-4">
+                              {isAdmin ? (
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={() => toggleProbeSelection(probe.id)}
+                                  aria-label={`选择探针 ${probe.name}`}
+                                  className="mt-1 h-5 w-5 shrink-0 rounded-[6px] border-border bg-background shadow-sm data-[state=checked]:border-primary"
+                                />
+                              ) : <div />}
+                              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                                <Badge className={cn('rounded-full border px-4 py-1 text-sm font-medium', meta.badgeClassName)}>
+                                  <StatusIcon className="mr-1.5 inline h-4 w-4" />
+                                  {meta.label}
+                                </Badge>
+                                {isAdmin ? (
+                                  <>
+                                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => runSingleProbe(probe.id)}>
+                                      <Play className="h-4 w-4" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => openEditDialog(probe)}>
+                                      <Edit3 className="h-4 w-4" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-destructive hover:text-destructive" onClick={() => deleteProbe(probe)}>
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </div>
+
                             <div className="flex min-w-0 items-center gap-4">
                               <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] border border-border/70 bg-card text-xl font-semibold text-foreground/80 shadow-sm">
                                 AI
                               </div>
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <h4 className="truncate text-xl font-semibold">{probe.name}</h4>
+                                  <h4 className="break-words text-xl font-semibold">{probe.name}</h4>
                                   <span className="text-xs text-muted-foreground">{driverLabel(probe.driver)}</span>
                                 </div>
                                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                                   <span>{providerLabel(probe.endpoints[0])}</span>
-                                  <span>{probe.model}</span>
+                                  <span className="break-all">{probe.model}</span>
                                 </div>
                               </div>
-                            </div>
-
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              {isAdmin ? (
-                                <button
-                                  type="button"
-                                  className={cn(
-                                    'flex h-9 w-9 items-center justify-center rounded-full border transition-colors',
-                                    checked
-                                      ? 'border-primary bg-primary text-primary-foreground'
-                                      : 'border-border/70 bg-background text-muted-foreground hover:border-border hover:text-foreground'
-                                  )}
-                                  onClick={() => toggleProbeSelection(probe.id)}
-                                >
-                                  {checked ? <Check className="h-4 w-4" /> : <span className="h-3.5 w-3.5 rounded-full border border-current" />}
-                                </button>
-                              ) : null}
-                              <Badge className={cn('rounded-full border px-4 py-1 text-sm font-medium', meta.badgeClassName)}>
-                                <StatusIcon className="mr-1.5 inline h-4 w-4" />
-                                {meta.label}
-                              </Badge>
-                              {isAdmin ? (
-                                <>
-                                  <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => runSingleProbe(probe.id)}>
-                                    <Play className="h-4 w-4" />
-                                  </Button>
-                                  <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => openEditDialog(probe)}>
-                                    <Edit3 className="h-4 w-4" />
-                                  </Button>
-                                  <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-destructive hover:text-destructive" onClick={() => deleteProbe(probe)}>
-                                    <Trash2 className="h-4 w-4" />
-                                  </Button>
-                                </>
-                              ) : null}
                             </div>
                           </div>
 
@@ -1129,6 +1201,66 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
           </div>
         )}
       </div>
+
+      {isAdmin && allProbeIds.length > 0 ? (
+        <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+            <div
+              className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+              role="button"
+              tabIndex={0}
+              onClick={toggleSelectAllProbes}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  toggleSelectAllProbes();
+                }
+              }}
+            >
+              <Checkbox
+                checked={allSelected ? true : hasPartialProbeSelection ? 'indeterminate' : false}
+                aria-label={allSelected ? '取消全选探针' : '全选探针'}
+                className="mr-2 h-4 w-4 rounded-[5px] border-border bg-background"
+                onCheckedChange={toggleSelectAllProbes}
+              />
+              {allSelected ? '取消全选' : '全选'}
+            </div>
+            <div className="px-3 text-sm font-medium text-foreground/80">
+              已选 {selectedProbeIds.size} 项
+            </div>
+            {selectedProbes.length > 0 ? (
+              <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full px-4 text-destructive hover:text-destructive"
+              onClick={() => setBulkDeleteOpen(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full px-4"
+              onClick={openSplitSelectedProbes}
+            >
+              拆分分组
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-full px-4"
+              onClick={openMergeSelectedProbes}
+              disabled={selectedProbeIds.size < 2}
+            >
+              合并分组
+            </Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <Dialog
         open={isAdmin && dialogOpen}
@@ -1490,6 +1622,77 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
           </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={Boolean(isAdmin && groupActionDialog?.open)}
+        onOpenChange={(open) => {
+          if (!open) setGroupActionDialog(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>{groupActionDialog?.mode === 'merge' ? '合并分组' : '拆分分组'}</DialogTitle>
+            <DialogDescription>
+              {groupActionDialog?.mode === 'merge'
+                ? '为选中的探针输入合并后的分组名称。'
+                : '为选中的探针输入新的分组名称。'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">
+              {groupActionDialog?.mode === 'merge' ? '合并后分组名' : '新分组名称'}
+            </label>
+            <Input
+              value={groupActionDialog?.groupName || ''}
+              onChange={(event) => setGroupActionDialog((prev) => (
+                prev ? { ...prev, groupName: event.target.value } : prev
+              ))}
+              placeholder={groupActionDialog?.mode === 'merge' ? '例如：生产核心模型组' : '例如：Codex 灰度组'}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGroupActionDialog(null)}>
+              取消
+            </Button>
+            <Button
+              className="rounded-full px-5"
+              onClick={groupActionDialog?.mode === 'merge' ? mergeSelectedProbes : splitSelectedProbes}
+              disabled={refreshing}
+            >
+              {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              确认
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={isAdmin && bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>批量删除探针</AlertDialogTitle>
+            <AlertDialogDescription className="whitespace-pre-line">
+              {selectedProbes.length > 0
+                ? `确定删除已选中的 ${selectedProbes.length} 个探针吗？\n删除后无法恢复，相关历史记录也会一起移除。`
+                : '请先选择要删除的探针。'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(event) => {
+                event.preventDefault();
+                void deleteSelectedProbes();
+              }}
+            >
+              {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs, Layers3, Trophy } from 'lucide-react';
 
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
@@ -42,9 +42,29 @@ interface TokenRankingItem {
   cost: number;
 }
 
+interface RunTokenUsageItem {
+  id: string;
+  configFile: string;
+  configName: string;
+  status: string;
+  startTime: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  cost: number;
+}
+
 const WORKFLOW_TOKEN_RANKING_HREF = '/run-history?view=token-ranking&dimension=workflow&sortKey=totalTokens&sortDirection=desc&page=1';
 const DASHBOARD_CACHE_KEY = 'dashboard-cache';
 const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
+const CHART_SERIES_COLORS = ['#38bdf8', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
+const TOKEN_STACK_COLORS = {
+  inputTokens: '#38bdf8',
+  outputTokens: '#8b5cf6',
+  cacheTokens: '#f59e0b',
+};
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -86,6 +106,8 @@ export default function DashboardPage() {
   const [runningRuns, setRunningRuns] = useState<any[]>([]);
   const [tokenRankingByUser, setTokenRankingByUser] = useState<TokenRankingItem[]>([]);
   const [tokenRankingByWorkflow, setTokenRankingByWorkflow] = useState<TokenRankingItem[]>([]);
+  const [runTokenUsageRanking, setRunTokenUsageRanking] = useState<RunTokenUsageItem[]>([]);
+  const [tokenActivityData, setTokenActivityData] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<{ username: string; email: string; role: 'admin' | 'user'; avatar?: string } | null>(null);
 
   useEffect(() => {
@@ -124,6 +146,11 @@ export default function DashboardPage() {
       setAgentUsageData(data.agentUsageData || []);
       setTokenRankingByUser(data.tokenRankingByUser || []);
       setTokenRankingByWorkflow(data.tokenRankingByWorkflow || []);
+      setRunTokenUsageRanking(data.runTokenUsageRanking || []);
+      setTokenActivityData((data.tokenActivityData || []).map((d: any) => ({
+        name: weekDays[d.dayOfWeek],
+        totalTokens: d.totalTokens || 0,
+      })));
 
       const actData = (data.activityData || []).map((d: any) => ({
         name: weekDays[d.dayOfWeek],
@@ -141,6 +168,11 @@ export default function DashboardPage() {
           agentUsageData: data.agentUsageData || [],
           tokenRankingByUser: data.tokenRankingByUser || [],
           tokenRankingByWorkflow: data.tokenRankingByWorkflow || [],
+          runTokenUsageRanking: data.runTokenUsageRanking || [],
+          tokenActivityData: (data.tokenActivityData || []).map((d: any) => ({
+            name: weekDays[d.dayOfWeek],
+            totalTokens: d.totalTokens || 0,
+          })),
           activityData: actData,
         }));
       } catch {}
@@ -166,6 +198,8 @@ export default function DashboardPage() {
           setActivityData(cached.activityData || []);
           setTokenRankingByUser(cached.tokenRankingByUser || []);
           setTokenRankingByWorkflow(cached.tokenRankingByWorkflow || []);
+          setRunTokenUsageRanking(cached.runTokenUsageRanking || []);
+          setTokenActivityData(cached.tokenActivityData || []);
           setLoading(false);
         }
       }
@@ -230,24 +264,24 @@ export default function DashboardPage() {
     actionHref?: string;
     actionLabel?: string;
   }) => (
-    <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h3 className="flex items-center gap-2 text-lg font-semibold">
-          <Cpu className="w-5 h-5 text-primary" />
-          {title}
-        </h3>
-        {actionHref && actionLabel ? (
-          <Button variant="ghost" size="sm" className="h-8 px-2.5 text-xs" asChild>
-            <Link href={actionHref}>{actionLabel}</Link>
-          </Button>
-        ) : null}
-      </div>
+    <ChartShell
+      title={title}
+      icon={Cpu}
+      description={t('dashboard.tokenRanking.workflowSubtitle')}
+      action={actionHref && actionLabel ? (
+        <Button variant="ghost" size="sm" className="h-8 rounded-full px-3 text-xs" asChild>
+          <Link href={actionHref}>{actionLabel}</Link>
+        </Button>
+      ) : null}
+      className="h-full"
+    >
       {items.length > 0 ? (
         <div className="space-y-3">
           {items.map((item, index) => {
             const cacheTokens = (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0);
+            const maxTokens = Math.max(...items.map((entry) => entry.totalTokens || 0), 1);
             return (
-              <div key={`${item.configFile || item.name}-${index}`} className="rounded-lg border border-border/30 bg-muted/40 p-3">
+              <div key={`${item.configFile || item.name}-${index}`} className="rounded-xl border border-border/40 bg-background/55 p-3.5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
@@ -265,6 +299,12 @@ export default function DashboardPage() {
                     <div className="text-xs text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
                   </div>
                 </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted/70">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,#38bdf8,#8b5cf6,#f59e0b)]"
+                    style={{ width: `${Math.max(12, Math.round((item.totalTokens / maxTokens) * 100))}%` }}
+                  />
+                </div>
                 <div className="mt-2 text-xs text-muted-foreground">
                   {t('dashboard.tokenRanking.breakdown')
                     .replace('{input}', formatTokens(item.inputTokens))
@@ -280,10 +320,151 @@ export default function DashboardPage() {
           {t('common.noData')}
         </div>
       )}
-    </div>
+    </ChartShell>
   );
 
   const PIE_COLORS = ['#3b82f6', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
+
+  const workflowComparisonData = tokenRankingByWorkflow.slice(0, 6).map((item) => ({
+    name: item.name || item.configFile || '-',
+    inputTokens: item.inputTokens || 0,
+    outputTokens: item.outputTokens || 0,
+    cacheTokens: (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0),
+    totalTokens: item.totalTokens || 0,
+  }));
+
+  const runRankingChartData = runTokenUsageRanking.slice(0, 8).map((item) => ({
+    name: item.configName || item.configFile || '-',
+    totalTokens: item.totalTokens || 0,
+    status: item.status,
+    cost: item.cost,
+  }));
+
+  const recentTokenTrendData = recentRuns
+    .slice()
+    .reverse()
+    .map((run: any, index: number) => ({
+      name: `#${index + 1}`,
+      workflow: run.configName || run.configFile || '-',
+      totalTokens: Number(run.totalTokens || 0),
+      status: run.status,
+      startTime: run.startTime,
+    }));
+
+  const tokenCompositionData = [
+    {
+      name: t('dashboard.charts.inputTokens'),
+      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.inputTokens || 0), 0),
+      color: TOKEN_STACK_COLORS.inputTokens,
+    },
+    {
+      name: t('dashboard.charts.outputTokens'),
+      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.outputTokens || 0), 0),
+      color: TOKEN_STACK_COLORS.outputTokens,
+    },
+    {
+      name: t('dashboard.charts.cacheTokens'),
+      value: workflowComparisonData.reduce((sum, row) => sum + Number(row.cacheTokens || 0), 0),
+      color: TOKEN_STACK_COLORS.cacheTokens,
+    },
+  ].filter((item) => item.value > 0);
+
+  const activityChartData = activityData.map((item, index) => ({
+    ...item,
+    fill: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
+  }));
+
+  const agentCallsChartData = agentUsageData.map((item, index) => ({
+    ...item,
+    fill: CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length],
+  }));
+
+  const ChartShell = ({
+    title,
+    icon: Icon,
+    description,
+    children,
+    action,
+    className,
+  }: {
+    title: string;
+    icon: any;
+    description?: string;
+    children: ReactNode;
+    action?: ReactNode;
+    className?: string;
+  }) => (
+    <div className={`relative overflow-hidden rounded-2xl border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.02))] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl ${className || ''}`}>
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.12),transparent_32%),radial-gradient(circle_at_bottom_left,rgba(139,92,246,0.12),transparent_30%)]" />
+      <div className="relative mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-lg font-semibold">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <Icon className="h-4.5 w-4.5" />
+            </span>
+            {title}
+          </h3>
+          {description ? <p className="mt-2 text-sm text-muted-foreground">{description}</p> : null}
+        </div>
+        {action}
+      </div>
+      <div className="relative">{children}</div>
+    </div>
+  );
+
+  const SectionShell = ({
+    title,
+    icon: Icon,
+    description,
+    children,
+  }: {
+    title: string;
+    icon: any;
+    description?: string;
+    children: ReactNode;
+  }) => (
+    <section className="relative overflow-hidden rounded-[28px] border border-border/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.025))] px-6 py-6 shadow-[0_24px_70px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(56,189,248,0.10),transparent_28%),radial-gradient(circle_at_20%_80%,rgba(139,92,246,0.10),transparent_26%)]" />
+      <div className="relative mb-5 flex items-start gap-4">
+        <div className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold">{title}</h2>
+          {description ? <p className="mt-1.5 text-sm text-muted-foreground">{description}</p> : null}
+        </div>
+      </div>
+      <div className="relative">{children}</div>
+    </section>
+  );
+
+  const ModernTooltip = ({
+    active,
+    payload,
+    label,
+  }: {
+    active?: boolean;
+    payload?: Array<{ name: string; value: number; color?: string; payload?: any }>;
+    label?: string;
+  }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div className="min-w-[180px] rounded-xl border border-border/60 bg-background/95 px-3 py-2.5 shadow-xl backdrop-blur">
+        <div className="mb-2 text-xs font-medium text-foreground">{label}</div>
+        <div className="space-y-1.5">
+          {payload.map((entry, index) => (
+            <div key={`${entry.name}-${index}`} className="flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: entry.color || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length] }} />
+                <span>{entry.name}</span>
+              </div>
+              <span className="font-medium text-foreground">{formatTokens(Number(entry.value || 0))}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const UserTokenPieChart = ({ title, items }: { title: string; items: TokenRankingItem[] }) => {
     const pieData = items.map((item) => ({
@@ -295,11 +476,12 @@ export default function DashboardPage() {
     const total = pieData.reduce((sum, d) => sum + d.value, 0);
 
     return (
-      <div className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Cpu className="w-5 h-5 text-primary" />
-          {title}
-        </h3>
+      <ChartShell
+        title={title}
+        icon={Cpu}
+        description={t('dashboard.tokenRanking.userSubtitle')}
+        className="h-full"
+      >
         {items.length > 0 ? (
           <div className="flex items-center gap-4">
             <div className="w-[180px] h-[180px] shrink-0">
@@ -319,8 +501,7 @@ export default function DashboardPage() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: any) => formatTokens(Number(value))}
-                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                    content={<ModernTooltip />}
                   />
                 </PieChart>
               </ResponsiveContainer>
@@ -341,7 +522,7 @@ export default function DashboardPage() {
             {t('common.noData')}
           </div>
         )}
-      </div>
+      </ChartShell>
     );
   };
 
@@ -510,106 +691,87 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* Token Ranking */}
+          {/* Runtime Analytics */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
           >
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-primary" />
-              {t('dashboard.tokenRanking.title')}
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
-              <TokenRankingList
-                title={t('dashboard.tokenRanking.byWorkflow')}
-                items={tokenRankingByWorkflow}
-                actionHref={WORKFLOW_TOKEN_RANKING_HREF}
-                actionLabel={t('dashboard.tokenRanking.viewAll')}
-              />
-            </div>
+            <SectionShell
+              title={t('dashboard.charts.runtimeSectionTitle')}
+              icon={Activity}
+              description={t('dashboard.charts.runtimeSectionDesc')}
+            >
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                <div className="xl:col-span-5">
+                  <ChartShell
+                    title={t('dashboard.charts.agentUsage')}
+                    icon={Bot}
+                    description={t('dashboard.charts.agentUsageDesc')}
+                    className="h-full"
+                  >
+                    {agentCallsChartData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={agentCallsChartData} layout="vertical" margin={{ left: 20 }}>
+                          <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                          <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
+                          <YAxis type="category" dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} width={100} tickLine={false} axisLine={false} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                          <Tooltip content={<ModernTooltip />} />
+                          <Bar dataKey="calls" name={t('dashboard.charts.calls')} radius={[0, 10, 10, 0]}>
+                            {agentCallsChartData.map((entry, index) => (
+                              <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
+                        {t('common.noData')}
+                      </div>
+                    )}
+                  </ChartShell>
+                </div>
+                <div className="xl:col-span-7">
+                  <ChartShell
+                    title={t('dashboard.charts.weeklyActivity')}
+                    icon={Activity}
+                    description={t('dashboard.charts.weeklyActivityDesc')}
+                    className="h-full"
+                  >
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={activityChartData}>
+                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                        <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
+                        <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
+                        <Tooltip content={<ModernTooltip />} />
+                        <Bar dataKey="runs" name={t('dashboard.charts.runs')} radius={[10, 10, 0, 0]}>
+                          {activityChartData.map((entry, index) => (
+                            <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </ChartShell>
+                </div>
+              </div>
+            </SectionShell>
           </motion.div>
 
-          {/* Charts Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Agent Usage Chart */}
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.3 }}
-              className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6"
-            >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Bot className="w-5 h-5 text-primary" />
-                {t('dashboard.charts.agentUsage')}
-              </h3>
-              {agentUsageData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={agentUsageData} layout="vertical" margin={{ left: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                    <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                    <YAxis type="category" dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} width={100} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: 'hsl(var(--card))',
-                        border: '1px solid hsl(var(--border))',
-                        borderRadius: '8px',
-                      }}
-                      formatter={(value: any, name?: string | number) => [value, name === 'calls' ? t('dashboard.charts.calls') : t('dashboard.charts.cost')]}
-                    />
-                    <Bar dataKey="calls" fill="hsl(var(--primary))" radius={[0, 8, 8, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <div className="flex items-center justify-center h-[250px] text-muted-foreground text-sm">
-                  {t('common.noData')}
-                </div>
-              )}
-            </motion.div>
-
-            {/* Activity Chart */}
-            <motion.div
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: 0.4 }}
-              className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6"
-            >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Activity className="w-5 h-5 text-primary" />
-                {t('dashboard.charts.weeklyActivity')}
-              </h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={activityData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: '8px',
-                    }}
-                  />
-                  <Bar dataKey="runs" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </motion.div>
-          </div>
-
           {/* Workflows and Recent Runs */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+          >
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
             {/* Workflows */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.5 }}
-              className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6"
+            <div className="xl:col-span-5">
+            <ChartShell
+              title={t('dashboard.sections.activeWorkflows')}
+              icon={Workflow}
+              description={t('dashboard.sections.activeWorkflowsDesc')}
+              className="h-full"
             >
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                <Workflow className="w-5 h-5 text-primary" />
-                {t('dashboard.sections.activeWorkflows')}
-              </h3>
               <div className="space-y-3">
                 {runningRuns.slice(0, 5).map((run, i) => {
                   const config = configs.find(c => c.filename === run.configFile);
@@ -620,45 +782,52 @@ export default function DashboardPage() {
                       key={run.id}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.6 + i * 0.1 }}
-                      whileHover={{ x: 5 }}
-                      className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border border-border/30 cursor-pointer hover:border-primary/50 transition-colors"
+                      transition={{ delay: 0.35 + i * 0.06 }}
+                      whileHover={{ x: 4 }}
+                      className="group flex items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
                       onClick={() => router.push(`/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`)}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/15">
+                          <Play className="h-4 w-4" />
+                        </div>
                         <div className="flex flex-col">
                           <span className="font-medium">{configName}</span>
                           <span className="text-xs text-muted-foreground">{formatStateName(run.currentPhase || '') || 'Starting...'}</span>
                         </div>
                       </div>
-                      <Badge variant="secondary">{run.completedSteps || 0}/{run.totalSteps || 0}</Badge>
+                      <Badge variant="secondary" className="rounded-full px-3 py-1">{run.completedSteps || 0}/{run.totalSteps || 0}</Badge>
                     </motion.div>
                   );
                 })}
                 {runningRuns.length === 0 && (
-                  <div className="text-center text-muted-foreground py-8">
+                  <div className="rounded-2xl border border-dashed border-border/60 py-10 text-center text-muted-foreground">
                     {t('dashboard.sections.noActiveWorkflows')}
                   </div>
                 )}
               </div>
-            </motion.div>
+            </ChartShell>
+            </div>
 
             {/* Recent Runs */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl p-6"
+            <div className="xl:col-span-7">
+            <ChartShell
+              title={t('dashboard.sections.recentRuns')}
+              icon={History}
+              description={t('dashboard.sections.recentRunsDesc')}
+              action={
+                <Button variant="ghost" size="sm" className="h-8 rounded-full px-3 text-xs" asChild>
+                  <Link href="/run-history">查看全部</Link>
+                </Button>
+              }
+              className="h-full"
             >
               <div className="mb-4 flex items-center justify-between gap-3">
                 <Link href="/run-history" className="inline-flex items-center gap-2 text-lg font-semibold transition-colors hover:text-primary">
                   <History className="w-5 h-5 text-primary" />
                   <span>{t('dashboard.sections.recentRuns')}</span>
                 </Link>
-                <Button variant="ghost" size="sm" asChild>
-                  <Link href="/run-history">查看全部</Link>
-                </Button>
+                <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">{recentRuns.length}</Badge>
               </div>
               <div className="space-y-3">
                 {recentRuns.map((run, i) => (
@@ -666,39 +835,311 @@ export default function DashboardPage() {
                     key={run.id}
                     initial={{ opacity: 0, x: 20 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.7 + i * 0.1 }}
+                    transition={{ delay: 0.4 + i * 0.06 }}
                     onClick={() => router.push(`/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`)}
-                    className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border border-border/30 cursor-pointer hover:bg-muted/70 transition-colors"
+                    className="group flex items-center justify-between rounded-2xl border border-border/50 bg-background/55 p-3.5 shadow-sm transition-all hover:border-primary/35 hover:bg-background/72"
                   >
                     <div className="flex items-center gap-3">
-                      {run.status === 'completed' ? (
-                        <CheckCircle2 className="w-4 h-4 text-green-500" />
-                      ) : run.status === 'failed' ? (
-                        <XCircle className="w-4 h-4 text-red-500" />
-                      ) : run.status === 'running' ? (
-                        <Play className="w-4 h-4 text-blue-500" />
-                      ) : run.status === 'stopped' ? (
-                        <AlertCircle className="w-4 h-4 text-gray-500" />
-                      ) : run.status === 'crashed' ? (
-                        <XCircle className="w-4 h-4 text-orange-500" />
-                      ) : (
-                        <Clock className="w-4 h-4 text-yellow-500" />
-                      )}
-                      <div className="flex-1 min-w-0">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                        {run.status === 'completed' ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        ) : run.status === 'failed' ? (
+                          <XCircle className="h-4 w-4 text-red-500" />
+                        ) : run.status === 'running' ? (
+                          <Play className="h-4 w-4 text-blue-500" />
+                        ) : run.status === 'stopped' ? (
+                          <AlertCircle className="h-4 w-4 text-gray-500" />
+                        ) : run.status === 'crashed' ? (
+                          <XCircle className="h-4 w-4 text-orange-500" />
+                        ) : (
+                          <Clock className="h-4 w-4 text-yellow-500" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium truncate">{run.configName || run.configFile}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {formatStateName(run.currentPhase || '') || t('dashboard.starting')} · {new Date(run.startTime).toLocaleString()}
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                          <span>{formatStateName(run.currentPhase || '') || t('dashboard.starting')}</span>
+                          <span className="h-1 w-1 rounded-full bg-border" />
+                          <span>{new Date(run.startTime).toLocaleString()}</span>
                         </div>
                       </div>
                     </div>
-                    <Badge variant={run.status === 'completed' ? 'default' : 'secondary'}>
-                      {t(`dashboard.status.${run.status}`)}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      {typeof run.totalTokens === 'number' ? (
+                        <div className="hidden text-right md:block">
+                          <div className="text-sm font-semibold">{formatTokens(run.totalTokens)}</div>
+                          <div className="text-[11px] text-muted-foreground">{t('dashboard.tokenRanking.totalTokens')}</div>
+                        </div>
+                      ) : (
+                        null
+                      )}
+                      <Badge variant={run.status === 'completed' ? 'default' : 'secondary'} className="rounded-full px-3 py-1">
+                        {t(`dashboard.status.${run.status}`)}
+                      </Badge>
+                    </div>
                   </motion.div>
                 ))}
               </div>
-            </motion.div>
+            </ChartShell>
+            </div>
           </div>
+          </motion.div>
+
+          {/* Token Analytics */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <SectionShell
+              title={t('dashboard.tokenRanking.title')}
+              icon={TrendingUp}
+              description={t('dashboard.tokenRanking.sectionSubtitle')}
+            >
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+                <div className="xl:col-span-8">
+                  <ChartShell
+                    title={t('dashboard.charts.workflowTokenComparison')}
+                    icon={Layers3}
+                    description={t('dashboard.charts.workflowTokenComparisonDesc')}
+                    action={
+                      <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                        Top {workflowComparisonData.length || 0}
+                      </Badge>
+                    }
+                    className="h-full"
+                  >
+                    {workflowComparisonData.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-4">
+                        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_220px] 2xl:items-end">
+                          <ResponsiveContainer width="100%" height={252}>
+                            <BarChart data={workflowComparisonData} barGap={10} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                              <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.25} />
+                              <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} interval={0} height={52} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                              <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatTokens(Number(value))} />
+                              <Tooltip content={<ModernTooltip />} />
+                              <Bar dataKey="inputTokens" name={t('dashboard.charts.inputTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.inputTokens} radius={[8, 8, 0, 0]} />
+                              <Bar dataKey="outputTokens" name={t('dashboard.charts.outputTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.outputTokens} radius={[0, 0, 0, 0]} />
+                              <Bar dataKey="cacheTokens" name={t('dashboard.charts.cacheTokens')} stackId="tokens" fill={TOKEN_STACK_COLORS.cacheTokens} radius={[8, 8, 0, 0]} />
+                            </BarChart>
+                          </ResponsiveContainer>
+                          <div className="grid content-end gap-2">
+                            {[
+                              { label: t('dashboard.charts.inputTokens'), color: TOKEN_STACK_COLORS.inputTokens },
+                              { label: t('dashboard.charts.outputTokens'), color: TOKEN_STACK_COLORS.outputTokens },
+                              { label: t('dashboard.charts.cacheTokens'), color: TOKEN_STACK_COLORS.cacheTokens },
+                            ].map((item) => (
+                              <div key={item.label} className="inline-flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+                                <div className="inline-flex items-center gap-2">
+                                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                                  {item.label}
+                                </div>
+                                <span className="text-[11px] text-foreground/70">
+                                  {formatTokens(
+                                    workflowComparisonData.reduce((sum, row) => sum + Number(
+                                      item.label === t('dashboard.charts.inputTokens')
+                                        ? row.inputTokens
+                                        : item.label === t('dashboard.charts.outputTokens')
+                                          ? row.outputTokens
+                                          : row.cacheTokens
+                                    ), 0)
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                          <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-foreground">{t('dashboard.charts.recentTokenTrend')}</div>
+                                <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.recentTokenTrendDesc')}</div>
+                              </div>
+                              <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                                {recentTokenTrendData.length} runs
+                              </Badge>
+                            </div>
+                            {recentTokenTrendData.length > 0 ? (
+                              <ResponsiveContainer width="100%" height={120}>
+                                <AreaChart data={recentTokenTrendData} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+                                  <defs>
+                                    <linearGradient id="recentTokenTrendFill" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.38} />
+                                      <stop offset="100%" stopColor="#38bdf8" stopOpacity={0.04} />
+                                    </linearGradient>
+                                  </defs>
+                                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
+                                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+                                  <YAxis hide />
+                                  <Tooltip content={<ModernTooltip />} />
+                                  <Area
+                                    type="monotone"
+                                    dataKey="totalTokens"
+                                    name={t('dashboard.tokenRanking.totalTokens')}
+                                    stroke="#38bdf8"
+                                    strokeWidth={2}
+                                    fill="url(#recentTokenTrendFill)"
+                                  />
+                                </AreaChart>
+                              </ResponsiveContainer>
+                            ) : (
+                              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
+                                {t('common.noData')}
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-foreground">{t('dashboard.charts.weeklyTokenTrend')}</div>
+                                <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.weeklyTokenTrendDesc')}</div>
+                              </div>
+                              <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                                7d
+                              </Badge>
+                            </div>
+                            {tokenActivityData.length > 0 ? (
+                              <ResponsiveContainer width="100%" height={120}>
+                                <AreaChart data={tokenActivityData} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+                                  <defs>
+                                    <linearGradient id="weeklyTokenTrendFill" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.34} />
+                                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.05} />
+                                    </linearGradient>
+                                  </defs>
+                                  <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.18} />
+                                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} />
+                                  <YAxis hide />
+                                  <Tooltip content={<ModernTooltip />} />
+                                  <Area
+                                    type="monotone"
+                                    dataKey="totalTokens"
+                                    name={t('dashboard.charts.weeklyTokenTrend')}
+                                    stroke="#8b5cf6"
+                                    strokeWidth={2}
+                                    fill="url(#weeklyTokenTrendFill)"
+                                  />
+                                </AreaChart>
+                              </ResponsiveContainer>
+                            ) : (
+                              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
+                                {t('common.noData')}
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-foreground">{t('dashboard.charts.tokenComposition')}</div>
+                                <div className="mt-1 text-xs text-muted-foreground">{t('dashboard.charts.tokenCompositionDesc')}</div>
+                              </div>
+                              <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs">
+                                {formatTokens(tokenCompositionData.reduce((sum, item) => sum + item.value, 0))}
+                              </Badge>
+                            </div>
+                            {tokenCompositionData.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-[180px_minmax(0,1fr)] md:items-center">
+                                <div className="mx-auto h-[150px] w-[150px]">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <PieChart>
+                                      <Pie
+                                        data={tokenCompositionData}
+                                        cx="50%"
+                                        cy="50%"
+                                        innerRadius={40}
+                                        outerRadius={62}
+                                        paddingAngle={2}
+                                        dataKey="value"
+                                        stroke="none"
+                                      >
+                                        {tokenCompositionData.map((entry, index) => (
+                                          <Cell key={`${entry.name}-${index}`} fill={entry.color} />
+                                        ))}
+                                      </Pie>
+                                      <Tooltip content={<ModernTooltip />} />
+                                    </PieChart>
+                                  </ResponsiveContainer>
+                                </div>
+                                <div className="space-y-2">
+                                  {tokenCompositionData.map((item) => {
+                                    const total = tokenCompositionData.reduce((sum, entry) => sum + entry.value, 0) || 1;
+                                    const percent = Math.round((item.value / total) * 100);
+                                    return (
+                                      <div key={item.name} className="rounded-xl border border-border/50 bg-background/55 px-3 py-2.5">
+                                        <div className="flex items-center justify-between gap-3 text-xs">
+                                          <div className="inline-flex items-center gap-2 text-muted-foreground">
+                                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                                            <span>{item.name}</span>
+                                          </div>
+                                          <span className="font-medium text-foreground">{percent}%</span>
+                                        </div>
+                                        <div className="mt-1.5 text-sm font-semibold">{formatTokens(item.value)}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex h-[150px] items-center justify-center text-sm text-muted-foreground">
+                                {t('common.noData')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex h-[396px] items-center justify-center text-sm text-muted-foreground">
+                        {t('common.noData')}
+                      </div>
+                    )}
+                  </ChartShell>
+                </div>
+                <div className="grid gap-6 xl:col-span-4">
+                  <div className="grid grid-cols-1 gap-6">
+                    <UserTokenPieChart title={t('dashboard.tokenRanking.byUser')} items={tokenRankingByUser} />
+                    <ChartShell
+                      title={t('dashboard.charts.runTokenRanking')}
+                      icon={Trophy}
+                      description={t('dashboard.charts.runTokenRankingDesc')}
+                      action={
+                        <Button variant="ghost" size="sm" className="h-8 rounded-full px-3 text-xs" asChild>
+                          <Link href="/run-history">查看运行记录</Link>
+                        </Button>
+                      }
+                      className="h-full"
+                    >
+                      {runRankingChartData.length > 0 ? (
+                        <ResponsiveContainer width="100%" height={220}>
+                          <BarChart data={runRankingChartData} layout="vertical" margin={{ top: 8, right: 12, left: 16, bottom: 0 }} barCategoryGap={14}>
+                            <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                            <XAxis type="number" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => formatTokens(Number(value))} />
+                            <YAxis type="category" dataKey="name" width={110} stroke="hsl(var(--muted-foreground))" fontSize={11} tickLine={false} axisLine={false} tick={{ fill: 'hsl(var(--muted-foreground))' }} />
+                            <Tooltip content={<ModernTooltip />} />
+                            <Bar dataKey="totalTokens" name={t('dashboard.tokenRanking.totalTokens')} radius={[0, 10, 10, 0]}>
+                              {runRankingChartData.map((entry, index) => (
+                                <Cell key={`${entry.name}-${index}`} fill={CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      ) : (
+                        <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+                          {t('common.noData')}
+                        </div>
+                      )}
+                    </ChartShell>
+                  </div>
+                  <TokenRankingList
+                    title={t('dashboard.tokenRanking.byWorkflow')}
+                    items={tokenRankingByWorkflow}
+                    actionHref={WORKFLOW_TOKEN_RANKING_HREF}
+                    actionLabel={t('dashboard.tokenRanking.viewAll')}
+                  />
+                </div>
+              </div>
+            </SectionShell>
+          </motion.div>
         </div>
       </div>
 

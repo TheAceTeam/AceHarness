@@ -107,12 +107,12 @@ export default function UniversalCard({ card, onAction }: UniversalCardProps) {
 function CardHeader({ header }: { header: NonNullable<CardSchema['header']> }) {
   const gradient = header.gradient || 'from-blue-500 to-cyan-500';
   return (
-    <div className={`p-3 bg-gradient-to-r ${gradient} bg-opacity-10`} style={{ background: `linear-gradient(to right, var(--tw-gradient-stops))` }}>
+    <div className={`p-3 bg-gradient-to-r ${gradient} bg-opacity-15`} style={{ opacity: 0.85 }}>
       <div className="flex items-center gap-2">
         {header.icon && (
-          <span className="material-symbols-outlined text-base text-white/90">{header.icon}</span>
+          <span className="material-symbols-outlined text-base text-foreground/80">{header.icon}</span>
         )}
-        <span className="text-sm font-medium text-white/95 flex-1 truncate">{header.title}</span>
+        <span className="text-sm font-medium text-foreground flex-1 truncate">{header.title}</span>
         {header.badges?.map((b, i) => (
           <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${badgeClass(b.color)}`}>
             {b.text}
@@ -120,7 +120,7 @@ function CardHeader({ header }: { header: NonNullable<CardSchema['header']> }) {
         ))}
       </div>
       {header.subtitle && (
-        <div className="text-xs text-white/70 mt-0.5 truncate">{header.subtitle}</div>
+        <div className="text-xs text-foreground/70 mt-0.5 truncate">{header.subtitle}</div>
       )}
     </div>
   );

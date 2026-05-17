@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { getActionsGrouped, getPinnedActions, getCollapsibleActions, type HomePluginQuickAction } from '@/lib/sidebar-plugins';
+import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
 
 interface QuickActionsProps {
   onAction: (text: string) => void;
@@ -306,20 +307,20 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
         )}
       </AnimatePresence>
 
-      <div className="mb-2 flex flex-wrap gap-1.5">
+      <Suggestions className="mb-2 gap-1.5">
         {pinnedActions.map((action) => (
-          <motion.button
+          <Suggestion
             key={action.label}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
+            suggestion={action.prompt}
             onClick={() => onAction(action.prompt)}
-            className={`inline-flex items-center gap-1.5 bg-gradient-to-r ${action.color} text-white text-[11px] font-medium px-3 py-1.5 rounded-lg border border-white/10 shadow-sm`}
+            className={`bg-gradient-to-r ${action.color} text-white text-[11px] font-medium border-white/10 shadow-sm hover:opacity-90`}
+            size="sm"
           >
             <span className="material-symbols-outlined text-xs">{action.icon}</span>
             {action.label}
-          </motion.button>
+          </Suggestion>
         ))}
-      </div>
+      </Suggestions>
       <div className="flex items-center justify-between gap-3 mb-1.5">
         <button
           onClick={() => setExpanded(e => !e)}

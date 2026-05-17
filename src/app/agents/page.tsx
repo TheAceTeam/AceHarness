@@ -222,6 +222,10 @@ export default function AgentsPage() {
     setSelectedAgentNames([]);
   };
 
+  const toggleSelectAllFilteredByContainer = () => {
+    toggleSelectAllFiltered(allFilteredSelected ? false : true);
+  };
+
   const handleBatchDeleteAgents = async () => {
     if (selectedAgentNames.length === 0) {
       toast('warning', '请先选择要删除的 Agent');
@@ -600,24 +604,6 @@ export default function AgentsPage() {
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                <div className="mr-2 inline-flex items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3 py-1.5 text-xs">
-                  <Checkbox
-                    checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
-                    onCheckedChange={toggleSelectAllFiltered}
-                    className="h-4 w-4"
-                  />
-                  <span>全选当前筛选结果</span>
-                </div>
-                {selectedAgentNames.length > 0 ? (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    className="rounded-full"
-                    onClick={handleBatchDeleteAgents}
-                  >
-                    批量删除 {selectedAgentNames.length}
-                  </Button>
-                ) : null}
                 {CATEGORIES.map((cat) => (
                   <Button
                     key={cat}
@@ -643,7 +629,7 @@ export default function AgentsPage() {
           </div>
         </section>
 
-        <section className="flex-1 pb-10">
+        <section className="flex-1 pb-28">
           <div className="space-y-10">
             {loading ? (
               <div className="flex items-center justify-center h-64">
@@ -692,12 +678,13 @@ export default function AgentsPage() {
                                 key={agent.name}
                                 className="group relative min-w-0"
                               >
-                                <div className="absolute left-4 top-4 z-20">
+                                <div className="absolute right-3 top-3 z-20 rounded-md border border-border bg-background/95 p-1.5 shadow-[0_2px_10px_rgba(0,0,0,0.25)] opacity-40 group-hover:opacity-100 transition-opacity duration-200 hover:opacity-100">
                                   <Checkbox
                                     checked={isSelected}
                                     onCheckedChange={() => toggleAgentSelection(agent.name)}
                                     onClick={(event) => event.stopPropagation()}
-                                    className="h-4 w-4 border-white/40 bg-black/30 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-slate-950"
+                                    aria-label={isSelected ? `取消选择 Agent ${agent.name}` : `选择 Agent ${agent.name}`}
+                                    className="h-4 w-4 rounded-[4px]"
                                   />
                                 </div>
                                 <AgentHeroCard
@@ -830,6 +817,47 @@ export default function AgentsPage() {
             )}
           </div>
         </section>
+
+        {filteredAgents.length > 0 ? (
+          <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+            <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+              <div
+                className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+                role="button"
+                tabIndex={0}
+                onClick={toggleSelectAllFilteredByContainer}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    toggleSelectAllFilteredByContainer();
+                  }
+                }}
+              >
+                <Checkbox
+                  checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                  onCheckedChange={toggleSelectAllFiltered}
+                  className="mr-2 h-4 w-4 border-border bg-background"
+                  aria-label={allFilteredSelected ? '取消全选' : '选择全部'}
+                />
+                {allFilteredSelected ? '取消全选' : '选择全部'}
+              </div>
+              <div className="px-3 text-sm font-medium text-foreground/80">
+                已选 {selectedAgentNames.length} 项
+              </div>
+              {selectedAgentNames.length > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-full px-4 text-destructive hover:text-destructive"
+                  onClick={handleBatchDeleteAgents}
+                >
+                  <span className="material-symbols-outlined mr-2 text-base">delete</span>
+                  批量删除
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {editingAgent && (
@@ -877,3 +905,4 @@ export default function AgentsPage() {
     </div>
   );
 }
+

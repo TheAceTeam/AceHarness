@@ -52,6 +52,7 @@ runs/
 .codex/
 .cursor/
 .cursorrules
+.agents/
 
 # ACEHarness data
 data/*
@@ -61,8 +62,6 @@ data/*
 __pycache__/
 *.pyc
 
-# User-specific configs
-configs/unreachable.yaml
 
 # Temp files
 .tmp/

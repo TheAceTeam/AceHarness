@@ -1194,7 +1194,7 @@ function ChatPageContent() {
         <div
           className={
             isMobile
-              ? 'fixed inset-y-0 left-0 z-40 bg-background shadow-xl'
+              ? 'fixed inset-y-0 left-0 z-40 bg-background'
               : 'relative shrink-0'
           }
           style={{ width: isMobile ? `${Math.min(sidebarWidth, 320)}px` : `${sidebarWidth}px` }}
@@ -1225,7 +1225,7 @@ function ChatPageContent() {
               <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
             </Button>
             {activeAgentBinding ? (
-              <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5 shadow-sm">
+              <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
                 <Avatar className="h-8 w-8 ring-1 ring-border/70">
                   <AvatarImage src={activeAgentAvatarSrc || undefined} alt={activeAgentBinding.agentName} />
                   <AvatarFallback>{activeAgentBinding.agentName.slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -1296,13 +1296,13 @@ function ChatPageContent() {
                   <div
                     ref={scrollContainerRef}
                     className={cn(
-                      'absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16',
+                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16',
                       isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
                     {messages.length === 0 && sessionLoadingId === activeSessionId ? (
                       <div className="flex h-full items-center justify-center">
-                        <div className="flex items-center gap-3 rounded-2xl border bg-background/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                        <div className="home-chat-surface flex items-center gap-3 rounded-2xl px-4 py-3 text-sm text-muted-foreground">
                           <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
                           <span>正在加载对话...</span>
                         </div>
@@ -1369,9 +1369,9 @@ function ChatPageContent() {
                   {showScrollBtn && (
                     <button
                       onClick={scrollToBottom}
-                      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary/90 text-primary-foreground text-xs shadow-lg hover:bg-primary transition-colors"
+                      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-primary/20 bg-background/92 px-3 py-1.5 text-xs text-foreground backdrop-blur-md transition-colors duration-150 hover:bg-background"
                     >
-                      <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>arrow_downward</span>
+                      <span className="material-symbols-outlined text-primary" style={{ fontSize: '16px' }}>arrow_downward</span>
                       新消息
                     </button>
                   )}
@@ -1379,16 +1379,16 @@ function ChatPageContent() {
 
                 <div
                   className={cn(
-                    'shrink-0 border-t bg-background/80 backdrop-blur px-4 py-3 md:px-8 lg:px-16',
+                    'home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16',
                     isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
                   )}
                 >
                   {messages.length > 0 && (
-                    <div className="mb-2 max-w-4xl mx-auto">
+                    <div className="mx-auto mb-2 max-w-4xl rounded-2xl border border-border/60 bg-background/70 px-2 py-2 backdrop-blur-sm">
                       <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
                     </div>
                   )}
-                  <div className="flex items-stretch gap-2 max-w-4xl mx-auto">
+                  <div className="mx-auto flex max-w-4xl items-stretch gap-2">
                     <div className="flex-1">
                       <RichTextEditor
                         ref={editorRef}
@@ -1423,11 +1423,11 @@ function ChatPageContent() {
                       />
                     </div>
                     {loading && (
-                      <Button className="rounded-xl h-[76px] self-stretch px-3" variant="destructive" onClick={stopStreaming} title="停止生成">
+                      <Button className="h-[76px] self-stretch rounded-2xl border border-destructive/20 px-3 transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
                         <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>stop</span>
                       </Button>
                     )}
-                    <Button className="rounded-xl h-[76px] self-stretch px-4" onClick={handleSend} disabled={!getInputMarkdown()}>
+                    <Button className="h-[76px] self-stretch rounded-2xl px-4 transition-colors duration-150" onClick={handleSend} disabled={!getInputMarkdown()}>
                       <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
                     </Button>
                   </div>
@@ -1481,7 +1481,7 @@ function ChatPageContent() {
                 <button
                   type="button"
                   className={cn(
-                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-4 text-[12px] text-muted-foreground transition hover:text-foreground',
+                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/82 px-2 py-4 text-[12px] text-muted-foreground backdrop-blur-sm transition-colors duration-150 hover:text-foreground',
                     isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
                   )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}

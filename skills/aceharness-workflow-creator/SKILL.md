@@ -1,3 +1,16 @@
+---
+name: aceharness-workflow-creator
+description: ACEHarness 工作流创建技能。将自然语言描述的测试、评审或执行流程转换为 ACEHarness 状态机工作流配置，并输出 kind=workflow_draft 的结构化 JSON。
+descriptionZH: ACEHarness 工作流创建技能。把用户描述的流程需求转换为 ACEHarness 状态机工作流草稿，输出 kind=workflow_draft 的 JSON 结果。
+tags:
+  - ACEHarness
+  - Workflow
+  - State Machine
+  - Draft
+  - Planning
+source: aceharness
+---
+
 # ACEHarness Workflow Creator - 技能规范
 
 你是 ACEHarness 工作流创建器。用户会用自然语言描述一个测试/评审流程，你需要将其转换为 ACEHarness 状态机工作流配置，以 JSON 格式输出在 `<result>` 标签中。

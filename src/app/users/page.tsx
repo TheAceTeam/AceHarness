@@ -64,8 +64,8 @@ function UsersContent() {
 
   const getAuthHeaders = useCallback((includeJson = false): Record<string, string> => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
-    return includeJson ? { ...authHeaders, 'Content-Type': 'application/json' } : authHeaders;
+    const base: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    return includeJson ? { ...base, 'Content-Type': 'application/json' } : base;
   }, []);
 
   const loadUsers = useCallback(async () => {

@@ -110,8 +110,20 @@ export async function POST(request: Request) {
         mkdirSync(configDir, { recursive: true });
       }
       const skillsLink = path.join(configDir, 'skills');
-      if (existsSync(skillsDir) && ensureDirectoryLinkSync(skillsDir, skillsLink) === 'created') {
-        console.log(`[Engine] Linked ${engineConfigDir}/skills -> skills/`);
+      if (existsSync(skillsDir)) {
+        const linkResult = ensureDirectoryLinkSync(skillsDir, skillsLink);
+        if (linkResult === 'created') {
+          console.log(`[Engine] Linked ${engineConfigDir}/skills -> skills/`);
+        } else if (linkResult === 'skipped' && !existsSync(skillsLink)) {
+          // Link failed or target mismatch — fall back to copy
+          try {
+            const { cpSync } = await import('fs');
+            cpSync(skillsDir, skillsLink, { recursive: true, force: true });
+            console.log(`[Engine] Copied ${engineConfigDir}/skills (symlink fallback)`);
+          } catch (copyErr) {
+            console.warn('[Engine] Failed to copy skills:', copyErr);
+          }
+        }
       }
     } catch (e) {
       console.warn('[Engine] Failed to setup skills symlink:', e);

@@ -86,25 +86,25 @@ function validateTasks(file) {
   requirePattern(content, /^# 实现计划[：:].+/m, file, '必须以 `# 实现计划：<功能名称>` 开头');
   requirePattern(content, /^## 任务$/m, file, '缺少 `## 任务` 章节');
 
-  // 检查多级嵌套 checkbox
-  const topLevelTasks = content.match(/^- \[[ xX-]\] \d+\./gm) || [];
+  // 检查多级嵌套 checkbox（支持 T前缀 和 纯数字编号）
+  const topLevelTasks = content.match(/^- \[[ xX-]\] [A-Za-z]*\d+/gm) || [];
   if (topLevelTasks.length === 0) {
-    fail(`${file}: 至少需要一个顶层任务（格式：- [ ] N. <标题>）`);
+    fail(`${file}: 至少需要一个顶层任务（格式：- [ ] T1 <标题> 或 - [ ] 1 <标题>）`);
   }
 
-  const subTasks = content.match(/^\s{2,}- \[[ xX-]\] \d+\.\d+/gm) || [];
+  const subTasks = content.match(/^\s{2,}- \[[ xX-]\] [A-Za-z]*\d+\.\d+/gm) || [];
   if (subTasks.length === 0) {
-    fail(`${file}: 至少需要一个子任务（格式：  - [ ] N.M <标题>）`);
+    fail(`${file}: 至少需要一个子任务（格式：  - [ ] T1.1 <标题>）`);
   }
 
   // 检查需求引用
   const reqRefs = content.match(/_需求[：:].+?_/gm) || [];
   if (reqRefs.length === 0) {
-    fail(`${file}: 至少需要一个需求引用（格式：_需求：x.x_）`);
+    fail(`${file}: 至少需要一个需求引用（格式：_需求：Tx_）`);
   }
 
   // 检查检查点
-  const checkpoints = content.match(/^- \[[ xX-]\] \d+\.\s*检查点/gm) || [];
+  const checkpoints = content.match(/^- \[[ xX-]\] [A-Za-z]*\d+.*检查点/gm) || [];
   if (checkpoints.length === 0) {
     fail(`${file}: 至少需要一个检查点任务`);
   }

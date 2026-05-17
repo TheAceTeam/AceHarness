@@ -4,8 +4,13 @@ import { Children, isValidElement, useMemo, useState, useCallback, useEffect, us
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+import { CodeBlock as AICodeBlock } from '@/components/ai-elements/code-block';
+import type { BundledLanguage } from 'shiki';
+import {
+  ChainOfThought,
+  ChainOfThoughtHeader,
+  ChainOfThoughtContent,
+} from '@/components/ai-elements/chain-of-thought';
 import { useToast } from '@/components/ui/toast';
 import { workspaceApi } from '@/lib/core/api';
 import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook/markdown';
@@ -119,9 +124,6 @@ const verdictConfig: Record<string, { icon: string; label: string; color: string
   fail: { icon: 'cancel', label: '未通过', color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/30' },
 };
 
-let basicHljsLanguagesRegistered = false;
-let cangjieLanguageRegistered = false;
-let highlightReady = false;
 let mermaidInitialized = false;
 
 function VerdictCard({ data }: { data: { verdict: string; remaining_issues?: number; summary?: string } }) {
@@ -161,42 +163,9 @@ function normalizeFenceLanguage(className?: string) {
 }
 
 function renderHighlightedCode(code: string, language: string) {
-  const normalizedLanguage = normalizeLanguage(language);
-
-  if (shouldUseSyntaxHighlighter(normalizedLanguage)) {
-    return (
-      <SyntaxHighlighter
-        language={normalizedLanguage}
-        style={atomOneDark}
-        customStyle={{
-          margin: 0,
-          background: '#282c34',
-          color: '#e2e8f0',
-          borderRadius: '0.375rem',
-          padding: '1rem',
-          fontSize: '13px',
-          lineHeight: '1.5rem',
-          overflowX: 'auto',
-        }}
-        codeTagProps={{
-          style: {
-            fontFamily: 'inherit',
-            color: '#e2e8f0',
-          },
-        }}
-        useInlineStyles
-        wrapLongLines={false}
-        PreTag="pre"
-      >
-        {code}
-      </SyntaxHighlighter>
-    );
-  }
-
+  const normalized = normalizeLanguage(language);
   return (
-    <pre className="!mt-0 overflow-x-auto rounded-md bg-[#282c34] p-4 text-[13px] leading-6 text-slate-100">
-      <code>{code}</code>
-    </pre>
+    <AICodeBlock code={code} language={normalized as BundledLanguage} />
   );
 }
 
@@ -236,16 +205,10 @@ function renderMarkdownFragment(content: string) {
 }
 
 function normalizeLanguage(language: string) {
-  if (language === 'cangjie') return cangjieLanguageRegistered ? 'cangjie' : 'text';
-  if (language === 'shell') return 'bash';
-  if (language === 'plaintext') return 'text';
+  if (language === 'cangjie' || language === 'cj') return 'text';
   return language || 'text';
 }
 
-function shouldUseSyntaxHighlighter(language: string) {
-  if (!highlightReady) return false;
-  return ['cangjie', 'javascript', 'js', 'typescript', 'ts', 'json', 'html', 'xml', 'bash', 'shell', 'yaml', 'yml', 'markdown', 'md', 'python', 'py', 'java', 'cpp', 'c', 'sql'].includes(language);
-}
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
   return renderHighlightedCode(code, language);
@@ -776,90 +739,6 @@ export default function Markdown({ children }: { children?: string | null }) {
   const isLarge = contentLength > MESSAGE_LAZY_CHAR_THRESHOLD && !forceRenderLarge;
   const effectiveChildren = isLarge ? (children || '').slice(0, 2000) + '\n\n---' : children;
   const processedContent = useMemo(() => preprocessMarkdown(effectiveChildren), [effectiveChildren]);
-  const [, forceRefresh] = useState(0);
-
-  useEffect(() => {
-    if (highlightReady) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const [
-          { default: javascript },
-          { default: typescript },
-          { default: json },
-          { default: xml },
-          { default: bash },
-          { default: yaml },
-          { default: markdown },
-          { default: python },
-          { default: java },
-          { default: cpp },
-          { default: sql },
-        ] = await Promise.all([
-          import('react-syntax-highlighter/dist/esm/languages/hljs/javascript'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/typescript'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/json'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/xml'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/bash'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/yaml'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/markdown'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/python'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/java'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/cpp'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/sql'),
-        ]);
-
-        if (cancelled) return;
-
-        if (!basicHljsLanguagesRegistered) {
-          SyntaxHighlighter.registerLanguage('javascript', javascript);
-          SyntaxHighlighter.registerLanguage('js', javascript);
-          SyntaxHighlighter.registerLanguage('typescript', typescript);
-          SyntaxHighlighter.registerLanguage('ts', typescript);
-          SyntaxHighlighter.registerLanguage('json', json);
-          SyntaxHighlighter.registerLanguage('html', xml);
-          SyntaxHighlighter.registerLanguage('xml', xml);
-          SyntaxHighlighter.registerLanguage('bash', bash);
-          SyntaxHighlighter.registerLanguage('shell', bash);
-          SyntaxHighlighter.registerLanguage('yaml', yaml);
-          SyntaxHighlighter.registerLanguage('yml', yaml);
-          SyntaxHighlighter.registerLanguage('markdown', markdown);
-          SyntaxHighlighter.registerLanguage('md', markdown);
-          SyntaxHighlighter.registerLanguage('python', python);
-          SyntaxHighlighter.registerLanguage('py', python);
-          SyntaxHighlighter.registerLanguage('java', java);
-          SyntaxHighlighter.registerLanguage('cpp', cpp);
-          SyntaxHighlighter.registerLanguage('c', cpp);
-          SyntaxHighlighter.registerLanguage('sql', sql);
-          basicHljsLanguagesRegistered = true;
-        }
-
-        if (!cangjieLanguageRegistered) {
-          const mod = await import('@/lib/cangjie/highlight');
-          if (cancelled) return;
-          const cangjie = mod.default || mod;
-          if (typeof cangjie === 'function') {
-            SyntaxHighlighter.registerLanguage('cangjie', cangjie);
-            SyntaxHighlighter.registerLanguage('cj', cangjie);
-            cangjieLanguageRegistered = true;
-          }
-        }
-
-        highlightReady = basicHljsLanguagesRegistered && cangjieLanguageRegistered;
-        if (!cancelled && highlightReady) {
-          forceRefresh((value) => value + 1);
-        }
-      } catch {
-        // ignore and fall back to plain text rendering
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   return (
     <div className={styles.markdownContent}>

@@ -15,6 +15,7 @@ const refreshPromises = new Map<string, Promise<void>>();
 const IS_BUILD_PHASE = process.env.NEXT_PHASE === 'phase-production-build';
 const DASHBOARD_USER_TOKEN_LIMIT = 8;
 const DASHBOARD_WORKFLOW_TOKEN_LIMIT = 10;
+const DASHBOARD_RUN_TOKEN_LIMIT = 8;
 
 function getDashboardCacheKey(userId: string, role: 'admin' | 'user'): string {
   return role === 'admin' ? 'admin' : `user:${userId}`;
@@ -58,6 +59,22 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
 
   runs.sort((a, b) => getSafeTime(b.startTime) - getSafeTime(a.startTime));
   const recentRuns = runs.slice(0, 5);
+  const runTokenUsageRanking = [...runs]
+    .sort((a, b) => b.totalTokens - a.totalTokens || getSafeTime(b.startTime) - getSafeTime(a.startTime))
+    .slice(0, DASHBOARD_RUN_TOKEN_LIMIT)
+    .map((run) => ({
+      id: run.id,
+      configFile: run.configFile,
+      configName: run.configName,
+      status: run.status,
+      startTime: run.startTime,
+      totalTokens: run.totalTokens,
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      cacheCreationInputTokens: run.cacheCreationInputTokens,
+      cacheReadInputTokens: run.cacheReadInputTokens,
+      cost: run.cost,
+    }));
 
   // Weekly activity
   const dayCounts: number[] = [0, 0, 0, 0, 0, 0, 0];
@@ -72,6 +89,19 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
     const d = new Date();
     d.setDate(d.getDate() - (6 - i));
     return { dayOfWeek: d.getDay(), runs: count };
+  });
+  const tokenDayTotals: number[] = [0, 0, 0, 0, 0, 0, 0];
+  for (const r of runs) {
+    const t = getSafeTime(r.startTime);
+    if (t >= sevenDaysAgo) {
+      const daysAgo = Math.floor((now - t) / (24 * 60 * 60 * 1000));
+      if (daysAgo >= 0 && daysAgo < 7) tokenDayTotals[6 - daysAgo] += r.totalTokens || 0;
+    }
+  }
+  const tokenActivityData = tokenDayTotals.map((totalTokens, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return { dayOfWeek: d.getDay(), totalTokens };
   });
 
   const topAgents = Object.entries(agentUsage)
@@ -98,7 +128,9 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
     agentUsageData: topAgents,
     tokenRankingByUser: tokenRankings.tokenRankingByUser.slice(0, DASHBOARD_USER_TOKEN_LIMIT),
     tokenRankingByWorkflow: tokenRankings.tokenRankingByWorkflow.slice(0, DASHBOARD_WORKFLOW_TOKEN_LIMIT),
+    runTokenUsageRanking,
     activityData,
+    tokenActivityData,
   };
 }
 

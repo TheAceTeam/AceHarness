@@ -1923,7 +1923,7 @@ export default function HomeCommandSidebar({
         accentClass: visual.card,
         nameClass: visual.name,
         avatarClass: visual.avatar,
-        ringClass: speaking ? 'ring-2 ring-primary/60 shadow-[0_0_0_6px_rgba(59,130,246,0.12)]' : '',
+        ringClass: speaking ? 'ring-2 ring-primary/60' : '',
         active,
         speaking,
       };
@@ -1951,7 +1951,7 @@ export default function HomeCommandSidebar({
         accentClass: player.alive ? visual.card : 'border-border bg-muted/40',
         nameClass: visual.name,
         avatarClass: visual.avatar,
-        ringClass: speaking ? 'ring-2 ring-primary/60 shadow-[0_0_0_6px_rgba(59,130,246,0.12)]' : '',
+        ringClass: speaking ? 'ring-2 ring-primary/60' : '',
         active,
         speaking,
         dimmed: !player.alive,
@@ -6005,7 +6005,7 @@ export default function HomeCommandSidebar({
 
   const renderMentionSuggestions = () => (
     mentionSuggestions.length > 0 ? (
-      <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
+      <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2">
         <div className="mb-1 text-[10px] text-muted-foreground">@ 提示</div>
         <div className="flex flex-wrap gap-1.5">
           {mentionSuggestions.map((name, index) => (
@@ -6151,7 +6151,7 @@ export default function HomeCommandSidebar({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4 pb-16">
+        <div className="home-chat-scroll flex-1 overflow-y-auto px-4 py-4 pb-16">
           {isWerewolfLab ? (
             <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/5 p-3">
               <button
@@ -6485,7 +6485,7 @@ export default function HomeCommandSidebar({
                       return (
                         <div key={entry.key} className="grid grid-cols-[82px_1fr] gap-3 rounded-xl border bg-muted/10 p-3">
                           <div
-                            className="h-[116px] w-[78px] overflow-hidden rounded-md border bg-muted shadow-sm"
+                            className="h-[116px] w-[78px] overflow-hidden rounded-md border bg-muted"
                             aria-label={`${asset.label}卡牌`}
                             role="img"
                             style={spriteStyle || undefined}

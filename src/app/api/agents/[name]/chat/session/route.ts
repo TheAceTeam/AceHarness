@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/middleware';
-import { ensureAgentChatSession } from '@/lib/agent/chat-service';
+import { prepareAgentChat } from '@/lib/agent/chat-service';
 import type { RoleConfig } from '@/lib/core/schemas';
 
 function parseTemporaryRoleConfig(body: any): RoleConfig | null {
@@ -39,8 +39,9 @@ export async function POST(
   try {
     const { name } = await params;
     const body = await request.json();
-    const result = await ensureAgentChatSession({
+    const result = await prepareAgentChat({
       agentName: name,
+      message: '',
       mode: body?.mode === 'workflow-chat' ? 'workflow-chat' : 'standalone-chat',
       sessionId: typeof body?.sessionId === 'string' ? body.sessionId : null,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,

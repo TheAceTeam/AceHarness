@@ -7,7 +7,13 @@ import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
+import {
+  PromptInput,
+  PromptInputTextarea,
+  PromptInputFooter,
+  PromptInputSubmit,
+} from '@/components/ai-elements/prompt-input';
+import type { FormEvent } from 'react';
 
 interface WorkflowSupervisorChatPanelProps {
   sessionId?: string | null;
@@ -62,7 +68,6 @@ export default function WorkflowSupervisorChatPanel({
   const [draft, setDraft] = useState('');
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -104,13 +109,6 @@ export default function WorkflowSupervisorChatPanel({
   const applyMention = (mention: string) => {
     const next = insertMention(draft, mention);
     setDraft(next);
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      const pos = next.length;
-      el.focus();
-      el.setSelectionRange(pos, pos);
-    });
   };
 
   const submit = async () => {
@@ -118,6 +116,10 @@ export default function WorkflowSupervisorChatPanel({
     if (!text || !loaded || loading) return;
     setDraft('');
     await sendMessage(text);
+  };
+
+  const handlePromptSubmit = (_message: import('@/components/ai-elements/prompt-input').PromptInputMessage, _event: FormEvent) => {
+    void submit();
   };
 
   if (!sessionId) {
@@ -193,14 +195,33 @@ export default function WorkflowSupervisorChatPanel({
           <span className="font-mono"> @全员 </span>
           主持；没有新的 @ 时本轮会自然结束。
         </div>
-        <div className="flex items-end gap-2">
-          <div className="relative flex-1">
-            <Textarea
-              ref={textareaRef}
+        <div className="relative">
+          {mentionSuggestions.length > 0 ? (
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
+              <div className="mb-1 text-[10px] text-muted-foreground">@ 提示</div>
+              <div className="flex flex-wrap gap-1.5">
+                {mentionSuggestions.map((name, index) => (
+                  <Button
+                    key={name}
+                    type="button"
+                    size="sm"
+                    variant={index === activeMentionIndex ? 'secondary' : 'ghost'}
+                    className="h-7 max-w-full px-2 text-xs"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => applyMention(name)}
+                  >
+                    <span className="truncate">@{name}</span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <PromptInput onSubmit={handlePromptSubmit}>
+            <PromptInputTextarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               placeholder="给 Supervisor 发送单聊消息，系统会自动携带当前 workflow / run 上下文..."
-              className="min-h-[64px] resize-none"
+              className="min-h-[64px]"
               disabled={!loaded}
               onKeyDown={(event) => {
                 if (mentionSuggestions.length > 0) {
@@ -225,36 +246,13 @@ export default function WorkflowSupervisorChatPanel({
                     return;
                   }
                 }
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void submit();
-                }
               }}
             />
-            {mentionSuggestions.length > 0 ? (
-              <div className="absolute bottom-[calc(100%+0.5rem)] left-0 z-20 w-full rounded-xl border bg-background p-2 shadow-lg">
-                <div className="mb-1 text-[10px] text-muted-foreground">@ 提示</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {mentionSuggestions.map((name, index) => (
-                    <Button
-                      key={name}
-                      type="button"
-                      size="sm"
-                      variant={index === activeMentionIndex ? 'secondary' : 'ghost'}
-                      className="h-7 max-w-full px-2 text-xs"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => applyMention(name)}
-                    >
-                      <span className="truncate">@{name}</span>
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <Button className="h-[64px]" onClick={() => void submit()} disabled={!loaded || loading || !draft.trim()}>
-            发送
-          </Button>
+            <PromptInputFooter>
+              <div />
+              <PromptInputSubmit disabled={!loaded || loading || !draft.trim()} />
+            </PromptInputFooter>
+          </PromptInput>
         </div>
       </div>
     </div>

@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { readFile, readdir, stat, mkdir, cp, rm, writeFile, copyFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
 import { existsSync } from 'fs';
+import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { cpus } from 'os';
 import { parse } from 'yaml';
 import { resolveAgentModel } from '@/lib/workflow/manager';
@@ -512,9 +513,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // 没有指定 skills，symlink 整个 skills 目录（像 chat 一样）
       if (!existsSync(workspaceSkillsDir)) {
         try {
-          const { symlinkSync } = await import('fs');
-          symlinkSync(serverSkillsDir, workspaceSkillsDir);
-        } catch { /* ignore */ }
+          createDirectoryLinkSync(serverSkillsDir, workspaceSkillsDir);
+        } catch {
+          try {
+            await cp(serverSkillsDir, workspaceSkillsDir, { recursive: true, force: true });
+            console.log(`[SM-Skills] 已复制整个 skills 目录 → ${workspaceSkillsDir}`);
+          } catch (e2) {
+            console.warn('[SM-Skills] 同步 skills 目录失败:', e2);
+          }
+        }
       }
       return;
     }
@@ -529,8 +536,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (!existsSync(src)) continue;
       if (existsSync(dst)) continue;
       try {
-        const { symlinkSync } = await import('fs');
-        symlinkSync(src, dst);
+        createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
         console.log(`[SM-Skills] 已链接 skill "${skillName}" → ${dst}`);
       } catch (e) {
