@@ -1508,6 +1508,7 @@ export default function NewConfigModal({
   const [workflowDraftConfig, setWorkflowDraftConfig] = useState<any | null>(null);
   const [workflowDraftValidation, setWorkflowDraftValidation] = useState<any | null>(null);
   const [workflowDraftPreview, setWorkflowDraftPreview] = useState<WorkflowDraftPreviewState | null>(null);
+  const [workflowDraftContinueReason, setWorkflowDraftContinueReason] = useState('');
   const [isSavingWorkflowDraft, setIsSavingWorkflowDraft] = useState(false);
   const [backendSessionId, setBackendSessionId] = useState<string | undefined>();
   const streamContentRef = useRef<HTMLDivElement>(null);
@@ -2401,6 +2402,7 @@ export default function NewConfigModal({
 
       const startData = await startRes.json();
       if (!startRes.ok || !startData.chatId) {
+        setWorkflowDraftContinueReason(startData.error || 'AI 流式请求失败');
         toast('error', startData.error || 'AI 流式请求失败');
         setAiPhase('waiting');
         return;
@@ -2484,9 +2486,11 @@ export default function NewConfigModal({
               );
               return;
             }
+            setWorkflowDraftContinueReason(formatValidationIssuesForPrompt(validation));
             setAiPhase('waiting');
             return;
           }
+          setWorkflowDraftContinueReason('');
           setWorkflowDraftConfig(validation.normalized || draftConfig);
         }
 
@@ -2521,6 +2525,10 @@ export default function NewConfigModal({
           return;
         }
 
+        if (!draftConfig) {
+          setWorkflowDraftContinueReason(draftPreview.parseError || `系统未检测到可解析的 workflow_draft.config（${targetFilename || 'workflow.yaml'}）`);
+        }
+
         if (draftConfig) {
           setAiFilename('');
           setAiPhase('waiting');
@@ -2545,9 +2553,11 @@ export default function NewConfigModal({
         }
         setCurrentStream('');
         setCurrentThinking('');
+        setWorkflowDraftContinueReason(accumulated ? 'AI 流式响应中断，当前草案可能未完整返回。' : 'AI 流式响应中断');
         setAiPhase('waiting');
       });
     } catch (err: any) {
+      setWorkflowDraftContinueReason(err?.message || 'AI 请求失败');
       toast('error', 'AI 请求失败: ' + err.message);
       setAiPhase('waiting');
     }
@@ -5705,6 +5715,17 @@ ${recommendationPrompt}
                 }}>
                   ↻ 调整方案
                 </Button>
+                {(workflowDraftContinueReason || (workflowDraftValidation && !workflowDraftValidation.ok)) && (
+                  <Button type="button" size="sm" variant="outline" onClick={() => {
+                    const filename = (getValues('filename') || '').trim() || 'workflow.yaml';
+                    const reason = workflowDraftContinueReason
+                      || formatValidationIssuesForPrompt(workflowDraftValidation);
+                    setAiMessages(prev => [...prev, { role: 'user', content: '请继续修正 workflow 草案' }]);
+                    sendToAi(buildWorkflowDraftContinueMessage(reason, filename), backendSessionId, { workflowDraftAttempt: 1 });
+                  }}>
+                    ↻ 继续生成
+                  </Button>
+                )}
               </div>
               <div className="flex gap-2">
                 <Input
