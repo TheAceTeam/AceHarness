@@ -70,7 +70,7 @@ const MonacoEditor = dynamic(
 );
 
 const MAX_PLAN_DRAFT_REPAIR_ATTEMPTS = 2;
-const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = 2;
+const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = 3;
 const MODAL_HISTORY_RECENT_WINDOW = 8;
 const PLANNING_STREAM_SCOPE = 'workflow-planning';
 const CREATION_SESSION_TAG_PREFIX = '创建工作流 ·';
@@ -230,6 +230,15 @@ function buildWorkflowDraftRepairMessage(previousOutput: string, validation: any
     '```text',
     previousOutput.slice(0, 8000),
     '```',
+  ].join('\n');
+}
+
+function buildWorkflowDraftContinueMessage(reason: string, filename: string) {
+  return [
+    `上一轮生成的 workflow 草案格式不对，请基于现有上下文继续修正并返回完整的 workflow_draft，filename 保持为 "${filename}"。`,
+    '先参照已有 workflow 模板或相关 skill 检查一遍，优先检查 specTaskBinding.taskIds 等 task 绑定关系，再修正其余格式问题。',
+    '不要重新询问用户，不要只输出解释，不要输出 action。',
+    `系统提示：${reason || '未知原因'}`,
   ].join('\n');
 }
 
@@ -1423,7 +1432,7 @@ function WorkflowDraftPreviewCard({ preview }: { preview: WorkflowDraftPreviewSt
 
       {issues.length > 0 ? (
         <div className="mt-3 space-y-1 text-xs">
-          {issues.slice(0, 5).map((issue: any, index: number) => (
+          {issues.map((issue: any, index: number) => (
             <div key={`${issue.path?.join('.') || 'root'}-${index}`} className="rounded-md border bg-background/80 px-3 py-2">
               <span className="font-medium">{issue.path?.join('.') || '(root)'}</span>
               <span className="text-muted-foreground">: {issue.message}</span>
@@ -5667,8 +5676,17 @@ ${recommendationPrompt}
                 </div>
               )}
               {workflowDraftValidation && !workflowDraftValidation.ok && (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                  workflow 草案未通过系统校验，已要求 AI 按校验结果修正。
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 space-y-1.5">
+                  <div>workflow 草案未通过系统校验，已自动把错误反馈给 AI 继续修正。</div>
+                  {Array.isArray(workflowDraftValidation?.issues) && workflowDraftValidation.issues.length > 0 ? (
+                    <div className="space-y-1">
+                      {workflowDraftValidation.issues.map((issue: any, index: number) => (
+                        <div key={`${issue.path?.join('.') || 'root'}-${index}`}>
+                          {index + 1}. {issue.path?.join('.') || '(root)'}: {issue.message}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               )}
               <div className="flex gap-2 flex-wrap">

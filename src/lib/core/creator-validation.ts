@@ -20,13 +20,38 @@ export interface ValidationResult<T> {
   issues: ValidationIssue[];
 }
 
-function zodIssuesToValidationIssues(issues: ZodIssue[]): ValidationIssue[] {
-  return issues.map((issue) => ({
-    path: issue.path.map((item) => String(item)),
+function expandZodIssue(issue: ZodIssue, inheritedPath: string[] = []): ValidationIssue[] {
+  const currentPath = [...inheritedPath, ...issue.path.map((item) => String(item))];
+  const nestedErrors = (issue as any)?.errors;
+
+  if (issue.code === 'invalid_union' && Array.isArray(nestedErrors) && nestedErrors.length > 0) {
+    const expanded = nestedErrors.flatMap((branchIssues: unknown) => (
+      Array.isArray(branchIssues)
+        ? branchIssues.flatMap((branchIssue) => expandZodIssue(branchIssue as ZodIssue, currentPath))
+        : []
+    ));
+    if (expanded.length > 0) {
+      const deduped = new Map<string, ValidationIssue>();
+      for (const entry of expanded) {
+        const key = `${entry.path.join('.')}|${entry.message}|${entry.code || ''}`;
+        if (!deduped.has(key)) {
+          deduped.set(key, entry);
+        }
+      }
+      return [...deduped.values()];
+    }
+  }
+
+  return [{
+    path: currentPath,
     message: issue.message,
     severity: 'error',
     code: issue.code,
-  }));
+  }];
+}
+
+function zodIssuesToValidationIssues(issues: ZodIssue[]): ValidationIssue[] {
+  return issues.flatMap((issue) => expandZodIssue(issue));
 }
 
 function pushIssue(
