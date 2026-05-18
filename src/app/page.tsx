@@ -516,7 +516,6 @@ function ChatPageContent() {
     }
 
     setInput(starterPrompt);
-    editorRef.current?.setContent(starterPrompt);
     editorRef.current?.focus();
 
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -878,7 +877,6 @@ function ChatPageContent() {
 
     if (prompt && prompt.includes('\n')) {
       setInput(prompt);
-      editorRef.current?.setContent(prompt);
       editorRef.current?.focus();
       return;
     }

@@ -73,7 +73,14 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const effectiveEngine = engine || globalEngine;
   const globalEngineInfo = getEngineMeta(globalEngine);
   const globalLabel = globalEngineInfo?.name || globalEngine;
-  const isEngineSelectable = useCallback((engineId: string) => engineAvailability[engineId] !== false, [engineAvailability]);
+  const hasAnyAvailableEngine = useMemo(
+    () => Object.values(engineAvailability).some((available) => available),
+    [engineAvailability]
+  );
+  const isEngineSelectable = useCallback(
+    (engineId: string) => !hasAnyAvailableEngine || engineAvailability[engineId] !== false,
+    [engineAvailability, hasAnyAvailableEngine]
+  );
 
   // Composite value: "engineId::modelValue" — empty engineId = follow system
   const compositeValue = `${engine}::${model}`;
@@ -114,8 +121,31 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
       }
     }
 
+    if (result.length === 0) {
+      const fallbackItems = models.length > 0
+        ? models.map((m) => ({
+            value: `${engine || ''}::${m.value}`,
+            label: m.label,
+            icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
+          }))
+        : (model
+            ? [{
+                value: `${engine || ''}::${model}`,
+                label: model,
+                icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
+              }]
+            : []);
+      if (fallbackItems.length > 0) {
+        result.push({
+          label: '模型',
+          icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
+          items: fallbackItems,
+        });
+      }
+    }
+
     return result;
-  }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible]);
+  }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
 
   const modelLabel = models.find(m => m.value === model)?.label || model || '选择模型';
   const triggerLabel = modelLabel;

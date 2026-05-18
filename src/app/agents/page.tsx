@@ -181,7 +181,8 @@ export default function AgentsPage() {
 
   const handleSaveAgent = async (agent: AgentConfig) => {
     try {
-      await agentApi.saveAgent(agent.name, agent);
+      const targetName = isNewAgent ? agent.name : (editingAgent?.name || agent.name);
+      await agentApi.saveAgent(targetName, agent);
       await loadAgents();
       setEditingAgent(null);
       toast('success', 'Agent 配置已保存');

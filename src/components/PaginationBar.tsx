@@ -1,10 +1,18 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, List } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from '@/components/ui/pagination';
 
 type ViewMode = 'gallery' | 'table';
 
@@ -25,23 +33,27 @@ interface PaginationBarProps {
 }
 
 function getVisiblePages(current: number, totalPages: number) {
-  const pages: (number | string)[] = [];
-  const maxVisible = 5;
+  const pages: (number | '...left' | '...right')[] = [];
+  const maxVisible = 7;
 
   if (totalPages <= maxVisible) {
     for (let i = 1; i <= totalPages; i++) {
       pages.push(i);
     }
-  } else {
-    if (current <= 3) {
-      pages.push(1, 2, 3, 4, '...', totalPages);
-    } else if (current >= totalPages - 2) {
-      pages.push(1, '...', totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
-    } else {
-      pages.push(1, '...left', current - 1, current, current + 1, '...right', totalPages);
-    }
+    return pages;
   }
 
+  if (current <= 4) {
+    pages.push(1, 2, 3, 4, 5, '...right', totalPages);
+    return pages;
+  }
+
+  if (current >= totalPages - 3) {
+    pages.push(1, '...left', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+    return pages;
+  }
+
+  pages.push(1, '...left', current - 1, current, current + 1, '...right', totalPages);
   return pages;
 }
 
@@ -58,19 +70,17 @@ export function PaginationBar({
   viewModeStyle = 'material',
   galleryLabel,
   tableLabel,
-  paginationStyle = 'numbered',
+  paginationStyle: _paginationStyle = 'numbered',
 }: PaginationBarProps) {
   const [inputPage, setInputPage] = useState('');
-  const totalPages = Math.ceil(total / pageSize);
-
-  const summaryLabel = useMemo(() => {
-    if (!total) return `暂无${itemLabel}`;
-    const start = (current - 1) * pageSize + 1;
-    const end = Math.min(current * pageSize, total);
-    return `显示 ${start}-${end} / ${total} 个${itemLabel}`;
-  }, [current, pageSize, total, itemLabel]);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const visiblePages = useMemo(() => getVisiblePages(current, totalPages), [current, totalPages]);
 
   const showViewToggle = viewMode !== undefined && onViewModeChange !== undefined;
+
+  useEffect(() => {
+    setInputPage(String(current));
+  }, [current]);
 
   const handleInputPageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInputPage(e.target.value);
@@ -80,8 +90,10 @@ export function PaginationBar({
     const pageNum = parseInt(inputPage, 10);
     if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
       onPageChange(pageNum);
-      setInputPage('');
+      setInputPage(String(pageNum));
+      return;
     }
+    setInputPage(String(current));
   };
 
   const handleInputKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -91,27 +103,13 @@ export function PaginationBar({
   };
 
   return (
-    <div className="flex flex-wrap items-center justify-center gap-4 mt-6">
-      {/* Left: summary + page size */}
+    <div className="mt-6 flex flex-wrap items-center justify-center gap-4">
       <div className="flex items-center gap-4">
         <span className="text-sm text-muted-foreground whitespace-nowrap">
-          {summaryLabel}
+          共 {total} 个{itemLabel}
         </span>
-        <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
-          <SelectTrigger className="h-9 w-[112px] bg-background">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {pageSizeOptions.map((opt) => (
-              <SelectItem key={opt} value={String(opt)}>
-                {opt} / 页
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {/* Right: view toggle + navigation */}
       <div className="flex items-center gap-4">
         {showViewToggle ? (
           <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
@@ -144,86 +142,77 @@ export function PaginationBar({
           </div>
         ) : null}
 
-        {/* Page navigation */}
-        {totalPages > 1 ? (
-          paginationStyle === 'numbered' ? (
-            <div className="flex items-center gap-2">
-              <Button
-                onClick={() => onPageChange(current - 1)}
-                disabled={current === 1}
-                variant="outline"
-                size="sm"
-              >
-                上一页
-              </Button>
-              {totalPages > 10 ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground">第</span>
-                  <input
-                    type="text"
-                    value={inputPage}
-                    onChange={handleInputPageChange}
-                    onKeyPress={handleInputKeyPress}
-                    onBlur={handleInputPageSubmit}
-                    placeholder={current.toString()}
-                    className="w-16 px-2 py-1 text-sm text-center border rounded focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                  <span className="text-sm text-muted-foreground">页</span>
-                </div>
-              ) : (
-                getVisiblePages(current, totalPages).map((page, index) => (
-                  typeof page === 'number' ? (
-                    <Button
-                      key={page}
+        <div className="flex flex-wrap items-center gap-3">
+          <Pagination className="mx-0 w-auto justify-start">
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious
+                  onClick={() => onPageChange(current - 1)}
+                  disabled={current === 1}
+                />
+              </PaginationItem>
+              {visiblePages.map((page, index) => (
+                <PaginationItem key={`${page}-${index}`}>
+                  {typeof page === 'number' ? (
+                    <PaginationLink
+                      isActive={page === current}
                       onClick={() => onPageChange(page)}
-                      variant={current === page ? 'default' : 'outline'}
-                      size="sm"
                     >
                       {page}
-                    </Button>
-                  ) : (
-                    <span key={`ellipsis-${index}`} className="px-2 text-muted-foreground">
+                    </PaginationLink>
+                  ) : page === '...left' ? (
+                    <PaginationLink
+                      aria-label="向前跳转 5 页"
+                      onClick={() => onPageChange(Math.max(1, current - 5))}
+                    >
                       ...
-                    </span>
-                  )
-                ))
-              )}
-              <Button
-                onClick={() => onPageChange(current + 1)}
-                disabled={current === totalPages}
-                variant="outline"
-                size="sm"
-              >
-                下一页
-              </Button>
-              <span className="text-sm text-muted-foreground ml-2">
-                共 {total} 个
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <Button
-                onClick={() => onPageChange(current - 1)}
-                disabled={current === 1}
-                variant="outline"
-                size="sm"
-              >
-                上一页
-              </Button>
-              <Badge variant="secondary">
-                第 {current} / {totalPages} 页
-              </Badge>
-              <Button
-                onClick={() => onPageChange(current + 1)}
-                disabled={current === totalPages}
-                variant="outline"
-                size="sm"
-              >
-                下一页
-              </Button>
-            </div>
-          )
-        ) : null}
+                    </PaginationLink>
+                  ) : page === '...right' ? (
+                    <PaginationLink
+                      aria-label="向后跳转 5 页"
+                      onClick={() => onPageChange(Math.min(totalPages, current + 5))}
+                    >
+                      ...
+                    </PaginationLink>
+                  ) : (
+                    <PaginationEllipsis />
+                  )}
+                </PaginationItem>
+              ))}
+              <PaginationItem>
+                <PaginationNext
+                  onClick={() => onPageChange(current + 1)}
+                  disabled={current === totalPages}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
+          <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
+            <SelectTrigger className="h-9 w-[112px] bg-background">
+              <span>{pageSize} / 页</span>
+            </SelectTrigger>
+            <SelectContent>
+              {pageSizeOptions.map((opt) => (
+                <SelectItem key={opt} value={String(opt)}>
+                  {opt} / 页
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>跳至</span>
+            <input
+              type="text"
+              value={inputPage}
+              onChange={handleInputPageChange}
+              onKeyPress={handleInputKeyPress}
+              onBlur={handleInputPageSubmit}
+              aria-label="页码"
+              className="h-9 w-16 rounded-md border bg-background px-2 py-1 text-center text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <span>页</span>
+          </div>
+        </div>
       </div>
     </div>
   );

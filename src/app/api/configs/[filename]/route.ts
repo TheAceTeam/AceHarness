@@ -3,13 +3,14 @@ import { readFile, readdir, writeFile, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
-import { getConfigMeta, deleteConfigMeta } from '@/lib/config/metadata';
+import { canAccessConfigMeta, getConfigMeta, deleteConfigMeta, setConfigMeta } from '@/lib/config/metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, getRuntimeWorkflowConfigPath, markConfigDeleted, unmarkConfigDeleted } from '@/lib/run/runtime-configs';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { loadCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { deleteRunsByConfig } from '@/lib/run/store';
 import { workflowRegistry } from '@/lib/workflow/registry';
+import { getUserById, loadUsers } from '@/lib/core/user-store';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -21,9 +22,13 @@ function normalizeConfigFilename(filename: string): string {
 
 async function canAccessWorkflow(filename: string, userId: string, role: 'admin' | 'user') {
   const meta = await getConfigMeta(filename, 'workflow');
-  if (!meta) return true;
-  if (meta.visibility === 'public') return true;
+  return canAccessConfigMeta(meta, userId, role);
+}
+
+async function canEditWorkflow(filename: string, userId: string, role: 'admin' | 'user') {
+  const meta = await getConfigMeta(filename, 'workflow');
   if (role === 'admin') return true;
+  if (!meta) return true;
   return !meta.createdBy || meta.createdBy === userId;
 }
 
@@ -50,6 +55,8 @@ export async function GET(
     const content = await readFile(filepath, 'utf-8');
     const config = parse(content);
     const validation = validateWorkflowDraft(config);
+    const meta = await getConfigMeta(filename, 'workflow');
+    const owner = meta?.createdBy ? await getUserById(meta.createdBy).catch(() => undefined) : undefined;
 
     // Load agents from configs/agents/*.yaml
     const agents: any[] = [];
@@ -69,6 +76,13 @@ export async function GET(
       config,
       raw: content,
       agents,
+      meta: {
+        createdBy: meta?.createdBy,
+        visibility: meta?.visibility || 'private',
+        sharedWithUserIds: meta?.sharedWithUserIds || [],
+        createdAt: meta?.createdAt,
+        ownerName: owner?.username || '',
+      },
       validation: {
         ...formatValidationIssuesForResponse(validation),
         normalized: validation.normalized,
@@ -104,12 +118,13 @@ export async function POST(
     if (auth instanceof NextResponse) return auth;
 
     const filename = (await params).filename;
-    if (!(await canAccessWorkflow(filename, auth.id, auth.role))) {
+    if (!(await canEditWorkflow(filename, auth.id, auth.role))) {
       return NextResponse.json({ error: '无权限修改该工作流' }, { status: 403 });
     }
 
     const body = await request.json();
     const { config } = body;
+    const requestedMeta = body?.meta && typeof body.meta === 'object' ? body.meta : null;
 
     // Strip roles before saving — agents are managed separately
     const { roles, ...configWithoutRoles } = config;
@@ -145,6 +160,20 @@ export async function POST(
     await writeFile(filepath, yamlContent, 'utf-8');
     const configsDir = await getRuntimeConfigsDirPath();
     await unmarkConfigDeleted(configsDir, filename);
+    if (requestedMeta) {
+      const users = await loadUsers();
+      const allowedUserIds = new Set(users.filter((user) => user.status === 'active').map((user) => user.id));
+      const visibility = requestedMeta.visibility === 'public' || requestedMeta.visibility === 'shared'
+        ? requestedMeta.visibility
+        : 'private';
+      const sharedWithUserIds = Array.isArray(requestedMeta.sharedWithUserIds)
+        ? requestedMeta.sharedWithUserIds.filter((item: unknown): item is string => typeof item === 'string' && allowedUserIds.has(item))
+        : [];
+      await setConfigMeta(filename, {
+        visibility,
+        sharedWithUserIds: visibility === 'shared' ? sharedWithUserIds : [],
+      }, 'workflow');
+    }
 
     return NextResponse.json({ success: true, message: '配置已保存', bindingValidation });
   } catch (error: any) {
@@ -165,7 +194,7 @@ export async function DELETE(
 
     const filename = (await params).filename;
     normalizeConfigFilename(filename);
-    if (!(await canAccessWorkflow(filename, auth.id, auth.role))) {
+    if (!(await canEditWorkflow(filename, auth.id, auth.role))) {
       return NextResponse.json({ error: '无权限删除该工作流' }, { status: 403 });
     }
     await stopRunningWorkflow(filename);

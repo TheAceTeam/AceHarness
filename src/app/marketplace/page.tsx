@@ -6,10 +6,12 @@ import {
   SkillSearch,
   InstallProgress,
   SkillDetail,
-  Pagination
 } from '@/components/marketplace';
+import { PaginationBar } from '@/components/PaginationBar';
 import { MarketplaceSkill, InstallProgress as InstallProgressType } from '@/types/marketplace';
 import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
+
+const PAGE_SIZE_OPTIONS = [15, 30, 60, 100];
 
 export default function MarketplacePage() {
   const [skills, setSkills] = useState<MarketplaceSkill[]>([]);
@@ -20,6 +22,7 @@ export default function MarketplacePage() {
   const [searchKeyword, setSearchKeyword] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [totalItems, setTotalItems] = useState(0);
 
   const [installing, setInstalling] = useState<string | null>(null);
@@ -49,7 +52,7 @@ export default function MarketplacePage() {
             keyword: searchKeyword,
             category: selectedCategory,
             pageNum: currentPage,
-            pageSize: DEFAULT_PAGE_SIZE,
+            pageSize,
           }),
         });
 
@@ -70,7 +73,7 @@ export default function MarketplacePage() {
     };
 
     fetchSkills();
-  }, [searchKeyword, selectedCategory, currentPage]);
+  }, [searchKeyword, selectedCategory, currentPage, pageSize]);
 
   const loadCategories = async () => {
     try {
@@ -207,11 +210,17 @@ export default function MarketplacePage() {
         )}
 
         {totalItems > 0 && (
-          <Pagination
+          <PaginationBar
             current={currentPage}
             total={totalItems}
-            pageSize={DEFAULT_PAGE_SIZE}
-            onChange={handlePageChange}
+            pageSize={pageSize}
+            onPageChange={handlePageChange}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setCurrentPage(1);
+            }}
+            itemLabel="Skill"
           />
         )}
       </div>

@@ -5,7 +5,7 @@ import { parse, stringify } from 'yaml';
 import { newConfigFormSchema } from '@/lib/core/schemas';
 import { ZodError } from 'zod';
 import { requireAuth } from '@/lib/auth/middleware';
-import { getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
 import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
@@ -286,7 +286,7 @@ export async function POST(request: NextRequest) {
       defaultConfig = configDraft;
     } else if (referenceWorkflow) {
       const sourceMeta = await getConfigMeta(referenceWorkflow, 'workflow');
-      if (sourceMeta?.visibility === 'private' && sourceMeta.createdBy && sourceMeta.createdBy !== auth.id && auth.role !== 'admin') {
+      if (!canAccessConfigMeta(sourceMeta, auth.id, auth.role)) {
         return NextResponse.json({ error: '无权限访问参考工作流' }, { status: 403 });
       }
 
