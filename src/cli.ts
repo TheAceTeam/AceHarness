@@ -1,9 +1,10 @@
 import { existsSync } from 'fs';
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
+import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from '@/lib/core/models';
 import { ACPEngine } from './lib/engines/acp-engine';
@@ -32,6 +33,21 @@ interface SystemSettings {
   port?: number;
   lanAccess?: boolean;
   locale?: Locale;
+  runInBackground?: boolean;
+  useDaemon?: boolean;
+}
+
+interface AceServiceState {
+  serviceId: string;
+  daemonPid: number | null;
+  serverPid: number | null;
+  host: string;
+  port: number;
+  url: string;
+  mode: 'foreground' | 'background' | 'daemon';
+  startedAt: string;
+  updatedAt: string;
+  installRoot: string;
 }
 
 interface PromptChoice<T extends string | number | boolean> {
@@ -87,6 +103,25 @@ interface CliMessages {
   defaultSecurityQuestion: string;
   portPrompt: string;
   lanAccessPrompt: string;
+  backgroundPrompt: string;
+  daemonPrompt: string;
+  serviceEmpty: string;
+  serviceHeader: string;
+  serviceStopped: string;
+  serviceStopping: string;
+  serviceStopTimeout: string;
+  serviceStopFailed: (message: string) => string;
+  serviceSelectPrompt: string;
+  serviceActionPrompt: string;
+  serviceActionBack: string;
+  serviceActionStop: string;
+  serviceActionExit: string;
+  serviceStatusRunning: string;
+  serviceStatusStopped: string;
+  serviceModeForeground: string;
+  serviceModeBackground: string;
+  serviceModeDaemon: string;
+  serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => string;
   yes: string;
   no: string;
   skip: string;
@@ -100,6 +135,7 @@ const USERS_FILE = getWorkspaceDataFile('users.json');
 const TOKENS_FILE = getWorkspaceDataFile('tokens.json');
 const ADMIN_FILE = getWorkspaceDataFile('admin.json');
 const NOTEBOOK_SHARES_FILE = getWorkspaceDataFile('notebook-shares.json');
+const SERVICE_STATE_DIR = getWorkspaceDataFile('ace-services');
 
 async function ensureRuntimeHome(): Promise<void> {
   await Promise.all([
@@ -139,6 +175,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '用法:',
       '  ace              启动 ACEHarness',
       '  ace start        启动 ACEHarness',
+      '  ace servive      查看并停止 ACE 进程',
       '  ace reset --force 重置本地 ACE 配置',
       '  ace --help       查看帮助',
     ].join('\n'),
@@ -167,6 +204,25 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     defaultSecurityQuestion: '你的团队名称是什么？',
     portPrompt: '使用的端口',
     lanAccessPrompt: '启用局域网访问吗？',
+    backgroundPrompt: '启动后是否转入后台运行？',
+    daemonPrompt: '后台运行时是否启用进程守护与异常自动重启？',
+    serviceEmpty: '[ACE] 当前没有受管的 ACE 进程。',
+    serviceHeader: '[ACE] 当前 ACE 进程：',
+    serviceStopped: '[ACE] 已发送停止请求。',
+    serviceStopping: '[ACE] 正在停止实例...',
+    serviceStopTimeout: '[ACE] 停止请求已发送，但进程尚未退出，请稍后刷新。',
+    serviceStopFailed: (message: string) => `[ACE] 停止失败：${message}`,
+    serviceSelectPrompt: '选择要管理的 ACE 实例',
+    serviceActionPrompt: '选择操作',
+    serviceActionBack: '返回',
+    serviceActionStop: '停止该实例',
+    serviceActionExit: '退出',
+    serviceStatusRunning: '运行中',
+    serviceStatusStopped: '已停止',
+    serviceModeForeground: '前台',
+    serviceModeBackground: '后台',
+    serviceModeDaemon: '守护',
+    serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
     yes: '是',
     no: '否',
     skip: '跳过',
@@ -189,6 +245,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       'Usage:',
       '  ace               Start ACEHarness',
       '  ace start         Start ACEHarness',
+      '  ace servive       Inspect and stop ACE processes',
       '  ace reset --force Reset local ACE state',
       '  ace --help        Show help',
     ].join('\n'),
@@ -217,6 +274,25 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     defaultSecurityQuestion: 'What is your team name?',
     portPrompt: 'Port to use',
     lanAccessPrompt: 'Enable LAN access?',
+    backgroundPrompt: 'Run the service in the background after startup?',
+    daemonPrompt: 'Enable process supervision with automatic restart for the background service?',
+    serviceEmpty: '[ACE] No managed ACE process is running.',
+    serviceHeader: '[ACE] Current ACE processes:',
+    serviceStopped: '[ACE] Stop request sent.',
+    serviceStopping: '[ACE] Stopping instance...',
+    serviceStopTimeout: '[ACE] Stop request sent, but the process is still exiting. Refresh shortly.',
+    serviceStopFailed: (message: string) => `[ACE] Failed to stop service: ${message}`,
+    serviceSelectPrompt: 'Choose an ACE instance',
+    serviceActionPrompt: 'Choose an action',
+    serviceActionBack: 'Back',
+    serviceActionStop: 'Stop this instance',
+    serviceActionExit: 'Exit',
+    serviceStatusRunning: 'running',
+    serviceStatusStopped: 'stopped',
+    serviceModeForeground: 'foreground',
+    serviceModeBackground: 'background',
+    serviceModeDaemon: 'daemon',
+    serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
     yes: 'yes',
     no: 'no',
     skip: 'skip',
@@ -247,23 +323,25 @@ function resolveCliLocale(): Locale {
   return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
-type CliCommand = '' | 'start' | 'reset' | 'help';
+type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | '__run-server' | '__daemon';
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const help = args.includes('--help') || args.includes('-h');
   const positionals = args.filter((arg) => !arg.startsWith('-'));
   const command = help ? 'help' : (positionals[0] || '');
-  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help']);
+  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', '__run-server', '__daemon']);
   const commandIsValid = validCommands.has(command as CliCommand);
   const allowedOptions = command === 'reset'
     ? new Set(['--force', '--help', '-h'])
-    : new Set(['--help', '-h']);
+    : new Set(['--help', '-h', '--service-id']);
   const unknownOption = args.find((arg) => arg.startsWith('-') && !allowedOptions.has(arg));
+  const serviceIdIndex = args.findIndex((arg) => arg === '--service-id');
   return {
     command: command as CliCommand | string,
     force: args.includes('--force'),
     verbose: args.includes('-V') || args.includes('--verbose'),
+    serviceId: serviceIdIndex >= 0 ? args[serviceIdIndex + 1] || '' : '',
     unknownCommand: commandIsValid ? '' : command,
     unknownOption: unknownOption || '',
   };
@@ -271,6 +349,14 @@ function parseArgs(argv: string[]) {
 
 function printUsage(locale = resolveCliLocale(), stream: NodeJS.WriteStream = process.stdout) {
   stream.write(`${getLocaleMessages(locale).usage}\n`);
+}
+
+function getServiceStateFile(serviceId: string): string {
+  return join(SERVICE_STATE_DIR, `${serviceId}.json`);
+}
+
+function getServiceStopFile(serviceId: string): string {
+  return join(SERVICE_STATE_DIR, `${serviceId}.stop`);
 }
 
 async function resetAceState(force: boolean) {
@@ -289,6 +375,7 @@ async function resetAceState(force: boolean) {
     TOKENS_FILE,
     ADMIN_FILE,
     NOTEBOOK_SHARES_FILE,
+    SERVICE_STATE_DIR,
   ];
 
   for (const target of targets) {
@@ -334,6 +421,103 @@ async function loadSystemSettings(): Promise<SystemSettings> {
 async function saveSystemSettings(settings: SystemSettings): Promise<void> {
   await mkdir(dirname(SYSTEM_SETTINGS_PATH), { recursive: true });
   await writeFile(SYSTEM_SETTINGS_PATH, stringify(settings), 'utf-8');
+}
+
+async function loadServiceState(serviceId: string): Promise<AceServiceState | null> {
+  try {
+    const raw = await readFile(getServiceStateFile(serviceId), 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed as AceServiceState;
+  } catch {
+    return null;
+  }
+}
+
+async function listServiceStates(): Promise<AceServiceState[]> {
+  try {
+    const names = await readdir(SERVICE_STATE_DIR);
+    const states = await Promise.all(names
+      .filter((name) => name.endsWith('.json'))
+      .map(async (name) => {
+        try {
+          const raw = await readFile(join(SERVICE_STATE_DIR, name), 'utf-8');
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed as AceServiceState : null;
+        } catch {
+          return null;
+        }
+      }));
+    return states.filter(Boolean) as AceServiceState[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveServiceState(state: AceServiceState): Promise<void> {
+  await mkdir(SERVICE_STATE_DIR, { recursive: true });
+  await writeFile(getServiceStateFile(state.serviceId), JSON.stringify(state, null, 2), 'utf-8');
+}
+
+async function clearServiceState(serviceId: string): Promise<void> {
+  await rm(getServiceStateFile(serviceId), { force: true });
+  await rm(getServiceStopFile(serviceId), { force: true });
+}
+
+function isPidRunning(pid: number | null | undefined): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function serviceUrlFromSettings(settings: SystemSettings): string {
+  const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
+  const port = settings.port || 3000;
+  const urlHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+  return `http://${urlHost}:${port}`;
+}
+
+function buildServiceState(
+  serviceId: string,
+  settings: SystemSettings,
+  mode: AceServiceState['mode'],
+  daemonPid: number | null,
+  serverPid: number | null,
+): AceServiceState {
+  const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
+  const port = settings.port || 3000;
+  const now = new Date().toISOString();
+  return {
+    serviceId,
+    daemonPid,
+    serverPid,
+    host,
+    port,
+    url: serviceUrlFromSettings(settings),
+    mode,
+    startedAt: now,
+    updatedAt: now,
+    installRoot: getRepoRoot(),
+  };
+}
+
+async function updateServiceState(serviceId: string, patch: Partial<AceServiceState>): Promise<void> {
+  const current = await loadServiceState(serviceId);
+  if (!current) return;
+  await saveServiceState({
+    ...current,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function requestServiceStop(serviceId: string): Promise<void> {
+  await mkdir(SERVICE_STATE_DIR, { recursive: true });
+  await writeFile(getServiceStopFile(serviceId), String(Date.now()), 'utf-8');
 }
 
 async function isSetup(): Promise<boolean> {
@@ -620,14 +804,34 @@ async function promptForNetworkSettings(settings: SystemSettings, locale: Locale
       active: messages.yes,
       inactive: messages.no,
     },
+    {
+      type: 'toggle',
+      name: 'runInBackground',
+      message: messages.backgroundPrompt,
+      initial: Boolean(settings.runInBackground),
+      active: messages.yes,
+      inactive: messages.no,
+    },
+    {
+      type: 'toggle',
+      name: 'useDaemon',
+      message: messages.daemonPrompt,
+      initial: settings.useDaemon !== false,
+      active: messages.yes,
+      inactive: messages.no,
+    },
   ], getPromptOptions(locale));
 
   const lanAccess = Boolean(networkForm.lanAccess);
+  const runInBackground = Boolean(networkForm.runInBackground);
+  const useDaemon = Boolean(networkForm.useDaemon);
   return {
     ...settings,
     locale,
     port: Number(networkForm.port || settings.port || 3000),
     lanAccess,
+    runInBackground,
+    useDaemon,
     host: lanAccess ? '0.0.0.0' : '127.0.0.1',
   };
 }
@@ -770,14 +974,14 @@ function tryOpenBrowser(url: string): boolean {
     return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
   };
 
-  const commands: Array<[string, string[]]> = process.platform === 'darwin'
+  const commands: Array<[string, string[]]> = isMacOS()
     ? [['open', [url]]]
-    : process.platform === 'win32'
+    : isWindows()
       ? [[resolveWindowsCmd(), ['/c', 'start', '', url]]]
       : [['xdg-open', [url]]];
 
   for (const [command, args] of commands) {
-    if (process.platform !== 'win32' && !commandExists(command)) {
+    if (!isWindows() && !commandExists(command)) {
       continue;
     }
 
@@ -796,7 +1000,240 @@ function tryOpenBrowser(url: string): boolean {
   return false;
 }
 
-async function start() {
+function buildChildEnv(settings: SystemSettings): NodeJS.ProcessEnv {
+  const host = settings.host || (settings.lanAccess ? '0.0.0.0' : '127.0.0.1');
+  const port = String(settings.port || 3000);
+  return {
+    ...process.env,
+    ACE_HOST: host,
+    ACE_PORT: port,
+    PORT: port,
+    NODE_ENV: process.env.NODE_ENV || 'production',
+    ACE_LOCALE: settings.locale || resolveCliLocale(),
+  };
+}
+
+function formatServiceMode(locale: Locale, mode: AceServiceState['mode']): string {
+  const messages = getLocaleMessages(locale);
+  if (mode === 'daemon') return messages.serviceModeDaemon;
+  if (mode === 'background') return messages.serviceModeBackground;
+  return messages.serviceModeForeground;
+}
+
+function isServiceRunning(state: AceServiceState): boolean {
+  return isPidRunning(state.daemonPid) || isPidRunning(state.serverPid);
+}
+
+async function waitForServiceStop(state: AceServiceState, timeoutMs = 4000): Promise<boolean> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const daemonRunning = isPidRunning(state.daemonPid);
+    const serverRunning = isPidRunning(state.serverPid);
+    if (!daemonRunning && !serverRunning) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return !isPidRunning(state.daemonPid) && !isPidRunning(state.serverPid);
+}
+
+function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boolean): ChildProcess {
+  return spawn(process.execPath, [__filename, ...args], {
+    cwd: getRepoRoot(),
+    env,
+    detached,
+    stdio: detached ? 'ignore' : 'inherit',
+    windowsHide: true,
+  });
+}
+
+async function startServerProcess(settings: SystemSettings, serviceId: string): Promise<void> {
+  await syncBrowserLocale(settings);
+  const messages = getLocaleMessages(normalizeLocale(settings.locale));
+  const url = serviceUrlFromSettings(settings);
+  const state = buildServiceState(serviceId, settings, 'foreground', null, process.pid);
+  await saveServiceState(state);
+  const cleanup = () => {
+    void clearServiceState(serviceId);
+  };
+  process.once('SIGTERM', cleanup);
+  process.once('SIGINT', cleanup);
+  process.once('exit', cleanup);
+  setTimeout(() => {
+    if (!tryOpenBrowser(url)) {
+      console.log(messages.openBrowserFallback(url));
+    }
+  }, 1200);
+  console.log(messages.startingServer(url));
+  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
+  require('../server.js');
+}
+
+async function runManagedServerChild(serviceId: string): Promise<void> {
+  const settings = await loadSystemSettings();
+  const env = buildChildEnv(settings);
+  Object.assign(process.env, env);
+  await updateServiceState(serviceId, { serverPid: process.pid });
+  const cleanup = () => {
+    void (async () => {
+      const current = await loadServiceState(serviceId);
+      if (!current) return;
+      if (current.daemonPid && current.daemonPid !== process.pid) {
+        await updateServiceState(serviceId, { serverPid: null });
+        return;
+      }
+      await clearServiceState(serviceId);
+    })();
+  };
+  process.once('SIGTERM', cleanup);
+  process.once('SIGINT', cleanup);
+  process.once('exit', cleanup);
+  require('../server.js');
+}
+
+async function runDaemonSupervisor(serviceId: string): Promise<void> {
+  const settings = await loadSystemSettings();
+  const env = buildChildEnv(settings);
+  let shuttingDown = false;
+  let child: ChildProcess | null = null;
+
+  const stopChild = () => {
+    if (!child || child.exitCode !== null || child.killed) return;
+    try {
+      child.kill('SIGTERM');
+    } catch {}
+  };
+
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stopChild();
+    await clearServiceState(serviceId);
+    process.exit(0);
+  };
+
+  process.once('SIGTERM', () => { void shutdown(); });
+  process.once('SIGINT', () => { void shutdown(); });
+  process.once('exit', () => { stopChild(); });
+
+  while (!shuttingDown) {
+    child = spawnCliProcess(['__run-server', '--service-id', serviceId], env, false);
+    await updateServiceState(serviceId, { daemonPid: process.pid, serverPid: child.pid ?? null, mode: 'daemon' });
+
+    const exitInfo = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child!.once('exit', (code, signal) => resolve({ code, signal }));
+      child!.once('error', () => resolve({ code: 1, signal: null }));
+    });
+
+    child = null;
+    if (shuttingDown || existsSync(getServiceStopFile(serviceId))) {
+      await shutdown();
+      return;
+    }
+    await updateServiceState(serviceId, { serverPid: null });
+    if (exitInfo.code === 0) {
+      await clearServiceState(serviceId);
+      process.exit(0);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+}
+
+async function startManagedBackground(settings: SystemSettings): Promise<void> {
+  const locale = normalizeLocale(settings.locale);
+  const messages = getLocaleMessages(locale);
+  const serviceId = randomUUID().slice(0, 8);
+  const env = buildChildEnv(settings);
+  const mode = settings.useDaemon === false ? 'background' : 'daemon';
+  const child = spawnCliProcess([mode === 'daemon' ? '__daemon' : '__run-server', '--service-id', serviceId], env, true);
+  child.unref();
+
+  const state = buildServiceState(serviceId, settings, mode, mode === 'daemon' ? (child.pid ?? null) : null, mode === 'background' ? (child.pid ?? null) : null);
+  await saveServiceState(state);
+  console.log(messages.startingServer(state.url));
+  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
+}
+
+async function serviceCommand(locale: Locale): Promise<void> {
+  const messages = getLocaleMessages(locale);
+  while (true) {
+    const states = await listServiceStates();
+    const liveStates: AceServiceState[] = [];
+    for (const state of states) {
+      if (isServiceRunning(state)) {
+        liveStates.push(state);
+      } else {
+        await clearServiceState(state.serviceId);
+      }
+    }
+
+    if (liveStates.length === 0) {
+      console.log(messages.serviceEmpty);
+      return;
+    }
+
+    console.log(messages.serviceHeader);
+    for (const state of liveStates) {
+      const status = isServiceRunning(state) ? messages.serviceStatusRunning : messages.serviceStatusStopped;
+      console.log(`  ${messages.serviceEntry(state, formatServiceMode(locale, state.mode), status)}`);
+    }
+
+    const selected = await prompt({
+      type: 'select',
+      name: 'serviceId',
+      message: messages.serviceSelectPrompt,
+      choices: [
+        ...liveStates.map((state) => ({
+          title: messages.serviceEntry(state, formatServiceMode(locale, state.mode), messages.serviceStatusRunning),
+          value: state.serviceId,
+        })),
+        { title: messages.serviceActionExit, value: '' },
+      ],
+      initial: 0,
+    }, getPromptOptions(locale));
+
+    if (!selected.serviceId) return;
+
+    const answer = await prompt({
+      type: 'select',
+      name: 'action',
+      message: messages.serviceActionPrompt,
+      choices: [
+        { title: messages.serviceActionStop, value: 'stop' },
+        { title: messages.serviceActionBack, value: 'back' },
+        { title: messages.serviceActionExit, value: 'exit' },
+      ],
+      initial: 0,
+    }, getPromptOptions(locale));
+
+    if (answer.action === 'exit') return;
+    if (answer.action !== 'stop') continue;
+
+    const state = liveStates.find((item) => item.serviceId === selected.serviceId);
+    if (!state) continue;
+
+    try {
+      await requestServiceStop(state.serviceId);
+      const targetPid = state.daemonPid && isPidRunning(state.daemonPid) ? state.daemonPid : state.serverPid;
+      console.log(messages.serviceStopping);
+      if (targetPid) {
+        process.kill(targetPid, 'SIGTERM');
+      }
+      const stopped = await waitForServiceStop(state);
+      if (stopped) {
+        await clearServiceState(state.serviceId);
+        console.log(messages.serviceStopped);
+      } else {
+        console.log(messages.serviceStopTimeout);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(messages.serviceStopFailed(message));
+    }
+  }
+}
+
+async function start(interactive: boolean) {
   await ensureRuntimeHome();
 
   const settings = await loadSystemSettings();
@@ -808,37 +1245,23 @@ async function start() {
 
   const nextSettings = await loadSystemSettings();
   const locale = normalizeLocale(nextSettings.locale);
-  const updatedSettings = await promptForNetworkSettings(nextSettings, locale);
-  await saveSystemSettings({
-    ...updatedSettings,
-  });
-  const messages = getLocaleMessages(locale);
-  await syncBrowserLocale({ ...updatedSettings, locale });
+  const resolvedSettings = interactive ? await promptForNetworkSettings(nextSettings, locale) : nextSettings;
+  if (interactive) {
+    await saveSystemSettings({
+      ...resolvedSettings,
+    });
+  }
 
-  process.env.ACE_HOST = updatedSettings.host || (updatedSettings.lanAccess ? '0.0.0.0' : '127.0.0.1');
-  process.env.ACE_PORT = String(updatedSettings.port || 3000);
-  process.env.PORT = process.env.ACE_PORT;
-  process.env = {
-    ...process.env,
-    NODE_ENV: process.env.NODE_ENV || 'production',
-  };
+  if (resolvedSettings.runInBackground) {
+    await startManagedBackground(resolvedSettings);
+    return;
+  }
 
-  const urlHost = process.env.ACE_HOST === '0.0.0.0' ? '127.0.0.1' : process.env.ACE_HOST;
-  const url = `http://${urlHost}:${process.env.ACE_PORT}`;
-
-  setTimeout(() => {
-    if (!tryOpenBrowser(url)) {
-      console.log(messages.openBrowserFallback(url));
-    }
-  }, 1200);
-
-  console.log(messages.startingServer(url));
-  console.log(`[ACE] ${messages.runtimeHome}: ${getWorkspaceDirectory('workspace')}`);
-  require('../server.js');
+  await startServerProcess(resolvedSettings, randomUUID().slice(0, 8));
 }
 
 async function main() {
-  const { command, force, unknownCommand, unknownOption } = parseArgs(process.argv);
+  const { command, force, serviceId, unknownCommand, unknownOption } = parseArgs(process.argv);
   const locale = resolveCliLocale();
   const messages = getLocaleMessages(locale);
 
@@ -860,8 +1283,20 @@ async function main() {
     await resetAceState(force);
     return;
   }
+  if (command === 'servive' || command === 'service') {
+    await serviceCommand(locale);
+    return;
+  }
+  if (command === '__run-server') {
+    await runManagedServerChild(serviceId || randomUUID().slice(0, 8));
+    return;
+  }
+  if (command === '__daemon') {
+    await runDaemonSupervisor(serviceId || randomUUID().slice(0, 8));
+    return;
+  }
 
-  await start();
+  await start(true);
 }
 
 main().catch((error) => {

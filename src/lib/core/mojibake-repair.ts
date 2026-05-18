@@ -1,4 +1,5 @@
 import iconv from 'iconv-lite';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 const COMMON_CJK_CHARS = '的一是不了在人有我他这为之大来以个中上们到说国和地也子时道出而要于就下得可你年生自会那后能对着事其里所去行过家学用同于然作方成者多日都三小军无么经法当起与好看天分还进面开心';
 const COMMON_PUNCT = '，。！？；：（）《》、';
@@ -19,7 +20,7 @@ function scoreText(text: string): number {
 }
 
 export function repairWindowsMojibake(text: string): string {
-  if (process.platform !== 'win32' || !text) {
+  if (!isWindows() || !text) {
     return text;
   }
 

@@ -1,7 +1,8 @@
 import { existsSync, realpathSync, symlinkSync } from 'fs';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 function getDirectoryLinkType(): 'dir' | 'junction' {
-  return process.platform === 'win32' ? 'junction' : 'dir';
+  return isWindows() ? 'junction' : 'dir';
 }
 
 export function createDirectoryLinkSync(targetDir: string, linkPath: string): void {

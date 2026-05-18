@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { canAccessConfigMeta, listConfigsWithMeta } from '@/lib/config/metadata';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 import { loadUsers } from '@/lib/core/user-store';
@@ -218,7 +218,7 @@ export async function readAccessibleConfigNameMap(userId: string, role: 'admin' 
     const results = await Promise.all(
       yamlFiles.map(async (entry) => {
         const meta = metaMap[entry.name];
-        if (meta?.visibility === 'private' && meta.createdBy && meta.createdBy !== userId && role !== 'admin') {
+        if (!canAccessConfigMeta(meta, userId, role)) {
           return null;
         }
         try {

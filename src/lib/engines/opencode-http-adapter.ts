@@ -140,6 +140,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
   timeoutMs?: number;
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
+  disableStreaming?: boolean;
 }): Promise<string> {
   const promptBody: OpenCodePromptBody = {
     ...options.promptBodyExtras,
@@ -147,7 +148,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
   };
   const query = options.workingDirectory ? { directory: options.workingDirectory } : undefined;
 
-  if ((!options.eventBaseUrl && !options.client.event?.subscribe) || !options.client.session.promptAsync) {
+  if (options.disableStreaming || ((!options.eventBaseUrl && !options.client.event?.subscribe) || !options.client.session.promptAsync)) {
     return await sendPromptBlocking({
       client: options.client,
       sessionId: options.sessionId,

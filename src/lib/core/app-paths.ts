@@ -1,5 +1,6 @@
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 export type AppDirectoryKind = 'config' | 'data' | 'cache' | 'logs' | 'workspace';
 
@@ -16,7 +17,7 @@ function resolveRuntimeRoot(): string {
   const aceHome = process.env.ACE_HOME?.trim();
   if (aceHome) return resolve(aceHome);
 
-  if (process.platform === 'win32') {
+  if (isWindows()) {
     const appData = process.env.APPDATA?.trim();
     if (appData) return resolve(appData, 'ACEHarness');
   }

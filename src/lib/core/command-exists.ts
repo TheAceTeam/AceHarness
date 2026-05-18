@@ -1,6 +1,7 @@
 import { execFileSync, execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter, isAbsolute, join } from 'path';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin'];
 
@@ -10,7 +11,7 @@ const DEFAULT_SCAN_DIRS_POSIX = ['/root/.local/bin', '/usr/local/bin', '/usr/bin
  * and cmd-launched where.exe can disagree with an interactive CMD session.
  */
 function getProcessPathEnv(): string {
-  if (process.platform !== 'win32') {
+  if (!isWindows()) {
     return process.env.PATH || '';
   }
   const path = process.env.PATH || process.env.Path;
@@ -18,7 +19,7 @@ function getProcessPathEnv(): string {
 }
 
 function windowsEnvForChildProcess(): NodeJS.ProcessEnv {
-  if (process.platform !== 'win32') return process.env;
+  if (!isWindows()) return process.env;
   const mergedPath = getProcessPathEnv();
   if (!mergedPath) return process.env;
   return {
@@ -88,7 +89,7 @@ function resolveWindowsPowerShell(): string {
 }
 
 function getExecutableCandidates(command: string): string[] {
-  if (process.platform !== 'win32') return [command];
+  if (!isWindows()) return [command];
 
   const hasExtension = /\.[^./\\]+$/.test(command);
   if (hasExtension) return [command];
@@ -118,7 +119,7 @@ function pickPreferredWindowsCommand(candidates: string[]): string | null {
 export function getCommonCliSearchPaths(): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
 
-  if (process.platform === 'win32') {
+  if (isWindows()) {
     return [...getLocalNodeBinDirs(), ...defaultWindowsScanDirs()];
   }
 
@@ -132,7 +133,7 @@ export function getCommonCliSearchPaths(): string[] {
 }
 
 function findCommandViaLoginShell(command: string): string | null {
-  if (process.platform === 'win32') return null;
+  if (isWindows()) return null;
   if (!/^[\w.-]+$/.test(command)) return null;
 
   const shell = process.env.SHELL?.trim() || '/bin/sh';
@@ -153,7 +154,7 @@ function findCommandViaLoginShell(command: string): string | null {
 }
 
 function findCommandViaPowerShell(command: string): string | null {
-  if (process.platform !== 'win32') return null;
+  if (!isWindows()) return null;
   if (!/^[\w.-]+$/.test(command)) return null;
 
   const shell = resolveWindowsPowerShell();
@@ -192,7 +193,7 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
     return existsSync(command) ? command : null;
   }
 
-  if (process.platform === 'win32' && /^[\w.-]+$/.test(command)) {
+  if (isWindows() && /^[\w.-]+$/.test(command)) {
     try {
       const output = execSync(`where.exe ${command}`, {
         encoding: 'utf8',
@@ -241,7 +242,7 @@ export function commandExists(command: string, extraPaths: string[] = []): boole
       stdio: 'ignore',
       timeout: 5000,
       windowsHide: true,
-      env: process.platform === 'win32' ? windowsEnvForChildProcess() : process.env,
+      env: isWindows() ? windowsEnvForChildProcess() : process.env,
     });
     return true;
   } catch (err: any) {

@@ -16,6 +16,7 @@ import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 const requireFromHere = createRequire(__filename);
 
@@ -84,7 +85,7 @@ function metadataFromCodexEvent(event: Record<string, unknown> | null): EngineRe
 
 function isSpawnableCodexOverride(candidate: string | null | undefined): candidate is string {
   if (!candidate) return false;
-  if (process.platform !== 'win32') return true;
+  if (!isWindows()) return true;
   const lower = candidate.toLowerCase();
   return lower.endsWith('.exe') || lower.endsWith('.com');
 }

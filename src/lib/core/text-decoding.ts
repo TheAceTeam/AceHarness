@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 function countMatches(text: string, pattern: RegExp): number {
   return text.match(pattern)?.length || 0;
@@ -14,7 +15,7 @@ function scoreDecodedText(text: string): number {
 
 export function decodeTextBufferBestEffort(buffer: Buffer): string {
   const utf8 = buffer.toString('utf8');
-  if (process.platform !== 'win32') {
+  if (!isWindows()) {
     return utf8;
   }
 

@@ -11,6 +11,7 @@ import { delimiter as pathDelimiter, join } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { isWindows } from '@/lib/core/runtime-platform';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -140,7 +141,7 @@ function escapeWinCmdToken(s: string): string {
 }
 
 function getWindowsSystemPaths(): string[] {
-  if (process.platform !== 'win32') return [];
+  if (!isWindows()) return [];
   const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
     .map((item) => item?.trim())
     .filter(Boolean) as string[];
@@ -172,7 +173,7 @@ function spawnAcpCli(
   argv: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ): ChildProcess {
-  if (process.platform !== 'win32') {
+  if (!isWindows()) {
     return spawn(command, argv, {
       cwd: opts.cwd,
       env: opts.env,
