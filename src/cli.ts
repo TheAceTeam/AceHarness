@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
 import { commandExists } from './lib/command-exists';
+import { resolveBinary as resolveMagicCliBinary } from './lib/engines/magic-cli-wrapper';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from './lib/models';
 import { ACPEngine } from './lib/engines/acp-engine';
@@ -19,7 +20,7 @@ import {
 process.chdir(getRepoRoot());
 
 type Locale = 'zh' | 'en';
-type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli' | 'magic-cli';
+type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli';
 
 interface ConfiguredEngine {
   engine?: EngineType;
@@ -119,7 +120,6 @@ const ENGINE_META: Array<{ id: EngineType; name: string }> = [
   { id: 'nga', name: 'NGA' },
   { id: 'codegenie', name: 'CodeGenie' },
   { id: 'cursor', name: 'Cursor CLI' },
-  { id: 'cangjie-magic', name: 'CangjieMagic' },
   { id: 'trae-cli', name: 'Trae CLI' },
   { id: 'magic-cli', name: 'Magic CLI' },
 ];
@@ -401,18 +401,14 @@ async function moduleExists(moduleName: string): Promise<boolean> {
   }
 }
 
-function isCangjieMagicAvailable(): boolean {
-  return Boolean(process.env.CANGJIE_MAGIC_PATH) && commandExists('cjpm');
-}
-
 async function detectEngines() {
   const availability = await Promise.all(ENGINE_META.map(async (engine) => ({
     ...engine,
     available:
       engine.id === 'claude-code' ? await moduleExists('@anthropic-ai/claude-agent-sdk')
         : engine.id === 'codex' ? (await moduleExists('@openai/codex-sdk')) || commandExists('codex')
-          : engine.id === 'cangjie-magic' ? isCangjieMagicAvailable()
-            : commandExists(engine.id === 'cursor' ? 'agent' : engine.id === 'magic-cli' ? 'magic-cli.sh' : engine.id),
+          : engine.id === 'magic-cli' ? resolveMagicCliBinary() !== null
+            : commandExists(engine.id === 'cursor' ? 'agent' : engine.id),
   })));
 
   return availability;
