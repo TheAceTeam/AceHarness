@@ -18,7 +18,6 @@ const SUPPORTED_ENGINES = [
   'kiro-cli',
   'codex',
   'claude-code',
-  'cangjie-magic',
 ];
 
 function parseArgs(argv) {

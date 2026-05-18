@@ -57,7 +57,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 ### 前置条件
 
 - Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
-- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`cangjie-magic` 等至少一种
+- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli` 等至少一种
 - `ANTHROPIC_API_KEY`：默认对话和工作流执行所需，见 `.env.example`
 
 ### 安装与运行
@@ -164,7 +164,7 @@ ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程�
 { "engine": "claude-code" }
 ```
 
-支持的执行引擎包括 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`（Cursor CLI）、`codex`、`trae-cli`、`cangjie-magic`（CangjieMagic）。
+支持的执行引擎包括 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`（Cursor CLI）、`codex`、`trae-cli`。
 
 子进程会继承 `process.env`，无需额外配置。切换引擎只需在引擎页面选择本机可用的 CLI 工具即可。
 
@@ -240,7 +240,7 @@ npm run lint
 | 可视化 | ReactFlow 11、Recharts 3、Mermaid 11 |
 | 表单与拖拽 | React Hook Form 7、@dnd-kit |
 | Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、react-syntax-highlighter、KaTeX |
-| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `cangjie-magic` |
+| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` |
 | 测试 | Vitest 4、Testing Library、jsdom |
 | 国际化与主题 | next-intl 4、next-themes |
 

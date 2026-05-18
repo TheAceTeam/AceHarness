@@ -56,7 +56,7 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 ### Requirements
 
 - Node.js `>= 20` / npm `>= 9`
-- One AI execution engine: `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, or `cangjie-magic`
+- One AI execution engine: `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, or `magic-cli`
 
 ### Install and Run
 
@@ -160,7 +160,7 @@ Copy `.env.example` to `.env.local` and fill in real values. The table below lis
 { "engine": "claude-code" }
 ```
 
-Supported execution engines include `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor` (Cursor CLI), `codex`, `trae-cli`, and `cangjie-magic` (CangjieMagic).
+Supported execution engines include `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor` (Cursor CLI), `codex`, `trae-cli`, and `magic-cli`.
 
 Child processes inherit `process.env`, so no extra setup is required. To switch engines, simply change the active CLI tool on the engine page.
 
@@ -236,7 +236,7 @@ npm run lint
 | Visualization | ReactFlow 11, Recharts 3, Mermaid 11 |
 | Forms and drag-and-drop | React Hook Form 7, @dnd-kit |
 | Markdown and docs | react-markdown, remark-gfm, rehype-raw, react-syntax-highlighter, KaTeX |
-| AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `cangjie-magic` |
+| AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `magic-cli` |
 | Testing | Vitest 4, Testing Library, jsdom |
 | Internationalization and themes | next-intl 4, next-themes |
 

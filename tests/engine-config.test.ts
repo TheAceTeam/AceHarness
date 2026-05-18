@@ -9,8 +9,8 @@ describe('engine config', () => {
     expect(getEngineConfigDir('opencode')).toBe('.opencode');
     expect(getEngineConfigDir('codex')).toBe('.codex');
     expect(getEngineConfigDir('cursor')).toBe('.cursor');
-    expect(getEngineConfigDir('cangjie-magic')).toBe('.claude');
     expect(getEngineConfigDir('trae-cli')).toBe('.trae');
+    expect(getEngineConfigDir('magic-cli')).toBe('.magic-cli');
   });
 
   test('getEngineConfigDir falls back to .claude for unknown engine types', () => {
@@ -31,9 +31,6 @@ describe('engine config', () => {
     expect(getEngineSkillsSubdir('unknown')).toBe('.claude/skills');
   });
 
-  test('cangjie-magic shares claude-code config directory but has distinct engine type', () => {
-    expect(getEngineConfigDir('cangjie-magic')).toBe(getEngineConfigDir('claude-code'));
-  });
 });
 
 describe('resolveAgentSelection', () => {

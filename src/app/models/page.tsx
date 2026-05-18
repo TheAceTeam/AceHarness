@@ -50,7 +50,6 @@ const ALL_ENGINES = [
   { id: 'codegenie', label: 'CodeGenie' },
   { id: 'codex', label: 'Codex' },
   { id: 'cursor', label: 'Cursor' },
-  { id: 'cangjie-magic', label: 'CangjieMagic' },
   { id: 'magic-cli', label: 'Magic CLI' },
 ];
 

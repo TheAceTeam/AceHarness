@@ -318,11 +318,3 @@ models:
       - anthropic
     engines:
       - magic-cli
-  - value: deepseek:deepseek-v4-pro
-    label: DeepSeek V4 Pro
-    costMultiplier: 0.15
-    endpoints:
-      - openai
-      - anthropic
-    engines:
-      - magic-cli

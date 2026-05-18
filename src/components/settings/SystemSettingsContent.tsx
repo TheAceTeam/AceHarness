@@ -526,16 +526,17 @@ export default function SystemSettingsContent() {
           ) : null}
         </section>
 
+        {/* TODO: Not sure the modification */}
         <section className="rounded-xl border bg-card p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">环境变量说明</h2>
-            <p className="mt-1 text-sm text-muted-foreground">这些变量会影响仓颉运行环境与 CangjieMagic 相关能力。</p>
+            <p className="mt-1 text-sm text-muted-foreground">这些变量会影响仓颉运行环境与相关能力。</p>
           </div>
           <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
             <code className="font-mono text-primary">CANGJIE_HOME</code>
             <span>仓颉 SDK 根目录（Markdown/编辑器运行仓颉代码必需）</span>
             <code className="font-mono text-primary">CANGJIE_MAGIC_PATH</code>
-            <span>CangjieMagic 项目路径</span>
+            <span>仓颉 Magic 项目路径</span>
             <code className="font-mono text-primary">OPENSSL_PATH</code>
             <span>OpenSSL 动态库路径</span>
             <code className="font-mono text-primary">CANGJIE_STDX_PATH</code>

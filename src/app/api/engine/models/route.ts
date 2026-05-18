@@ -40,8 +40,9 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // TODO: magic-cli doesn't support ACP model discovery.
   // These engines don't use ACP or are not available on this system
-  if (engineType === 'cangjie-magic' || engineType === 'codex') {
+  if (engineType === 'codex') {
     return NextResponse.json({ models: [], message: `${engineType} does not support ACP model discovery` });
   }
 
