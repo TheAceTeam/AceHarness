@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { requireAuth } from '@/lib/auth/middleware';
 import { ensureNotebookRoot, normalizeNotebookScope } from '@/lib/notebook/manager';
+import { isBuiltinNotebookPath, toBuiltinNotebookAbsolutePath } from '@/lib/notebook/builtin';
 import { getNotebookShare } from '@/lib/notebook/share-store';
 
 const MAX_FILE_SIZE = 200 * 1024;
@@ -46,11 +47,20 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: '分享链接无权访问该文件' }, { status: 403 });
       }
     }
-    const fullPath = path.join(notebookRoot, file);
-    const realPath = await fs.realpath(fullPath);
-
-    if (!isPathSafe(notebookRoot, realPath)) {
-      return NextResponse.json({ error: '路径不合法' }, { status: 403 });
+    const builtin = isBuiltinNotebookPath(file);
+    let realPath = '';
+    if (builtin) {
+      const builtinRoot = toBuiltinNotebookAbsolutePath(scope, '__builtin__');
+      realPath = await fs.realpath(toBuiltinNotebookAbsolutePath(scope, file));
+      if (!isPathSafe(builtinRoot, realPath)) {
+        return NextResponse.json({ error: '路径不合法' }, { status: 403 });
+      }
+    } else {
+      const fullPath = path.join(notebookRoot, file);
+      realPath = await fs.realpath(fullPath);
+      if (!isPathSafe(notebookRoot, realPath)) {
+        return NextResponse.json({ error: '路径不合法' }, { status: 403 });
+      }
     }
 
     const stat = await fs.stat(realPath);
@@ -82,7 +92,7 @@ export async function GET(request: NextRequest) {
     }
 
     const content = await fs.readFile(realPath, 'utf-8');
-    return NextResponse.json({ content, size: stat.size, path: file, scope });
+    return NextResponse.json({ content, size: stat.size, path: file, scope, readOnly: builtin });
   } catch (error: any) {
     if (error.code === 'ENOENT') {
       return NextResponse.json({ error: '文件不存在' }, { status: 404 });
@@ -106,6 +116,10 @@ export async function PUT(request: NextRequest) {
 
     if (!file || content === undefined) {
       return NextResponse.json({ error: '缺少 file 或 content 参数' }, { status: 400 });
+    }
+
+    if (isBuiltinNotebookPath(file)) {
+      return NextResponse.json({ error: '内置文档为只读内容，无法保存' }, { status: 403 });
     }
 
     if (new TextEncoder().encode(content).length > MAX_FILE_SIZE) {

@@ -23,6 +23,7 @@ import AiAssistantSheet from "@/components/chat/AiAssistantSheet"
 import * as VisuallyHidden from "@radix-ui/react-visually-hidden"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useToast } from "@/components/ui/toast"
+import { cn } from "@/lib/core/utils"
 
 interface WorkspaceEditorProps {
   open: boolean
@@ -31,10 +32,13 @@ interface WorkspaceEditorProps {
   initialFilePath?: string | null
   mode?: WorkspaceMode
   title?: string
+  presentation?: "drawer" | "page"
   notebookScope?: NotebookScope
   notebookShareToken?: string
   notebookPermission?: 'read' | 'write'
 }
+
+type NotebookBrowserView = "list" | "desktop"
 
 type DiffLine = { type: 'equal' | 'delete' | 'add'; text: string }
 
@@ -84,6 +88,25 @@ function isPreviewFile(filePath: string): boolean {
 
 function getFileType(filePath: string): string {
   return filePath.split(".").pop()?.toLowerCase() || ""
+}
+
+function treeHasPath(tree: TreeNode[], targetPath: string): boolean {
+  for (const node of tree) {
+    if (node.path === targetPath) return true
+    if (node.type === "directory" && node.children && treeHasPath(node.children, targetPath)) return true
+  }
+  return false
+}
+
+function findTreeNode(tree: TreeNode[], targetPath: string): TreeNode | null {
+  for (const node of tree) {
+    if (node.path === targetPath) return node
+    if (node.type === "directory" && node.children) {
+      const hit = findTreeNode(node.children, targetPath)
+      if (hit) return hit
+    }
+  }
+  return null
 }
 
 function splitSuggestionIntoLineHunks(payload: {
@@ -192,6 +215,7 @@ export function WorkspaceEditor({
   initialFilePath,
   mode = "default",
   title,
+  presentation = "drawer",
   notebookScope = 'personal',
   notebookShareToken,
   notebookPermission = 'write',
@@ -204,12 +228,14 @@ export function WorkspaceEditor({
   const [fileSize, setFileSize] = React.useState<number | null>(null)
   const [fileLoading, setFileLoading] = React.useState(false)
   const [fileError, setFileError] = React.useState<string | null>(null)
+  const [selectedFileReadOnly, setSelectedFileReadOnly] = React.useState(false)
   const [oversize, setOversize] = React.useState(false)
   const [fileBlob, setFileBlob] = React.useState<Blob | null>(null)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [treeCollapsed, setTreeCollapsed] = React.useState(false)
   const [clipboard, setClipboard] = React.useState<ClipboardItem | null>(null)
   const [aiSheetOpen, setAiSheetOpen] = React.useState(false)
+  const [notebookBrowserView, setNotebookBrowserView] = React.useState<NotebookBrowserView>("list")
   const [aiContext, setAiContext] = React.useState("")
   const [aiAutoTask, setAiAutoTask] = React.useState<{ id: string; displayText: string; prompt: string } | null>(null)
   const [aiSelectionMeta, setAiSelectionMeta] = React.useState<{
@@ -284,6 +310,7 @@ export function WorkspaceEditor({
   }, [baseTitle, open, selectedFile])
 
   const openAiWithFilePath = React.useCallback(() => {
+    if (!selectedFile) return
     const filePathText = selectedFile ? `当前文件路径：${selectedFile}` : "当前未选择文件"
     setAiContext(filePathText)
     setAiSelectionMeta(null)
@@ -406,8 +433,26 @@ export function WorkspaceEditor({
     panel.isCollapsed() ? panel.expand() : panel.collapse()
   }, [treePanelRef])
 
+  React.useEffect(() => {
+    if (typeof window === "undefined" || mode !== "notebook") return
+    const saved = window.localStorage.getItem("notebook-browser-view")
+    if (saved === "desktop" || saved === "list") {
+      setNotebookBrowserView(saved)
+    }
+  }, [mode])
+
+  const handleNotebookViewChange = React.useCallback((view: NotebookBrowserView) => {
+    setNotebookBrowserView(view)
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("notebook-browser-view", view)
+    }
+  }, [])
+
+  const layoutId = mode === "notebook" ? `workspace-editor-${notebookBrowserView}` : "workspace-editor"
+  const isNotebookDesktop = mode === "notebook" && notebookBrowserView === "desktop"
+
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "workspace-editor",
+    id: layoutId,
   })
 
   const updateUrlFileState = React.useCallback((filePath: string | null) => {
@@ -429,7 +474,7 @@ export function WorkspaceEditor({
     if (!open || !workspacePath) return
     setTreeLoading(true)
     const loadTree = mode === "notebook"
-      ? workspaceApi.getNotebookTree(2, { scope: notebookScope, shareToken: notebookShareToken })
+      ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
       : workspaceApi.getTree(workspacePath)
     loadTree
       .then((data) => {
@@ -475,6 +520,7 @@ export function WorkspaceEditor({
     setFileBlob(null)
     setFileContent(null)
     setFileError(null)
+    setSelectedFileReadOnly(false)
 
     if (isPreviewFile(selectedFile)) {
       const loadBlob = mode === "notebook"
@@ -503,20 +549,44 @@ export function WorkspaceEditor({
         setFileContent(data.content)
         setFileSize(data.size)
         setFileError(null)
+        setSelectedFileReadOnly(Boolean((data as { readOnly?: boolean }).readOnly) || Boolean(findTreeNode(tree, selectedFile)?.readOnly))
       })
       .catch((err: Error & { size?: number }) => {
         if (err.message?.includes("KB 限制")) {
           setOversize(true)
           if (err.size != null) setFileSize(err.size)
           setFileError(null)
+          setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
           return
         }
         const message = formatErrorMessage(err, "读取文件失败")
         setFileError(message)
+        setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
         toast("error", message)
       })
       .finally(() => setFileLoading(false))
-  }, [mode, notebookScope, notebookShareToken, selectedFile, toast, workspacePath])
+  }, [mode, notebookScope, notebookShareToken, selectedFile, toast, tree, workspacePath])
+
+  React.useEffect(() => {
+    if (!selectedFile) return
+    if (treeLoading || treeError) return
+    if (treeHasPath(tree, selectedFile)) return
+    setSelectedFile(null)
+    setFileContent(null)
+    setFileSize(null)
+    setFileError(null)
+    setSelectedFileReadOnly(false)
+    setOversize(false)
+    setFileBlob(null)
+    setAiSheetOpen(false)
+    setAiContext("")
+    setAiAutoTask(null)
+    setAiSelectionMeta(null)
+    setPendingAiSuggestions([])
+    setApplyAiSuggestionRequest(null)
+    setApplyAiSuggestionQueue([])
+    updateUrlFileState(null)
+  }, [selectedFile, tree, treeError, treeLoading, updateUrlFileState])
 
   React.useEffect(() => {
     if (!open) return
@@ -534,6 +604,9 @@ export function WorkspaceEditor({
     async (content: string) => {
       if (!selectedFile) return
       if (mode === "notebook") {
+        if (selectedFileReadOnly) {
+          throw new Error('内置文档为只读内容，无法保存')
+        }
         if (notebookPermission === 'read') {
           throw new Error('当前分享链接为只读权限，无法保存')
         }
@@ -542,7 +615,7 @@ export function WorkspaceEditor({
       }
       await workspaceApi.saveFile(workspacePath, selectedFile, content)
     },
-    [mode, notebookPermission, notebookScope, notebookShareToken, selectedFile, workspacePath]
+    [mode, notebookPermission, notebookScope, notebookShareToken, selectedFile, selectedFileReadOnly, workspacePath]
   )
 
   const handleSelectFile = React.useCallback((filePath: string) => {
@@ -558,6 +631,7 @@ export function WorkspaceEditor({
     setFileContent(null)
     setFileSize(null)
     setFileError(null)
+    setSelectedFileReadOnly(false)
     setOversize(false)
     setFileBlob(null)
     updateUrlFileState(null)
@@ -567,7 +641,7 @@ export function WorkspaceEditor({
     if (!workspacePath) return
     setTreeLoading(true)
     const loadTree = mode === "notebook"
-      ? workspaceApi.getNotebookTree(2, { scope: notebookScope, shareToken: notebookShareToken })
+      ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
       : workspaceApi.getTree(workspacePath)
     loadTree
       .then((data) => {
@@ -590,6 +664,7 @@ export function WorkspaceEditor({
         setFileContent(null)
         setFileSize(null)
         setFileError(null)
+        setSelectedFileReadOnly(false)
         setOversize(false)
         setFileBlob(null)
         setTree([])
@@ -608,173 +683,196 @@ export function WorkspaceEditor({
     [onOpenChange, updateUrlFileState]
   )
 
-  return (
-    <>
-      <Drawer direction="bottom" open={open} onOpenChange={handleOpenChange} dismissible={false}>
-        <DrawerContent className="h-screen w-screen max-w-none rounded-none mt-0 after:hidden">
-          <VisuallyHidden.Root>
-            <DrawerTitle>工作区编辑器</DrawerTitle>
-          </VisuallyHidden.Root>
-          <div className="flex flex-col h-full">
-            <div className="flex items-center gap-1 px-2 py-1 border-b shrink-0">
-              <span className="text-sm text-muted-foreground truncate flex-1 px-2">
-                {baseTitle}
-              </span>
-              {pendingAiSuggestions.length > 0 && (
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => {
-                      setApplyAiSuggestionQueue(
-                        [...pendingAiSuggestions]
-                          .sort((a, b) => b.range.startLineNumber - a.range.startLineNumber)
-                          .map((item) => ({
-                            id: item.id,
-                            range: item.range,
-                            targetText: item.targetText,
-                          })),
-                      )
-                    }}
-                  >
-                    接受全部
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => setPendingAiSuggestions([])}
-                  >
-                    拒绝全部
-                  </Button>
-                </div>
-              )}
+  const showToolbar = presentation === "drawer"
+  const showCloseButton = presentation === "drawer"
+
+  const editorBody = (
+    <div className="flex flex-col h-full bg-background">
+      {showToolbar && (
+        <div className="flex items-center gap-1 px-2 py-1 border-b shrink-0">
+          <span className="text-sm text-muted-foreground truncate flex-1 px-2">
+            {baseTitle}
+          </span>
+          {pendingAiSuggestions.length > 0 && (
+            <div className="flex items-center gap-1">
               <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={openAiWithFilePath}
-                title="问 AI"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => {
+                  setApplyAiSuggestionQueue(
+                    [...pendingAiSuggestions]
+                      .sort((a, b) => b.range.startLineNumber - a.range.startLineNumber)
+                      .map((item) => ({
+                        id: item.id,
+                        range: item.range,
+                        targetText: item.targetText,
+                      })),
+                  )
+                }}
               >
-                <span className="material-symbols-outlined text-[16px]">smart_toy</span>
-                <span className="sr-only">问 AI</span>
+                接受全部
               </Button>
               <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={() => handleOpenChange(false)}
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setPendingAiSuggestions([])}
               >
-                <X className="h-4 w-4" />
-                <span className="sr-only">关闭</span>
+                拒绝全部
               </Button>
             </div>
-            <ResizablePanelGroup id="workspace-editor" orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-              <ResizablePanel
-                id="workspace-tree"
-                panelRef={treePanelRef}
-                defaultSize="20%"
-                minSize="12%"
-                maxSize="40%"
-                collapsible
-                collapsedSize="0%"
-                onResize={() => setTreeCollapsed(treePanelRef.current?.isCollapsed() ?? false)}
-              >
-                {treeError && (
-                  <div className="border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {treeError}
-                  </div>
-                )}
-                <FileTreeSidebar
-                  workspacePath={workspacePath}
-                  tree={tree}
-                  selectedFile={selectedFile}
-                  onSelectFile={handleSelectFile}
-                  onDeletedPath={handleDeletedPath}
-                  loading={treeLoading}
-                  clipboard={clipboard}
-                  setClipboard={setClipboard}
-                  onRefresh={handleTreeRefresh}
-                  mode={mode}
-                  notebookScope={notebookScope}
-                  notebookShareToken={notebookShareToken}
-                  notebookPermission={notebookPermission}
-                />
-              </ResizablePanel>
-              <ResizableHandle
-                withHandle
-                collapsed={treeCollapsed}
-                onClickHandle={toggleTree}
-                handleIcon={treeCollapsed
-                  ? <ChevronRight className="h-2.5 w-2.5" />
-                  : <ChevronLeft className="h-2.5 w-2.5" />
-                }
-              />
-              <ResizablePanel id="workspace-editor-panel" defaultSize="80%" minSize="40%">
-                <EditorPanel
-                  filePath={selectedFile}
-                  content={fileContent}
-                  fileSize={fileSize}
-                  loading={fileLoading}
-                  onSave={handleSave}
-                  oversize={oversize}
-                  fileBlob={fileBlob}
-                  error={fileError}
-                  fileType={selectedFile ? getFileType(selectedFile) : undefined}
-                  mode={mode}
-                  notebookScope={notebookScope}
-                  notebookShareToken={notebookShareToken}
-                  notebookPermission={notebookPermission}
-                  onAskAIFromFile={openAiWithFilePath}
-                  onAskAIFromSelection={openAiWithSelection}
-                  onAskAIAction={openAiWithAction}
-                  applyAiSuggestion={applyAiSuggestionRequest}
-                  aiSuggestions={pendingAiSuggestions}
-                  onAcceptAiSuggestion={(id) => {
-                    const hit = pendingAiSuggestions.find((item) => item.id === id)
-                    if (!hit) return
-                    setApplyAiSuggestionRequest({
-                      id: hit.id,
-                      range: hit.range,
-                      targetText: hit.targetText,
-                    })
-                    const lineDelta = hit.newLineCount - hit.oldLineCount
-                    setPendingAiSuggestions((prev) => prev
-                      .filter((item) => item.id !== id)
-                      .map((item) => {
-                        if (lineDelta === 0) return item
-                        if (item.range.startLineNumber < hit.range.endLineNumber) return item
-                        return {
-                          ...item,
-                          range: {
-                            ...item.range,
-                            startLineNumber: item.range.startLineNumber + lineDelta,
-                            endLineNumber: item.range.endLineNumber + lineDelta,
-                          },
-                          decorateRange: {
-                            startLineNumber: item.decorateRange.startLineNumber + lineDelta,
-                            endLineNumber: item.decorateRange.endLineNumber + lineDelta,
-                          },
-                          insertBefore: item.insertBefore,
-                        }
-                      }))
-                  }}
-                  onRejectAiSuggestion={(id) => {
-                    setPendingAiSuggestions((prev) => prev.filter((x) => x.id !== id))
-                  }}
-                  onApplyAiSuggestionDone={(id) => {
-                    if (applyAiSuggestionRequest?.id === id) {
-                      setApplyAiSuggestionRequest(null)
-                    }
-                    setPendingAiSuggestions((prev) => prev.filter((x) => x.id !== id))
-                  }}
-                />
-              </ResizablePanel>
-            </ResizablePanelGroup>
+          )}
+          {selectedFile && (
+            <Button
+              variant="ghost"
+              size={mode === "notebook" ? "sm" : "icon"}
+              className={cn("shrink-0", mode === "notebook" ? "h-8 gap-2 px-3" : "h-7 w-7")}
+              onClick={openAiWithFilePath}
+              title="问 AI"
+            >
+              <span className="material-symbols-outlined text-[16px]">smart_toy</span>
+              {mode === "notebook" ? <span>问 AI</span> : <span className="sr-only">问 AI</span>}
+            </Button>
+          )}
+          {showCloseButton && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => handleOpenChange(false)}
+            >
+              <X className="h-4 w-4" />
+              <span className="sr-only">关闭</span>
+            </Button>
+          )}
+        </div>
+      )}
+      <ResizablePanelGroup key={layoutId} id={layoutId} orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
+        <ResizablePanel
+          id="workspace-tree"
+          panelRef={treePanelRef}
+          defaultSize={isNotebookDesktop ? "50%" : "20%"}
+          minSize={isNotebookDesktop ? "28%" : "12%"}
+          maxSize={isNotebookDesktop ? "60%" : "40%"}
+          collapsible
+          collapsedSize="0%"
+          onResize={() => setTreeCollapsed(treePanelRef.current?.isCollapsed() ?? false)}
+        >
+          {treeError && (
+            <div className="border-b bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {treeError}
+            </div>
+          )}
+          <FileTreeSidebar
+            workspacePath={workspacePath}
+            tree={tree}
+            selectedFile={selectedFile}
+            onSelectFile={handleSelectFile}
+            onDeletedPath={handleDeletedPath}
+            loading={treeLoading}
+            clipboard={clipboard}
+            setClipboard={setClipboard}
+            onRefresh={handleTreeRefresh}
+            mode={mode}
+            notebookScope={notebookScope}
+            notebookShareToken={notebookShareToken}
+            notebookPermission={selectedFileReadOnly ? 'read' : notebookPermission}
+            notebookView={notebookBrowserView}
+            onNotebookViewChange={handleNotebookViewChange}
+          />
+        </ResizablePanel>
+        <ResizableHandle
+          withHandle
+          collapsed={treeCollapsed}
+          onClickHandle={toggleTree}
+          handleIcon={treeCollapsed
+            ? <ChevronRight className="h-2.5 w-2.5" />
+            : <ChevronLeft className="h-2.5 w-2.5" />
+          }
+        />
+        <ResizablePanel id="workspace-editor-panel" defaultSize={isNotebookDesktop ? "50%" : "80%"} minSize="40%">
+          <EditorPanel
+            filePath={selectedFile}
+            content={fileContent}
+            fileSize={fileSize}
+            loading={fileLoading}
+            onSave={handleSave}
+            oversize={oversize}
+            fileBlob={fileBlob}
+            error={fileError}
+            fileType={selectedFile ? getFileType(selectedFile) : undefined}
+            mode={mode}
+            notebookScope={notebookScope}
+            notebookShareToken={notebookShareToken}
+            notebookPermission={selectedFileReadOnly ? 'read' : notebookPermission}
+            onAskAIFromFile={openAiWithFilePath}
+            onAskAIFromSelection={openAiWithSelection}
+            onAskAIAction={openAiWithAction}
+            applyAiSuggestion={applyAiSuggestionRequest}
+            aiSuggestions={pendingAiSuggestions}
+            onAcceptAiSuggestion={(id) => {
+              const hit = pendingAiSuggestions.find((item) => item.id === id)
+              if (!hit) return
+              setApplyAiSuggestionRequest({
+                id: hit.id,
+                range: hit.range,
+                targetText: hit.targetText,
+              })
+              const lineDelta = hit.newLineCount - hit.oldLineCount
+              setPendingAiSuggestions((prev) => prev
+                .filter((item) => item.id !== id)
+                .map((item) => {
+                  if (lineDelta === 0) return item
+                  if (item.range.startLineNumber < hit.range.endLineNumber) return item
+                  return {
+                    ...item,
+                    range: {
+                      ...item.range,
+                      startLineNumber: item.range.startLineNumber + lineDelta,
+                      endLineNumber: item.range.endLineNumber + lineDelta,
+                    },
+                    decorateRange: {
+                      startLineNumber: item.decorateRange.startLineNumber + lineDelta,
+                      endLineNumber: item.decorateRange.endLineNumber + lineDelta,
+                    },
+                    insertBefore: item.insertBefore,
+                  }
+                }))
+            }}
+            onRejectAiSuggestion={(id) => {
+              setPendingAiSuggestions((prev) => prev.filter((x) => x.id !== id))
+            }}
+            onApplyAiSuggestionDone={(id) => {
+              if (applyAiSuggestionRequest?.id === id) {
+                setApplyAiSuggestionRequest(null)
+              }
+              setPendingAiSuggestions((prev) => prev.filter((x) => x.id !== id))
+            }}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </div>
+  )
+
+  return (
+    <>
+      {presentation === "drawer" ? (
+        <Drawer direction="bottom" open={open} onOpenChange={handleOpenChange} dismissible={false}>
+          <DrawerContent className="h-screen w-screen max-w-none rounded-none mt-0 after:hidden">
+            <VisuallyHidden.Root>
+              <DrawerTitle>工作区编辑器</DrawerTitle>
+            </VisuallyHidden.Root>
+            {editorBody}
+          </DrawerContent>
+        </Drawer>
+      ) : (
+        <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+          <div className="flex-1 min-h-0">
+            {editorBody}
           </div>
-        </DrawerContent>
-      </Drawer>
+        </div>
+      )}
 
       <FileSearchCommand
         open={searchOpen}

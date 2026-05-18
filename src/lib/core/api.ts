@@ -59,6 +59,9 @@ interface ConfigListResponse {
     stepCount: number;
     agentCount: number;
     createdAt?: number;
+    visibility?: 'private' | 'shared' | 'public';
+    sharedWithUserIds?: string[];
+    ownerName?: string;
   }[];
   pagination: {
     total: number;
@@ -79,6 +82,13 @@ interface ConfigResponse {
   config: any;
   raw: string;
   agents: any[];
+  meta?: {
+    createdBy?: string;
+    visibility: 'private' | 'shared' | 'public';
+    sharedWithUserIds: string[];
+    createdAt?: number;
+    ownerName?: string;
+  };
 }
 
 interface WorkflowCreationRecommendationsResponse {
@@ -676,11 +686,40 @@ export const configApi = {
     return response.json();
   },
 
-  async copyConfig(filename: string, newFilename: string): Promise<ApiResponse> {
+  async saveConfigWithMeta(filename: string, config: any, meta?: {
+    visibility?: 'private' | 'shared' | 'public';
+    sharedWithUserIds?: string[];
+  }): Promise<ApiResponse> {
+    const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config, meta }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      const details = normalizeValidationDetails(data?.details)
+        .map((d: any) => `${Array.isArray(d?.path) ? d.path.join('.') : ''}: ${d?.message || ''}`.replace(/^:\s*/, '').trim())
+        .filter(Boolean)
+        .join('; ');
+      throw new Error(data?.error ? `${data.error}${details ? ` (${details})` : ''}` : '保存配置失败');
+    }
+    return response.json();
+  },
+
+  async copyConfig(filename: string, newFilename: string, options?: {
+    workflowName?: string;
+    visibility?: 'private' | 'shared' | 'public';
+    sharedWithUserIds?: string[];
+  }): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}/copy`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newFilename }),
+      body: JSON.stringify({
+        newFilename,
+        workflowName: options?.workflowName,
+        visibility: options?.visibility,
+        sharedWithUserIds: options?.sharedWithUserIds,
+      }),
     });
     if (!response.ok) {
       const err = await response.json();
@@ -1086,6 +1125,15 @@ export const runsApi = {
       throw new Error(data.error || '批量删除运行记录失败');
     }
     return response.json();
+  },
+  };
+
+export const usersApi = {
+  async listShareableUsers(): Promise<Array<{ id: string; username: string; email: string; role: 'admin' | 'user' }>> {
+    const response = await authFetch(`${API_BASE}/users/shareable`);
+    if (!response.ok) throw new Error('获取可共享用户失败');
+    const data = await response.json().catch(() => ({}));
+    return Array.isArray(data?.users) ? data.users : [];
   },
 };
 
@@ -1917,6 +1965,8 @@ export interface TreeNode {
   type: 'file' | 'directory';
   modifiedTime?: number;
   children?: TreeNode[];
+  readOnly?: boolean;
+  iconEmoji?: string;
 }
 
 export interface WorkspaceTreeResponse {
@@ -1973,7 +2023,7 @@ export const workspaceApi = {
     }
     return res.json();
   },
-  async getNotebookFile(file: string, options?: { scope?: NotebookScope; shareToken?: string }): Promise<{ content: string; size: number; path: string }> {
+  async getNotebookFile(file: string, options?: { scope?: NotebookScope; shareToken?: string }): Promise<{ content: string; size: number; path: string; readOnly?: boolean }> {
     const params = new URLSearchParams();
     params.set('file', file);
     if (options?.scope) params.set('scope', options.scope);

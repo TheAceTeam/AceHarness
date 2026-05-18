@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import { isWindows } from '@/lib/core/runtime-platform';
 import {
   isInsidePath,
   resolveExistingInsideWorkspace,
@@ -20,7 +21,7 @@ function toPortablePath(input: string): string {
 }
 
 async function getAvailableDriveRoots(): Promise<string[]> {
-  if (process.platform !== 'win32') return [];
+  if (!isWindows()) return [];
 
   const checks = await Promise.all(
     Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index)).map(async (letter) => {

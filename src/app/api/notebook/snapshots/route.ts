@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/middleware';
 import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook/manager';
+import { isBuiltinNotebookPath } from '@/lib/notebook/builtin';
 import { getNotebookShare } from '@/lib/notebook/share-store';
 import {
   createNotebookSnapshot,
@@ -42,6 +43,9 @@ export async function GET(request: NextRequest) {
     const scope = normalizeNotebookScope(searchParams.get('scope'));
 
     if (!file) return NextResponse.json({ error: '缺少 file 参数' }, { status: 400 });
+    if (isBuiltinNotebookPath(file)) {
+      return NextResponse.json({ error: '内置文档不支持快照' }, { status: 403 });
+    }
     if (scope === 'personal' && !auth.personalDir) {
       return NextResponse.json({ error: '用户未配置个人目录' }, { status: 400 });
     }
@@ -104,6 +108,9 @@ export async function POST(request: NextRequest) {
     let content = typeof body?.content === 'string' ? body.content : '';
 
     if (!file) return NextResponse.json({ error: '缺少 file 参数' }, { status: 400 });
+    if (isBuiltinNotebookPath(file)) {
+      return NextResponse.json({ error: '内置文档不支持快照' }, { status: 403 });
+    }
     if (scope === 'personal' && !auth.personalDir) {
       return NextResponse.json({ error: '用户未配置个人目录' }, { status: 400 });
     }
@@ -160,6 +167,9 @@ export async function PUT(request: NextRequest) {
 
     if (!file || !snapshotId) {
       return NextResponse.json({ error: '缺少 file 或 snapshotId 参数' }, { status: 400 });
+    }
+    if (isBuiltinNotebookPath(file)) {
+      return NextResponse.json({ error: '内置文档不支持快照' }, { status: 403 });
     }
     if (scope === 'personal' && !auth.personalDir) {
       return NextResponse.json({ error: '用户未配置个人目录' }, { status: 400 });

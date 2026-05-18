@@ -178,6 +178,10 @@ function isNotebookFile(filePath: string | null) {
   return !!filePath && filePath.endsWith('.cj.md')
 }
 
+function getDisplayedPathSegment(segment: string): string {
+  return segment === "__builtin__" ? "Cangjie Notebook介绍" : segment
+}
+
 type DiffLine = { type: 'equal' | 'delete' | 'add'; text: string }
 
 function buildLineDiff(beforeText: string, afterText: string): DiffLine[] {
@@ -504,7 +508,7 @@ export function EditorPanel({
     editorRef.current?.trigger("keyboard", "redo", null)
   }
 
-  const pathSegments = filePath?.split("/").filter(Boolean) || []
+  const pathSegments = (filePath?.replace(/\\/g, "/").split("/").filter(Boolean) || []).map(getDisplayedPathSegment)
   const canRunCangjie = isRunnableCangjieFile(filePath) && !oversize && !loading && editorContent != null
   const isNotebook = mode === 'notebook' && isNotebookFile(filePath)
 
@@ -573,14 +577,25 @@ export function EditorPanel({
               )}
             </MenubarContent>
           </MenubarMenu>
-          {canRunCangjie && (
-            <div className="ml-auto flex items-center px-2">
+          <div className="ml-auto flex items-center px-2 gap-2">
+            {canRunCangjie && (
               <Button variant="outline" size="sm" onClick={handleRun} disabled={running} className="h-7 gap-1.5">
                 {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                 {running ? "运行中" : "运行"}
               </Button>
-            </div>
-          )}
+            )}
+            {filePath && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onAskAIFromFile?.()}
+                className="h-7 gap-1.5"
+              >
+                <span className="material-symbols-outlined text-[16px]">smart_toy</span>
+                问 AI
+              </Button>
+            )}
+          </div>
         </Menubar>
 
         {filePath && (

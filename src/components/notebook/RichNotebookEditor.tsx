@@ -144,6 +144,40 @@ function countAiSuggestionNodes(editor: Editor): number {
   return count;
 }
 
+let cachedCollabIdentity: {
+  token: string;
+  user: { id: string; name: string; color: string };
+} | null = null;
+
+function NotebookSyncLoader() {
+  return (
+    <div className="font-loader-wrap relative flex h-full items-center justify-center overflow-hidden bg-background px-6">
+      <div className="font-loader flex min-h-[60vh] w-full max-w-[900px] flex-col items-center justify-center">
+        <div className="fl-scene">
+          <div className="fl-world">
+            <div className="fl-shadow" />
+            <div className="fl-body">
+              <div className="fl-back" />
+              <div className="fl-spine" />
+              <div className="fl-cl" />
+              <div className="fl-cr" />
+              <div className="fl-pages">
+                <div className="fl-sl"><div className="fl-spl" /><div className="fl-spl" /><div className="fl-spl" /><div className="fl-spl" /></div>
+                <div className="fl-sr"><div className="fl-sp" /><div className="fl-sp" /><div className="fl-sp" /><div className="fl-sp" /></div>
+                <div className="fl-fp"><div className="fl-pf" /><div className="fl-pb" /></div>
+                <div className="fl-fp"><div className="fl-pf" /><div className="fl-pb" /></div>
+                <div className="fl-fp"><div className="fl-pf" /><div className="fl-pb" /></div>
+                <div className="fl-fp"><div className="fl-pf" /><div className="fl-pb" /></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="fl-label">Syncing notebook...</div>
+      </div>
+    </div>
+  );
+}
+
 function plainTextToParagraphNodes(text: string) {
   return text.split('\n').map((line) => (
     line
@@ -555,9 +589,11 @@ export function RichNotebookEditor({
   onDependencyGraphOpenChange = () => {},
 }: RichNotebookEditorProps) {
   const { toast } = useToast();
+  const collaborationEnabled = scope === 'global' || Boolean(shareToken);
   const changeSourceRef = useRef<'internal' | 'external'>('external');
   const lastKnownContentRef = useRef(content);
   const derivedRefreshFrameRef = useRef<number | null>(null);
+  const [collabReady, setCollabReady] = useState(!collaborationEnabled);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [collabUser, setCollabUser] = useState<{ id: string; name: string; color: string }>({
     id: '',
@@ -621,10 +657,27 @@ export function RichNotebookEditor({
   }, [content]);
 
   useEffect(() => {
+    setCollabReady(!collaborationEnabled);
+  }, [collaborationEnabled, filePath, scope, shareToken]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!collaborationEnabled) {
+      setCollabReady(true);
+      setAuthToken(null);
+      setCollabSession(null);
+      setCollabUsers([]);
+      return;
+    }
     const token = window.localStorage.getItem('auth-token') || null;
     if (!token) {
+      cachedCollabIdentity = null;
       setAuthToken(null);
+      return;
+    }
+    if (cachedCollabIdentity?.token === token) {
+      setCollabUser(cachedCollabIdentity.user);
+      setAuthToken(token);
       return;
     }
     fetch('/api/auth/me', {
@@ -639,18 +692,27 @@ export function RichNotebookEditor({
         }
         const id = String(data.user.id);
         const name = String(data.user.username);
-        setCollabUser({ id, name, color: pickCaretColor(id) });
+        const user = { id, name, color: pickCaretColor(id) };
+        cachedCollabIdentity = { token, user };
+        setCollabUser(user);
         setAuthToken(token);
       })
       .catch(() => {
+        cachedCollabIdentity = null;
         setAuthToken(null);
         toast('error', '获取当前用户失败，协作已禁用');
       });
-  }, [toast]);
+  }, [collaborationEnabled, toast]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!collaborationEnabled) {
+      setCollabSession(null);
+      setCollabUsers([]);
+      return;
+    }
     if (!authToken) {
+      setCollabReady(false);
       setCollabSession(null);
       return;
     }
@@ -667,6 +729,7 @@ export function RichNotebookEditor({
       },
     });
 
+    setCollabReady(false);
     setCollabSession({ doc, provider });
     return () => {
       provider.destroy();
@@ -674,7 +737,7 @@ export function RichNotebookEditor({
       setCollabSession((prev) => (prev?.provider === provider ? null : prev));
       setCollabUsers([]);
     };
-  }, [authToken, filePath, scope, shareToken]);
+  }, [authToken, collaborationEnabled, filePath, scope, shareToken]);
 
   const resolveCellStatus = useCallback((cellId: string, currentEditor?: Editor): 'idle' | 'running' | 'success' | 'failed' => {
     const state = cellRunStateRef.current[cellId];
@@ -1002,7 +1065,12 @@ export function RichNotebookEditor({
         showOnlyWhenEditable: true,
         showOnlyCurrent: false,
         includeChildren: true,
-        placeholder: ({ node }) => {
+        placeholder: ({ node, pos, editor }) => {
+          const $pos = editor.state.doc.resolve(pos);
+          const parentNode = $pos.parent;
+          const grandParentNode = $pos.depth > 0 ? $pos.node($pos.depth - 1) : null;
+          if (parentNode.type.name === 'tableCell' || parentNode.type.name === 'tableHeader') return '';
+          if (grandParentNode?.type.name === 'tableCell' || grandParentNode?.type.name === 'tableHeader') return '';
           if (node.type.name === 'heading') return '输入标题，例如：问题背景 / 结论';
           if (node.type.name === 'notebookCodeBlock') return '粘贴代码，右上角运行，或输入 / 触发命令菜单';
           if (node.type.name === 'blockquote') return '可写备注、限制条件或风险提示';
@@ -1134,12 +1202,21 @@ export function RichNotebookEditor({
     return base;
   }, [cellRunState, collabSession, collabUser.color, collabUser.id, collabUser.name, filePath, onRunCell, outputBackedSuccess, replaceSuggestionNodeWithText, resolveCellStatus, setCellRunStateWithRef, toast]);
 
+  const canWriteEditorContent = (targetEditor: {
+    isDestroyed?: boolean;
+    commands?: { setContent?: (...args: any[]) => unknown };
+  } | null | undefined) => {
+    if (!targetEditor) return false;
+    if (targetEditor.isDestroyed) return false;
+    return typeof targetEditor.commands?.setContent === 'function';
+  };
+
   const initialEditorContent = collabSession ? lastKnownContentRef.current : content;
 
   const editor = useEditor({
     immediatelyRender: false,
     extensions: notebookExtensions,
-    editable: permission !== 'read',
+    editable: permission !== 'read' && (!collabSession || collabReady),
     content: initialEditorContent,
     contentType: 'markdown',
     editorProps: {
@@ -1158,7 +1235,8 @@ export function RichNotebookEditor({
             openImageEditor(pos, {
               left: Math.max(16, Math.min(window.innerWidth - 16, rect.left + rect.width / 2)),
               top: Math.max(16, Math.min(window.innerHeight - 16, rect.bottom + 6)),
-            });
+  });
+
             return true;
           }
           return false;
@@ -1207,8 +1285,11 @@ export function RichNotebookEditor({
     },
     onCreate: ({ editor }) => {
       editorRef.current = editor;
-      if (!collabSession && content) {
+      if (!collabSession && content && !editor.isDestroyed && typeof editor.commands?.setContent === 'function') {
         editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+      }
+      if (!collaborationEnabled) {
+        setCollabReady(true);
       }
       lastKnownContentRef.current = editor.getMarkdown();
       refreshDerivedNotebookState(editor);
@@ -1225,11 +1306,15 @@ export function RichNotebookEditor({
         return;
       }
       scheduleDerivedNotebookStateRefresh(editor);
+      if (collabSession && !collabReady) {
+        lastKnownContentRef.current = editor.getMarkdown();
+        return;
+      }
       const markdown = editor.getMarkdown();
       lastKnownContentRef.current = markdown;
       onChange(markdown);
     },
-  }, [collabSession?.provider, collabSession?.doc, permission, filePath, scope, shareToken, collabUser.name, collabUser.color]);
+  }, [collabSession?.provider, collabSession?.doc, collabReady, collaborationEnabled, permission, filePath, scope, shareToken, collabUser.name, collabUser.color]);
 
   useEffect(() => {
     editorRef.current = editor || null;
@@ -1311,17 +1396,19 @@ export function RichNotebookEditor({
   }, [editor]);
 
   useEffect(() => {
-    if (!editor) return;
+    const currentEditor = editor;
+    if (!currentEditor) return;
+    if (!canWriteEditorContent(currentEditor)) return;
     if (collabSession) return;
     if (changeSourceRef.current === 'internal') {
       changeSourceRef.current = 'external';
       return;
     }
-    if (content === editor.getMarkdown()) return;
-    editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+    if (content === currentEditor.getMarkdown()) return;
+    currentEditor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
     lastKnownContentRef.current = content;
-    refreshDerivedNotebookState(editor);
-  }, [collabSession, content, editor, refreshDerivedNotebookState]);
+    refreshDerivedNotebookState(currentEditor);
+  }, [canWriteEditorContent, collabSession, content, editor, refreshDerivedNotebookState]);
 
   useEffect(() => {
     if (!editor) return;
@@ -1357,38 +1444,49 @@ export function RichNotebookEditor({
     if (!editor || !collabSession) return;
     const { doc, provider } = collabSession;
     const config = doc.getMap('config');
-    let seedTimer: ReturnType<typeof setTimeout> | null = null;
+    const markReady = () => {
+      setCollabReady(true);
+      scheduleDerivedNotebookStateRefresh(editor);
+    };
     const trySeedInitialContent = () => {
-      if (!content) return;
-      if (seedTimer) clearTimeout(seedTimer);
-      seedTimer = setTimeout(() => {
-        if (editor.isDestroyed) return;
-        if (config.get('initialContentLoaded') === true) return;
-        if (doc.getXmlFragment('default').length > 0) {
-          doc.transact(() => {
-            config.set('initialContentLoaded', true);
-          }, 'seed-mark-loaded');
-          return;
-        }
-        const awarenessIds = Array.from(provider.awareness.getStates().keys());
-        const selfId = provider.awareness.clientID;
-        if (!awarenessIds.includes(selfId)) awarenessIds.push(selfId);
-        const leaderId = awarenessIds.length > 0 ? Math.min(...awarenessIds) : selfId;
-        if (selfId !== leaderId) return;
-        changeSourceRef.current = 'internal';
-        editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
-        lastKnownContentRef.current = content;
-        refreshDerivedNotebookState(editor);
+      if (editor.isDestroyed) return;
+      if (config.get('initialContentLoaded') === true) {
+        markReady();
+        return;
+      }
+      if (doc.getXmlFragment('default').length > 0) {
         doc.transact(() => {
           config.set('initialContentLoaded', true);
-        }, 'seed-init');
-      }, 280);
+        }, 'seed-mark-loaded');
+        markReady();
+        return;
+      }
+      if (!content) {
+        doc.transact(() => {
+          config.set('initialContentLoaded', true);
+        }, 'seed-empty-init');
+        markReady();
+        return;
+      }
+      const awarenessIds = Array.from(provider.awareness.getStates().keys());
+      const selfId = provider.awareness.clientID;
+      if (!awarenessIds.includes(selfId)) awarenessIds.push(selfId);
+      const leaderId = awarenessIds.length > 0 ? Math.min(...awarenessIds) : selfId;
+      if (selfId !== leaderId) return;
+      if (!canWriteEditorContent(editor)) return;
+      changeSourceRef.current = 'internal';
+      editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+      lastKnownContentRef.current = content;
+      refreshDerivedNotebookState(editor);
+      doc.transact(() => {
+        config.set('initialContentLoaded', true);
+      }, 'seed-init');
+      markReady();
     };
 
     const onProviderSync = (isSynced: boolean) => {
       if (!isSynced) return;
       trySeedInitialContent();
-      scheduleDerivedNotebookStateRefresh(editor);
     };
     const onAwarenessChange = () => {
       trySeedInitialContent();
@@ -1396,7 +1494,6 @@ export function RichNotebookEditor({
     provider.on('sync', onProviderSync);
     provider.awareness.on('change', onAwarenessChange);
     return () => {
-      if (seedTimer) clearTimeout(seedTimer);
       provider.off('sync', onProviderSync);
       provider.awareness.off('change', onAwarenessChange);
     };
@@ -1984,6 +2081,7 @@ export function RichNotebookEditor({
         return;
       }
       if (askAIOptimizeMeta.scope === 'document') {
+        if (!canWriteEditorContent(editor)) return;
         editor.commands.setContent(tracked.nodes);
       } else {
         editor
@@ -2889,6 +2987,259 @@ export function RichNotebookEditor({
     return <div className="flex items-center justify-center h-full text-muted-foreground">加载 Notebook 编辑器...</div>;
   }
 
+  const syncPending = collaborationEnabled && !collabReady;
+
+  if (syncPending) {
+    return (
+      <>
+        <NotebookSyncLoader />
+        <style jsx global>{`
+          .font-loader .fl-scene {
+            --bw: 68px;
+            --bh: 96px;
+            --sw: 7px;
+            --ce: 5px;
+            --dur: 2.4s;
+            --stagger: 0.4s;
+            position: relative;
+            width: 210px;
+            height: 180px;
+            perspective: 600px;
+            perspective-origin: 50% 42%;
+          }
+          .font-loader-wrap::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 30%;
+            height: 3px;
+            background: linear-gradient(90deg, #4285f4, #ea4335, #fbbc05, #34a853, #4285f4);
+            background-size: 200% 100%;
+            animation: fl-bar-m 1.2s ease-in-out infinite, fl-bar-g 2s ease-out forwards;
+            z-index: 20;
+          }
+          .font-loader .fl-world {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform-style: preserve-3d;
+            transform: translate(-50%, -48%) rotateX(28deg) rotateY(-8deg) rotateZ(2deg);
+            width: calc(var(--bw) * 2 + var(--sw));
+            height: calc(var(--bh) + var(--ce) * 2);
+          }
+          .font-loader .fl-shadow {
+            position: absolute;
+            bottom: -14px;
+            left: 50%;
+            transform: translateX(-50%) rotateX(90deg) translateZ(-2px);
+            width: 105%;
+            height: 36px;
+            background: radial-gradient(ellipse at center, rgba(80, 55, 30, 0.3) 0%, rgba(80, 55, 30, 0.1) 40%, transparent 75%);
+            border-radius: 50%;
+            filter: blur(3px);
+          }
+          .font-loader .fl-body {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            transform-style: preserve-3d;
+          }
+          .font-loader .fl-back {
+            position: absolute;
+            inset: 0;
+            background: #8b5e3c;
+            background-image: linear-gradient(180deg, rgba(0, 0, 0, 0.15) 0%, transparent 8%, transparent 92%, rgba(0, 0, 0, 0.2) 100%);
+            border-radius: 2px 3px 3px 2px;
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+            transform: translateZ(-3px);
+          }
+          .font-loader .fl-spine {
+            position: absolute;
+            left: calc(var(--bw) + var(--ce) - var(--sw) / 2);
+            top: 0;
+            width: var(--sw);
+            height: 100%;
+            background: #6f472b;
+            background-image: linear-gradient(90deg, rgba(0, 0, 0, 0.35) 0%, rgba(0, 0, 0, 0.1) 20%, rgba(255, 255, 255, 0.06) 55%, rgba(0, 0, 0, 0.3) 100%);
+            border-radius: 2px;
+            transform: translateZ(-1.5px);
+            box-shadow: 2px 0 3px rgba(0, 0, 0, 0.3), -2px 0 2px rgba(0, 0, 0, 0.2);
+            z-index: 5;
+          }
+          .font-loader .fl-cl,
+          .font-loader .fl-cr {
+            position: absolute;
+            top: 0;
+            width: calc(var(--bw) + var(--ce));
+            height: 100%;
+            background: #8b5e3c;
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+            transform: translateZ(-2px);
+            z-index: 1;
+          }
+          .font-loader .fl-cl {
+            left: 0;
+            border-radius: 2px 0 0 2px;
+          }
+          .font-loader .fl-cr {
+            right: 0;
+            border-radius: 0 2px 2px 0;
+          }
+          .font-loader .fl-pages {
+            position: absolute;
+            left: var(--ce);
+            top: var(--ce);
+            width: calc(var(--bw) * 2);
+            height: var(--bh);
+            transform-style: preserve-3d;
+            z-index: 3;
+          }
+          .font-loader .fl-sr,
+          .font-loader .fl-sl {
+            position: absolute;
+            top: 0;
+            width: var(--bw);
+            height: 100%;
+            transform-style: preserve-3d;
+            z-index: 10;
+          }
+          .font-loader .fl-sr {
+            right: 0;
+          }
+          .font-loader .fl-sl {
+            left: 0;
+          }
+          .font-loader .fl-sp,
+          .font-loader .fl-spl {
+            position: absolute;
+            top: 0;
+            width: var(--bw);
+            height: 100%;
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+          }
+          .font-loader .fl-sp {
+            right: 0;
+            border-radius: 0 1px 1px 0;
+          }
+          .font-loader .fl-spl {
+            left: 0;
+            border-radius: 1px 0 0 1px;
+          }
+          .font-loader .fl-sp::before,
+          .font-loader .fl-spl::before,
+          .font-loader .fl-pf::before,
+          .font-loader .fl-pb::before {
+            content: '';
+            position: absolute;
+            left: 10%;
+            right: 10%;
+            top: 14px;
+            bottom: 8px;
+          }
+          .font-loader .fl-sp::before,
+          .font-loader .fl-pf::before {
+            background: repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(170, 160, 140, 0.2) 18px, rgba(170, 160, 140, 0.2) 19px);
+          }
+          .font-loader .fl-spl::before,
+          .font-loader .fl-pb::before {
+            background: repeating-linear-gradient(0deg, transparent, transparent 18px, rgba(130, 120, 105, 0.28) 18px, rgba(130, 120, 105, 0.28) 19px);
+          }
+          .font-loader .fl-sp:nth-child(1),
+          .font-loader .fl-spl:nth-child(1) {
+            transform: translateZ(4px);
+          }
+          .font-loader .fl-sp:nth-child(2),
+          .font-loader .fl-spl:nth-child(2) {
+            transform: translateZ(3px);
+          }
+          .font-loader .fl-sp:nth-child(3),
+          .font-loader .fl-spl:nth-child(3) {
+            transform: translateZ(2px);
+          }
+          .font-loader .fl-sp:nth-child(4),
+          .font-loader .fl-spl:nth-child(4) {
+            transform: translateZ(1px);
+          }
+          .font-loader .fl-sp:nth-child(1) { background: #fdfdfb; }
+          .font-loader .fl-sp:nth-child(2) { background: #fcfcf9; }
+          .font-loader .fl-sp:nth-child(3) { background: #fbfbf7; }
+          .font-loader .fl-sp:nth-child(4) { background: #fafaf6; }
+          .font-loader .fl-spl:nth-child(1) { background: #ecebe5; }
+          .font-loader .fl-spl:nth-child(2) { background: #eae9e3; }
+          .font-loader .fl-spl:nth-child(3) { background: #e8e7e1; }
+          .font-loader .fl-spl:nth-child(4) { background: #e6e5df; }
+          .font-loader .fl-fp {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: var(--bw);
+            height: 100%;
+            transform-style: preserve-3d;
+            transform-origin: left center;
+            animation: fl-flip var(--dur) ease-in-out infinite;
+            will-change: transform, opacity;
+          }
+          .font-loader .fl-fp:nth-child(3) { animation-delay: calc(var(--stagger) * 0); }
+          .font-loader .fl-fp:nth-child(4) { animation-delay: calc(var(--stagger) * -1); }
+          .font-loader .fl-fp:nth-child(5) { animation-delay: calc(var(--stagger) * -2); }
+          .font-loader .fl-fp:nth-child(6) { animation-delay: calc(var(--stagger) * -3); }
+          .font-loader .fl-pf,
+          .font-loader .fl-pb {
+            position: absolute;
+            inset: 0;
+            backface-visibility: hidden;
+            overflow: hidden;
+          }
+          .font-loader .fl-pf {
+            background: #fdfdfc;
+            border-radius: 1px 2px 2px 1px;
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+          }
+          .font-loader .fl-pb {
+            background: #dcd9d1;
+            border-radius: 2px 1px 1px 2px;
+            transform: rotateY(180deg);
+            box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+          }
+          .font-loader .fl-label {
+            margin-top: 14px;
+            font-size: 11px;
+            letter-spacing: 0.25em;
+            color: #8b7d6b;
+            animation: fl-pulse 2.4s ease-in-out infinite;
+            user-select: none;
+            text-transform: uppercase;
+          }
+          @keyframes fl-bar-m {
+            0% { background-position: 100% 0; }
+            100% { background-position: -100% 0; }
+          }
+          @keyframes fl-bar-g {
+            0% { width: 0%; }
+            50% { width: 60%; }
+            80% { width: 85%; }
+            100% { width: 92%; }
+          }
+          @keyframes fl-flip {
+            0% { transform: rotateY(0deg) translateZ(5px); opacity: 1; z-index: 30; }
+            18% { transform: rotateY(-175deg) translateZ(5px); opacity: 1; z-index: 30; }
+            22% { transform: rotateY(-177deg) translateZ(1px); opacity: 0; z-index: 1; }
+            80% { transform: rotateY(-177deg) translateZ(1px); opacity: 0; z-index: 1; }
+            83% { transform: rotateY(0deg) translateZ(1px); opacity: 0; z-index: 1; }
+            88% { transform: rotateY(0deg) translateZ(5px); opacity: 1; z-index: 30; }
+            100% { transform: rotateY(0deg) translateZ(5px); opacity: 1; z-index: 30; }
+          }
+          @keyframes fl-pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 0.9; }
+          }
+        `}</style>
+      </>
+    );
+  }
+
   return (
     <div className="notebook-rich-editor h-full min-w-0 flex [&_.tiptap_p]:my-3 [&_.tiptap_code]:font-mono">
       <div className="relative min-w-0 flex h-full flex-1 flex-col">
@@ -3658,6 +4009,12 @@ export function RichNotebookEditor({
           pointer-events: none;
           opacity: 0.7;
         }
+        .notebook-rich-editor .tiptap td p.is-empty::before,
+        .notebook-rich-editor .tiptap th p.is-empty::before,
+        .notebook-rich-editor .tiptap td [data-placeholder]::before,
+        .notebook-rich-editor .tiptap th [data-placeholder]::before {
+          content: none !important;
+        }
         .notebook-rich-editor .tiptap a {
           color: #2563eb;
           text-decoration: underline;
@@ -3685,7 +4042,7 @@ export function RichNotebookEditor({
           padding: 8px 10px;
           overflow-x: auto;
         }
-      `}</style>
+        `}</style>
     </div>
-  );
-}
+    );
+  }

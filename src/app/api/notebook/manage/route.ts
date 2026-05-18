@@ -4,7 +4,44 @@ import path from 'path';
 import { existsSync } from 'fs';
 import { requireAuth } from '@/lib/auth/middleware';
 import { ensureNotebookRoot, normalizeNotebookScope, safeResolve, type NotebookScope } from '@/lib/notebook/manager';
+import { isBuiltinNotebookPath } from '@/lib/notebook/builtin';
 import { getNotebookShare } from '@/lib/notebook/share-store';
+import {
+  appendNotebookDirectoryOrder,
+  copyNotebookDirectoryIcon,
+  removeNotebookDirectoryOrder,
+  removeNotebookDirectoryIcon,
+  renameNotebookDirectoryIcon,
+  renameNotebookDirectoryOrder,
+  reorderNotebookDirectoryEntry,
+  setNotebookDirectoryIcon,
+} from '@/lib/notebook/tree-order';
+
+async function ensureDestinationAvailable(fullPath: string): Promise<void> {
+  try {
+    await fs.lstat(fullPath);
+    throw new Error('目标路径已存在');
+  } catch (error: any) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+}
+
+function ensureValidRelocation(srcFull: string, destFull: string, options?: { disallowSameParent?: boolean }): void {
+  const srcNormalized = path.resolve(srcFull);
+  const destNormalized = path.resolve(destFull);
+  const srcParent = path.dirname(srcNormalized);
+
+  if (srcNormalized === destNormalized) {
+    throw new Error('源路径与目标路径相同');
+  }
+  if (destNormalized.startsWith(`${srcNormalized}${path.sep}`)) {
+    throw new Error('不能移动或重命名到自身子目录中');
+  }
+  if (options?.disallowSameParent && srcParent === path.dirname(destNormalized)) {
+    throw new Error('目标路径与当前目录相同');
+  }
+}
 
 async function resolveSharePermission(shareToken: string): Promise<'read' | 'write' | null> {
   if (!shareToken) return null;
@@ -14,6 +51,10 @@ async function resolveSharePermission(shareToken: string): Promise<'read' | 'wri
 
 async function getRoot(scope: NotebookScope, personalDir: string): Promise<string> {
   return ensureNotebookRoot(scope, personalDir);
+}
+
+function containsBuiltinNotebookPath(params: Record<string, unknown>): boolean {
+  return Object.values(params).some((value) => typeof value === 'string' && isBuiltinNotebookPath(value));
 }
 
 export async function POST(request: NextRequest) {
@@ -31,6 +72,10 @@ export async function POST(request: NextRequest) {
 
     if (!action) {
       return NextResponse.json({ error: '缺少 action 参数' }, { status: 400 });
+    }
+
+    if (containsBuiltinNotebookPath(params)) {
+      return NextResponse.json({ error: '内置文档目录为只读内容，无法执行该操作' }, { status: 403 });
     }
 
     if (scope === 'global' && shareToken) {
@@ -55,12 +100,14 @@ export async function POST(request: NextRequest) {
         if (!fullPath) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, params.content || '', 'utf-8');
+        await appendNotebookDirectoryOrder(path.dirname(fullPath), path.basename(fullPath));
         return NextResponse.json({ success: true, scope });
       }
       case 'create-folder': {
         const fullPath = safeResolve(notebookRoot, params.path);
         if (!fullPath) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         await fs.mkdir(fullPath, { recursive: true });
+        await appendNotebookDirectoryOrder(path.dirname(fullPath), path.basename(fullPath));
         return NextResponse.json({ success: true, scope });
       }
       case 'rename': {
@@ -68,8 +115,23 @@ export async function POST(request: NextRequest) {
         const newFull = safeResolve(notebookRoot, params.newPath);
         if (!oldFull || !newFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         if (!existsSync(oldFull)) return NextResponse.json({ error: '源路径不存在' }, { status: 404 });
+        ensureValidRelocation(oldFull, newFull);
+        await ensureDestinationAvailable(newFull);
         await fs.mkdir(path.dirname(newFull), { recursive: true });
         await fs.rename(oldFull, newFull);
+        const oldParent = path.dirname(oldFull);
+        const newParent = path.dirname(newFull);
+        const oldName = path.basename(oldFull);
+        const newName = path.basename(newFull);
+        if (oldParent === newParent) {
+          await renameNotebookDirectoryOrder(oldParent, oldName, newName);
+          await renameNotebookDirectoryIcon(oldParent, oldName, newName);
+        } else {
+          await removeNotebookDirectoryOrder(oldParent, oldName);
+          await appendNotebookDirectoryOrder(newParent, newName);
+          await copyNotebookDirectoryIcon(oldParent, oldName, newParent, newName);
+          await removeNotebookDirectoryIcon(oldParent, oldName);
+        }
         return NextResponse.json({ success: true, scope });
       }
       case 'delete': {
@@ -80,6 +142,8 @@ export async function POST(request: NextRequest) {
         if (!fullPath) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         if (!existsSync(fullPath)) return NextResponse.json({ error: '路径不存在' }, { status: 404 });
         await fs.rm(fullPath, { recursive: true, force: true });
+        await removeNotebookDirectoryOrder(path.dirname(fullPath), path.basename(fullPath));
+        await removeNotebookDirectoryIcon(path.dirname(fullPath), path.basename(fullPath));
         return NextResponse.json({ success: true, scope });
       }
       case 'copy': {
@@ -87,8 +151,11 @@ export async function POST(request: NextRequest) {
         const destFull = safeResolve(notebookRoot, params.destPath);
         if (!srcFull || !destFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         if (!existsSync(srcFull)) return NextResponse.json({ error: '源路径不存在' }, { status: 404 });
+        await ensureDestinationAvailable(destFull);
         await fs.mkdir(path.dirname(destFull), { recursive: true });
         await fs.cp(srcFull, destFull, { recursive: true });
+        await appendNotebookDirectoryOrder(path.dirname(destFull), path.basename(destFull));
+        await copyNotebookDirectoryIcon(path.dirname(srcFull), path.basename(srcFull), path.dirname(destFull), path.basename(destFull));
         return NextResponse.json({ success: true, scope });
       }
       case 'copy-between': {
@@ -100,8 +167,11 @@ export async function POST(request: NextRequest) {
         const destFull = safeResolve(destRoot, params.destPath);
         if (!srcFull || !destFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         if (!existsSync(srcFull)) return NextResponse.json({ error: '源路径不存在' }, { status: 404 });
+        await ensureDestinationAvailable(destFull);
         await fs.mkdir(path.dirname(destFull), { recursive: true });
         await fs.cp(srcFull, destFull, { recursive: true });
+        await appendNotebookDirectoryOrder(path.dirname(destFull), path.basename(destFull));
+        await copyNotebookDirectoryIcon(path.dirname(srcFull), path.basename(srcFull), path.dirname(destFull), path.basename(destFull));
         return NextResponse.json({ success: true, srcScope, destScope });
       }
       case 'move': {
@@ -109,6 +179,8 @@ export async function POST(request: NextRequest) {
         const destFull = safeResolve(notebookRoot, params.destPath);
         if (!srcFull || !destFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
         if (!existsSync(srcFull)) return NextResponse.json({ error: '源路径不存在' }, { status: 404 });
+        ensureValidRelocation(srcFull, destFull, { disallowSameParent: true });
+        await ensureDestinationAvailable(destFull);
         await fs.mkdir(path.dirname(destFull), { recursive: true });
         try {
           await fs.rename(srcFull, destFull);
@@ -116,6 +188,40 @@ export async function POST(request: NextRequest) {
           await fs.cp(srcFull, destFull, { recursive: true });
           await fs.rm(srcFull, { recursive: true, force: true });
         }
+        await removeNotebookDirectoryOrder(path.dirname(srcFull), path.basename(srcFull));
+        await appendNotebookDirectoryOrder(path.dirname(destFull), path.basename(destFull));
+        await copyNotebookDirectoryIcon(path.dirname(srcFull), path.basename(srcFull), path.dirname(destFull), path.basename(destFull));
+        await removeNotebookDirectoryIcon(path.dirname(srcFull), path.basename(srcFull));
+        return NextResponse.json({ success: true, scope });
+      }
+      case 'set-icon': {
+        const targetFull = safeResolve(notebookRoot, params.path);
+        const icon = typeof params.icon === 'string' ? params.icon.trim() : '';
+        if (!targetFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
+        if (!existsSync(targetFull)) return NextResponse.json({ error: '路径不存在' }, { status: 404 });
+        const stat = await fs.stat(targetFull);
+        if (!stat.isDirectory()) return NextResponse.json({ error: '仅支持为目录设置图标' }, { status: 400 });
+        if (icon.length > 16) return NextResponse.json({ error: '图标内容过长' }, { status: 400 });
+        await setNotebookDirectoryIcon(path.dirname(targetFull), path.basename(targetFull), icon || null);
+        return NextResponse.json({ success: true, scope });
+      }
+      case 'reorder': {
+        const srcFull = safeResolve(notebookRoot, params.srcPath);
+        const targetFull = safeResolve(notebookRoot, params.targetPath);
+        const position = params.position === 'after' ? 'after' : 'before';
+        if (!srcFull || !targetFull) return NextResponse.json({ error: '路径不合法' }, { status: 403 });
+        if (!existsSync(targetFull)) {
+          return NextResponse.json({ error: '目标路径不存在' }, { status: 404 });
+        }
+        const targetParent = path.dirname(targetFull);
+        const targetScopedSource = path.join(targetParent, path.basename(srcFull));
+        const reorderSource = existsSync(srcFull) && path.dirname(srcFull) === targetParent
+          ? srcFull
+          : targetScopedSource;
+        if (!existsSync(reorderSource) || path.dirname(reorderSource) !== targetParent) {
+          return NextResponse.json({ error: '仅支持同一目录内排序' }, { status: 400 });
+        }
+        await reorderNotebookDirectoryEntry(targetParent, path.basename(reorderSource), path.basename(targetFull), position);
         return NextResponse.json({ success: true, scope });
       }
       default:

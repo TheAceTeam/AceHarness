@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import { requireAuth } from '@/lib/auth/middleware';
 import { createNotebookShare, getNotebookShare, type NotebookSharePermission } from '@/lib/notebook/share-store';
 import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook/manager';
+import { isBuiltinNotebookPath } from '@/lib/notebook/builtin';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);
@@ -19,6 +20,9 @@ export async function POST(request: NextRequest) {
     }
     if (!filePath) {
       return NextResponse.json({ error: '缺少 filePath' }, { status: 400 });
+    }
+    if (isBuiltinNotebookPath(filePath)) {
+      return NextResponse.json({ error: '内置文档不支持创建分享链接' }, { status: 403 });
     }
 
     const root = await ensureNotebookRoot(scope, auth.personalDir);
