@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
 
     if (stat.size > MAX_FILE_SIZE) {
       return NextResponse.json(
-        { error: '文件超过 200KB 限制', size: stat.size, path: file },
+        { error: '文件超过 1MB 限制', size: stat.size, path: file },
         { status: 413 }
       );
     }
@@ -82,7 +82,7 @@ export async function PUT(request: NextRequest) {
     }
 
     if (new TextEncoder().encode(content).length > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: '内容超过 200KB 限制' }, { status: 413 });
+      return NextResponse.json({ error: '内容超过 1MB 限制' }, { status: 413 });
     }
 
     const resolvedWorkspace = await resolveWorkspaceRoot(workspace);

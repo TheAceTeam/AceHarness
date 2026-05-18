@@ -48,11 +48,10 @@
       "apiDocsDesc": "查看 REST API 接口文档",
       "chatMode": "对话模式",
       "envVars": "系统设置",
-      "envVarsDesc": "管理系统环境变量、托管 SDK 与 GitCode Token"
-      ,
-      "globalNotebook": "Notebook",
-      "globalNotebookDesc": "打开系统共享与协作空间"
-    },
+        "envVarsDesc": "管理系统环境变量、托管 SDK 与 GitCode Token",
+        "knowledge": "知识管理",
+        "knowledgeDesc": "管理团队知识内容与共享资料"
+      },
     "charts": {
       "agentUsage": "Agent 使用统计",
       "agentUsageDesc": "按调用次数观察最近活跃度最高的 Agent。",

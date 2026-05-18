@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isSetup, setupFirstAdmin } from '@/lib/core/user-store';
 import { saveChatSettings, discoverSkills } from '@/lib/chat/settings';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getRuntimePlatform } from '@/lib/core/runtime-platform';
 import { homedir } from 'os';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,7 @@ export async function GET() {
   return NextResponse.json({
     isSetup: setup,
     runtimeRoot: getWorkspaceRoot(),
-    platform: process.platform,
+    platform: getRuntimePlatform(),
     userHome: homedir(),
   });
 }

@@ -11,6 +11,7 @@ import { writeFile, mkdir } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { isWindows } from '@/lib/core/runtime-platform';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 const DEBUG_DIR = resolve(RUNS_DIR, '.tmp');
@@ -174,7 +175,7 @@ class ProcessManager extends EventEmitter {
     }
     // Also kill orphan system claude processes
     const pids: number[] = [];
-    if (process.platform !== 'win32') {
+    if (!isWindows()) {
       try {
         const out = execSync("pgrep -f 'claude.*-p' || true", { encoding: 'utf-8' });
         const lines = out.trim().split('\n').filter(Boolean);

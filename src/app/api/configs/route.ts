@@ -3,7 +3,8 @@ import { readdir, readFile, stat } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
-import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { canAccessConfigMeta, listConfigsWithMeta } from '@/lib/config/metadata';
+import { getUserById } from '@/lib/core/user-store';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 
 export const dynamic = 'force-dynamic';
@@ -73,7 +74,7 @@ export async function GET(request: NextRequest) {
     for (const entry of entries) {
       if (entry.isFile() && (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml'))) {
         const meta = metaMap[entry.name];
-        if (meta?.visibility === 'private' && meta.createdBy && meta.createdBy !== auth.id && auth.role !== 'admin') {
+        if (!canAccessConfigMeta(meta, auth.id, auth.role)) {
           continue;
         }
         yamlFiles.push(entry.name);
@@ -85,7 +86,7 @@ export async function GET(request: NextRequest) {
             if (subEntry.isFile() && (subEntry.name.endsWith('.yaml') || subEntry.name.endsWith('.yml'))) {
               const relPath = `${entry.name}/${subEntry.name}`;
               const meta = metaMap[relPath];
-              if (meta?.visibility === 'private' && meta.createdBy && meta.createdBy !== auth.id && auth.role !== 'admin') {
+              if (!canAccessConfigMeta(meta, auth.id, auth.role)) {
                 continue;
               }
               yamlFiles.push(relPath);
@@ -138,6 +139,8 @@ export async function GET(request: NextRequest) {
           ) || 0;
         }
 
+        const meta = metaMap[file];
+        const owner = meta?.createdBy ? await getUserById(meta.createdBy).catch(() => undefined) : undefined;
         configs.push({
           filename: file,
           name: config?.workflow?.name || file,
@@ -146,7 +149,10 @@ export async function GET(request: NextRequest) {
           phaseCount,
           stepCount,
           agentCount,
-          createdAt: metaMap[file]?.createdAt || (await stat(filePath)).birthtimeMs,
+          createdAt: meta?.createdAt || (await stat(filePath)).birthtimeMs,
+          visibility: meta?.visibility || 'private',
+          sharedWithUserIds: meta?.sharedWithUserIds || [],
+          ownerName: owner?.username || '',
         });
       } catch {
         // skip malformed or non-workflow yaml files

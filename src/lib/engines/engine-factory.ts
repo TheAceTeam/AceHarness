@@ -232,15 +232,7 @@ export async function getOrCreateEngine(type?: EngineType, sessionKey?: string):
   return engine;
 }
 
-/**
- * Create an engine instance based on type
- */
-export async function createEngine(type?: EngineType): Promise<Engine | null> {
-  const requestedType = type || await getConfiguredEngine();
-  const engineType = type && !supportsDriverSelection(type)
-    ? type
-    : await resolveRequestedEngineType(requestedType);
-
+async function instantiateResolvedEngine(engineType: EngineType, requestedType?: EngineType): Promise<Engine | null> {
   switch (engineType) {
     case 'kiro-cli':
       const kiroEngine = new KiroCliEngineWrapper();
@@ -255,7 +247,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const ccEngine = new ClaudeCodeEngineWrapper();
       if (!(await ccEngine.isAvailable())) {
         console.warn('[EngineFactory] Claude Code SDK is not available, trying ACP fallback');
-        return await createEngine('claude-code-acp');
+        return await instantiateResolvedEngine('claude-code-acp', requestedType || engineType);
       }
       return ccEngine;
 
@@ -263,7 +255,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const ccAcpEngine = new ClaudeCodeAcpEngineWrapper();
       if (!(await ccAcpEngine.isAvailable())) {
         console.warn('[EngineFactory] Claude Code ACP bridge is not available, trying SDK fallback');
-        if (type === 'claude-code-acp') {
+        if ((requestedType || engineType) === 'claude-code-acp') {
           const fallback = new ClaudeCodeEngineWrapper();
           if (await fallback.isAvailable()) return fallback;
         }
@@ -293,7 +285,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const ocEngine = new OpenCodeEngineWrapper();
       if (!(await ocEngine.isAvailable())) {
         console.warn('[EngineFactory] OpenCode stdio is not available, trying SDK fallback');
-        return await createEngine('opencode-sdk');
+        return await instantiateResolvedEngine('opencode-sdk', requestedType || engineType);
       }
       return ocEngine;
 
@@ -301,7 +293,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const ocSdkEngine = new OpenCodeSdkEngineWrapper();
       if (!(await ocSdkEngine.isAvailable())) {
         console.warn('[EngineFactory] OpenCode (SDK) is not available, trying stdio fallback');
-        if (type === 'opencode-sdk') {
+        if ((requestedType || engineType) === 'opencode-sdk') {
           const fallback = new OpenCodeEngineWrapper();
           if (await fallback.isAvailable()) return fallback;
         }
@@ -321,7 +313,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const codegenieEngine = new CodegenieEngineWrapper();
       if (!(await codegenieEngine.isAvailable())) {
         console.warn('[EngineFactory] CodeGenie stdio is not available, trying SDK fallback');
-        return await createEngine('codegenie-sdk');
+        return await instantiateResolvedEngine('codegenie-sdk', requestedType || engineType);
       }
       return codegenieEngine;
 
@@ -329,7 +321,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       const codegenieSdkEngine = new CodegenieSdkEngineWrapper();
       if (!(await codegenieSdkEngine.isAvailable())) {
         console.warn('[EngineFactory] CodeGenie SDK is not available, trying stdio fallback');
-        if (type === 'codegenie-sdk') {
+        if ((requestedType || engineType) === 'codegenie-sdk') {
           const fallback = new CodegenieEngineWrapper();
           if (await fallback.isAvailable()) return fallback;
         }
@@ -357,6 +349,23 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       console.warn(`Unknown engine type: ${engineType}`);
       return null;
   }
+}
+
+export async function createEngineForDriver(engine: EngineType, driver?: EngineDriver): Promise<Engine | null> {
+  const resolved = resolveEffectiveEngine(engine, driver);
+  if (!resolved) return null;
+  return await instantiateResolvedEngine(resolved, resolved);
+}
+
+/**
+ * Create an engine instance based on type
+ */
+export async function createEngine(type?: EngineType): Promise<Engine | null> {
+  const requestedType = type || await getConfiguredEngine();
+  const engineType = type && !supportsDriverSelection(type)
+    ? type
+    : await resolveRequestedEngineType(requestedType);
+  return await instantiateResolvedEngine(engineType, type);
 }
 
 /**

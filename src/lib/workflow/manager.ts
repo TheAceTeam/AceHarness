@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
-import { readFile, readdir, stat, mkdir, cp, rm, copyFile } from 'fs/promises';
+import { readFile, readdir, stat, mkdir, cp, rm, copyFile, writeFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { cpus } from 'os';
@@ -21,6 +21,7 @@ import {
 } from '@/lib/run/state-persistence';
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
+import { isWindows } from '@/lib/core/runtime-platform';
 import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
@@ -32,6 +33,7 @@ import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@
 import { ensureDefaultSupervisorConfig } from '@/lib/core/default-supervisor';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
 import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
+import { compactStepConclusion } from '@/lib/state-machine/utils';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
@@ -1141,6 +1143,79 @@ try {
     return summaryMatch ? summaryMatch[1].trim() : output.substring(0, 200).trim();
   }
 
+  private sanitizeOutputName(name: string): string {
+    return String(name || '').replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+  }
+
+  private deriveStepDisplayOutput(rawOutput: string): string {
+    const parsed = extractStructuredJsonObject(rawOutput);
+    if (parsed && typeof parsed.summary === 'string' && parsed.summary.trim()) {
+      return parsed.summary.trim();
+    }
+
+    const compact = compactStepConclusion(rawOutput).trim();
+    if (compact && compact !== '{}' && compact !== '[]') {
+      return compact;
+    }
+
+    const fallback = this.parseSummary(rawOutput).trim();
+    if (fallback && fallback !== '{}' && fallback !== '[]') {
+      return fallback;
+    }
+
+    return '';
+  }
+
+  private selectPreferredAgentOutput(rawOutput: string, streamOutput?: string | null): string {
+    const normalizedRaw = stripNonAiStreamArtifacts(rawOutput || '');
+    const normalizedStream = stripNonAiStreamArtifacts(streamOutput || '');
+
+    if (!normalizedStream) {
+      return rawOutput;
+    }
+    if (!normalizedRaw) {
+      return normalizedStream;
+    }
+
+    const rawDisplay = this.deriveStepDisplayOutput(normalizedRaw);
+    if (!rawDisplay) {
+      return normalizedStream;
+    }
+
+    if (normalizedRaw === '{}' || normalizedRaw === '[]') {
+      return normalizedStream;
+    }
+
+    const parsed = extractStructuredJsonObject(normalizedRaw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+      return normalizedStream;
+    }
+
+    return rawOutput;
+  }
+
+  private buildTimestampedDetailFileName(phaseName: string | null, stepName: string): string {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safePhase = this.sanitizeOutputName(phaseName || '当前阶段');
+    const safeStep = this.sanitizeOutputName(stepName);
+    return `${ts}-${safePhase}-${safeStep}.md`;
+  }
+
+  private async persistPhaseStepArtifacts(stepName: string, rawOutput: string, displayOutput?: string): Promise<void> {
+    if (!this.currentRunId) return;
+
+    const summaryContent = (displayOutput || '').trim() || rawOutput;
+    await saveProcessOutput(this.currentRunId, stepName, summaryContent).catch(() => {});
+
+    const outputsDir = join(getWorkspaceRunsDir(), this.currentRunId, 'outputs');
+    const detailFileName = this.buildTimestampedDetailFileName(this.currentPhase, stepName);
+    const detailFilePath = resolve(outputsDir, detailFileName);
+    if (!existsSync(detailFilePath)) {
+      await mkdir(outputsDir, { recursive: true }).catch(() => {});
+      await writeFile(detailFilePath, rawOutput || summaryContent, 'utf-8').catch(() => {});
+    }
+  }
+
   async executeWorkflow(workflowConfig: WorkflowConfig): Promise<void> {
     for (const phase of workflowConfig.workflow.phases) {
       if (this.shouldStop) break;
@@ -1496,9 +1571,11 @@ try {
         this.agentSessionIds.set(step.agent, jsonResult.session_id);
       }
 
+      const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
+
       if (agent) {
-        agent.lastOutput = resultText;
-        agent.summary = this.parseSummary(resultText);
+        agent.lastOutput = displayOutput;
+        agent.summary = this.deriveStepDisplayOutput(resultText) || this.parseSummary(resultText);
         agent.costUsd += jsonResult.cost_usd || 0;
         agent.sessionId = jsonResult.session_id || null;
         const newChanges = this.parseChanges(resultText);
@@ -1514,7 +1591,7 @@ try {
         stepName: step.name,
         agent: step.agent,
         status: 'completed',
-        output: resultText,
+        output: displayOutput,
         error: '',
         costUsd: jsonResult.cost_usd || 0,
         durationMs: jsonResult.duration_ms || 0,
@@ -1528,8 +1605,8 @@ try {
         id: stepId,
         step: step.name,
         agent: step.agent,
-        output: resultText.substring(0, 500) + (resultText.length > 500 ? '...' : ''),
-        fullOutput: resultText,
+        output: displayOutput.substring(0, 500) + (displayOutput.length > 500 ? '...' : ''),
+        fullOutput: displayOutput,
         role: step.role,
         costUsd: jsonResult.cost_usd,
         sessionId: jsonResult.session_id,
@@ -1537,9 +1614,7 @@ try {
         durationMs: jsonResult.duration_ms,
       });
 
-      if (this.currentRunId) {
-        saveProcessOutput(this.currentRunId, step.name, resultText).catch(() => {});
-      }
+      await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
       await this.persistState();
 
       return resultText;
@@ -1565,12 +1640,14 @@ try {
         this.completedStepNames.push(step.name);
         this.currentStep = null;
 
+        const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
+
         this.stepLogs.push({
           id: stepId,
           stepName: step.name,
           agent: step.agent,
           status: 'completed',
-          output: resultText,
+          output: displayOutput,
           error: '',
           costUsd: 0,
           durationMs: 0,
@@ -1584,8 +1661,8 @@ try {
           id: stepId,
           step: step.name,
           agent: step.agent,
-          output: resultText.substring(0, 500) + (resultText.length > 500 ? '...' : ''),
-          fullOutput: resultText,
+          output: displayOutput.substring(0, 500) + (displayOutput.length > 500 ? '...' : ''),
+          fullOutput: displayOutput,
           role: step.role,
           costUsd: 0,
           numTurns: 0,
@@ -1593,9 +1670,7 @@ try {
           forceCompleted: true,
         });
 
-        if (this.currentRunId) {
-          saveProcessOutput(this.currentRunId, step.name, resultText).catch(() => {});
-        }
+        await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
         await this.persistState();
         return resultText;
       }
@@ -1753,7 +1828,10 @@ try {
       if (this.currentRunId && proc?.streamContent) {
         saveStreamContent(this.currentRunId, step.name, proc.streamContent).catch(() => {});
       }
-      return result;
+      return {
+        ...result,
+        result: this.selectPreferredAgentOutput(result.result, proc?.streamContent),
+      };
     } finally {
       processManager.off('stream', streamHandler);
     }
@@ -1932,7 +2010,10 @@ try {
       }
 
       // Return result with accumulated output from all rounds
-      return { ...lastResult!, result: accumulatedOutput };
+      return {
+        ...lastResult!,
+        result: this.selectPreferredAgentOutput(accumulatedOutput, accumulatedStream),
+      };
     } finally {
       processManager.off('stream', streamHandler);
     }
@@ -2306,7 +2387,7 @@ try {
         const streamContent = await loadStreamContent(this.currentRunId, stepName);
         if (streamContent) {
           // Kill any orphaned claude processes
-          if (process.platform !== 'win32') {
+          if (!isWindows()) {
             try {
               const { execSync } = await import('child_process');
               execSync('pkill -f "claude.*--output-format json" 2>/dev/null || true', { timeout: 5000 });

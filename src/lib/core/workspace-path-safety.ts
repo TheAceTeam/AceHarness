@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-export const WORKSPACE_TEXT_FILE_SIZE_LIMIT = 200 * 1024;
+export const WORKSPACE_TEXT_FILE_SIZE_LIMIT = 1024 * 1024;
 export const WORKSPACE_BLOB_PREVIEW_SIZE_LIMIT = 50 * 1024 * 1024;
 export const WORKSPACE_UPLOAD_FILE_SIZE_LIMIT = 50 * 1024 * 1024;
 export const WORKSPACE_UPLOAD_TOTAL_SIZE_LIMIT = 200 * 1024 * 1024;

@@ -3,7 +3,7 @@ import { readdir, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
-import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { canAccessConfigMeta, listConfigsWithMeta } from '@/lib/config/metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run/history';
 
@@ -207,7 +207,7 @@ async function readConfigsSummary(userId: string, role: 'admin' | 'user') {
     const results = await Promise.all(
       yamlFiles.map(async (entry) => {
         const meta = metaMap[entry.name];
-        if (meta?.visibility === 'private' && meta.createdBy && meta.createdBy !== userId && role !== 'admin') {
+        if (!canAccessConfigMeta(meta, userId, role)) {
           return null;
         }
         try {

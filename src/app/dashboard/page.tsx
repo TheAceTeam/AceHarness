@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
-import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs, Layers3, Trophy } from 'lucide-react';
+import { Activity, Zap, Cpu, TrendingUp, Clock, CheckCircle2, XCircle, AlertCircle, Workflow, Bot, Settings, Play, Package, Cog, FileText, History, Key, NotebookTabs, Layers3, Trophy, Loader2, BarChart3 } from 'lucide-react';
 
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
@@ -275,7 +275,9 @@ export default function DashboardPage() {
       ) : null}
       className="h-full"
     >
-      {items.length > 0 ? (
+      {loading ? (
+        <ChartState loading height={180} />
+      ) : items.length > 0 ? (
         <div className="space-y-3">
           {items.map((item, index) => {
             const cacheTokens = (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0);
@@ -316,9 +318,7 @@ export default function DashboardPage() {
           })}
         </div>
       ) : (
-        <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
-          {t('common.noData')}
-        </div>
+        <ChartState loading={false} empty height={180} />
       )}
     </ChartShell>
   );
@@ -412,6 +412,38 @@ export default function DashboardPage() {
     </div>
   );
 
+  const ChartState = ({
+    loading: isLoading,
+    empty,
+    height = 220,
+  }: {
+    loading: boolean;
+    empty?: boolean;
+    height?: number;
+  }) => (
+    <div className="flex items-center justify-center" style={{ height }}>
+      <div className="flex flex-col items-center gap-3 text-center">
+        {isLoading ? (
+          <>
+            <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border/60 bg-background/60">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            </div>
+            <div className="text-sm font-medium text-foreground">加载中...</div>
+            <div className="text-xs text-muted-foreground">正在准备统计数据</div>
+          </>
+        ) : (
+          <>
+            <div className="flex h-12 w-12 items-center justify-center rounded-full border border-dashed border-border/60 bg-background/40">
+              <BarChart3 className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <div className="text-sm font-medium text-foreground">{t('common.noData')}</div>
+            {empty ? <div className="text-xs text-muted-foreground">当前还没有可展示的统计记录</div> : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
   const SectionShell = ({
     title,
     icon: Icon,
@@ -482,7 +514,9 @@ export default function DashboardPage() {
         description={t('dashboard.tokenRanking.userSubtitle')}
         className="h-full"
       >
-        {items.length > 0 ? (
+        {loading ? (
+          <ChartState loading height={180} />
+        ) : items.length > 0 ? (
           <div className="flex items-center gap-4">
             <div className="w-[180px] h-[180px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
@@ -518,9 +552,7 @@ export default function DashboardPage() {
             </div>
           </div>
         ) : (
-          <div className="flex h-[180px] items-center justify-center text-sm text-muted-foreground">
-            {t('common.noData')}
-          </div>
+          <ChartState loading={false} empty height={180} />
         )}
       </ChartShell>
     );
@@ -676,9 +708,9 @@ export default function DashboardPage() {
                 />
                 <QuickAction
                   icon={NotebookTabs}
-                  label={t('dashboard.quickActions.globalNotebook')}
-                  desc={t('dashboard.quickActions.globalNotebookDesc')}
-                  onClick={() => router.push('/notebook?notebook=1&notebookScope=global')}
+                  label={t('dashboard.quickActions.knowledge')}
+                  desc={t('dashboard.quickActions.knowledgeDesc')}
+                  onClick={() => router.push('/knowledge')}
                   color="from-emerald-500 to-emerald-600"
                 />
                 <QuickAction
@@ -710,7 +742,9 @@ export default function DashboardPage() {
                     description={t('dashboard.charts.agentUsageDesc')}
                     className="h-full"
                   >
-                    {agentCallsChartData.length > 0 ? (
+                    {loading ? (
+                      <ChartState loading height={280} />
+                    ) : agentCallsChartData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={280}>
                         <BarChart data={agentCallsChartData} layout="vertical" margin={{ left: 20 }}>
                           <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
@@ -725,9 +759,7 @@ export default function DashboardPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <div className="flex items-center justify-center h-[280px] text-muted-foreground text-sm">
-                        {t('common.noData')}
-                      </div>
+                      <ChartState loading={false} empty height={280} />
                     )}
                   </ChartShell>
                 </div>
@@ -738,19 +770,25 @@ export default function DashboardPage() {
                     description={t('dashboard.charts.weeklyActivityDesc')}
                     className="h-full"
                   >
-                    <ResponsiveContainer width="100%" height={280}>
-                      <BarChart data={activityChartData}>
-                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
-                        <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                        <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
-                        <Tooltip content={<ModernTooltip />} />
-                        <Bar dataKey="runs" name={t('dashboard.charts.runs')} radius={[10, 10, 0, 0]}>
-                          {activityChartData.map((entry, index) => (
-                            <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                    {loading ? (
+                      <ChartState loading height={280} />
+                    ) : activityChartData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height={280}>
+                        <BarChart data={activityChartData}>
+                          <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                          <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
+                          <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
+                          <Tooltip content={<ModernTooltip />} />
+                          <Bar dataKey="runs" name={t('dashboard.charts.runs')} radius={[10, 10, 0, 0]}>
+                            {activityChartData.map((entry, index) => (
+                              <Cell key={`${entry.name}-${index}`} fill={entry.fill || CHART_SERIES_COLORS[index % CHART_SERIES_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <ChartState loading={false} empty height={280} />
+                    )}
                   </ChartShell>
                 </div>
               </div>
@@ -909,7 +947,9 @@ export default function DashboardPage() {
                     }
                     className="h-full"
                   >
-                    {workflowComparisonData.length > 0 ? (
+                    {loading ? (
+                      <ChartState loading height={396} />
+                    ) : workflowComparisonData.length > 0 ? (
                       <div className="grid grid-cols-1 gap-4">
                         <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_220px] 2xl:items-end">
                           <ResponsiveContainer width="100%" height={252}>
@@ -984,9 +1024,7 @@ export default function DashboardPage() {
                                 </AreaChart>
                               </ResponsiveContainer>
                             ) : (
-                              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
-                                {t('common.noData')}
-                              </div>
+                              <ChartState loading={false} empty height={120} />
                             )}
                           </div>
                           <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
@@ -1023,9 +1061,7 @@ export default function DashboardPage() {
                                 </AreaChart>
                               </ResponsiveContainer>
                             ) : (
-                              <div className="flex h-[120px] items-center justify-center text-sm text-muted-foreground">
-                                {t('common.noData')}
-                              </div>
+                              <ChartState loading={false} empty height={120} />
                             )}
                           </div>
                           <div className="rounded-2xl border border-border/60 bg-background/45 p-4">
@@ -1081,17 +1117,13 @@ export default function DashboardPage() {
                                 </div>
                               </div>
                             ) : (
-                              <div className="flex h-[150px] items-center justify-center text-sm text-muted-foreground">
-                                {t('common.noData')}
-                              </div>
+                              <ChartState loading={false} empty height={150} />
                             )}
                           </div>
                         </div>
                       </div>
                     ) : (
-                      <div className="flex h-[396px] items-center justify-center text-sm text-muted-foreground">
-                        {t('common.noData')}
-                      </div>
+                      <ChartState loading={false} empty height={396} />
                     )}
                   </ChartShell>
                 </div>
@@ -1109,7 +1141,9 @@ export default function DashboardPage() {
                       }
                       className="h-full"
                     >
-                      {runRankingChartData.length > 0 ? (
+                      {loading ? (
+                        <ChartState loading height={220} />
+                      ) : runRankingChartData.length > 0 ? (
                         <ResponsiveContainer width="100%" height={220}>
                           <BarChart data={runRankingChartData} layout="vertical" margin={{ top: 8, right: 12, left: 16, bottom: 0 }} barCategoryGap={14}>
                             <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
@@ -1124,9 +1158,7 @@ export default function DashboardPage() {
                           </BarChart>
                         </ResponsiveContainer>
                       ) : (
-                        <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-                          {t('common.noData')}
-                        </div>
+                        <ChartState loading={false} empty height={220} />
                       )}
                     </ChartShell>
                   </div>

@@ -31,13 +31,13 @@ import Markdown from '@/components/Markdown';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
+import { PaginationBar } from '@/components/PaginationBar';
 import { getAllPlugins, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
 import {
   SkillCard,
   SkillSearch,
   InstallProgress,
   SkillDetail,
-  Pagination,
 } from '@/components/marketplace';
 import {
   Table,
@@ -1176,11 +1176,17 @@ export default function SkillsPage() {
             </section>
 
             {localPagination.total > 0 ? (
-              <Pagination
+              <PaginationBar
                 current={localPagination.page}
                 total={localPagination.total}
                 pageSize={localPagination.pageSize}
-                onChange={setLocalPage}
+                onPageChange={setLocalPage}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageSizeChange={(size) => {
+                  setLocalPageSize(size);
+                  setLocalPage(1);
+                }}
+                itemLabel="Skill"
               />
             ) : null}
 
@@ -1362,11 +1368,17 @@ export default function SkillsPage() {
             </section>
 
             {totalItems > 0 ? (
-              <Pagination
+              <PaginationBar
                 current={onlinePage}
                 total={totalItems}
                 pageSize={onlinePageSize}
-                onChange={setOnlinePage}
+                onPageChange={setOnlinePage}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageSizeChange={(size) => {
+                  setOnlinePageSize(size);
+                  setOnlinePage(1);
+                }}
+                itemLabel="Skill"
               />
             ) : null}
 

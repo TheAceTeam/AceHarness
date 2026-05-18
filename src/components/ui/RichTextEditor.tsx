@@ -57,6 +57,21 @@ function trimTrailingNewlines(value: string): string {
   return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
 }
 
+function trySetEditorContent(
+  editor: ReturnType<typeof useEditor> | null | undefined,
+  content: string,
+  emitUpdate = false,
+): boolean {
+  if (!editor || (editor as any).isDestroyed) return false;
+  try {
+    editor.commands.setContent(content, { contentType: 'markdown', emitUpdate });
+    return true;
+  } catch (error) {
+    console.warn('[RichTextEditor] setContent skipped because editor is not ready', error);
+    return false;
+  }
+}
+
 const SingleLineEnter = Extension.create({
   name: 'singleLineEnter',
 
@@ -546,7 +561,12 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
 
   useImperativeHandle(ref, () => ({
     clear: () => {
-      editor?.commands.clearContent();
+      if (!editor || (editor as any).isDestroyed) return;
+      try {
+        editor.commands.clearContent();
+      } catch (error) {
+        console.warn('[RichTextEditor] clear skipped because editor is not ready', error);
+      }
     },
     getText: () => editor?.getText() || '',
     getHTML: () => editor?.getHTML() || '',
@@ -565,9 +585,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       }
     },
     setContent: (content: string) => {
-      if (editor) {
-        editor.commands.setContent(content, { contentType: 'markdown' });
-      }
+      trySetEditorContent(editor, content, true);
     },
     insertMarkdown: (content: string) => {
       if (editor) {
@@ -649,7 +667,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   useEffect(() => {
     if (!editor) return;
     if (content === editor.getMarkdown()) return;
-    editor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
+    trySetEditorContent(editor, content, false);
   }, [content, editor]);
 
   useEffect(() => {

@@ -9,6 +9,7 @@ import tar from 'tar-stream';
 import { createGunzip } from 'zlib';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { getRuntimeSdkSettingsPath } from '@/lib/run/runtime-configs';
 import { loadSystemSettings } from '@/lib/config/system-settings';
 
@@ -90,8 +91,8 @@ export interface SdkOverview {
 }
 
 function getHostOs(): HostOs {
-  if (process.platform === 'win32') return 'win32';
-  if (process.platform === 'darwin') return 'darwin';
+  if (isWindows()) return 'win32';
+  if (isMacOS()) return 'darwin';
   return 'linux';
 }
 
@@ -303,7 +304,7 @@ function safeJoin(base: string, target: string): string {
 async function extractZip(archivePath: string, targetDir: string) {
   await mkdir(targetDir, { recursive: true });
 
-  if (process.platform === 'win32') {
+  if (isWindows()) {
     await execFileAsync('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
@@ -319,7 +320,7 @@ async function extractZip(archivePath: string, targetDir: string) {
 }
 
 async function extractTarGz(archivePath: string, targetDir: string) {
-  const isWindows = process.platform === 'win32';
+  const windows = isWindows();
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
     const finish = (error?: unknown) => {
@@ -350,7 +351,7 @@ async function extractTarGz(archivePath: string, targetDir: string) {
         }
         await mkdir(dirname(destination), { recursive: true });
         await streamPipeline(stream, createWriteStream(destination));
-        if (!isWindows && header.mode) {
+        if (!windows && header.mode) {
           await chmod(destination, header.mode & 0o777);
         }
         next();
@@ -370,13 +371,13 @@ async function extractTarGz(archivePath: string, targetDir: string) {
 }
 
 async function ensureExecutable(filePath: string) {
-  if (process.platform === 'win32') return;
+  if (isWindows()) return;
   if (!existsSync(filePath)) return;
   await chmod(filePath, 0o755);
 }
 
 async function finalizeSdkLayout(sdkRoot: string): Promise<string> {
-  if (process.platform === 'win32') return sdkRoot;
+  if (isWindows()) return sdkRoot;
   const binDir = join(sdkRoot, 'bin');
   const toolsBinDir = join(sdkRoot, 'tools', 'bin');
   const cjpmSource = join(toolsBinDir, 'cjpm');
@@ -398,7 +399,7 @@ async function findSdkRoot(dir: string): Promise<string> {
   for (const candidate of candidates) {
     if (!existsSync(candidate)) continue;
     const hasBin = existsSync(join(candidate, 'bin'));
-    const hasEnvSetup = process.platform === 'win32' || existsSync(join(candidate, 'envsetup.sh'));
+    const hasEnvSetup = isWindows() || existsSync(join(candidate, 'envsetup.sh'));
     if (hasBin && hasEnvSetup) return candidate;
   }
   throw new Error('未找到有效的 Cangjie SDK 根目录');

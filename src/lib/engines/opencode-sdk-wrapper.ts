@@ -23,6 +23,17 @@ let serverInstance: { url: string; close: () => void } | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
 let clientInstance: OpenCodeHttpClient | null = null;
 
+async function runtimeImport<T = any>(moduleName: string): Promise<T> {
+  try {
+    return await Function('moduleName', 'return import(moduleName)')(moduleName) as T;
+  } catch (error: any) {
+    if (String(error?.message || error).includes('dynamic import callback')) {
+      return await import(/* @vite-ignore */ moduleName) as T;
+    }
+    throw error;
+  }
+}
+
 function requireClient(): OpenCodeHttpClient {
   if (!clientInstance) {
     throw new Error('[opencode-sdk] client not initialized');
@@ -41,7 +52,7 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
   }
 
   serverStarting = (async () => {
-    const { createOpencode } = await import('@opencode-ai/sdk');
+    const { createOpencode } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
     console.log('[opencode-sdk] starting HTTP server...');
 
     // Load user-configured environment variables
@@ -129,6 +140,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         timeoutMs: options.timeoutMs,
         signal: this.abortController.signal,
         emit: (event) => this.emit('stream', event),
+        disableStreaming: true,
       });
       this.collectedOutput = output;
 

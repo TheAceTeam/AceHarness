@@ -7,6 +7,7 @@
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { isWindows } from '@/lib/core/runtime-platform';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';
@@ -182,7 +183,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
   }
 
   private buildCodeagentEnv(codeagentPath: string): Record<string, string> | undefined {
-    if (process.platform === 'win32') return undefined;
+    if (isWindows()) return undefined;
 
     const installRoot = dirname(dirname(codeagentPath));
     const muslLibDir = join(installRoot, 'bun-musl-dir', 'musl-lib');

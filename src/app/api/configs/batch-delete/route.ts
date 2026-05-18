@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const meta = await getConfigMeta(filename, 'workflow');
-        if (meta?.visibility === 'private' && meta.createdBy !== auth.id && auth.role !== 'admin') {
+        if (auth.role !== 'admin' && meta?.createdBy && meta.createdBy !== auth.id) {
           errors.push(`${filename}: 无权限`);
           continue;
         }

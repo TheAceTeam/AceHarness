@@ -490,6 +490,12 @@ function safeJsonParse(value: string): unknown {
   }
 }
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const token = window.localStorage.getItem('auth-token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 function formatResponseBody(contentType: string, text: string): string {
   if (!text) return '';
   if (contentType.includes('application/json')) {
@@ -621,9 +627,14 @@ export default function ApiDocsPage() {
     }));
 
     try {
+      const mergedHeaders = {
+        ...getAuthHeaders(),
+        ...(headersValue as Record<string, string>),
+      };
+
       const requestInit: RequestInit = {
         method: endpoint.method,
-        headers: headersValue as HeadersInit,
+        headers: mergedHeaders as HeadersInit,
         credentials: 'same-origin',
       };
 
@@ -632,6 +643,9 @@ export default function ApiDocsPage() {
       }
 
       const response = await fetch(current.url, requestInit);
+      if (response.status === 401 && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('auth:expired'));
+      }
       const contentType = response.headers.get('content-type') || '';
       const body = contentType.includes('text/event-stream')
         ? await readSsePreview(response)

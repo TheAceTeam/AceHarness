@@ -4,12 +4,13 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { configApi, specCodingApi } from '@/lib/core/api';
+import { configApi, specCodingApi, usersApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MultiCombobox } from '@/components/ui/combobox';
 import {
   Table,
   TableBody,
@@ -20,12 +21,13 @@ import {
 } from '@/components/ui/table';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { Plus, LogIn, Edit, Trash2, ArrowLeft, ArrowRight, FileText, ArrowDown, ArrowUp, ArrowUpDown, History } from 'lucide-react';
+import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2 } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { PaginationBar } from '@/components/PaginationBar';
 import {
   Dialog,
   DialogContent,
@@ -46,6 +48,16 @@ interface WorkflowConfig {
   phases?: number;
   steps?: number;
   createdAt?: number | string;
+  visibility?: 'private' | 'shared' | 'public';
+  sharedWithUserIds?: string[];
+  ownerName?: string;
+}
+
+interface ShareableUser {
+  id: string;
+  username: string;
+  email: string;
+  role: 'admin' | 'user';
 }
 
 type WorkflowSortKey = 'name' | 'createdAt';
@@ -114,6 +126,16 @@ export default function WorkflowsPage() {
   const [activeTab, setActiveTab] = useState<WorkflowsPageTab>('workflows');
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(new Set());
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [activeWorkflow, setActiveWorkflow] = useState<WorkflowConfig | null>(null);
+  const [copyFilename, setCopyFilename] = useState('');
+  const [copyWorkflowName, setCopyWorkflowName] = useState('');
+  const [sharingVisibility, setSharingVisibility] = useState<'private' | 'shared' | 'public'>('private');
+  const [sharingUserIds, setSharingUserIds] = useState<string[]>([]);
+  const [shareableUsers, setShareableUsers] = useState<ShareableUser[]>([]);
+  const [shareableUsersLoading, setShareableUsersLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
   const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
   const [filterBarHeight, setFilterBarHeight] = useState(0);
@@ -234,6 +256,40 @@ export default function WorkflowsPage() {
     void loadCreationDrafts();
   }, [loadCreationDrafts]);
 
+  const loadShareableUsers = useCallback(async () => {
+    if (shareableUsersLoading || shareableUsers.length > 0) return;
+    setShareableUsersLoading(true);
+    try {
+      const users = await usersApi.listShareableUsers();
+      setShareableUsers(users);
+    } catch {
+      toast('error', '无法加载可共享用户列表');
+    } finally {
+      setShareableUsersLoading(false);
+    }
+  }, [shareableUsers.length, shareableUsersLoading, toast]);
+
+  const openCopyDialog = useCallback((workflow: WorkflowConfig) => {
+    const nextFilename = workflow.filename.endsWith('.yaml')
+      ? workflow.filename.replace(/\.yaml$/i, '-copy.yaml')
+      : `${workflow.filename}-copy.yaml`;
+    setActiveWorkflow(workflow);
+    setCopyFilename(nextFilename);
+    setCopyWorkflowName(`${workflow.name} (副本)`);
+    setSharingVisibility('private');
+    setSharingUserIds([]);
+    setCopyDialogOpen(true);
+    void loadShareableUsers();
+  }, [loadShareableUsers]);
+
+  const openShareDialog = useCallback((workflow: WorkflowConfig) => {
+    setActiveWorkflow(workflow);
+    setSharingVisibility((workflow.visibility as 'private' | 'shared' | 'public') || 'private');
+    setSharingUserIds(workflow.sharedWithUserIds || []);
+    setShareDialogOpen(true);
+    void loadShareableUsers();
+  }, [loadShareableUsers]);
+
   const handleAICreate = () => {
     setShowAIGuide(true);
   };
@@ -286,6 +342,64 @@ export default function WorkflowsPage() {
       }
     }
   };
+
+  const handleConfirmCopy = useCallback(async () => {
+    if (!activeWorkflow) return;
+    const filename = copyFilename.trim();
+    const workflowName = copyWorkflowName.trim();
+    if (!/^[a-zA-Z0-9_-]+\.yaml$/.test(filename)) {
+      toast('error', '复制文件名必须以 .yaml 结尾，且只包含字母、数字、下划线和连字符');
+      return;
+    }
+    if (!workflowName) {
+      toast('error', '请输入副本工作流名称');
+      return;
+    }
+    if (sharingVisibility === 'shared' && sharingUserIds.length === 0) {
+      toast('error', '共享给指定用户时，至少选择一个用户');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      await configApi.copyConfig(activeWorkflow.filename, filename, {
+        workflowName,
+        visibility: sharingVisibility,
+        sharedWithUserIds: sharingVisibility === 'shared' ? sharingUserIds : [],
+      });
+      toast('success', '工作流已复制');
+      setCopyDialogOpen(false);
+      setActiveWorkflow(null);
+      await loadWorkflows();
+    } catch (error: any) {
+      toast('error', error?.message || '复制工作流失败');
+    } finally {
+      setActionLoading(false);
+    }
+  }, [activeWorkflow, copyFilename, copyWorkflowName, loadWorkflows, sharingUserIds, sharingVisibility, toast]);
+
+  const handleConfirmShare = useCallback(async () => {
+    if (!activeWorkflow) return;
+    if (sharingVisibility === 'shared' && sharingUserIds.length === 0) {
+      toast('error', '共享给指定用户时，至少选择一个用户');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      const detail = await configApi.getConfig(activeWorkflow.filename);
+      await configApi.saveConfigWithMeta(activeWorkflow.filename, detail.config, {
+        visibility: sharingVisibility,
+        sharedWithUserIds: sharingVisibility === 'shared' ? sharingUserIds : [],
+      });
+      toast('success', '工作流可见性已更新');
+      setShareDialogOpen(false);
+      setActiveWorkflow(null);
+      await loadWorkflows();
+    } catch (error: any) {
+      toast('error', error?.message || '更新工作流可见性失败');
+    } finally {
+      setActionLoading(false);
+    }
+  }, [activeWorkflow, loadWorkflows, sharingUserIds, sharingVisibility, toast]);
 
   const handleDeleteCreationDraft = useCallback(async (session: CreationDraftSession) => {
     const confirmed = await confirm({
@@ -395,18 +509,23 @@ export default function WorkflowsPage() {
     && displayedWorkflows.every((workflow) => selectedWorkflows.has(workflow.filename));
   const hasPartialDisplayedWorkflowSelection = displayedWorkflows.some((workflow) => selectedWorkflows.has(workflow.filename))
     && !allDisplayedWorkflowsSelected;
-  const totalLabel = useMemo(() => {
-    if (!pagination.total) return '暂无工作流';
-    const start = (pagination.page - 1) * pagination.pageSize + 1;
-    const end = Math.min(pagination.page * pagination.pageSize, pagination.total);
-    return `显示 ${start}-${end} / ${pagination.total} 个工作流`;
-  }, [pagination]);
-
   const modeLabel = (mode?: string) => mode === 'state-machine' ? '状态机' : '阶段模式';
   const modeBadgeClass = (mode?: string) =>
     mode === 'state-machine'
       ? 'bg-sky-500/10 text-sky-700 dark:text-sky-300'
       : 'bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  const visibilityLabel = (workflow: WorkflowConfig) => {
+    if (workflow.visibility === 'public') return '公开';
+    if (workflow.visibility === 'shared') return `共享 ${workflow.sharedWithUserIds?.length || 0}`;
+    return '个人';
+  };
+  const visibilityBadgeClass = (workflow: WorkflowConfig) => (
+    workflow.visibility === 'public'
+      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+      : workflow.visibility === 'shared'
+        ? 'bg-violet-500/10 text-violet-700 dark:text-violet-300'
+        : 'bg-slate-500/10 text-slate-700 dark:text-slate-300'
+  );
   const getCreationStageLabel = (session: CreationDraftSession) => {
     if (session.status === 'run-bound') return '已生成工作流并启动运行';
     if (session.status === 'config-generated') return '已生成工作流';
@@ -624,21 +743,6 @@ export default function WorkflowsPage() {
                   ) : null}
                 </div>
                 <div className="flex items-center gap-4">
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {totalLabel}
-                  </span>
-                  <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
-                    <SelectTrigger className="h-9 w-[112px] bg-background">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PAGE_SIZE_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={String(option)}>
-                          {option} / 页
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                   {/* View mode toggle */}
                   <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
                     <Button
@@ -734,6 +838,7 @@ export default function WorkflowsPage() {
                       </TableHead>
                       <TableHead className="min-w-[72px] whitespace-normal leading-tight">阶段/状态</TableHead>
                       <TableHead>步骤</TableHead>
+                      <TableHead className="min-w-[120px]">可见性</TableHead>
                       <TableHead className="min-w-[160px] whitespace-nowrap">
                         <Button
                           type="button"
@@ -770,6 +875,12 @@ export default function WorkflowsPage() {
                         </TableCell>
                         <TableCell className="min-w-[72px] whitespace-nowrap">{wf.phaseCount ?? 0}</TableCell>
                         <TableCell>{wf.stepCount ?? 0}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge className={cn('whitespace-nowrap', visibilityBadgeClass(wf))}>{visibilityLabel(wf)}</Badge>
+                            {wf.ownerName ? <span className="text-xs text-muted-foreground">{wf.ownerName}</span> : null}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                           {formatWorkflowCreatedAt(wf.createdAt)}
                         </TableCell>
@@ -791,6 +902,12 @@ export default function WorkflowsPage() {
                               <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
                                 <Edit className="w-3 h-3" />
                               </Link>
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => openCopyDialog(wf)}>
+                              <Copy className="w-3 h-3" />
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => openShareDialog(wf)}>
+                              <Share2 className="w-3 h-3" />
                             </Button>
                             <Button size="sm" variant="outline" onClick={() => handleDelete(wf.filename)}>
                               <Trash2 className="w-3 h-3" />
@@ -846,6 +963,11 @@ export default function WorkflowsPage() {
                     <span>{workflow.stepCount ?? 0} 个步骤</span>
                   </div>
 
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <Badge className={visibilityBadgeClass(workflow)}>{visibilityLabel(workflow)}</Badge>
+                    {workflow.ownerName ? <span className="text-xs text-muted-foreground">所有者：{workflow.ownerName}</span> : null}
+                  </div>
+
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline" asChild>
                       <Link href={`/workbench/${encodeURIComponent(workflow.filename)}`}>
@@ -864,6 +986,12 @@ export default function WorkflowsPage() {
                         <Edit className="w-3 h-3" />
                       </Link>
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => openCopyDialog(workflow)}>
+                      <Copy className="w-3 h-3" />
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
+                      <Share2 className="w-3 h-3" />
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => handleDelete(workflow.filename)}>
                       <Trash2 className="w-3 h-3" />
                     </Button>
@@ -876,32 +1004,19 @@ export default function WorkflowsPage() {
             )}
 
             {!loading && pagination.total > 0 ? (
-              <section className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm text-muted-foreground">{totalLabel}</div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={pagination.page <= 1}
-                    onClick={() => setPage((current) => Math.max(1, current - 1))}
-                  >
-                    <ArrowLeft className="mr-1 h-4 w-4" />
-                    上一页
-                  </Button>
-                  <Badge variant="secondary">
-                    第 {pagination.page} / {pagination.totalPages} 页
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={pagination.page >= pagination.totalPages}
-                    onClick={() => setPage((current) => current + 1)}
-                  >
-                    下一页
-                    <ArrowRight className="ml-1 h-4 w-4" />
-                  </Button>
-                </div>
-              </section>
+              <PaginationBar
+                current={pagination.page}
+                total={pagination.total}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+                itemLabel="工作流"
+                paginationStyle="numbered"
+              />
             ) : null}
           </>
         ) : (
@@ -1116,6 +1231,99 @@ export default function WorkflowsPage() {
       )}
 
       {dialogProps && <ConfirmDialog {...dialogProps} />}
+
+      <Dialog open={copyDialogOpen} onOpenChange={(open) => { if (!actionLoading) setCopyDialogOpen(open); }}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>复制工作流</DialogTitle>
+            <DialogDescription>创建一个新副本，并设置它的初始可见性。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">副本名称</label>
+              <Input value={copyWorkflowName} onChange={(e) => setCopyWorkflowName(e.target.value)} placeholder="输入副本工作流名称" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">副本文件名</label>
+              <Input value={copyFilename} onChange={(e) => setCopyFilename(e.target.value)} placeholder="example-copy.yaml" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">可见性</label>
+              <Select value={sharingVisibility} onValueChange={(value: 'private' | 'shared' | 'public') => setSharingVisibility(value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="private">个人可见</SelectItem>
+                  <SelectItem value="shared">指定用户可见</SelectItem>
+                  <SelectItem value="public">公开可见</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {sharingVisibility === 'shared' ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">共享给用户</label>
+                <MultiCombobox
+                  value={sharingUserIds}
+                  onValueChange={setSharingUserIds}
+                  options={shareableUsers.map((user) => ({
+                    value: user.id,
+                    label: user.username,
+                    description: user.email,
+                  }))}
+                  placeholder={shareableUsersLoading ? '加载用户中...' : '选择可访问该副本的用户'}
+                />
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCopyDialogOpen(false)} disabled={actionLoading}>取消</Button>
+              <Button onClick={() => void handleConfirmCopy()} disabled={actionLoading}>复制</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={shareDialogOpen} onOpenChange={(open) => { if (!actionLoading) setShareDialogOpen(open); }}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>设置工作流可见性</DialogTitle>
+            <DialogDescription>管理员始终可访问全部工作流；不做设置时保持旧行为兼容。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <button type="button" onClick={() => setSharingVisibility('private')} className={cn('rounded-xl border p-3 text-left', sharingVisibility === 'private' && 'border-primary bg-primary/5')}>
+                <div className="flex items-center gap-2 text-sm font-medium"><Lock className="h-4 w-4" />个人可见</div>
+                <div className="mt-1 text-xs text-muted-foreground">仅创建者和管理员可访问</div>
+              </button>
+              <button type="button" onClick={() => setSharingVisibility('shared')} className={cn('rounded-xl border p-3 text-left', sharingVisibility === 'shared' && 'border-primary bg-primary/5')}>
+                <div className="flex items-center gap-2 text-sm font-medium"><Share2 className="h-4 w-4" />指定用户</div>
+                <div className="mt-1 text-xs text-muted-foreground">共享给明确指定的用户</div>
+              </button>
+              <button type="button" onClick={() => setSharingVisibility('public')} className={cn('rounded-xl border p-3 text-left', sharingVisibility === 'public' && 'border-primary bg-primary/5')}>
+                <div className="flex items-center gap-2 text-sm font-medium"><Globe className="h-4 w-4" />公开可见</div>
+                <div className="mt-1 text-xs text-muted-foreground">所有登录用户都可访问</div>
+              </button>
+            </div>
+            {sharingVisibility === 'shared' ? (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">共享给用户</label>
+                <MultiCombobox
+                  value={sharingUserIds}
+                  onValueChange={setSharingUserIds}
+                  options={shareableUsers.map((user) => ({
+                    value: user.id,
+                    label: user.username,
+                    description: user.email,
+                  }))}
+                  placeholder={shareableUsersLoading ? '加载用户中...' : '选择可访问该工作流的用户'}
+                />
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShareDialogOpen(false)} disabled={actionLoading}>取消</Button>
+              <Button onClick={() => void handleConfirmShare()} disabled={actionLoading}>保存</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* AI 引导创建指南弹窗 */}
       <Dialog open={showAIGuide} onOpenChange={setShowAIGuide}>

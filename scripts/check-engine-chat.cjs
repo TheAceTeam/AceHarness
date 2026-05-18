@@ -20,6 +20,8 @@ const SUPPORTED_ENGINES = [
   'claude-code',
 ];
 
+const SUPPORTED_DRIVERS = ['sdk', 'stdio', 'all'];
+
 function parseArgs(argv) {
   const options = {
     engines: [],
@@ -29,6 +31,7 @@ function parseArgs(argv) {
     systemPrompt: '你是 ACEHarness engine wrapper 健康检查助手。请保持回复极简。',
     timeoutMs: 45_000,
     json: false,
+    driver: '',
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -47,6 +50,8 @@ function parseArgs(argv) {
       options.systemPrompt = argv[++index];
     } else if (arg === '--timeout-ms' && argv[index + 1]) {
       options.timeoutMs = Number(argv[++index]) || options.timeoutMs;
+    } else if (arg === '--driver' && argv[index + 1]) {
+      options.driver = String(argv[++index] || '').trim();
     } else if (arg === '--json') {
       options.json = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -80,6 +85,7 @@ ACEHarness wrapper 对话功能检查
   --prompt          健康检查提示词，默认要求只回复 OK
   --system-prompt   额外系统提示
   --timeout-ms      单个 engine 超时时间，默认 45000
+  --driver          对支持多驱动的引擎指定 sdk / stdio / all
   --json            输出 JSON
 `);
 }
@@ -231,6 +237,39 @@ async function runEngine(engineType, options, createEngine) {
   }
 }
 
+function expandEngineTargets(engines, driver, supportsDriverSelection, resolveEffectiveEngine) {
+  const normalizedDriver = String(driver || '').trim();
+  if (!normalizedDriver) {
+    return engines.flatMap((engine) => {
+      if (!supportsDriverSelection(engine)) {
+        return [{ label: engine, effectiveEngine: engine }];
+      }
+      return ['sdk', 'stdio'].map((item) => ({
+        label: `${engine}/${item}`,
+        effectiveEngine: resolveEffectiveEngine(engine, item),
+      })).filter((item) => item.effectiveEngine);
+    });
+  }
+
+  return engines.flatMap((engine) => {
+    if (!supportsDriverSelection(engine)) {
+      return [{ label: engine, effectiveEngine: engine }];
+    }
+
+    if (normalizedDriver === 'all') {
+      return ['sdk', 'stdio'].map((item) => ({
+        label: `${engine}/${item}`,
+        effectiveEngine: resolveEffectiveEngine(engine, item),
+      })).filter((item) => item.effectiveEngine);
+    }
+
+    return [{
+      label: `${engine}/${normalizedDriver}`,
+      effectiveEngine: resolveEffectiveEngine(engine, normalizedDriver),
+    }].filter((item) => item.effectiveEngine);
+  });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const unsupported = options.engines.filter((engine) => !SUPPORTED_ENGINES.includes(engine));
@@ -240,12 +279,28 @@ async function main() {
     process.exit(2);
   }
 
+  if (options.driver && !SUPPORTED_DRIVERS.includes(options.driver)) {
+    console.error(`不支持的 driver: ${options.driver}`);
+    console.error(`支持的 driver: ${SUPPORTED_DRIVERS.join(', ')}`);
+    process.exit(2);
+  }
+
   setupTsRuntime();
-  const { createEngine } = require('../src/lib/engines/engine-factory');
+  const { createEngine, createEngineForDriver, supportsDriverSelection, resolveEffectiveEngine } = require('../src/lib/engines/engine-factory');
+  const targets = expandEngineTargets(options.engines, options.driver, supportsDriverSelection, resolveEffectiveEngine);
 
   const rows = [];
-  for (const engine of options.engines) {
-    rows.push(await runEngine(engine, options, createEngine));
+  for (const target of targets) {
+    const driver = target.label.includes('/') ? target.label.split('/').pop() : '';
+    const row = await runEngine(
+      target.effectiveEngine,
+      options,
+      driver === 'sdk' || driver === 'stdio'
+        ? (() => createEngineForDriver(target.label.split('/')[0], driver))
+        : createEngine,
+    );
+    row.engine = target.label;
+    rows.push(row);
   }
 
   if (options.json) {

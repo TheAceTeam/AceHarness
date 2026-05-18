@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { NextRequest, NextResponse } from 'next/server';
 import { detectCangjieHome, buildCangjieSpawnEnv, buildCjpmShellCommand } from '@/lib/cangjie/env';
 import { requireAuth } from '@/lib/auth/middleware';
+import { getRuntimePlatform, isWindows } from '@/lib/core/runtime-platform';
 
 interface RunCangjieRequest {
   code: string;
@@ -70,15 +71,15 @@ function runProcess(command: string, args: string[], options: { cwd: string; env
 }
 
 async function buildRunCommand(cangjieHome: string, tempDir: string, sourceName: string, outputPath: string, options?: { userId?: string }) {
-  const outputName = process.platform === 'win32' ? 'main_exec.exe' : 'main_exec';
+  const outputName = isWindows() ? 'main_exec.exe' : 'main_exec';
   const compileCommand = `cjc ${JSON.stringify(sourceName)} -o ${JSON.stringify(outputName)}`;
-  const executeCommand = process.platform === 'win32' ? `./${outputName}` : `./${outputName}`;
+  const executeCommand = `./${outputName}`;
 
-  if (process.platform === 'win32') {
+  if (isWindows()) {
     const env = await buildCangjieSpawnEnv(cangjieHome, process.env as Record<string, string | undefined>, options);
     return {
       mode: 'direct' as const,
-      command: process.platform === 'win32' ? 'cjc.exe' : 'cjc',
+      command: isWindows() ? 'cjc.exe' : 'cjc',
       args: [sourceName, '-o', outputPath],
       env: env as NodeJS.ProcessEnv,
       commandSummary: `cjc ${sourceName} -o ${outputName}`,
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
     }
 
     const setupScript = resolve(cangjieHome, 'envsetup.sh');
-    if (process.platform !== 'win32' && !existsSync(setupScript)) {
+    if (!isWindows() && !existsSync(setupScript)) {
       return NextResponse.json({ error: `未找到 envsetup.sh: ${setupScript}` }, { status: 400 });
     }
 
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
 
     const sourceName = sanitizeSourceName(body.sourceName);
     const sourcePath = resolve(tempDir, sourceName);
-    outputPath = resolve(tempDir, process.platform === 'win32' ? 'main_exec.exe' : 'main_exec');
+    outputPath = resolve(tempDir, isWindows() ? 'main_exec.exe' : 'main_exec');
 
     await writeFile(sourcePath, code, 'utf-8');
 
@@ -156,7 +157,7 @@ export async function POST(req: NextRequest) {
         combinedOutput: [compileResult.stdout, compileResult.stderr].filter(Boolean).join('\n'),
         exitCode: compileResult.exitCode,
         commandSummary: commandConfig.commandSummary,
-        env: { cangjieHome, platform: process.platform, usedEnvsetup: true },
+        env: { cangjieHome, platform: getRuntimePlatform(), usedEnvsetup: true },
         error: '编译失败',
       }, { status: 200 });
     }
@@ -169,7 +170,7 @@ export async function POST(req: NextRequest) {
         combinedOutput: [compileResult.stdout, compileResult.stderr].filter(Boolean).join('\n'),
         exitCode: compileResult.exitCode,
         commandSummary: commandConfig.commandSummary,
-        env: { cangjieHome, platform: process.platform, usedEnvsetup: true },
+        env: { cangjieHome, platform: getRuntimePlatform(), usedEnvsetup: true },
       });
     }
 
@@ -186,7 +187,7 @@ export async function POST(req: NextRequest) {
       combinedOutput: [compileResult.stdout, compileResult.stderr, runResult.stdout, runResult.stderr].filter(Boolean).join('\n'),
       exitCode: runResult.exitCode,
       commandSummary: `${commandConfig.commandSummary} && ${commandConfig.runSummary}`,
-      env: { cangjieHome, platform: process.platform, usedEnvsetup: true },
+      env: { cangjieHome, platform: getRuntimePlatform(), usedEnvsetup: true },
     });
   } catch (error: any) {
     return NextResponse.json({

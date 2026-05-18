@@ -221,7 +221,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <Label>名称 *</Label>
-                <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="agent-name" disabled={!isNew} />
+                <Input value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="agent-name" />
               </div>
 
               <div>

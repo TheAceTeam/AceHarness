@@ -7,6 +7,7 @@ import { execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { isLinux, isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { getEffectiveManagedCangjieHome } from '@/lib/cangjie/sdk-manager';
 
 /**
@@ -71,17 +72,61 @@ async function resolveEnvPath(
   return null;
 }
 
+function mergeExtraWindowsPaths(env: Record<string, string>, extraPaths: Array<string | null | undefined>) {
+  const additions = extraPaths.filter((value): value is string => Boolean(value));
+  if (additions.length === 0) return;
+  env.PATH = [...additions, env.PATH || env.Path || ''].filter(Boolean).join(';');
+  env.Path = env.PATH;
+}
+
+function buildWindowsFallbackEnv(
+  cangjieHome: string,
+  env: Record<string, string>,
+) {
+  const runtimeNativeDir = resolve(cangjieHome, 'runtime', 'lib', 'windows_x86_64_cjnative');
+  const libNativeDir = resolve(cangjieHome, 'lib', 'windows_x86_64_cjnative');
+  const binDir = resolve(cangjieHome, 'bin');
+  const toolsBinDir = resolve(cangjieHome, 'tools', 'bin');
+  const toolsLibDir = resolve(cangjieHome, 'tools', 'lib');
+  const cjpmUserBinDir = env.USERPROFILE ? resolve(env.USERPROFILE, '.cjpm', 'bin') : null;
+  mergeExtraWindowsPaths(env, [runtimeNativeDir, libNativeDir, binDir, toolsBinDir, cjpmUserBinDir, toolsLibDir]);
+}
+
+function captureWindowsEnvFromScript(
+  command: string,
+  baseEnv: Record<string, string>,
+): Record<string, string> | null {
+  try {
+    const output = execSync(command, {
+      shell: 'powershell',
+      env: baseEnv as NodeJS.ProcessEnv,
+      encoding: 'utf-8',
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    });
+    const nextEnv: Record<string, string> = { ...baseEnv };
+    for (const line of output.split(/\r?\n/)) {
+      const idx = line.indexOf('=');
+      if (idx <= 0) continue;
+      nextEnv[line.slice(0, idx)] = line.slice(idx + 1);
+    }
+    return nextEnv;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Source envsetup.sh and capture the resulting environment variables.
  * On macOS/Linux: `source envsetup.sh && env -0`
- * On Windows: parse envsetup.sh exports and set key variables directly
+ * On Windows: prefer official envsetup.ps1, fallback to envsetup.bat, then minimal PATH reconstruction
  */
 export async function buildCangjieSpawnEnv(
   cangjieHome: string,
   baseEnv: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
   options?: { userId?: string },
 ): Promise<Record<string, string>> {
-  const isWindows = process.platform === 'win32';
+  const windows = isWindows();
   const env: Record<string, string> = {};
 
   // Copy base env (filter out undefined)
@@ -91,22 +136,26 @@ export async function buildCangjieSpawnEnv(
 
   env.CANGJIE_HOME = cangjieHome;
 
-  if (isWindows) {
-    // Windows: no `source` available. Manually construct key paths.
-    const binDir = resolve(cangjieHome, 'bin');
-    const libDir = resolve(cangjieHome, 'lib');
-    const runtimeDir = resolve(cangjieHome, 'runtime', 'lib');
-    const pathParts = [binDir];
-    if (existsSync(libDir)) pathParts.push(libDir);
-    if (existsSync(runtimeDir)) pathParts.push(runtimeDir);
+  if (windows) {
+    const setupPs1 = resolve(cangjieHome, 'envsetup.ps1');
+    const setupBat = resolve(cangjieHome, 'envsetup.bat');
+    const captured =
+      (existsSync(setupPs1)
+        ? captureWindowsEnvFromScript(`. "${setupPs1}"; Get-ChildItem Env: | ForEach-Object { "$($_.Name)=$($_.Value)" }`, env)
+        : null)
+      ?? (existsSync(setupBat)
+        ? captureWindowsEnvFromScript(`cmd /d /c "call ""${setupBat}"" && set"`, env)
+        : null);
+    if (captured) {
+      Object.assign(env, captured);
+    } else {
+      buildWindowsFallbackEnv(cangjieHome, env);
+    }
 
     // Add OpenSSL and stdx to PATH on Windows
     const opensslPath = await resolveEnvPath('OPENSSL_PATH', [], options?.userId);
-    if (opensslPath) pathParts.push(opensslPath);
     const stdxPath = await resolveEnvPath('CANGJIE_STDX_PATH', [], options?.userId);
-    if (stdxPath) pathParts.push(stdxPath);
-
-    env.PATH = [...pathParts, env.PATH || ''].filter(Boolean).join(';');
+    mergeExtraWindowsPaths(env, [opensslPath, stdxPath]);
   } else {
     // macOS/Linux: source envsetup.sh and capture full env
     const setupScript = resolve(cangjieHome, 'envsetup.sh');
@@ -116,7 +165,7 @@ export async function buildCangjieSpawnEnv(
     }
 
     // On macOS, prepend OpenSSL and stdx lib paths before sourcing — cjpm needs them
-    if (process.platform === 'darwin') {
+    if (isMacOS()) {
       const extraPaths: string[] = [];
 
       const opensslPath = await resolveEnvPath('OPENSSL_PATH', [
@@ -131,7 +180,7 @@ export async function buildCangjieSpawnEnv(
       if (extraPaths.length > 0) {
         env.DYLD_LIBRARY_PATH = [...extraPaths, env.DYLD_LIBRARY_PATH || ''].filter(Boolean).join(':');
       }
-    } else if (process.platform === 'linux') {
+    } else if (isLinux()) {
       const extraPaths: string[] = [];
 
       const stdxPath = await resolveEnvPath('CANGJIE_STDX_PATH', [], options?.userId);
@@ -175,11 +224,11 @@ export async function buildCangjieSpawnEnv(
  */
 export function isCjpmAvailable(env?: Record<string, string>): boolean {
   try {
-    const isWindows = process.platform === 'win32';
-    const cmd = isWindows ? 'where cjpm' : 'command -v cjpm';
+    const windows = isWindows();
+    const cmd = windows ? 'where cjpm' : 'command -v cjpm';
     execSync(cmd, {
       stdio: 'ignore',
-      shell: isWindows ? undefined : '/bin/bash',
+      shell: windows ? undefined : '/bin/bash',
       env: env ? { ...env } as NodeJS.ProcessEnv : undefined,
       timeout: 5_000,
     });
@@ -202,13 +251,28 @@ export async function buildCjpmShellCommand(
   projectDir?: string,
   options?: { userId?: string },
 ): Promise<{ command: string; args: string[] }> {
-  const isWindows = process.platform === 'win32';
+  const windows = isWindows();
   const setupScript = resolve(cangjieHome, 'envsetup.sh');
 
-  if (isWindows) {
+  if (windows) {
+    const setupPs1 = resolve(cangjieHome, 'envsetup.ps1');
+    const setupBat = resolve(cangjieHome, 'envsetup.bat');
     const parts: string[] = [
       `$env:CANGJIE_HOME="${cangjieHome}"`,
     ];
+    if (existsSync(setupPs1)) {
+      parts.push(`. "${setupPs1}"`);
+    } else if (existsSync(setupBat)) {
+      parts.push(`cmd /d /c "call ""${setupBat}"" && ${cjpmCommand.replace(/"/g, '""')}"`);
+      return {
+        command: 'powershell',
+        args: ['-NoProfile', '-Command', parts.join('; ')],
+      };
+    } else {
+      const fallbackEnv = await buildCangjieSpawnEnv(cangjieHome, process.env as Record<string, string | undefined>, options);
+      const pathValue = (fallbackEnv.PATH || fallbackEnv.Path || '').replace(/"/g, '""');
+      parts.push(`$env:PATH="${pathValue}"`);
+    }
     // Add OpenSSL and stdx to PATH on Windows
     const opensslPath = await resolveEnvPath('OPENSSL_PATH', [], options?.userId);
     const stdxPath = await resolveEnvPath('CANGJIE_STDX_PATH', [], options?.userId);
@@ -229,7 +293,7 @@ export async function buildCjpmShellCommand(
   // macOS/Linux: source envsetup.sh, set up library paths, then run command
   const parts: string[] = [`source "${setupScript}"`];
 
-  if (process.platform === 'darwin') {
+  if (isMacOS()) {
     const extraPaths: string[] = [];
 
     const opensslPath = await resolveEnvPath('OPENSSL_PATH', [

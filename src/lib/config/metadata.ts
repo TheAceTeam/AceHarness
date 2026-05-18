@@ -10,7 +10,8 @@ import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsD
 
 export interface ConfigMeta {
   createdBy?: string;
-  visibility: 'public' | 'private';
+  visibility: 'public' | 'private' | 'shared';
+  sharedWithUserIds?: string[];
   createdAt: number;
 }
 
@@ -48,7 +49,14 @@ export async function getConfigMeta(configFile: string, type: 'workflow' | 'agen
 export async function setConfigMeta(configFile: string, meta: Partial<ConfigMeta>, type: 'workflow' | 'agent' = 'workflow'): Promise<void> {
   const metaPath = await getMetaPath(type);
   const data = await loadMetadata(metaPath);
-  data[configFile] = { ...data[configFile], ...meta } as ConfigMeta;
+  const sharedWithUserIds = Array.isArray(meta.sharedWithUserIds)
+    ? Array.from(new Set(meta.sharedWithUserIds.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)))
+    : meta.sharedWithUserIds;
+  data[configFile] = {
+    ...data[configFile],
+    ...meta,
+    ...(sharedWithUserIds !== undefined ? { sharedWithUserIds } : {}),
+  } as ConfigMeta;
   await saveMetadata(metaPath, data);
 }
 
@@ -62,4 +70,19 @@ export async function deleteConfigMeta(configFile: string, type: 'workflow' | 'a
 export async function listConfigsWithMeta(type: 'workflow' | 'agent' = 'workflow'): Promise<MetadataMap> {
   const metaPath = await getMetaPath(type);
   return loadMetadata(metaPath);
+}
+
+export function canAccessConfigMeta(
+  meta: ConfigMeta | undefined,
+  userId: string,
+  role: 'admin' | 'user',
+): boolean {
+  if (!meta) return true;
+  if (role === 'admin') return true;
+  if (meta.visibility === 'public') return true;
+  if (meta.createdBy && meta.createdBy === userId) return true;
+  if (meta.visibility === 'shared') {
+    return Array.isArray(meta.sharedWithUserIds) && meta.sharedWithUserIds.includes(userId);
+  }
+  return !meta.createdBy || meta.createdBy === userId;
 }

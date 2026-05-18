@@ -14,6 +14,7 @@ import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './e
 import { normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { isWindows } from '@/lib/core/runtime-platform';
 import {
   buildFullPrompt,
   formatError,
@@ -33,6 +34,17 @@ let clientBaseUrl: string | null = null;
 let managedServer: ManagedServer | null = null;
 let serverStarting: Promise<ManagedServer> | null = null;
 let shutdownHooksInstalled = false;
+
+async function runtimeImport<T = any>(moduleName: string): Promise<T> {
+  try {
+    return await Function('moduleName', 'return import(moduleName)')(moduleName) as T;
+  } catch (error: any) {
+    if (String(error?.message || error).includes('dynamic import callback')) {
+      return await import(/* @vite-ignore */ moduleName) as T;
+    }
+    throw error;
+  }
+}
 
 function getBaseUrl(): string {
   return String(process.env.ACE_CODEGENIE_SDK_BASE_URL || '').trim().replace(/\/+$/, '');
@@ -119,7 +131,7 @@ async function startManagedServer(): Promise<ManagedServer> {
     const child = spawn(command, args, {
       cwd: process.cwd(),
       env: spawnEnv,
-      shell: process.platform === 'win32',
+      shell: isWindows(),
       windowsHide: true,
     });
 
@@ -190,7 +202,7 @@ async function startManagedServer(): Promise<ManagedServer> {
 function closeChildTree(child: ChildProcessWithoutNullStreams): void {
   try {
     if (child.killed || child.exitCode !== null) return;
-    if (process.platform === 'win32' && child.pid) {
+    if (isWindows() && child.pid) {
       spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
         stdio: 'ignore',
         windowsHide: true,
@@ -216,7 +228,7 @@ async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: st
     throw new Error(`CodeGenie SDK health check failed at ${baseUrl}/global/health`);
   }
 
-  const { createOpencodeClient } = await import('@opencode-ai/sdk');
+  const { createOpencodeClient } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
   const client = createOpencodeClient({ baseUrl }) as unknown as OpenCodeHttpClient;
   const configResult = await client.config?.get?.({});
   if (configResult?.error) {

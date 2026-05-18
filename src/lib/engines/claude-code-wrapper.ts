@@ -16,6 +16,7 @@ import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getRuntimePlatform, isLinux, isWindows } from '@/lib/core/runtime-platform';
 
 const requireFromHere = createRequire(__filename);
 
@@ -415,9 +416,9 @@ function resolveClaudeNativeBinary(): string | undefined {
   const envPath = process.env.ACE_CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE;
   if (envPath && isExecutable(envPath)) return envPath;
 
-  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const suffix = isWindows() ? '.exe' : '';
   const packageNames = (() => {
-    if (process.platform === 'linux') {
+    if (isLinux()) {
       const arch = process.arch;
       const glibc = hasRuntimeGlibc();
       const primary = glibc
@@ -428,7 +429,7 @@ function resolveClaudeNativeBinary(): string | undefined {
         : [`@anthropic-ai/claude-agent-sdk-linux-${arch}`];
       return [...primary, ...fallback];
     }
-    return [`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`];
+    return [`@anthropic-ai/claude-agent-sdk-${getRuntimePlatform()}-${process.arch}`];
   })();
 
   for (const packageName of packageNames) {

@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 interface UserMenuProps {
-  user: {
+  user?: {
     username: string;
     email: string;
     role: 'admin' | 'user';
@@ -106,6 +106,10 @@ export default function UserMenu({ user }: UserMenuProps) {
           <p className="text-xs text-muted-foreground">{user.email}</p>
         </div>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push('/account?notebook=1&notebookScope=personal')}>
+          <span className="material-symbols-outlined text-sm mr-2">book_2</span>
+          Cangjie Notebook
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => router.push('/account')}>
           <span className="material-symbols-outlined text-sm mr-2">person</span>
           账户设置

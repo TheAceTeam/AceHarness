@@ -39,6 +39,22 @@ async function createParentDirectories(root: string, relPath: string): Promise<s
   return fullPath;
 }
 
+function ensureValidRelocation(srcFull: string, destFull: string, options?: { disallowSameParent?: boolean }): void {
+  const srcNormalized = path.resolve(srcFull);
+  const destNormalized = path.resolve(destFull);
+  const srcParent = path.dirname(srcNormalized);
+
+  if (srcNormalized === destNormalized) {
+    throw new WorkspacePathError('源路径与目标路径相同', 400);
+  }
+  if (destNormalized.startsWith(`${srcNormalized}${path.sep}`)) {
+    throw new WorkspacePathError('不能移动或重命名到自身子目录中', 400);
+  }
+  if (options?.disallowSameParent && srcParent === path.dirname(destNormalized)) {
+    throw new WorkspacePathError('目标路径与当前目录相同', 400);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -68,6 +84,7 @@ export async function POST(request: NextRequest) {
       case 'rename': {
         const oldFull = await resolveExistingInsideWorkspace(resolvedWorkspace, params.oldPath);
         const { fullPath: newFull } = await resolveCreatableInsideWorkspace(resolvedWorkspace, params.newPath);
+        ensureValidRelocation(oldFull, newFull);
         await ensureDestinationAvailable(newFull);
         await fs.rename(oldFull, newFull);
         return NextResponse.json({ success: true });
@@ -93,6 +110,7 @@ export async function POST(request: NextRequest) {
       case 'move': {
         const srcFull = await resolveExistingInsideWorkspace(resolvedWorkspace, params.srcPath);
         const destFull = await createParentDirectories(resolvedWorkspace, params.destPath);
+        ensureValidRelocation(srcFull, destFull, { disallowSameParent: true });
         await ensureDestinationAvailable(destFull);
         try {
           await fs.rename(srcFull, destFull);
