@@ -19,10 +19,9 @@ import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
 import { CodegenieSdkEngineWrapper } from './codegenie-sdk-wrapper';
-import { CangjieMagicEngineWrapper } from './cangjie-magic-wrapper';
 import { MagicCliEngineWrapper } from './magic-cli-wrapper';
 
-export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli' | 'magic-cli';
+export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli' | 'magic-cli';
 export type EngineDriver = 'stdio' | 'sdk';
 
 interface EngineConfig {
@@ -377,9 +376,6 @@ case 'claude-code-acp':
       const ccAcpCheck = new ClaudeCodeAcpEngineWrapper();
       return await ccAcpCheck.isAvailable();
 
-    case 'cangjie-magic':
-      const cjCheck = new CangjieMagicEngineWrapper();
-      return await cjCheck.isAvailable();
     case 'opencode':
       const ocCheck = new OpenCodeEngineWrapper();
       return await ocCheck.isAvailable();

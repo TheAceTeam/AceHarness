@@ -37,7 +37,6 @@ const ENGINE_ENDPOINT_HINTS: Record<string, string[]> = {
   'claude-code': ['anthropic'],
   'claude-code-acp': ['anthropic'],
   'codex': ['openai'],
-  'cangjie-magic': ['cangjie'],
 };
 
 let writeLock: Promise<void> = Promise.resolve();

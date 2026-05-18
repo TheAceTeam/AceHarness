@@ -63,11 +63,6 @@ export const ENGINE_META: Record<EngineType, EngineMeta> = {
     name: 'Trae CLI',
     iconPath: '/engines/trae.svg',
   },
-  'cangjie-magic': {
-    id: 'cangjie-magic',
-    name: 'CangjieMagic',
-    iconPath: '/engines/magic-cli.svg',
-  },
   'magic-cli': {
     id: 'magic-cli',
     name: 'Magic CLI',
