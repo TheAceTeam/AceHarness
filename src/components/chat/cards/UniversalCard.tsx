@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { Progress } from '@/components/ui/progress';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 
 // --- Schema Types ---
 
@@ -35,6 +36,7 @@ type Block =
   | { type: 'text'; content: string; maxLines?: number }
   | { type: 'code'; code: string; lang?: string; copyable?: boolean }
   | { type: 'progress'; value: number; max?: number; label?: string }
+  | { type: 'bar-chart'; items: { label: string; value: number; displayValue?: string; color?: string; hint?: string; voters?: { name: string; avatarSrc?: string; weightLabel?: string }[] }[]; max?: number }
   | { type: 'steps'; current: number; total: number }
   | { type: 'tabs'; tabs: { key: string; label: string; blocks: Block[] }[] }
   | { type: 'collapse'; title: string; icon?: string; subtitle?: string; blocks: Block[]; defaultOpen?: boolean }
@@ -105,12 +107,12 @@ export default function UniversalCard({ card, onAction }: UniversalCardProps) {
 function CardHeader({ header }: { header: NonNullable<CardSchema['header']> }) {
   const gradient = header.gradient || 'from-blue-500 to-cyan-500';
   return (
-    <div className={`p-3 bg-gradient-to-r ${gradient} bg-opacity-10`} style={{ background: `linear-gradient(to right, var(--tw-gradient-stops))` }}>
+    <div className={`p-3 bg-gradient-to-r ${gradient} bg-opacity-15`} style={{ opacity: 0.85 }}>
       <div className="flex items-center gap-2">
         {header.icon && (
-          <span className="material-symbols-outlined text-base text-white/90">{header.icon}</span>
+          <span className="material-symbols-outlined text-base text-foreground/80">{header.icon}</span>
         )}
-        <span className="text-sm font-medium text-white/95 flex-1 truncate">{header.title}</span>
+        <span className="text-sm font-medium text-foreground flex-1 truncate">{header.title}</span>
         {header.badges?.map((b, i) => (
           <span key={i} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${badgeClass(b.color)}`}>
             {b.text}
@@ -118,7 +120,7 @@ function CardHeader({ header }: { header: NonNullable<CardSchema['header']> }) {
         ))}
       </div>
       {header.subtitle && (
-        <div className="text-xs text-white/70 mt-0.5 truncate">{header.subtitle}</div>
+        <div className="text-xs text-foreground/70 mt-0.5 truncate">{header.subtitle}</div>
       )}
     </div>
   );
@@ -133,6 +135,7 @@ function BlockRenderer({ block, onAction }: { block: Block; onAction?: (prompt: 
     case 'text': return <TextBlock content={block.content} maxLines={block.maxLines} />;
     case 'code': return <CodeBlock code={block.code} lang={block.lang} copyable={block.copyable} />;
     case 'progress': return <ProgressBlock value={block.value} max={block.max} label={block.label} />;
+    case 'bar-chart': return <BarChartBlock items={block.items} max={block.max} />;
     case 'steps': return <StepsBlock current={block.current} total={block.total} />;
     case 'tabs': return <TabsBlock tabs={block.tabs} onAction={onAction} />;
     case 'collapse': return <CollapseBlock title={block.title} icon={block.icon} subtitle={block.subtitle} blocks={block.blocks} defaultOpen={block.defaultOpen} onAction={onAction} />;
@@ -214,6 +217,75 @@ function ProgressBlock({ value, max = 100, label }: { value: number; max?: numbe
     <div className="space-y-1">
       {label && <div className="text-xs text-muted-foreground">{label}</div>}
       <Progress value={pct} className="h-2 [&>[data-slot=progress-indicator]]:bg-gradient-to-r [&>[data-slot=progress-indicator]]:from-blue-500 [&>[data-slot=progress-indicator]]:to-cyan-500" />
+    </div>
+  );
+}
+
+const BAR_CHART_COLORS: Record<string, string> = {
+  blue: 'bg-sky-500',
+  cyan: 'bg-cyan-500',
+  emerald: 'bg-emerald-500',
+  rose: 'bg-rose-500',
+  amber: 'bg-amber-500',
+  violet: 'bg-violet-500',
+  lime: 'bg-lime-500',
+  orange: 'bg-orange-500',
+  pink: 'bg-pink-500',
+};
+
+function BarChartBlock({
+  items,
+  max,
+}: {
+  items: { label: string; value: number; displayValue?: string; color?: string; hint?: string; voters?: { name: string; avatarSrc?: string; weightLabel?: string }[] }[];
+  max?: number;
+}) {
+  if (!items?.length) return null;
+  const resolvedMax = Math.max(1, max || Math.max(...items.map((item) => item.value)));
+  return (
+    <div className="space-y-2">
+      {items.map((item, index) => {
+        const pct = Math.max(4, Math.min(100, (item.value / resolvedMax) * 100));
+        const barClass = BAR_CHART_COLORS[item.color || 'blue'] || BAR_CHART_COLORS.blue;
+        return (
+          <div key={`${item.label}-${index}`} className="space-y-1">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="truncate text-foreground">{item.label}</span>
+              <span className="shrink-0 text-muted-foreground">{item.displayValue || item.value}</span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-muted/70">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${barClass}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {item.voters?.length ? (
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {item.voters.map((voter, voterIndex) => (
+                  <div
+                    key={`${item.label}-${voter.name}-${voterIndex}`}
+                    className="group relative"
+                    title={voter.weightLabel ? `${voter.name}（${voter.weightLabel}）` : voter.name}
+                  >
+                    <Avatar className="h-6 w-6 border border-border/70 shadow-sm">
+                      {voter.avatarSrc ? <AvatarImage src={voter.avatarSrc} alt={voter.name} /> : null}
+                      <AvatarFallback className="bg-muted text-[10px] font-medium text-foreground">
+                        {voter.name.slice(0, 1)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md group-hover:block">
+                      {voter.name}{voter.weightLabel ? `（${voter.weightLabel}）` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {item.hint ? (
+              <div className="text-[11px] text-muted-foreground">{item.hint}</div>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }

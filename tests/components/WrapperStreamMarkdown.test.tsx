@@ -4,18 +4,18 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
-import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
-import { extractSpecCodingRevisionCommand } from '@/lib/spec-coding-revision-protocol';
-import { extractStructuredResult } from '@/lib/result-channel';
+import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
+import { extractSpecCodingRevisionCommand } from '@/lib/spec/coding-revision-protocol';
+import { extractStructuredResult } from '@/lib/ai/result-channel';
 import {
   extractClarificationFormResult,
   extractPlanDraftResult,
   extractWorkflowDraftPreview,
-} from '@/lib/ai-result-normalizers';
-import { applyAiSpecCodingDraft } from '@/lib/ai-draft-utils';
-import { validateWorkflowDraft } from '@/lib/creator-validation';
-import { buildCreationSession } from '@/lib/spec-coding-store';
-import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/schemas';
+} from '@/lib/ai/result-normalizers';
+import { applyAiSpecCodingDraft } from '@/lib/ai/draft-utils';
+import { validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { buildCreationSession } from '@/lib/spec/coding-store';
+import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/core/schemas';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,6 +34,33 @@ function renderMessage(content: string, extraMessage: Record<string, any> = {}) 
   return render(
     <ChatMessage
       message={{ id: 'm1', role: 'assistant', content, ...extraMessage }}
+      onConfirmAction={() => {}}
+      onRejectAction={() => {}}
+      onUndoAction={() => {}}
+      onRetryAction={() => {}}
+    />
+  );
+}
+
+function renderWerewolfMessage(view: { mode: 'god' | 'night'; viewer?: string }) {
+  return render(
+    <ChatMessage
+      message={{
+        id: 'ww1',
+        role: 'assistant',
+        content: '狼人夜间讨论：今晚落刀预言家。',
+        rawContent: '狼人夜间讨论：今晚落刀预言家。',
+        cards: [{
+          type: 'werewolf_speech',
+          speakerName: '不动声色的谋略高手',
+          speakerType: 'agent',
+          actionLabel: '狼人内部会议',
+          visibility: 'werewolves',
+          audience: ['不动声色的谋略高手'],
+          colorIndex: 1,
+        }],
+      }}
+      werewolfView={view}
       onConfirmAction={() => {}}
       onRejectAction={() => {}}
       onUndoAction={() => {}}
@@ -97,7 +124,7 @@ function baseSpecCoding(projectRoot: string) {
 
 async function buildCodexRenderedMessage(events: any[]) {
   vi.resetModules();
-  vi.doMock('@/lib/command-exists', () => ({
+  vi.doMock('@/lib/core/command-exists', () => ({
     findCommand: vi.fn(() => '/usr/local/bin/codex'),
     commandExists: vi.fn(() => true),
     getCommonCliSearchPaths: vi.fn(() => []),
@@ -194,6 +221,7 @@ async function buildAcpRenderedMessage(
 
     return {
       ACPEngine: MockACPEngine,
+      logAcpTiming: vi.fn(),
     };
   });
 
@@ -223,6 +251,45 @@ async function buildAcpRenderedMessage(
 }
 
 describe('Wrapper stream markdown rendering', () => {
+  test('werewolf history re-renders hidden night actions when switching view', () => {
+    const { rerender } = renderWerewolfMessage({ mode: 'night' });
+    expect(screen.getByText(/当前视角不可见/)).toBeInTheDocument();
+    expect(screen.queryByText(/今晚落刀预言家/)).toBeNull();
+    expect(screen.queryByText('不动声色的谋略高手')).toBeNull();
+    expect(screen.queryByText('狼人内部会议')).toBeNull();
+    expect(screen.queryByText('狼队可见')).toBeNull();
+    expect(screen.getByText('隐藏行动')).toBeInTheDocument();
+    expect(document.body.innerHTML).not.toContain('不动声色的谋略高手');
+
+    rerender(
+      <ChatMessage
+        message={{
+          id: 'ww1',
+          role: 'assistant',
+          content: '狼人夜间讨论：今晚落刀预言家。',
+          rawContent: '狼人夜间讨论：今晚落刀预言家。',
+          cards: [{
+            type: 'werewolf_speech',
+            speakerName: '不动声色的谋略高手',
+            speakerType: 'agent',
+            actionLabel: '狼人内部会议',
+            visibility: 'werewolves',
+            audience: ['不动声色的谋略高手'],
+            colorIndex: 1,
+          }],
+        }}
+        werewolfView={{ mode: 'god' }}
+        onConfirmAction={() => {}}
+        onRejectAction={() => {}}
+        onUndoAction={() => {}}
+        onRetryAction={() => {}}
+      />
+    );
+
+    expect(screen.getByText(/今晚落刀预言家/)).toBeInTheDocument();
+    expect(screen.queryByText(/当前视角不可见/)).toBeNull();
+  });
+
   test('codex renders command details, short output, and assistant text', async () => {
     const { view } = await buildCodexRenderedMessage([
       {

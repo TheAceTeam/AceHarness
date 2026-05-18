@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
-import { parseNeedInfo, routeInfoRequest } from '@/lib/supervisor-router';
-import type { AgentSummary } from '@/lib/supervisor-router';
+import { parseNeedInfo, routeInfoRequest } from '@/lib/core/supervisor-router';
+import type { AgentSummary } from '@/lib/core/supervisor-router';
 
 const mockStep = { name: 'test-step', agent: 'developer', task: 'do something' };
 

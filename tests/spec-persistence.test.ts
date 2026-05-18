@@ -3,10 +3,10 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { withTempDir } from './helpers/module-helpers';
-import type { SpecCodingDocument } from '@/lib/schemas';
+import type { SpecCodingDocument } from '@/lib/core/schemas';
 
 async function loadSpecPersistence() {
-  return import('@/lib/spec-persistence');
+  return import('@/lib/spec/persistence');
 }
 
 function minimalSpecCoding(overrides: Partial<SpecCodingDocument> = {}): SpecCodingDocument {

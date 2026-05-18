@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
-import { loadChatSettings } from '@/lib/chat-settings';
+import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
+import { loadChatSettings } from '@/lib/chat/settings';
 
 export async function GET() {
   try {

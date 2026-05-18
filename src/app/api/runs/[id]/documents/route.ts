@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadRunState } from '@/lib/run-state-persistence';
+import { loadRunState } from '@/lib/run/state-persistence';
 import { readdir, stat, readFile, rename, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { parse } from 'yaml';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import { resolveWorkflowConfigPath } from '@/lib/workflow-config-path';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { resolveWorkflowConfigPath } from '@/lib/workflow/config-path';
+
+const TIMESTAMP_PREFIX_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/;
 
 /** Resolve the .ace-outputs dir and runs/outputs dir for a given runId */
 async function resolveOutputDirs(runId: string) {
@@ -32,6 +34,35 @@ function safePath(dir: string, file: string): string | null {
   const safe = file.replace(/\.\./g, '');
   const full = resolve(dir, safe);
   return full.startsWith(dir) ? full : null;
+}
+
+function normalizeLookupKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+}
+
+function resolveStepMetadata(
+  logicalName: string,
+  stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }>
+): { resolvedStepName: string; agent: string; phaseName: string; role: string } | null {
+  const direct = stepMap[logicalName] || stepMap[normalizeLookupKey(logicalName)];
+  if (direct) {
+    return { resolvedStepName: direct.canonicalStepName, agent: direct.agent, phaseName: direct.phaseName, role: direct.role };
+  }
+
+  const keys = Object.keys(stepMap).sort((a, b) => b.length - a.length);
+  for (const key of keys) {
+    if (logicalName.endsWith(`-${key}`)) {
+      const matched = stepMap[key];
+      return {
+        resolvedStepName: matched.canonicalStepName,
+        agent: matched.agent,
+        phaseName: matched.phaseName,
+        role: matched.role,
+      };
+    }
+  }
+
+  return null;
 }
 
 export async function GET(
@@ -90,7 +121,7 @@ export async function GET(
     const versionRegex = /^(.+)-v(\d+)\.md$/;
 
     // Build step→phase/agent lookup from config (once, outside loop)
-    const stepMap: Record<string, { agent: string; phaseName: string; role: string }> = {};
+    const stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }> = {};
     try {
       const configPath = await resolveWorkflowConfigPath(state.configFile);
       if (configPath) {
@@ -100,7 +131,7 @@ export async function GET(
           for (const phase of config.workflow.phases) {
             for (const step of phase.steps || []) {
               const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
+              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
               stepMap[step.name] = info;
               stepMap[safeStep] = info;
             }
@@ -111,7 +142,7 @@ export async function GET(
           for (const state of config.workflow.states) {
             for (const step of state.steps || []) {
               const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { agent: step.agent || '', phaseName: state.name, role: step.role || 'defender' };
+              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: state.name, role: step.role || 'defender' };
               stepMap[step.name] = info;
               stepMap[safeStep] = info;
               // Also map "stateName-stepName" format used in output filenames
@@ -132,6 +163,8 @@ export async function GET(
       const fileStat = await stat(fullPath);
 
       let baseName = entry.replace(/\.(md|txt)$/, '');
+      const documentKind = TIMESTAMP_PREFIX_RE.test(baseName) ? 'detail' : 'conclusion';
+      const logicalName = documentKind === 'detail' ? baseName.replace(TIMESTAMP_PREFIX_RE, '') : baseName;
       let iteration: number | null = null;
       let stepName = baseName;
 
@@ -148,16 +181,24 @@ export async function GET(
         iteration = 1;
       }
 
-      const info = stepMap[stepName] || { agent: '', phaseName: '', role: '' };
+      const resolved = resolveStepMetadata(logicalName, stepMap);
+      const info = resolved || { resolvedStepName: stepName, agent: '', phaseName: '', role: '' };
+      const groupKey = info.phaseName
+        ? `${info.phaseName}::${info.resolvedStepName}`
+        : logicalName;
 
       files.push({
         filename: entry,
         stepName,
         baseName,
+        logicalName,
         iteration,
         agent: info.agent,
         phaseName: info.phaseName,
         role: info.role,
+        documentKind,
+        groupKey,
+        groupLabel: info.resolvedStepName || logicalName,
         size: fileStat.size,
         modifiedTime: fileStat.mtime.toISOString(),
       });

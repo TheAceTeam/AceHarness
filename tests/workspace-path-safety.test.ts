@@ -12,7 +12,7 @@ import {
   resolveCreatableInsideWorkspace,
   resolveExistingInsideWorkspace,
   sanitizeDownloadName,
-} from '@/lib/workspace-path-safety';
+} from '@/lib/core/workspace-path-safety';
 
 function expectWorkspacePathError(fn: () => unknown, status?: number): void {
   expect(fn).toThrow(WorkspacePathError);

@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/api';
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
+import { runsApi, workspaceApi, type NotebookScope, type TreeNode } from '@/lib/core/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,12 +20,24 @@ interface DocFile {
   filename: string;
   stepName: string;
   baseName: string;
+  logicalName?: string;
   iteration: number | null;
   agent: string;
   phaseName: string;
   role: string;
+  documentKind?: 'conclusion' | 'detail';
+  groupKey?: string;
+  groupLabel?: string;
   size: number;
   modifiedTime: string;
+}
+
+interface DocTreeGroup {
+  key: string;
+  name: string;
+  summary: DocFile | null;
+  details: DocFile[];
+  latestTime: number;
 }
 
 interface DocumentsPanelProps {
@@ -87,6 +99,77 @@ function getFileGroup(filename: string): string {
   return stripped || '其他';
 }
 
+function getTreeLinkName(file: DocFile): string {
+  return file.groupLabel || file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+}
+
+function getTreeGroupKey(file: DocFile): string {
+  if (file.groupKey) return file.groupKey;
+  const logical = file.logicalName || stripTimestampPrefix(file.baseName || file.filename);
+  return logical.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+}
+
+function sortDocFiles(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocFile[] {
+  const next = [...files];
+  next.sort((a, b) => {
+    let c = 0;
+    if (sortField === 'name') c = a.baseName.localeCompare(b.baseName);
+    else if (sortField === 'time') c = new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime();
+    else if (sortField === 'size') c = a.size - b.size;
+    return sortOrder === 'asc' ? c : -c;
+  });
+  return next;
+}
+
+function buildTreeGroups(files: DocFile[], sortField: SortField, sortOrder: SortOrder): DocTreeGroup[] {
+  const map = new Map<string, { name: string; summary: DocFile | null; details: DocFile[] }>();
+
+  files.forEach((file) => {
+    const key = getTreeGroupKey(file);
+    const existing = map.get(key) || { name: getTreeLinkName(file), summary: null, details: [] };
+    existing.name ||= getTreeLinkName(file);
+    if (hasTimestamp(file.filename)) {
+      existing.details.push(file);
+    } else if (!existing.summary) {
+      existing.summary = file;
+    } else {
+      existing.details.push(file);
+    }
+    map.set(key, existing);
+  });
+
+  return Array.from(map.entries())
+    .map(([key, value]) => {
+      const sortedDetails = sortDocFiles(value.details, sortField, sortOrder);
+      const latestSource = value.summary
+        ? [value.summary, ...sortedDetails]
+        : sortedDetails;
+      const latestTime = latestSource.reduce((max, item) => {
+        const time = new Date(item.modifiedTime).getTime();
+        return Number.isFinite(time) ? Math.max(max, time) : max;
+      }, 0);
+      return {
+        key,
+        name: value.name,
+        summary: value.summary,
+        details: sortedDetails,
+        latestTime,
+      };
+    })
+    .sort((a, b) => {
+      let c = 0;
+      if (sortField === 'name') c = a.name.localeCompare(b.name);
+      else if (sortField === 'size') {
+        const sizeA = (a.summary?.size || 0) + a.details.reduce((sum, item) => sum + item.size, 0);
+        const sizeB = (b.summary?.size || 0) + b.details.reduce((sum, item) => sum + item.size, 0);
+        c = sizeA - sizeB;
+      } else {
+        c = a.latestTime - b.latestTime;
+      }
+      return sortOrder === 'asc' ? c : -c;
+    });
+}
+
 export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0, onOpenWorkspaceDirectory }: DocumentsPanelProps) {
   const { toast } = useToast();
   const [files, setFiles] = useState<DocFile[]>([]);
@@ -104,6 +187,7 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
 
   // Selection
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   // Preview
   const [previewFile, setPreviewFile] = useState<DocFile | null>(null);
@@ -240,21 +324,41 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   const groupNames = useMemo(() => Object.keys(groups).sort(), [groups]);
 
   // Filtered + sorted files
+  const scopedFiles = useMemo(() => {
+    return activeGroup ? (groups[activeGroup] || []) : [...tabFiles];
+  }, [activeGroup, groups, tabFiles]);
+
   const processedFiles = useMemo(() => {
-    let filtered = activeGroup ? (groups[activeGroup] || []) : [...tabFiles];
+    let filtered = [...scopedFiles];
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       filtered = filtered.filter(f => f.filename.toLowerCase().includes(q) || f.baseName.toLowerCase().includes(q));
     }
-    filtered.sort((a, b) => {
-      let c = 0;
-      if (sortField === 'name') c = a.baseName.localeCompare(b.baseName);
-      else if (sortField === 'time') c = new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime();
-      else if (sortField === 'size') c = a.size - b.size;
-      return sortOrder === 'asc' ? c : -c;
-    });
-    return filtered;
-  }, [files, groups, activeGroup, searchQuery, sortField, sortOrder]);
+    return sortDocFiles(filtered, sortField, sortOrder);
+  }, [scopedFiles, searchQuery, sortField, sortOrder]);
+
+  const treeGroups = useMemo(() => {
+    const grouped = buildTreeGroups(scopedFiles, sortField, sortOrder);
+    if (!searchQuery.trim()) return grouped;
+    const q = searchQuery.toLowerCase();
+    return grouped
+      .map((group) => {
+        const summaryMatches = Boolean(group.summary && (
+          group.summary.filename.toLowerCase().includes(q) || group.summary.baseName.toLowerCase().includes(q)
+        ));
+        const detailMatches = group.details.filter((file) => (
+          file.filename.toLowerCase().includes(q) || file.baseName.toLowerCase().includes(q)
+        ));
+        if (summaryMatches) {
+          return { ...group };
+        }
+        if (detailMatches.length > 0) {
+          return { ...group, details: detailMatches };
+        }
+        return null;
+      })
+      .filter(Boolean) as DocTreeGroup[];
+  }, [scopedFiles, searchQuery, sortField, sortOrder]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) setSortOrder(o => o === 'asc' ? 'desc' : 'asc');
@@ -271,6 +375,26 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     } catch { setPreviewContent('(无法加载)'); }
     setLoadingPreview(false);
   }, [runId]);
+
+  const toggleExpandedGroup = useCallback((groupKey: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!previewFile) return;
+    const key = getTreeGroupKey(previewFile);
+    setExpandedGroups((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, [previewFile]);
 
   const openLatestTimestampedFile = useCallback(async () => {
     if (!runId) return;
@@ -313,8 +437,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     });
   };
   const toggleSelectAll = () => {
-    if (selected.size === processedFiles.length) setSelected(new Set());
-    else setSelected(new Set(processedFiles.map(f => f.filename)));
+    const visibleFiles = docFilter === 'all'
+      ? treeGroups.flatMap(group => group.summary ? [group.summary, ...group.details] : group.details)
+      : processedFiles;
+    if (selected.size === visibleFiles.length) setSelected(new Set());
+    else setSelected(new Set(visibleFiles.map(f => f.filename)));
   };
 
   const handleRename = async (file: string) => {
@@ -557,18 +684,25 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
   );
 
   // --- File row ---
-  const fileRow = (file: DocFile, compact: boolean) => {
+  const fileRow = (
+    file: DocFile,
+    compact: boolean,
+    options?: { indent?: number; prefix?: ReactNode; muted?: boolean }
+  ) => {
     const isRenaming = renamingFile === file.filename;
     const isSelected = selected.has(file.filename);
     const isActive = previewFile?.filename === file.filename;
+    const rowStyle = options?.indent ? { paddingLeft: `${12 + options.indent}px` } : undefined;
 
     if (compact) {
       return (
         <div
           key={file.filename}
-          className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30"
+          className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 ${options?.muted ? 'text-muted-foreground' : ''}`}
+          style={rowStyle}
           onClick={() => { setModalOpen(true); selectFile(file); }}
         >
+          {options?.prefix}
           <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
           <span className="truncate flex-1" title={file.filename}>{getDisplayFileName(file)}</span>
         </div>
@@ -579,9 +713,11 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       <div
         key={file.filename}
         className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 ${isActive ? 'bg-accent' : ''}`}
+        style={rowStyle}
         onClick={() => !isRenaming && selectFile(file)}
       >
         <Checkbox checked={isSelected} onCheckedChange={() => toggleSelect(file.filename)} onClick={e => e.stopPropagation()} className="h-3.5 w-3.5" />
+        {options?.prefix}
         <span className={`material-symbols-outlined text-sm shrink-0 ${getDocumentIconClass(file)}`}>{getDocumentIcon(file)}</span>
         {isRenaming ? (
           <Input
@@ -636,9 +772,85 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     );
   };
 
+  const treeChevron = (group: DocTreeGroup) => (
+    <button
+      type="button"
+      className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
+      onClick={(e) => {
+        e.stopPropagation();
+        toggleExpandedGroup(group.key);
+      }}
+      title={expandedGroups.has(group.key) ? '收起详情' : '展开详情'}
+    >
+      <span className="material-symbols-outlined text-[12px]">
+        {expandedGroups.has(group.key) ? 'expand_more' : 'chevron_right'}
+      </span>
+    </button>
+  );
+
+  const renderTreeList = (compact: boolean) => {
+    if (loading) {
+      return <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>;
+    }
+    if (treeGroups.length === 0) {
+      return <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>;
+    }
+
+    return (
+      <>
+        {!compact && (
+          <div className="flex items-center gap-2 px-3 py-1 text-[10px] text-muted-foreground border-b border-border/30 bg-muted/20">
+            <Checkbox
+              checked={
+                treeGroups.length > 0
+                && selected.size === treeGroups.flatMap(group => group.summary ? [group.summary, ...group.details] : group.details).length
+              }
+              onCheckedChange={toggleSelectAll}
+              className="h-3 w-3"
+            />
+            <span className="flex-1">总结 / 详情</span>
+            <span className="w-14 text-right">大小</span>
+            <span className="w-20 text-right">时间</span>
+            <span className="w-5" />
+          </div>
+        )}
+        {treeGroups.map((group) => {
+          const expanded = expandedGroups.has(group.key);
+          const summaryFile = group.summary;
+          return (
+            <div key={group.key}>
+              {summaryFile ? (
+                fileRow(summaryFile, compact, {
+                  prefix: group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />,
+                })
+              ) : (
+                <div
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/30 bg-muted/20"
+                  style={compact ? undefined : { paddingLeft: '12px' }}
+                >
+                  {group.details.length > 0 ? treeChevron(group) : <span className="w-4 shrink-0" />}
+                  <span className="material-symbols-outlined text-sm text-amber-600 shrink-0">topic</span>
+                  <span className="flex-1 truncate font-medium">{group.name}</span>
+                  {!compact && <span className="text-[10px] text-muted-foreground shrink-0">{group.details.length} 条详情</span>}
+                </div>
+              )}
+              {expanded && group.details.map((file) => fileRow(file, compact, {
+                indent: 22,
+                prefix: <span className="material-symbols-outlined text-[12px] text-muted-foreground shrink-0">subdirectory_arrow_right</span>,
+                muted: true,
+              }))}
+            </div>
+          );
+        })}
+      </>
+    );
+  };
+
   // --- File list ---
   const fileList = (compact: boolean) => (
     <div className="flex-1 overflow-y-auto">
+      {docFilter === 'all' ? renderTreeList(compact) : (
+        <>
       {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
       {!loading && processedFiles.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
@@ -659,12 +871,16 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
         </div>
       )}
       {!loading && processedFiles.map(f => fileRow(f, compact))}
+        </>
+      )}
     </div>
   );
 
   // --- Compact embedded: show folder groups + files ---
   const compactView = () => (
     <div className="flex-1 overflow-y-auto">
+      {docFilter === 'all' ? renderTreeList(true) : (
+        <>
       {loading && <div className="text-center text-xs text-muted-foreground py-8">加载中...</div>}
       {!loading && files.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
@@ -678,6 +894,8 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           {(groups[g] || []).map(f => fileRow(f, true))}
         </div>
       ))}
+        </>
+      )}
     </div>
   );
 

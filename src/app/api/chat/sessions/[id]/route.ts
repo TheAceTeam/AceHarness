@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadChatSession, saveChatSession, deleteChatSession } from '@/lib/chat-persistence';
-import { requireAuth } from '@/lib/auth-middleware';
+import { loadChatSession, saveChatSession, deleteChatSession } from '@/lib/chat/persistence';
+import { requireAuth } from '@/lib/auth/middleware';
 
 function isOwner(session: any, userId: string): boolean {
   // Backward compatibility: legacy sessions without createdBy are treated as shared.

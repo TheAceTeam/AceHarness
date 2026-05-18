@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import AuthGuard from '@/components/AuthGuard';
 import Markdown from '@/components/Markdown';
-import { workspaceApi } from '@/lib/api';
+import { workspaceApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 
 interface AbsoluteFilePreviewProps {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/auth-middleware';
+import { requireAdmin } from '@/lib/auth/middleware';
 import {
   adminResetPassword,
   deleteUser,
@@ -7,7 +7,7 @@ import {
   reviewUserRegistration,
   toPublicUser,
   updateUser,
-} from '@/lib/user-store';
+} from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

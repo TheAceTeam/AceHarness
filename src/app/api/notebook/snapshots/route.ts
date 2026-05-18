@@ -1,14 +1,14 @@
 import fs from 'fs/promises';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook-manager';
-import { getNotebookShare } from '@/lib/notebook-share-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { ensureNotebookRoot, normalizeNotebookScope, safeResolve } from '@/lib/notebook/manager';
+import { getNotebookShare } from '@/lib/notebook/share-store';
 import {
   createNotebookSnapshot,
   getNotebookSnapshotContent,
   listNotebookSnapshots,
   type NotebookSnapshotSource,
-} from '@/lib/notebook-snapshot-store';
+} from '@/lib/notebook/snapshot-store';
 
 async function resolveShare(shareToken: string) {
   if (!shareToken) return null;

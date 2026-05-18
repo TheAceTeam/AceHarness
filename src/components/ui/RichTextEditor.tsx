@@ -7,12 +7,13 @@ import CharacterCount from '@tiptap/extension-character-count';
 import { ListKit } from '@tiptap/extension-list';
 import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
+import Mention from '@tiptap/extension-mention';
 import { Markdown } from '@tiptap/markdown';
 import { Extension } from '@tiptap/core';
-import { useEffect, forwardRef, useImperativeHandle, useRef, useState, useCallback } from 'react';
+import { useEffect, forwardRef, useImperativeHandle, useRef, useState, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { createPortal } from 'react-dom';
-import { uploadImageFile } from '@/lib/client-image-upload';
+import { uploadImageFile } from '@/lib/core/client-image-upload';
 
 export interface RichTextEditorHandle {
   clear: () => void;
@@ -23,6 +24,7 @@ export interface RichTextEditorHandle {
   isEmpty: () => boolean;
   setFullscreen: (value: boolean) => void;
   setContent: (content: string) => void;
+  insertMarkdown: (content: string) => void;
 }
 
 interface RichTextEditorProps {
@@ -40,7 +42,16 @@ interface RichTextEditorProps {
   showToolbar?: boolean;
   footerContent?: React.ReactNode;
   trimPastedTrailingNewlines?: boolean;
+  mentionItems?: Array<string | { id: string; label: string; description?: string }>;
 }
+
+type MentionItem = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+const EMPTY_MENTION_ITEMS: NonNullable<RichTextEditorProps['mentionItems']> = [];
 
 function trimTrailingNewlines(value: string): string {
   return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
@@ -138,6 +149,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   showToolbar = false,
   footerContent,
   trimPastedTrailingNewlines = false,
+  mentionItems = EMPTY_MENTION_ITEMS,
 }, ref) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
@@ -147,6 +159,17 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   const lastCompositionEndAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(0);
+  const normalizedMentionItems = useMemo<MentionItem[]>(() => {
+    const seen = new Set<string>();
+    return mentionItems
+      .map((item) => typeof item === 'string' ? { id: item, label: item } : item)
+      .filter((item) => {
+        const key = item.id || item.label;
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [mentionItems]);
 
   const getMarkdownWithImageLocalPaths = useCallback(() => {
     if (!editorRuntimeRef.current) return '';
@@ -209,6 +232,213 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       Markdown,
       Typography,
       Image,
+      Mention.configure({
+        HTMLAttributes: {
+          class: 'ace-mention',
+        },
+        deleteTriggerWithBackspace: true,
+        renderText({ options, node }) {
+          return `${options.suggestion.char}${node.attrs.label ?? node.attrs.id}`;
+        },
+        suggestion: {
+          char: '@',
+          allowSpaces: true,
+          items: ({ query }: { query: string }) => {
+            const normalizedQuery = query.trim().toLowerCase();
+            return normalizedMentionItems
+              .filter((item) => {
+                if (!normalizedQuery) return true;
+                return item.label.toLowerCase().includes(normalizedQuery) || item.id.toLowerCase().includes(normalizedQuery);
+              })
+              .slice(0, 8);
+          },
+          command: ({ editor, range, props }: any) => {
+            editor
+              .chain()
+              .focus()
+              .insertContentAt(range, [
+                {
+                  type: 'mention',
+                  attrs: {
+                    id: props.id,
+                    label: props.label,
+                  },
+                },
+                {
+                  type: 'text',
+                  text: ' ',
+                },
+              ])
+              .run();
+          },
+          render: () => {
+            let component: HTMLDivElement | null = null;
+            let selectedIndex = 0;
+            let items: MentionItem[] = [];
+            let command: ((item: MentionItem) => void) | null = null;
+            let lastClientRect: (() => DOMRect | null) | null = null;
+            let lastRange: { from: number; to: number } | null = null;
+            let lastEditor: any = null;
+            let frameId: number | null = null;
+
+            const selectItem = (index: number) => {
+              const item = items[index];
+              if (item && command) command(item);
+            };
+
+            const schedulePosition = () => {
+              if (frameId !== null) cancelAnimationFrame(frameId);
+              frameId = requestAnimationFrame(() => {
+                frameId = null;
+                positionMenu(true);
+              });
+            };
+
+            const positionMenu = (showAfterPosition = false) => {
+              if (!component) return;
+              let rect = null as DOMRect | null;
+              try {
+                const selection = window.getSelection();
+                if (selection && selection.rangeCount > 0) {
+                  const selectionRange = selection.getRangeAt(0).cloneRange();
+                  selectionRange.collapse(false);
+                  rect = selectionRange.getBoundingClientRect();
+                }
+              } catch {
+                rect = null;
+              }
+              try {
+                if ((!rect || rect.left <= 0 || rect.top <= 0) && lastEditor?.view && typeof lastRange?.from === 'number') {
+                  rect = lastEditor.view.coordsAtPos(lastRange.from) as DOMRect;
+                }
+              } catch {
+                rect = null;
+              }
+              if (!rect || rect.left <= 0 || rect.top <= 0) {
+                rect = lastClientRect?.() || null;
+              }
+              if ((!rect || rect.left <= 0 || rect.top <= 0) && editorContainerRef.current) {
+                rect = editorContainerRef.current.getBoundingClientRect();
+              }
+              if (rect) {
+                const containerRect = editorContainerRef.current?.getBoundingClientRect();
+                const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                const menuWidth = Math.max(component.offsetWidth || 0, 180);
+                const menuHeight = Math.max(component.offsetHeight || 0, 40);
+                const margin = 8;
+                const rawLeft = containerRect
+                  ? Math.min(Math.max(rect.left, containerRect.left + margin), Math.max(containerRect.left + margin, containerRect.right - menuWidth - margin))
+                  : rect.left;
+                const left = Math.min(
+                  Math.max(rawLeft, margin),
+                  Math.max(margin, viewportWidth - menuWidth - margin)
+                );
+                const belowTop = rect.bottom + 6;
+                const aboveTop = rect.top - menuHeight - 6;
+                const top = belowTop + menuHeight + margin <= viewportHeight
+                  ? belowTop
+                  : Math.max(margin, aboveTop);
+                component.style.position = 'fixed';
+                component.style.left = `${left}px`;
+                component.style.top = `${top}px`;
+                if (showAfterPosition) {
+                  component.style.visibility = 'visible';
+                }
+              }
+            };
+
+            const renderMenu = () => {
+              if (!component) return;
+              component.innerHTML = '';
+              component.className = 'z-50 min-w-[180px] rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg';
+              if (items.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'px-2 py-1.5 text-xs text-muted-foreground';
+                empty.textContent = '没有匹配成员';
+                component.appendChild(empty);
+              } else {
+                items.forEach((item, index) => {
+                  const button = document.createElement('button');
+                  button.type = 'button';
+                  button.className = [
+                    'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm',
+                    index === selectedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground',
+                  ].join(' ');
+                  button.onmouseenter = () => {
+                    selectedIndex = index;
+                    renderMenu();
+                  };
+                  button.onmousedown = (event) => {
+                    event.preventDefault();
+                    selectItem(index);
+                  };
+                  const label = document.createElement('span');
+                  label.className = 'font-medium';
+                  label.textContent = `@${item.label}`;
+                  button.appendChild(label);
+                  if (item.description) {
+                    const description = document.createElement('span');
+                    description.className = 'ml-3 max-w-[160px] truncate text-xs opacity-65';
+                    description.textContent = item.description;
+                    button.appendChild(description);
+                  }
+                  component?.appendChild(button);
+                });
+              }
+              positionMenu();
+              schedulePosition();
+            };
+
+            const update = (props: any) => {
+              items = props.items || [];
+              command = props.command;
+              lastClientRect = props.clientRect || null;
+              lastRange = props.range || null;
+              lastEditor = props.editor || null;
+              selectedIndex = Math.min(selectedIndex, Math.max(0, items.length - 1));
+              renderMenu();
+            };
+
+            return {
+              onStart: (props: any) => {
+                component = document.createElement('div');
+                component.style.visibility = 'hidden';
+                document.body.appendChild(component);
+                update(props);
+              },
+              onUpdate: update,
+              onKeyDown: (props: any) => {
+                if (!items.length) return false;
+                if (props.event.key === 'ArrowDown') {
+                  selectedIndex = (selectedIndex + 1) % items.length;
+                  renderMenu();
+                  return true;
+                }
+                if (props.event.key === 'ArrowUp') {
+                  selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+                  renderMenu();
+                  return true;
+                }
+                if (props.event.key === 'Enter' || props.event.key === 'Tab') {
+                  selectItem(selectedIndex);
+                  return true;
+                }
+                if (props.event.key === 'Escape') {
+                  return true;
+                }
+                return false;
+              },
+              onExit: () => {
+                if (frameId !== null) cancelAnimationFrame(frameId);
+                frameId = null;
+                component?.remove();
+                component = null;
+              },
+            };
+          },
+        },
+      }),
       Placeholder.configure({
         placeholder,
         emptyEditorClass: 'is-editor-empty',
@@ -277,7 +507,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       const text = editor.getText();
       onChange?.(markdown, text);
     },
-  });
+  }, [normalizedMentionItems]);
 
   useEffect(() => {
     editorRuntimeRef.current = editor || null;
@@ -339,7 +569,12 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         editor.commands.setContent(content, { contentType: 'markdown' });
       }
     },
-  }), [editor, safeFocus]);
+    insertMarkdown: (content: string) => {
+      if (editor) {
+        editor.chain().focus().insertContent(content, { contentType: 'markdown' }).run();
+      }
+    },
+  }), [editor, getMarkdownWithImageLocalPaths, safeFocus]);
 
   const editorWrapperRef = useRef<HTMLDivElement>(null);
 
@@ -429,6 +664,15 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     }
   }, [isFullscreen, editor, safeFocus]);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (!isFullscreen) return;
+    document.body.setAttribute('data-rich-text-editor-fullscreen-open', 'true');
+    return () => {
+      document.body.removeAttribute('data-rich-text-editor-fullscreen-open');
+    };
+  }, [isFullscreen]);
+
   if (!editor) {
     return null;
   }
@@ -438,7 +682,13 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
 
   if (isFullscreen) {
     const fullscreenContent = (
-      <div className="fixed inset-0 z-[9999] bg-background flex flex-col">
+      <div
+        data-rich-text-editor-fullscreen=""
+        className="fixed inset-0 z-[9999] bg-background flex flex-col"
+        onPointerDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="flex-1 flex flex-col p-4 md:p-6">
           <div className="flex-1 flex flex-col rounded-xl md:rounded-2xl border border-input bg-background overflow-hidden shadow-2xl">
             <div className="px-4 md:px-6 py-3 md:py-4 border-b bg-muted/50 flex items-center justify-between">
@@ -466,12 +716,12 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   }
 
   return (
-    <div ref={editorContainerRef} className={`relative ${className}`}>
-      <div ref={editorWrapperRef} className="overflow-hidden rounded-lg border border-input bg-background" style={{ maxHeight: `${maxHeight}px`, minHeight: `${minHeight}px` }}>
-        <div className="px-2 py-1.5 flex items-start gap-1">
-          <div className="flex-1 min-h-[32px] overflow-y-auto">
+    <div ref={editorContainerRef} className={`relative min-h-0 ${className}`}>
+      <div ref={editorWrapperRef} className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-input bg-background" style={{ maxHeight: `${maxHeight}px`, minHeight: `${minHeight}px` }}>
+        <div className="flex min-h-0 flex-1 items-start gap-1 px-2 py-1.5">
+          <div className="min-h-[32px] min-w-0 flex-1 overflow-y-auto">
             {showToolbar && <MenuBar editor={editor} />}
-            <EditorContent editor={editor} className="outline-none [&_.ProseMirror]:!outline-none [&_.ProseMirror:focus]:!outline-none [&_.ProseMirror_h1]:text-lg [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:my-2 [&_.ProseMirror_h2]:text-base [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:my-2 [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-primary/50 [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-muted-foreground [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5 [&_.ProseMirror_hr]:my-3 [&_.ProseMirror_hr]:border-border [&_.ProseMirror_img]:my-2 [&_.ProseMirror_img]:max-h-36 [&_.ProseMirror_img]:max-w-[260px] [&_.ProseMirror_img]:rounded-md [&_.ProseMirror_img]:border [&_.ProseMirror_img]:border-border [&_.ProseMirror_img]:object-contain" style={{ maxHeight: `${maxHeight - 16}px` }} />
+            <EditorContent editor={editor} className="outline-none [&_.ProseMirror]:!outline-none [&_.ProseMirror]:min-w-0 [&_.ProseMirror]:whitespace-pre-wrap [&_.ProseMirror]:break-words [&_.ProseMirror]:[overflow-wrap:anywhere] [&_.ProseMirror:focus]:!outline-none [&_.ProseMirror_h1]:text-lg [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:my-2 [&_.ProseMirror_h2]:text-base [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:my-2 [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-primary/50 [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-muted-foreground [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5 [&_.ProseMirror_hr]:my-3 [&_.ProseMirror_hr]:border-border [&_.ProseMirror_code]:whitespace-pre-wrap [&_.ProseMirror_code]:break-words [&_.ProseMirror_code]:[overflow-wrap:anywhere] [&_.ProseMirror_pre]:max-w-full [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre_code]:whitespace-pre-wrap [&_.ProseMirror_pre_code]:break-words [&_.ProseMirror_pre_code]:[overflow-wrap:anywhere] [&_.ProseMirror_img]:my-2 [&_.ProseMirror_img]:max-h-36 [&_.ProseMirror_img]:max-w-[260px] [&_.ProseMirror_img]:rounded-md [&_.ProseMirror_img]:border [&_.ProseMirror_img]:border-border [&_.ProseMirror_img]:object-contain" style={{ maxHeight: `${maxHeight - 16}px` }} />
           </div>
           {showFullscreenToggle && (
             <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0 opacity-50 hover:opacity-100" onClick={() => setIsFullscreen(true)} title="全屏编辑">

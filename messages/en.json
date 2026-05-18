@@ -2,6 +2,7 @@
   "dashboard": {
     "title": "ACEHarness Control Center",
     "subtitle": "Full-Lifecycle Multi-Agent Orchestration System",
+    "versionLabel": "Current version",
     "stats": {
       "totalRuns": "Total Runs",
       "successRate": "Success Rate",
@@ -14,8 +15,12 @@
     },
     "tokenRanking": {
       "title": "Token Usage Ranking",
+      "sectionSubtitle": "View workflow, run, and user token distribution in one place.",
       "byUser": "By User",
       "byWorkflow": "By Workflow",
+      "userSubtitle": "See overall token share and spend distribution by user.",
+      "workflowSubtitle": "See the most token-heavy workflows at a glance with aggregated breakdown.",
+      "viewAll": "All",
       "totalTokens": "Total Tokens",
       "runs": "Runs",
       "cost": "Cost",
@@ -49,13 +54,31 @@
     },
     "charts": {
       "agentUsage": "Agent Usage",
+      "agentUsageDesc": "Track the most active agents by recent call volume.",
       "weeklyActivity": "Weekly Activity",
+      "weeklyActivityDesc": "Run trend over the last 7 days.",
+      "workflowTokenComparison": "Workflow Token Comparison",
+      "workflowTokenComparisonDesc": "Compare input, output, and cache token mix across workflows.",
+      "runTokenRanking": "Run Token Ranking",
+      "runTokenRankingDesc": "Rank individual runs by total token consumption to spot the heaviest executions.",
+      "recentTokenTrend": "Recent Run Token Trend",
+      "recentTokenTrendDesc": "See token movement across the most recent runs.",
+      "weeklyTokenTrend": "7-Day Token Trend",
+      "weeklyTokenTrendDesc": "Track total token consumption by day over the last 7 days.",
+      "runtimeSectionTitle": "Runtime Overview",
+      "runtimeSectionDesc": "View agent activity and the 7-day run trend.",
       "calls": "Calls",
-      "cost": "Cost ($)"
+      "cost": "Cost ($)",
+      "runs": "Runs",
+      "inputTokens": "Input Tokens",
+      "outputTokens": "Output Tokens",
+      "cacheTokens": "Cache Tokens"
     },
     "sections": {
       "activeWorkflows": "Active Workflows",
+      "activeWorkflowsDesc": "Overview of workflows that are still running, including progress and current phase.",
       "recentRuns": "Recent Runs",
+      "recentRunsDesc": "Latest executions with status, phase, and token consumption.",
       "phases": "phases",
       "noActiveWorkflows": "No active workflows"
     },

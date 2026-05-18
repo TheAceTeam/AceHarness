@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineIcon } from '@/components/EngineIcon';
-import { getEngineMeta } from '@/lib/engine-metadata';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 
 interface ModelOption {
@@ -51,6 +51,12 @@ interface Engine {
   status: 'available' | 'coming-soon';
   features: string[];
   endpoints: string[];
+}
+
+interface EngineAvailabilityReport {
+  engine: string;
+  available: boolean;
+  drivers?: Partial<Record<'stdio' | 'sdk', boolean>>;
 }
 
 const engines: Engine[] = [
@@ -143,9 +149,10 @@ export default function EnginesPage() {
   useDocumentTitle('执行引擎');
   const [currentEngine, setCurrentEngine] = useState<string>('claude-code');
   const [defaultModel, setDefaultModel] = useState<string>('');
+  const [driverSelections, setDriverSelections] = useState<Record<string, 'stdio' | 'sdk'>>({});
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
-  const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
+  const [engineAvailability, setEngineAvailability] = useState<Record<string, EngineAvailabilityReport>>({});
   const [checkingAvailability, setCheckingAvailability] = useState(false);
 
   const broadcastEngineUpdated = () => {
@@ -171,6 +178,18 @@ export default function EnginesPage() {
   const getModelsForEngine = (engineId: string) =>
     models.filter(m => !m.engines || m.engines.length === 0 || m.engines.includes(engineId));
 
+  const getDriverForEngine = (engineId: string): 'stdio' | 'sdk' =>
+    driverSelections[engineId] || (engineId === 'codegenie' ? 'stdio' : 'sdk');
+
+  const getEngineReport = (engineId: string): EngineAvailabilityReport | undefined =>
+    engineAvailability[engineId];
+
+  const isEngineAvailable = (engineId: string): boolean | undefined =>
+    getEngineReport(engineId)?.available;
+
+  const isDriverAvailable = (engineId: string, driver: 'stdio' | 'sdk'): boolean | undefined =>
+    getEngineReport(engineId)?.drivers?.[driver];
+
   const loadCurrentEngine = async () => {
     try {
       const response = await fetch('/api/engine');
@@ -181,6 +200,13 @@ export default function EnginesPage() {
       if (data.defaultModel) {
         setDefaultModel(data.defaultModel);
       }
+      if (data.driver) {
+        setDriverSelections((prev) => ({
+          ...prev,
+          ...(data.drivers || {}),
+          ...(data.engine ? { [data.engine]: data.driver } : {}),
+        }));
+      }
     } catch (error) {
       console.error('Failed to load current engine:', error);
     } finally {
@@ -190,17 +216,24 @@ export default function EnginesPage() {
 
   const checkEngineAvailability = async () => {
     setCheckingAvailability(true);
-    const availability: Record<string, boolean> = {};
+    const availability: Record<string, EngineAvailabilityReport> = {};
 
     for (const engine of engines) {
       if (engine.status === 'available') {
         try {
           const response = await fetch(`/api/engine/availability?engine=${engine.id}`);
           const data = await response.json();
-          availability[engine.id] = data.available;
+          availability[engine.id] = {
+            engine: engine.id,
+            available: Boolean(data.available),
+            drivers: data.drivers || undefined,
+          };
         } catch (error) {
           console.error(`Failed to check ${engine.id} availability:`, error);
-          availability[engine.id] = false;
+          availability[engine.id] = {
+            engine: engine.id,
+            available: false,
+          };
         }
       }
     }
@@ -216,14 +249,14 @@ export default function EnginesPage() {
     }
 
     // Check if engine is available before switching
-    if (engineAvailability[engineId] === false) {
+    if (isEngineAvailable(engineId) === false) {
       const hints: Record<string, string> = {
         'kiro-cli': '安装方法：curl -fsSL https://cli.kiro.dev/install | bash',
         'claude-code': '安装方法：npm install -g @anthropic-ai/claude-code',
 
         'opencode': '安装方法：npm install -g opencode-ai',
         'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
-        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH（参见 CodeGenie 官方安装说明）',
+        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，可设置环境变量 ACEH_CODEGENIE_COMMAND 指向可执行文件（参见 CodeGenie 官方安装说明）',
         'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
         'magic-cli': '请从 https://gitcode.com/Cangjie-SIG/magic-cli 克隆仓库，并将环境变量 MAGIC_CLI_PATH 指向 magic-cli.sh 的完整路径，或将 magic-cli.sh 所在目录加入 PATH',
       };
@@ -273,6 +306,36 @@ export default function EnginesPage() {
     } catch (error) {
       console.error('Failed to set default model:', error);
       toast('error', '设置默认模型失败');
+    }
+  };
+
+  const handleSetEngineDriver = async (engineId: string, nextDriver: 'stdio' | 'sdk') => {
+    if (isDriverAvailable(engineId, nextDriver) === false) {
+      toast('error', `${engines.find((item) => item.id === engineId)?.name || engineId} 的 ${nextDriver} 驱动当前不可用`);
+      return;
+    }
+
+    const previousDriver = getDriverForEngine(engineId);
+    setDriverSelections((prev) => ({ ...prev, [engineId]: nextDriver }));
+    try {
+      const response = await fetch('/api/engine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: engineId, targetEngine: engineId, driver: nextDriver }),
+      });
+      if (!response.ok) {
+        throw new Error('切换失败');
+      }
+      setCurrentEngine(engineId);
+      const compatible = getModelsForEngine(engineId);
+      if (defaultModel && !compatible.find(m => m.value === defaultModel)) {
+        setDefaultModel('');
+      }
+      broadcastEngineUpdated();
+      toast('success', `已切换到 ${engines.find((item) => item.id === engineId)?.name || engineId} / ${nextDriver}`);
+    } catch (error) {
+      setDriverSelections((prev) => ({ ...prev, [engineId]: previousDriver }));
+      toast('error', error instanceof Error ? error.message : '切换失败');
     }
   };
 
@@ -512,9 +575,9 @@ export default function EnginesPage() {
                 <div className="absolute top-4 right-4">
                   {checkingAvailability ? (
                     <Badge variant="outline">检查中...</Badge>
-                  ) : engineAvailability[engine.id] === false ? (
+                  ) : isEngineAvailable(engine.id) === false ? (
                     <Badge variant="destructive">不可用</Badge>
-                  ) : engineAvailability[engine.id] === true ? (
+                  ) : isEngineAvailable(engine.id) === true ? (
                     <Badge variant="outline" className="bg-green-500/10 text-green-600 border-green-500/30">可用</Badge>
                   ) : null}
                 </div>
@@ -551,11 +614,76 @@ export default function EnginesPage() {
                 </div>
               </div>
 
+              {engine.status === 'available' && ['claude-code', 'opencode', 'codegenie'].includes(engine.id) && (
+                <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">驱动模式：</p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={getDriverForEngine(engine.id) === 'stdio' ? 'default' : 'outline'}
+                      className="flex-1 h-8 text-xs justify-between gap-2"
+                      disabled={checkingAvailability || isDriverAvailable(engine.id, 'stdio') === false}
+                      onClick={() => handleSetEngineDriver(engine.id, 'stdio')}
+                    >
+                      <span>stdio (ACP)</span>
+                      <Badge
+                        variant={isDriverAvailable(engine.id, 'stdio') === false ? 'destructive' : 'secondary'}
+                        className={`h-5 px-1.5 text-[10px] ${
+                          isDriverAvailable(engine.id, 'stdio') === true
+                            ? 'bg-green-500/10 text-green-600 border-green-500/30'
+                            : isDriverAvailable(engine.id, 'stdio') === undefined
+                              ? 'bg-muted text-muted-foreground border-border'
+                              : ''
+                        }`}
+                      >
+                        {isDriverAvailable(engine.id, 'stdio') === false ? '不可用' : isDriverAvailable(engine.id, 'stdio') === true ? '可用' : '未检测'}
+                      </Badge>
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={getDriverForEngine(engine.id) === 'sdk' ? 'default' : 'outline'}
+                      className="flex-1 h-8 text-xs justify-between gap-2"
+                      disabled={checkingAvailability || isDriverAvailable(engine.id, 'sdk') === false}
+                      onClick={() => handleSetEngineDriver(engine.id, 'sdk')}
+                    >
+                      <span>SDK (HTTP)</span>
+                      <Badge
+                        variant={isDriverAvailable(engine.id, 'sdk') === false ? 'destructive' : 'secondary'}
+                        className={`h-5 px-1.5 text-[10px] ${
+                          isDriverAvailable(engine.id, 'sdk') === true
+                            ? 'bg-green-500/10 text-green-600 border-green-500/30'
+                            : isDriverAvailable(engine.id, 'sdk') === undefined
+                              ? 'bg-muted text-muted-foreground border-border'
+                              : ''
+                        }`}
+                      >
+                        {isDriverAvailable(engine.id, 'sdk') === false ? '不可用' : isDriverAvailable(engine.id, 'sdk') === true ? '可用' : '未检测'}
+                      </Badge>
+                    </Button>
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    {checkingAvailability
+                      ? '驱动可用性检测中'
+                      : '点击驱动按钮会切换到对应的引擎接入方式'}
+                  </p>
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    {engine.id === 'claude-code'
+                      ? (getDriverForEngine(engine.id) === 'sdk'
+                        ? 'SDK 模式使用 @anthropic-ai/claude-agent-sdk，保持当前 Claude Code 默认接入方式'
+                        : 'stdio 模式通过 claude-agent-acp 走 ACP 协议，适合统一到 ACP 驱动栈')
+                      : (getDriverForEngine(engine.id) === 'sdk'
+                        ? 'SDK 模式通过 HTTP API 通信，一个 server 服务所有会话，更稳定'
+                        : 'stdio 模式通过子进程 stdin/stdout 通信，兼容旧版本')}
+                  </p>
+                </div>
+              )}
+
               {/* Select Button */}
               {engine.status === 'available' && currentEngine !== engine.id && (
                 <Button
                   className="w-full mt-4"
                   variant="outline"
+                  disabled={checkingAvailability}
                   onClick={(e) => {
                     e.stopPropagation();
                     handleSelectEngine(engine.id);

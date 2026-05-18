@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile, stat } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { listConfigsWithMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
+import { requireAuth } from '@/lib/auth/middleware';
+import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 
 export const dynamic = 'force-dynamic';
 

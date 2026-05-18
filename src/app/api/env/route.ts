@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadEnvVars, saveEnvVars } from '@/lib/env-manager';
-import { requireAuth } from '@/lib/auth-middleware';
+import { loadEnvVars, saveEnvVars } from '@/lib/core/env-manager';
+import { requireAuth } from '@/lib/auth/middleware';
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request);

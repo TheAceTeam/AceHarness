@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { resetPasswordByQuestion, getSecurityQuestion } from '@/lib/user-store';
+import { resetPasswordByQuestion, getSecurityQuestion } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 
 const AVATARS = [
   'axolotl.png', 'bear.png', 'bird.png', 'cat.png', 'deer.png', 'dog.png',

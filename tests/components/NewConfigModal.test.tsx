@@ -1,0 +1,895 @@
+// @vitest-environment jsdom
+import React from 'react';
+import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
+import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
+import { cleanup, waitFor, screen } from '@testing-library/react';
+
+const chatContextMock = {
+  ...defaultChatContextMock,
+  appendSessionMessage: vi.fn(async () => {}),
+  updateSessionCreationBinding: vi.fn(async () => {}),
+  appendVisibleSessionTag: vi.fn(async () => {}),
+};
+
+vi.mock('next/dynamic', () => ({
+  default: () => function DynamicStub() {
+    return <div data-testid="dynamic-stub" />;
+  },
+}));
+
+vi.mock('next-themes', () => ({
+  useTheme: () => ({ resolvedTheme: 'light' }),
+}));
+
+vi.mock('@/contexts/ChatContext', () => ({
+  useChat: () => chatContextMock,
+}));
+
+vi.mock('@/components/WorkflowModeSelector', () => ({
+  default: () => <div data-testid="workflow-mode-selector" />,
+}));
+
+vi.mock('@/components/EngineModelSelect', () => ({
+  EngineModelSelect: () => <div data-testid="engine-model-select" />,
+}));
+
+vi.mock('@/components/common/WorkspaceDirectoryPicker', () => ({
+  default: () => <div data-testid="workspace-directory-picker" />,
+}));
+
+vi.mock('@/components/Markdown', () => ({
+  default: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('@/components/chat/cards/UniversalCard', () => ({
+  default: () => <div data-testid="universal-card" />,
+}));
+
+vi.mock('@/components/chat/ChatMessage', () => ({
+  ThinkingBot: () => <div data-testid="thinking-bot" />,
+}));
+
+vi.mock('@/components/ui/combobox', () => ({
+  ComboboxPortalProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SingleCombobox: ({ value, onValueChange, options = [] as Array<{ value: string; label: string }> }: any) => (
+    <select
+      data-testid="single-combobox"
+      value={value}
+      onChange={(event) => onValueChange?.(event.target.value)}
+    >
+      {options.map((option: any) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
+}));
+
+vi.mock('@/lib/chat/chat-actions', () => ({
+  parseActions: () => ({ text: '', actions: [], cards: [], sidebarHints: [] }),
+}));
+
+vi.mock('@/lib/ai/result-normalizers', () => ({
+  extractClarificationFormResult: () => null,
+  extractPlanDraftResult: () => null,
+  extractWorkflowDraftPreview: () => ({ filename: '', config: null, yaml: '', parseError: '' }),
+}));
+
+vi.mock('@/lib/core/api', () => ({
+  agentApi: {
+    listAgents: vi.fn(async () => ({ agents: [] })),
+  },
+}));
+
+vi.mock('@/components/ui/dialog', () => ({
+  Dialog: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div>{children}</div> : null),
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock('@/components/ui/button', () => ({
+  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+}));
+
+vi.mock('@/components/ui/checkbox', () => ({
+  Checkbox: ({ checked, onCheckedChange, ...props }: any) => (
+    <input
+      type="checkbox"
+      checked={!!checked}
+      onChange={(event) => onCheckedChange?.(event.target.checked)}
+      {...props}
+    />
+  ),
+}));
+
+vi.mock('@/components/ui/switch', () => ({
+  Switch: ({ checked, onCheckedChange, ...props }: any) => (
+    <input
+      type="checkbox"
+      checked={!!checked}
+      onChange={(event) => onCheckedChange?.(event.target.checked)}
+      {...props}
+    />
+  ),
+}));
+
+vi.mock('@/components/ui/input', () => ({
+  Input: React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>((props, ref) => (
+    <input ref={ref} {...props} />
+  )),
+}));
+
+vi.mock('@/components/ui/textarea', () => ({
+  Textarea: React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>((props, ref) => (
+    <textarea ref={ref} {...props} />
+  )),
+}));
+
+vi.mock('@/components/ui/label', () => ({
+  Label: ({ children, ...props }: any) => <label {...props}>{children}</label>,
+}));
+
+vi.mock('@/components/ui/badge', () => ({
+  Badge: ({ children, ...props }: any) => <span {...props}>{children}</span>,
+}));
+
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectItem: ({ children, value }: any) => <div data-value={value}>{children}</div>,
+  SelectTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SelectValue: ({ placeholder }: any) => <span>{placeholder}</span>,
+}));
+
+vi.mock('@/components/ui/tabs', () => ({
+  Tabs: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsList: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  TabsTrigger: ({ children }: { children: React.ReactNode }) => <button>{children}</button>,
+}));
+
+vi.mock('@/components/ui/avatar', () => ({
+  Avatar: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AvatarFallback: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  AvatarImage: () => null,
+}));
+
+vi.mock('@/components/ui/table', () => ({
+  Table: ({ children }: { children: React.ReactNode }) => <table>{children}</table>,
+  TableBody: ({ children }: { children: React.ReactNode }) => <tbody>{children}</tbody>,
+  TableCell: ({ children }: { children: React.ReactNode }) => <td>{children}</td>,
+  TableHead: ({ children }: { children: React.ReactNode }) => <th>{children}</th>,
+  TableHeader: ({ children }: { children: React.ReactNode }) => <thead>{children}</thead>,
+  TableRow: ({ children }: { children: React.ReactNode }) => <tr>{children}</tr>,
+}));
+
+import NewConfigModal from '@/components/NewConfigModal';
+
+type FetchCall = {
+  url: string;
+  method: string;
+  body?: any;
+};
+
+function createJsonResponse(data: any, ok = true, status = 200): Response {
+  return {
+    ok,
+    status,
+    json: async () => data,
+  } as Response;
+}
+
+describe('NewConfigModal backend draft isolation', () => {
+  const fetchCalls: FetchCall[] = [];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fetchCalls.length = 0;
+    localStorage.clear();
+    localStorage.setItem('auth-token', 'token');
+    chatContextMock.appendSessionMessage.mockClear();
+    chatContextMock.updateSessionCreationBinding.mockClear();
+    chatContextMock.appendVisibleSessionTag.mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  test('bootstraps independent planning chat and creation session on open', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({ sessions: [] });
+      }
+      if (url === '/api/chat/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-1',
+            title: body?.title || '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'draft-1',
+            chatSessionId: body?.chatSessionId,
+            filename: body?.filename,
+            workflowName: body?.workflowName,
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: { id: 'spec-1' },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-1',
+            title: '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-1' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ success: true });
+      }
+      if (url === '/api/spec-coding/sessions/draft-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'draft-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(true);
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(true);
+    });
+
+    const draftCreateCall = fetchCalls.find((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST');
+    expect(draftCreateCall?.body.chatSessionId).toBe('planning-1');
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'planning-1',
+      expect.objectContaining({ creationSessionId: 'draft-1' })
+    );
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'draft-1' })
+    );
+  });
+
+  test('restores from backend resumeCreationSessionId instead of creating a new draft', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/resume-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'resume-1',
+            chatSessionId: 'planning-resume',
+            mode: 'ai-guided',
+            workflowName: '恢复中的工作流',
+            filename: 'resume-workflow.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/resume',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: {
+              id: 'spec-resume',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 1,
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/resume-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'resume-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="resume-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions/resume-1' && call.method === 'GET')).toBe(true);
+    });
+
+    expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
+    expect(screen.getByDisplayValue('恢复中的工作流')).toBeTruthy();
+    expect(screen.getByDisplayValue('resume-workflow.yaml')).toBeTruthy();
+  });
+
+  test('restores unfinished homepage creation by chat session after refresh and keeps visible tags', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({
+          sessions: [{
+            id: 'unfinished-1',
+            status: 'draft',
+            updatedAt: 20,
+          }],
+        });
+      }
+      if (url === '/api/spec-coding/sessions/unfinished-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'unfinished-1',
+            chatSessionId: 'planning-restore',
+            homeChatSessionId: 'parent-1',
+            mode: 'ai-guided',
+            workflowName: '刷新恢复工作流',
+            filename: 'restore-after-refresh.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/restore-after-refresh',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: 1,
+            updatedAt: 20,
+            specCoding: {
+              id: 'spec-unfinished',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 3,
+              planningStage: 'generating-plan',
+              clarificationAnswers: {
+                scope: { optionIds: ['api'], note: '覆盖 API 状态' },
+              },
+            },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-restore' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-restore',
+            title: '创建计划：刷新恢复工作流',
+            model: 'test-model',
+            messages: [{
+              id: 'tag-1',
+              role: 'user',
+              content: '创建工作流 · 刷新恢复工作流 · restore-after-refresh.yaml · 计划生成中',
+              timestamp: 1,
+            }],
+            createdAt: 1,
+            updatedAt: 20,
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [{
+              id: 'tag-parent',
+              role: 'user',
+              content: '创建工作流 · 刷新恢复工作流 · restore-after-refresh.yaml · 计划生成中',
+              timestamp: 1,
+            }],
+            createdAt: 1,
+            updatedAt: 20,
+          },
+        });
+      }
+      if (url === '/api/chat/stream?checkActive=planning-restore&streamScope=workflow-planning' && method === 'GET') {
+        return createJsonResponse({ active: false });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-restore' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ ok: true });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('刷新恢复工作流')).toBeTruthy();
+    });
+    expect(screen.getByText('restore-after-refresh.yaml')).toBeTruthy();
+    expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'unfinished-1', status: 'draft' })
+    );
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'planning-restore',
+      expect.objectContaining({ creationSessionId: 'unfinished-1', status: 'draft' })
+    );
+    expect(chatContextMock.appendVisibleSessionTag).not.toHaveBeenCalled();
+    expect(fetchCalls.find((call) => call.url === '/api/chat/sessions/parent-1' && call.method === 'GET')?.body).toBeUndefined();
+    expect(fetchCalls.some((call) => (
+      call.url === '/api/chat/sessions/parent-1'
+      && call.method === 'PUT'
+      && call.body?.creationSession?.creationSessionId === 'unfinished-1'
+    ))).toBe(true);
+  });
+
+  test('does not restore completed homepage creation and records completion tags for new draft', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions?chatSessionId=parent-1' && method === 'GET') {
+        return createJsonResponse({
+          sessions: [{
+            id: 'done-1',
+            status: 'config-generated',
+            workflowName: '已完成工作流',
+            filename: 'done.yaml',
+            updatedAt: 30,
+          }],
+        });
+      }
+      if (url === '/api/chat/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-new',
+            title: body?.title || '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions' && method === 'POST') {
+        return createJsonResponse({
+          session: {
+            id: 'draft-new',
+            chatSessionId: body?.chatSessionId,
+            homeChatSessionId: body?.homeChatSessionId,
+            filename: body?.filename,
+            workflowName: body?.workflowName,
+            status: 'draft',
+            createdAt: 40,
+            updatedAt: 40,
+            specCoding: { id: 'spec-new' },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-new' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-new',
+            title: '创建计划：新工作流',
+            model: 'test-model',
+            messages: [],
+            createdAt: 40,
+            updatedAt: 40,
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/parent-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'parent-1',
+            title: 'Parent Session',
+            model: 'test-model',
+            messages: [{
+              id: 'done-tag',
+              role: 'user',
+              content: '创建工作流 · 已完成工作流 · done.yaml · 配置已生成',
+              timestamp: 30,
+            }],
+            createdAt: 1,
+            updatedAt: 30,
+          },
+        });
+      }
+      if (
+        (url === '/api/chat/sessions/planning-new' || url === '/api/chat/sessions/parent-1')
+        && method === 'PUT'
+      ) {
+        return createJsonResponse({ ok: true });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+      />
+    );
+
+    await waitFor(() => {
+      expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(true);
+    });
+
+    expect(screen.queryByDisplayValue('已完成工作流')).toBeNull();
+    const createdDraftCall = fetchCalls.find((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST');
+    expect(createdDraftCall?.body.homeChatSessionId).toBe('parent-1');
+    expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
+      'parent-1',
+      expect.objectContaining({ creationSessionId: 'draft-new', status: 'draft' })
+    );
+    expect(chatContextMock.appendVisibleSessionTag).toHaveBeenCalledWith(
+      'parent-1',
+      expect.stringContaining('创建工作流 ·')
+    );
+    expect(chatContextMock.appendVisibleSessionTag).toHaveBeenCalledWith(
+      'parent-1',
+      expect.stringContaining('已开始')
+    );
+    expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions/done-1' && call.method === 'GET')).toBe(false);
+  });
+
+  test('resolves formStep from stageSessions when uiState.formStep is stale (step 1 but clarification exists)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/stale-step-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'stale-step-1',
+            chatSessionId: 'planning-stale',
+            mode: 'ai-guided',
+            workflowName: '步骤回退测试',
+            filename: 'stale-step.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/stale',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: {
+                frontendSessionId: 'planning-stale',
+                backendSessionId: 'backend-1',
+                updatedAt: Date.now(),
+              },
+              specPlanning: {
+                frontendSessionId: 'planning-stale',
+                backendSessionId: 'backend-1',
+                updatedAt: Date.now(),
+              },
+            },
+            specCoding: {
+              id: 'spec-stale',
+              version: 1,
+              status: 'draft',
+              title: '新工作流 SpecCoding',
+              persistMode: 'none',
+              artifacts: {
+                requirements: '# 需求文档：新工作流\n\n## 简介\n新工作流 的需求澄清',
+                design: '# 设计文档：新工作流\n\n## 概述\n使用 状态机 workflow',
+                tasks: '',
+              },
+              phases: [],
+              assignments: [],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+            },
+            uiState: {
+              formStep: 1,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/stale-step-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'stale-step-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="stale-step-1"
+      />
+    );
+
+    // Should resolve to step 3 (specPlanning exists) instead of stale step 1
+    await waitFor(() => {
+      expect(screen.getByText('计划生成')).toBeTruthy();
+    });
+  });
+
+  test('resolves formStep to 4 when uiState.formStep was persisted as 4', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/real-spec-1' && method === 'GET') {
+        const longContent = 'A'.repeat(300);
+        return createJsonResponse({
+          session: {
+            id: 'real-spec-1',
+            chatSessionId: 'planning-real',
+            mode: 'ai-guided',
+            workflowName: '真实Spec测试',
+            filename: 'real-spec.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/real',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+              specPlanning: { frontendSessionId: 'planning-real', backendSessionId: 'b1', updatedAt: Date.now() },
+            },
+            specCoding: {
+              id: 'spec-real',
+              version: 2,
+              status: 'draft',
+              title: '真实Spec',
+              summary: '真实Spec 的创建期设计草案',
+              persistMode: 'none',
+              artifacts: {
+                requirements: longContent,
+                design: longContent,
+                tasks: longContent,
+              },
+              phases: [{ id: 's1', title: '需求分析', objective: '分析', ownerAgents: ['architect'], status: 'pending' }],
+              assignments: [{ agent: 'architect', responsibility: '负责需求分析', phaseIds: ['s1'] }],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+              workflowName: '真实Spec测试',
+              goals: ['测试'],
+              nonGoals: [],
+              constraints: [],
+              requirements: [],
+              checkpoints: [],
+              progress: { overallStatus: 'pending', completedPhaseIds: [], activePhaseId: 's1', summary: '' },
+            },
+            workflowDraftSummary: {
+              mode: 'state-machine',
+              nodes: [{ name: '需求分析', detail: '分析', ownerAgents: ['architect'] }],
+              assignments: [{ agent: 'architect', responsibility: '负责需求分析' }],
+              sourceSummary: '草案已生成',
+            },
+            config: { workflow: { mode: 'state-machine', states: [{ name: '需求分析', steps: [{ agent: 'architect' }] }] } },
+            uiState: {
+              formStep: 4,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/real-spec-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'real-spec-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="real-spec-1"
+      />
+    );
+
+    // Should resolve to step 4: Math.max(uiState.formStep=4, resolve=3) = 4
+    await waitFor(() => {
+      expect(screen.getByText('返回计划')).toBeTruthy();
+    });
+  });
+
+  test('handleNextStep does not jump to step 4 when previewSession has skeleton specCoding', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      fetchCalls.push({ url, method, body });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/skeleton-1' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'skeleton-1',
+            chatSessionId: 'planning-skel',
+            mode: 'ai-guided',
+            workflowName: '骨架测试',
+            filename: 'skeleton-test.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/skeleton',
+            workspaceMode: 'in-place',
+            description: '',
+            requirements: '测试需求描述至少五个字',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            stageSessions: {
+              clarification: { frontendSessionId: 'planning-skel', backendSessionId: 'b1', updatedAt: Date.now() },
+            },
+            specCoding: {
+              id: 'spec-skel',
+              version: 1,
+              status: 'draft',
+              title: '新工作流 SpecCoding',
+              persistMode: 'none',
+              artifacts: { requirements: '# 需求文档', design: '', tasks: '' },
+              phases: [],
+              assignments: [],
+              tasks: [],
+              revisions: [{ id: 'r1', version: 1, summary: '初始', createdAt: new Date().toISOString() }],
+            },
+            uiState: {
+              formStep: 1,
+              planningStage: 'idle',
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/skeleton-1' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'skeleton-1' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="skeleton-1"
+      />
+    );
+
+    // Should resolve to step 2 (clarification exists, spec is skeleton) not step 4
+    await waitFor(() => {
+      expect(screen.getByText('补充问答')).toBeTruthy();
+    });
+    // Should NOT show step 4 content
+    expect(screen.queryByText('返回修改')).toBeNull();
+  });
+});

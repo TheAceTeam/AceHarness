@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadChatSettings, saveChatSettings, discoverSkills } from '@/lib/chat-settings';
+import { loadChatSettings, saveChatSettings, discoverSkills } from '@/lib/chat/settings';
 
 export async function GET() {
   const settings = await loadChatSettings();

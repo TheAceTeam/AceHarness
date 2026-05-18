@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   createDeterministicAvatarConfig,
   resolveAgentAvatarSrc,
-} from '@/lib/agent-personas';
+} from '@/lib/agent/personas';
 
 function buildSeed(input: {
   displayName: string;

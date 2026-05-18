@@ -3,9 +3,10 @@ import { stat, rm, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { parse } from 'yaml';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 
-const RUNS_DIR = resolve(process.cwd(), 'runs');
+const RUNS_DIR = getWorkspaceRunsDir();
 
 export async function DELETE(
   request: NextRequest,

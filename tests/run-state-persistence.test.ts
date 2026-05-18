@@ -6,7 +6,7 @@ import { withIsolatedAceHome } from './helpers/module-helpers';
 
 async function loadPersistence() {
   vi.resetModules();
-  return import('@/lib/run-state-persistence');
+  return import('@/lib/run/state-persistence');
 }
 
 function minimalRunState(overrides: Record<string, any> = {}) {
@@ -96,8 +96,8 @@ describe('run-state-persistence', () => {
     await withIsolatedAceHome(async () => {
       vi.resetModules();
       const [{ saveRunState, loadRunState }, { deleteRunsByConfig }] = await Promise.all([
-        import('@/lib/run-state-persistence'),
-        import('@/lib/run-store'),
+        import('@/lib/run/state-persistence'),
+        import('@/lib/run/store'),
       ]);
 
       const targetRunA = minimalRunState({ runId: 'run-target-a', configFile: 'target.yaml' });

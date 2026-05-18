@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { changeEmail } from '@/lib/user-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { changeEmail } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

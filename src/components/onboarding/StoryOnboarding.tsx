@@ -572,7 +572,7 @@ function renderModulePanel(moduleKey: ModuleKey) {
           animate={{ y: [0, -3, 0] }}
           transition={{ duration: 1.6, repeat: Infinity }}
         >
-          println("cell output preview")
+          {'println("cell output preview")'}
         </motion.div>
       </div>
     );

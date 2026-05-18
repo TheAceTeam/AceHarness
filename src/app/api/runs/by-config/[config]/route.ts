@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listRunsByConfig } from '@/lib/run-store';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { isProcessAlive, loadRunState, saveRunState } from '@/lib/run-state-persistence';
+import { listRunsByConfig } from '@/lib/run/store';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { isProcessAlive, loadRunState, saveRunState } from '@/lib/run/state-persistence';
 
 export async function GET(
   request: NextRequest,

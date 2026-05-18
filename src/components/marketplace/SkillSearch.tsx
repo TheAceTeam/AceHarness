@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -30,18 +31,19 @@ export function SkillSearch({ onSearch, onCategoryChange, categories }: SkillSea
   };
 
   return (
-    <div className="mb-6 space-y-4">
-      <div className="flex gap-2">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 lg:flex-row">
         <Input
           type="text"
           placeholder="搜索 skill..."
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onKeyPress={handleKeyPress}
-          className="flex-1"
+          className="h-11 flex-1 rounded-2xl border-border/70 bg-background/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
         />
-        <Button onClick={handleSearch}>
-          🔍 搜索
+        <Button onClick={handleSearch} className="h-11 rounded-2xl px-5">
+          <Search className="mr-2 h-4 w-4" />
+          搜索
         </Button>
       </div>
 
@@ -50,6 +52,7 @@ export function SkillSearch({ onSearch, onCategoryChange, categories }: SkillSea
           onClick={() => handleCategoryClick('')}
           variant={selectedCategory === '' ? 'default' : 'outline'}
           size="sm"
+          className="rounded-full"
         >
           全部
         </Button>
@@ -60,6 +63,7 @@ export function SkillSearch({ onSearch, onCategoryChange, categories }: SkillSea
             onClick={() => handleCategoryClick(category.id)}
             variant={selectedCategory === category.id ? 'default' : 'outline'}
             size="sm"
+            className="rounded-full"
           >
             {category.cnName} ({category.count})
           </Button>

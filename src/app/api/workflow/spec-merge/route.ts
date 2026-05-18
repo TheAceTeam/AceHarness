@@ -3,19 +3,19 @@ import { mkdir, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { getWorkspaceRunsDir } from '@/lib/app-paths';
-import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
-import { loadRunState, saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
+import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { loadRunState, saveRunState, type PersistedRunState } from '@/lib/run/state-persistence';
 import {
   applyMergedMasterSpec,
   buildStructuralMergedMasterSpec,
   getSpecRootDir,
   readDeltaSpec,
-} from '@/lib/spec-persistence';
+} from '@/lib/spec/persistence';
 import { createEngine } from '@/lib/engines/engine-factory';
-import { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec-merge-utils';
+import { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec/merge-utils';
 
-export { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec-merge-utils';
+export { sha256, buildDeltaDigest, stripCodeFence, createUnifiedDiff } from '@/lib/spec/merge-utils';
 
 const PREVIEW_FILE_NAME = 'merged-spec-preview.md';
 const DEFAULT_MERGE_MODEL = 'claude-opus-4-6';

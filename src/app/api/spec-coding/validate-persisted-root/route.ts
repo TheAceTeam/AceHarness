@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
-import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
+import { requireAuth } from '@/lib/auth/middleware';
+import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);

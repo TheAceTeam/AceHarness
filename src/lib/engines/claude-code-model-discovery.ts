@@ -1,5 +1,5 @@
-import { buildEnvObject, loadEnvVars } from '@/lib/env-manager';
-import { getModelOptions, type ModelOption } from '@/lib/models';
+import { buildEnvObject, loadEnvVars } from '@/lib/core/env-manager';
+import { getModelOptions, type ModelOption } from '@/lib/core/models';
 
 export interface DiscoveredClaudeCodeModel {
   modelId: string;

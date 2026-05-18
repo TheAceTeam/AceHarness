@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { validateToken, getUserById, toPublicUser, removeToken } from '@/lib/user-store';
+import { validateToken, getUserById, toPublicUser, removeToken } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

@@ -9,7 +9,7 @@ interface AuthResult {
 
 async function createAuthToken(role: 'admin' | 'user' = 'user'): Promise<AuthResult> {
   vi.resetModules();
-  const { createUser, storeToken } = await import('@/lib/user-store');
+  const { createUser, storeToken } = await import('@/lib/core/user-store');
   const suffix = `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const user = await createUser({
     username: `spec-${suffix}`,
@@ -74,6 +74,20 @@ function sessionPayload(workspace: string, overrides: Record<string, any> = {}) 
     requirements: 'Confirm requirements before generating workflow config',
     config: phaseConfig(workspace),
     ...overrides,
+  };
+}
+
+function withValidTasksArtifact(specCoding: any) {
+  return {
+    ...specCoding,
+    artifacts: {
+      ...(specCoding.artifacts || {}),
+      tasks: [
+        '# tasks.md',
+        '',
+        '- [ ] T1.1 Confirm baseline spec <!-- spec-coding-task:T1.1 -->',
+      ].join('\n'),
+    },
   };
 }
 
@@ -212,7 +226,7 @@ describe('spec-coding API routes', () => {
           token: owner.token,
           method: 'PUT',
           json: {
-            specCoding: created.session.specCoding,
+            specCoding: withValidTasksArtifact(created.session.specCoding),
             specCodingStatus: 'confirmed',
             persistMode: 'repository',
             specRoot: '.custom-spec',
@@ -236,6 +250,60 @@ describe('spec-coding API routes', () => {
         const fetched = await responseJson<any>(response);
         expect(fetched.session.specCoding.status).toBe('confirmed');
         expect(fetched.session.specCoding.revisions.at(-1).summary).toBe('Confirm baseline spec before workflow generation');
+      });
+    });
+  });
+
+  test('session detail route accepts partial specCoding document updates when revising artifacts', async () => {
+    await withIsolatedAceHome(async () => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const owner = await createAuthToken();
+        const { sessions, sessionById } = await loadSpecCodingRoutes();
+
+        let response = await sessions.POST(makeRequest('/api/spec-coding/sessions', {
+          token: owner.token,
+          json: sessionPayload(workspace),
+        }));
+        expect(response.status).toBe(200);
+        const created = await responseJson<any>(response);
+        const sessionId = created.session.id;
+        const originalSpec = withValidTasksArtifact(created.session.specCoding);
+
+        response = await sessionById.PUT(makeRequest(`/api/spec-coding/sessions/${sessionId}`, {
+          token: owner.token,
+          method: 'PUT',
+          json: {
+            specCoding: {
+              id: originalSpec.id,
+              version: originalSpec.version,
+              status: originalSpec.status,
+              summary: '设计页手动修订 design.md',
+              workflowName: originalSpec.workflowName,
+              phases: originalSpec.phases,
+              assignments: originalSpec.assignments,
+              checkpoints: originalSpec.checkpoints,
+              tasks: originalSpec.tasks,
+              progress: originalSpec.progress,
+              revisions: originalSpec.revisions,
+              artifacts: {
+                ...originalSpec.artifacts,
+                design: `${originalSpec.artifacts.design}\n\n## Revised\n\nUpdated from design page.`,
+              },
+              linkedConfigFilename: originalSpec.linkedConfigFilename,
+              createdAt: originalSpec.createdAt,
+              updatedAt: new Date().toISOString(),
+            },
+            specCodingStatus: originalSpec.status,
+            revisionSummary: '设计页手动修订 design.md',
+          },
+        }), idParams(sessionId));
+
+        const updated = await responseJson<any>(response);
+        expect(response.status).toBe(200);
+        expect(updated.session.specCoding.title).toBe(originalSpec.title);
+        expect(updated.session.specCoding.goals).toEqual(originalSpec.goals);
+        expect(updated.session.specCoding.artifacts.design).toContain('## Revised');
+        expect(updated.session.specCoding.version).toBe(originalSpec.version + 1);
       });
     });
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { validateWorkflowDraft, validateAgentDraft, buildDefaultAgentDraft } from '@/lib/creator-validation';
+import { validateWorkflowDraft, validateAgentDraft, buildDefaultAgentDraft } from '@/lib/core/creator-validation';
 import { tmpdir } from 'os';
 import { mkdtempSync } from 'fs';
 import { join } from 'path';
@@ -29,7 +29,11 @@ function validStateMachineConfig(projectRoot: string) {
           isInitial: true,
           isFinal: false,
           steps: [{ name: 'Step 1', agent: 'developer', task: 'Start' }],
-          transitions: [{ to: 'Done', condition: { verdict: 'pass' }, priority: 100 }],
+          transitions: [
+            { to: 'Done', condition: { verdict: 'pass' }, priority: 100 },
+            { to: 'Done', condition: { verdict: 'conditional_pass' }, priority: 90 },
+            { to: 'Done', condition: { verdict: 'fail' }, priority: 80 },
+          ],
         },
         {
           name: 'Done',

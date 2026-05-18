@@ -13,8 +13,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { createNotebookCellId, displayNotebookCellId, isRunnableNotebookLanguage, normalizeNotebookLanguage } from '@/lib/notebook-markdown';
-import { copyText } from '@/lib/clipboard';
+import { createNotebookCellId, displayNotebookCellId, isRunnableNotebookLanguage, normalizeNotebookLanguage } from '@/lib/notebook/markdown';
+import { copyText } from '@/lib/core/clipboard';
 
 interface NotebookCodeBlockProps extends ReactNodeViewProps {
   onRunCell: (payload: { pos: number; cellId: string; language: string; code: string; dependsOn: string[] }) => Promise<{ output: string | null; success: boolean }>;

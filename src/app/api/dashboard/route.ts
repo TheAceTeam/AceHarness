@@ -2,18 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { listConfigsWithMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { applyConfigNamesToRuns, getSafeTime, readAllRunsSummary } from '@/lib/run-history';
+import { requireAuth } from '@/lib/auth/middleware';
+import { listConfigsWithMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeAgentsDirPath, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { applyConfigNamesToRuns, buildTokenRankingsForRuns, getSafeTime, readAllRunsSummary } from '@/lib/run/history';
 
 // ── In-memory cache with background refresh ──
-let cachedResult: any = null;
-let cacheTimestamp = 0;
+const cachedResults = new Map<string, { result: any; ts: number }>();
 const CACHE_TTL = 10_000; // 10s — background refresh interval
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
-let isRefreshing = false;
+const refreshPromises = new Map<string, Promise<void>>();
 const IS_BUILD_PHASE = process.env.NEXT_PHASE === 'phase-production-build';
+const DASHBOARD_USER_TOKEN_LIMIT = 8;
+const DASHBOARD_WORKFLOW_TOKEN_LIMIT = 10;
+const DASHBOARD_RUN_TOKEN_LIMIT = 8;
+
+function getDashboardCacheKey(userId: string, role: 'admin' | 'user'): string {
+  return role === 'admin' ? 'admin' : `user:${userId}`;
+}
 
 async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin') {
   const [configResult, agentCount, runsResult] = await Promise.all([
@@ -23,8 +29,9 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
   ]);
 
   const { configs, configNameMap } = configResult;
-  const { agentUsage, tokenRankingByUser, tokenRankingByWorkflow } = runsResult;
+  const { agentUsage } = runsResult;
   const runs = applyConfigNamesToRuns(runsResult.runs, configNameMap, role);
+  const tokenRankings = buildTokenRankingsForRuns(runs);
 
   const totalRuns = runs.length;
   const completed = runs.filter(r => r.status === 'completed').length;
@@ -52,6 +59,22 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
 
   runs.sort((a, b) => getSafeTime(b.startTime) - getSafeTime(a.startTime));
   const recentRuns = runs.slice(0, 5);
+  const runTokenUsageRanking = [...runs]
+    .sort((a, b) => b.totalTokens - a.totalTokens || getSafeTime(b.startTime) - getSafeTime(a.startTime))
+    .slice(0, DASHBOARD_RUN_TOKEN_LIMIT)
+    .map((run) => ({
+      id: run.id,
+      configFile: run.configFile,
+      configName: run.configName,
+      status: run.status,
+      startTime: run.startTime,
+      totalTokens: run.totalTokens,
+      inputTokens: run.inputTokens,
+      outputTokens: run.outputTokens,
+      cacheCreationInputTokens: run.cacheCreationInputTokens,
+      cacheReadInputTokens: run.cacheReadInputTokens,
+      cost: run.cost,
+    }));
 
   // Weekly activity
   const dayCounts: number[] = [0, 0, 0, 0, 0, 0, 0];
@@ -66,6 +89,19 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
     const d = new Date();
     d.setDate(d.getDate() - (6 - i));
     return { dayOfWeek: d.getDay(), runs: count };
+  });
+  const tokenDayTotals: number[] = [0, 0, 0, 0, 0, 0, 0];
+  for (const r of runs) {
+    const t = getSafeTime(r.startTime);
+    if (t >= sevenDaysAgo) {
+      const daysAgo = Math.floor((now - t) / (24 * 60 * 60 * 1000));
+      if (daysAgo >= 0 && daysAgo < 7) tokenDayTotals[6 - daysAgo] += r.totalTokens || 0;
+    }
+  }
+  const tokenActivityData = tokenDayTotals.map((totalTokens, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return { dayOfWeek: d.getDay(), totalTokens };
   });
 
   const topAgents = Object.entries(agentUsage)
@@ -90,41 +126,64 @@ async function computeDashboardData(userId = '', role: 'admin' | 'user' = 'admin
       startTime: r.startTime, status: r.status, currentPhase: r.currentPhase,
     })),
     agentUsageData: topAgents,
-    tokenRankingByUser,
-    tokenRankingByWorkflow,
+    tokenRankingByUser: tokenRankings.tokenRankingByUser.slice(0, DASHBOARD_USER_TOKEN_LIMIT),
+    tokenRankingByWorkflow: tokenRankings.tokenRankingByWorkflow.slice(0, DASHBOARD_WORKFLOW_TOKEN_LIMIT),
+    runTokenUsageRanking,
     activityData,
+    tokenActivityData,
   };
 }
 
-async function refreshCache() {
-  if (isRefreshing) return;
-  isRefreshing = true;
-  try {
-    cachedResult = await computeDashboardData();
-    cacheTimestamp = Date.now();
-  } catch (e) {
-    if (!IS_BUILD_PHASE) {
-      console.error('[dashboard cache] refresh failed:', e);
+async function refreshCache(userId = '', role: 'admin' | 'user' = 'admin') {
+  const key = getDashboardCacheKey(userId, role);
+  const inFlight = refreshPromises.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const result = await computeDashboardData(userId, role);
+      cachedResults.set(key, { result, ts: Date.now() });
+    } catch (e) {
+      if (!IS_BUILD_PHASE) {
+        console.error('[dashboard cache] refresh failed:', e);
+      }
     }
-  } finally {
-    isRefreshing = false;
-  }
+  })().finally(() => {
+    refreshPromises.delete(key);
+  });
+
+  refreshPromises.set(key, promise);
+  return promise;
 }
 
 // Start background refresh timer on first import
 if (!IS_BUILD_PHASE && !refreshTimer) {
   refreshTimer = setInterval(() => {
-    refreshCache().catch(() => {});
+    refreshCache('', 'admin').catch(() => {});
   }, CACHE_TTL);
   // Don't block module load — kick off first refresh async
-  refreshCache().catch(() => {});
+  refreshCache('', 'admin').catch(() => {});
 }
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth(request);
     if (auth instanceof NextResponse) return auth;
+    const key = getDashboardCacheKey(auth.id, auth.role);
+    const cached = cachedResults.get(key);
+    const now = Date.now();
+
+    if (cached && now - cached.ts < CACHE_TTL) {
+      return NextResponse.json(cached.result);
+    }
+
+    if (cached) {
+      refreshCache(auth.id, auth.role).catch(() => {});
+      return NextResponse.json(cached.result);
+    }
+
     const result = await computeDashboardData(auth.id, auth.role);
+    cachedResults.set(key, { result, ts: now });
     return NextResponse.json(result);
   } catch (error: any) {
     return NextResponse.json(

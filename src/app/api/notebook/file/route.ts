@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { requireAuth } from '@/lib/auth-middleware';
-import { ensureNotebookRoot, normalizeNotebookScope } from '@/lib/notebook-manager';
-import { getNotebookShare } from '@/lib/notebook-share-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { ensureNotebookRoot, normalizeNotebookScope } from '@/lib/notebook/manager';
+import { getNotebookShare } from '@/lib/notebook/share-store';
 
 const MAX_FILE_SIZE = 200 * 1024;
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ACPEngine } from '@/lib/engines/acp-engine';
+import { ACPEngine, getAcpModelDiscoveryTimeoutMs } from '@/lib/engines/acp-engine';
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
-import { commandExists } from '@/lib/command-exists';
+import { commandExists } from '@/lib/core/command-exists';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,11 +49,11 @@ export async function GET(request: NextRequest) {
   // magic-cli: models come from config YAML, not ACP discovery, due to magic-cli can't support model
   // listing via ACP protocol currently.
   if (engineType === 'magic-cli') {
-    const { getModelOptions } = await import('@/lib/models');
+    const { getModelOptions } = await import('@/lib/core/models');
     const allModels = await getModelOptions();
     const models = allModels
-      .filter(m => !m.engines || m.engines.length === 0 || m.engines.includes('magic-cli'))
-      .map(m => ({ modelId: m.value, name: m.label }));
+      .filter((m: any) => !m.engines || m.engines.length === 0 || m.engines.includes('magic-cli'))
+      .map((m: any) => ({ modelId: m.value, name: m.label }));
     return NextResponse.json({ engine: engineType, models });
   }
 
@@ -83,9 +83,17 @@ export async function GET(request: NextRequest) {
   });
 
   try {
-    // Set a timeout — if engine doesn't respond in 30s, abort
+    const discoveryMs = getAcpModelDiscoveryTimeoutMs();
     const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Engine model discovery timed out (30s)')), 30000)
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Engine model discovery timed out (${discoveryMs}ms; set ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS or ACE_ACP_INIT_TIMEOUT_MS / ACE_ACP_NEW_SESSION_TIMEOUT_MS)`
+            )
+          ),
+        discoveryMs
+      )
     );
 
     const discover = async () => {

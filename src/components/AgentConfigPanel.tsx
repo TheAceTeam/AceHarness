@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { roleConfigSchema } from '@/lib/schemas';
-import type { RoleConfig } from '@/lib/schemas';
+import { roleConfigSchema } from '@/lib/core/schemas';
+import type { RoleConfig } from '@/lib/core/schemas';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -12,8 +12,8 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { resolveAgentSelection } from '@/lib/agent-engine-selection';
-import { getEngineMeta } from '@/lib/engine-metadata';
+import { resolveAgentSelection } from '@/lib/agent/engine-selection';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
 
 interface AgentConfigPanelProps {
   agents: RoleConfig[];

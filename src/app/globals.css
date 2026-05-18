@@ -2,8 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
+body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
+  pointer-events: none;
+}
+
+/* Prevent layout shift when scrollbar appears/disappears */
 html {
-  scrollbar-gutter: stable;
+  overflow-y: scroll;
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+/* Override react-remove-scroll-bar's padding and margin since we have a permanent scrollbar */
+/* The library injects a <style> with body[data-scroll-locked] { margin-right: 15px !important } */
+/* We need higher specificity to override it */
+html body {
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+html body[data-scroll-locked] {
+  overflow: hidden !important;
+  padding-right: 0px !important;
+  margin-right: 0px !important;
+}
+
+/* Override the injected .width-before-scroll-bar and .right-scroll-bar-position */
+html body .width-before-scroll-bar {
+  margin-right: 0px !important;
+}
+
+html body .right-scroll-bar-position {
+  right: 0px !important;
 }
 
 @layer base {
@@ -141,6 +174,217 @@ html {
   .thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
   .thin-scrollbar::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
   .thin-scrollbar::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground) / 0.5); }
+}
+
+@layer utilities {
+  .werewolf-wood-bg {
+    background-color: #3f291d;
+    background-image:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 246, 220, 0.06), rgba(26, 12, 6, 0.18)),
+      linear-gradient(90deg,
+        rgba(255, 255, 255, 0.03) 0%,
+        rgba(255, 255, 255, 0.01) 16%,
+        rgba(0, 0, 0, 0.09) 34%,
+        rgba(255, 255, 255, 0.02) 52%,
+        rgba(0, 0, 0, 0.1) 70%,
+        rgba(255, 255, 255, 0.03) 100%),
+      repeating-linear-gradient(102deg,
+        rgba(95, 58, 37, 0.34) 0 14px,
+        rgba(70, 41, 25, 0.18) 14px 34px,
+        rgba(126, 80, 52, 0.22) 34px 60px),
+      radial-gradient(circle at 22% 24%, rgba(255, 218, 162, 0.13) 0 2.4%, transparent 2.5%),
+      radial-gradient(circle at 71% 68%, rgba(32, 12, 4, 0.16) 0 2.1%, transparent 2.2%);
+    background-blend-mode: soft-light, soft-light, overlay, normal, normal, multiply;
+    background-size: cover, auto, auto, 260px 260px, 180px 180px, 220px 220px;
+    background-position: center;
+  }
+
+  .werewolf-wood-panel {
+    background-color: rgba(54, 34, 23, 0.76);
+    background-image:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 239, 211, 0.08), rgba(0, 0, 0, 0.16)),
+      repeating-linear-gradient(94deg,
+        rgba(119, 75, 49, 0.16) 0 18px,
+        rgba(63, 40, 27, 0.08) 18px 40px,
+        rgba(146, 93, 62, 0.12) 40px 76px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, overlay;
+    border-color: rgba(91, 62, 44, 0.72);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 242, 217, 0.08),
+      inset 0 -1px 0 rgba(20, 10, 4, 0.18);
+    backdrop-filter: blur(14px);
+  }
+
+  .werewolf-wood-main {
+    background:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(255, 246, 225, 0.03), rgba(0, 0, 0, 0.08)),
+      radial-gradient(circle at top, rgba(255, 214, 155, 0.08), transparent 38%);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, screen;
+  }
+
+  .werewolf-parchment {
+    background:
+      url('/images/parchment.png'),
+      linear-gradient(180deg, rgba(255, 252, 242, 0.88), rgba(235, 219, 189, 0.88)),
+      repeating-linear-gradient(96deg,
+        rgba(140, 114, 72, 0.06) 0 24px,
+        rgba(255, 255, 255, 0.02) 24px 48px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: multiply, normal, soft-light;
+    border-color: rgba(141, 109, 70, 0.38);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -1px 0 rgba(120, 84, 46, 0.08),
+      0 8px 24px rgba(25, 10, 2, 0.08);
+  }
+
+  .dark .werewolf-parchment {
+    background:
+      url('/images/parchment.png'),
+      linear-gradient(180deg, rgba(75, 54, 35, 0.9), rgba(56, 38, 24, 0.92)),
+      repeating-linear-gradient(96deg,
+        rgba(191, 153, 100, 0.06) 0 24px,
+        rgba(255, 255, 255, 0.015) 24px 48px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: overlay, normal, soft-light;
+    border-color: rgba(153, 118, 74, 0.46);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 239, 213, 0.08),
+      inset 0 -1px 0 rgba(20, 10, 4, 0.16),
+      0 10px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .werewolf-wood-frame {
+    border-color: rgba(123, 86, 53, 0.72);
+    background:
+      url('/images/wood.png'),
+      linear-gradient(180deg, rgba(93, 63, 39, 0.76), rgba(52, 33, 22, 0.84)),
+      repeating-linear-gradient(94deg,
+        rgba(132, 93, 60, 0.18) 0 18px,
+        rgba(67, 42, 27, 0.08) 18px 40px,
+        rgba(163, 116, 74, 0.16) 40px 72px);
+    background-size: cover, auto, auto;
+    background-position: center;
+    background-blend-mode: soft-light, normal, overlay;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 241, 214, 0.1),
+      inset 0 -1px 0 rgba(19, 8, 3, 0.24),
+      0 16px 30px rgba(25, 10, 2, 0.16);
+  }
+
+  .werewolf-copper-badge {
+    border-color: rgba(181, 133, 72, 0.48);
+    background-image:
+      linear-gradient(180deg, rgba(110, 77, 44, 0.2), rgba(69, 44, 25, 0.14));
+    color: #c18a46;
+  }
+
+  .dark .werewolf-copper-badge {
+    border-color: rgba(201, 154, 91, 0.42);
+    background-image:
+      linear-gradient(180deg, rgba(122, 81, 39, 0.24), rgba(77, 49, 25, 0.18));
+    color: #e7bc7a;
+  }
+
+  .werewolf-gold-button {
+    border-color: rgba(176, 128, 68, 0.62);
+    background-image:
+      linear-gradient(180deg, rgba(166, 114, 55, 0.94), rgba(114, 72, 33, 0.98));
+    color: #fff6e7;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 244, 215, 0.28),
+      0 8px 18px rgba(75, 42, 12, 0.26);
+  }
+
+  .werewolf-gold-button:hover {
+    background-image:
+      linear-gradient(180deg, rgba(181, 126, 63, 0.98), rgba(128, 81, 38, 1));
+  }
+
+  .werewolf-gold-button:disabled {
+    opacity: 0.55;
+    box-shadow: none;
+  }
+
+  .werewolf-ghost-button {
+    border-color: rgba(168, 125, 73, 0.46);
+    background-image:
+      linear-gradient(180deg, rgba(255, 246, 226, 0.14), rgba(104, 70, 42, 0.12));
+    color: #b47d42;
+  }
+
+  .werewolf-ghost-button:hover {
+    background-image:
+      linear-gradient(180deg, rgba(255, 244, 223, 0.2), rgba(115, 74, 39, 0.16));
+    color: #8b5a28;
+  }
+
+  .dark .werewolf-ghost-button {
+    color: #ddb374;
+    background-image:
+      linear-gradient(180deg, rgba(149, 102, 49, 0.18), rgba(60, 39, 21, 0.2));
+  }
+
+  .dark .werewolf-ghost-button:hover {
+    color: #f0cb92;
+    background-image:
+      linear-gradient(180deg, rgba(165, 114, 57, 0.24), rgba(77, 49, 25, 0.24));
+  }
+
+  .werewolf-copper-badge,
+  .werewolf-gold-button,
+  .werewolf-ghost-button {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .werewolf-copper-badge::before,
+  .werewolf-gold-button::before,
+  .werewolf-ghost-button::before {
+    content: '';
+    display: inline-block;
+    width: 0.9rem;
+    height: 0.9rem;
+    margin-right: 0.45rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    background-image: url('/images/badge.png');
+    background-repeat: no-repeat;
+    background-size: 400% 300%;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 247, 222, 0.3),
+      0 1px 3px rgba(37, 18, 4, 0.22);
+    vertical-align: -0.12rem;
+  }
+
+  .werewolf-copper-badge::before {
+    background-position: 33.333% 50%;
+  }
+
+  .werewolf-gold-button::before {
+    background-position: 0% 50%;
+  }
+
+  .werewolf-ghost-button::before {
+    background-position: 66.666% 50%;
+  }
+
+  .dark .werewolf-copper-badge::before,
+  .dark .werewolf-gold-button::before,
+  .dark .werewolf-ghost-button::before {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 243, 214, 0.16),
+      0 1px 4px rgba(0, 0, 0, 0.28);
+  }
 }
 
 /* Tiptap task list styles */
@@ -486,4 +730,159 @@ button[data-resize-btn][data-resize-btn]:hover {
 
 .delay-2000 {
   animation-delay: 2s;
+}
+
+@layer utilities {
+  .home-chat-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+    scroll-behavior: smooth;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-thumb {
+    background: hsl(var(--border) / 0.9);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: padding-box;
+  }
+
+  .home-chat-scroll::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.55);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .home-chat-surface {
+    border: 1px solid hsl(var(--border) / 0.7);
+    background: hsl(var(--background) / 0.78);
+    backdrop-filter: blur(10px);
+  }
+
+  .dark .home-chat-surface {
+    background: hsl(var(--card) / 0.74);
+  }
+
+  .home-chat-bubble {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.78);
+    backdrop-filter: blur(10px);
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .home-chat-bubble::before {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.46), transparent);
+  }
+
+  .home-chat-bubble:hover {
+    border-color: hsl(var(--primary) / 0.26);
+  }
+
+  .home-chat-bubble-assistant {
+    border-color: hsl(var(--border) / 0.88);
+    background:
+      linear-gradient(180deg, hsl(var(--muted) / 0.9), hsl(var(--background) / 0.92));
+  }
+
+  .dark .home-chat-bubble-assistant {
+    background:
+      linear-gradient(180deg, rgba(30, 41, 59, 0.76), rgba(15, 23, 42, 0.9));
+  }
+
+  .home-chat-bubble-user {
+    border-color: hsl(var(--primary) / 0.28);
+    background:
+      linear-gradient(135deg, hsl(var(--primary)), hsl(224 76% 56%));
+  }
+
+  .home-chat-bubble-user::before {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.68), transparent);
+  }
+
+  .home-chat-bubble-error {
+    border-color: hsl(var(--destructive) / 0.24);
+    background:
+      linear-gradient(180deg, hsl(var(--destructive) / 0.08), hsl(var(--background) / 0.92));
+  }
+
+  .home-chat-bubble-error::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    left: 0;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 9999px;
+    background: hsl(var(--destructive) / 0.7);
+  }
+
+  .dark .home-chat-bubble-error {
+    background:
+      linear-gradient(180deg, rgba(127, 29, 29, 0.2), rgba(24, 24, 27, 0.94));
+  }
+
+  .home-chat-meta-pill {
+    border: 1px solid hsl(var(--border) / 0.72);
+    background: hsl(var(--background) / 0.76);
+    backdrop-filter: blur(8px);
+  }
+
+  .dark .home-chat-meta-pill {
+    background: hsl(var(--muted) / 0.72);
+  }
+
+  .home-chat-thinking-pill {
+    border: 1px solid hsl(var(--border) / 0.72);
+    background: hsl(var(--background) / 0.8);
+    backdrop-filter: blur(12px);
+  }
+
+  .dark .home-chat-thinking-pill {
+    background: hsl(var(--muted) / 0.74);
+  }
+
+  .home-chat-session-row {
+    transition:
+      background-color 160ms ease,
+      ring-color 160ms ease;
+  }
+
+  .home-chat-sidebar-card {
+    border-color: hsl(var(--border) / 0.72);
+    background: hsl(var(--background) / 0.72);
+    backdrop-filter: blur(10px);
+    transition:
+      border-color 160ms ease;
+  }
+
+  .dark .home-chat-sidebar-card {
+    background: hsl(var(--card) / 0.7);
+  }
+
+  .home-chat-input-tray {
+    border-color: hsl(var(--border) / 0.8);
+    background: hsl(var(--background) / 0.86);
+    backdrop-filter: blur(14px);
+  }
+
+  .dark .home-chat-input-tray {
+    background: hsl(var(--background) / 0.82);
+  }
 }

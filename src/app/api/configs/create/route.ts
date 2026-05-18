@@ -2,16 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, access, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
-import { newConfigFormSchema } from '@/lib/schemas';
+import { newConfigFormSchema } from '@/lib/core/schemas';
 import { ZodError } from 'zod';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getConfigMeta, setConfigMeta } from '@/lib/config-metadata';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/runtime-configs';
-import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec-coding-store';
-import { updateChatSessionCreationBinding } from '@/lib/chat-persistence';
-import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
-import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
+import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { buildCreationSession, loadCreationSession, saveCreationSession, updateCreationSession } from '@/lib/spec/coding-store';
+import { updateChatSessionCreationBinding } from '@/lib/chat/persistence';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
+import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 function createDefaultWorkflowGovernance() {
   return {
@@ -24,6 +24,21 @@ function createDefaultWorkflowGovernance() {
       experienceEnabled: true,
     },
   };
+}
+
+function createVerdictTransitions(input: {
+  passTo: string;
+  conditionalPassTo: string;
+  failTo: string;
+  passLabel: string;
+  conditionalPassLabel: string;
+  failLabel: string;
+}) {
+  return [
+    { to: input.passTo, condition: { verdict: 'pass' }, priority: 10, label: input.passLabel },
+    { to: input.conditionalPassTo, condition: { verdict: 'conditional_pass' }, priority: 20, label: input.conditionalPassLabel },
+    { to: input.failTo, condition: { verdict: 'fail' }, priority: 30, label: input.failLabel },
+  ];
 }
 
 function createPhaseBasedConfig(workflowName: string, workingDirectory: string, workspaceMode: 'isolated-copy' | 'in-place', description?: string) {
@@ -74,11 +89,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '方案挑战', agent: 'design-breaker', role: 'attacker', task: '审查设计方案，寻找潜在缺陷和风险点' },
             { name: '设计评审', agent: 'design-judge', role: 'judge', task: '综合红队方案和蓝队意见，给出评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '实施', condition: { verdict: 'pass' }, priority: 1, label: '设计通过' },
-            { to: '设计', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修改' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '重新设计' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '实施',
+            conditionalPassTo: '设计',
+            failTo: '设计',
+            passLabel: '设计通过',
+            conditionalPassLabel: '需要修改',
+            failLabel: '重新设计',
+          }),
         },
         {
           name: '实施',
@@ -92,11 +110,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '代码审查', agent: 'code-hunter', role: 'attacker', task: '审查代码实现，检查安全性、性能和代码质量' },
             { name: '实施评审', agent: 'code-judge', role: 'judge', task: '综合实施结果和审查意见，给出评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '测试', condition: { verdict: 'pass' }, priority: 1, label: '实施完成' },
-            { to: '实施', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修改' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '设计有问题' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '测试',
+            conditionalPassTo: '实施',
+            failTo: '设计',
+            passLabel: '实施完成',
+            conditionalPassLabel: '需要修改',
+            failLabel: '设计有问题',
+          }),
         },
         {
           name: '测试',
@@ -110,11 +131,14 @@ function createStateMachineConfig(workflowName: string, workingDirectory: string
             { name: '压力测试', agent: 'stress-tester', role: 'attacker', task: '进行边界测试和压力测试，寻找潜在问题' },
             { name: '测试评审', agent: 'code-judge', role: 'judge', task: '综合测试结果，给出最终评审结论和 verdict' },
           ],
-          transitions: [
-            { to: '完成', condition: { verdict: 'pass' }, priority: 1, label: '测试通过' },
-            { to: '实施', condition: { verdict: 'conditional_pass' }, priority: 2, label: '需要修复' },
-            { to: '设计', condition: { verdict: 'fail' }, priority: 3, label: '严重问题' },
-          ],
+          transitions: createVerdictTransitions({
+            passTo: '完成',
+            conditionalPassTo: '实施',
+            failTo: '设计',
+            passLabel: '测试通过',
+            conditionalPassLabel: '需要修复',
+            failLabel: '严重问题',
+          }),
         },
         {
           name: '完成',
@@ -220,6 +244,7 @@ export async function POST(request: NextRequest) {
     const frontendSessionId = typeof body.frontendSessionId === 'string' ? body.frontendSessionId : undefined;
     const creationSessionId = typeof body.creationSessionId === 'string' ? body.creationSessionId : undefined;
     const configDraft = body.configDraft && typeof body.configDraft === 'object' ? body.configDraft : null;
+    const skipSpecCoding = body.skipSpecCoding === true;
 
     // 验证表单
     const validationResult = newConfigFormSchema.safeParse(body);
@@ -235,7 +260,7 @@ export async function POST(request: NextRequest) {
 
     const { filename, workflowName, referenceWorkflow, workingDirectory, workspaceMode, description, mode, requirements, persistMode, specRoot } = validationResult.data;
     const workflowMode = mode || 'phase-based';
-    const normalizedPersistMode = persistMode === 'repository' ? 'repository' : 'none';
+    const normalizedPersistMode = skipSpecCoding ? 'none' : (persistMode === 'repository' ? 'repository' : 'none');
     const normalizedSpecRoot = normalizedPersistMode === 'repository' ? (specRoot?.trim() || '.spec') : undefined;
     if (normalizedPersistMode === 'repository') {
       assertPersistedSpecRootReady(workingDirectory, normalizedSpecRoot);
@@ -335,10 +360,27 @@ export async function POST(request: NextRequest) {
         : 'AI 已根据需求生成阶段工作流，请在设计页面调整阶段和步骤。';
     }
 
-    let creationSession = creationSessionId ? await loadCreationSession(creationSessionId) : null;
+    let creationSession = !skipSpecCoding && creationSessionId ? await loadCreationSession(creationSessionId) : null;
     if (creationSession?.createdBy && creationSession.createdBy !== auth.id) {
       return NextResponse.json({ error: '无权复用该创建态会话' }, { status: 403 });
     }
+    if (skipSpecCoding) {
+      await writeFile(filepath, stringify(defaultConfig), 'utf-8');
+      await setConfigMeta(filename, {
+        createdBy: auth.id,
+        visibility: 'private',
+        createdAt: Date.now(),
+      }, 'workflow');
+
+      return NextResponse.json({
+        success: true,
+        message,
+        filename,
+        creationSession: null,
+        specCodingSkipped: true,
+      });
+    }
+
     if (creationSession) {
       creationSession = await updateCreationSession(creationSession.id, {
         chatSessionId: frontendSessionId || creationSession.chatSessionId,
@@ -433,7 +475,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: '配置文件已创建',
+      message,
       filename,
       creationSession,
     });

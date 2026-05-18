@@ -103,11 +103,29 @@ function mergeChildLdLibraryPath(extra, inherited) {
 }
 
 function defaultWindowsScanDirs() {
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
+    .map((item) => item?.trim())
+    .filter(Boolean);
   const out = [];
+  for (const root of roots) {
+    out.push(join(root, 'System32'));
+    out.push(join(root, 'Sysnative'));
+    out.push(root);
+  }
   if (process.env.APPDATA) out.push(join(process.env.APPDATA, 'npm'));
   if (process.env.LOCALAPPDATA) out.push(join(process.env.LOCALAPPDATA, 'Programs'));
   out.push('C:\\Program Files\\nodejs');
   return out;
+}
+
+function resolveWindowsCmdShell() {
+  const candidates = [
+    process.env.ComSpec?.trim(),
+    ...defaultWindowsScanDirs().map((dir) => join(dir, 'cmd.exe')),
+    'C:\\Windows\\System32\\cmd.exe',
+    'cmd.exe',
+  ].filter(Boolean);
+  return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
 }
 
 function existsNamedInDir(dir, name) {
@@ -200,7 +218,7 @@ function buildArgs(engine, cwd, explicitBinary = false) {
 }
 
 function augmentPathForSpawn(existingPath) {
-  const extra = isWin ? [] : ['/root/.local/bin', '/usr/local/bin'];
+  const extra = isWin ? defaultWindowsScanDirs() : ['/root/.local/bin', '/usr/local/bin'];
   return [existingPath || '', ...extra].filter(Boolean).join(pathDelimiter);
 }
 
@@ -220,7 +238,7 @@ function spawnAcp(engine, command, argv, cwd, env) {
   }
   const line = [command, ...argv].map(escapeWinCmdToken).join(' ');
   return spawn(line, {
-    shell: true,
+    shell: resolveWindowsCmdShell(),
     windowsHide: true,
     cwd,
     env,

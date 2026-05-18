@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadRunState } from '@/lib/run-state-persistence';
-import { loadWorkflowFinalReview } from '@/lib/workflow-experience-store';
+import { loadRunState } from '@/lib/run/state-persistence';
+import { loadWorkflowFinalReview } from '@/lib/workflow/experience-store';
 
 export async function GET(
   request: NextRequest,

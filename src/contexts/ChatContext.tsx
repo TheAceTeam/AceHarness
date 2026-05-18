@@ -1,8 +1,8 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
-import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions } from '@/lib/chat-actions';
-import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/home-sidebar-state';
+import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
+import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 
 // --- Types ---
 
@@ -11,13 +11,23 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'error';
   content: string;
   rawContent?: string;
+  source?: {
+    type: 'wechat';
+    label?: string;
+    direction?: 'inbound' | 'outbound';
+  };
   actions?: ActionState[];
   cards?: any[];
   engine?: string;
   model?: string;
   costUsd?: number;
   durationMs?: number;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
   timestamp: number;
 }
 
@@ -87,8 +97,11 @@ interface DashboardChatContextType {
       team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
+    sessionWorkbenchState?: SessionWorkbenchState;
+    messages?: Array<Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>>;
   }) => string;
   deleteSession: (id: string) => void;
+  deleteSessions: (ids: string[]) => void;
   renameSession: (id: string, title: string) => void;
   setActiveSessionId: (id: string) => void;
   sendMessage: (text: string, options?: { displayText?: string }) => Promise<void>;
@@ -97,7 +110,13 @@ interface DashboardChatContextType {
   retryFromMessage: (messageId: string) => void;
   continueFromMessage: (messageId: string) => Promise<void>;
   loading: boolean;
+  activeStreamingSessionIds: string[];
+  recentlyCompletedSessionIds: string[];
+  sessionLoadingId: string | null;
   streamingMessageId: string | null;
+  setStreamingMessageId: (id: string | null) => void;
+  markSessionStreaming: (sessionId: string | null | undefined) => void;
+  unmarkSessionStreaming: (sessionId: string | null | undefined) => void;
   model: string;
   setModel: (m: string) => void;
   engine: string;
@@ -114,22 +133,29 @@ interface DashboardChatContextType {
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
+  updateSessionCreationBinding: (sessionId: string, creationSession: ChatSession['creationSession'] | null) => Promise<void>;
   appendVisibleSessionTag: (sessionId: string, label: string) => Promise<void>;
   appendSessionMessage: (
     sessionId: string,
     message: Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>,
     options?: { backendSessionId?: string }
   ) => Promise<void>;
+  updateSessionMessage: (
+    sessionId: string,
+    messageId: string,
+    patch: Partial<ChatMessage>
+  ) => Promise<void>;
 }
 
 const DashboardChatContext = createContext<DashboardChatContextType>({
   isOpen: false, openChat: () => {}, closeChat: () => {}, toggleChat: () => {},
   sessions: [], activeSessionId: null, activeSession: null,
-  createSession: () => '', deleteSession: () => {}, renameSession: () => {},
+  createSession: () => '', deleteSession: () => {}, deleteSessions: () => {}, renameSession: () => {},
   setActiveSessionId: () => {},
   sendMessage: async () => {}, stopStreaming: () => {},
   deleteMessage: () => {}, retryFromMessage: () => {}, continueFromMessage: async () => {},
-  loading: false, streamingMessageId: null,
+  loading: false, activeStreamingSessionIds: [], recentlyCompletedSessionIds: [], sessionLoadingId: null, streamingMessageId: null, setStreamingMessageId: () => {},
+  markSessionStreaming: () => {}, unmarkSessionStreaming: () => {},
   model: '', setModel: () => {},
   engine: '', effectiveEngine: '', setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
@@ -137,12 +163,47 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
+  updateSessionCreationBinding: async () => {},
   appendVisibleSessionTag: async () => {},
   appendSessionMessage: async () => {},
+  updateSessionMessage: async () => {},
 });
 
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ACTIVE_SESSION_STORAGE_KEY = 'aceharness:chat:active-session-id';
+
+function readStoredActiveSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const scoped = window.sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    if (scoped) return scoped;
+  } catch {}
+
+  try {
+    return window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredActiveSessionId(sessionId: string | null): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    if (sessionId) {
+      window.sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, sessionId);
+    } else {
+      window.sessionStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    }
+  } catch {}
+
+  // Remove the legacy shared-tab key so different browser windows stop
+  // competing over the same active session selection.
+  try {
+    window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+  } catch {}
+}
 
 // --- Server API helpers ---
 function getAuthHeaders(): Record<string, string> {
@@ -192,6 +253,34 @@ async function apiDeleteSession(id: string): Promise<void> {
   });
 }
 
+async function apiBatchDeleteSessions(ids: string[]): Promise<void> {
+  const res = await fetch('/api/chat/sessions/batch-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok && res.status !== 207) {
+    throw new Error('批量删除会话失败');
+  }
+}
+
+async function apiTerminateSessionProcesses(id: string): Promise<void> {
+  await Promise.allSettled([
+    fetch(`/api/chat/stream?frontendSessionId=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }),
+    fetch(`/api/agents/__session__/chat/stream?frontendSessionId=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }),
+  ]);
+}
+
+async function apiTerminateSessionsProcesses(ids: string[]): Promise<void> {
+  await Promise.allSettled(ids.map((id) => apiTerminateSessionProcesses(id)));
+}
+
 export function ChatProvider({ children }: { children: ReactNode }) {
   const getWorkingDirStorageKey = useCallback(() => {
     if (typeof window === 'undefined') return 'chat-working-directory';
@@ -216,6 +305,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [loading, setLoading] = useState(false);
+  const [activeStreamingSessionIds, setActiveStreamingSessionIds] = useState<string[]>([]);
+  const [recentlyCompletedSessionIds, setRecentlyCompletedSessionIds] = useState<string[]>([]);
+  const [sessionLoadingId, setSessionLoadingId] = useState<string | null>(null);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [model, setModel] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -241,22 +333,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const savedModel = typeof window !== 'undefined' ? localStorage.getItem('chat-model') : null;
       if (!savedModel && data.defaultModel) setModel(data.defaultModel);
     }).catch(() => {});
-  }, []);
-
-  const handleSetEngine = useCallback((e: string) => {
-    setEngineState(e);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('chat-engine', e);
-    }
-    updateActiveSession(s => ({ ...s, engine: e }));
-  }, []);
-
-  const handleSetModel = useCallback((m: string) => {
-    setModel(m);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('chat-model', m);
-    }
-    updateActiveSession(s => ({ ...s, model: m }));
   }, []);
 
   // Load global engine config and default model on mount, and keep it in sync with engine settings page
@@ -343,6 +419,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const activeSessionRef = useRef<ChatSession | null>(null);
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const activeChatIdRef = useRef<string | null>(null);
+  const attachedStreamingSessionIdRef = useRef<string | null>(null);
+  const recentCompletionTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const sessionLoadTokenRef = useRef(0);
   const skillSettingsRef = useRef(skillSettings);
   const modelRef = useRef(model);
   const engineRef = useRef(engine);
@@ -359,9 +438,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     apiListSessions().then(list => {
       setSessions(list);
       if (list.length === 0) return;
-      const savedActiveSessionId = typeof window !== 'undefined'
-        ? window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)
-        : null;
+      const savedActiveSessionId = readStoredActiveSessionId();
       const nextActiveSession = savedActiveSessionId
         ? list.find((session) => session.id === savedActiveSessionId)
         : null;
@@ -370,12 +447,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (activeSessionId) {
-      window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
-    } else {
-      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
-    }
+    writeStoredActiveSessionId(activeSessionId);
   }, [activeSessionId]);
 
   // Re-parse messages with unparsed action/card blocks in content
@@ -422,20 +494,118 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Load full session when activeSessionId changes
-  useEffect(() => {
-    if (!activeSessionId) { setActiveSession(null); return; }
-    // If we already have it loaded (e.g. just created), skip
-    if (activeSession?.id === activeSessionId) return;
-    // Close any active stream and reset loading state
+  const markSessionStreaming = useCallback((sessionId: string | null | undefined) => {
+    if (!sessionId) return;
+    setActiveStreamingSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+    setRecentlyCompletedSessionIds((prev) => prev.filter((item) => item !== sessionId));
+    const existingTimer = recentCompletionTimersRef.current[sessionId];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      delete recentCompletionTimersRef.current[sessionId];
+    }
+  }, []);
+
+  const unmarkSessionStreaming = useCallback((sessionId: string | null | undefined) => {
+    if (!sessionId) return;
+    setActiveStreamingSessionIds((prev) => prev.filter((item) => item !== sessionId));
+  }, []);
+
+  const markSessionRecentlyCompleted = useCallback((sessionId: string | null | undefined) => {
+    if (!sessionId) return;
+    setRecentlyCompletedSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+    const existingTimer = recentCompletionTimersRef.current[sessionId];
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    recentCompletionTimersRef.current[sessionId] = setTimeout(() => {
+      setRecentlyCompletedSessionIds((prev) => prev.filter((item) => item !== sessionId));
+      delete recentCompletionTimersRef.current[sessionId];
+    }, 120000);
+  }, []);
+
+  const detachCurrentStream = useCallback(() => {
     if (activeEventSourceRef.current) {
       activeEventSourceRef.current.close();
       activeEventSourceRef.current = null;
     }
+    activeChatIdRef.current = null;
+    attachedStreamingSessionIdRef.current = null;
     setLoading(false);
     setStreamingMessageId(null);
+  }, []);
+
+  useEffect(() => {
+    if (activeStreamingSessionIds.length === 0) return;
+    let cancelled = false;
+    const targetIds = activeStreamingSessionIds.filter((sessionId) => sessionId !== attachedStreamingSessionIdRef.current);
+    if (targetIds.length === 0) return;
+
+    const checkDetachedStreams = async () => {
+      await Promise.all(targetIds.map(async (sessionId) => {
+        const res = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(sessionId)}`).catch(() => null);
+        const data = await res?.json().catch(() => null);
+        if (cancelled || !data || data.active) return;
+        unmarkSessionStreaming(sessionId);
+        if (data.status === 'completed') {
+          markSessionRecentlyCompleted(sessionId);
+        }
+      }));
+    };
+
+    void checkDetachedStreams();
+    const timer = window.setInterval(() => {
+      void checkDetachedStreams();
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeStreamingSessionIds, markSessionRecentlyCompleted, unmarkSessionStreaming]);
+
+  useEffect(() => () => {
+    Object.values(recentCompletionTimersRef.current).forEach((timer) => clearTimeout(timer));
+    recentCompletionTimersRef.current = {};
+  }, []);
+
+  // Load full session when activeSessionId changes
+  useEffect(() => {
+    if (!activeSessionId) {
+      setActiveSession(null);
+      setSessionLoadingId(null);
+      return;
+    }
+    // If we already have it loaded (e.g. just created), skip
+    if (activeSession?.id === activeSessionId && sessionLoadingId !== activeSessionId) return;
+    // Close any active stream and reset loading state
+    detachCurrentStream();
+    setSessionLoadingId(activeSessionId);
+    const nextToken = sessionLoadTokenRef.current + 1;
+    sessionLoadTokenRef.current = nextToken;
+    const summary = sessions.find((item) => item.id === activeSessionId);
+    if (summary && activeSession?.id !== activeSessionId) {
+      setActiveSession({
+        id: summary.id,
+        title: summary.title,
+        backendSessionId: undefined,
+        creationSession: summary.creationSession,
+        workflowBinding: summary.workflowBinding,
+        agentBinding: summary.agentBinding,
+        sessionWorkbenchState: summary.sessionWorkbenchState,
+        model: summary.model,
+        engine: undefined,
+        messages: [],
+        createdAt: summary.createdAt,
+        updatedAt: summary.updatedAt,
+      });
+    }
     apiLoadSession(activeSessionId).then(async s => {
-      if (!s) { setActiveSession(null); return; }
+      if (sessionLoadTokenRef.current !== nextToken) return;
+      if (!s) {
+        setActiveSession(null);
+        setSessionLoadingId((current) => current === activeSessionId ? null : current);
+        return;
+      }
       // Clean up empty assistant messages left by interrupted streams
       const cleaned = {
         ...s,
@@ -443,6 +613,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       };
       const reparsedSession = reparseSession(cleaned);
       setActiveSession(reparsedSession);
+      setSessionLoadingId((current) => current === activeSessionId ? null : current);
       setSessions((list) => {
         const summary: SessionSummary = {
           id: reparsedSession.id,
@@ -474,35 +645,47 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         const checkRes = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(activeSessionId)}`);
         const checkData = await checkRes.json();
+        if (sessionLoadTokenRef.current !== nextToken) return;
         // Skip reconnect if engine has changed since the stream was started
         const streamEngine = checkData.engine || '';
         const streamModel = checkData.model || '';
         const currentEngine = cleaned.engine || globalEngineRef.current || '';
         const currentModel = cleaned.model || '';
         if (checkData.active && checkData.chatId && streamEngine === currentEngine && streamModel === currentModel) {
-          // Always create a fresh assistant message for recovery — never reuse an existing one
-          // to avoid overwriting completed historical messages with new streaming content
-          const recoveryMsg = { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
-          cleaned.messages.push(recoveryMsg);
-          setActiveSession(reparseSession(cleaned));
+          const initialStreamContent = checkData.streamContent || '';
+          const { text: initialCleanText } = parseActions(initialStreamContent);
+          const lastAssistantMessage = [...cleaned.messages].reverse().find((message) => message.role === 'assistant');
+          const lastAssistantContent = (lastAssistantMessage?.content || '').trim();
+          const lastAssistantRawContent = (lastAssistantMessage?.rawContent || '').trim();
+          const canReuseLastAssistant = Boolean(
+            lastAssistantMessage && (
+              !lastAssistantContent
+              || (initialCleanText && initialCleanText.startsWith(lastAssistantContent))
+              || (lastAssistantRawContent && initialStreamContent.startsWith(lastAssistantRawContent))
+            )
+          );
+          const recoveryMsg = canReuseLastAssistant && lastAssistantMessage
+            ? lastAssistantMessage
+            : { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
+          const recoveredSession = canReuseLastAssistant
+            ? cleaned
+            : { ...cleaned, messages: [...cleaned.messages, recoveryMsg] };
+          setActiveSession(reparseSession(recoveredSession));
 
             setLoading(true);
+            markSessionStreaming(activeSessionId);
             setStreamingMessageId(recoveryMsg.id);
             activeChatIdRef.current = checkData.chatId;
+            attachedStreamingSessionIdRef.current = activeSessionId;
 
             // Pre-fill with accumulated content
-            if (checkData.streamContent) {
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(checkData.streamContent);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            if (initialStreamContent) {
+              const { text: cleanText } = parseActions(initialStreamContent);
               setActiveSession(prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(prev.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : prev.sessionWorkbenchState,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, cards: newCards.length > 0 ? newCards : m.cards } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: initialStreamContent } : m),
                 };
               });
             }
@@ -510,24 +693,35 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             // Connect SSE to continue receiving deltas
             const es = new EventSource(`/api/chat/stream?id=${checkData.chatId}`);
             activeEventSourceRef.current = es;
-            let accumulated = checkData.streamContent || '';
+            let accumulated = initialStreamContent;
+            let initialSnapshotReplayPending = Boolean(initialStreamContent);
 
             es.addEventListener('delta', (e) => {
               const { content } = JSON.parse(e.data);
+              if (initialSnapshotReplayPending && content === initialStreamContent) {
+                initialSnapshotReplayPending = false;
+                return;
+              }
+              initialSnapshotReplayPending = false;
               accumulated += content;
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+              const { text: parsedText } = parseActions(accumulated);
+              const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               setActiveSession(prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(prev.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : prev.sessionWorkbenchState,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, cards: newCards.length > 0 ? newCards : m.cards } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulated } : m),
                 };
               });
+            });
+
+            es.addEventListener('session', (e) => {
+              const data = JSON.parse(e.data || '{}');
+              if (!data?.sessionId) return;
+              setActiveSession(prev => prev ? {
+                ...prev,
+                backendSessionId: data.sessionId,
+              } : prev);
             });
 
             es.addEventListener('thinking', (e) => {
@@ -548,6 +742,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               es.close();
               activeEventSourceRef.current = null;
               activeChatIdRef.current = null;
+              attachedStreamingSessionIdRef.current = null;
               if (data.sessionId) {
                 setActiveSession(prev => prev ? { ...prev, backendSessionId: data.sessionId } : prev);
               }
@@ -564,13 +759,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   } : prev.sessionWorkbenchState,
                   messages: prev.messages.map(m => m.id === recoveryMsg.id ? {
                     ...m, content: cleanText,
-                    rawContent: cards.length > 0 ? fullText : m.rawContent,
+                    rawContent: fullText !== cleanText ? fullText : m.rawContent,
                     cards: cards.length > 0 ? cards : m.cards,
                     costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
                   } : m),
                 };
               });
               setLoading(false);
+              unmarkSessionStreaming(activeSessionId);
+              setSessionLoadingId((current) => current === activeSessionId ? null : current);
               setStreamingMessageId(null);
             });
 
@@ -578,16 +775,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               es.close();
               activeEventSourceRef.current = null;
               activeChatIdRef.current = null;
+              attachedStreamingSessionIdRef.current = null;
               setLoading(false);
+              unmarkSessionStreaming(activeSessionId);
+              setSessionLoadingId((current) => current === activeSessionId ? null : current);
               setStreamingMessageId(null);
             });
         }
       } catch { /* recovery is best-effort */ }
+    }).catch(() => {
+      if (sessionLoadTokenRef.current !== nextToken) return;
+      setActiveSession(null);
+      setSessionLoadingId((current) => current === activeSessionId ? null : current);
     });
-  }, [activeSessionId]);
+  }, [activeSession?.id, activeSessionId, detachCurrentStream, markSessionStreaming, reparseSession, sessionLoadingId, sessions, unmarkSessionStreaming]);
 
   useEffect(() => {
-    if (!activeSessionId || !activeSession?.workflowBinding) return;
+    const shouldRefreshFromPersistence = Boolean(
+      activeSessionId
+      && (
+        activeSession?.workflowBinding
+        || activeSession?.sessionWorkbenchState?.wechatBinding
+      )
+    );
+    if (!shouldRefreshFromPersistence || !activeSessionId) return;
 
     let cancelled = false;
     const refreshWorkflowSession = async () => {
@@ -632,12 +843,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
 
     refreshWorkflowSession();
-    const timer = window.setInterval(refreshWorkflowSession, 5000);
+    const timer = window.setInterval(refreshWorkflowSession, activeSession?.sessionWorkbenchState?.wechatBinding ? 3000 : 5000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSession?.workflowBinding?.configFile, activeSession?.workflowBinding?.runId, activeSessionId, reparseSession]);
+  }, [activeSession, activeSessionId, reparseSession]);
 
   // Debounced persist to server
   const pendingSessionRef = useRef<ChatSession | null>(null);
@@ -677,29 +888,93 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveSession(prev => {
       if (!prev) return prev;
       const updated = updater(prev);
+      if (updated === prev) return prev;
       scheduleSave(updated);
       // Also update summary in sessions list
-      setSessions(list => list.map(s => s.id === updated.id ? {
-        ...s,
-        title: updated.title,
-        updatedAt: updated.updatedAt,
-        messageCount: updated.messages.length,
-        lastMessage: updated.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
-        agentBinding: updated.agentBinding,
-        workflowBinding: updated.workflowBinding,
-        creationSession: updated.creationSession,
-        sessionWorkbenchState: updated.sessionWorkbenchState,
-      } : s));
+      setSessions(list => {
+        let changed = false;
+        const next = list.map(s => {
+          if (s.id !== updated.id) return s;
+          const summary = {
+            ...s,
+            title: updated.title,
+            updatedAt: updated.updatedAt,
+            messageCount: updated.messages.length,
+            lastMessage: updated.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+            agentBinding: updated.agentBinding,
+            workflowBinding: updated.workflowBinding,
+            creationSession: updated.creationSession,
+            sessionWorkbenchState: updated.sessionWorkbenchState,
+          };
+          if (JSON.stringify(summary) === JSON.stringify(s)) return s;
+          changed = true;
+          return summary;
+        });
+        return changed ? next : list;
+      });
       return updated;
     });
   }, [scheduleSave]);
 
+  const handleSetEngine = useCallback((e: string) => {
+    setEngineState(e);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat-engine', e);
+    }
+    updateActiveSession(s => ({ ...s, engine: e }));
+  }, [updateActiveSession]);
+
+  const handleSetModel = useCallback((m: string) => {
+    setModel(m);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chat-model', m);
+    }
+    updateActiveSession(s => ({ ...s, model: m }));
+  }, [updateActiveSession]);
+
   const setSessionWorkbenchState = useCallback((state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => {
-    updateActiveSession((session) => ({
+    updateActiveSession((session) => {
+      const nextState = typeof state === 'function' ? state(session.sessionWorkbenchState) : state;
+      if (nextState === session.sessionWorkbenchState) return session;
+      if (JSON.stringify(nextState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
+      return {
+        ...session,
+        updatedAt: Date.now(),
+        sessionWorkbenchState: nextState,
+      };
+    });
+  }, [updateActiveSession]);
+
+  const updateSessionCreationBinding = useCallback(async (
+    sessionId: string,
+    creationSession: ChatSession['creationSession'] | null
+  ) => {
+    const applyBinding = (session: ChatSession): ChatSession => ({
       ...session,
       updatedAt: Date.now(),
-      sessionWorkbenchState: typeof state === 'function' ? state(session.sessionWorkbenchState) : state,
-    }));
+      creationSession: creationSession || undefined,
+    });
+
+    if (activeSessionRef.current?.id === sessionId) {
+      updateActiveSession((session) => applyBinding(session));
+      return;
+    }
+
+    const session = await apiLoadSession(sessionId);
+    if (!session) return;
+    const updated = applyBinding(session);
+    await apiSaveSession(updated);
+    setSessions((list) => list.map((item) => item.id === updated.id ? {
+      ...item,
+      title: updated.title,
+      updatedAt: updated.updatedAt,
+      messageCount: updated.messages.length,
+      lastMessage: updated.messages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      agentBinding: updated.agentBinding,
+      workflowBinding: updated.workflowBinding,
+      creationSession: updated.creationSession,
+      sessionWorkbenchState: updated.sessionWorkbenchState,
+    } : item));
   }, [updateActiveSession]);
 
   const appendVisibleSessionTag = useCallback(async (sessionId: string, label: string) => {
@@ -795,6 +1070,51 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } : item));
   }, [updateActiveSession]);
 
+  const updateSessionMessage = useCallback(async (
+    sessionId: string,
+    messageId: string,
+    patch: Partial<ChatMessage>
+  ) => {
+    const applyPatch = (session: ChatSession): ChatSession => {
+      const messages = session.messages.map((message) => (
+        message.id === messageId
+          ? {
+              ...message,
+              ...patch,
+              id: message.id,
+              timestamp: patch.timestamp || message.timestamp,
+            }
+          : message
+      ));
+      return {
+        ...session,
+        updatedAt: Date.now(),
+        messages,
+      };
+    };
+
+    if (activeSessionRef.current?.id === sessionId) {
+      updateActiveSession((session) => applyPatch(session));
+      return;
+    }
+
+    const session = await apiLoadSession(sessionId);
+    if (!session) return;
+    const updated = applyPatch(session);
+    await apiSaveSession(updated);
+    setSessions((list) => list.map((item) => item.id === updated.id ? {
+      ...item,
+      title: updated.title,
+      updatedAt: updated.updatedAt,
+      messageCount: updated.messages.length,
+      lastMessage: updated.messages.filter((msg) => msg.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      agentBinding: updated.agentBinding,
+      workflowBinding: updated.workflowBinding,
+      creationSession: updated.creationSession,
+      sessionWorkbenchState: updated.sessionWorkbenchState,
+    } : item));
+  }, [updateActiveSession]);
+
   const createSession = useCallback((options?: {
     title?: string;
     agentBinding?: {
@@ -802,12 +1122,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       team?: 'blue' | 'red' | 'judge' | 'black-gold';
       roleType?: 'normal' | 'supervisor';
     };
+    sessionWorkbenchState?: SessionWorkbenchState;
+    messages?: Array<Omit<ChatMessage, 'id' | 'timestamp'> & Partial<Pick<ChatMessage, 'id' | 'timestamp'>>>;
   }) => {
     const id = genId();
     const title = options?.title?.trim() || '新对话';
     const now = Date.now();
+    const initialMessages: ChatMessage[] = (options?.messages || []).map((message, index) => ({
+      ...message,
+      id: message.id || genId(),
+      timestamp: message.timestamp || now + index,
+    }));
     const session: ChatSession = {
-      id, title, model, engine: engine || undefined, messages: [],
+      id, title, model, engine: engine || undefined, messages: initialMessages,
       agentBinding: options?.agentBinding ? {
         agentName: options.agentBinding.agentName,
         team: options.agentBinding.team,
@@ -815,13 +1142,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         createdAt: now,
         updatedAt: now,
       } : undefined,
-      sessionWorkbenchState: undefined,
+      sessionWorkbenchState: options?.sessionWorkbenchState,
       createdAt: now, updatedAt: now,
     };
     const summary: SessionSummary = {
       id, title, model,
       createdAt: session.createdAt, updatedAt: session.updatedAt,
-      messageCount: 0,
+      messageCount: initialMessages.length,
+      lastMessage: initialMessages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
       agentBinding: session.agentBinding,
       sessionWorkbenchState: session.sessionWorkbenchState,
     };
@@ -833,6 +1161,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [model, engine]);
 
   const deleteSession = useCallback((id: string) => {
+    if (activeSessionId === id) {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+      activeChatIdRef.current = null;
+      setLoading(false);
+      setStreamingMessageId(null);
+    }
     setSessions(prev => {
       const next = prev.filter(s => s.id !== id);
       if (activeSessionId === id) {
@@ -842,7 +1179,46 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-    apiDeleteSession(id).catch(console.error);
+    void apiTerminateSessionProcesses(id)
+      .catch(console.error)
+      .finally(() => {
+        apiDeleteSession(id).catch(console.error);
+      });
+  }, [activeSessionId]);
+
+  const deleteSessions = useCallback((ids: string[]) => {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    if (uniqueIds.length === 0) return;
+    const deleting = new Set(uniqueIds);
+    const deletingActive = activeSessionId ? deleting.has(activeSessionId) : false;
+    if (deletingActive) {
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+      activeChatIdRef.current = null;
+      setLoading(false);
+      setStreamingMessageId(null);
+    }
+    setActiveStreamingSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
+    setRecentlyCompletedSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
+    setSessions(prev => {
+      const next = prev.filter(s => !deleting.has(s.id));
+      if (deletingActive) {
+        const nextId = next.length > 0 ? next[0].id : null;
+        setActiveSessionId(nextId);
+        if (!nextId) setActiveSession(null);
+      }
+      return next;
+    });
+    void apiTerminateSessionsProcesses(uniqueIds)
+      .catch(console.error)
+      .finally(() => {
+        apiBatchDeleteSessions(uniqueIds).catch(async (error) => {
+          console.error(error);
+          await Promise.allSettled(uniqueIds.map((id) => apiDeleteSession(id)));
+        });
+      });
   }, [activeSessionId]);
 
   const renameSession = useCallback((id: string, title: string) => {
@@ -950,23 +1326,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             es.addEventListener('delta', (e) => {
               const { content } = JSON.parse(e.data);
               accumulated += content;
-              // Extract cards in real-time so they render immediately without waiting for stream to finish
-              const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-              updateActiveSession(s => {
-                const existingMsg = s.messages.find(m => m.id === followUpMsgId);
-                const existingCards: any[] = existingMsg?.cards || [];
-                const existingKeys = new Set(existingCards.map((c: any) => c.header?.title));
-                const uniqueNewCards = newCards.filter((c: any) => !existingKeys.has(c.header?.title));
-                return {
-                  ...s,
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(s.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : s.sessionWorkbenchState,
-                  messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, cards: [...existingCards, ...uniqueNewCards] } : m),
-                };
-              });
+              const { text: parsedText } = parseActions(accumulated);
+              const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
+              updateActiveSession(s => ({
+                ...s,
+                messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+              }));
             });
 
             es.addEventListener('done', (e) => {
@@ -991,7 +1356,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 } : s.sessionWorkbenchState,
                 messages: s.messages.map(m => m.id === followUpMsgId ? {
                   ...m, content: cleanText,
-                  rawContent: (newCards.length > 0 || newActionStates.length > 0) ? fullText : undefined,
+                  rawContent: fullText !== cleanText ? fullText : undefined,
                   actions: newActionStates.length > 0 ? newActionStates : undefined,
                   cards: newCards.length > 0 ? newCards : undefined,
                 } : m),
@@ -1039,7 +1404,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                             ...(s.sessionWorkbenchState || {}),
                             homeSidebar: latestSidebarHint,
                           } : s.sessionWorkbenchState,
-                          messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, cards: newCards } : m),
+                          messages: s.messages.map(m => m.id === followUpMsgId ? {
+                            ...m,
+                            content: cleanText,
+                            rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
+                            cards: newCards,
+                          } : m),
                         }));
                       }
                     })
@@ -1057,20 +1427,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       setStreamingMessageId(null);
     }
-  }, [updateAction, model, updateActiveSession]);
+  }, [effectiveEngine, enrichAction, model, updateAction, updateActiveSession, workingDirectory]);
 
   const interruptCurrentStream = useCallback(() => {
-    if (activeEventSourceRef.current) {
-      activeEventSourceRef.current.close();
-      activeEventSourceRef.current = null;
+    const activeChatId = activeChatIdRef.current;
+    const targetSessionId = attachedStreamingSessionIdRef.current || activeSessionRef.current?.id || activeSessionId;
+    detachCurrentStream();
+    if (activeChatId) {
+      fetch(`/api/chat/stream?id=${encodeURIComponent(activeChatId)}&preserveSession=1`, { method: 'DELETE' }).catch(() => {});
     }
-    if (activeChatIdRef.current) {
-      fetch(`/api/chat/stream?id=${encodeURIComponent(activeChatIdRef.current)}`, { method: 'DELETE' }).catch(() => {});
-      activeChatIdRef.current = null;
-    }
-    setLoading(false);
-    setStreamingMessageId(null);
-  }, []);
+    unmarkSessionStreaming(targetSessionId);
+  }, [activeSessionId, detachCurrentStream, unmarkSessionStreaming]);
 
   // --- Send message (streaming) ---
   const sendMessage = useCallback(async (text: string, options?: { displayText?: string }) => {
@@ -1096,18 +1463,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const previousSession = activeSessionRef.current;
     const agentBinding = previousSession?.agentBinding;
     const previousEffectiveEngine = previousSession?.engine || globalEngineRef.current || '';
-    const previousModel = previousSession?.model || '';
     const shouldStartFresh = !!previousSession?.backendSessionId
-      && (resolvedEngine !== previousEffectiveEngine || currentModel !== previousModel);
+      && resolvedEngine !== previousEffectiveEngine;
     const assistantMsg: ChatMessage = { id: assistantMsgId, role: 'assistant', content: '', engine: resolvedEngine, model: currentModel || undefined, timestamp: Date.now() };
     updateActiveSession(s => ({
       ...s,
-      engine: currentEngineOverride,
+      engine: resolvedEngine || undefined,
       model: currentModel,
       backendSessionId: shouldStartFresh ? undefined : s.backendSessionId,
     }));
     updateActiveSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, assistantMsg] }));
     setLoading(true);
+    markSessionStreaming(sid);
     setStreamingMessageId(assistantMsgId);
 
     try {
@@ -1210,15 +1577,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             homeSidebar: latestSidebarHint,
           } : s.sessionWorkbenchState,
           updatedAt: Date.now(),
-          messages: s.messages.map((m) => m.id === assistantMsgId
-            ? {
-                ...m,
-                role: result.isError ? 'error' as const : 'assistant' as const,
-                content: parsed.text,
-                rawContent: parsed.cards.length > 0 ? responseContent : m.rawContent,
-                cards: parsed.cards.length > 0 ? parsed.cards : undefined,
-                engine: result.engine || m.engine,
-                model: result.model || m.model,
+                messages: s.messages.map((m) => m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      role: result.isError ? 'error' as const : 'assistant' as const,
+                      content: parsed.text,
+                      rawContent: responseContent !== parsed.text ? responseContent : m.rawContent,
+                      cards: parsed.cards.length > 0 ? parsed.cards : undefined,
+                      engine: result.engine || m.engine,
+                      model: result.model || m.model,
               }
             : m),
         }));
@@ -1247,6 +1614,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       const { chatId } = startData;
       activeChatIdRef.current = chatId;
+      attachedStreamingSessionIdRef.current = sid;
       await new Promise<void>((resolve, reject) => {
         let accumulated = '';
         let reconnectAttempts = 0;
@@ -1281,28 +1649,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }));
           });
 
+          es.addEventListener('session', (e) => {
+            resetInactivityTimer();
+            const data = JSON.parse(e.data || '{}');
+            if (!data?.sessionId) return;
+            updateActiveSession(s => ({
+              ...s,
+              backendSessionId: data.sessionId,
+              engine: resolvedEngine || s.engine,
+              model: currentModel || s.model,
+            }));
+          });
+
           es.addEventListener('delta', (e) => {
             resetInactivityTimer();
             const { content } = JSON.parse(e.data);
             accumulated += content;
-            // Extract cards in real-time so they render immediately without waiting for stream to finish
-            const { text: cleanText, cards: newCards, sidebarHints } = parseActions(accumulated);
-            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-            updateActiveSession(s => {
-              const existingMsg = s.messages.find(m => m.id === assistantMsgId);
-              const existingCards: any[] = existingMsg?.cards || [];
-              // Merge cards by header.title to avoid duplicates
-              const existingKeys = new Set(existingCards.map((c: any) => c.header?.title));
-              const uniqueNewCards = newCards.filter((c: any) => !existingKeys.has(c.header?.title));
-              return {
-                ...s,
-                sessionWorkbenchState: latestSidebarHint ? {
-                  ...(s.sessionWorkbenchState || {}),
-                  homeSidebar: latestSidebarHint,
-                } : s.sessionWorkbenchState,
-                messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, cards: [...existingCards, ...uniqueNewCards] } : m),
-              };
-            });
+            const { text: parsedText } = parseActions(accumulated);
+            const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
+            updateActiveSession(s => ({
+              ...s,
+              messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+            }));
           });
 
           es.addEventListener('done', (e) => {
@@ -1311,6 +1679,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
+            attachedStreamingSessionIdRef.current = null;
             if (data.sessionId) {
               updateActiveSession(s => ({ ...s, backendSessionId: data.sessionId }));
             }
@@ -1328,6 +1697,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   : m),
               }));
               setLoading(false);
+              unmarkSessionStreaming(sid);
               setStreamingMessageId(null);
               resolve();
               return;
@@ -1359,6 +1729,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               resolve();
             } else {
               setLoading(false);
+              unmarkSessionStreaming(sid);
               setStreamingMessageId(null);
               resolve();
             }
@@ -1378,7 +1749,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
+            attachedStreamingSessionIdRef.current = null;
             setLoading(false);
+            unmarkSessionStreaming(sid);
             setStreamingMessageId(null);
             resolve();
           });
@@ -1397,7 +1770,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             es.close();
             activeEventSourceRef.current = null;
             activeChatIdRef.current = null;
+            attachedStreamingSessionIdRef.current = null;
             setLoading(false);
+            unmarkSessionStreaming(sid);
             setStreamingMessageId(null);
             resolve();
           });
@@ -1430,6 +1805,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         } : s.sessionWorkbenchState,
                         messages: s.messages.map(m => m.id === assistantMsgId ? {
                           ...m, content: cleanText,
+                          rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
                           actions: newActionStates.length > 0 ? newActionStates : m.actions,
                           cards: newCards.length > 0 ? newCards : m.cards,
                         } : m),
@@ -1439,6 +1815,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         resolve();
                       } else {
                         setLoading(false);
+                        unmarkSessionStreaming(sid);
                         setStreamingMessageId(null);
                         resolve();
                       }
@@ -1449,6 +1826,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                           : m),
                       }));
                       setLoading(false);
+                      unmarkSessionStreaming(sid);
                       setStreamingMessageId(null);
                       resolve();
                     }
@@ -1460,11 +1838,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         : m),
                     }));
                     setLoading(false);
+                    unmarkSessionStreaming(sid);
                     setStreamingMessageId(null);
                     resolve();
                   });
               } else {
                 setLoading(false);
+                unmarkSessionStreaming(sid);
                 setStreamingMessageId(null);
                 resolve();
               }
@@ -1483,11 +1863,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           : m),
       }));
       setLoading(false);
+      unmarkSessionStreaming(sid);
       setStreamingMessageId(null);
     }
     // Note: setLoading(false) is called inside the Promise's done/error handlers
     // to properly handle autoExecuteSafeActions
-  }, [activeSessionId, createSession, updateActiveSession, autoExecuteSafeActions, workingDirectory, interruptCurrentStream]);
+  }, [activeSessionId, createSession, updateActiveSession, autoExecuteSafeActions, workingDirectory, interruptCurrentStream, markSessionStreaming, unmarkSessionStreaming]);
   sendMessageRef.current = sendMessage;
   const confirmAction = useCallback(async (messageId: string, actionId: string) => {
     const msg = activeSession?.messages.find(m => m.id === messageId);
@@ -1602,6 +1983,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             ...m,
             role: 'assistant' as const,
             content: cleanText,
+            rawContent: recData.content !== cleanText ? recData.content : m.rawContent,
             actions: newActionStates.length > 0 ? newActionStates : undefined,
             cards: newCards.length > 0 ? newCards : undefined,
           } : m),
@@ -1641,16 +2023,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     <DashboardChatContext.Provider value={{
       isOpen, openChat, closeChat, toggleChat,
       sessions, activeSessionId, activeSession,
-      createSession, deleteSession, renameSession, setActiveSessionId,
+      createSession, deleteSession, deleteSessions, renameSession, setActiveSessionId,
       sendMessage, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
-      loading, streamingMessageId, model, setModel: handleSetModel,
+      loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
+      markSessionStreaming, unmarkSessionStreaming, model, setModel: handleSetModel,
       engine, effectiveEngine, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
+      updateSessionCreationBinding,
       appendVisibleSessionTag,
       appendSessionMessage,
+      updateSessionMessage,
     }}>
       {children}
     </DashboardChatContext.Provider>

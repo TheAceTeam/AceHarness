@@ -1,9 +1,36 @@
 'use client';
 
-import { ActionState, RISK_MAP } from '@/lib/chat-actions';
+import { ActionState, RISK_MAP } from '@/lib/chat/actions';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import ResultRenderer from './ResultRenderer';
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+} from '@/components/ai-elements/tool';
+import type { ToolPart } from '@/components/ai-elements/tool';
+import {
+  Confirmation,
+  ConfirmationTitle,
+  ConfirmationRequest,
+  ConfirmationActions,
+  ConfirmationAction,
+} from '@/components/ai-elements/confirmation';
+
+/** Map ACEHarness ActionState.status → ai-elements ToolPart['state'] */
+function toToolState(status: ActionState['status']): ToolPart['state'] {
+  switch (status) {
+    case 'pending': return 'approval-requested';
+    case 'executing':
+    case 'auto_executing': return 'input-available';
+    case 'success': return 'output-available';
+    case 'error': return 'output-error';
+    case 'undone': return 'approval-responded';
+    default: return 'input-streaming';
+  }
+}
 
 interface ActionCardProps {
   action: ActionState;
@@ -82,20 +109,29 @@ export default function ActionCard({ action, onConfirm, onReject, onUndo, onRetr
         <div className="text-xs text-yellow-600 pl-6">已撤销</div>
       )}
 
+      {/* Pending: Confirmation component */}
+      {action.status === 'pending' && (
+        <Confirmation
+          state="approval-requested"
+          approval={{ id: action.action.type }}
+          className="mt-2"
+        >
+          <ConfirmationTitle>确认执行 {action.action.description}</ConfirmationTitle>
+          <ConfirmationRequest>
+            <ConfirmationActions>
+              <ConfirmationAction variant="outline" onClick={onReject}>
+                拒绝
+              </ConfirmationAction>
+              <ConfirmationAction onClick={onConfirm}>
+                确认执行
+              </ConfirmationAction>
+            </ConfirmationActions>
+          </ConfirmationRequest>
+        </Confirmation>
+      )}
+
       {/* Action buttons */}
       <div className="flex gap-2 mt-2 pl-6">
-        {action.status === 'pending' && (
-          <>
-            <Button size="sm" onClick={onConfirm}>
-              <span className="material-symbols-outlined text-sm mr-1">check</span>
-              确认执行
-            </Button>
-            <Button size="sm" variant="outline" onClick={onReject}>
-              <span className="material-symbols-outlined text-sm mr-1">close</span>
-              拒绝
-            </Button>
-          </>
-        )}
         {action.status === 'success' && action.snapshot && (
           <Button size="sm" variant="ghost" onClick={onUndo}>
             <span className="material-symbols-outlined text-sm mr-1">undo</span>

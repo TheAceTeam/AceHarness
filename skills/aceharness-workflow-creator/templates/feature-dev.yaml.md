@@ -1,132 +1,35 @@
-# 模板：功能开发（红蓝对抗）
+# 功能开发工作流示例
 
-适用于新功能开发、重构、迁移等需要设计→实施→验证的场景。
+这是一个典型的三阶段功能开发工作流：设计 → 实现 → 测试 → 完成。
 
-```yaml
-workflow:
-  name: 功能名称
-  description: 一句话描述
-  mode: state-machine
-  maxTransitions: 30
+## 状态流转图
 
-  states:
-    - name: 设计
-      description: 设计方案
-      requireHumanApproval: true
-      isInitial: true
-      isFinal: false
-      steps:
-        - name: 方案设计
-          agent: architect
-          role: defender
-          task: |
-            设计完整方案：
-            1. 模块划分和职责
-            2. 接口定义和数据结构
-            3. 关键流程和边界处理
-        - name: 方案攻击
-          agent: design-breaker
-          role: attacker
-          task: 攻击设计方案，寻找缺陷、遗漏、安全问题、边界条件
-        - name: 方案裁决
-          agent: design-judge
-          role: judge
-          task: |
-            评估方案和攻击发现，输出裁决 JSON：
-            {"verdict":"pass|conditional_pass|fail","summary":"..."}
-      transitions:
-        - to: 实施
-          condition: { verdict: pass }
-          priority: 1
-          label: 方案通过
-        - to: 设计
-          condition: { verdict: conditional_pass }
-          priority: 2
-          label: 需修复设计
-        - to: 终止
-          condition: { verdict: fail }
-          priority: 3
-          label: 设计不可行
-
-    - name: 实施
-      description: 编码实现
-      isInitial: false
-      isFinal: false
-      steps:
-        - name: 编码
-          agent: developer
-          role: defender
-          task: 根据设计方案实现功能
-        - name: 代码攻击
-          agent: code-hunter
-          role: attacker
-          task: 攻击代码，寻找 bug、安全漏洞、边界问题
-        - name: 代码裁决
-          agent: fix-judge
-          role: judge
-          task: |
-            裁决代码质量，输出 JSON：
-            {"verdict":"pass|conditional_pass","summary":"..."}
-      transitions:
-        - to: 验证
-          condition: { verdict: pass }
-          priority: 1
-          label: 代码通过
-        - to: 实施
-          condition: { verdict: conditional_pass }
-          priority: 2
-          label: 需继续修复
-
-    - name: 验证
-      description: 构建和测试
-      isInitial: false
-      isFinal: false
-      steps:
-        - name: 构建测试
-          agent: developer
-          role: defender
-          task: 执行构建和测试
-        - name: 验证裁决
-          agent: tester
-          role: judge
-          task: |
-            验证结果，输出 JSON：
-            {"verdict":"pass|fail","summary":"..."}
-      transitions:
-        - to: 完成
-          condition: { verdict: pass }
-          priority: 1
-          label: 验证通过
-        - to: 实施
-          condition: { verdict: fail }
-          priority: 2
-          label: 验证失败，返回修复
-
-    - name: 完成
-      description: 开发完成
-      isInitial: false
-      isFinal: true
-      steps:
-        - name: 交付报告
-          agent: documentation-writer
-          role: defender
-          task: 生成交付报告
-      transitions: []
-
-    - name: 终止
-      description: 异常终止
-      isInitial: false
-      isFinal: true
-      steps:
-        - name: 终止记录
-          agent: documentation-writer
-          role: defender
-          task: 记录终止原因
-      transitions: []
-
-context:
-  projectRoot: /absolute/path/to/project
-  requirements: |
-    需求描述和验收标准
-  timeoutMinutes: 180
 ```
+设计（isInitial）──pass──> 实现 ──pass──> 测试 ──pass──> 完成（isFinal）
+  │                        │                │
+  │──cond_pass──> 实现     │──cond_pass──> 测试    │──cond_pass──> 完成
+  │                        │                │
+  └──fail──> 设计          └──fail──> 设计   └──fail──> 实现
+```
+
+## 设计决策
+
+- **设计阶段** fail 回到自身（重新设计）
+- **实现阶段** fail 回到设计（可能是设计有问题）
+- **测试阶段** fail 回到实现（代码需要修复）
+- 每个阶段使用红蓝对抗模式：defender 做事，attacker 找问题，judge 裁决
+
+## 完整输出
+
+<result>
+{"kind":"workflow_draft","payload":{"filename":"feature-dev.yaml","summary":"三阶段功能开发工作流：设计-实现-测试","config":{"workflow":{"states":[{"name":"设计","isInitial":true,"steps":[{"name":"编写设计方案","agent":"defender","prompt":"根据需求编写技术设计方案，包括架构选型、接口设计、数据模型"},{"name":"审查设计","agent":"attacker","prompt":"审查设计方案，找出潜在问题：扩展性、性能、安全性、边界情况"},{"name":"设计裁决","agent":"judge","prompt":"综合评判设计方案质量，决定是否可以进入实现阶段"}],"transitions":[{"to":"实现","condition":{"verdict":"pass"}},{"to":"实现","condition":{"verdict":"conditional_pass"}},{"to":"设计","condition":{"verdict":"fail"}}]},{"name":"实现","steps":[{"name":"编写代码","agent":"defender","prompt":"按照设计方案实现功能代码，包括单元测试"},{"name":"代码审查","agent":"attacker","prompt":"审查代码实现：逻辑正确性、代码规范、测试覆盖率、安全漏洞"},{"name":"实现裁决","agent":"judge","prompt":"综合评判代码实现质量，决定是否可以进入测试阶段"}],"transitions":[{"to":"测试","condition":{"verdict":"pass"}},{"to":"测试","condition":{"verdict":"conditional_pass"}},{"to":"设计","condition":{"verdict":"fail"}}]},{"name":"测试","steps":[{"name":"执行测试","agent":"defender","prompt":"执行集成测试和端到端测试，验证功能完整性"},{"name":"测试审查","agent":"attacker","prompt":"检查测试覆盖率，尝试找到未覆盖的边界情况和异常路径"},{"name":"测试裁决","agent":"judge","prompt":"综合评判测试结果，决定功能是否达到上线标准"}],"transitions":[{"to":"完成","condition":{"verdict":"pass"}},{"to":"完成","condition":{"verdict":"conditional_pass"}},{"to":"实现","condition":{"verdict":"fail"}}]},{"name":"完成","isFinal":true,"steps":[],"transitions":[]}]},"context":{"projectRoot":"/Users/example/my-feature","workspaceMode":"in-place"}}}}
+</result>
+
+## 字段名提醒
+
+| 正确 | 错误 | 说明 |
+|------|------|------|
+| `isInitial` | `initial` | 初始状态标记 |
+| `isFinal` | `final` | 终止状态标记 |
+| `to` | `target` | 转移目标 |
+| `verdict` | `result` | 判定类型 |

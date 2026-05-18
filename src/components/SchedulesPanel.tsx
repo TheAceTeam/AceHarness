@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { scheduleApi, configApi } from '@/lib/api';
+import { scheduleApi, configApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -67,7 +67,7 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
       setConfigs((cfgData.configs || []).map((c: any) => ({ filename: c.filename, name: c.name })));
     } catch { toast('error', t('schedules.messages.loadFailed')); }
     setLoading(false);
-  }, [configFile]);
+  }, [configFile, t, toast]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);
 

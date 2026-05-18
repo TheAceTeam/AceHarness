@@ -6,13 +6,14 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowDown,
   ArrowLeft,
-  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   CheckCircle2,
   Clock,
   History,
   Play,
+  Search,
+  TrendingUp,
   User2,
   XCircle,
   AlertCircle,
@@ -20,7 +21,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -32,10 +32,14 @@ import {
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { cn } from '@/lib/utils';
+import { PaginationBar } from '@/components/PaginationBar';
+import { MultiCombobox } from '@/components/ui/combobox';
 
-type RunSortKey = 'name' | 'startTime';
+type HistoryView = 'runs' | 'token-ranking';
+type RunSortKey = 'name' | 'startTime' | 'totalTokens' | 'cost';
+type TokenRankingSortKey = 'name' | 'totalTokens' | 'runs' | 'cost';
 type SortDirection = 'asc' | 'desc';
+type TokenRankingDimension = 'workflow' | 'user';
 
 interface RunRow {
   id: string;
@@ -49,10 +53,30 @@ interface RunRow {
   completedSteps: number;
   ownerId: string;
   ownerName: string;
+  totalTokens: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+interface TokenRankingRow {
+  name: string;
+  configFile?: string;
+  runs: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+  cost: number;
 }
 
 interface HistoryResponse {
-  runs: RunRow[];
+  view: HistoryView;
+  runs?: RunRow[];
+  rankings?: TokenRankingRow[];
   pagination: {
     total: number;
     totalPages: number;
@@ -60,7 +84,9 @@ interface HistoryResponse {
     pageSize: number;
   };
   filters: {
-    sortKey: RunSortKey;
+    view: HistoryView;
+    dimension: TokenRankingDimension;
+    sortKey: RunSortKey | TokenRankingSortKey;
     sortDirection: SortDirection;
     ownerId: string;
     keyword?: string;
@@ -74,12 +100,34 @@ function parsePositiveInt(value: string | null, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseSortKey(value: string | null): RunSortKey {
-  return value === 'name' ? 'name' : 'startTime';
+function parseHistoryView(value: string | null): HistoryView {
+  return value === 'token-ranking' ? 'token-ranking' : 'runs';
+}
+
+function parseRunSortKey(value: string | null): RunSortKey {
+  if (value === 'name' || value === 'totalTokens' || value === 'cost') return value;
+  return 'startTime';
+}
+
+function parseTokenRankingSortKey(value: string | null): TokenRankingSortKey {
+  if (value === 'name' || value === 'runs' || value === 'cost') return value;
+  return 'totalTokens';
 }
 
 function parseSortDirection(value: string | null): SortDirection {
   return value === 'asc' ? 'asc' : 'desc';
+}
+
+function parseTokenRankingDimension(value: string | null): TokenRankingDimension {
+  return value === 'user' ? 'user' : 'workflow';
+}
+
+function formatTokens(value: number): string {
+  return Number(value || 0).toLocaleString();
+}
+
+function formatMoney(value: number): string {
+  return `$${Number(value || 0).toFixed(4)}`;
 }
 
 function formatStateName(name: string) {
@@ -133,10 +181,14 @@ export default function RunHistoryPage() {
   const queryString = searchParams.toString();
   const page = parsePositiveInt(searchParams.get('page'), 1);
   const pageSize = parsePositiveInt(searchParams.get('pageSize'), 20);
-  const sortKey = parseSortKey(searchParams.get('sortKey'));
+  const view = parseHistoryView(searchParams.get('view'));
+  const runSortKey = parseRunSortKey(searchParams.get('sortKey'));
+  const tokenRankingSortKey = parseTokenRankingSortKey(searchParams.get('sortKey'));
   const sortDirection = parseSortDirection(searchParams.get('sortDirection'));
-  const ownerId = searchParams.get('ownerId') || 'all';
+  const dimension = parseTokenRankingDimension(searchParams.get('dimension'));
+  const ownerIds = (searchParams.get('ownerId') || '').split(',').filter(Boolean);
   const keyword = searchParams.get('keyword') || '';
+  const activeSortKey = view === 'token-ranking' ? tokenRankingSortKey : runSortKey;
 
   const updateQuery = (patch: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -184,14 +236,45 @@ export default function RunHistoryPage() {
   }, [queryString, router]);
 
   const totalLabel = useMemo(() => {
-    if (!data?.pagination.total) return '暂无运行记录';
+    if (!data?.pagination.total) return view === 'token-ranking' ? '暂无 Token 排行数据' : '暂无运行记录';
     const start = (data.pagination.page - 1) * data.pagination.pageSize + 1;
     const end = Math.min(data.pagination.page * data.pagination.pageSize, data.pagination.total);
     return `显示 ${start}-${end} / ${data.pagination.total} 条`;
-  }, [data]);
+  }, [data, view]);
 
-  const toggleSort = (key: RunSortKey) => {
-    if (sortKey === key) {
+  const switchView = (nextView: HistoryView) => {
+    if (nextView === 'token-ranking') {
+      updateQuery({
+        view: 'token-ranking',
+        dimension,
+        sortKey: 'totalTokens',
+        sortDirection: 'desc',
+        page: '1',
+      });
+      return;
+    }
+
+    updateQuery({
+      view: null,
+      dimension: null,
+      sortKey: 'startTime',
+      sortDirection: 'desc',
+      page: '1',
+    });
+  };
+
+  const switchDimension = (nextDimension: TokenRankingDimension) => {
+    updateQuery({
+      view: 'token-ranking',
+      dimension: nextDimension,
+      sortKey: 'totalTokens',
+      sortDirection: 'desc',
+      page: '1',
+    });
+  };
+
+  const toggleSort = (key: RunSortKey | TokenRankingSortKey) => {
+    if (activeSortKey === key) {
       updateQuery({
         sortDirection: sortDirection === 'asc' ? 'desc' : 'asc',
         page: '1',
@@ -201,32 +284,42 @@ export default function RunHistoryPage() {
 
     updateQuery({
       sortKey: key,
-      sortDirection: key === 'startTime' ? 'desc' : 'asc',
+      sortDirection: key === 'name' ? 'asc' : 'desc',
       page: '1',
     });
   };
 
+  const pageTitle = view === 'token-ranking' ? 'Token 使用排行' : '全部运行记录';
+  const pageSubtitle = view === 'token-ranking'
+    ? (dimension === 'workflow'
+      ? '按工作流聚合查看累计 Token、成本和运行次数'
+      : '按用户聚合查看累计 Token、成本和运行次数')
+    : '按名称、日期和用户维度查看历史流水线运行';
+  const searchPlaceholder = view === 'token-ranking'
+    ? (dimension === 'workflow' ? '搜索工作流...' : '搜索用户...')
+    : '搜索运行记录...';
+  const rankingItems = data?.view === 'token-ranking' ? data.rankings || [] : [];
+  const runItems = data?.view === 'runs' || !data?.view ? data?.runs || [] : [];
+
   return (
     <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 border-b border-border/50 bg-card/85 backdrop-blur-xl">
-        <div className="container mx-auto flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href="/dashboard">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                返回首页
-              </Link>
-            </Button>
-            <div className="h-6 w-px bg-border" />
-            <div>
-              <h1 className="text-2xl font-bold">全部运行记录</h1>
-              <p className="text-xs text-muted-foreground">按名称、日期和用户维度查看历史流水线运行</p>
-            </div>
+      <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" size="sm" asChild>
+            <Link href="/dashboard">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              返回首页
+            </Link>
+          </Button>
+          <div className="h-6 w-px bg-border" />
+          <div>
+            <h1 className="text-2xl font-bold">{pageTitle}</h1>
+            <p className="text-xs text-muted-foreground">{pageSubtitle}</p>
           </div>
-          <div className="flex items-center gap-3">
-            <LanguageToggle />
-            <ThemeToggle />
-          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <LanguageToggle />
+          <ThemeToggle />
         </div>
       </header>
 
@@ -234,66 +327,76 @@ export default function RunHistoryPage() {
         <section className="rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
-              <Input
-                value={keyword}
-                onChange={(event) => updateQuery({ keyword: event.target.value || null, page: '1' })}
-                placeholder="搜索运行记录..."
-                className="h-11 w-full max-w-sm"
-              />
               <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
-                  variant={sortKey === 'startTime' ? 'default' : 'outline'}
+                  variant={view === 'runs' ? 'default' : 'outline'}
                   className="rounded-full"
-                  onClick={() => updateQuery({ sortKey: 'startTime', page: '1' })}
+                  onClick={() => switchView('runs')}
                 >
-                  按日期
+                  <History className="mr-1.5 h-4 w-4" />
+                  运行记录
                 </Button>
                 <Button
                   size="sm"
-                  variant={sortKey === 'name' ? 'default' : 'outline'}
+                  variant={view === 'token-ranking' ? 'default' : 'outline'}
                   className="rounded-full"
-                  onClick={() => updateQuery({ sortKey: 'name', page: '1' })}
+                  onClick={() => switchView('token-ranking')}
                 >
-                  按名称
+                  <TrendingUp className="mr-1.5 h-4 w-4" />
+                  Token 排行
                 </Button>
+              </div>
+              <div className="flex w-full max-w-sm items-center gap-2">
+                <Input
+                  value={keyword}
+                  onChange={(event) => updateQuery({ keyword: event.target.value || null, page: '1' })}
+                  onKeyDown={(event) => { if (event.key === 'Enter') updateQuery({ keyword: keyword || null, page: '1' }); }}
+                  placeholder={searchPlaceholder}
+                  className="h-11"
+                />
                 <Button
-                  size="sm"
                   variant="outline"
-                  className="rounded-full"
-                  onClick={() => updateQuery({ sortDirection: sortDirection === 'asc' ? 'desc' : 'asc', page: '1' })}
+                  size="icon"
+                  className="h-11 w-11 shrink-0"
+                  onClick={() => updateQuery({ keyword: keyword || null, page: '1' })}
                 >
-                  {sortDirection === 'asc' ? '升序' : '降序'}
+                  <Search className="h-4 w-4" />
                 </Button>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {data?.isAdmin ? (
-                <Select value={ownerId} onValueChange={(value) => updateQuery({ ownerId: value, page: '1' })}>
-                  <SelectTrigger className="h-10 w-[180px]">
-                    <SelectValue placeholder="全部用户" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">全部用户</SelectItem>
-                    {data.userOptions.map((user) => (
-                      <SelectItem key={user.id} value={user.id}>
-                        {user.username}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {view === 'token-ranking' ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={dimension === 'workflow' ? 'default' : 'outline'}
+                    className="rounded-full"
+                    onClick={() => switchDimension('workflow')}
+                  >
+                    按工作流
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={dimension === 'user' ? 'default' : 'outline'}
+                    className="rounded-full"
+                    onClick={() => switchDimension('user')}
+                  >
+                    按用户
+                  </Button>
+                </div>
               ) : null}
-              <Select value={String(pageSize)} onValueChange={(value) => updateQuery({ pageSize: value, page: '1' })}>
-                <SelectTrigger className={cn('h-10', data?.isAdmin ? 'w-[110px]' : 'w-[120px]')}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="20">20 / 页</SelectItem>
-                  <SelectItem value="50">50 / 页</SelectItem>
-                  <SelectItem value="100">100 / 页</SelectItem>
-                </SelectContent>
-              </Select>
+              {data?.isAdmin ? (
+                <MultiCombobox
+                  value={ownerIds}
+                  onValueChange={(values) => updateQuery({ ownerId: values.length ? values.join(',') : null, page: '1' })}
+                  options={(data.userOptions || []).map((user) => ({ value: user.id, label: user.username }))}
+                  placeholder="筛选用户..."
+                  triggerClassName="min-h-10 w-[240px]"
+                  emptyText="无匹配用户"
+                />
+              ) : null}
             </div>
           </div>
 
@@ -309,48 +412,124 @@ export default function RunHistoryPage() {
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('name')}
-                      className="inline-flex items-center gap-2 font-medium"
-                    >
-                      工作流名称
-                      <SortIndicator active={sortKey === 'name'} direction={sortDirection} />
-                    </button>
-                  </TableHead>
-                  {data?.isAdmin ? <TableHead>用户</TableHead> : null}
-                  <TableHead>状态</TableHead>
-                  <TableHead>当前阶段</TableHead>
-                  <TableHead>
-                    <button
-                      type="button"
-                      onClick={() => toggleSort('startTime')}
-                      className="inline-flex items-center gap-2 font-medium"
-                    >
-                      运行日期
-                      <SortIndicator active={sortKey === 'startTime'} direction={sortDirection} />
-                    </button>
-                  </TableHead>
-                  <TableHead>进度</TableHead>
-                </TableRow>
+                {view === 'token-ranking' ? (
+                  <TableRow>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('name')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        {dimension === 'workflow' ? '工作流名称' : '用户'}
+                        <SortIndicator active={activeSortKey === 'name'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('runs')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        运行次数
+                        <SortIndicator active={activeSortKey === 'runs'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('totalTokens')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        总 Token
+                        <SortIndicator active={activeSortKey === 'totalTokens'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                    <TableHead>明细</TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('cost')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        成本
+                        <SortIndicator active={activeSortKey === 'cost'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                  </TableRow>
+                ) : (
+                  <TableRow>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('name')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        工作流名称
+                        <SortIndicator active={activeSortKey === 'name'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                    {data?.isAdmin ? <TableHead>用户</TableHead> : null}
+                    <TableHead>状态</TableHead>
+                    <TableHead>当前阶段</TableHead>
+                    <TableHead>
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('startTime')}
+                        className="inline-flex items-center gap-2 font-medium"
+                      >
+                        运行日期
+                        <SortIndicator active={activeSortKey === 'startTime'} direction={sortDirection} />
+                      </button>
+                    </TableHead>
+                    <TableHead>进度</TableHead>
+                  </TableRow>
+                )}
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={data?.isAdmin ? 6 : 5} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={view === 'token-ranking' ? 5 : (data?.isAdmin ? 6 : 5)} className="h-32 text-center text-muted-foreground">
                       加载中...
                     </TableCell>
                   </TableRow>
                 ) : error ? (
                   <TableRow>
-                    <TableCell colSpan={data?.isAdmin ? 6 : 5} className="h-32 text-center text-red-500">
+                    <TableCell colSpan={view === 'token-ranking' ? 5 : (data?.isAdmin ? 6 : 5)} className="h-32 text-center text-red-500">
                       {error}
                     </TableCell>
                   </TableRow>
-                ) : data?.runs.length ? (
-                  data.runs.map((run) => (
+                ) : view === 'token-ranking' ? (
+                  rankingItems.length ? (
+                    rankingItems.map((item, index) => {
+                      const cacheTokens = (item.cacheCreationInputTokens || 0) + (item.cacheReadInputTokens || 0);
+                      return (
+                        <TableRow key={`${item.configFile || item.name}-${index}`}>
+                          <TableCell>
+                            <div className="min-w-[220px]">
+                              <div className="font-medium">{item.name || '-'}</div>
+                              {dimension === 'workflow' ? (
+                                <div className="mt-1 text-xs text-muted-foreground">{item.configFile || '-'}</div>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{item.runs.toLocaleString()}</TableCell>
+                          <TableCell className="whitespace-nowrap text-sm font-medium">{formatTokens(item.totalTokens)}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            输入 {formatTokens(item.inputTokens)} · 输出 {formatTokens(item.outputTokens)} · 缓存 {formatTokens(cacheTokens)}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-sm text-muted-foreground">{formatMoney(item.cost)}</TableCell>
+                        </TableRow>
+                      );
+                    })
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                        暂无 Token 排行数据
+                      </TableCell>
+                    </TableRow>
+                  )
+                ) : runItems.length ? (
+                  runItems.map((run) => (
                     <TableRow
                       key={run.id}
                       className={run.configFile ? 'cursor-pointer' : undefined}
@@ -404,32 +583,18 @@ export default function RunHistoryPage() {
           </div>
         </section>
 
-        <section className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-card/70 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-muted-foreground">{totalLabel}</div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!data || data.pagination.page <= 1}
-              onClick={() => updateQuery({ page: String(Math.max(1, page - 1)) })}
-            >
-              <ArrowLeft className="mr-1 h-4 w-4" />
-              上一页
-            </Button>
-            <Badge variant="secondary">
-              第 {data?.pagination.page || 1} / {data?.pagination.totalPages || 1} 页
-            </Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!data || data.pagination.page >= data.pagination.totalPages}
-              onClick={() => updateQuery({ page: String(page + 1) })}
-            >
-              下一页
-              <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-          </div>
-        </section>
+        {(data?.pagination.totalPages || 1) > 1 && (
+          <PaginationBar
+            current={data?.pagination.page || 1}
+            total={data?.pagination.total || 0}
+            pageSize={pageSize}
+            onPageChange={(p) => updateQuery({ page: String(p) })}
+            pageSizeOptions={[20, 50, 100]}
+            onPageSizeChange={(size) => updateQuery({ pageSize: String(size), page: '1' })}
+            itemLabel="条记录"
+            paginationStyle="numbered"
+          />
+        )}
       </main>
     </div>
   );

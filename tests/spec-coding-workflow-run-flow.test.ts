@@ -19,7 +19,7 @@ vi.mock('@/lib/engines/engine-config', () => ({
 }));
 
 async function createAuthToken(): Promise<{ token: string; userId: string }> {
-  const { createUser, storeToken } = await import('@/lib/user-store');
+  const { createUser, storeToken } = await import('@/lib/core/user-store');
   const suffix = `flow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const user = await createUser({
     username: `flow-${suffix}`,
@@ -147,7 +147,7 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(createJson.creationSession.bindingValidation.ok).toBe(true);
         expect(createJson.creationSession.bindingValidation.bindings[0].taskIds).toContain(boundTaskId);
 
-        const { StateMachineWorkflowManager } = await import('@/lib/state-machine-workflow-manager');
+        const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
         const manager = new StateMachineWorkflowManager();
         (manager as any)._creationSessionId = createJson.creationSession.id;
         (manager as any)._userPersonalDir = workspace;
@@ -252,8 +252,8 @@ describe('SpecCoding workflow creation to mocked AI run flow', () => {
         expect(createResponse.status, JSON.stringify(createJson)).toBe(200);
         expect(createJson.creationSession.bindingValidation.ok).toBe(true);
 
-        const { StateMachineWorkflowManager } = await import('@/lib/state-machine-workflow-manager');
-        const { deltaDirName } = await import('@/lib/spec-persistence');
+        const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+        const { deltaDirName } = await import('@/lib/spec/persistence');
         const manager = new StateMachineWorkflowManager();
         (manager as any)._creationSessionId = createJson.creationSession.id;
         (manager as any)._userPersonalDir = workspace;

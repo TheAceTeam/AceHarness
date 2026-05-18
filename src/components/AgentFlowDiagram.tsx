@@ -17,7 +17,7 @@ import ReactFlow, {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Badge } from './ui/badge';
-import type { StateMachineState } from '@/lib/schemas';
+import type { StateMachineState } from '@/lib/core/schemas';
 
 interface AgentFlowRecord {
   id: string;

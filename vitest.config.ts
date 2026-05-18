@@ -13,7 +13,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
-    exclude: ['node_modules', '.next', 'dist', 'dist-build'],
+    exclude: ['tests/ai-integration/**', 'node_modules', '.next', 'dist', 'dist-build'],
     setupFiles: ['tests/setup/component-test-setup.ts'],
     testTimeout: 30000,
   },

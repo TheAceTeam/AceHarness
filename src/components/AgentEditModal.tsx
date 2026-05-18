@@ -9,16 +9,16 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { ModelSelect } from '@/components/ModelSelect';
-import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineSelect } from '@/components/EngineSelect';
-import { getEngineMeta } from '@/lib/engine-metadata';
-import { agentApi } from '@/lib/api';
+import { getEngineMeta } from '@/lib/core/engine-metadata';
+import { SingleCombobox } from '@/components/ui/combobox';
+import { agentApi } from '@/lib/core/api';
 import {
   createDeterministicAvatarConfig,
   normalizeAgentAvatar,
   resolveAgentAvatarSrc,
   type AgentAvatarConfig,
-} from '@/lib/agent-personas';
+} from '@/lib/agent/personas';
 import { useToast } from '@/components/ui/toast';
 
 interface SubAgent {
@@ -87,18 +87,18 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [newTag, setNewTag] = useState('');
   const [newCapability, setNewCapability] = useState('');
   const [newConstraint, setNewConstraint] = useState('');
-  const [globalEngine, setGlobalEngine] = useState('');
-  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [editingSubAgent, setEditingSubAgent] = useState<{ name: string; config: SubAgent } | null>(null);
   const [newSubAgentName, setNewSubAgentName] = useState('');
   const [refreshingAvatar, setRefreshingAvatar] = useState(false);
+  const [globalEngine, setGlobalEngine] = useState('');
+  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
 
   useEffect(() => {
     fetch('/api/engine')
       .then((res) => res.json())
       .then((data) => {
         setGlobalEngine(data.engine || '');
-        setGlobalDefaultModel(data.defaultModel || '');
+        setGlobalDefaultModel(data.model || '');
       })
       .catch(() => {});
   }, []);
@@ -117,11 +117,6 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       alert('至少需要添加一个能力');
       return;
     }
-    if (formData.activeEngine && !formData.engineModels[formData.activeEngine]) {
-      alert('当前启用的引擎必须选择模型');
-      return;
-    }
-
     const dataToSave = { ...formData };
     if (!dataToSave.avatar) {
       dataToSave.avatar = createDeterministicAvatarConfig(dataToSave.name, {

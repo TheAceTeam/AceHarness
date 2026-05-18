@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { commandExists, getCommonCliSearchPaths } from '@/lib/command-exists';
+import { buildEnvObject, loadEnvVars } from '@/lib/core/env-manager';
+import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { detectCangjieHome, buildCangjieSpawnEnv, isCjpmAvailable } from '@/lib/cangjie/env';
 import { ClaudeCodeEngineWrapper } from '@/lib/engines/claude-code-wrapper';
 import { KiroCliEngineWrapper } from '@/lib/engines/kiro-cli-wrapper';
 import { OpenCodeEngineWrapper } from '@/lib/engines/opencode-wrapper';
@@ -27,8 +29,21 @@ describe('wrapper availability in current environment', () => {
 
   test('codex matches SDK + CLI discovery availability', async () => {
     const wrapper = new CodexEngineWrapper();
-    const expected = await hasModule('@openai/codex-sdk') && Boolean((wrapper as any).findCodexPath());
+    const expected = await hasModule('@openai/codex-sdk') || Boolean((wrapper as any).findCodexFallbackPath());
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
+  });
+
+  test('codex fallback avoids Windows npm command shims for SDK spawn', async () => {
+    const wrapper = new CodexEngineWrapper();
+    const codexPath = (wrapper as any).findCodexFallbackPath();
+
+    if (process.platform !== 'win32' || !codexPath) {
+      expect(true).toBe(true);
+      return;
+    }
+
+    expect(codexPath.toLowerCase()).toMatch(/codex\.exe$/);
+    expect(codexPath.toLowerCase()).not.toMatch(/\.(cmd|bat|ps1)$/);
   });
 
   test('cursor matches CLI discovery availability', async () => {
@@ -51,7 +66,13 @@ describe('wrapper availability in current environment', () => {
 
   test('codegenie matches CLI discovery availability', async () => {
     const wrapper = new CodegenieEngineWrapper();
-    const expected = commandExists('codegenie');
+    const explicit = process.env.ACEH_CODEGENIE_COMMAND?.trim();
+    const binary = explicit
+      ? findCommand(explicit, getCommonCliSearchPaths()) ||
+        findCommand('codegenie', getCommonCliSearchPaths()) ||
+        'codegenie'
+      : findCommand('codegenie', getCommonCliSearchPaths()) || 'codegenie';
+    const expected = commandExists(binary, getCommonCliSearchPaths());
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
   });
 

@@ -2,12 +2,12 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { MockEngine } from './helpers/mock-engine';
 
 // Mock all heavy external dependencies
-vi.mock('@/lib/run-store', () => ({
+vi.mock('@/lib/run/store', () => ({
   createRun: vi.fn().mockResolvedValue(undefined),
   updateRun: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/run-state-persistence', () => ({
+vi.mock('@/lib/run/state-persistence', () => ({
   saveRunState: vi.fn().mockResolvedValue(undefined),
   saveProcessOutput: vi.fn().mockResolvedValue(undefined),
   saveStreamContent: vi.fn().mockResolvedValue(undefined),
@@ -15,7 +15,7 @@ vi.mock('@/lib/run-state-persistence', () => ({
   loadStepOutputs: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@/lib/process-manager', () => ({
+vi.mock('@/lib/core/process-manager', () => ({
   processManager: {
     registerExternalProcess: vi.fn().mockReturnValue({
       status: 'running',
@@ -35,33 +35,33 @@ vi.mock('@/lib/process-manager', () => ({
   },
 }));
 
-vi.mock('@/lib/workflow-experience-store', () => ({
+vi.mock('@/lib/workflow/workflow-experience-store', () => ({
   appendWorkflowExperience: vi.fn().mockResolvedValue(undefined),
   buildWorkflowExperiencePromptBlock: vi.fn().mockReturnValue(''),
   findRelevantWorkflowExperiences: vi.fn().mockResolvedValue([]),
   saveWorkflowFinalReview: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/workflow-memory-store', () => ({
+vi.mock('@/lib/workflow/workflow-memory-store', () => ({
   appendMemoryEntries: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/agent-relationship-store', () => ({
+vi.mock('@/lib/agent/agent-relationship-store', () => ({
   upsertRelationshipSignal: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/chat-persistence', () => ({
+vi.mock('@/lib/chat/chat-persistence', () => ({
   updateChatSessionCreationBinding: vi.fn().mockResolvedValue(undefined),
   updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/default-supervisor', () => ({
+vi.mock('@/lib/core/default-supervisor', () => ({
   DEFAULT_SUPERVISOR_NAME: 'default-supervisor',
   ensureDefaultSupervisorConfig: vi.fn(),
   resolveWorkflowSupervisorAgent: vi.fn().mockReturnValue('default-supervisor'),
 }));
 
-vi.mock('@/lib/spec-coding-store', () => ({
+vi.mock('@/lib/spec/coding-store', () => ({
   appendSpecCodingRevision: vi.fn(),
   appendSupervisorSpecCodingRevision: vi.fn(),
   cloneSpecCodingForRun: vi.fn(),
@@ -71,7 +71,7 @@ vi.mock('@/lib/spec-coding-store', () => ({
   updateSpecCodingTaskStatuses: vi.fn(),
 }));
 
-vi.mock('@/lib/spec-persistence', () => ({
+vi.mock('@/lib/spec/persistence', () => ({
   ensureSpecDirStructure: vi.fn().mockResolvedValue(undefined),
   getSpecRootDir: vi.fn().mockReturnValue('/tmp/spec'),
   writeDeltaSpec: vi.fn().mockResolvedValue(undefined),
@@ -88,25 +88,35 @@ vi.mock('@/lib/engines/engine-config', () => ({
   getEngineSkillsSubdir: vi.fn().mockReturnValue('skills'),
 }));
 
-vi.mock('@/lib/runtime-configs', () => ({
+vi.mock('@/lib/run/runtime-configs', () => ({
   getRuntimeAgentsDirPath: vi.fn().mockReturnValue('/tmp/agents'),
   getRuntimeWorkflowConfigPath: vi.fn().mockResolvedValue('/tmp/config.yaml'),
 }));
 
-vi.mock('@/lib/runtime-skills', () => ({
+vi.mock('@/lib/run/runtime-skills', () => ({
   getRuntimeSkillsDirPath: vi.fn().mockResolvedValue('/tmp/skills'),
 }));
 
-vi.mock('@/lib/app-paths', () => ({
+vi.mock('@/lib/core/app-paths', () => ({
+  getInstallPath: vi.fn((...segments: string[]) => ['/tmp/install', ...segments].join('/')),
+  getInstallConfigsDir: vi.fn().mockReturnValue('/tmp/install/configs'),
+  getInstallConfigPath: vi.fn((...segments: string[]) => ['/tmp/install/configs', ...segments].join('/')),
+  getRepoRoot: vi.fn().mockReturnValue('/tmp/install'),
+  getWorkspaceCacheFile: vi.fn((...segments: string[]) => ['/tmp/workspace/cache', ...segments].join('/')),
+  getWorkspaceConfigFile: vi.fn((...segments: string[]) => ['/tmp/workspace/config', ...segments].join('/')),
+  getWorkspaceDataFile: vi.fn((...segments: string[]) => ['/tmp/workspace/data', ...segments].join('/')),
+  getWorkspaceLogFile: vi.fn((...segments: string[]) => ['/tmp/workspace/logs', ...segments].join('/')),
+  getWorkspaceSkillPath: vi.fn((...segments: string[]) => ['/tmp/workspace/skills', ...segments].join('/')),
+  getWorkspaceSkillsDir: vi.fn().mockReturnValue('/tmp/workspace/skills'),
   getWorkspaceRoot: vi.fn().mockReturnValue('/tmp/workspace'),
   getWorkspaceRunsDir: vi.fn().mockReturnValue('/tmp/runs'),
 }));
 
-vi.mock('@/lib/workflow-manager', () => ({
+vi.mock('@/lib/workflow/manager', () => ({
   resolveAgentModel: vi.fn().mockReturnValue('test-model'),
 }));
 
-vi.mock('@/lib/utils', () => ({
+vi.mock('@/lib/core/utils', () => ({
   formatTimestamp: vi.fn().mockReturnValue('2024-01-01-000000'),
 }));
 
@@ -184,8 +194,24 @@ function makeConfig(overrides: Record<string, any> = {}) {
 }
 
 // --- Helper to set up manager internal state ---
+function makeAgentState(name: string) {
+  return {
+    name,
+    team: '',
+    model: 'test-model',
+    status: 'idle',
+    currentTask: null,
+    completedTasks: 0,
+    tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+    costUsd: 0,
+    sessionId: null,
+    lastOutput: '',
+    summary: '',
+  };
+}
+
 async function createManagerForTest(engine: MockEngine) {
-  const { StateMachineWorkflowManager } = await import('@/lib/state-machine-workflow-manager');
+  const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
   const manager = new StateMachineWorkflowManager();
 
   // Set up minimum internal state
@@ -197,21 +223,7 @@ async function createManagerForTest(engine: MockEngine) {
   (manager as any).currentRequirements = 'Build a feature';
   (manager as any).workflowName = 'Test Workflow';
   (manager as any).runStartTime = new Date().toISOString();
-  (manager as any).agents = [
-    {
-      name: 'developer',
-      team: '',
-      model: 'test-model',
-      status: 'idle',
-      currentTask: null,
-      completedTasks: 0,
-      tokenUsage: { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
-      costUsd: 0,
-      sessionId: null,
-      lastOutput: '',
-      summary: '',
-    },
-  ];
+  (manager as any).agents = [makeAgentState('developer')];
   (manager as any).agentConfigs = [
     { name: 'developer', systemPrompt: 'You are a developer' },
   ];
@@ -297,6 +309,24 @@ describe('parseVerdict', () => {
   });
 });
 
+describe('engine-level failure detection', () => {
+  test('treats Claude context window limit as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure('ApiError: the model has reached its context window limit')).toBe(true);
+  });
+
+  test('stops the workflow when an engine returns a context-window error as plain output', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: 'ApiError: the model has reached its context window limit',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/context window limit/i);
+  });
+});
+
 // ============================================================
 // State machine execution flow
 // ============================================================
@@ -315,6 +345,102 @@ describe('state machine execution flow', () => {
     const result = await (manager as any).executeState(state, config, 'Build a feature');
     expect(result.stepOutputs).toHaveLength(1);
     expect(result.stepOutputs[0]).toContain('Step completed');
+  });
+
+  test('agentInstanceId is used as the engine execution identity', async () => {
+    const engine = new MockEngine({ success: true, output: 'Step completed by runtime instance' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('developer-1'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'developer-1', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.stepOutputs[0]).toContain('runtime instance');
+    expect(engine.calls[0].options.agent).toBe('developer-1');
+    expect((manager as any).stepLogs[0].agent).toBe('developer-1');
+  });
+
+  test('supervisor cannot substitute a normal workflow step runtime agent', async () => {
+    const engine = new MockEngine({ success: true, output: 'Supervisor should not run this step' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('default-supervisor'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'default-supervisor', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect(result.stepOutputs[0]).toContain('Supervisor');
+    expect(engine.calls).toHaveLength(0);
+    expect((manager as any).completedSteps).not.toContain('设计-design-step');
+  });
+
+  test('supervisor review text is rejected as a normal step output', async () => {
+    const supervisorReview = [
+      '当前阶段结论：建议继续留在方案设计。',
+      '是否建议继续迭代：是。',
+      '下一步指导意见：让 architect 产出 design.md。',
+      '下一步只做一件事：把统一事实基线固化成设计约束，然后输出 2-3 个方案对比。',
+      '重点锁定搜索入口、数据契约、结果规则、恢复逻辑这四项契约。',
+      '风险点只保留两个：不要默认跨会话历史搜索，不要默认结果可跳到命中消息。',
+    ].join('\n');
+    const engine = new MockEngine({ success: true, output: supervisorReview });
+    const manager = await createManagerForTest(engine);
+    (manager as any).latestSupervisorReview = {
+      type: 'state-review',
+      stateName: '方案设计',
+      content: supervisorReview,
+      timestamp: new Date().toISOString(),
+    };
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '方案设计',
+            isInitial: true,
+            steps: [
+              { name: '搜索方案设计', agent: 'developer', task: 'Design search', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect(result.stepOutputs[0]).toContain('Supervisor 审阅内容');
+    expect((manager as any).completedSteps).not.toContain('方案设计-搜索方案设计');
+    expect((manager as any).stepLogs[0].status).toBe('failed');
   });
 
   test('verdict=pass transitions to next state', async () => {

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import Markdown from '@/components/Markdown';
 import styles from '@/app/workbench/[config]/page.module.css';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 
 interface TokenUsage {
   inputTokens: number;
@@ -67,6 +67,8 @@ interface AgentPanelProps {
   onViewPersistedStepOutput?: (log: PersistedStepLog) => void;
   systemPrompt?: string;
   iterationPrompt?: string;
+  /** When true, hide agent header card and prompt sections to avoid duplication with step config */
+  compact?: boolean;
 }
 
 export default function AgentPanel({
@@ -84,6 +86,7 @@ export default function AgentPanel({
   onViewPersistedStepOutput,
   systemPrompt,
   iterationPrompt,
+  compact = false,
 }: AgentPanelProps) {
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const [showPrompt, setShowPrompt] = useState(false);
@@ -133,25 +136,26 @@ export default function AgentPanel({
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <div className="flex items-center gap-3">
-        <div className={`w-10 h-10 rounded-full ${teamBg} flex items-center justify-center`}>
-          <span className="material-symbols-outlined text-lg">smart_toy</span>
-        </div>
-        <div className="flex-1">
-          <div className="font-medium text-sm">{agent.name}</div>
-          <div className="flex items-center gap-2 mt-0.5">
-            <Badge variant="outline" className={`text-xs ${teamColor} border-current/30`}>
-              {getTeamLabel(agent.team)}
-            </Badge>
-            <Badge variant="secondary" className="text-xs">{agent.model}</Badge>
+      {!compact && (
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-full ${teamBg} flex items-center justify-center`}>
+            <span className="material-symbols-outlined text-lg">smart_toy</span>
+          </div>
+          <div className="flex-1">
+            <div className="font-medium text-sm">{agent.name}</div>
+            <div className="flex items-center gap-2 mt-0.5">
+              <Badge variant="outline" className={`text-xs ${teamColor} border-current/30`}>
+                {getTeamLabel(agent.team)}
+              </Badge>
+              <Badge variant="secondary" className="text-xs">{agent.model}</Badge>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${statusColor} ${agent.status === 'running' ? 'animate-pulse' : ''}`} />
+            <span className="text-xs text-muted-foreground">{getStatusText(agent.status)}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${statusColor} ${agent.status === 'running' ? 'animate-pulse' : ''}`} />
-          <span className="text-xs text-muted-foreground">{getStatusText(agent.status)}</span>
-        </div>
-      </div>
-      {/* PLACEHOLDER_REST */}
+      )}
 
       {agent.currentTask && (
         <div className="rounded-md bg-muted p-3">
@@ -160,7 +164,7 @@ export default function AgentPanel({
         </div>
       )}
 
-      {(systemPrompt || iterationPrompt) && (
+      {!compact && (systemPrompt || iterationPrompt) && (
         <div className="rounded-md border bg-muted/30 p-3">
           <div className="flex items-center justify-between gap-2">
             <div>

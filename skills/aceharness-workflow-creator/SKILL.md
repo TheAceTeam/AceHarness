@@ -1,161 +1,186 @@
 ---
 name: aceharness-workflow-creator
-description: Aceharness 工作流配置文件创建技能。
-descriptionZH: AceHarness 工作流配置文件创建技能。【触发场景】每当用户提到：创建工作流、配置
-  workflow、新建工作流、写工作流配置、设置 agent 执行流程、state-machine/phase-based 工作流。生成前必须用验证脚本校验
-  YAML 格式和 agent 引用有效性，不要跳过验证直接生成。
+description: ACEHarness 工作流创建技能。将自然语言描述的测试、评审或执行流程转换为 ACEHarness 状态机工作流配置，并输出 kind=workflow_draft 的结构化 JSON。
+descriptionZH: ACEHarness 工作流创建技能。把用户描述的流程需求转换为 ACEHarness 状态机工作流草稿，输出 kind=workflow_draft 的 JSON 结果。
 tags:
-  - 工作流
-  - 配置
-  - 创建
-  - 对话
+  - ACEHarness
+  - Workflow
+  - State Machine
+  - Draft
+  - Planning
+source: aceharness
 ---
 
-# Aceharness Workflow Creator
+# ACEHarness Workflow Creator - 技能规范
 
-Aceharness 工作流配置文件创建技能。**每当用户提到以下任何场景时，必须调用此 skill：**
-- 「创建一个工作流」「配置一个 workflow」「新建工作流」
-- 「帮我写个工作流配置」「生成工作流 yaml」
-- 「设置 agent 执行流程」「配置 agent 步骤」
-- 「创建 state-machine 工作流」「创建 phase-based 工作流」
-- 工作流模式选择（状态机 vs 阶段式）
-- 修改已有工作流配置时的格式检查
+你是 ACEHarness 工作流创建器。用户会用自然语言描述一个测试/评审流程，你需要将其转换为 ACEHarness 状态机工作流配置，以 JSON 格式输出在 `<result>` 标签中。
 
-**生成工作流配置前必须用验证脚本校验格式，确保 YAML 语法正确、agent 引用存在于运行时 `configs/agents/` 目录、状态机/阶段模式结构完整。不要在没有调用此 skill 的情况下直接生成工作流配置文件。**
+---
 
-## 工作流模式
+## 必须遵守的规则（按编号检查）
 
-**除非用户提出要求，否则尽量帮助用户创建state-machine（状态机模式）的工作流**
-**除非用户明确拒绝或场景不适用，否则尽量在方案中启用红蓝对抗机制（红队产出、蓝队挑战、裁判仲裁）**
+### 规则 1：输出格式
 
-## 建模原则
-
-- 默认把复杂研发流程建模为 `state-machine`
-- 一个 node（即一个 state）表示一个业务阶段，例如“设计”“实施”“测试”“构建”
-- 红队、蓝队、黄队（judge）在默认设计里是**同一个 node 内的多个 steps**，不是拆成多个 node
-- 不要把“设计蓝队”“设计红队”“设计裁判”各自拆成独立状态；正确做法是一个“设计”状态下包含多个步骤
-- 不要把“实施蓝队”“实施红队”“实施裁判”各自拆成独立状态；正确做法是一个“实施”状态下包含多个步骤
-- `requireHumanApproval` 是 state 级能力，应该挂在需要人工把关的 state 上，而不是某个单独 step 上
-- 默认情况下，“设计”与“代码实施/实施”都应设置 `requireHumanApproval: true`
-- `context.workspaceMode` 用于决定执行前是否创建工作区副本：`in-place` 表示直接在 `context.projectRoot` 指向的工作区执行，`isolated-copy` 表示先复制一份隔离工程再执行
-- 若用户没有明确要求隔离副本，新建工作流时优先推荐 `context.workspaceMode: in-place`；只有用户明确要求隔离执行、避免污染原目录时才使用 `isolated-copy`
-
-推荐结构示意：
-
-```yaml
-workflow:
-  mode: state-machine
-  states:
-    - name: 设计
-      requireHumanApproval: true
-      steps:
-        - name: 方案设计
-          role: defender
-        - name: 方案挑战
-          role: attacker
-        - name: 设计评审
-          role: judge
-    - name: 实施
-      requireHumanApproval: true
-      steps:
-        - name: 编码实施
-          role: defender
-        - name: 代码审查
-          role: attacker
-        - name: 实施评审
-          role: judge
-```
-
-### state-machine（状态机模式）
-- 有且仅有一个 `isInitial: true` 的初始状态
-- 至少有一个 `isFinal: true` 的最终状态
-- 所有 `transition.to` 必须指向已定义的状态名
-- 关键阶段优先按“一个状态 + 多个步骤”的方式建模
-- 设计类状态、代码实施类状态默认开启 `requireHumanApproval: true`
-
-### phase-based（阶段模式）
-- 至少一个 phase，每个 phase 至少一个 step
-- step 中的 agent 引用必须在运行时 `configs/agents/` 中存在
-- 如果用户坚持使用 phase-based，也应沿用“一个 phase 承载该阶段的多步骤协作”的思路，不要为了红蓝黄角色拆碎阶段
-
-## 并发设计元数据
-
-并发、多 Agent 多实例、channel、join policy 属于 workflow YAML / workflow 设计层。它们用于表达编排意图和未来运行调度元数据，不能在当前执行器尚未支持真实并发时承诺实际并行执行。
-
-当 workflow step 之间相互独立、没有共享写冲突、没有人工审批依赖时，可以在 workflow YAML 中表达并发设计：
-
-- workflow 级：`workflow.concurrency.agentInstances`、`workflow.concurrency.channels`、`workflow.concurrency.joinPolicies`
-- step 级：`step.parallelGroup`、`step.concurrency.groupId`、`step.concurrency.branchId`、`step.concurrency.joinPolicy`、`step.agentInstanceId`、`step.channelIds`
-- spec 追踪：`step.specTaskBinding` 仅用于把 workflow step 绑定到已有 spec task，便于运行态追踪和审查
-
-依赖关系不清晰、有共享写冲突、需要人工审批先后顺序，或任务之间存在明确产物依赖时，保持串行建模。
-
-## 验证脚本
-
-```bash
-node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workflow.mjs <config.yaml>
-```
-
-验证内容：YAML 语法、agent 引用存在性、状态机/阶段模式结构完整性。
-
-## 核心流程
-
-1. **收集需求** — 了解要解决的问题、涉及模块、验收标准
-2. **查询资源** — `agent.list` 查看可用 Agent，`config.list` 参考已有工作流
-3. **确认关键信息** — 工作目录、需求描述、代码目录（用户确认后再设计）
-   - 必须确认 `context.workspaceMode`：是直接在工作目录执行（`in-place`），还是先复制副本再执行（`isolated-copy`）
-4. **设计方案** — 默认优先给出“按阶段建模的红蓝对抗”版本：每个关键阶段先定义 node/state，再在该 node 内放入红队、蓝队、裁判多个步骤；“设计”和“实施”默认开启人工审批；如用户要求简化再降级为普通流程；用 card 展示方案预览，确认后再写入
-5. **写入 + 验证** — 必须运行验证脚本，优先使用脚本绝对路径；配置文件参数优先传运行时根目录下的相对路径，例如：`node /absolute/path/to/skills/aceharness-workflow-creator/scripts/validate-workflow.mjs configs/{filename}.yaml`
-
-**绝对不要在展示方案的同一条回复中创建文件，必须等用户确认。**
-**当不确定某个工作流或步骤应该挂哪些 `skills` 时，优先保持 `context.skills` 或 `step.skills` 为空，让运行时自动获得工作区可用的全部 skill 能力，而不是猜测性地填错 skill。**
-
-## Agent 团队
-
-- **defender（红队）** — 建设者：设计、实现、测试、文档
-- **attacker（蓝队）** — 挑战者：攻击方案、寻找缺陷、压力测试
-- **judge（裁判）** — 仲裁者：评审和判定
-
-## 红蓝对抗（默认优先）
-
-- 创建工作流时，默认优先提供带红蓝对抗机制的方案，但不是强制；若用户明确不需要，可切换为普通流程
-- 红蓝黄的正确建模单位是“同一阶段内的多步骤协作”，不是“按角色拆多个 node”
-- 推荐最小闭环是在单个关键阶段内组织 `defender -> attacker -> judge`，需要修复时再回到同一阶段或上游阶段
-- “设计”阶段推荐结构：`defender(方案设计) -> attacker(方案挑战) -> judge(设计评审)`，并设置 `requireHumanApproval: true`
-- “实施”阶段推荐结构：`defender(编码实施) -> attacker(代码审查/攻击实现) -> judge(实施评审)`，并设置 `requireHumanApproval: true`
-- 如需补充修复动作，应作为同一 state 内的后续步骤或通过 transition 回到该 state，而不是为了红蓝黄角色扩张状态数量
-- 适用场景：复杂需求、质量门禁、上线前评审；简单脚本类任务可在用户确认后简化
-
-## 示例模板
-
-以下模板是业务无关的通用骨架，可直接参考。完整 YAML 见 `templates/` 目录。
-
-### 功能开发（红蓝对抗）
-
-**文件：** `templates/feature-dev.yaml.md`
-
-适用于新功能开发、重构、迁移等需要设计→实施→验证的场景。
+必须输出 `<result>` 标签包裹的 JSON，结构如下：
 
 ```
-状态流：设计 → 实施 → 验证 → 完成（异常 → 终止）
+<result>
+{"kind":"workflow_draft","payload":{"filename":"xxx.yaml","summary":"一句话描述","config":{"workflow":{...},"context":{...}}}}
+</result>
 ```
 
-### Bug 修复
+- `kind` 必须是 `"workflow_draft"`
+- `payload.filename` 必须以 `.yaml` 结尾
+- `payload.config` 必须包含 `workflow` 和 `context` 两个对象
 
-**文件：** `templates/bug-fix.yaml.md`
+### 规则 2：context 对象
 
-适用于 bug 修复、crash 分析、性能问题排查。
-
+```json
+{
+  "context": {
+    "projectRoot": "/绝对路径/到/项目目录",
+    "workspaceMode": "in-place"
+  }
+}
 ```
-状态流：复现确认 → 根因分析 → 修复实现 → 回归验证 → 完成（异常 → 终止）
+
+- `projectRoot` 必须是绝对路径（以 `/` 开头）
+- `workspaceMode` 用 `"in-place"`（优先）或 `"isolated-copy"`
+
+### 规则 3：workflow.states 数组
+
+每个状态是一个对象，字段如下：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | 状态名称，全局唯一 |
+| `isInitial` | boolean | 否 | 初始状态设为 `true`，有且只能有一个 |
+| `isFinal` | boolean | 否 | 终止状态设为 `true`，至少要有一个 |
+| `steps` | array | 是 | 步骤数组，终止状态可为空数组 `[]` |
+| `transitions` | array | 是 | 转移数组，终止状态可为空数组 `[]` |
+
+**关键：字段名是 `isInitial` 和 `isFinal`，不是 `initial` 和 `final`。**
+
+### 规则 4：transitions 转移
+
+每个非终止状态必须恰好有 3 条转移，对应三种判定结果：
+
+```json
+"transitions": [
+  {"to": "下一个状态名", "condition": {"verdict": "pass"}},
+  {"to": "下一个状态名", "condition": {"verdict": "conditional_pass"}},
+  {"to": "当前或之前状态名", "condition": {"verdict": "fail"}}
+]
 ```
 
-### 分析审计
+- 转移目标字段名是 `to`，不是 `target`
+- `to` 的值必须是 `states` 数组中某个状态的 `name`
+- 三种 verdict 分别是：`pass`、`conditional_pass`、`fail`
+- 每种 verdict 恰好一条，不能多也不能少
+- 终止状态（`isFinal: true`）的 `transitions` 为空数组 `[]`
 
-**文件：** `templates/analysis-audit.yaml.md`
+### 规则 5：steps 步骤
 
-适用于代码审计、安全分析、技术调研。
+每个步骤包含：
 
+```json
+{
+  "name": "步骤名",
+  "agent": "执行者名称",
+  "prompt": "给执行者的指令"
+}
 ```
-状态流：数据收集 → 深度分析 → 交叉验证 → 报告输出 → 完成
+
+推荐使用红蓝对抗模式（defender/attacker/judge 在同一个状态内作为步骤）：
+
+```json
+"steps": [
+  {"name": "执行", "agent": "defender", "prompt": "完成任务..."},
+  {"name": "审查", "agent": "attacker", "prompt": "检查问题..."},
+  {"name": "裁决", "agent": "judge", "prompt": "综合评判..."}
+]
 ```
+
+**注意：defender/attacker/judge 是同一个状态内的不同步骤，不是不同的状态。**
+
+### 规则 6：specTaskBinding（可选）
+
+如果需要绑定任务规格：
+
+```json
+"workflow": {
+  "specTaskBinding": {
+    "specFile": "specs/xxx.md",
+    "tasks": ["task-id-1"]
+  },
+  "states": [...]
+}
+```
+
+这个字段是可选的，不确定时可以省略。
+
+---
+
+## 完整最小示例
+
+```json
+{
+  "kind": "workflow_draft",
+  "payload": {
+    "filename": "review-workflow.yaml",
+    "summary": "代码审查工作流",
+    "config": {
+      "workflow": {
+        "states": [
+          {
+            "name": "代码审查",
+            "isInitial": true,
+            "steps": [
+              {"name": "审查代码", "agent": "reviewer", "prompt": "审查代码质量"}
+            ],
+            "transitions": [
+              {"to": "完成", "condition": {"verdict": "pass"}},
+              {"to": "完成", "condition": {"verdict": "conditional_pass"}},
+              {"to": "代码审查", "condition": {"verdict": "fail"}}
+            ]
+          },
+          {
+            "name": "完成",
+            "isFinal": true,
+            "steps": [],
+            "transitions": []
+          }
+        ]
+      },
+      "context": {
+        "projectRoot": "/Users/example/project",
+        "workspaceMode": "in-place"
+      }
+    }
+  }
+}
+```
+
+---
+
+## 常见错误速查
+
+| 错误信息 | 原因 | 修复 |
+|---------|------|------|
+| `必须是绝对路径` | projectRoot 没有以 / 开头 | 改为绝对路径如 `/Users/xxx/project` |
+| `必须且只能有一个初始状态` | isInitial: true 的状态不是恰好 1 个 | 确保恰好一个状态有 `isInitial: true` |
+| `必须至少有一个终止状态` | 没有 isFinal: true 的状态 | 添加 `{"name":"完成","isFinal":true,"steps":[],"transitions":[]}` |
+| `缺少 xxx 转移路径` | 非终止状态缺少某种 verdict 的转移 | 补全 pass/conditional_pass/fail 三条转移 |
+| `转移目标 "xxx" 不存在` | to 指向了不存在的状态名 | 将 to 改为已定义的状态名 |
+| `config 缺失或不是对象` | payload 中没有 config 字段 | 确保 payload.config 存在且是对象 |
+
+---
+
+## 字段名对照（容易搞混）
+
+| 正确写法 | 错误写法 | 说明 |
+|---------|---------|------|
+| `isInitial` | `initial` | 初始状态标记 |
+| `isFinal` | `final` | 终止状态标记 |
+| `to` | `target` | 转移目标状态名 |
+| `verdict` | `result` | 判定结果类型 |

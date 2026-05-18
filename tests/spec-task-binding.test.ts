@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 function specCoding() {
   return {

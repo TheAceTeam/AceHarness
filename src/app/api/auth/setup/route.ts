@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isSetup, setupFirstAdmin } from '@/lib/user-store';
-import { saveChatSettings, discoverSkills } from '@/lib/chat-settings';
-import { getWorkspaceRoot } from '@/lib/app-paths';
+import { isSetup, setupFirstAdmin } from '@/lib/core/user-store';
+import { saveChatSettings, discoverSkills } from '@/lib/chat/settings';
+import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { homedir } from 'os';
 
 export const dynamic = 'force-dynamic';

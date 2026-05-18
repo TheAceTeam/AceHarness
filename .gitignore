@@ -23,6 +23,7 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.eslintcache
 
 # local env files
 .env
@@ -51,6 +52,7 @@ runs/
 .codex/
 .cursor/
 .cursorrules
+.agents/
 
 # ACEHarness data
 data/*
@@ -60,8 +62,6 @@ data/*
 __pycache__/
 *.pyc
 
-# User-specific configs
-configs/unreachable.yaml
 
 # Temp files
 .tmp/

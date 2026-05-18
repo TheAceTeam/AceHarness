@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
-import { requireAuth } from '@/lib/auth-middleware';
-import { ensureNotebookRoot, normalizeNotebookScope, safeResolve, type NotebookScope } from '@/lib/notebook-manager';
-import { getNotebookShare } from '@/lib/notebook-share-store';
+import { requireAuth } from '@/lib/auth/middleware';
+import { ensureNotebookRoot, normalizeNotebookScope, safeResolve, type NotebookScope } from '@/lib/notebook/manager';
+import { getNotebookShare } from '@/lib/notebook/share-store';
 
 async function resolveSharePermission(shareToken: string): Promise<'read' | 'write' | null> {
   if (!shareToken) return null;

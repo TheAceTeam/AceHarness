@@ -66,7 +66,7 @@ export interface EngineResult {
 }
 
 export interface EngineStreamEvent {
-  type: 'text' | 'tool' | 'thought' | 'error' | 'log';
+  type: 'text' | 'tool' | 'thought' | 'error' | 'log' | 'session';
   content: string;
   metadata?: any;
 }

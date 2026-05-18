@@ -50,16 +50,16 @@ import xml from 'highlight.js/lib/languages/xml';
 import bash from 'highlight.js/lib/languages/bash';
 import yaml from 'highlight.js/lib/languages/yaml';
 import markdown from 'highlight.js/lib/languages/markdown';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 import python from 'highlight.js/lib/languages/python';
 import java from 'highlight.js/lib/languages/java';
 import cpp from 'highlight.js/lib/languages/cpp';
 import sql from 'highlight.js/lib/languages/sql';
-import cangjie from '@/lib/cangjie-highlight';
+import cangjie from '@/lib/cangjie/highlight';
 import { NotebookAiSuggestionBlock, NotebookCodeBlock, NotebookMathBlock, NotebookOutputBlock } from './NotebookBlocks';
 import { NotebookAskAISheet } from './NotebookAskAISheet';
-import { NotebookOutput, buildNotebookOutput, createNotebookCellId, createNotebookOutputId, displayNotebookCellId, normalizeNotebookLanguage } from '@/lib/notebook-markdown';
-import { uploadImageFile } from '@/lib/client-image-upload';
+import { NotebookOutput, buildNotebookOutput, createNotebookCellId, createNotebookOutputId, displayNotebookCellId, normalizeNotebookLanguage } from '@/lib/notebook/markdown';
+import { uploadImageFile } from '@/lib/core/client-image-upload';
 
 const lowlight = createLowlight();
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { agentApi, configApi } from '@/lib/api';
+import { agentApi, configApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -17,7 +17,7 @@ import {
   extractAgentDraftCapabilities,
   normalizeAgentDraft,
   type AgentDraftState,
-} from '@/lib/agent-draft';
+} from '@/lib/agent/draft';
 
 type AgentConfig = {
   name: string;

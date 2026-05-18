@@ -1,23 +1,23 @@
 ﻿import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/auth-middleware';
+import { requireAuth } from '@/lib/auth/middleware';
 import {
   buildSpecCodingFromWorkflowConfig,
   loadMasterSpecAsCreationSession,
   rebuildSpecCodingPreservingArtifacts,
-} from '@/lib/spec-coding-store';
-import { buildDashboardSystemPrompt } from '@/lib/chat-system-prompt';
-import { loadChatSettings } from '@/lib/chat-settings';
+} from '@/lib/spec/coding-store';
+import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
+import { loadChatSettings } from '@/lib/chat/settings';
 import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
-import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/creator-validation';
+import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import {
   extractJsonObject,
   normalizeStringArray,
   applyAiSpecCodingDraft,
   buildFallbackClarification,
-} from '@/lib/ai-draft-utils';
-import { assertPersistedSpecRootReady } from '@/lib/spec-persistence';
+} from '@/lib/ai/draft-utils';
+import { assertPersistedSpecRootReady } from '@/lib/spec/persistence';
 
-export { extractJsonObject, normalizeStringArray, applyAiSpecCodingDraft, buildFallbackClarification } from '@/lib/ai-draft-utils';
+export { extractJsonObject, normalizeStringArray, applyAiSpecCodingDraft, buildFallbackClarification } from '@/lib/ai/draft-utils';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAuth(request);

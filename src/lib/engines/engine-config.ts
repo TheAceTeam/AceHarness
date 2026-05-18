@@ -7,10 +7,13 @@ import type { EngineType } from './engine-factory';
 
 const ENGINE_CONFIG_DIRS: Record<string, string> = {
   'claude-code': '.claude',
+  'claude-code-acp': '.claude',
   'kiro-cli': '.kiro',
   'opencode': '.opencode',
+  'opencode-sdk': '.opencode',
   'nga': '.opencode',
   'codegenie': '.opencode',
+  'codegenie-sdk': '.opencode',
   'codex': '.codex',
   'cursor': '.cursor',
   'trae-cli': '.trae',

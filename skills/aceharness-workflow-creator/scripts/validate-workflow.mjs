@@ -10,9 +10,19 @@ import { homedir } from 'os';
 import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const _require = createRequire(resolve(homedir(), '.aceharness', 'node_modules', '_placeholder.js'));
-const { parse } = _require('yaml');
-const { z } = _require('zod');
+const runtimeRequire = createRequire(resolve(homedir(), '.aceharness', 'node_modules', '_placeholder.js'));
+const cwdRequire = createRequire(resolve(process.cwd(), 'package.json'));
+
+function requireDependency(name) {
+  try {
+    return runtimeRequire(name);
+  } catch {
+    return cwdRequire(name);
+  }
+}
+
+const { parse } = requireDependency('yaml');
+const { z } = requireDependency('zod');
 
 function resolveRuntimeRoot() {
   const aceHome = process.env.ACE_HOME?.trim();
@@ -42,14 +52,63 @@ const iterationConfigSchema = z.object({
   escalateToHuman: z.boolean().default(true),
 });
 
+const joinPolicySchema = z.object({
+  mode: z.enum(['all', 'any', 'quorum', 'manual']).default('all'),
+  quorum: z.number().int().min(1).optional(),
+  timeoutMinutes: z.number().min(1).optional(),
+  onTimeout: z.enum(['continue', 'fail', 'manual-review']).optional(),
+});
+
+const channelBindingSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  type: z.enum(['shared', 'supervisor', 'agent-direct']).default('shared'),
+  participants: z.array(z.string()).default([]),
+  description: z.string().optional(),
+});
+
+const agentInstanceSchema = z.object({
+  id: z.string().min(1),
+  role: z.string().min(1),
+  label: z.string().optional(),
+  channelIds: z.array(z.string()).default([]),
+  maxParallelTasks: z.number().int().min(1).optional(),
+});
+
+const specTaskBindingSchema = z.object({
+  taskId: z.string().min(1).optional(),
+  taskIds: z.array(z.string().min(1)).default([]).optional(),
+  requirementIds: z.array(z.string()).default([]),
+  artifactKeys: z.array(z.string()).default([]),
+});
+
+const stepConcurrencySchema = z.object({
+  groupId: z.string().optional(),
+  branchId: z.string().optional(),
+  joinPolicy: joinPolicySchema.optional(),
+});
+
+const workflowConcurrencySchema = z.object({
+  enabled: z.boolean().default(false).optional(),
+  agentInstances: z.array(agentInstanceSchema).default([]).optional(),
+  channels: z.array(channelBindingSchema).default([]).optional(),
+  joinPolicies: z.record(z.string(), joinPolicySchema).default({}).optional(),
+}).optional();
+
 const workflowStepSchema = z.object({
+  id: z.string().min(1).optional(),
   name: z.string().min(1),
   agent: z.string().min(1),
   task: z.string().min(1),
+  preCommands: z.array(z.string()).optional(),
   type: z.string().optional(),
   role: z.enum(['attacker', 'defender', 'judge']).optional(),
   constraints: z.array(z.string()).optional(),
   parallelGroup: z.string().optional(),
+  concurrency: stepConcurrencySchema.optional(),
+  agentInstanceId: z.string().optional(),
+  channelIds: z.array(z.string()).optional(),
+  specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
 });
@@ -72,13 +131,24 @@ const contextConfigSchema = z.object({
   requirements: z.string().optional(),
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
+  engine: z.string().optional(),
+  executionPolicy: z.object({
+    defaultEngine: z.string().optional(),
+    defaultModel: z.string().optional(),
+    agentOverrides: z.record(z.string(), z.object({
+      enabled: z.boolean().default(false),
+      engine: z.string().optional(),
+      model: z.string().optional(),
+    })).default({}),
+  }).optional(),
   skills: z.array(z.string()).optional(),
+  routerModel: z.string().optional(),
 });
 
 const transitionConditionSchema = z.object({
   verdict: z.enum(['pass', 'conditional_pass', 'fail']).optional(),
-  issueTypes: z.array(z.string()).optional(),
-  severities: z.array(z.string()).optional(),
+  issueTypes: z.array(z.enum(['design', 'implementation', 'test', 'performance', 'security'])).optional(),
+  severities: z.array(z.enum(['critical', 'major', 'minor'])).optional(),
   minIssueCount: z.number().optional(),
   maxIssueCount: z.number().optional(),
   custom: z.string().optional(),
@@ -101,6 +171,12 @@ const stateMachineStateSchema = z.object({
   position: z.object({ x: z.number(), y: z.number() }).optional(),
   isInitial: z.boolean().default(false),
   isFinal: z.boolean().default(false),
+  maxSelfTransitions: z.number().min(1).max(100).default(3).optional(),
+  executionMode: z.enum(['sequential', 'parallel']).optional(),
+  joinPolicy: joinPolicySchema.optional(),
+  channels: z.array(z.string()).optional(),
+  instancePolicy: z.enum(['single', 'multi-instance']).optional(),
+  specPhaseId: z.string().optional(),
 });
 
 const issueRoutingRuleSchema = z.object({
@@ -110,10 +186,28 @@ const issueRoutingRuleSchema = z.object({
   priority: z.number().default(100),
 });
 
+const agentAvatarConfigSchema = z.object({
+  mode: z.enum(['deterministic', 'generated', 'uploaded', 'preset']),
+  seed: z.string().optional(),
+  style: z.enum(['personas', 'adventurer', 'pixel-art']).optional(),
+  prompt: z.string().optional(),
+  imageUrl: z.string().optional(),
+  thumbUrl: z.string().optional(),
+  presetName: z.string().optional(),
+  generatedAt: z.string().optional(),
+});
+
 const roleConfigSchema = z.object({
   name: z.string().min(1),
-  team: z.enum(['blue', 'red', 'judge']),
-  model: z.string().min(1),
+  team: z.enum(['blue', 'red', 'judge', 'black-gold']),
+  roleType: z.enum(['normal', 'supervisor']).default('normal').optional(),
+  avatar: z.union([z.string(), agentAvatarConfigSchema]).optional(),
+  title: z.string().optional(),
+  persona: z.string().optional(),
+  greeting: z.string().optional(),
+  rarity: z.enum(['common', 'rare', 'epic', 'legendary']).optional(),
+  engineModels: z.record(z.string(), z.string()),
+  activeEngine: z.string(),
   temperature: z.number().optional(),
   capabilities: z.array(z.string()).min(1),
   systemPrompt: z.string().min(1),
@@ -122,19 +216,39 @@ const roleConfigSchema = z.object({
   allowedTools: z.array(z.string()).optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  specialtyTags: z.array(z.string()).optional(),
+  alwaysAvailableForChat: z.boolean().optional(),
+  keywords: z.array(z.string()).optional(),
+  description: z.string().optional(),
   reviewPanel: z.object({
     enabled: z.boolean(),
     description: z.string().optional(),
-    subAgents: z.record(z.object({
+    subAgents: z.record(z.string(), z.object({
       description: z.string(),
       prompt: z.string(),
       tools: z.array(z.string()),
       model: z.string(),
     })),
   }).optional(),
+  mcpServers: z.array(z.object({
+    name: z.string().min(1),
+    type: z.enum(['cangjie-magic', 'stdio']),
+    command: z.string().min(1),
+    projectDir: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })).optional(),
 });
 
 // PLACEHOLDER_CONTINUE
+
+const workflowSupervisorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  agent: z.string().min(1).default('default-supervisor'),
+  stageReviewEnabled: z.boolean().default(true),
+  checkpointAdviceEnabled: z.boolean().default(true),
+  scoringEnabled: z.boolean().default(true),
+  experienceEnabled: z.boolean().default(true),
+}).optional();
 
 const phaseBasedSchema = z.object({
   workflow: z.object({
@@ -142,6 +256,8 @@ const phaseBasedSchema = z.object({
     description: z.string().optional(),
     mode: z.literal('phase-based').optional().default('phase-based'),
     phases: z.array(workflowPhaseSchema).min(1),
+    supervisor: workflowSupervisorConfigSchema,
+    concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,
@@ -155,6 +271,8 @@ const stateMachineSchema = z.object({
     states: z.array(stateMachineStateSchema).min(1),
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50),
+    supervisor: workflowSupervisorConfigSchema,
+    concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),
   context: contextConfigSchema,
@@ -256,6 +374,7 @@ function validate(configPath) {
   if (mode === 'state-machine' && config?.workflow?.states) {
     const states = config.workflow.states;
     const stateNames = new Set(states.map(s => s.name));
+    const requiredVerdicts = ['pass', 'conditional_pass', 'fail'];
 
     // Check initial/final states
     const initials = states.filter(s => s.isInitial);
@@ -269,6 +388,25 @@ function validate(configPath) {
       for (const t of state.transitions || []) {
         if (!stateNames.has(t.to)) {
           errors.push(`状态 "${state.name}" 的转移目标 "${t.to}" 不存在`);
+        }
+      }
+    }
+
+    // Check non-final states have exactly one pass / conditional_pass / fail transition.
+    for (const state of states) {
+      if (state.isFinal) continue;
+      const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+      const verdictTransitions = transitions.filter(t => typeof t?.condition?.verdict === 'string');
+      const nonVerdictTransitions = transitions.filter(t => typeof t?.condition?.verdict !== 'string');
+      if (nonVerdictTransitions.length > 0) {
+        errors.push(`状态 "${state.name}" 包含未指定 verdict 的转移规则；非终止状态必须使用 pass/conditional_pass/fail 三路转移`);
+      }
+      for (const verdict of requiredVerdicts) {
+        const matches = verdictTransitions.filter(t => t.condition.verdict === verdict);
+        if (matches.length === 0) {
+          errors.push(`状态 "${state.name}" 缺少 ${verdict} 转移路径`);
+        } else if (matches.length > 1) {
+          errors.push(`状态 "${state.name}" 的 ${verdict} 转移路径重复`);
         }
       }
     }

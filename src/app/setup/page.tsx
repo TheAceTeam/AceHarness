@@ -10,8 +10,8 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { getConcreteEngines } from '@/lib/engine-metadata';
-import type { ModelOption } from '@/lib/models';
+import { getConcreteEngines } from '@/lib/core/engine-metadata';
+import type { ModelOption } from '@/lib/core/models';
 
 interface DiscoveredSkill {
   name: string;
@@ -154,24 +154,18 @@ export default function SetupPage() {
       setError('');
       setCheckingEngine(true);
 
-      if (engineAvailability[engine] == null) {
-        try {
-          const availRes = await fetch(`/api/engine/availability?engine=${encodeURIComponent(engine)}`);
-          const availData = await availRes.json();
-          if (cancelled) return;
-          setEngineAvailability((prev) => ({ ...prev, [engine]: availData.available }));
-          if (!availData.available) {
-            setAvailableModels([]);
-            setDefaultModel('');
-            setError(`引擎 ${engine} 不可用，请确保已安装对应的命令行工具`);
-            setLoadingModels(false);
-            setCheckingEngine(false);
-            return;
-          }
-        } catch {
-          if (cancelled) return;
-        }
-      } else if (engineAvailability[engine] === false) {
+      let available = true;
+      try {
+        const availRes = await fetch(`/api/engine/availability?engine=${encodeURIComponent(engine)}`);
+        const availData = await availRes.json();
+        if (cancelled) return;
+        available = Boolean(availData.available);
+        setEngineAvailability((prev) => ({ ...prev, [engine]: available }));
+      } catch {
+        if (cancelled) return;
+      }
+
+      if (!available) {
         setAvailableModels([]);
         setDefaultModel('');
         setError(`引擎 ${engine} 不可用，请确保已安装对应的命令行工具`);

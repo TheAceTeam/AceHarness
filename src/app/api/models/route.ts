@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import { parse, stringify } from 'yaml';
-import { getModelOptions, clearModelsCache, type ModelOption } from '@/lib/models';
-import { getRuntimeModelsConfigPath } from '@/lib/runtime-configs';
+import { getModelOptions, clearModelsCache, type ModelOption } from '@/lib/core/models';
+import { getRuntimeModelsConfigPath } from '@/lib/run/runtime-configs';
 
 export async function GET() {
   try {

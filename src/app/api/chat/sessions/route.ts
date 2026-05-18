@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listChatSessions, saveChatSession } from '@/lib/chat-persistence';
-import { requireAuth } from '@/lib/auth-middleware';
+import { listChatSessions, saveChatSession } from '@/lib/chat/persistence';
+import { requireAuth } from '@/lib/auth/middleware';
 
 export async function GET(request: NextRequest) {
   const user = await requireAuth(request);

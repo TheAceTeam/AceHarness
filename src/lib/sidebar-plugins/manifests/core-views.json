@@ -1,0 +1,19 @@
+{
+  "id": "core-views",
+  "name": "查看功能",
+  "description": "查看工作流、Agent、模型、Skill 列表和运行状态",
+  "version": "1.0.0",
+  "enabled": true,
+  "order": 10,
+  "categories": [
+    { "id": "view", "title": "查看", "icon": "visibility", "order": 10 }
+  ],
+  "actions": [
+    { "id": "view-workflows", "label": "工作流列表", "icon": "account_tree", "color": "from-blue-500 to-blue-600", "prompt": "列出所有工作流配置", "category": "view", "order": 10 },
+    { "id": "view-agents", "label": "Agent 列表", "icon": "smart_toy", "color": "from-purple-500 to-purple-600", "prompt": "列出所有 Agent", "category": "view", "order": 20 },
+    { "id": "view-models", "label": "模型列表", "icon": "model_training", "color": "from-cyan-500 to-cyan-600", "prompt": "列出所有可用模型", "category": "view", "order": 30 },
+    { "id": "view-skills", "label": "Skill 列表", "icon": "extension", "color": "from-pink-500 to-pink-600", "prompt": "列出所有可用 Skills", "category": "view", "order": 40 },
+    { "id": "view-run-status", "label": "运行状态", "icon": "monitoring", "color": "from-green-500 to-green-600", "prompt": "查看当前工作流运行状态", "category": "view", "order": 50 },
+    { "id": "view-run-history", "label": "运行历史", "icon": "history", "color": "from-teal-500 to-teal-600", "prompt": "列出最近的运行记录", "category": "view", "order": 60 }
+  ]
+}

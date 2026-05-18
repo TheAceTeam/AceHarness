@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/auth-middleware';
-import { listOnboardingSummary } from '@/lib/onboarding-store';
+import { requireAdmin } from '@/lib/auth/middleware';
+import { listOnboardingSummary } from '@/lib/core/onboarding-store';
 
 export const dynamic = 'force-dynamic';
 

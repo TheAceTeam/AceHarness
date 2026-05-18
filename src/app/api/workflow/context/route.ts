@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { loadRunState, saveRunState } from '@/lib/run-state-persistence';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 
 export async function POST(request: NextRequest) {
   try {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { StoryOnboarding } from '@/components/onboarding/StoryOnboarding';
 import { Button } from '@/components/ui/button';
@@ -37,9 +37,9 @@ export default function OnboardingPortal() {
   const [loadingProgress, setLoadingProgress] = useState(false);
   const [progress, setProgress] = useState<ProgressPayload | null>(null);
 
-  const getAuthToken = () => (typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null);
+  const getAuthToken = useCallback(() => (typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null), []);
 
-  const loadProgress = async () => {
+  const loadProgress = useCallback(async () => {
     const token = getAuthToken();
     if (!token) return;
     setLoadingProgress(true);
@@ -59,7 +59,7 @@ export default function OnboardingPortal() {
     } finally {
       setLoadingProgress(false);
     }
-  };
+  }, [getAuthToken]);
 
   useEffect(() => {
     const stored = localStorage.getItem('auth-user');
@@ -72,7 +72,7 @@ export default function OnboardingPortal() {
       }
     }
     void loadProgress();
-  }, []);
+  }, [loadProgress]);
 
   const persistProgress = async (nextProgress: ProgressPayload, options?: { markCompleted?: boolean }) => {
     setProgress(nextProgress);

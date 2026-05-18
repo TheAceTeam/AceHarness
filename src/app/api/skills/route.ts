@@ -1,15 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { existsSync } from 'fs';
-import { getRuntimeSkillsDirPath, getSkillsTempPath } from '@/lib/runtime-skills';
-import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill-frontmatter';
+import { createReadStream, createWriteStream, existsSync } from 'fs';
+import unzipper from 'unzipper';
+import { ZipFile } from 'yazl';
+import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
+import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
+
+/** Zip directory contents using yazl (portable; avoids Windows missing `zip` and GBK stderr mojibake). */
+async function zipDirectoryContents(sourceDir: string, destZipPath: string): Promise<void> {
+  const zipfile = new ZipFile();
+
+  async function walk(rel: string): Promise<void> {
+    const abs = path.join(sourceDir, rel);
+    const entries = await fs.readdir(abs, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        await walk(entryRel);
+      } else {
+        const metadataPath = entryRel.split(path.sep).join('/');
+        zipfile.addFile(path.join(sourceDir, entryRel), metadataPath);
+      }
+    }
+  }
+
+  await walk('');
+
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(destZipPath);
+    out.on('error', reject);
+    out.on('close', () => resolve());
+    zipfile.outputStream.on('error', reject);
+    zipfile.outputStream.pipe(out);
+    zipfile.end();
+  });
+}
 
 /** Scan skills/ directory, find xxx/SKILL.md with valid frontmatter */
-async function discoverSkills() {
+async function discoverSkills(skillsDir: string) {
   const skills: any[] = [];
   try {
-    const skillsDir = await getRuntimeSkillsDirPath();
     const entries = await fs.readdir(skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -44,12 +75,23 @@ async function discoverSkills() {
 export async function GET() {
   try {
     const skillsDir = await getRuntimeSkillsDirPath();
+    const installSkillsDir = getInstallSkillsDirPath();
     const dirExists = existsSync(skillsDir);
     if (!dirExists) {
-      return NextResponse.json({ skills: [], isCloned: true, message: 'Skills 目录不存在', runtimeSkillsDir: skillsDir });
+      return NextResponse.json({
+        skills: [],
+        installSkills: [],
+        isCloned: true,
+        message: 'Skills 目录不存在',
+        runtimeSkillsDir: skillsDir,
+        installSkillsDir,
+      });
     }
-    const skills = await discoverSkills();
-    return NextResponse.json({ skills, isCloned: true, runtimeSkillsDir: skillsDir });
+    const [skills, installSkills] = await Promise.all([
+      discoverSkills(skillsDir),
+      existsSync(installSkillsDir) ? discoverSkills(installSkillsDir) : Promise.resolve([]),
+    ]);
+    return NextResponse.json({ skills, installSkills, isCloned: true, runtimeSkillsDir: skillsDir, installSkillsDir });
   } catch (error) {
     console.error('Failed to read skills:', error);
     return NextResponse.json({ error: 'Failed to read skills' }, { status: 500 });
@@ -83,10 +125,12 @@ export async function POST(request: NextRequest) {
     // Unzip
     const extractDir = path.join(tmpDir, 'extracted');
     await fs.mkdir(extractDir, { recursive: true });
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-    await execAsync(`unzip -o "${zipPath}" -d "${extractDir}"`, { maxBuffer: 50 * 1024 * 1024 });
+    await new Promise<void>((resolve, reject) => {
+      createReadStream(zipPath)
+        .pipe(unzipper.Extract({ path: extractDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
 
     type SkillImportCandidate = {
       sourceDir: string;
@@ -179,10 +223,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const zipPath = getSkillsTempPath('skills-export.zip');
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-    await execAsync(`cd "${tmpDir}" && zip -r "${zipPath}" .`, { maxBuffer: 50 * 1024 * 1024 });
+    await zipDirectoryContents(tmpDir, zipPath);
 
     const zipBuffer = await fs.readFile(zipPath);
 
@@ -199,5 +240,83 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('Failed to export skills:', error);
     return NextResponse.json({ error: '导出失败: ' + (error as Error).message }, { status: 500 });
+  }
+}
+
+// PATCH: Sync selected installed skills into runtime skills directory
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const skillNames = Array.isArray(body.skills)
+      ? body.skills.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+    if (skillNames.length === 0) {
+      return NextResponse.json({ error: '请选择要同步的 Skill' }, { status: 400 });
+    }
+
+    const installSkillsDir = getInstallSkillsDirPath();
+    if (!existsSync(installSkillsDir)) {
+      return NextResponse.json({ error: '安装目录中不存在 skills 目录' }, { status: 404 });
+    }
+
+    const installSkills = await discoverSkills(installSkillsDir);
+    const installSkillSet = new Set(installSkills.map((skill) => skill.path));
+    const invalid = skillNames.filter((name: string) => !installSkillSet.has(name));
+    if (invalid.length > 0) {
+      return NextResponse.json({ error: `这些 Skill 不在安装目录中：${invalid.join(', ')}` }, { status: 404 });
+    }
+
+    const result = await syncInstalledSkillsToRuntime(skillNames);
+    return NextResponse.json({
+      success: true,
+      synced: result.synced,
+      missing: result.missing,
+      message: `已同步 ${result.synced.length} 个 Skill 到 runtime 目录`,
+    });
+  } catch (error) {
+    console.error('Failed to sync installed skills:', error);
+    return NextResponse.json({ error: '同步失败: ' + (error as Error).message }, { status: 500 });
+  }
+}
+
+// DELETE: Remove skills by name
+export async function DELETE(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const skillNames = Array.isArray(body.skills)
+      ? body.skills.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+
+    if (skillNames.length === 0) {
+      return NextResponse.json({ error: '请选择要删除的 Skill' }, { status: 400 });
+    }
+
+    const skillsDir = await getRuntimeSkillsDirPath();
+    if (!existsSync(skillsDir)) {
+      return NextResponse.json({ error: 'Skills 目录不存在' }, { status: 404 });
+    }
+
+    const deleted: string[] = [];
+    const notFound: string[] = [];
+    for (const name of skillNames) {
+      const skillPath = path.join(skillsDir, name);
+      if (existsSync(skillPath)) {
+        await fs.rm(skillPath, { recursive: true, force: true });
+        deleted.push(name);
+      } else {
+        notFound.push(name);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      deleted,
+      notFound,
+      message: `已删除 ${deleted.length} 个 Skill${notFound.length ? `，${notFound.length} 个未找到` : ''}`,
+    });
+  } catch (error) {
+    console.error('Failed to delete skills:', error);
+    return NextResponse.json({ error: '删除失败: ' + (error as Error).message }, { status: 500 });
   }
 }

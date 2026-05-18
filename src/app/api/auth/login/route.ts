@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { login } from '@/lib/user-store';
+import { login } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

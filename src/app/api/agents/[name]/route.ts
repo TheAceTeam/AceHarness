@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile, writeFile, unlink } from 'fs/promises';
 import { parse, stringify } from 'yaml';
-import { getRuntimeAgentConfigPath } from '@/lib/runtime-configs';
-import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/creator-validation';
+import { getRuntimeAgentConfigPath } from '@/lib/run/runtime-configs';
+import { formatValidationIssuesForResponse, validateAgentDraft } from '@/lib/core/creator-validation';
 
 export async function GET(
   request: NextRequest,

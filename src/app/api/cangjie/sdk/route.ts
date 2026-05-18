@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin, requireAuth } from '@/lib/auth-middleware';
-import { getSdkOverview } from '@/lib/cangjie-sdk-manager';
+import { requireAdmin, requireAuth } from '@/lib/auth/middleware';
+import { getSdkOverview } from '@/lib/cangjie/sdk-manager';
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request);

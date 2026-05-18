@@ -9,7 +9,7 @@ interface AuthResult {
 
 async function createAuthToken(role: 'admin' | 'user' = 'user', usernamePrefix: string = role): Promise<AuthResult> {
   vi.resetModules();
-  const { createUser, storeToken } = await import('@/lib/user-store');
+  const { createUser, storeToken } = await import('@/lib/core/user-store');
   const suffix = `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const user = await createUser({
     username: `${usernamePrefix}-${suffix}`,
@@ -27,8 +27,8 @@ async function createAuthToken(role: 'admin' | 'user' = 'user', usernamePrefix: 
 
 async function loadRouteWithMockedRuns(mockRuns: any[], configNameMap: Record<string, string>) {
   vi.resetModules();
-  vi.doMock('@/lib/run-history', async () => {
-    const actual = await vi.importActual<typeof import('@/lib/run-history')>('@/lib/run-history');
+  vi.doMock('@/lib/run/history', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/run/history')>('@/lib/run/history');
     return {
       ...actual,
       readAllRunsSummary: vi.fn(async () => ({

@@ -218,6 +218,41 @@
   animation: dotFade 1.4s ease-in-out infinite;
 }
 
+:global(.ace-spec-task-line-error) {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+:global(.ace-spec-task-line-active) {
+  background: rgba(239, 68, 68, 0.14);
+}
+
+:global(.ace-spec-task-lines-error) {
+  border-left: 3px solid rgba(239, 68, 68, 0.5);
+}
+
+:global(.ace-spec-task-lines-active) {
+  border-left: 3px solid rgba(239, 68, 68, 0.95);
+}
+
+:global(.ace-spec-task-glyph-error) {
+  background: rgba(239, 68, 68, 0.85);
+  border-radius: 999px;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 6px;
+  margin-top: 6px;
+}
+
+:global(.ace-spec-task-glyph-active) {
+  background: rgba(220, 38, 38, 1);
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.18);
+  border-radius: 999px;
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 6px;
+  margin-top: 6px;
+}
+
 .thinkingDots span:nth-child(2) {
   animation-delay: 0.2s;
 }

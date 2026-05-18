@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import ChatMessage from '@/components/chat/ChatMessage';
+import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
@@ -11,14 +11,11 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ComboboxPortalProvider } from '@/components/ui/combobox';
-import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
-import { buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
-import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
-
-const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), { ssr: false });
+import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 
 interface AutoTask {
   id: string;
@@ -85,7 +82,6 @@ export function AiAssistantSheet({
   } = useChat();
 
   const [sheetSessionId, setSheetSessionId] = useState<string | null>(null);
-  const [inputCache, setInputCache] = useState('');
   const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
   const [insertedMessageIds, setInsertedMessageIds] = useState<Record<string, boolean>>({});
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -95,7 +91,6 @@ export function AiAssistantSheet({
   const [exportFileName, setExportFileName] = useState('');
   const [exportMessageId, setExportMessageId] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
-  const editorRef = useRef<RichTextEditorHandle>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const pendingHistoryScrollAdjustRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
@@ -194,14 +189,12 @@ export function AiAssistantSheet({
   }, [activeSessionId, ensureSheetSession, isLoadingCurrentSession, isSheetSessionActive, sendMessage]);
 
   const send = useCallback(async (rawText?: string) => {
-    const userText = (rawText?.trim() || editorRef.current?.getMarkdown().trim() || inputCache.trim());
+    const userText = rawText?.trim();
     if (!userText || isLoadingCurrentSession) return;
 
     const prompt = buildPrompt(userText);
-    editorRef.current?.clear();
-    setInputCache('');
     await sendWithPrompt(prompt, userText);
-  }, [buildPrompt, inputCache, isLoadingCurrentSession, sendWithPrompt]);
+  }, [buildPrompt, isLoadingCurrentSession, sendWithPrompt]);
 
   const normalizeNotebookFileName = useCallback((value: string) => {
     const trimmed = value.trim();
@@ -278,8 +271,7 @@ export function AiAssistantSheet({
       return;
     }
 
-    const timer = window.setTimeout(() => editorRef.current?.focus(), 120);
-    return () => window.clearTimeout(timer);
+    return;
   }, [open, sessions, setActiveSessionId, sheetSessionId]);
 
   useEffect(() => {
@@ -364,7 +356,7 @@ export function AiAssistantSheet({
         : message;
 
       return (
-        <div key={message.id}>
+        <div key={message.id} className="pb-4">
           <ChatMessage
             message={displayMessage}
             isStreaming={streamingMessageId === message.id}
@@ -379,7 +371,7 @@ export function AiAssistantSheet({
             onSaveAsNotebook={(messageId) => openExportDialog(messageId)}
           />
           {onInsertResult && message.role === 'assistant' && resultContent && (
-            <div className="mb-3 -mt-3 ml-10 flex justify-start">
+            <div className="mt-2 ml-10 flex justify-start">
               <Button
                 size="sm"
                 variant="outline"
@@ -525,10 +517,10 @@ export function AiAssistantSheet({
                       }}
                       hiddenContent={
                         historyExpanded
-                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={chatScrollRef} />
+                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={chatScrollRef} itemGap={0} />
                           : historicalMessages
                       }
-                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={chatScrollRef} />}
+                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={chatScrollRef} itemGap={0} />}
                     />
                     {isLoadingCurrentSession && !streamingMessageId && (
                       <div className="text-sm text-muted-foreground px-2 py-1">AI 思考中...</div>
@@ -578,44 +570,28 @@ export function AiAssistantSheet({
               </Tabs>
             </div>
 
-            <div className="mx-4 my-4 rounded-md border bg-background p-3">
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <RichTextEditor
-                    ref={editorRef}
-                    onEnter={(text) => {
-                      void send(text);
-                    }}
-                    onChange={setInputCache}
-                    placeholder={inputPlaceholder}
-                    minHeight={44}
-                    maxHeight={140}
-                    disabled={isLoadingCurrentSession}
-                    showToolbar={false}
-                  />
-                </div>
-                <Button size="sm" variant="outline" onClick={clearSessionMessages} disabled={isLoadingCurrentSession || sessionMessages.length === 0}>
-                  清空
-                </Button>
-                {isStreamingCurrentSession ? (
-                  <Button size="sm" variant="destructive" onClick={stopStreaming}>停止</Button>
-                ) : (
-                  <>
-                    <Button size="sm" variant="outline" onClick={regenerate} disabled={isLoadingCurrentSession || !lastRequestRef.current || !isSheetSessionActive}>
-                      重新生成
+            <div className="mx-4 my-4">
+              <PromptInput
+                onSubmit={(message) => { void send(message.text); }}
+                disabled={isLoadingCurrentSession}
+              >
+                <PromptInputTextarea placeholder={inputPlaceholder} />
+                <PromptInputFooter>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={clearSessionMessages} disabled={isLoadingCurrentSession || sessionMessages.length === 0}>
+                      清空
                     </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        void send();
-                      }}
-                      disabled={isLoadingCurrentSession || !((editorRef.current?.getMarkdown().trim()) || inputCache.trim())}
-                    >
-                      发送
-                    </Button>
-                  </>
-                )}
-              </div>
+                    {isStreamingCurrentSession ? (
+                      <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={stopStreaming}>停止</Button>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={regenerate} disabled={isLoadingCurrentSession || !lastRequestRef.current || !isSheetSessionActive}>
+                        重新生成
+                      </Button>
+                    )}
+                  </div>
+                  <PromptInputSubmit />
+                </PromptInputFooter>
+              </PromptInput>
             </div>
           </div>
         </ComboboxPortalProvider>

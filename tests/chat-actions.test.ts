@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { parseActions, normalizeAssistantDisplay, isSafeAction, RISK_MAP } from '@/lib/chat-actions';
-import type { ActionBlock } from '@/lib/chat-actions';
+import { parseActions, normalizeAssistantDisplay, getStreamingResultDisplay, isSafeAction, RISK_MAP } from '@/lib/chat/actions';
+import type { ActionBlock } from '@/lib/chat/actions';
 
 describe('parseActions', () => {
   test('extracts action blocks from markdown and removes them from visible text', () => {
@@ -220,6 +220,38 @@ describe('parseActions', () => {
     expect(result.text).toContain('const visible = true;');
     expect(result.text).toContain('结尾。');
     expect(result.text).not.toContain('hidden');
+  });
+
+  test('hides leaked machine json fences outside result sections', () => {
+    const markdown = [
+      '草案确认前说明。',
+      '```json',
+      '{"kind":"plan_draft","payload":{"summary":"不应直接显示","artifacts":{"requirements":"# req","design":"# design","tasks":"# tasks"}}}',
+      '```',
+      '下面展示正式结果。',
+      '<result>{"kind":"card","payload":{"header":{"title":"结果卡片"},"blocks":[{"type":"text","content":"已生成"}]}}</result>',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.cards).toHaveLength(1);
+    expect(result.text).toBe('草案确认前说明。\n下面展示正式结果。');
+    expect(result.text).not.toContain('plan_draft');
+    expect(result.text).not.toContain('# req');
+  });
+
+  test('keeps ordinary json fences outside result sections', () => {
+    const markdown = [
+      '示例：',
+      '```json',
+      '{"name":"visible-example"}',
+      '```',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.text).toBe(markdown);
+    expect(result.cards).toHaveLength(0);
   });
 
   test('parses action and result blocks together without leaking machine payloads', () => {
@@ -477,6 +509,34 @@ describe('normalizeAssistantDisplay', () => {
       hasMachineResult: false,
       hasSidebarHint: false,
     });
+  });
+
+  test('keeps streamed structured result out of visible text and exposes raw result content separately', () => {
+    const payload = {
+      kind: 'plan_draft',
+      payload: {
+        summary: '生成正式计划',
+        goals: ['展示流式预览'],
+        artifacts: {
+          requirements: '# requirements.md\n\n- 必须在流式阶段可见',
+          design: '# design.md\n\n~~~mermaid\nflowchart TD\n  A --> B\n~~~',
+          tasks: '# tasks.md\n\n- [ ] T1.1 验证预览',
+        },
+      },
+    };
+    const body = JSON.stringify(payload, null, 2);
+    const raw = `AI 正在生成正式计划制品\n<result>\n${body.slice(0, body.indexOf('T1.1') + 4)}`;
+    const normalized = normalizeAssistantDisplay(raw, true);
+    const streamingResult = getStreamingResultDisplay(raw);
+
+    expect(normalized.hasMachineResult).toBe(true);
+    expect(normalized.visibleText).toBe('AI 正在生成正式计划制品');
+    expect(normalized.visibleText).not.toContain('<result>');
+    expect(normalized.visibleText).not.toContain('"kind"');
+    expect(normalized.visibleText).not.toContain('# requirements.md');
+    expect(streamingResult).toMatchObject({ complete: false });
+    expect(streamingResult?.text).toContain('"kind": "plan_draft"');
+    expect(streamingResult?.text).toContain('# requirements.md');
   });
 });
 

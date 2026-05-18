@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { processManager } from '@/lib/process-manager';
-import { listRuns, listRunsByConfig } from '@/lib/run-store';
-import { loadRunState, saveRunState } from '@/lib/run-state-persistence';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { processManager } from '@/lib/core/process-manager';
+import { listRuns, listRunsByConfig } from '@/lib/run/store';
+import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 
 export async function POST(request: NextRequest) {
   try {

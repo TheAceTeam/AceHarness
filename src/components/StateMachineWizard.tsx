@@ -11,7 +11,7 @@ import {
   HelpCircle,
   Sparkles,
 } from 'lucide-react';
-import type { StateMachineState } from '@/lib/schemas';
+import type { StateMachineState } from '@/lib/core/schemas';
 
 interface StateMachineWizardProps {
   onComplete: (states: StateMachineState[]) => void;

@@ -11,7 +11,12 @@ interface Agent {
   completedTasks: number;
   sessionId?: string | null;
   output?: string;
-  tokenUsage?: { inputTokens: number; outputTokens: number };
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens?: number;
+    cacheReadInputTokens?: number;
+  };
   iterationCount?: number;
   summary?: string;
   changes?: { file: string; action: 'created' | 'modified' | 'deleted'; description: string }[];
@@ -108,7 +113,7 @@ type WorkflowAction =
   | { type: 'SET_EDITING_NODE'; payload: WorkflowState['editingNode'] }
   | { type: 'SET_AGENTS_CONFIG'; payload: any[] }
   | { type: 'SET_ITERATION_STATE'; payload: { phase: string; state: IterationStateInfo } }
-  | { type: 'UPDATE_AGENT_TOKEN_USAGE'; payload: { agent: string; usage: { inputTokens: number; outputTokens: number } } }
+  | { type: 'UPDATE_AGENT_TOKEN_USAGE'; payload: { agent: string; usage: { inputTokens: number; outputTokens: number; cacheCreationInputTokens?: number; cacheReadInputTokens?: number } } }
   | { type: 'SET_GLOBAL_CONTEXT'; payload: string }
   | { type: 'SET_PHASE_CONTEXT'; payload: { phase: string; context: string } }
   | { type: 'SET_PHASE_CONTEXTS'; payload: Record<string, string> }
@@ -208,7 +213,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_CHECKPOINT_MESSAGE': return { ...state, checkpointMessage: action.payload };
     case 'SET_CHECKPOINT_IS_ITERATIVE': return { ...state, checkpointIsIterative: action.payload };
     case 'SET_ACTIVE_TAB': return { ...state, activeTab: action.payload };
-    case 'SET_SELECTED_AGENT': return { ...state, selectedAgent: action.payload };
+    case 'SET_SELECTED_AGENT': return { ...state, selectedAgent: action.payload, selectedStep: null };
     case 'SET_SELECTED_STEP': return { ...state, selectedStep: action.payload };
     case 'SET_PROJECT_ROOT': return { ...state, projectRoot: action.payload };
     case 'SET_WORKSPACE_MODE': return { ...state, workspaceMode: action.payload };
@@ -230,6 +235,8 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
             tokenUsage: {
               inputTokens: (a.tokenUsage?.inputTokens || 0) + action.payload.usage.inputTokens,
               outputTokens: (a.tokenUsage?.outputTokens || 0) + action.payload.usage.outputTokens,
+              cacheCreationInputTokens: (a.tokenUsage?.cacheCreationInputTokens || 0) + (action.payload.usage.cacheCreationInputTokens || 0),
+              cacheReadInputTokens: (a.tokenUsage?.cacheReadInputTokens || 0) + (action.payload.usage.cacheReadInputTokens || 0),
             },
           };
         }

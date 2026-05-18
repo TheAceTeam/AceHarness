@@ -6,10 +6,11 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import { delimiter as pathDelimiter } from 'path';
+import { existsSync } from 'fs';
+import { delimiter as pathDelimiter, join } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
-import { findCommand, getCommonCliSearchPaths } from '../command-exists';
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import {
   ClientSideConnection,
   ndJsonStream,
@@ -23,6 +24,7 @@ import type {
   SessionUpdate,
   Client,
   Agent,
+  Usage,
 } from '@agentclientprotocol/sdk';
 
 // ============================================================================
@@ -53,11 +55,111 @@ export interface ACPEngineConfig {
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
 
+const ACP_STREAM_DEBUG = true; // Always log ACP stream events for diagnostics
+
+/** `ACE_TIMING_DEBUG` / `ACE_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
+function parseTimingDebugEnv(value: string | undefined): boolean | null {
+  if (value == null) return null;
+  const v = String(value).trim().toLowerCase();
+  if (!v) return null;
+  if (['0', 'false', 'off', 'no'].includes(v)) return false;
+  if (['1', 'true', 'on', 'yes'].includes(v)) return true;
+  return null;
+}
+
+/**
+ * 是否打印 ACP / chat/stream 各阶段 `[ACE_TIMING]` 日志。
+ * - 未设置环境变量且为本地开发（`NODE_ENV` 非 `production` / `test`）时默认开启，便于 `npm run dev` 分析。
+ * - 生产或测试跑法默认关闭；需要时在部署环境设 `ACE_TIMING_DEBUG=1`。
+ * - 任一变量的显式 `0` / `false` / `off` / `no` 会关闭（优先于默认开）。
+ */
+export function isAceTimingDebug(): boolean {
+  const a = parseTimingDebugEnv(process.env.ACE_TIMING_DEBUG);
+  const b = parseTimingDebugEnv(process.env.ACE_ACP_TIMING_DEBUG);
+  if (a === false || b === false) return false;
+  if (a === true || b === true) return true;
+  const nodeEnv = process.env.NODE_ENV;
+  return nodeEnv !== 'production' && nodeEnv !== 'test';
+}
+
+export function logAcpTiming(engineType: string, phase: string, startedAt: number, extra?: string): void {
+  if (!isAceTimingDebug()) return;
+  const ms = Date.now() - startedAt;
+  const tail = extra ? ` | ${extra}` : '';
+  console.log(`[ACE_TIMING][${engineType}] ${phase}: ${ms}ms${tail}`);
+}
+
+const DEFAULT_ACP_PHASE_MS = 30_000;
+const MIN_ACP_PHASE_MS = 1_000;
+const MAX_ACP_PHASE_MS = 900_000;
+
+function parseAcpPhaseTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (raw == null || String(raw).trim() === '') return fallback;
+  const n = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_ACP_PHASE_MS, Math.max(MIN_ACP_PHASE_MS, n));
+}
+
+/** Timeout for `connection.initialize` (ms). Env: `ACE_ACP_INIT_TIMEOUT_MS`, default 30000. */
+export function getAcpInitTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 30000. */
+export function getAcpNewSessionTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/** Timeout for `session/load` when resuming (ms). Env: `ACE_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
+export function getAcpLoadSessionTimeoutMs(): number {
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_LOAD_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+}
+
+/**
+ * Outer timeout for GET /api/engine/models (full start + session + model list).
+ * Env: `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS`; if unset, uses init + newSession + 15s headroom.
+ */
+export function getAcpModelDiscoveryTimeoutMs(): number {
+  const raw = process.env.ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS;
+  if (raw != null && String(raw).trim() !== '') {
+    return parseAcpPhaseTimeoutMs(raw, getAcpInitTimeoutMs() + getAcpNewSessionTimeoutMs() + 15_000);
+  }
+  return getAcpInitTimeoutMs() + getAcpNewSessionTimeoutMs() + 15_000;
+}
+
+export interface ACPSendPromptResult {
+  stopReason: ACPStopReason;
+  usage?: Usage | null;
+}
+
 /** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
 function escapeWinCmdToken(s: string): string {
   if (s === '') return '""';
   if (/[\s"]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
+}
+
+function getWindowsSystemPaths(): string[] {
+  if (process.platform !== 'win32') return [];
+  const roots = [process.env.SystemRoot, process.env.windir, 'C:\\Windows']
+    .map((item) => item?.trim())
+    .filter(Boolean) as string[];
+  const paths = roots.flatMap((root) => [
+    join(root, 'System32'),
+    join(root, 'Sysnative'),
+    root,
+  ]);
+  return Array.from(new Set(paths));
+}
+
+function resolveWindowsCmdShell(): string {
+  const candidates = [
+    process.env.ComSpec?.trim(),
+    ...getWindowsSystemPaths().map((dir) => join(dir, 'cmd.exe')),
+    'C:\\Windows\\System32\\cmd.exe',
+    'cmd.exe',
+  ].filter(Boolean) as string[];
+  return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
 }
 
 /**
@@ -80,7 +182,7 @@ function spawnAcpCli(
   const line = [command, ...argv].map(escapeWinCmdToken).join(' ');
   console.log(`[${engineType}] win32 shell spawn (cmd): ${line}`);
   return spawn(line, {
-    shell: true,
+    shell: resolveWindowsCmdShell(),
     windowsHide: true,
     cwd: opts.cwd,
     env: opts.env,
@@ -98,6 +200,7 @@ export class ACPEngine extends EventEmitter {
   private initialized = false;
   private availableModels: Array<{ modelId: string; name: string }> = [];
   private lastStderrChunk = '';
+  private lastExitInfo = '';
 
   constructor(private config: ACPEngineConfig) {
     super();
@@ -107,11 +210,13 @@ export class ACPEngine extends EventEmitter {
    * Start the ACP engine process
    */
   async start(): Promise<void> {
+    const tStartTotal = Date.now();
     const args = this.buildCommandArgs();
     const commonCliPaths = getCommonCliSearchPaths();
     const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
     const envPath = [
       process.env.PATH || '',
+      ...getWindowsSystemPaths(),
       ...commonCliPaths,
       this.config.env?.PATH || this.config.env?.Path || '',
     ].filter(Boolean).join(pathDelimiter);
@@ -125,10 +230,12 @@ export class ACPEngine extends EventEmitter {
 
     console.log(`[${this.config.engineType}] spawning: ${resolvedCommand} ${args.join(' ')}`);
 
+    const tSpawn = Date.now();
     this.process = spawnAcpCli(this.config.engineType, resolvedCommand, args, {
       cwd: this.config.workingDirectory,
       env: childEnv,
     });
+    logAcpTiming(this.config.engineType, 'acp.1_spawn_call_wall', tSpawn);
 
     if (!this.process.stdin || !this.process.stdout || !this.process.stderr) {
       throw new Error(`Failed to create ${this.config.engineType} process streams`);
@@ -142,6 +249,7 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('exit', (code, signal) => {
+      this.lastExitInfo = `code=${code}, signal=${signal}`;
       if (code !== 0 || signal) {
         console.warn(
           `[${this.config.engineType}] child exited early code=${code} signal=${signal}; stderr tail: ${this.lastStderrChunk?.slice(0, 500) || '<empty>'}`
@@ -155,6 +263,7 @@ export class ACPEngine extends EventEmitter {
       this.emit('error', error);
       this.cleanup(`${this.config.engineType} process error: ${error.message}`);
     });
+    const tStreams = Date.now();
     // Convert Node streams to Web streams for the SDK
     const output = Writable.toWeb(this.process.stdin) as WritableStream<Uint8Array>;
     const input = Readable.toWeb(this.process.stdout) as ReadableStream<Uint8Array>;
@@ -218,9 +327,13 @@ export class ACPEngine extends EventEmitter {
         }
       },
     }), stream);
+    logAcpTiming(this.config.engineType, 'acp.2_ndjson_stream_ready', tStreams);
 
     console.log(`[${this.config.engineType}] initializing ACP client...`);
+    const tInit = Date.now();
     await this.initialize();
+    logAcpTiming(this.config.engineType, 'acp.3_initialize_including_rpc', tInit);
+    logAcpTiming(this.config.engineType, 'acp.0_start_process_to_initialized', tStartTotal);
     console.log(`[${this.config.engineType}] ACP client initialized`);
   }
 
@@ -230,6 +343,9 @@ export class ACPEngine extends EventEmitter {
   private buildCommandArgs(): string[] {
     const args: string[] = [];
     switch (this.config.engineType) {
+      case 'claude-code-acp':
+        // claude-agent-acp starts ACP stdio mode with no positional subcommand.
+        break;
       case 'opencode':
         args.push('acp', '--cwd', this.config.workingDirectory);
         break;
@@ -282,31 +398,40 @@ export class ACPEngine extends EventEmitter {
       },
     });
 
-    const initTimeoutMs = 30_000;
-    const result = await Promise.race([
-      initPromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
-              )
-            ),
-          initTimeoutMs
-        )
-      ),
-    ]);
+    const initTimeoutMs = getAcpInitTimeoutMs();
+    let result;
+    const tInitRpc = Date.now();
+    try {
+      result = await Promise.race([
+        initPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP connection.initialize timeout after ${initTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_INIT_TIMEOUT_MS to increase)`
+                )
+              ),
+            initTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('connection.initialize', error);
+    }
+    logAcpTiming(this.config.engineType, 'acp.3a_connection.initialize_rpc', tInitRpc);
     this.initialized = true;
     console.log(`[${this.config.engineType}] connection.initialize() done`);
 
     // Cursor ACP requires authenticate after initialize
     if (this.config.engineType === 'cursor') {
+      const tAuth = Date.now();
       try {
         await this.connection.authenticate({ methodId: 'cursor_login' });
       } catch (e) {
         console.log(`[${this.config.engineType}] authenticate: ${e instanceof Error ? e.message : e}`);
       }
+      logAcpTiming(this.config.engineType, 'acp.3b_cursor_authenticate', tAuth);
     }
 
     this.emit('initialized', result);
@@ -323,21 +448,28 @@ export class ACPEngine extends EventEmitter {
       mcpServers: [],
     });
 
-    const sessionTimeoutMs = 30_000;
-    const result = await Promise.race([
-      newSessionPromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
-              )
-            ),
-          sessionTimeoutMs
-        )
-      ),
-    ]);
+    const sessionTimeoutMs = getAcpNewSessionTimeoutMs();
+    let result;
+    const tNewSess = Date.now();
+    try {
+      result = await Promise.race([
+        newSessionPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP newSession timeout after ${sessionTimeoutMs}ms. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_NEW_SESSION_TIMEOUT_MS to increase)`
+                )
+              ),
+            sessionTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('newSession', error);
+    }
+    logAcpTiming(this.config.engineType, 'acp.4_newSession_rpc', tNewSess);
     this.sessionId = result.sessionId;
     this.availableModels = (result.models?.availableModels as any[]) || [];
     console.log(`[${this.config.engineType}] session created: ${this.sessionId}`);
@@ -359,7 +491,33 @@ export class ACPEngine extends EventEmitter {
    */
   async resumeSession(sessionId: string): Promise<string> {
     if (!this.initialized || !this.connection) throw new Error(`${this.config.engineType} not initialized`);
-    const result = await this.connection.loadSession({ sessionId, cwd: this.config.workingDirectory, mcpServers: [] });
+    const loadPromise = this.connection.loadSession({
+      sessionId,
+      cwd: this.config.workingDirectory,
+      mcpServers: [],
+    });
+    const loadTimeoutMs = getAcpLoadSessionTimeoutMs();
+    let result;
+    const tLoad = Date.now();
+    try {
+      result = await Promise.race([
+        loadPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP session/load timeout after ${loadTimeoutMs}ms. sessionId=${sessionId}. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'} (set ACE_ACP_LOAD_SESSION_TIMEOUT_MS to increase)`
+                )
+              ),
+            loadTimeoutMs
+          )
+        ),
+      ]);
+    } catch (error) {
+      throw this.withAcpDiagnostics('session/load', error);
+    }
+    logAcpTiming(this.config.engineType, 'acp.4_session_load_rpc', tLoad, `sessionId=${sessionId}`);
     this.sessionId = sessionId;
     this.availableModels = (result.models?.availableModels as any[]) || this.availableModels;
     this.emit('session-resumed', {
@@ -373,18 +531,28 @@ export class ACPEngine extends EventEmitter {
   /**
    * Send a prompt to the current session
    */
-  async sendPrompt(prompt: string): Promise<ACPStopReason> {
+  async sendPrompt(prompt: string): Promise<ACPSendPromptResult> {
     if (!this.sessionId || !this.connection) throw new Error('No active session');
 
     console.log(`[${this.config.engineType}] sendPrompt: sessionId=${this.sessionId}, promptLength=${prompt.length}`);
 
     try {
+      const tPrompt = Date.now();
       const result = await this.connection.prompt({
         sessionId: this.sessionId,
         prompt: [{ type: 'text', text: prompt }],
       });
+      logAcpTiming(
+        this.config.engineType,
+        'acp.6_prompt_rpc_agent_wall',
+        tPrompt,
+        `stopReason=${result.stopReason ?? 'n/a'} len=${prompt.length}`
+      );
       console.log(`[${this.config.engineType}] sendPrompt completed: stopReason=${result.stopReason}`);
-      return result.stopReason;
+      return {
+        stopReason: result.stopReason,
+        usage: result.usage,
+      };
     } catch (err) {
       console.error(`[${this.config.engineType}] sendPrompt error:`, err);
       throw err;
@@ -406,8 +574,10 @@ export class ACPEngine extends EventEmitter {
       throw err;
     }
     console.log(`[${this.config.engineType}] setModel: "${modelId}" -> resolved: "${resolved}"`);
+    const tSet = Date.now();
     try {
       await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId: resolved });
+      logAcpTiming(this.config.engineType, 'acp.5_setSessionModel_rpc', tSet, resolved);
     } catch (err) {
       const modelList = this.availableModels.map(m => `  ${m.modelId} (${m.name})`).join('\n');
       const wrapped = new Error(
@@ -458,6 +628,15 @@ export class ACPEngine extends EventEmitter {
     return '';
   }
 
+  private withAcpDiagnostics(phase: string, error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error);
+    const stderrTail = this.lastStderrChunk?.slice(-1000) || '<empty>';
+    const exitInfo = this.lastExitInfo || '<not-exited>';
+    return new Error(
+      `${message}. phase=${phase}; engineType=${this.config.engineType}; command=${this.config.command}; cwd=${this.config.workingDirectory}; childExit=${exitInfo}; stderrTail=${stderrTail}`
+    );
+  }
+
   /**
    * Cancel the current session
    */
@@ -479,7 +658,9 @@ export class ACPEngine extends EventEmitter {
    * Handle session update notifications from the SDK
    */
   private handleSessionUpdate(update: SessionUpdate): void {
-    console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
+    if (ACP_STREAM_DEBUG) {
+      console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
+    }
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         this.emit('user-message', (update as any).content);

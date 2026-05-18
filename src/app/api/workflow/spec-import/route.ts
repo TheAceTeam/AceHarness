@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
-import { requireAuth } from '@/lib/auth-middleware';
-import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
-import { loadRunState, saveRunState } from '@/lib/run-state-persistence';
-import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow-registry';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
-import { getSpecRootDir, readDeltaSpec, writeDeltaSpec } from '@/lib/spec-persistence';
-import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/runtime-spec-import';
-import type { SpecCodingDocument } from '@/lib/schemas';
+import { requireAuth } from '@/lib/auth/middleware';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
+import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/registry';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
+import { getSpecRootDir, readDeltaSpec, writeDeltaSpec } from '@/lib/spec/persistence';
+import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/run/runtime-spec-import';
+import type { SpecCodingDocument } from '@/lib/core/schemas';
 
 type SpecImportRequest = {
   action?: 'import-delta';

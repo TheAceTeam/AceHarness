@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/auth-middleware';
-import { createUser, listUsers } from '@/lib/user-store';
+import { requireAdmin } from '@/lib/auth/middleware';
+import { createUser, listUsers } from '@/lib/core/user-store';
 
 export const dynamic = 'force-dynamic';
 

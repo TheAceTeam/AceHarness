@@ -10,13 +10,15 @@ import { Input } from '@/components/ui/input';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { Switch } from '@/components/ui/switch';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
-import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat-notebook';
+import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
+import { Switch } from '@/components/ui/switch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
 import ChatSidebar from '@/components/chat/ChatSidebar';
+import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage, { RobotLogo } from '@/components/chat/ChatMessage';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
@@ -25,18 +27,27 @@ import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import AuthGuard from '@/components/AuthGuard';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
-import { normalizeAssistantDisplay, parseActions } from '@/lib/chat-actions';
+import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
+  type CollaborationRoomState,
   inferHomeSidebarMode,
   inferHomeSidebarTab,
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
-} from '@/lib/home-sidebar-state';
+} from '@/lib/core/home-sidebar-state';
+import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
-import { computeAdaptiveRecentWindow } from '@/lib/chat-message-window';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
+import { cn } from '@/lib/core/utils';
+import {
+  DEFAULT_WEREWOLF_BOARD_ID,
+  TEMP_WEREWOLF_SUPERVISOR,
+  listTemporaryWerewolfAgentNames,
+} from '@/plugins/werewolf/agents';
+import pkgJson from '../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
 import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
@@ -48,6 +59,7 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 });
 
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
+const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
@@ -55,8 +67,35 @@ const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEd
 const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
+const DEFAULT_HOME_SIDEBAR_SIZE = 26;
+const MIN_HOME_SIDEBAR_SIZE = 20;
+const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
+
+function createWerewolfLabRoom(now = Date.now()): CollaborationRoomState {
+  const players = listTemporaryWerewolfAgentNames();
+  return {
+    topic: '多Agent能力实验室：AI 狼人杀',
+    selectedAgents: [TEMP_WEREWOLF_SUPERVISOR.name, ...players],
+    mode: 'roundtable',
+    messages: [],
+    rounds: [],
+    agentSessions: {},
+    werewolf: {
+      enabled: true,
+      phase: 'setup',
+      dayNumber: 1,
+      boardId: DEFAULT_WEREWOLF_BOARD_ID,
+      boardName: '预女猎',
+      players: [],
+      eliminated: [],
+      votes: [],
+      revealedRoles: false,
+      lastSummary: '请先选择板子，系统会随机选择参与人格并分配身份。',
+    },
+  };
+}
 
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
@@ -103,17 +142,20 @@ function ChatPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  useSidebarPluginPreferences();
   const {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
-    loading, streamingMessageId,
+    loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction,
     skillSettings, setSessionWorkbenchState,
+    appendSessionMessage,
+    updateSessionMessage,
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
-  const [notebookExporting, setNotebookExporting] = useState(false);
+  const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);  const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
   const [exportFileName, setExportFileName] = useState('');
@@ -132,6 +174,8 @@ function ChatPageContent() {
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
+  const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
+  const [origin, setOrigin] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
   const editEditorRef = useRef<RichTextEditorHandle | null>(null);
@@ -147,7 +191,15 @@ function ChatPageContent() {
   const [currentUser, setCurrentUser] = useState<{ username: string; email: string; role: 'admin' | 'user'; avatar?: string } | null>(null);
   const [homeSidebarTab, setHomeSidebarTab] = useState<HomeSidebarTab>('commander');
   const [homeSidebarMode, setHomeSidebarMode] = useState<HomeSidebarMode>('hidden');
+  const [homeSidebarSize, setHomeSidebarSize] = useState(() => {
+    if (typeof window === 'undefined') return DEFAULT_HOME_SIDEBAR_SIZE;
+    const saved = Number(window.localStorage.getItem(HOME_SIDEBAR_WIDTH_STORAGE_KEY) || '');
+    if (!Number.isFinite(saved)) return DEFAULT_HOME_SIDEBAR_SIZE;
+    return Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, saved));
+  });
   const starterHandledRef = useRef(false);
+  const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
+  const lastHomeSidebarSyncRef = useRef('');
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
     // 已有持久化状态时跳过昂贵的 parseActions 解析
@@ -167,39 +219,55 @@ function ChatPageContent() {
   }, [activeSession?.messages, activeSession?.sessionWorkbenchState?.homeSidebar]);
 
   const latestSidebarHint = activeSession?.sessionWorkbenchState?.homeSidebar || parsedSidebarHint;
+  const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding);
+  const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
+  const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
+  const hasCommanderSidebarContext = hasWorkflowSidebarContext || hasCollaborationSidebarContext;
+  const hasHintSidebarContext = Boolean(
+    latestSidebarHint?.intent
+    || latestSidebarHint?.workflowDraft
+    || latestSidebarHint?.agentDraft
+    || latestSidebarHint?.tabs?.length
+  );
   const derivedHomeSidebarTab = useMemo(
     () => inferHomeSidebarTab(latestSidebarHint, {
-      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
-      hasCreationSession: Boolean(activeSession?.creationSession),
+      hasWorkflowBinding: hasCommanderSidebarContext,
+      hasCreationSession: hasCreationSidebarContext,
     }),
-    [activeSession?.creationSession, activeSession?.workflowBinding, latestSidebarHint]
+    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
   );
   const derivedHomeSidebarMode = useMemo(
     () => inferHomeSidebarMode(latestSidebarHint, {
-      hasWorkflowBinding: Boolean(activeSession?.workflowBinding),
-      hasCreationSession: Boolean(activeSession?.creationSession),
+      hasWorkflowBinding: hasCommanderSidebarContext,
+      hasCreationSession: hasCreationSidebarContext,
     }),
-    [activeSession?.creationSession, activeSession?.workflowBinding, latestSidebarHint]
+    [hasCommanderSidebarContext, hasCreationSidebarContext, latestSidebarHint]
   );
 
   const sessionScopedSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>();
-    if (activeSession?.workflowBinding) {
-      tabs.add('commander');
-      tabs.add('workflow');
+    // If hint explicitly specifies tabs, use those as the primary source
+    const hintTabs = latestSidebarHint?.tabs || [];
+    if (hintTabs.length > 0) {
+      for (const tab of hintTabs) {
+        if (tab === 'commander' && !hasCommanderSidebarContext) continue;
+        tabs.add(tab);
+      }
+    } else {
+      if (hasCommanderSidebarContext) {
+        tabs.add('commander');
+      }
+      if (hasWorkflowSidebarContext) {
+        tabs.add('workflow');
+      }
+      if (hasCreationSidebarContext) {
+        tabs.add('workflow');
+      }
     }
-    if (activeSession?.creationSession) {
-      tabs.add('workflow');
-    }
-    for (const tab of latestSidebarHint?.tabs || []) {
-      // commander tab 仅在有 workflowBinding 时才有意义
-      if (tab === 'commander' && !activeSession?.workflowBinding) continue;
-      tabs.add(tab);
-    }
-    if (tabs.size === 0 && activeSession?.workflowBinding) tabs.add('commander');
+    if (tabs.size === 0 && hasCommanderSidebarContext) tabs.add('commander');
     if (tabs.size === 0 && latestSidebarHint) tabs.add(derivedHomeSidebarTab);
     return Array.from(tabs);
-  }, [activeSession?.creationSession, activeSession?.workflowBinding, derivedHomeSidebarTab, latestSidebarHint, latestSidebarHint?.tabs]);
+  }, [derivedHomeSidebarTab, hasCommanderSidebarContext, hasCreationSidebarContext, hasWorkflowSidebarContext, latestSidebarHint, latestSidebarHint?.tabs]);
 
   const availableHomeSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>(sessionScopedSidebarTabs);
@@ -208,6 +276,11 @@ function ChatPageContent() {
     }
     return Array.from(tabs);
   }, [derivedHomeSidebarMode, derivedHomeSidebarTab, sessionScopedSidebarTabs]);
+  const hasHomeSidebarContext = hasWorkflowSidebarContext
+    || hasCreationSidebarContext
+    || hasCollaborationSidebarContext
+    || hasHintSidebarContext;
+  const availableHomeSidebarTabsKey = availableHomeSidebarTabs.join('|');
 
   useEffect(() => {
     if (!parsedSidebarHint) return;
@@ -220,9 +293,10 @@ function ChatPageContent() {
   }, [activeSession?.sessionWorkbenchState?.homeSidebar, parsedSidebarHint, setSessionWorkbenchState]);
 
   useEffect(() => {
-    setHomeSidebarTab((prev) => (prev === derivedHomeSidebarTab ? prev : derivedHomeSidebarTab));
-    setHomeSidebarMode((prev) => (prev === derivedHomeSidebarMode ? prev : derivedHomeSidebarMode));
-  }, [derivedHomeSidebarMode, derivedHomeSidebarTab]);
+    if (typeof window !== 'undefined') {
+      setOrigin(window.location.origin);
+    }
+  }, []);
 
   useEffect(() => {
     const handleOpenWorkspacePath = (event: Event) => {
@@ -307,55 +381,35 @@ function ChatPageContent() {
     if (isMobile) return;
 
     const hintedTab = latestSidebarHint?.activeTab;
-    const nextTab = hintedTab && sessionScopedSidebarTabs.includes(hintedTab)
-      ? hintedTab
-      : sessionScopedSidebarTabs[0] || 'commander';
-
-    setHomeSidebarTab(nextTab);
-
-    if (latestSidebarHint?.mode) {
-      setHomeSidebarMode(latestSidebarHint.mode);
-      return;
-    }
-
-    if (sessionScopedSidebarTabs.length > 0) {
-      setHomeSidebarMode('peek');
-      return;
-    }
-
-    setHomeSidebarMode('hidden');
-  }, [activeSession?.id, isMobile, latestSidebarHint?.activeTab, latestSidebarHint?.mode, sessionScopedSidebarTabs]);
-
-  useEffect(() => {
-    if (isMobile) return;
-    const binding = activeSession?.workflowBinding;
-    const creation = activeSession?.creationSession;
-    const hasSidebarContext = Boolean(binding || creation);
-    const hintedTab = latestSidebarHint?.activeTab;
-    const fallbackTab = availableHomeSidebarTabs[0] || null;
     const nextTab = hintedTab && availableHomeSidebarTabs.includes(hintedTab)
       ? hintedTab
-      : fallbackTab;
+      : availableHomeSidebarTabs[0] || derivedHomeSidebarTab;
 
-    if (nextTab) {
-      setHomeSidebarTab((prev) => (prev === nextTab ? prev : nextTab));
+    let nextMode = latestSidebarHint?.mode || derivedHomeSidebarMode;
+    if (nextMode === 'hidden' && hasHomeSidebarContext && availableHomeSidebarTabs.length > 0) {
+      nextMode = 'peek';
+    } else if (!hasHomeSidebarContext && hasMessages) {
+      nextMode = 'hidden';
     }
 
-    if (latestSidebarHint?.mode) {
-      setHomeSidebarMode(latestSidebarHint.mode);
-      return;
-    }
+    const syncSignature = [
+      activeSession?.id || '',
+      nextTab,
+      nextMode,
+      availableHomeSidebarTabsKey,
+      hasHomeSidebarContext ? 'context' : 'empty',
+    ].join('|');
+    if (lastHomeSidebarSyncRef.current === syncSignature) return;
+    lastHomeSidebarSyncRef.current = syncSignature;
 
-    if (hasSidebarContext && availableHomeSidebarTabs.length > 0) {
-      setHomeSidebarMode('peek');
-    } else if (hasMessages) {
-      setHomeSidebarMode('hidden');
-    }
+    setHomeSidebarTab((prev) => (prev === nextTab ? prev : nextTab));
+    setHomeSidebarMode((prev) => (prev === nextMode ? prev : nextMode));
   }, [
-    activeSession?.creationSession,
     activeSession?.id,
-    activeSession?.workflowBinding,
-    availableHomeSidebarTabs,
+    availableHomeSidebarTabsKey,
+    derivedHomeSidebarMode,
+    derivedHomeSidebarTab,
+    hasHomeSidebarContext,
     hasMessages,
     isMobile,
     latestSidebarHint?.activeTab,
@@ -609,11 +663,10 @@ function ChatPageContent() {
     summary?: string;
     shouldOpenModal?: boolean;
   }) => {
-    if (patch.tab) setHomeSidebarTab(patch.tab);
-    if (patch.mode) setHomeSidebarMode(patch.mode);
-    setSessionWorkbenchState((prev) => ({
-      ...(prev || {}),
-      homeSidebar: {
+    if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
+    if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
+    setSessionWorkbenchState((prev) => {
+      const nextHomeSidebar: HomeSidebarHint = {
         type: 'home_sidebar',
         ...(prev?.homeSidebar || {}),
         ...(patch.tab ? { activeTab: patch.tab } : {}),
@@ -623,8 +676,15 @@ function ChatPageContent() {
         ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
         ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
         ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
-      },
-    }));
+      };
+      if (JSON.stringify(prev?.homeSidebar || null) === JSON.stringify(nextHomeSidebar)) {
+        return prev || { homeSidebar: nextHomeSidebar };
+      }
+      return {
+        ...(prev || {}),
+        homeSidebar: nextHomeSidebar,
+      };
+    });
   }, [setSessionWorkbenchState]);
 
   const openHomeSidebar = useCallback((
@@ -643,13 +703,48 @@ function ChatPageContent() {
   }, [applyHomeSidebarState]);
 
   const closeHomeSidebar = useCallback(() => {
-    const hasSidebarContext = Boolean(activeSession?.workflowBinding || activeSession?.creationSession);
-    applyHomeSidebarState({ mode: hasSidebarContext ? 'peek' : 'hidden' });
-  }, [activeSession?.creationSession, activeSession?.workflowBinding, applyHomeSidebarState]);
+    applyHomeSidebarState({ mode: hasHomeSidebarContext ? 'peek' : 'hidden' });
+  }, [applyHomeSidebarState, hasHomeSidebarContext]);
 
   const handleHomeSidebarTabChange = useCallback((tab: HomeSidebarTab) => {
     applyHomeSidebarState({ tab });
   }, [applyHomeSidebarState]);
+
+  const handleHomeSidebarLayout = useCallback((layout: Record<string, number> | number[]) => {
+    if (homeSidebarMode !== 'active') return;
+    const nextSize = Array.isArray(layout)
+      ? layout[1]
+      : layout['home-command-sidebar-panel'];
+    if (!Number.isFinite(nextSize)) return;
+    const clamped = Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, nextSize));
+    setHomeSidebarSize((prev) => Math.abs(prev - clamped) < 0.1 ? prev : clamped);
+    try {
+      window.localStorage.setItem(HOME_SIDEBAR_WIDTH_STORAGE_KEY, clamped.toFixed(2));
+    } catch {}
+  }, [homeSidebarMode]);
+
+  const mainInputMentionItems = useMemo(() => {
+    const room = activeSession?.sessionWorkbenchState?.collaborationRoom;
+    if (!room || !hasCollaborationSidebarContext) return [];
+    const names = new Set<string>();
+    if (homeSidebarTab === 'chatroom') {
+      names.add('全员');
+      names.add('AI 百灵鸟');
+      (room.chatroom?.participants || []).forEach((participant) => {
+        const name = String(participant || '').trim();
+        if (name) names.add(name);
+      });
+      (room.selectedAgents || []).forEach((name) => {
+        if (name) names.add(name);
+      });
+    } else if (homeSidebarTab === 'commander' || homeSidebarTab === 'workflow') {
+      names.add('全员');
+      (room.selectedAgents || []).forEach((name) => {
+        if (name) names.add(name);
+      });
+    }
+    return Array.from(names);
+  }, [activeSession?.sessionWorkbenchState?.collaborationRoom, hasCollaborationSidebarContext, homeSidebarTab]);
 
   const submitMessage = useCallback(async (text: string) => {
     const normalized = text.trim();
@@ -662,13 +757,29 @@ function ChatPageContent() {
     unlockAutoScroll();
     setInput('');
     editorRef.current?.clear();
+
+    // Route to collaboration room if active
+    if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
+      if (homeSidebarTab === 'chatroom' && activeSessionId && appendSessionMessage) {
+        await appendSessionMessage(activeSessionId, {
+          role: 'user',
+          content: normalized,
+          rawContent: normalized,
+          timestamp: Date.now(),
+        });
+      }
+      collaborationMessageHandlerRef.current(normalized);
+      editorRef.current?.focus();
+      return;
+    }
+
     if (loading) {
       stopStreaming();
       await Promise.resolve();
     }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [deleteMessage, editingMessageId, loading, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [activeSessionId, appendSessionMessage, deleteMessage, editingMessageId, hasCollaborationSidebarContext, homeSidebarTab, loading, sendMessage, stopStreaming, unlockAutoScroll]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -685,36 +796,84 @@ function ChatPageContent() {
   const handleQuickAction = useCallback((prompt: string) => {
     if (prompt === '__HOME_ACTION__:create_workflow') {
       openHomeSidebar('workflow', 'create-workflow', 'clarifying', { shouldOpenModal: true });
-      const hiddenPrompt = [
-        '这是一次来自首页按钮的“创建工作流”界面动作，不是用户新增的一条需求内容。',
-        '你必须只根据当前已有对话历史来提取真实需求、约束、工作目录、参考工作流、目标、范围、技术栈、已有角色分工，不要把本条指令本身写进 workflowDraft.requirements 或 description。',
-        '请把能确认的上下文尽量整理进 home_sidebar：summary、knownFacts、missingFields、questions、recommendedNextAction、workflowDraft。',
-        '如果要输出 shouldOpenModal=true 的 home_sidebar，它必须作为整条回复最后一个 <result> 块输出；输出后不要再追加正文。',
-        '如果信息不足，请先提出最少量的澄清问题，不要编造需求。',
-      ].join('\n');
       unlockAutoScroll();
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
-      void sendMessage(hiddenPrompt, { displayText: '创建工作流' });
       return;
     }
 
     if (prompt === '__HOME_ACTION__:create_agent') {
       openHomeSidebar('agent', 'create-agent', 'clarifying', { shouldOpenModal: true });
-      const hiddenPrompt = [
-        '这是一次来自首页按钮的“创建 Agent”界面动作，不是用户新增的一条职责需求内容。',
-        '你必须只根据当前已有对话历史来提取这个 Agent 的真实职责、风格、能力边界、输入输出、协作对象、参考 workflow 和工作目录，不要把本条指令本身写进 agentDraft.mission 或 style。',
-        '请把能确认的上下文尽量整理进 home_sidebar：summary、knownFacts、missingFields、questions、recommendedNextAction、agentDraft。',
-        '如果要输出 shouldOpenModal=true 的 home_sidebar，它必须作为整条回复最后一个 <result> 块输出；输出后不要再追加正文。',
-        '如果信息不足，请先提出最少量的澄清问题，不要编造职责。',
-      ].join('\n');
       unlockAutoScroll();
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
-      void sendMessage(hiddenPrompt, { displayText: '创建 Agent' });
       return;
+    }
+
+    if (prompt === '__HOME_ACTION__:werewolf_lab') {
+      const now = Date.now();
+      const sessionId = createSession({
+        title: '多Agent能力实验室 · AI 狼人杀',
+        sessionWorkbenchState: {
+          homeSidebar: {
+            type: 'home_sidebar',
+            mode: 'active',
+            activeTab: 'commander',
+            tabs: ['commander'],
+            intent: 'supervisor-chat',
+            stage: 'running',
+            reason: '启动多Agent能力实验室，用 AI 狼人杀测试群聊、点名、回合制和投票能力。',
+            summary: '这是一个多Agent协作能力测试对话。右侧协作室已预置 AI 狼人杀实验流程，可选择板子、随机角色和视角后由 Supervisor 推进。',
+            recommendedNextAction: '在右侧协作室选择板子，必要时刷新随机角色，然后点击“确认角色并开局”。',
+          },
+          collaborationRoom: createWerewolfLabRoom(now),
+        },
+        messages: [
+          {
+            role: 'user',
+            content: '启动多Agent能力实验室：AI 狼人杀',
+            timestamp: now,
+          },
+          {
+            role: 'assistant',
+            content: [
+              '已创建一个 AI 狼人杀实验对话。',
+              '',
+              '右侧协作室已预置 20 个临时测试人格。先选择板子和参与人格，再让 Supervisor 按流程推进发言、投票和结算。',
+            ].join('\n'),
+            timestamp: now + 1,
+          },
+        ],
+      });
+      setActiveSessionId(sessionId);
+      setHomeSidebarTab('commander');
+      setHomeSidebarMode('active');
+      unlockAutoScroll();
+      setInput('');
+      editorRef.current?.clear();
+      toast('success', '已创建多Agent能力实验室对话');
+      return;
+    }
+
+    // Plugin intent dispatch — let registered plugins handle their own actions
+    if (prompt.startsWith('__HOME_ACTION__:')) {
+      const actionId = prompt.replace('__HOME_ACTION__:', '');
+      const handled = dispatchHomeAction(actionId, {
+        createSession,
+        setActiveSessionId,
+        setHomeSidebarTab,
+        setHomeSidebarMode,
+        unlockAutoScroll,
+        toast,
+      });
+      if (handled) {
+        unlockAutoScroll();
+        setInput('');
+        editorRef.current?.clear();
+        return;
+      }
     }
 
     if (prompt && prompt.includes('\n')) {
@@ -731,7 +890,7 @@ function ChatPageContent() {
       if (loading) stopStreaming();
       sendMessage(prompt);
     }
-  }, [loading, openHomeSidebar, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [loading, openHomeSidebar, stopStreaming, unlockAutoScroll]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
     setDebugMode(checked);
@@ -862,9 +1021,34 @@ function ChatPageContent() {
     return callbacks;
   }, [messages, confirmAction, rejectAction, undoActionById, retryAction]);
 
+  const handleQuoteMessage = useCallback((messageId: string) => {
+    const message = messages.find((item) => item.id === messageId);
+    if (!message) return;
+    const collaborationCard = (message.cards || []).find((card: any) => card?.type === 'collaboration_speech');
+    const speakerName = collaborationCard?.speakerName
+      || (message.role === 'user' ? '用户' : message.role === 'assistant' ? 'AI' : '错误');
+    const sourceText = String(message.content || message.rawContent || '').trim();
+    if (!sourceText) return;
+    const quotedText = sourceText
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .slice(0, 30)
+      .map((line) => `> ${line}`)
+      .join('\n');
+    const prefix = editorRef.current?.isEmpty() ? '' : '\n\n';
+    const quoteMarkdown = `${prefix}> **${speakerName}：**\n${quotedText}\n\n`;
+    editorRef.current?.insertMarkdown(quoteMarkdown);
+    editorRef.current?.focus();
+  }, [messages]);
+
+  const isChatroomCentralTranscript = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
     streamingMessageId,
-  }), [messages, streamingMessageId]);
+    forceFullWindow: Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled),
+    ...(isChatroomCentralTranscript
+      ? { minRecentMessages: 100, maxRecentMessages: 100, targetWeight: Number.MAX_SAFE_INTEGER }
+      : {}),
+  }), [messages, streamingMessageId, activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled, isChatroomCentralTranscript]);
 
   const renderedMessages = useMemo(() => {
     const hiddenCount = Math.max(0, messages.length - recentWindowSize);
@@ -883,7 +1067,8 @@ function ChatPageContent() {
       const isStreaming = msg.id === streamingMessageId;
       let displayMsg = msg;
       let hasSidebarHint = false;
-      if (msg.role === 'assistant') {
+      const isWerewolfMessage = Boolean((msg.cards || []).some((card: any) => card?.type === 'werewolf_speech'));
+      if (msg.role === 'assistant' && !isWerewolfMessage) {
         const raw = msg.rawContent || msg.content || '';
         const normalized = normalizeAssistantDisplay(raw, isStreaming);
         hasSidebarHint = normalized.hasSidebarHint;
@@ -892,7 +1077,7 @@ function ChatPageContent() {
         }
       }
       return (
-        <div key={msg.id}>
+        <div key={msg.id} className="pb-4">
           <ChatMessage
             message={displayMsg}
             isStreaming={isStreaming}
@@ -906,10 +1091,12 @@ function ChatPageContent() {
             onEditMessage={msg.role === 'user' ? handleEditMessage : undefined}
             onContinue={msg.role === 'error' ? continueFromMessage : undefined}
             onSaveAsNotebook={msg.role === 'assistant' ? handleSaveAssistantMessageAsNotebook : undefined}
+            onQuoteMessage={handleQuoteMessage}
+            werewolfView={activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolfView}
             currentUser={currentUser}
           />
           {hasSidebarHint && (
-            <div className="ml-10 -mt-2 mb-2">
+            <div className="mt-2 ml-10">
               <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-medium text-primary">
                 <span className="material-symbols-outlined" style={{ fontSize: 12 }}>side_navigation</span>
                 已推送侧边栏
@@ -919,24 +1106,31 @@ function ChatPageContent() {
         </div>
       );
     });
-  }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook]);
+  }, [messages, streamingMessageId, recentWindowSize, historyExpanded, messageCallbacks, handleQuickAction, deleteMessage, retryFromMessage, handleEditMessage, continueFromMessage, handleSaveAssistantMessageAsNotebook, handleQuoteMessage]);
   const hiddenMessageCount = Math.max(0, messages.length - recentWindowSize);
-  const historicalMessageItems = hiddenMessageCount > 0
-    ? messages.slice(0, hiddenMessageCount).map((message, index) => ({
+  const historicalMessageItems = useMemo(() => (
+    hiddenMessageCount > 0
+      ? messages.slice(0, hiddenMessageCount).map((message, index) => ({
         key: message.id,
         node: renderedMessages[index],
       }))
-    : [];
-  const recentMessageItems = hiddenMessageCount > 0
-    ? messages.slice(-recentWindowSize).map((message, index) => ({
+      : []
+  ), [hiddenMessageCount, messages, renderedMessages]);
+  const recentMessageItems = useMemo(() => (
+    hiddenMessageCount > 0
+      ? messages.slice(-recentWindowSize).map((message, index) => ({
         key: message.id,
         node: renderedMessages[hiddenMessageCount + index],
       }))
-    : messages.map((message, index) => ({
+      : messages.map((message, index) => ({
         key: message.id,
         node: renderedMessages[index],
-      }));
-  const historicalMessages = hiddenMessageCount > 0 ? renderedMessages.slice(0, hiddenMessageCount) : [];
+      }))
+  ), [hiddenMessageCount, messages, recentWindowSize, renderedMessages]);
+  const historicalMessages = useMemo(
+    () => (hiddenMessageCount > 0 ? renderedMessages.slice(0, hiddenMessageCount) : []),
+    [hiddenMessageCount, renderedMessages]
+  );
 
   useEffect(() => {
     const scroller = scrollContainerRef.current;
@@ -950,6 +1144,31 @@ function ChatPageContent() {
   }, [historyExpanded, hiddenMessageCount]);
 
   const activeAgentBinding = activeSession?.agentBinding;
+  const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
+  const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+
+    if (isWerewolfLabMode) {
+      if (werewolfPreviousDarkClassRef.current === null) {
+        werewolfPreviousDarkClassRef.current = root.classList.contains('dark');
+      }
+      root.classList.add('dark');
+      return;
+    }
+
+    const previousHadDarkClass = werewolfPreviousDarkClassRef.current;
+    if (previousHadDarkClass === null) return;
+    werewolfPreviousDarkClassRef.current = null;
+    if (previousHadDarkClass) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+  }, [activeSession?.id, isWerewolfLabMode]);
+
   const activeAgentAvatarSrc = activeAgentBinding
     ? resolveAgentAvatarSrc(undefined, activeAgentBinding.agentName, {
         team: activeAgentBinding.team || 'red',
@@ -958,7 +1177,13 @@ function ChatPageContent() {
     : null;
 
   return (
-    <div ref={containerRef} className="h-screen flex overflow-hidden bg-background">
+    <div
+      ref={containerRef}
+      className={cn(
+        'h-screen flex overflow-hidden bg-background',
+        isWerewolfLabMode && 'werewolf-wood-bg'
+      )}
+    >
       {/* Mobile overlay backdrop */}
       {isMobile && sidebarOpen && (
         <div className="fixed inset-0 bg-black/40 z-30" onClick={() => setSidebarOpen(false)} />
@@ -969,7 +1194,7 @@ function ChatPageContent() {
         <div
           className={
             isMobile
-              ? 'fixed inset-y-0 left-0 z-40 bg-background shadow-xl'
+              ? 'fixed inset-y-0 left-0 z-40 bg-background'
               : 'relative shrink-0'
           }
           style={{ width: isMobile ? `${Math.min(sidebarWidth, 320)}px` : `${sidebarWidth}px` }}
@@ -987,15 +1212,20 @@ function ChatPageContent() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className={cn('flex-1 flex flex-col min-w-0', isWerewolfLabMode && 'werewolf-wood-main')}>
         {/* Top bar */}
-        <div className="flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0">
+        <div
+          className={cn(
+            'flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0',
+            isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
+          )}
+        >
           <div className="flex items-center gap-2">
             <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
               <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
             </Button>
             {activeAgentBinding ? (
-              <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5 shadow-sm">
+              <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
                 <Avatar className="h-8 w-8 ring-1 ring-border/70">
                   <AvatarImage src={activeAgentAvatarSrc || undefined} alt={activeAgentBinding.agentName} />
                   <AvatarFallback>{activeAgentBinding.agentName.slice(0, 2).toUpperCase()}</AvatarFallback>
@@ -1018,6 +1248,21 @@ function ChatPageContent() {
                 </Button>
               </div>
             ) : null}
+            <Button
+              size="sm"
+              variant={activeWeChatBinding ? 'default' : 'outline'}
+              className="rounded-full"
+              onClick={() => setWeChatBindDialogOpen(true)}
+              title="绑定当前首页对话到微信 Bot"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>forum</span>
+              <span>微信 Bot</span>
+              {activeWeChatBinding ? (
+                <span className="ml-2 hidden sm:inline text-xs opacity-90">
+                  {activeWeChatBinding.externalConversationId}
+                </span>
+              ) : null}
+            </Button>
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -1040,12 +1285,29 @@ function ChatPageContent() {
         </div>
 
         <div className="flex-1 min-h-0">
-          <ResizablePanelGroup direction="horizontal" className="h-full">
-            <ResizablePanel defaultSize={homeSidebarMode === 'active' ? 74 : 100} minSize={42}>
-              <div className="flex h-full min-h-0 flex-col">
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
+            onLayoutChanged={handleHomeSidebarLayout}
+          >
+            <ResizablePanel id="home-main-panel" defaultSize={homeSidebarMode === 'active' ? `${100 - homeSidebarSize}%` : '100%'} minSize="42%">
+              <div className={cn('flex h-full min-h-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
                 <div className="flex-1 relative min-h-0">
-                  <div ref={scrollContainerRef} className="absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16">
-                    {messages.length === 0 && !loading && (
+                  <div
+                    ref={scrollContainerRef}
+                    className={cn(
+                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16',
+                      isWerewolfLabMode && 'werewolf-wood-main'
+                    )}
+                  >
+                    {messages.length === 0 && sessionLoadingId === activeSessionId ? (
+                      <div className="flex h-full items-center justify-center">
+                        <div className="home-chat-surface flex items-center gap-3 rounded-2xl px-4 py-3 text-sm text-muted-foreground">
+                          <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
+                          <span>正在加载对话...</span>
+                        </div>
+                      </div>
+                    ) : messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
                         <div className="text-center">
                           <motion.div
@@ -1072,6 +1334,14 @@ function ChatPageContent() {
                               ? `当前正在与 Agent「${activeAgentBinding.agentName}」对话`
                               : '通过对话实现全流程 Multi-Agent 智能编排'}
                           </motion.p>
+                          <motion.span
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ delay: 0.2 }}
+                            className="mt-1 text-xs text-muted-foreground/60"
+                          >
+                            v{pkgJson.version}
+                          </motion.span>
                         </div>
                         <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} />
                       </div>
@@ -1089,31 +1359,36 @@ function ChatPageContent() {
                       }}
                       hiddenContent={
                         historyExpanded
-                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={scrollContainerRef} />
+                          ? <VirtualMessageList items={historicalMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />
                           : historicalMessages
                       }
-                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} />}
+                      recentContent={<VirtualMessageList items={recentMessageItems} scrollContainerRef={scrollContainerRef} itemGap={0} />}
                     />
                     <div ref={messagesEndRef} />
                   </div>
                   {showScrollBtn && (
                     <button
                       onClick={scrollToBottom}
-                      className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary/90 text-primary-foreground text-xs shadow-lg hover:bg-primary transition-colors"
+                      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-primary/20 bg-background/92 px-3 py-1.5 text-xs text-foreground backdrop-blur-md transition-colors duration-150 hover:bg-background"
                     >
-                      <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>arrow_downward</span>
+                      <span className="material-symbols-outlined text-primary" style={{ fontSize: '16px' }}>arrow_downward</span>
                       新消息
                     </button>
                   )}
                 </div>
 
-                <div className="shrink-0 border-t bg-background/80 backdrop-blur px-4 py-3 md:px-8 lg:px-16">
+                <div
+                  className={cn(
+                    'home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16',
+                    isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
+                  )}
+                >
                   {messages.length > 0 && (
-                    <div className="mb-2 max-w-4xl mx-auto">
+                    <div className="mx-auto mb-2 max-w-4xl rounded-2xl border border-border/60 bg-background/70 px-2 py-2 backdrop-blur-sm">
                       <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
                     </div>
                   )}
-                  <div className="flex items-stretch gap-2 max-w-4xl mx-auto">
+                  <div className="mx-auto flex max-w-4xl items-stretch gap-2">
                     <div className="flex-1">
                       <RichTextEditor
                         ref={editorRef}
@@ -1122,10 +1397,12 @@ function ChatPageContent() {
                         onChange={(markdown) => setInput(markdown)}
                         placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
                         minHeight={76}
+                        className="[&_.ProseMirror]:text-[13px] [&_.ProseMirror]:leading-5 [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
                         disabled={false}
                         autoFocus={false}
                         showFullscreenToggle={!isMobile}
                         showToolbar={false}
+                        mentionItems={mainInputMentionItems}
                         trimPastedTrailingNewlines
                         footerContent={(
                           <>
@@ -1146,11 +1423,11 @@ function ChatPageContent() {
                       />
                     </div>
                     {loading && (
-                      <Button className="rounded-xl h-[76px] self-stretch px-3" variant="destructive" onClick={stopStreaming} title="停止生成">
+                      <Button className="h-[76px] self-stretch rounded-2xl border border-destructive/20 px-3 transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
                         <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>stop</span>
                       </Button>
                     )}
-                    <Button className="rounded-xl h-[76px] self-stretch px-4" onClick={handleSend} disabled={!getInputMarkdown()}>
+                    <Button className="h-[76px] self-stretch rounded-2xl px-4 transition-colors duration-150" onClick={handleSend} disabled={!getInputMarkdown()}>
                       <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
                     </Button>
                   </div>
@@ -1167,8 +1444,10 @@ function ChatPageContent() {
                 />
 
                 <ResizablePanel
-                  defaultSize={26}
-                  minSize={20}
+                  id="home-command-sidebar-panel"
+                  defaultSize={`${homeSidebarSize}%`}
+                  minSize={`${MIN_HOME_SIDEBAR_SIZE}%`}
+                  maxSize={`${MAX_HOME_SIDEBAR_SIZE}%`}
                   className="hidden lg:block"
                 >
                   <HomeCommandSidebar
@@ -1179,6 +1458,12 @@ function ChatPageContent() {
                     activeSession={activeSession}
                     sessionWorkbenchState={activeSession?.sessionWorkbenchState}
                     setSessionWorkbenchState={setSessionWorkbenchState}
+                    appendSessionMessage={appendSessionMessage}
+                    updateSessionMessage={updateSessionMessage}
+                    setStreamingMessageId={setStreamingMessageId}
+                    markSessionStreaming={markSessionStreaming}
+                    unmarkSessionStreaming={unmarkSessionStreaming}
+                    onRegisterCollaborationHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
                     sidebarHint={latestSidebarHint}
                     activeTab={homeSidebarTab}
                     onTabChange={handleHomeSidebarTabChange}
@@ -1187,14 +1472,18 @@ function ChatPageContent() {
                     onExpand={() => openHomeSidebar(homeSidebarTab)}
                     expanded={homeSidebarMode === 'active'}
                     ensureSessionId={createSession}
+                    werewolfMode={isWerewolfLabMode}
                   />
                 </ResizablePanel>
               </>
             ) : homeSidebarMode === 'peek' ? (
-              <div className="hidden lg:flex items-start border-l bg-card/20">
+              <div className={cn('hidden lg:flex items-start border-l bg-card/20', isWerewolfLabMode && 'werewolf-wood-panel border-l-stone-700/60')}>
                 <button
                   type="button"
-                  className="m-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/80 px-2 py-4 text-[12px] text-muted-foreground transition hover:text-foreground"
+                  className={cn(
+                    'm-2 flex min-h-32 w-16 flex-col items-center justify-center gap-2 rounded-2xl border bg-background/82 px-2 py-4 text-[12px] text-muted-foreground backdrop-blur-sm transition-colors duration-150 hover:text-foreground',
+                    isWerewolfLabMode && 'border-stone-600/70 bg-stone-950/35 text-stone-300 hover:text-stone-100'
+                  )}
                   onClick={() => openHomeSidebar(homeSidebarTab)}
                   title="展开首页动态侧边栏"
                 >
@@ -1210,26 +1499,45 @@ function ChatPageContent() {
 
         {/* Edit Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
+            <DialogContent
+            className="max-w-2xl overflow-hidden p-0 flex flex-col gap-0"
+            resizableHeight
+            defaultHeight={500}
+            minHeight={360}
+            maxHeight={820}
+            onPointerDownOutside={(event) => {
+              const target = event.target as HTMLElement | null;
+              if (target?.closest('[data-rich-text-editor-fullscreen]')) {
+                event.preventDefault();
+              }
+            }}
+            onInteractOutside={(event) => {
+              const target = event.target as HTMLElement | null;
+              if (target?.closest('[data-rich-text-editor-fullscreen]')) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <DialogHeader className="border-b px-6 py-4">
               <DialogTitle>编辑消息</DialogTitle>
             </DialogHeader>
-            <div className="min-h-[200px]">
+            <div className="min-h-0 flex-1 px-6 py-4">
               {editDialogOpen && (
                 <RichTextEditor
                   ref={editEditorRef}
                   content={editContent}
                   onChange={(markdown) => setEditContent(markdown)}
                   placeholder="输入消息内容..."
-                  minHeight={200}
-                  maxHeight={400}
+                  minHeight={280}
+                  maxHeight={340}
                   autoFocus
                   showFullscreenToggle={true}
                   showToolbar={false}
+                  className="h-full"
                 />
               )}
             </div>
-            <DialogFooter>
+            <DialogFooter className="border-t px-6 py-4">
               <Button variant="outline" onClick={handleCancelEdit}>取消</Button>
               <Button onClick={handleConfirmEdit}>发送</Button>
             </DialogFooter>
@@ -1237,11 +1545,17 @@ function ChatPageContent() {
         </Dialog>
 
         <Dialog open={debugMode} onOpenChange={setDebugMode}>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
+          <DialogContent
+            className="max-w-3xl overflow-hidden p-0 flex flex-col gap-0"
+            resizableHeight
+            defaultHeight={620}
+            minHeight={360}
+            maxHeight={900}
+          >
+            <DialogHeader className="border-b px-6 py-4">
               <DialogTitle>System Prompt（实时）</DialogTitle>
             </DialogHeader>
-            <pre className="max-h-[60vh] overflow-y-auto rounded-xl border bg-black p-4 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
+            <pre className="min-h-0 flex-1 overflow-y-auto bg-black px-6 py-5 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
               {debugLoading ? '加载中...' : (debugPrompt || '')}
             </pre>
           </DialogContent>
@@ -1288,6 +1602,31 @@ function ChatPageContent() {
           />
         )}
       </div>
+
+      <WeChatSessionBindDialog
+        open={wechatBindDialogOpen}
+        onOpenChange={setWeChatBindDialogOpen}
+        activeSession={activeSession}
+        origin={origin}
+        onBindingSaved={({ integration, binding, targetLabel, accountId }) => {
+          setSessionWorkbenchState((prev) => ({
+            ...(prev || {}),
+            wechatBinding: {
+              integrationId: integration.id,
+              integrationName: integration.name,
+              bindingId: binding.id,
+              accountId,
+              externalConversationId: binding.externalConversationId,
+              externalConversationName: binding.externalConversationName,
+              bindingType: binding.bindingType,
+              targetLabel,
+              webhookPath: integration.webhookPath,
+              secret: integration.secret,
+              updatedAt: Date.now(),
+            },
+          }));
+        }}
+      />
     </div>
   );
 }

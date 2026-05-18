@@ -11,51 +11,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { getActionsGrouped, getPinnedActions, getCollapsibleActions, type HomePluginQuickAction } from '@/lib/sidebar-plugins';
+import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
 
 interface QuickActionsProps {
   onAction: (text: string) => void;
   skillSettings?: Record<string, boolean>;
 }
-
-const CATEGORIES = [
-  {
-    title: '查看',
-    icon: 'visibility',
-    actions: [
-      { icon: 'account_tree', label: '工作流列表', prompt: '列出所有工作流配置', color: 'from-blue-500 to-blue-600' },
-      { icon: 'smart_toy', label: 'Agent 列表', prompt: '列出所有 Agent', color: 'from-purple-500 to-purple-600' },
-      { icon: 'model_training', label: '模型列表', prompt: '列出所有可用模型', color: 'from-cyan-500 to-cyan-600' },
-      { icon: 'extension', label: 'Skill 列表', prompt: '列出所有可用 Skills', color: 'from-pink-500 to-pink-600' },
-      { icon: 'monitoring', label: '运行状态', prompt: '查看当前工作流运行状态', color: 'from-green-500 to-green-600' },
-      { icon: 'history', label: '运行历史', prompt: '列出最近的运行记录', color: 'from-teal-500 to-teal-600' },
-    ],
-  },
-  {
-    title: '创建',
-    icon: 'add_circle',
-    actions: [
-      { icon: 'add_circle', label: '创建工作流', prompt: '__HOME_ACTION__:create_workflow', color: 'from-orange-500 to-orange-600' },
-      { icon: 'person_add', label: '创建 Agent', prompt: '__HOME_ACTION__:create_agent', color: 'from-indigo-500 to-indigo-600' },
-      { icon: 'play_arrow', label: '启动运行', prompt: '我想启动一个工作流运行', color: 'from-emerald-500 to-emerald-600' },
-    ],
-  },
-  {
-    title: '优化',
-    icon: 'auto_fix_high',
-    actions: [
-      { icon: 'auto_fix_high', label: '优化提示词', prompt: '帮我优化一个 Agent 的提示词', color: 'from-amber-500 to-amber-600' },
-      { icon: 'analytics', label: '分析运行', prompt: '分析最近一次运行的提示词效果', color: 'from-rose-500 to-rose-600' },
-    ],
-  },
-];
-
-const ALL_ACTIONS = CATEGORIES.flatMap(c => c.actions);
-const PINNED_ACTIONS = CATEGORIES.find((category) => category.title === '创建')?.actions.filter(
-  (action) => action.label === '创建工作流' || action.label === '创建 Agent'
-) || [];
-const COLLAPSIBLE_ACTIONS = ALL_ACTIONS.filter(
-  (action) => !PINNED_ACTIONS.some((pinned) => pinned.label === action.label)
-);
 
 const containerVariants = {
   hidden: {},
@@ -186,10 +148,15 @@ const ACTION_GUIDES: Record<string, {
 };
 
 export default function QuickActions({ onAction, skillSettings }: QuickActionsProps) {
-  const [guideAction, setGuideAction] = useState<(typeof ALL_ACTIONS)[number] | null>(null);
+  const [guideAction, setGuideAction] = useState<HomePluginQuickAction | null>(null);
   const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
+  const actionsGrouped = getActionsGrouped();
 
-  const handleActionClick = (action: (typeof ALL_ACTIONS)[number]) => {
+  const handleActionClick = (action: HomePluginQuickAction) => {
+    if (action.prompt.startsWith('__HOME_ACTION__:')) {
+      onAction(action.prompt);
+      return;
+    }
     if (ACTION_GUIDES[action.label]) {
       setGuideAction(action);
       return;
@@ -211,14 +178,14 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
         initial="hidden"
         animate="show"
       >
-        {CATEGORIES.map(cat => (
-          <div key={cat.title}>
+        {actionsGrouped.map(({ category, actions }) => (
+          <div key={category.id}>
             <div className="flex items-center gap-1.5 mb-2 px-1">
-              <span className="material-symbols-outlined text-sm text-muted-foreground">{cat.icon}</span>
-              <span className="text-xs font-medium text-muted-foreground">{cat.title}</span>
+              <span className="material-symbols-outlined text-sm text-muted-foreground">{category.icon}</span>
+              <span className="text-xs font-medium text-muted-foreground">{category.title}</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {cat.actions.map(a => (
+              {actions.map(a => (
                 <motion.button
                   key={a.label}
                   variants={itemVariants}
@@ -308,6 +275,8 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
 /** Compact horizontal bar version — shown above input when messages exist */
 export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) {
   const [expanded, setExpanded] = useState(false);
+  const pinnedActions = getPinnedActions();
+  const collapsibleActions = getCollapsibleActions();
 
   return (
     <div className="w-full">
@@ -321,7 +290,7 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
             className="overflow-hidden mb-2"
           >
             <div className="flex flex-wrap gap-1.5 pb-1">
-              {COLLAPSIBLE_ACTIONS.map(a => (
+              {collapsibleActions.map(a => (
                 <motion.button
                   key={a.label}
                   whileHover={{ scale: 1.05 }}
@@ -338,20 +307,20 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
         )}
       </AnimatePresence>
 
-      <div className="mb-2 flex flex-wrap gap-1.5">
-        {PINNED_ACTIONS.map((action) => (
-          <motion.button
+      <Suggestions className="mb-2 gap-1.5">
+        {pinnedActions.map((action) => (
+          <Suggestion
             key={action.label}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
+            suggestion={action.prompt}
             onClick={() => onAction(action.prompt)}
-            className={`inline-flex items-center gap-1.5 bg-gradient-to-r ${action.color} text-white text-[11px] font-medium px-3 py-1.5 rounded-lg border border-white/10 shadow-sm`}
+            className={`bg-gradient-to-r ${action.color} text-white text-[11px] font-medium border-white/10 shadow-sm hover:opacity-90`}
+            size="sm"
           >
             <span className="material-symbols-outlined text-xs">{action.icon}</span>
             {action.label}
-          </motion.button>
+          </Suggestion>
         ))}
-      </div>
+      </Suggestions>
       <div className="flex items-center justify-between gap-3 mb-1.5">
         <button
           onClick={() => setExpanded(e => !e)}

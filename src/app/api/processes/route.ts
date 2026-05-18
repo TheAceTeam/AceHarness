@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { processManager } from '@/lib/process-manager';
+import { processManager } from '@/lib/core/process-manager';
 
 export async function GET(request: NextRequest) {
   try {

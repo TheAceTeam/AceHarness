@@ -6,6 +6,7 @@ import React from 'react';
 
 const mockCreateSession = vi.fn(() => 'new-session-id');
 const mockDeleteSession = vi.fn();
+const mockDeleteSessions = vi.fn();
 const mockRenameSession = vi.fn();
 const mockSetActiveSessionId = vi.fn();
 const mockToggleSkill = vi.fn();
@@ -16,6 +17,7 @@ let mockSessions: any[] = [
   { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
 ];
 let mockLoading = false;
+let mockActiveStreamingSessionIds: string[] = [];
 let mockSkillSettings: Record<string, boolean> = {};
 let mockDiscoveredSkills: any[] = [];
 
@@ -27,8 +29,11 @@ vi.mock('@/contexts/ChatContext', () => ({
     setActiveSessionId: mockSetActiveSessionId,
     createSession: mockCreateSession,
     deleteSession: mockDeleteSession,
+    deleteSessions: mockDeleteSessions,
     renameSession: mockRenameSession,
     loading: mockLoading,
+    activeStreamingSessionIds: mockActiveStreamingSessionIds,
+    recentlyCompletedSessionIds: [],
     skillSettings: mockSkillSettings,
     discoveredSkills: mockDiscoveredSkills,
     toggleSkill: mockToggleSkill,
@@ -36,7 +41,7 @@ vi.mock('@/contexts/ChatContext', () => ({
   }),
 }));
 
-vi.mock('@/lib/agent-conversations', () => ({
+vi.mock('@/lib/agent/agent-conversations', () => ({
   buildWorkflowConversationDirectory: vi.fn().mockReturnValue([]),
   getConversationSessionStatusLabel: vi.fn().mockReturnValue(''),
   getCreationSessionStatusLabel: vi.fn((status?: string) => {
@@ -70,6 +75,7 @@ describe('ChatSidebar', () => {
       { id: 'sess-2', title: 'Session Two', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 3 },
     ];
     mockLoading = false;
+    mockActiveStreamingSessionIds = [];
     mockSkillSettings = {};
     mockDiscoveredSkills = [];
   });
@@ -146,16 +152,21 @@ describe('ChatSidebar', () => {
     render(<ChatSidebar />);
 
     expect(screen.getByText('Plain Chat')).toBeTruthy();
-    expect(screen.getByText('Create Workflow')).toBeTruthy();
+    expect(screen.queryByText('Create Workflow')).toBeNull();
     expect(screen.queryByText('Run Workflow')).toBeNull();
-    expect(screen.getByText('创建')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /工作流/ }));
 
-    expect(screen.getByText('Run Workflow')).toBeTruthy();
+    expect(screen.queryByText('Run Workflow')).toBeNull();
     expect(screen.queryByText('Plain Chat')).toBeNull();
-    expect(screen.queryByText('Create Workflow')).toBeNull();
-    expect(screen.getByText('运行')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /非运行中/ }));
+    expect(screen.getByText('Draft Workflow')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
+    expect(screen.getByText('工作流设计')).toBeTruthy();
+
+    expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
+    expect(screen.getByText('运行会话')).toBeTruthy();
   });
 
   test('filters sessions within each tab', async () => {
@@ -212,35 +223,74 @@ describe('ChatSidebar', () => {
 
     expect(screen.queryByLabelText('选择 Session One')).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: '对话管理' }));
+    await user.click(screen.getByRole('button', { name: '批量管理' }));
     await user.click(screen.getByLabelText('选择 Session One'));
     await user.click(screen.getByLabelText('选择 Session Two'));
     await user.click(screen.getByRole('button', { name: /删除/ }));
 
     expect(screen.getByText('将删除选中的 2 个对话，删除后无法恢复。')).toBeTruthy();
-    expect(mockDeleteSession).not.toHaveBeenCalled();
+    expect(mockDeleteSessions).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('button', { name: '删除' }));
 
-    expect(mockDeleteSession).toHaveBeenCalledWith('sess-1');
-    expect(mockDeleteSession).toHaveBeenCalledWith('sess-2');
+    expect(mockDeleteSessions).toHaveBeenCalledWith(['sess-1', 'sess-2']);
   });
 
   test('marks the active loading session as streaming', () => {
-    mockLoading = true;
+    mockActiveStreamingSessionIds = ['sess-1'];
 
     render(<ChatSidebar />);
 
-    expect(screen.getByText('生成中')).toBeTruthy();
+    expect(screen.getAllByText('Session One').length).toBeGreaterThan(0);
     expect(screen.getByLabelText('进行中')).toBeTruthy();
+  });
+
+  test('pins wechat-bound sessions and shows wechat indicators', () => {
+    mockSessions = [
+      {
+        id: 'normal-1',
+        title: 'Normal Session',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now() - 1000,
+        updatedAt: Date.now(),
+        messageCount: 1,
+      },
+      {
+        id: 'wechat-1',
+        title: 'WeChat Session',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now() - 2000,
+        updatedAt: Date.now() - 5000,
+        messageCount: 1,
+        sessionWorkbenchState: {
+          wechatBinding: {
+            integrationId: 'integration-1',
+            integrationName: '微信接入',
+            bindingId: 'binding-1',
+            externalConversationId: 'wechat-conversation-1',
+            bindingType: 'agent-chat',
+            targetLabel: 'WeChat Session',
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    ];
+
+    const { container } = render(<ChatSidebar />);
+
+    const titles = Array.from(container.querySelectorAll('.text-sm.font-medium.truncate'))
+      .map((node) => node.textContent)
+      .filter(Boolean);
+    expect(titles.indexOf('WeChat Session')).toBeLessThan(titles.indexOf('Normal Session'));
+    expect(screen.getByLabelText('微信绑定会话')).toBeTruthy();
+    expect(screen.getByLabelText('已置顶')).toBeTruthy();
   });
 
   test('row menu enters rename mode', async () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     expect(screen.getByDisplayValue('Session One')).toBeTruthy();
   });
@@ -249,8 +299,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
     fireEvent.mouseMove(document.body);
 
     expect(screen.getByRole('dialog')).toBeTruthy();
@@ -271,8 +320,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     const input = await screen.findByDisplayValue('Session One');
     await user.clear(input);
@@ -286,8 +334,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('重命名'));
+    await user.click(screen.getByLabelText('重命名 Session One'));
 
     const input = await screen.findByDisplayValue('Session One');
     await user.clear(input);
@@ -316,8 +363,7 @@ describe('ChatSidebar', () => {
     const user = userEvent.setup();
     render(<ChatSidebar />);
 
-    await user.click(screen.getByLabelText('更多操作 Session One'));
-    await user.click(await screen.findByText('删除'));
+    await user.click(screen.getByLabelText('删除 Session One'));
 
     expect(screen.getByText('确认删除对话')).toBeTruthy();
     expect(mockDeleteSession).not.toHaveBeenCalled();

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/auth-middleware';
-import { activateSdk, deactivateSdk } from '@/lib/cangjie-sdk-manager';
+import { requireAdmin } from '@/lib/auth/middleware';
+import { activateSdk, deactivateSdk } from '@/lib/cangjie/sdk-manager';
 
 export async function POST(request: NextRequest) {
   const auth = await requireAdmin(request);

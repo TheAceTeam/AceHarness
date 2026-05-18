@@ -1,27 +1,22 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { agentApi } from '@/lib/api';
+import { agentApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { FolderOpen, Globe } from 'lucide-react';
-import { EngineIcon } from '@/components/EngineIcon';
-import { getConcreteEngines, getEngineMeta } from '@/lib/engine-metadata';
+import { FolderOpen } from 'lucide-react';
 import AgentEditModal from '@/components/AgentEditModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import { ClipLoader } from 'react-spinners';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
-import { ModelOption } from '@/lib/models';
-import { SingleCombobox, type ComboboxOption, type ComboboxGroupDef } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { resolveAgentSelection } from '@/lib/agent-engine-selection';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Table,
@@ -31,12 +26,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  listSessionsForAgent,
-  type ChatSessionSummaryLike,
-} from '@/lib/agent-conversations';
-import { cn } from '@/lib/utils';
-import { resolveAgentAvatarSrc } from '@/lib/agent-personas';
+import { cn } from '@/lib/core/utils';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 
 interface AgentConfig {
@@ -62,7 +53,6 @@ type DisplayTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
 export default function AgentsPage() {
   const VIEW_MODE_STORAGE_KEY = 'aceharness:agents:view-mode';
-  const router = useRouter();
   const { toast } = useToast();
   useDocumentTitle('Agent 管理');
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -75,16 +65,11 @@ export default function AgentsPage() {
   const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
   const [isNewAgent, setIsNewAgent] = useState(false);
   const [showAICreateModal, setShowAICreateModal] = useState(false);
-  const [showBatchReplaceModal, setShowBatchReplaceModal] = useState(false);
-  const [fromModel, setFromModel] = useState('');
-  const [toModel, setToModel] = useState('');
-  const [batchReplacing, setBatchReplacing] = useState(false);
   const [alertMessage, setAlertMessage] = useState('');
-  const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
-  const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
-  const [viewMode, setViewMode] = useState<'gallery' | 'table'>('table');
+  const [viewMode, setViewMode] = useState<'gallery' | 'table'>('gallery');
+  const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [runtimeAgentsDir, setRuntimeAgentsDir] = useState('');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
@@ -95,8 +80,6 @@ export default function AgentsPage() {
 
   useEffect(() => {
     loadAgents();
-    loadModels();
-    loadChatSessions();
     fetch('/api/engine').then(r => r.json()).then(d => {
       if (d.engine) setGlobalEngine(d.engine);
       setGlobalDefaultModel(d.defaultModel || '');
@@ -145,16 +128,6 @@ export default function AgentsPage() {
     };
   }, []);
 
-  const loadModels = async () => {
-    try {
-      const response = await fetch('/api/models');
-      const data = await response.json();
-      setAvailableModels(data.models || []);
-    } catch (error) {
-      console.error('Failed to load models:', error);
-    }
-  };
-
   const loadAgents = async () => {
     try {
       setLoading(true);
@@ -168,15 +141,9 @@ export default function AgentsPage() {
     }
   };
 
-  const loadChatSessions = async () => {
-    try {
-      const response = await fetch('/api/chat/sessions');
-      const data = await response.json();
-      setChatSessions(data.sessions || []);
-    } catch {
-      setChatSessions([]);
-    }
-  };
+  useEffect(() => {
+    setSelectedAgentNames((prev) => prev.filter((name) => agents.some((agent) => agent.name === name)));
+  }, [agents]);
 
   const handleCreateAgent = () => {
       setEditingAgent({
@@ -241,42 +208,44 @@ export default function AgentsPage() {
     }
   };
 
-  const handleBatchReplaceModel = async () => {
-    if (!fromModel || !toModel) {
-      setAlertMessage('请选择源模型和目标模型');
+  const toggleAgentSelection = (name: string) => {
+    setSelectedAgentNames((prev) => (
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name]
+    ));
+  };
+
+  const toggleSelectAllFiltered = (checked: boolean | 'indeterminate') => {
+    if (checked) {
+      setSelectedAgentNames(filteredAgents.map((agent) => agent.name));
       return;
     }
-    // Parse composite "engine::model" values
-    const [fromEng, ...fromRest] = fromModel.split('::');
-    const fromMod = fromRest.join('::');
-    const [toEng, ...toRest] = toModel.split('::');
-    const toMod = toRest.join('::');
+    setSelectedAgentNames([]);
+  };
 
-    if (fromEng === toEng && fromMod === toMod) {
-      setAlertMessage('源模型和目标模型不能相同');
+  const toggleSelectAllFilteredByContainer = () => {
+    toggleSelectAllFiltered(allFilteredSelected ? false : true);
+  };
+
+  const handleBatchDeleteAgents = async () => {
+    if (selectedAgentNames.length === 0) {
+      toast('warning', '请先选择要删除的 Agent');
       return;
     }
     const confirmed = await confirm({
-      title: '确认批量替换',
-      description: `确定要将引擎 "${fromEng || '跟随全局'}" 下使用 "${fromMod}" 的 Agent 替换为 "${toEng || '跟随全局'}" 的 "${toMod}" 吗？`,
-      confirmLabel: '确认替换',
+      title: '确认批量删除',
+      description: `确定要删除这 ${selectedAgentNames.length} 个 Agent 吗？`,
+      confirmLabel: '批量删除',
       cancelLabel: '取消',
-      variant: 'default',
+      variant: 'destructive',
     });
     if (!confirmed) return;
-
-    setBatchReplacing(true);
     try {
-      const result = await agentApi.batchReplaceModel(fromEng, fromMod, toMod);
-      setAlertMessage(result.message);
+      const result = await agentApi.batchDeleteAgents(selectedAgentNames);
+      setSelectedAgentNames([]);
       await loadAgents();
-      setShowBatchReplaceModal(false);
-      setFromModel('');
-      setToModel('');
+      toast('success', result.message || `已删除 ${result.updatedCount} 个 Agent`);
     } catch (error: any) {
-      setAlertMessage('批量替换失败: ' + error.message);
-    } finally {
-      setBatchReplacing(false);
+      toast('error', error.message || '批量删除 Agent 失败');
     }
   };
 
@@ -295,67 +264,6 @@ export default function AgentsPage() {
     if (firstTag === 'C++' || firstTag === '编译器' || firstTag === 'LLVM') return 'compiler';
     return 'common';
   };
-
-  // Get all unique models (from engineModels values)
-  const allModels = Array.from(new Set(agents.flatMap(a => Object.values(a.engineModels || {})).filter(Boolean)));
-
-  const ALL_ENGINES = [
-    {
-      id: '',
-      name: '跟随全局',
-      icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
-    },
-    ...getConcreteEngines().map((engine) => ({
-      id: engine.id,
-      name: engine.name,
-      icon: <EngineIcon engineId={engine.id} className="h-4 w-4" />,
-    })),
-  ];
-
-  // Source: only engine::model combos that actually exist in agents
-  const batchSourceGroups: ComboboxGroupDef[] = (() => {
-    // Collect all existing engine::model pairs from agents
-    const existing = new Map<string, Set<string>>();
-    for (const a of agents) {
-      for (const [eng, mod] of Object.entries(a.engineModels || {})) {
-        if (!mod) continue;
-        if (!existing.has(eng)) existing.set(eng, new Set());
-        existing.get(eng)!.add(mod);
-      }
-    }
-    return ALL_ENGINES
-      .filter(eng => existing.has(eng.id))
-      .map(eng => ({
-        label: eng.name,
-        icon: eng.icon,
-        items: Array.from(existing.get(eng.id)!).map(mod => {
-          const label = availableModels.find(m => m.value === mod)?.label || mod;
-          return { value: `${eng.id}::${mod}`, label, icon: eng.icon };
-        }),
-      }))
-      .filter(g => g.items.length > 0);
-  })();
-
-  // Target: filter by effective engine (follow-global uses globalEngine)
-  const batchTargetGroups: ComboboxGroupDef[] = (() => {
-    if (!fromModel) return [];
-    const [srcEng] = fromModel.split('::');
-    const effectiveEng = srcEng || globalEngine;
-    const eng = ALL_ENGINES.find(e => e.id === srcEng) || ALL_ENGINES[0];
-    const engineModels = availableModels.filter(
-      m => !m.engines || m.engines.length === 0 || m.engines.includes(effectiveEng),
-    );
-    if (engineModels.length === 0) return [];
-    return [{
-      label: eng.name,
-      icon: eng.icon,
-      items: engineModels.map(m => ({
-        value: `${srcEng}::${m.value}`,
-        label: m.label,
-        icon: eng.icon,
-      })),
-    }];
-  })();
 
   const normalizeTeam = (team: AgentConfig['team']): DisplayTeam => team as DisplayTeam;
 
@@ -380,7 +288,7 @@ export default function AgentsPage() {
   });
 
   // Group agents by team
-  const TEAM_ORDER: DisplayTeam[] = ['black-gold', 'blue', 'red', 'judge'];
+  const TEAM_ORDER: DisplayTeam[] = ['black-gold', 'red', 'blue', 'judge'];
   const groupedAgents = Object.fromEntries(
     TEAM_ORDER.map((team) => [team, filteredAgents.filter((agent) => normalizeTeam(agent.team) === team)])
   ) as Record<DisplayTeam, AgentConfig[]>;
@@ -404,20 +312,21 @@ export default function AgentsPage() {
     judge: '裁定席',
   };
   const teamDescriptions: Record<string, string> = {
-    'black-gold': '统筹、评估、给出阶段指导',
-    blue: '攻击、挑战、寻找风险与反例',
-    red: '实施、防守、稳定推进主任务',
-    judge: '裁定、复核、形成结论与分歧意见',
+    'black-gold': 'Supervisor，统筹推进、评估与阶段指挥',
+    blue: '攻击方，负责挑战、压测和寻找风险',
+    red: '防守方，负责实现、修复与稳定推进',
+    judge: '裁判席，负责裁定、复核与形成结论',
   };
   const teamPanelClass: Record<DisplayTeam, string> = {
-    'black-gold': 'border-amber-300/20 bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.1),_transparent_45%),linear-gradient(180deg,rgba(24,24,27,0.82),rgba(10,10,10,0.64))]',
-    blue: 'border-sky-400/20 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.1),_transparent_45%),linear-gradient(180deg,rgba(15,23,42,0.82),rgba(15,23,42,0.64))]',
-    red: 'border-rose-400/20 bg-[radial-gradient(circle_at_top,_rgba(251,113,133,0.1),_transparent_45%),linear-gradient(180deg,rgba(69,10,10,0.82),rgba(39,17,28,0.64))]',
-    judge: 'border-stone-300/20 bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.08),_transparent_45%),linear-gradient(180deg,rgba(30,41,59,0.84),rgba(15,23,42,0.64))]',
+    'black-gold': 'border-amber-500/25 bg-[linear-gradient(180deg,rgba(245,158,11,0.06),rgba(245,158,11,0.02))]',
+    blue: 'border-sky-500/25 bg-[linear-gradient(180deg,rgba(14,165,233,0.06),rgba(14,165,233,0.02))]',
+    red: 'border-rose-500/25 bg-[linear-gradient(180deg,rgba(244,63,94,0.06),rgba(244,63,94,0.02))]',
+    judge: 'border-yellow-500/25 bg-[linear-gradient(180deg,rgba(234,179,8,0.06),rgba(234,179,8,0.02))]',
   };
   const groupLabels: Record<string, string> = { all: '全部', common: '通用', compiler: '编译器', openharmony: '仓颉' };
-  const chatReadyAgents = agents.filter((agent) => agent.alwaysAvailableForChat);
   const supervisorAgents = agents.filter((agent) => agent.roleType === 'supervisor');
+  const allFilteredSelected = filteredAgents.length > 0 && filteredAgents.every((agent) => selectedAgentNames.includes(agent.name));
+  const hasPartialFilteredSelection = filteredAgents.some((agent) => selectedAgentNames.includes(agent.name));
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
@@ -425,44 +334,8 @@ export default function AgentsPage() {
     );
   };
 
-  const openHomepageChatForAgent = (agent: AgentConfig) => {
-    const params = new URLSearchParams({
-      sidebarTab: 'agent',
-      sessionTitle: `${agent.name} 对话`,
-      agentName: agent.name,
-      agentTeam: agent.team,
-      agentRoleType: agent.roleType || 'normal',
-    });
-    router.push(`/?${params.toString()}`);
-  };
-
-  const continueBoundSessionForAgent = (agent: AgentConfig) => {
-    const target = listSessionsForAgent(chatSessions, agent.name)[0];
-    if (!target) {
-      openHomepageChatForAgent(agent);
-      return;
-    }
-    const params = new URLSearchParams({
-      sessionId: target.id,
-      sidebarTab: agent.roleType === 'supervisor' ? 'commander' : 'agent',
-    });
-    router.push(`/?${params.toString()}`);
-  };
-
   const getAgentRuntimeMeta = (agent: AgentConfig) => {
-    const relatedSessions = listSessionsForAgent(chatSessions, agent.name);
-    const latestSession = relatedSessions[0];
-    const resolved = resolveAgentSelection(agent as any, {
-      engine: globalEngine,
-      defaultModel: globalDefaultModel,
-    });
-    const engineLabel = resolved.effectiveEngine
-      ? (getEngineMeta(resolved.effectiveEngine)?.name || resolved.effectiveEngine)
-      : '未配置';
     return {
-      latestSession,
-      resolved,
-      engineLabel,
       avatarSrc: resolveAgentAvatarSrc(agent.avatar, agent.name, {
         team: agent.team,
         roleType: agent.roleType || 'normal',
@@ -471,7 +344,7 @@ export default function AgentsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(251,191,36,0.08),_transparent_25%),radial-gradient(circle_at_20%_20%,_rgba(59,130,246,0.1),_transparent_30%),radial-gradient(circle_at_80%_10%,_rgba(244,63,94,0.08),_transparent_28%),linear-gradient(180deg,hsl(var(--background)),hsl(var(--background)))]">
+    <div className="min-h-screen bg-background">
       {runtimeAgentsDir ? (
         <WorkspaceEditor
           open={workspaceOpen}
@@ -596,24 +469,13 @@ export default function AgentsPage() {
                   type="button"
                   variant="ghost"
                   className="h-auto min-h-[124px] whitespace-normal rounded-[24px] border border-border/60 bg-muted/30 p-4 text-left hover:bg-muted/60 hover:text-foreground"
-                  onClick={() => router.push('/?sidebarTab=agent&starterAction=create_agent&sessionTitle=Agent%20%E8%A7%84%E5%88%92')}
+                  onClick={() => setWorkspaceOpen(true)}
+                  disabled={!runtimeAgentsDir}
                 >
                   <div className="w-full break-words">
-                    <div className="text-sm font-medium">首页先规划</div>
-                    <div className="mt-2 text-xs leading-6 text-muted-foreground">回到首页按对话方式先收敛需求，再回这里落地成角色。</div>
+                    <div className="text-sm font-medium">查看运行目录</div>
+                    <div className="mt-2 text-xs leading-6 text-muted-foreground">直接检查 runtime agents 文件结构和落地结果。</div>
                   </div>
-                </Button>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>工具操作后置处理：</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 rounded-full px-3 text-xs"
-                  onClick={() => setShowBatchReplaceModal(true)}
-                >
-                  <span className="material-symbols-outlined mr-1 text-sm">swap_horiz</span>
-                  批量替换模型
                 </Button>
               </div>
             </div>
@@ -622,15 +484,15 @@ export default function AgentsPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold">编队总览</div>
-                  <div className="mt-1 text-xs text-muted-foreground">当前大厅中最常被调起的常驻角色与席位分布。</div>
+                  <div className="mt-1 text-xs text-muted-foreground">当前大厅中的角色数量、席位分布与管理视图概览。</div>
                 </div>
-                <Badge variant="secondary">{chatReadyAgents.length + supervisorAgents.length}</Badge>
+                <Badge variant="secondary">{agents.length}</Badge>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <div className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/5 p-4">
-                  <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-600">常驻对话</div>
-                  <div className="mt-2 text-2xl font-semibold">{chatReadyAgents.length}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">适合首页长期协作与反复追问</div>
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-600">可管理角色</div>
+                  <div className="mt-2 text-2xl font-semibold">{filteredAgents.length}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">当前筛选结果可直接编辑、删除或批量整理</div>
                 </div>
                 <div className="rounded-[24px] border border-amber-500/20 bg-amber-500/5 p-4">
                   <div className="text-[11px] uppercase tracking-[0.18em] text-amber-600">Supervisor</div>
@@ -646,15 +508,6 @@ export default function AgentsPage() {
                   </div>
                 ))}
               </div>
-              {chatReadyAgents.length > 0 && (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {chatReadyAgents.slice(0, 5).map((agent) => (
-                    <Button key={agent.name} size="sm" variant="outline" onClick={() => openHomepageChatForAgent(agent)}>
-                      {agent.name}
-                    </Button>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         </section>
@@ -776,7 +629,7 @@ export default function AgentsPage() {
           </div>
         </section>
 
-        <section className="flex-1 pb-10">
+        <section className="flex-1 pb-28">
           <div className="space-y-10">
             {loading ? (
               <div className="flex items-center justify-center h-64">
@@ -789,12 +642,10 @@ export default function AgentsPage() {
               </div>
             ) : (
               viewMode === 'gallery' ? (
-                <div className="space-y-10">
+                <div className="space-y-8">
                   {TEAM_ORDER.map(team => (
                     groupedAgents[team].length > 0 && (
-                      <div key={team} className={cn('relative overflow-hidden rounded-[30px] border p-5 shadow-sm backdrop-blur', teamPanelClass[team])}>
-                        <div className="absolute -right-16 top-0 h-44 w-44 rounded-full bg-white/5 blur-3xl" />
-                        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),transparent_20%,transparent_75%,rgba(255,255,255,0.02))]" />
+                      <div key={team} className={cn('relative overflow-hidden rounded-xl border p-4 shadow-sm', teamPanelClass[team])}>
                         <div className="relative flex flex-wrap items-end justify-between gap-3">
                           <div>
                             <div className="flex items-center gap-3">
@@ -808,54 +659,50 @@ export default function AgentsPage() {
                               <h2 className="text-2xl font-semibold">{teamLabels[team]}</h2>
                               <span className="text-sm text-muted-foreground">({groupedAgents[team].length})</span>
                             </div>
-                            <p className="mt-1 text-sm text-white/70">{teamDescriptions[team]}</p>
+                            <p className="mt-1 text-sm text-muted-foreground">{teamDescriptions[team]}</p>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
+                            <Badge variant="outline" className="px-3 py-1 text-xs">
                               阵营名册
                             </Badge>
-                            <Badge variant="outline" className="border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
+                            <Badge variant="outline" className="px-3 py-1 text-xs">
                               {groupedAgents[team].length} 名角色
                             </Badge>
                           </div>
                         </div>
-                        <div className="relative mt-5 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(280px,1fr))]">
+                        <div className="relative mt-4 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))]">
                           {groupedAgents[team].map(agent => {
-                            const { latestSession, resolved, engineLabel } = getAgentRuntimeMeta(agent);
+                            const isSelected = selectedAgentNames.includes(agent.name);
                             return (
                               <div
                                 key={agent.name}
                                 className="group relative min-w-0"
                               >
+                                <div className="absolute right-3 top-3 z-20 rounded-md border border-border bg-background/95 p-1.5 shadow-[0_2px_10px_rgba(0,0,0,0.25)] opacity-40 group-hover:opacity-100 transition-opacity duration-200 hover:opacity-100">
+                                  <Checkbox
+                                    checked={isSelected}
+                                    onCheckedChange={() => toggleAgentSelection(agent.name)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    aria-label={isSelected ? `取消选择 Agent ${agent.name}` : `选择 Agent ${agent.name}`}
+                                    className="h-4 w-4 rounded-[4px]"
+                                  />
+                                </div>
                                 <AgentHeroCard
                                   agent={agent as any}
                                   className="h-full"
+                                  selected={isSelected}
                                   meta={
                                     <div className="space-y-1">
-                                      <div className="truncate">{engineLabel} / {resolved.effectiveModel || '未配置模型'}{agent.temperature !== undefined ? ` / temp ${agent.temperature}` : ''}</div>
-                                      {latestSession?.workflowBinding ? (
-                                        <div className="truncate text-white/45">
-                                          Run {latestSession.workflowBinding.runId} · {latestSession.workflowBinding.configFile}
-                                        </div>
-                                      ) : null}
+                                      <div className="truncate">{agent.temperature !== undefined ? `温度 ${agent.temperature}` : '默认温度'}</div>
+                                      <div className="truncate text-muted-foreground">{agent.category || '未分类'} · {(agent.tags || []).length} 个标签</div>
                                     </div>
                                   }
                                   actions={
                                     <>
-                                      <Button size="sm" variant="outline" className="h-8 rounded-full border-white/15 bg-white/5 px-3 text-white hover:bg-white/10 hover:text-white" onClick={() => openHomepageChatForAgent(agent)}>
-                                        <span className="material-symbols-outlined text-sm mr-1">chat</span>
-                                        首页对话
-                                      </Button>
-                                      {latestSession ? (
-                                        <Button size="sm" variant="outline" className="h-8 rounded-full border-white/15 bg-white/5 px-3 text-white hover:bg-white/10 hover:text-white" onClick={() => continueBoundSessionForAgent(agent)}>
-                                          <span className="material-symbols-outlined text-sm mr-1">history</span>
-                                          最近会话
-                                        </Button>
-                                      ) : null}
                                       <Button
                                         size="sm"
                                         variant="secondary"
-                                        className="h-8 rounded-full bg-white/10 px-3 text-white hover:bg-white/15"
+                                        className="h-7 rounded-full border border-border/60 bg-background px-2.5 text-[11px] text-foreground hover:bg-muted"
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           handleEditAgent(agent);
@@ -867,7 +714,7 @@ export default function AgentsPage() {
                                       <Button
                                         size="sm"
                                         variant="secondary"
-                                        className="h-8 rounded-full bg-white/10 px-3 text-white hover:bg-white/15"
+                                        className="h-7 rounded-full border border-border/60 bg-background px-2.5 text-[11px] text-foreground hover:bg-muted"
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           handleDeleteAgent(agent.name);
@@ -892,20 +739,31 @@ export default function AgentsPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                            onCheckedChange={toggleSelectAllFiltered}
+                          />
+                        </TableHead>
                         <TableHead>角色</TableHead>
                         <TableHead>阵营</TableHead>
                         <TableHead>分类</TableHead>
-                        <TableHead>模型</TableHead>
+                        <TableHead>温度</TableHead>
                         <TableHead>标签</TableHead>
-                        <TableHead>会话</TableHead>
                         <TableHead className="text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {filteredAgents.map((agent) => {
-                        const { latestSession, resolved, engineLabel, avatarSrc } = getAgentRuntimeMeta(agent);
+                        const { avatarSrc } = getAgentRuntimeMeta(agent);
                         return (
                           <TableRow key={agent.name}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedAgentNames.includes(agent.name)}
+                                onCheckedChange={() => toggleAgentSelection(agent.name)}
+                              />
+                            </TableCell>
                             <TableCell className="min-w-[220px]">
                               <div className="flex items-center gap-3">
                                 <Avatar className="h-11 w-11 ring-1 ring-border/60">
@@ -918,19 +776,15 @@ export default function AgentsPage() {
                                     {agent.roleType === 'supervisor' ? (
                                       <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-200">Supervisor</Badge>
                                     ) : null}
-                                    {agent.alwaysAvailableForChat ? (
-                                      <Badge className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">常驻对话</Badge>
-                                    ) : null}
                                   </div>
                                 </div>
                               </div>
                             </TableCell>
                             <TableCell>{teamLabels[agent.team]}</TableCell>
                             <TableCell>{agent.category || '未分类'}</TableCell>
-                            <TableCell className="min-w-[240px]">
-                              <div className="truncate">{engineLabel} / {resolved.effectiveModel || '未配置模型'}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {agent.temperature !== undefined ? `temp ${agent.temperature}` : '默认温度'}
+                            <TableCell className="min-w-[120px]">
+                              <div className="text-sm">
+                                {agent.temperature !== undefined ? agent.temperature : '默认'}
                               </div>
                             </TableCell>
                             <TableCell className="min-w-[220px]">
@@ -943,28 +797,8 @@ export default function AgentsPage() {
                                 ) : null}
                               </div>
                             </TableCell>
-                            <TableCell className="min-w-[180px]">
-                              {latestSession ? (
-                                <div>
-                                  <div className="font-medium">已有会话</div>
-                                  <div className="truncate text-xs text-muted-foreground">
-                                    {latestSession.workflowBinding ? `Run ${latestSession.workflowBinding.runId}` : '独立会话'}
-                                  </div>
-                                </div>
-                              ) : (
-                                <span className="text-sm text-muted-foreground">未开始</span>
-                              )}
-                            </TableCell>
                             <TableCell>
                               <div className="flex justify-end gap-2">
-                                <Button size="sm" variant="outline" onClick={() => openHomepageChatForAgent(agent)}>
-                                  对话
-                                </Button>
-                                {latestSession ? (
-                                  <Button size="sm" variant="outline" onClick={() => continueBoundSessionForAgent(agent)}>
-                                    会话
-                                  </Button>
-                                ) : null}
                                 <Button size="sm" variant="secondary" onClick={() => handleEditAgent(agent)}>
                                   编辑
                                 </Button>
@@ -983,6 +817,47 @@ export default function AgentsPage() {
             )}
           </div>
         </section>
+
+        {filteredAgents.length > 0 ? (
+          <div className="pointer-events-none fixed bottom-6 left-1/2 z-40 w-full max-w-fit -translate-x-1/2 px-4">
+            <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-full border border-border/70 bg-background/95 px-3 py-3 shadow-[0_12px_32px_rgba(15,23,42,0.18)] backdrop-blur">
+              <div
+                className="flex items-center rounded-full border border-border/70 bg-background px-4 py-2 text-sm shadow-sm"
+                role="button"
+                tabIndex={0}
+                onClick={toggleSelectAllFilteredByContainer}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    toggleSelectAllFilteredByContainer();
+                  }
+                }}
+              >
+                <Checkbox
+                  checked={allFilteredSelected ? true : hasPartialFilteredSelection ? 'indeterminate' : false}
+                  onCheckedChange={toggleSelectAllFiltered}
+                  className="mr-2 h-4 w-4 border-border bg-background"
+                  aria-label={allFilteredSelected ? '取消全选' : '选择全部'}
+                />
+                {allFilteredSelected ? '取消全选' : '选择全部'}
+              </div>
+              <div className="px-3 text-sm font-medium text-foreground/80">
+                已选 {selectedAgentNames.length} 项
+              </div>
+              {selectedAgentNames.length > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-full px-4 text-destructive hover:text-destructive"
+                  onClick={handleBatchDeleteAgents}
+                >
+                  <span className="material-symbols-outlined mr-2 text-base">delete</span>
+                  批量删除
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {editingAgent && (
@@ -1013,56 +888,6 @@ export default function AgentsPage() {
         onContinueEdit={handleContinueEditAIAgent}
       />
 
-      {showBatchReplaceModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={() => setShowBatchReplaceModal(false)}>
-          <div className="bg-card rounded-lg w-[500px] max-w-[90%] border" onClick={(e) => e.stopPropagation()}>
-            <div className="p-5 border-b">
-              <h3 className="text-lg font-semibold">批量替换模型</h3>
-            </div>
-            <div className="p-5 space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">源（引擎 + 模型）</label>
-                <SingleCombobox
-                  value={fromModel}
-                  onValueChange={(v) => { setFromModel(v); setToModel(''); }}
-                  groups={batchSourceGroups}
-                  placeholder="选择当前使用的引擎和模型"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium mb-2 block">替换为</label>
-                <SingleCombobox
-                  value={toModel}
-                  onValueChange={setToModel}
-                  groups={batchTargetGroups}
-                  placeholder={fromModel ? "选择目标模型" : "请先选择源模型"}
-                />
-              </div>
-              {fromModel && toModel && (() => {
-                const [fEng] = fromModel.split('::');
-                const fMod = fromModel.split('::').slice(1).join('::');
-                const tMod = toModel.split('::').slice(1).join('::');
-                const fEngName = ALL_ENGINES.find(e => e.id === fEng)?.name || fEng || '跟随全局';
-                const affected = agents.filter(a => a.engineModels?.[fEng] === fMod).length;
-                return (
-                  <div className="text-sm text-muted-foreground">
-                    将引擎 "{fEngName}" 下使用 "{fMod}" 的 Agent 模型替换为 "{tMod}"（影响 {affected} 个 Agent）
-                  </div>
-                );
-              })()}
-            </div>
-            <div className="p-5 border-t flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowBatchReplaceModal(false)} disabled={batchReplacing}>
-                取消
-              </Button>
-              <Button onClick={handleBatchReplaceModel} disabled={batchReplacing}>
-                {batchReplacing ? '替换中...' : '确认替换'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {dialogProps && <ConfirmDialog {...dialogProps} />}
 
       {alertMessage && (
@@ -1080,3 +905,4 @@ export default function AgentsPage() {
     </div>
   );
 }
+

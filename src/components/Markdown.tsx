@@ -4,13 +4,17 @@ import { Children, isValidElement, useMemo, useState, useCallback, useEffect, us
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
-import { Light as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+import { CodeBlock as AICodeBlock } from '@/components/ai-elements/code-block';
+import type { BundledLanguage } from 'shiki';
+import {
+  ChainOfThought,
+  ChainOfThoughtHeader,
+  ChainOfThoughtContent,
+} from '@/components/ai-elements/chain-of-thought';
 import { useToast } from '@/components/ui/toast';
-import { workspaceApi } from '@/lib/api';
-import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook-markdown';
-import { copyText } from '@/lib/clipboard';
+import { workspaceApi } from '@/lib/core/api';
+import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook/markdown';
+import { copyText } from '@/lib/core/clipboard';
 import { AnsiLogBlock } from '@/components/AnsiLogBlock';
 import { Button } from '@/components/ui/button';
 import styles from './Markdown.module.css';
@@ -120,9 +124,6 @@ const verdictConfig: Record<string, { icon: string; label: string; color: string
   fail: { icon: 'cancel', label: '未通过', color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/30' },
 };
 
-let basicHljsLanguagesRegistered = false;
-let cangjieLanguageRegistered = false;
-let highlightReady = false;
 let mermaidInitialized = false;
 
 function VerdictCard({ data }: { data: { verdict: string; remaining_issues?: number; summary?: string } }) {
@@ -162,42 +163,9 @@ function normalizeFenceLanguage(className?: string) {
 }
 
 function renderHighlightedCode(code: string, language: string) {
-  const normalizedLanguage = normalizeLanguage(language);
-
-  if (shouldUseSyntaxHighlighter(normalizedLanguage)) {
-    return (
-      <SyntaxHighlighter
-        language={normalizedLanguage}
-        style={atomOneDark}
-        customStyle={{
-          margin: 0,
-          background: '#282c34',
-          color: '#e2e8f0',
-          borderRadius: '0.375rem',
-          padding: '1rem',
-          fontSize: '13px',
-          lineHeight: '1.5rem',
-          overflowX: 'auto',
-        }}
-        codeTagProps={{
-          style: {
-            fontFamily: 'inherit',
-            color: '#e2e8f0',
-          },
-        }}
-        useInlineStyles
-        wrapLongLines={false}
-        PreTag="pre"
-      >
-        {code}
-      </SyntaxHighlighter>
-    );
-  }
-
+  const normalized = normalizeLanguage(language);
   return (
-    <pre className="!mt-0 overflow-x-auto rounded-md bg-[#282c34] p-4 text-[13px] leading-6 text-slate-100">
-      <code>{code}</code>
-    </pre>
+    <AICodeBlock code={code} language={normalized as BundledLanguage} />
   );
 }
 
@@ -228,7 +196,7 @@ function renderMarkdownFragment(content: string) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
-      rehypePlugins={[rehypeRaw, rehypeSanitize, rehypePreserveUnknownHtmlAsText]}
+      rehypePlugins={[rehypeRaw, rehypePreserveUnknownHtmlAsText]}
       components={components}
     >
       {preprocessMarkdown(content)}
@@ -237,16 +205,10 @@ function renderMarkdownFragment(content: string) {
 }
 
 function normalizeLanguage(language: string) {
-  if (language === 'cangjie') return cangjieLanguageRegistered ? 'cangjie' : 'text';
-  if (language === 'shell') return 'bash';
-  if (language === 'plaintext') return 'text';
+  if (language === 'cangjie' || language === 'cj') return 'text';
   return language || 'text';
 }
 
-function shouldUseSyntaxHighlighter(language: string) {
-  if (!highlightReady) return false;
-  return ['cangjie', 'javascript', 'js', 'typescript', 'ts', 'json', 'html', 'xml', 'bash', 'shell', 'yaml', 'yml', 'markdown', 'md', 'python', 'py', 'java', 'cpp', 'c', 'sql'].includes(language);
-}
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
   return renderHighlightedCode(code, language);
@@ -437,6 +399,38 @@ function RunnableCodeBlock({ code, language }: { code: string; language: string 
   );
 }
 
+function MarkdownDetails({ node, children, ...props }: any) {
+  const [open, setOpen] = useState(Boolean(props.open));
+
+  if (node?.properties?.[NOTEBOOK_OUTPUT_ATTR] === 'true') {
+    return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
+  }
+
+  const parts = Children.toArray(children);
+  const summaryNode = parts.find(isSummaryElement) || null;
+  const bodyText = parts
+    .filter((child) => child !== summaryNode && typeof child === 'string')
+    .join('')
+    .trim();
+  const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
+
+  return (
+    <details
+      className="my-2 overflow-hidden rounded-md border border-border/50 bg-muted/20"
+      {...props}
+      onToggle={(event: any) => {
+        setOpen(Boolean(event.currentTarget?.open));
+        props.onToggle?.(event);
+      }}
+    >
+      {summaryNode}
+      {(bodyText || bodyNodes.length > 0) ? (
+        <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
+      ) : null}
+    </details>
+  );
+}
+
 const components = {
   code({ className, children, ...props }: any) {
     const language = normalizeFenceLanguage(className);
@@ -513,35 +507,8 @@ const components = {
       </a>
     );
   },
-  details({ node, children, ...props }: any) {
-    if (node?.properties?.[NOTEBOOK_OUTPUT_ATTR] === 'true') {
-      return <NotebookOutputDetails node={node} {...props}>{children}</NotebookOutputDetails>;
-    }
-
-    const [open, setOpen] = useState(Boolean(props.open));
-    const parts = Children.toArray(children);
-    const summaryNode = parts.find(isSummaryElement) || null;
-    const bodyText = parts
-      .filter((child) => child !== summaryNode && typeof child === 'string')
-      .join('')
-      .trim();
-    const bodyNodes = parts.filter((child) => child !== summaryNode && typeof child !== 'string');
-
-    return (
-      <details
-        className="my-2 overflow-hidden rounded-md border border-border/50 bg-muted/20"
-        {...props}
-        onToggle={(event: any) => {
-          setOpen(Boolean(event.currentTarget?.open));
-          props.onToggle?.(event);
-        }}
-      >
-        {summaryNode}
-        {(bodyText || bodyNodes.length > 0) ? (
-          <LazyDetailsBody bodyText={bodyText} bodyNodes={bodyNodes} open={open} />
-        ) : null}
-      </details>
-    );
+  details(props: any) {
+    return <MarkdownDetails {...props} />;
   },
   summary({ node: _node, children, ...props }: any) {
     return (
@@ -688,32 +655,56 @@ function renderTaskStatusLines(content: string): string {
   let inCodeBlock = false;
   let fenceWidth = 0;
   let fenceChar: '`' | '~' | null = null;
+  const rendered: string[] = [];
 
-  return lines.map((line) => {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     if (!inCodeBlock) {
       const fenceOpen = line.match(/^(`{3,}|~{3,})/);
       if (fenceOpen) {
         inCodeBlock = true;
         fenceWidth = fenceOpen[1].length;
         fenceChar = fenceOpen[1][0] as '`' | '~';
-        return line;
+        rendered.push(line);
+        continue;
       }
 
       const taskLine = line.match(/^(\s*)-\s+\[([ xX-])\]\s+(.+)$/);
-      if (!taskLine) return line;
+      if (!taskLine) {
+        rendered.push(line);
+        continue;
+      }
 
       const marker = taskLine[2].toLowerCase();
       const body = taskLine[3];
       const bodyWithoutComment = body.replace(/\s*<!--[\s\S]*?-->\s*$/g, '').trim();
       const escapedBody = escapeHtml(bodyWithoutComment);
+      const detailLines: string[] = [];
+
+      while (i + 1 < lines.length) {
+        const nextLine = lines[i + 1];
+        if (!nextLine.trim()) break;
+        if (/^\s*-\s+\[([ xX-])\]\s+/.test(nextLine)) break;
+        if (/^(#{1,6})\s+/.test(nextLine)) break;
+        if (/^(`{3,}|~{3,})/.test(nextLine)) break;
+        detailLines.push(nextLine.trim());
+        i += 1;
+      }
+
+      const detailBlock = detailLines.length > 0
+        ? `\n${taskLine[1]}  <div class="ace-task-details">${detailLines.map((item) => `<div class="ace-task-detail-line">${escapeHtml(item)}</div>`).join('')}</div>`
+        : '';
 
       if (marker === 'x') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>`;
+        rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--completed"><span class="ace-task-badge ace-task-badge--completed">[x] 已完成</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+        continue;
       }
       if (marker === '-') {
-        return `${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>`;
+        rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+        continue;
       }
-      return `${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>`;
+      rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+      continue;
     }
 
     const closeRe = fenceChar === '~' ? /^(~{3,})\s*$/ : /^(`{3,})\s*$/;
@@ -722,8 +713,10 @@ function renderTaskStatusLines(content: string): string {
       inCodeBlock = false;
       fenceChar = null;
     }
-    return line;
-  }).join('\n');
+    rendered.push(line);
+  }
+
+  return rendered.join('\n');
 }
 
 function stripHiddenSpecCodingComments(content: string): string {
@@ -746,90 +739,6 @@ export default function Markdown({ children }: { children?: string | null }) {
   const isLarge = contentLength > MESSAGE_LAZY_CHAR_THRESHOLD && !forceRenderLarge;
   const effectiveChildren = isLarge ? (children || '').slice(0, 2000) + '\n\n---' : children;
   const processedContent = useMemo(() => preprocessMarkdown(effectiveChildren), [effectiveChildren]);
-  const [, forceRefresh] = useState(0);
-
-  useEffect(() => {
-    if (highlightReady) return;
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const [
-          { default: javascript },
-          { default: typescript },
-          { default: json },
-          { default: xml },
-          { default: bash },
-          { default: yaml },
-          { default: markdown },
-          { default: python },
-          { default: java },
-          { default: cpp },
-          { default: sql },
-        ] = await Promise.all([
-          import('react-syntax-highlighter/dist/esm/languages/hljs/javascript'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/typescript'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/json'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/xml'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/bash'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/yaml'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/markdown'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/python'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/java'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/cpp'),
-          import('react-syntax-highlighter/dist/esm/languages/hljs/sql'),
-        ]);
-
-        if (cancelled) return;
-
-        if (!basicHljsLanguagesRegistered) {
-          SyntaxHighlighter.registerLanguage('javascript', javascript);
-          SyntaxHighlighter.registerLanguage('js', javascript);
-          SyntaxHighlighter.registerLanguage('typescript', typescript);
-          SyntaxHighlighter.registerLanguage('ts', typescript);
-          SyntaxHighlighter.registerLanguage('json', json);
-          SyntaxHighlighter.registerLanguage('html', xml);
-          SyntaxHighlighter.registerLanguage('xml', xml);
-          SyntaxHighlighter.registerLanguage('bash', bash);
-          SyntaxHighlighter.registerLanguage('shell', bash);
-          SyntaxHighlighter.registerLanguage('yaml', yaml);
-          SyntaxHighlighter.registerLanguage('yml', yaml);
-          SyntaxHighlighter.registerLanguage('markdown', markdown);
-          SyntaxHighlighter.registerLanguage('md', markdown);
-          SyntaxHighlighter.registerLanguage('python', python);
-          SyntaxHighlighter.registerLanguage('py', python);
-          SyntaxHighlighter.registerLanguage('java', java);
-          SyntaxHighlighter.registerLanguage('cpp', cpp);
-          SyntaxHighlighter.registerLanguage('c', cpp);
-          SyntaxHighlighter.registerLanguage('sql', sql);
-          basicHljsLanguagesRegistered = true;
-        }
-
-        if (!cangjieLanguageRegistered) {
-          const mod = await import('@/lib/cangjie-highlight');
-          if (cancelled) return;
-          const cangjie = mod.default || mod;
-          if (typeof cangjie === 'function') {
-            SyntaxHighlighter.registerLanguage('cangjie', cangjie);
-            SyntaxHighlighter.registerLanguage('cj', cangjie);
-            cangjieLanguageRegistered = true;
-          }
-        }
-
-        highlightReady = basicHljsLanguagesRegistered && cangjieLanguageRegistered;
-        if (!cancelled && highlightReady) {
-          forceRefresh((value) => value + 1);
-        }
-      } catch {
-        // ignore and fall back to plain text rendering
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   return (
     <div className={styles.markdownContent}>

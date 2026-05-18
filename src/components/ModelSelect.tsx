@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { ModelOption } from '@/lib/models';
+import { Globe } from 'lucide-react';
+import { ModelOption } from '@/lib/core/models';
 import { SingleCombobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useToast } from '@/components/ui/toast';
 
@@ -11,11 +12,14 @@ interface ModelSelectProps {
   className?: string;
   /** When set, only show models that include this engine in their engines list */
   engine?: string;
+  /** Show a "use global" option */
+  allowGlobal?: boolean;
 }
 
-export function ModelSelect({ value, onChange, className = '', engine }: ModelSelectProps) {
+export function ModelSelect({ value, onChange, className = '', engine, allowGlobal = false }: ModelSelectProps) {
   const [allModels, setAllModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
+  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const { toast } = useToast();
 
   useEffect(() => {
@@ -27,6 +31,29 @@ export function ModelSelect({ value, onChange, className = '', engine }: ModelSe
       })
       .catch(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!allowGlobal) return;
+    const refresh = () => {
+      fetch('/api/engine')
+        .then(res => res.json())
+        .then(data => {
+          setGlobalDefaultModel(data.defaultModel || '');
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const onEngineUpdated = () => refresh();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'engine-config-updated-at') refresh();
+    };
+    window.addEventListener('engine:updated', onEngineUpdated as EventListener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [allowGlobal]);
 
   // Filter by engine if specified; models without engines field are shown for all engines
   const models = engine
@@ -40,11 +67,27 @@ export function ModelSelect({ value, onChange, className = '', engine }: ModelSe
     : allModels;
 
   const options: ComboboxOption[] = useMemo(
-    () => models.map(m => ({ value: m.value, label: `${m.label} (${m.costMultiplier}x)` })),
-    [models],
+    () => {
+      const items: ComboboxOption[] = [];
+      if (allowGlobal) {
+        items.push({
+          value: '__global__',
+          label: globalDefaultModel ? `跟随全局 (${globalDefaultModel})` : '跟随全局',
+          icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
+        });
+      }
+      items.push(...models.map(m => ({ value: m.value, label: `${m.label} (${m.costMultiplier}x)` })));
+      return items;
+    },
+    [allowGlobal, globalDefaultModel, models],
   );
 
   const handleChange = (newValue: string) => {
+    if (allowGlobal && newValue === '__global__') {
+      onChange('');
+      toast('info', globalDefaultModel ? `模型已切换: 跟随全局 (${globalDefaultModel})` : '模型已切换: 跟随全局');
+      return;
+    }
     const selectedModel = models.find(m => m.value === newValue);
     onChange(newValue);
     if (selectedModel) {
@@ -54,7 +97,7 @@ export function ModelSelect({ value, onChange, className = '', engine }: ModelSe
 
   return (
     <SingleCombobox
-      value={value}
+      value={value || (allowGlobal ? '__global__' : '')}
       onValueChange={handleChange}
       options={options}
       placeholder="选择模型"

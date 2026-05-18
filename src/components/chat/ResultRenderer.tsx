@@ -109,7 +109,7 @@ function resultToCard(type: string, result: any): CardSchema | null {
         : [{ type: 'text' as const, content: '暂无 Agent' }],
       actions: [
         { label: '创建新 Agent', prompt: '帮我创建一个新的 Agent', icon: 'add' },
-        { label: '批量替换模型', prompt: '帮我批量替换 Agent 使用的模型', icon: 'swap_horiz' },
+        { label: '批量设置模型策略', prompt: '帮我批量设置 Agent 的模型策略', icon: 'swap_horiz' },
       ],
     };
   }

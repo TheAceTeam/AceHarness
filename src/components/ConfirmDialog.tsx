@@ -35,7 +35,7 @@ export default function ConfirmDialog({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
+          <AlertDialogDescription className="whitespace-pre-line">{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           {showCancel ? (

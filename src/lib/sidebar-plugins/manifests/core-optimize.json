@@ -1,0 +1,15 @@
+{
+  "id": "core-optimize",
+  "name": "优化功能",
+  "description": "优化提示词、分析运行效果",
+  "version": "1.0.0",
+  "enabled": true,
+  "order": 30,
+  "categories": [
+    { "id": "optimize", "title": "优化", "icon": "auto_fix_high", "order": 30 }
+  ],
+  "actions": [
+    { "id": "optimize-prompt", "label": "优化提示词", "icon": "auto_fix_high", "color": "from-amber-500 to-amber-600", "prompt": "帮我优化一个 Agent 的提示词", "category": "optimize", "order": 10 },
+    { "id": "analyze-run", "label": "分析运行", "icon": "analytics", "color": "from-rose-500 to-rose-600", "prompt": "分析最近一次运行的提示词效果", "category": "optimize", "order": 20 }
+  ]
+}

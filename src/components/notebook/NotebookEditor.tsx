@@ -4,12 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
 import { Copy, Download, History, Loader2, Save } from 'lucide-react';
-import { workspaceApi, type NotebookScope, type NotebookSnapshotSummary } from '@/lib/api';
+import { workspaceApi, type NotebookScope, type NotebookSnapshotSummary } from '@/lib/core/api';
 import { useToast } from '@/components/ui/toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { copyText } from '@/lib/clipboard';
+import { copyText } from '@/lib/core/clipboard';
 
 const RichNotebookEditor = dynamic(() => import('./RichNotebookEditor').then((mod) => mod.RichNotebookEditor), {
   ssr: false,
@@ -162,7 +162,7 @@ export function NotebookEditor({
       toast('error', message);
       return { output: message, success: false };
     }
-  }, [filePath, toast]);
+  }, [toast]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([editorContent], { type: 'text/markdown;charset=utf-8' });

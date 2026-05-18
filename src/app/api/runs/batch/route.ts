@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { deleteRun } from '@/lib/run-store';
+import { deleteRun } from '@/lib/run/store';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
-import { workflowRegistry } from '@/lib/workflow-registry';
+import { workflowRegistry } from '@/lib/workflow/registry';
 
 const RUNS_DIR = resolve(process.cwd(), 'runs');
 

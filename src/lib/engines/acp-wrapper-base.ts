@@ -7,10 +7,28 @@
  */
 
 import { EventEmitter } from 'events';
-import { ACPEngine, ACPEngineConfig } from './acp-engine';
+import { ACPEngine, logAcpTiming } from './acp-engine';
+import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { htmlCodeBlock, formatLargeContent, formatTextContent } from '../markdown-utils';
+import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
+
+function numberOrZero(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function metadataFromAcpUsage(usage: any): EngineResultMetadata {
+  return {
+    ...ZERO_USAGE_METADATA,
+    usage: {
+      input_tokens: numberOrZero(usage?.inputTokens ?? usage?.input_tokens),
+      output_tokens: numberOrZero(usage?.outputTokens ?? usage?.output_tokens),
+      cache_creation_input_tokens: numberOrZero(usage?.cachedWriteTokens ?? usage?.cache_creation_input_tokens),
+      cache_read_input_tokens: numberOrZero(usage?.cachedReadTokens ?? usage?.cache_read_input_tokens),
+    },
+  };
+}
 
 const ZERO_USAGE_METADATA: EngineResultMetadata = {
   usage: {
@@ -32,13 +50,15 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected seenToolIds = new Set<string>();
   protected streaming = false;
   protected collectedOutput = '';
-  protected skipRuntimeModelSwitch = false;
+  protected currentModelId: string | null = null;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
   abstract isAvailable(): Promise<boolean>;
 
   async execute(options: EngineOptions): Promise<EngineResult> {
+    const timingLabel = this.getName();
+    const tExecute = Date.now();
     try {
       this.seenToolIds.clear();
       this.lastBlockWasTool = false;
@@ -47,20 +67,36 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       // Reuse existing engine if resuming a session, otherwise create new
       const canReuse = options.sessionId && this.engine && this.currentSessionId === options.sessionId;
       if (!canReuse) {
+        const tStop = Date.now();
         // Stop previous engine if any
         if (this.engine) {
           try { await this.engine.stop(); } catch {}
         }
+        this.currentModelId = null;
+        logAcpTiming(timingLabel, 'wrap.W0_stop_previous_engine', tStop);
+
+        const tStart = Date.now();
         await this.startNewEngine(options);
+        logAcpTiming(timingLabel, 'wrap.W1_startNewEngine_acp.start', tStart);
         const startedEngine = this.engine;
         if (!startedEngine) {
           throw new Error(`[${this.getName()}] engine not initialized`);
         }
 
+        const tSess = Date.now();
         if (options.sessionId) {
           this.currentSessionId = await startedEngine.resumeSession(options.sessionId);
+          logAcpTiming(timingLabel, 'wrap.W2_resumeSession', tSess);
         } else {
           this.currentSessionId = await startedEngine.createSession();
+          logAcpTiming(timingLabel, 'wrap.W2_createSession', tSess);
+        }
+        this.currentModelId = null;
+        if (this.currentSessionId) {
+          this.emit('stream', {
+            type: 'session',
+            content: this.currentSessionId,
+          } as EngineStreamEvent);
         }
       }
 
@@ -69,10 +105,13 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-      if (options.model && !this.skipRuntimeModelSwitch) {
+if (options.model && this.currentModelId !== options.model) {
+        const tModel = Date.now();
         try {
           // magic-cli doesn't support runtime model switching via ACP, so skip this step for it.
           await engine.setModel(options.model);
+          this.currentModelId = options.model;
+          logAcpTiming(timingLabel, 'wrap.W3_setModel', tModel);
         } catch (modelErr: any) {
           // Emit the error to the stream so the user sees available models in the UI
           this.emit('stream', {
@@ -100,7 +139,11 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         }
       }
       console.log(`[${this.getName()}] calling sendPrompt...`);
-      const stopReason = await engine.sendPrompt(fullPrompt);
+      const tPrompt = Date.now();
+      const promptResult = await engine.sendPrompt(fullPrompt);
+      logAcpTiming(timingLabel, 'wrap.W4_sendPrompt_includes_agent', tPrompt);
+      logAcpTiming(timingLabel, 'wrap.W_execute_total', tExecute, `canReuse=${canReuse}`);
+      const stopReason = promptResult.stopReason;
       console.log(`[${this.getName()}] sendPrompt returned: stopReason=${stopReason}`);
       this.streaming = false;
 
@@ -112,10 +155,11 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         output: normalizeEngineOutput(this.collectedOutput),
         sessionId: this.currentSessionId ?? undefined,
         stopReason,
-        metadata: ZERO_USAGE_METADATA
+        metadata: promptResult.usage ? metadataFromAcpUsage(promptResult.usage) : ZERO_USAGE_METADATA
       };
     } catch (error) {
       this.streaming = false;
+      logAcpTiming(timingLabel, 'wrap.W_execute_total_failed', tExecute);
       const errorMessage = error instanceof Error ? error.message : String(error);
       const normalizedOutput = normalizeEngineOutput(this.collectedOutput);
       const hasUsableOutput = normalizedOutput.length > 0;
@@ -147,6 +191,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       this.engine.cancelSession();
       this.engine.stop();
       this.engine = null;
+      this.currentModelId = null;
     }
   }
 
@@ -155,6 +200,30 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     this.engine = new ACPEngine(config);
     this.setupEngineEvents();
     await this.engine.start();
+  }
+
+  /**
+   * Ensure the engine process is running. Reuses the existing process if it's
+   * still alive (just creates a new session on it). Only spawns a new process
+   * if there's no engine or the previous one has exited.
+   */
+  protected async ensureEngine(options: EngineOptions): Promise<void> {
+    // Check if existing engine process is still alive
+    if (this.engine && this.isEngineAlive()) {
+      return; // Reuse existing process — just create/resume session on it
+    }
+    // Engine is dead or doesn't exist — spawn a new one
+    if (this.engine) {
+      try { this.engine.stop(); } catch {}
+    }
+    await this.startNewEngine(options);
+  }
+
+  /** Check if the underlying engine process is still running */
+  private isEngineAlive(): boolean {
+    if (!this.engine) return false;
+    // ACPEngine sets this.process = null in cleanup() when process exits
+    return (this.engine as any).process != null;
   }
 
   protected emitText(content: string, metadata?: unknown): void {

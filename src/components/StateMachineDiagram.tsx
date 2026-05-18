@@ -19,19 +19,78 @@ import ReactFlow, {
   ReactFlowProvider,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/schemas';
+import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/core/schemas';
 import { Badge } from './ui/badge';
 
 // 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，
 // 进而触发 useMemo 重算与 setNodes 写入新对象 → Maximum update depth exceeded
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
+const EXECUTED_EDGE_COLOR = '#2563eb';
 
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {
   if (name === '__origin__') return '开始';
   if (name === '__human_approval__') return '人工审查';
   return name;
+}
+
+function buildExecutedStateTransitions(history: StateTransitionRecord[]): Array<{
+  from: string;
+  to: string;
+  reason: string;
+}> {
+  const transitions: Array<{ from: string; to: string; reason: string }> = [];
+
+  for (let i = 0; i < history.length; i += 1) {
+    const record = history[i];
+    if (!record || record.from === '__origin__') continue;
+
+    if (record.to === '__human_approval__') {
+      const next = history[i + 1];
+      if (next?.from === '__human_approval__' && next.to && next.to !== '__human_approval__') {
+        transitions.push({
+          from: record.from,
+          to: next.to,
+          reason: next.reason || record.reason || '人工审查后转移',
+        });
+        i += 1;
+      }
+      continue;
+    }
+
+    if (record.from === '__human_approval__') {
+      continue;
+    }
+
+    transitions.push({
+      from: record.from,
+      to: record.to,
+      reason: record.reason || '状态转移',
+    });
+  }
+
+  return transitions;
+}
+
+function buildUniqueExecutedTransitions(history: StateTransitionRecord[]): Array<{
+  from: string;
+  to: string;
+  reason: string;
+  index: number;
+}> {
+  const folded = buildExecutedStateTransitions(history);
+  const seen = new Set<string>();
+  const unique: Array<{ from: string; to: string; reason: string; index: number }> = [];
+
+  folded.forEach((transition, index) => {
+    const key = `${transition.from}->${transition.to}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push({ ...transition, index });
+  });
+
+  return unique;
 }
 
 interface SupervisorFlowRecord {
@@ -213,6 +272,7 @@ function buildStateDiagramStepGroups(steps: any[]) {
 function StateNode({ data }: any) {
   const { state, isInitial, isFinal, isCurrent, currentStep, completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
+  const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
     const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
     const isRunningStep = currentStep === step.name || currentStep === `${state.name}-${step.name}`;
@@ -242,7 +302,13 @@ function StateNode({ data }: any) {
     <div
       className={`
         px-3 py-2 rounded-lg border-2 min-w-[220px] max-w-[320px] transition-all
-        ${isCurrent ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg' : isHumanCheckpoint ? 'border-orange-400 bg-orange-50 dark:bg-orange-950' : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800'}
+        ${isCurrent && isHumanApprovalState
+          ? 'border-amber-500 bg-amber-50 dark:bg-amber-950 shadow-[0_0_0_3px_rgba(245,158,11,0.18)]'
+          : isCurrent
+            ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg'
+            : isHumanCheckpoint
+              ? 'border-amber-400 bg-amber-50/80 dark:bg-amber-950/80'
+              : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800'}
         ${isInitial ? 'ring-2 ring-green-400' : ''}
         ${isFinal ? 'ring-2 ring-red-400' : ''}
       `}
@@ -256,20 +322,24 @@ function StateNode({ data }: any) {
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
           {isHumanCheckpoint && (
-            <span className="material-symbols-outlined text-orange-500" style={{ fontSize: 13 }}>person</span>
+            <span className="material-symbols-outlined text-amber-600" style={{ fontSize: 13 }}>notification_important</span>
           )}
           <div className="font-semibold text-xs">{state.name}</div>
         </div>
         <div className="flex gap-1">
           {isInitial && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-green-100 dark:bg-green-900">初始</Badge>}
           {isFinal && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-red-100 dark:bg-red-900">终止</Badge>}
-          {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-orange-100 dark:bg-orange-900">人工</Badge>}
-          {isCurrent && <Badge className="text-[10px] px-1 py-0 bg-blue-500 text-white">执行中</Badge>}
+          {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工审查</Badge>}
+          {isCurrent && (
+            <Badge className={`text-[10px] px-1 py-0 ${isHumanApprovalState ? 'bg-amber-500 text-black' : 'bg-blue-500 text-white'}`}>
+              {isHumanApprovalState ? '等待处理' : '执行中'}
+            </Badge>
+          )}
         </div>
       </div>
 
       {state.description && (
-        <div className="text-[10px] text-gray-500 dark:text-gray-400 mb-1.5 line-clamp-1">
+        <div className={`text-[10px] mb-1.5 line-clamp-1 ${isHumanApprovalState ? 'text-amber-700 dark:text-amber-200 font-medium' : 'text-gray-500 dark:text-gray-400'}`}>
           {state.description}
         </div>
       )}
@@ -309,7 +379,7 @@ function StateNode({ data }: any) {
       {/* 人工审查节点：当前状态时显示可选跳转目标 */}
       {isHumanCheckpoint && isCurrent && isRunning && onForceTransition && (
         <div className="mt-1.5 space-y-0.5">
-          <div className="text-[10px] text-orange-600 dark:text-orange-400 font-medium mb-0.5">选择下一步：</div>
+          <div className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold mb-0.5">人工审查待处理，请明确选择下一步：</div>
           {state.transitions && state.transitions.length > 0 ? (
             state.transitions.map((transition: any, idx: number) => (
               <button
@@ -509,6 +579,9 @@ function StateMachineDiagramInner({
       : 200;
     nodePositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
 
+    const executedTransitions = buildExecutedStateTransitions(stateHistory);
+    const executedTransitionOverlays = buildUniqueExecutedTransitions(stateHistory);
+
     // 配置的状态转移边
     for (const state of states) {
       if (!state.transitions || !Array.isArray(state.transitions)) {
@@ -525,7 +598,7 @@ function StateMachineDiagramInner({
         edgeSet.add(edgeId);
 
         // 检查这条边是否在历史记录中
-        const historyIndex = stateHistory.findIndex(
+        const historyIndex = executedTransitions.findIndex(
           h => h.from === state.name && h.to === transition.to
         );
         const isInHistory = historyIndex !== -1;
@@ -541,7 +614,7 @@ function StateMachineDiagramInner({
         if (isInHistory) {
           // 已执行的边：粗实线，高亮颜色，动画
           edgeStyle = {
-            stroke: '#3b82f6',
+            stroke: EXECUTED_EDGE_COLOR,
             strokeWidth: 3,
           };
           edgeAnimated = true;
@@ -609,14 +682,8 @@ function StateMachineDiagramInner({
     }
 
     // 添加历史中实际发生但不在配置中的转移（如 __origin__ 或其他动态转移）
-    for (let i = 0; i < stateHistory.length; i++) {
-      const record = stateHistory[i];
-
-      // 跳过 __origin__ 和 __human_approval__ 相关的转移（后面单独处理）
-      if (record.from === '__origin__' || record.to === '__human_approval__' || record.from === '__human_approval__') {
-        continue;
-      }
-
+    for (let i = 0; i < executedTransitions.length; i++) {
+      const record = executedTransitions[i];
       const edgeId = `${record.from}-${record.to}`;
 
       // 如果这条边不在配置的边中，添加它
@@ -642,22 +709,21 @@ function StateMachineDiagramInner({
           label: `${i + 1}. ${record.reason}`,
           type: 'default',
           animated: true,
-          hidden: false,
-          style: {
-            stroke: '#3b82f6',
+            hidden: false,
+            style: {
+            stroke: EXECUTED_EDGE_COLOR,
             strokeWidth: 3,
-            strokeDasharray: '5,5',
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             width: 20,
             height: 20,
-            color: '#3b82f6',
+            color: EXECUTED_EDGE_COLOR,
           },
           labelStyle: {
             fontSize: 11,
             fontWeight: 'bold',
-            fill: '#3b82f6',
+            fill: EXECUTED_EDGE_COLOR,
           },
           labelBgStyle: {
             fill: '#ffffff',
@@ -665,6 +731,42 @@ function StateMachineDiagramInner({
           },
         });
       }
+    }
+
+    for (const overlay of executedTransitionOverlays) {
+      const sourcePos = nodePositions.get(overlay.from);
+      const targetPos = nodePositions.get(overlay.to);
+      let sourceHandle = 'right';
+      let targetHandle = 'left';
+
+      if (sourcePos && targetPos) {
+        const handles = calculateHandlePositions(sourcePos, targetPos);
+        sourceHandle = handles.sourceHandle;
+        targetHandle = handles.targetHandle;
+      }
+
+      edges.push({
+        id: `executed-${overlay.index}-${overlay.from}-${overlay.to}`,
+        source: overlay.from,
+        target: overlay.to,
+        sourceHandle,
+        targetHandle,
+        label: '',
+        type: 'default',
+        animated: true,
+        hidden: false,
+        style: {
+          stroke: EXECUTED_EDGE_COLOR,
+          strokeWidth: 3,
+          zIndex: 20,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 20,
+          height: 20,
+          color: EXECUTED_EDGE_COLOR,
+        },
+      });
     }
 
     // 添加从需要人工审查的状态到人工审查节点的连线
@@ -700,7 +802,7 @@ function StateMachineDiagramInner({
             animated: false,
             hidden: !showAllEdges,
             style: {
-              stroke: '#f97316', // 橙色
+              stroke: '#f97316',
               strokeWidth: 2,
               strokeDasharray: '5,5',
             },
@@ -882,9 +984,9 @@ function StateMachineDiagramInner({
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-green-400" /><span>初始状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-red-400" /><span>终止状态</span></div>
               <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full border-2 border-orange-400" /><span>人工检查点</span></div>
-              <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-blue-500" /><span>已执行路径</span></div>
+              <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[3px] border-blue-600" /><span>已执行路径</span></div>
               <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-500" /><span>当前可用</span></div>
-              <div className="flex items-center gap-2"><div className="w-8 h-0.5 bg-gray-400 opacity-40" style={{ borderTop: '1px dashed' }} /><span>未使用路径</span></div>
+              <div className="flex items-center gap-2"><div className="h-0 w-8 border-t-[2px] border-dashed border-gray-400 opacity-40" /><span>未使用路径</span></div>
             </div>
             <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-500">
               提示：悬停节点可查看相关路径
@@ -901,7 +1003,12 @@ function getConditionLabel(transition: StateTransition): string {
   const parts: string[] = [];
 
   if (condition.verdict) {
-    parts.push(condition.verdict);
+    const verdictLabels: Record<string, string> = {
+      pass: '通过',
+      conditional_pass: '有条件通过',
+      fail: '失败',
+    };
+    parts.push(verdictLabels[condition.verdict] || condition.verdict);
   }
 
   if (condition.issueTypes && condition.issueTypes.length > 0) {

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { processManager } from '@/lib/process-manager';
+import { processManager } from '@/lib/core/process-manager';
 
 // Each test gets a clean-ish state. The ProcessManager is a singleton,
 // so we work with it directly and clean up after each test.

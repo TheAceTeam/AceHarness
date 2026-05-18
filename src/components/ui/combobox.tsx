@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Combobox as ComboboxPrimitive } from '@base-ui/react/combobox';
-import { cn } from '@/lib/utils';
+import { cn } from '@/lib/core/utils';
 
 // ─── Portal Container Context ────────────────────────────────────────────────
 // When Combobox is used inside a Radix Dialog, the Dialog sets pointer-events:none
@@ -350,7 +350,7 @@ function MultiCombobox({
   emptyText = '无匹配项',
 }: MultiComboboxProps) {
   const selectedItems = React.useMemo(
-    () => options.filter(o => value.includes(o.value)),
+    () => options.filter(o => value?.includes(o.value)),
     [options, value],
   );
 

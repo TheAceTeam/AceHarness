@@ -48,7 +48,7 @@ function buildPhaseConfig(projectRoot: string): PhaseConfig {
 
 async function loadStore() {
   vi.resetModules();
-  return import('@/lib/spec-coding-store');
+  return import('@/lib/spec/coding-store');
 }
 
 describe('spec-coding-store', () => {

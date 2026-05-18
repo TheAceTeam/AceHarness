@@ -6,7 +6,7 @@
 
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
-import { commandExists, findCommand, getCommonCliSearchPaths } from '../command-exists';
+import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngine, ACPEngineConfig } from './acp-engine';

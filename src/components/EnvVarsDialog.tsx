@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { envApi } from '@/lib/api';
+import { envApi } from '@/lib/core/api';
 
 interface EnvVar {
   key: string;

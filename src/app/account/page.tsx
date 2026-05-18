@@ -13,8 +13,8 @@ import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import EnvVarsDialog from '@/components/EnvVarsDialog';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { ArrowLeft, FolderOpen, NotebookTabs } from 'lucide-react';
-import { workspaceApi, type NotebookScope } from '@/lib/api';
+import { ArrowLeft, FolderOpen, NotebookTabs, RadioTower } from 'lucide-react';
+import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 
 interface UserInfo {
   id: string;
@@ -260,6 +260,25 @@ function AccountContent() {
             </div>
           </div>
         </div>
+
+        <Link href="/account/channels" className="block rounded-xl border bg-card p-6 transition-colors hover:bg-muted/40">
+          <div className="flex items-start gap-4">
+            <div className="rounded-lg bg-primary/10 p-3 text-primary">
+              <RadioTower className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold">微信接入</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">一键生成微信 webhook 地址，接桥接器并在线测试工作流运行时和圆桌消息。</p>
+                </div>
+                <Button variant="outline" size="sm" className="shrink-0 pointer-events-none" tabIndex={-1}>
+                  打开
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Link>
 
         {/* Actions */}
         <div className="rounded-xl border bg-card divide-y">

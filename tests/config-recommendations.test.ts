@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   DEFAULT_RECOMMENDED_AGENT_FALLBACK,
   buildRecommendedAgents,
-} from '@/lib/config-recommendations';
+} from '@/lib/config/recommendations';
 
 describe('config recommendations', () => {
   test('default recommendation fallback is the intended default delivery lineup', () => {

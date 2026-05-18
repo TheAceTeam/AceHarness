@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { workflowRegistry } from '@/lib/workflow-registry';
-import { requireAuth } from '@/lib/auth-middleware';
-import { runWorkflowPreflight } from '@/lib/workflow-preflight';
+import { workflowRegistry } from '@/lib/workflow/registry';
+import { requireAuth } from '@/lib/auth/middleware';
+import { runWorkflowPreflight } from '@/lib/workflow/preflight';
 import { readFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { parse, stringify } from 'yaml';
-import { getRuntimeWorkflowConfigPath } from '@/lib/runtime-configs';
-import { createRun } from '@/lib/run-store';
-import { saveRunState, type PersistedRunState } from '@/lib/run-state-persistence';
-import { loadCreationSession, loadLatestCreationSessionByFilename, cloneSpecCodingForRun, updateCreationSession } from '@/lib/spec-coding-store';
-import { appendChatSessionMessage, loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat-persistence';
-import { countWorkflowSteps } from '@/lib/workflow-step-counter';
-import { compileStepTaskBindings } from '@/lib/spec-task-binding';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { createRun } from '@/lib/run/store';
+import { saveRunState, type PersistedRunState } from '@/lib/run/state-persistence';
+import { loadCreationSession, loadLatestCreationSessionByFilename, cloneSpecCodingForRun, updateCreationSession } from '@/lib/spec/coding-store';
+import { appendChatSessionMessage, loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { countWorkflowSteps } from '@/lib/workflow/step-counter';
+import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { writeFile } from 'fs/promises';
 
-export { countWorkflowSteps } from '@/lib/workflow-step-counter';
+export { countWorkflowSteps } from '@/lib/workflow/step-counter';
 
 async function ensureWorkflowChatSession(input: {
   frontendSessionId?: string;
@@ -55,6 +55,17 @@ async function ensureWorkflowChatSession(input: {
   return id;
 }
 
+function normalizeInitialContexts(input: any): { globalContext: string; phaseContexts: Record<string, string> } {
+  const globalContext = typeof input?.globalContext === 'string' ? input.globalContext : '';
+  const phaseEntries = Object.entries(input?.phaseContexts || {}).filter(
+    ([key, value]) => typeof key === 'string' && key.trim().length > 0 && typeof value === 'string' && value.trim().length > 0
+  );
+  return {
+    globalContext,
+    phaseContexts: Object.fromEntries(phaseEntries) as Record<string, string>,
+  };
+}
+
 async function startRehearsalRun(input: {
   configFile: string;
   frontendSessionId?: string;
@@ -62,6 +73,10 @@ async function startRehearsalRun(input: {
   userId: string;
   username: string;
   preflightChecks: any[];
+  initialContexts?: {
+    globalContext: string;
+    phaseContexts: Record<string, string>;
+  };
 }) {
   const configPath = await getRuntimeWorkflowConfigPath(input.configFile);
   const raw = await readFile(configPath, 'utf-8');
@@ -122,6 +137,8 @@ async function startRehearsalRun(input: {
     supervisorSessionId: null,
     attachedAgentSessions: {},
     workflowFrontendSessionId: input.frontendSessionId || null,
+    globalContext: input.initialContexts?.globalContext || '',
+    phaseContexts: input.initialContexts?.phaseContexts || {},
     qualityChecks: input.preflightChecks,
     stepTaskBindingsSnapshot: bindingValidation?.bindings,
     bindingValidation: bindingValidation as any,
@@ -175,6 +192,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { configFile, frontendSessionId, creationSessionId, skipPreflight, rehearsal, preflightChecks: inputPreflightChecks } = body;
+    const initialContexts = normalizeInitialContexts(body?.initialContexts);
 
     if (!configFile) {
       return NextResponse.json(
@@ -238,6 +256,7 @@ export async function POST(request: NextRequest) {
         userId: user.id,
         username: user.username,
         preflightChecks: preflightChecks || [],
+        initialContexts,
       });
       return NextResponse.json({
         success: true,
@@ -269,6 +288,8 @@ export async function POST(request: NextRequest) {
     (manager as any)._userPersonalDir = user.personalDir;
     (manager as any)._frontendSessionId = workflowChatSessionId;
     (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
+    (manager as any)._initialContexts = initialContexts;
+    const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
     await appendChatSessionMessage(workflowChatSessionId, {
       role: 'assistant',
       content: [
@@ -279,7 +300,7 @@ export async function POST(request: NextRequest) {
         '</workflow-event>',
       ].join('\n'),
     }, { dedupeKey: `${Date.now()}-workflow-run-starting` }).catch(() => {});
-    (manager as any).start(configFile, undefined, preflightChecks).catch((err: any) => {
+    (manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId).catch((err: any) => {
       console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
       // Ensure status reflects the failure so frontend can detect it
       try {
@@ -292,6 +313,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: '工作流已启动',
+      runId,
       frontendSessionId: workflowChatSessionId,
     });
   } catch (error: any) {

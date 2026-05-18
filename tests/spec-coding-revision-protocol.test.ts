@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   extractSpecCodingRevisionCommand,
   stripSpecCodingRevisionCommand,
-} from '@/lib/spec-coding-revision-protocol';
+} from '@/lib/spec/coding-revision-protocol';
 
 describe('spec-coding revision protocol', () => {
   test('extracts revision command from result channel kind payload', () => {

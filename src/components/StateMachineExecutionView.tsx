@@ -3,10 +3,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Badge } from './ui/badge';
-import { GitBranch, Activity, MessageSquare, CheckCircle2 } from 'lucide-react';
-import StateMachineRuntimePanel from './StateMachineRuntimePanel';
+import { Button } from './ui/button';
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
+import { GitBranch, Activity, MessageSquare, CheckCircle2, Maximize2, X } from 'lucide-react';
+import StateMachineRuntimePanel, { formatStateName } from './StateMachineRuntimePanel';
 import StateMachineDiagram from './StateMachineDiagram';
-import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/schemas';
+import AgentFormationDiagram from './AgentFormationDiagram';
+import type { StateTransitionRecord, Issue, StateMachineState } from '@/lib/core/schemas';
+import type { AgentAvatarConfig, AgentRoleType, AgentTeam } from '@/lib/agent/personas';
 
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;
@@ -16,6 +20,11 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
   return `${hours}小时${remainingMinutes}分`;
+}
+
+function formatTokenCount(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  return new Intl.NumberFormat('zh-CN').format(Math.max(0, Math.round(value)));
 }
 
 const EVENT_TAG_CONFIG: Record<string, { label: string; className: string }> = {
@@ -85,6 +94,32 @@ interface StateMachineExecutionViewProps {
   endTime?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
   agentFlow?: AgentFlowRecord[];
+  tokenAnalytics?: {
+    total: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationInputTokens: number;
+      cacheReadInputTokens: number;
+      totalTokens: number;
+    };
+    byAgent: Array<{
+      name: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationInputTokens: number;
+      cacheReadInputTokens: number;
+      totalTokens: number;
+    }>;
+    byPhase: Array<{
+      name: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheCreationInputTokens: number;
+      cacheReadInputTokens: number;
+      totalTokens: number;
+    }>;
+    hasData: boolean;
+  };
   executionTrace?: {
     designTitle: string;
     designStatus?: string | null;
@@ -111,8 +146,16 @@ interface StateMachineExecutionViewProps {
   } | null;
   overviewFooter?: ReactNode;
   supervisorInteractionPanel?: ReactNode;
+  supervisorFooter?: ReactNode;
   activeTabOverride?: string | null;
   hasPendingHumanQuestion?: boolean;
+  formationAgents?: Array<{
+    name: string;
+    team?: AgentTeam;
+    roleType?: AgentRoleType;
+    avatar?: AgentAvatarConfig | string | null;
+  }>;
+  supervisorAgent?: string | null;
 
   // 回调
   onStateClick?: (stateName: string) => void;
@@ -138,16 +181,23 @@ export default function StateMachineExecutionView({
   endTime,
   supervisorFlow = [],
   agentFlow = [],
+  tokenAnalytics,
   overviewFooter,
   supervisorInteractionPanel,
+  supervisorFooter,
   activeTabOverride,
   hasPendingHumanQuestion,
+  formationAgents = [],
+  supervisorAgent,
   onStateClick,
   onStepClick,
   onForceTransition,
 }: StateMachineExecutionViewProps) {
   const [activeTab, setActiveTab] = useState('overview');
   const [flowKindFilter, setFlowKindFilter] = useState<'all' | 'supervisor' | 'agent' | 'state' | 'concurrency'>('all');
+  const [supervisorTimelineOpen, setSupervisorTimelineOpen] = useState(false);
+  const [supervisorPanelTab, setSupervisorPanelTab] = useState<'formation' | 'human' | 'timeline' | 'summary'>('human');
+  const [formationFullscreenOpen, setFormationFullscreenOpen] = useState(false);
 
   useEffect(() => {
     if (activeTabOverride) {
@@ -156,15 +206,37 @@ export default function StateMachineExecutionView({
         : activeTabOverride === 'history' || activeTabOverride === 'timeline' || activeTabOverride === 'agent-flow'
           ? 'history'
           : activeTabOverride === 'supervisor'
-          ? 'supervisor'
-          : 'trace');
+            ? 'supervisor'
+            : activeTabOverride === 'token'
+              ? 'token'
+              : 'trace');
     }
   }, [activeTabOverride]);
+
+  useEffect(() => {
+    if (hasPendingHumanQuestion) {
+      setSupervisorPanelTab('human');
+    }
+  }, [hasPendingHumanQuestion]);
 
   const handleOverviewStateClick = (stateName: string) => {
     setActiveTab('trace');
     onStateClick?.(stateName);
   };
+
+  const renderFormationDiagram = (className?: string) => (
+    <div className={className}>
+      <AgentFormationDiagram
+        states={states}
+        agents={formationAgents}
+        supervisorAgent={supervisorAgent}
+        currentStep={currentStep}
+        activeSteps={activeSteps}
+        status={status}
+        className={className ? 'h-full' : undefined}
+      />
+    </div>
+  );
 
   const visibleConcurrencyGroups = activeConcurrencyGroups.filter((group) => group.status === 'running');
   const concurrencyGroupsToDisplay = visibleConcurrencyGroups.length > 0
@@ -193,9 +265,11 @@ export default function StateMachineExecutionView({
     }> = [];
 
     supervisorFlow.forEach((item, index) => {
+      const displayFrom = formatStateName(item.from || 'Supervisor');
+      const displayTo = formatStateName(item.to || '下一节点');
       const title = item.type === 'decision'
-        ? `Supervisor 路由：${item.from} → ${item.to}`
-        : `Supervisor 询问：${item.to}`;
+        ? `Supervisor 路由：${displayFrom} → ${displayTo}`
+        : `Supervisor 询问：${displayTo}`;
       items.push({
         id: `supervisor-${index}`,
         timestamp: item.timestamp,
@@ -227,11 +301,13 @@ export default function StateMachineExecutionView({
     });
 
     stateHistory.slice(-12).forEach((item, index) => {
+      const displayFrom = formatStateName(item.from || '起点');
+      const displayTo = formatStateName(item.to || '未知状态');
       items.push({
         id: `state-${index}`,
         timestamp: item.timestamp,
         kind: 'state',
-        title: `${item.from || '起点'} → ${item.to}`,
+        title: `${displayFrom} → ${displayTo}`,
         body: item.reason || undefined,
         tags: ['状态流转', item.issues?.length ? `${item.issues.length} issue` : ''],
       });
@@ -312,6 +388,8 @@ export default function StateMachineExecutionView({
       const isRealTo = item.to && item.to !== '__origin__' && item.to !== '__human_approval__';
       const isRollback = isRealFrom && isRealTo && (stateOrder[item.to] ?? 0) < (stateOrder[item.from] ?? 0);
       const hasIssues = item.issues?.length > 0;
+      const displayFrom = formatStateName(item.from || '起点');
+      const displayTo = formatStateName(item.to || '未知状态');
 
       const eventTags: string[] = [];
       if (isHuman) eventTags.push('human-question');
@@ -322,13 +400,13 @@ export default function StateMachineExecutionView({
         id: `state-flow-${index}`,
         timestamp: item.timestamp,
         kind: 'state',
-        actor: item.from || '起点',
-        target: item.to,
+        actor: displayFrom,
+        target: displayTo,
         title: isHuman
           ? (item.to === '__human_approval__' ? '进入人工审查' : '人工审查完成')
           : isRollback
-            ? `回退：${item.from} → ${item.to}`
-            : `${item.from || '起点'} → ${item.to}`,
+            ? `回退：${displayFrom} → ${displayTo}`
+            : `${displayFrom} → ${displayTo}`,
         body: item.reason || undefined,
         tags: [
           item.issues?.length ? `${item.issues.length} 个问题` : '',
@@ -377,11 +455,16 @@ export default function StateMachineExecutionView({
 
   const flowRoutes = useMemo(() => {
     const seen = new Set<string>();
+    const formatRouteEndpoint = (value: string, kind: string) => {
+      if (kind === 'state' || kind === 'concurrency') return formatStateName(value);
+      if (value === '__origin__' || value === '__human_approval__') return formatStateName(value);
+      return value;
+    };
     return flowHistory
       .map((item) => ({
         id: `${item.actor}->${item.target}`,
-        actor: item.actor,
-        target: item.target,
+        actor: formatRouteEndpoint(item.actor, item.kind),
+        target: formatRouteEndpoint(item.target, item.kind),
         kind: item.kind,
       }))
       .filter((route) => {
@@ -426,7 +509,7 @@ export default function StateMachineExecutionView({
   return (
     <div className="h-full flex flex-col">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-        <TabsList className="grid w-full grid-cols-4 mb-4">
+        <TabsList className="grid w-full grid-cols-5 mb-4">
           <TabsTrigger value="overview" className="flex items-center gap-2">
             <Activity className="w-4 h-4" />
             <span>总览</span>
@@ -439,12 +522,23 @@ export default function StateMachineExecutionView({
             <GitBranch className="w-4 h-4" />
             <span>流转历史</span>
           </TabsTrigger>
-          <TabsTrigger value="supervisor" className={`flex items-center gap-2 ${hasPendingHumanQuestion ? 'text-orange-500 animate-pulse' : ''}`}>
+          <TabsTrigger
+            value="supervisor"
+            className={`flex items-center gap-2 ${
+              hasPendingHumanQuestion
+                ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
+                : ''
+            }`}
+          >
             <MessageSquare className="w-4 h-4" />
-            <span>Supervisor</span>
+            <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
             {hasPendingHumanQuestion && (
-              <span className="h-2 w-2 rounded-full bg-orange-500" />
+              <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
             )}
+          </TabsTrigger>
+          <TabsTrigger value="token" className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-base">toll</span>
+            <span>Token</span>
           </TabsTrigger>
         </TabsList>
 
@@ -522,7 +616,7 @@ export default function StateMachineExecutionView({
                       className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-gray-800 dark:hover:bg-amber-900/40"
                       onClick={() => handleOverviewStateClick(hs.state)}
                     >
-                      {hs.state}
+                      {formatStateName(hs.state)}
                       <span className="ml-1.5 text-amber-600 dark:text-amber-400">×{hs.visits}</span>
                     </button>
                   ))}
@@ -651,10 +745,10 @@ export default function StateMachineExecutionView({
                     ) : null}
                     {item.eventTags.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
-                        {item.eventTags.map((t) => {
+                        {item.eventTags.map((t, index) => {
                           const cfg = EVENT_TAG_CONFIG[t];
                           return cfg ? (
-                            <span key={t} className={`inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${cfg.className}`}>
+                            <span key={`${item.id}-event-tag-${t}-${index}`} className={`inline-flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-[10px] font-medium ${cfg.className}`}>
                               {cfg.label}
                             </span>
                           ) : null;
@@ -701,69 +795,264 @@ export default function StateMachineExecutionView({
               </div>
             </div>
 
-            {supervisorInteractionPanel ? (
-              supervisorInteractionPanel
-            ) : (
-              <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  当前没有待人工回复
-                </div>
-              </div>
-            )}
-
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
-              <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold">会话记录</h3>
+                  <h3 className="font-semibold">Supervisor 面板</h3>
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    Supervisor 与 Agent、人类、状态机之间的关键交互，按时间汇总。
+                    默认聚焦当前圆桌会话与人工处理入口，编队状态和会话记录按需展开。
                   </p>
                 </div>
-                <Badge variant="outline" className="text-[10px]">{supervisorTimeline.length} 条</Badge>
-              </div>
+                <Tabs value={supervisorPanelTab} onValueChange={(value) => setSupervisorPanelTab(value as typeof supervisorPanelTab)} className="w-full">
+                  <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:grid-cols-4">
+                    <TabsTrigger value="human" className={hasPendingHumanQuestion ? 'text-amber-700' : ''}>圆桌会议</TabsTrigger>
+                    <TabsTrigger value="formation">编队状态</TabsTrigger>
+                    <TabsTrigger value="timeline">会话记录</TabsTrigger>
+                    <TabsTrigger value="summary">结算总结</TabsTrigger>
+                  </TabsList>
 
-              {supervisorTimeline.length ? (
-                <div className="space-y-3">
-                  {supervisorTimeline.map((item) => (
-                    <div
-                      key={item.id}
-                      className={`rounded-2xl border p-3 ${
-                        item.kind === 'supervisor'
-                          ? 'border-blue-500/30 bg-blue-500/8'
-                          : item.kind === 'agent'
-                            ? 'border-emerald-500/30 bg-emerald-500/8'
-                            : 'bg-muted/20'
-                      }`}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="text-sm font-medium">{item.title}</div>
-                        <span className="text-[10px] text-muted-foreground">{new Date(item.timestamp).toLocaleString()}</span>
-                      </div>
-                      {item.body ? (
-                        <div className="mt-2 text-xs leading-5 text-muted-foreground whitespace-pre-line line-clamp-5">
-                          {item.body}
+                  <TabsContent value="human" className="mt-4">
+                    {supervisorInteractionPanel ? (
+                      supervisorInteractionPanel
+                    ) : (
+                      <div className="rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                          当前没有待人工回复
                         </div>
-                      ) : null}
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {item.tags.map((tag) => (
-                          <Badge key={`${item.id}-${tag}`} variant="outline" className="text-[10px]">
-                            {tag}
-                          </Badge>
-                        ))}
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="formation" className="mt-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium">Agent 编队状态图</div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">{formationAgents.length} 个参与者</Badge>
+                        <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setFormationFullscreenOpen(true)}>
+                          <Maximize2 className="mr-1 h-3.5 w-3.5" />
+                          全屏查看
+                        </Button>
                       </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                  暂无 Supervisor 会话记录。
-                </div>
-              )}
+                    {renderFormationDiagram()}
+                  </TabsContent>
+
+                  <TabsContent value="timeline" className="mt-4">
+                    <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold">会话记录</h3>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">{supervisorTimeline.length} 条</Badge>
+                          <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSupervisorTimelineOpen(true)}>
+                            打开会话记录
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="summary" className="mt-4">
+                    {supervisorFooter ? (
+                      supervisorFooter
+                    ) : (
+                      <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                        当前还没有可展示的结算总结
+                      </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
+              </div>
             </div>
           </div>
         </TabsContent>
+
+        <TabsContent value="token" className="flex-1 overflow-auto">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-amber-500">toll</span>
+                    <h3 className="font-semibold">Token 消耗统计</h3>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    按 Agent 和阶段两个维度统计当前 run 的 token 消耗，包含输入、输出和缓存命中。
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-[10px]">
+                  总计 {formatTokenCount(tokenAnalytics?.total.totalTokens || 0)}
+                </Badge>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-4">
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">输入</div>
+                  <div className="mt-1 text-lg font-semibold">{formatTokenCount(tokenAnalytics?.total.inputTokens || 0)}</div>
+                </div>
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">输出</div>
+                  <div className="mt-1 text-lg font-semibold">{formatTokenCount(tokenAnalytics?.total.outputTokens || 0)}</div>
+                </div>
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">缓存写入</div>
+                  <div className="mt-1 text-lg font-semibold">{formatTokenCount(tokenAnalytics?.total.cacheCreationInputTokens || 0)}</div>
+                </div>
+                <div className="rounded-xl border bg-muted/20 p-3">
+                  <div className="text-[10px] text-muted-foreground">缓存读取</div>
+                  <div className="mt-1 text-lg font-semibold">{formatTokenCount(tokenAnalytics?.total.cacheReadInputTokens || 0)}</div>
+                </div>
+              </div>
+            </div>
+
+            {tokenAnalytics?.hasData ? (
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold">按 Agent</h3>
+                    <Badge variant="outline" className="text-[10px]">{tokenAnalytics.byAgent.length} 个</Badge>
+                  </div>
+                  <div className="space-y-2">
+                    {tokenAnalytics.byAgent.map((item) => (
+                      <div key={item.name} className="rounded-xl border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{item.name}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              输入 {formatTokenCount(item.inputTokens)} · 输出 {formatTokenCount(item.outputTokens)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-semibold">{formatTokenCount(item.totalTokens)}</div>
+                            <div className="text-[10px] text-muted-foreground">total</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold">按阶段</h3>
+                    <Badge variant="outline" className="text-[10px]">{tokenAnalytics.byPhase.length} 个</Badge>
+                  </div>
+                  <div className="space-y-2">
+                    {tokenAnalytics.byPhase.map((item) => (
+                      <div key={item.name} className="rounded-xl border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium">{formatStateName(item.name)}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              输入 {formatTokenCount(item.inputTokens)} · 输出 {formatTokenCount(item.outputTokens)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-semibold">{formatTokenCount(item.totalTokens)}</div>
+                            <div className="text-[10px] text-muted-foreground">total</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                当前 run 还没有可统计的 token 数据。
+              </div>
+            )}
+          </div>
+        </TabsContent>
       </Tabs>
+      <Dialog open={supervisorTimelineOpen} onOpenChange={setSupervisorTimelineOpen}>
+        <DialogContent className="max-w-4xl w-[92vw] h-[80vh] p-0 flex flex-col gap-0">
+          <DialogTitle className="sr-only">Supervisor 会话记录</DialogTitle>
+          <div className="border-b px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">会话记录</h3>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Supervisor 与 Agent、人类、状态机之间的关键交互，按时间汇总。
+                </p>
+              </div>
+              <Badge variant="outline" className="text-[10px]">{supervisorTimeline.length} 条</Badge>
+            </div>
+          </div>
+          <div className="flex-1 overflow-auto p-5">
+            {supervisorTimeline.length ? (
+              <div className="space-y-3">
+                {supervisorTimeline.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`rounded-2xl border p-3 ${
+                      item.kind === 'supervisor'
+                        ? 'border-blue-500/30 bg-blue-500/8'
+                        : item.kind === 'agent'
+                          ? 'border-emerald-500/30 bg-emerald-500/8'
+                          : 'bg-muted/20'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm font-medium">{item.title}</div>
+                      <span className="text-[10px] text-muted-foreground">{new Date(item.timestamp).toLocaleString()}</span>
+                    </div>
+                    {item.body ? (
+                      <div className="mt-2 text-xs leading-5 text-muted-foreground whitespace-pre-line line-clamp-5">
+                        {item.body}
+                      </div>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {item.tags.map((tag) => (
+                        <Badge key={`${item.id}-${tag}`} variant="outline" className="text-[10px]">
+                          {tag}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                暂无 Supervisor 会话记录。
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={formationFullscreenOpen} onOpenChange={setFormationFullscreenOpen}>
+        <DialogContent className="max-w-none w-[96vw] h-[92vh] p-0 flex flex-col gap-0">
+          <DialogTitle className="sr-only">Agent 编队状态图</DialogTitle>
+          <div className="border-b px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">Agent 编队状态图</h3>
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  以全屏视图查看 Supervisor 与各 Agent 的当前编队和运行态。
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="text-[10px]">{formationAgents.length} 个参与者</Badge>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setFormationFullscreenOpen(false)}
+                  aria-label="关闭编队状态图全屏视图"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden p-5">
+            {renderFormationDiagram('h-full')}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
