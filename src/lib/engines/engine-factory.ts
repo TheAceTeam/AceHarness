@@ -9,7 +9,6 @@ import { existsSync } from 'fs';
 import { getEngineConfigPath } from '@/lib/app-paths';
 import type { Engine } from './engine-interface';
 import { KiroCliEngineWrapper } from './kiro-cli-wrapper';
-import { CangjieMagicEngineWrapper } from './cangjie-magic-wrapper';
 import { OpenCodeEngineWrapper } from './opencode-wrapper';
 import { CodexEngineWrapper } from './codex-wrapper';
 import { CursorEngineWrapper } from './cursor-wrapper';
@@ -18,9 +17,8 @@ import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
 import { MagicCliEngineWrapper } from './magic-cli-wrapper';
-import { MagicCliEngineWrapper } from './magic-cli-wrapper';
 
-export type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli' | 'magic-cli';
+export type EngineType = 'claude-code' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'nga' | 'codegenie' | 'trae-cli' | 'magic-cli';
 
 interface EngineConfig {
   engine: EngineType;
@@ -133,14 +131,6 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
       }
       return cursorEngine;
 
-    case 'cangjie-magic':
-      const cjEngine = new CangjieMagicEngineWrapper();
-      if (!(await cjEngine.isAvailable())) {
-        console.warn('[EngineFactory] CangjieMagic is not available');
-        return null;
-      }
-      return cjEngine;
-
     case 'opencode':
       const ocEngine = new OpenCodeEngineWrapper();
       if (!(await ocEngine.isAvailable())) {
@@ -199,10 +189,6 @@ export async function isEngineAvailable(type: EngineType): Promise<boolean> {
     case 'claude-code':
       const ccCheck = new ClaudeCodeEngineWrapper();
       return await ccCheck.isAvailable();
-
-    case 'cangjie-magic':
-      const cjCheck = new CangjieMagicEngineWrapper();
-      return await cjCheck.isAvailable();
 
     case 'opencode':
       const ocCheck = new OpenCodeEngineWrapper();

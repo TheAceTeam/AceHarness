@@ -9,8 +9,7 @@ export * from './engine-factory';
 export * from './acp-engine';
 export * from './acp-wrapper-base';
 export * from './kiro-cli-wrapper';
-export * from './cangjie-magic';
-export * from './cangjie-magic-wrapper';
+
 export * from './opencode-wrapper';
 export * from './nga-wrapper';
 export * from './codegenie-wrapper';
