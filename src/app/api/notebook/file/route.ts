@@ -6,7 +6,7 @@ import { ensureNotebookRoot, normalizeNotebookScope } from '@/lib/notebook/manag
 import { isBuiltinNotebookPath, toBuiltinNotebookAbsolutePath } from '@/lib/notebook/builtin';
 import { getNotebookShare } from '@/lib/notebook/share-store';
 
-const MAX_FILE_SIZE = 200 * 1024;
+const MAX_FILE_SIZE = 1024 * 1024;
 
 function isPathSafe(root: string, resolvedPath: string) {
   return resolvedPath.startsWith(root + path.sep) || resolvedPath === root;
@@ -88,7 +88,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (stat.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: '文件超过 200KB 限制', size: stat.size, path: file }, { status: 413 });
+      return NextResponse.json({ error: '文件超过 1MB 限制', size: stat.size, path: file }, { status: 413 });
     }
 
     const content = await fs.readFile(realPath, 'utf-8');
@@ -123,7 +123,7 @@ export async function PUT(request: NextRequest) {
     }
 
     if (new TextEncoder().encode(content).length > MAX_FILE_SIZE) {
-      return NextResponse.json({ error: '内容超过 200KB 限制' }, { status: 413 });
+      return NextResponse.json({ error: '内容超过 1MB 限制' }, { status: 413 });
     }
 
     if (scope === 'global' && shareToken) {

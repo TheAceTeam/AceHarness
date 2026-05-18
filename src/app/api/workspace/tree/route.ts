@@ -68,7 +68,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
   context.seen.add(realDir);
 
   const entries = await fs.readdir(realDir, { withFileTypes: true });
-  const filtered = entries.filter(e => !e.name.startsWith('.') && !SKIP_DIRS.has(e.name));
+  const filtered = entries.filter(e => !SKIP_DIRS.has(e.name));
 
   const dirs: TreeNode[] = [];
   const files: TreeNode[] = [];

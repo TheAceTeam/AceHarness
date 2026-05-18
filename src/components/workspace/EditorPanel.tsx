@@ -638,7 +638,7 @@ export function EditorPanel({
           ) : oversize ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
               <FileCode2 className="h-12 w-12" />
-              <p className="text-sm">文件过大（{fileSize ? (fileSize >= 1024 * 1024 ? `${(fileSize / 1024 / 1024).toFixed(1)}MB` : `${(fileSize / 1024).toFixed(1)}KB`) : ""}），仅支持预览和编辑 200KB 以下的文件</p>
+              <p className="text-sm">文件过大（{fileSize ? (fileSize >= 1024 * 1024 ? `${(fileSize / 1024 / 1024).toFixed(1)}MB` : `${(fileSize / 1024).toFixed(1)}KB`) : ""}），仅支持预览和编辑 1MB 以下的文件</p>
             </div>
           ) : fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType) ? (
             <div className="h-full overflow-auto">

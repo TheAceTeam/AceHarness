@@ -208,6 +208,11 @@ function formatErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function isFileTooLargeError(error: unknown): error is Error & { size?: number } {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+  return /[KM]B 限制/i.test(message)
+}
+
 export function WorkspaceEditor({
   open,
   onOpenChange,
@@ -492,6 +497,11 @@ export function WorkspaceEditor({
 
   React.useEffect(() => {
     if (!open) return
+    const fileFromUrl = searchParams.get(fileParamKey)
+    if (fileFromUrl) {
+      setSelectedFile(fileFromUrl)
+      return
+    }
     if (initialFilePath && mode !== 'notebook') {
       const normalizedWorkspace = workspacePath.replace(/\\/g, "/").replace(/\/+$/g, "")
       const normalizedFile = initialFilePath.replace(/\\/g, "/")
@@ -506,10 +516,6 @@ export function WorkspaceEditor({
           return
         }
       }
-    }
-    const fileFromUrl = searchParams.get(fileParamKey)
-    if (fileFromUrl) {
-      setSelectedFile(fileFromUrl)
     }
   }, [fileParamKey, initialFilePath, mode, open, searchParams, workspacePath])
 
@@ -551,12 +557,12 @@ export function WorkspaceEditor({
         setFileError(null)
         setSelectedFileReadOnly(Boolean((data as { readOnly?: boolean }).readOnly) || Boolean(findTreeNode(tree, selectedFile)?.readOnly))
       })
-      .catch((err: Error & { size?: number }) => {
-        if (err.message?.includes("KB 限制")) {
-          setOversize(true)
-          if (err.size != null) setFileSize(err.size)
-          setFileError(null)
-          setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
+        .catch((err: Error & { size?: number }) => {
+          if (isFileTooLargeError(err)) {
+            setOversize(true)
+            if (err.size != null) setFileSize(err.size)
+            setFileError(null)
+            setSelectedFileReadOnly(Boolean(findTreeNode(tree, selectedFile)?.readOnly))
           return
         }
         const message = formatErrorMessage(err, "读取文件失败")
