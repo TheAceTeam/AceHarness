@@ -1049,6 +1049,7 @@ function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boole
 
 async function startServerProcess(settings: SystemSettings, serviceId: string): Promise<void> {
   await syncBrowserLocale(settings);
+  Object.assign(process.env, buildChildEnv(settings));
   const messages = getLocaleMessages(normalizeLocale(settings.locale));
   const url = serviceUrlFromSettings(settings);
   const state = buildServiceState(serviceId, settings, 'foreground', null, process.pid);
