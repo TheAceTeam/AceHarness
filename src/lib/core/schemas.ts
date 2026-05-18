@@ -170,7 +170,7 @@ export const roleConfigSchema = z.object({
   }).optional(),
   mcpServers: z.array(z.object({
     name: z.string().min(1),
-    type: z.enum(['cangjie-magic', 'stdio']),
+    type: z.enum(['stdio']),
     command: z.string().min(1),
     projectDir: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),

@@ -1,6 +1,6 @@
 /**
  * Cangjie 环境检测与 shell sourcing 工具
- * 供 MCP Server 集成和 CangjieMagic Engine 共用
+ * 供 MCP Server 集成和仓颉运行环境共用
  */
 
 import { execSync } from 'child_process';

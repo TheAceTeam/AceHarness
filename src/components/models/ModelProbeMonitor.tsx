@@ -113,7 +113,6 @@ const PROBE_ENGINES = [
   'codegenie',
   'cursor',
   'trae-cli',
-  'cangjie-magic',
 ] as const;
 const AVAILABILITY_WINDOWS: AvailabilityWindow[] = [7, 15, 30];
 const PROVIDER_LABELS: Record<string, string> = {

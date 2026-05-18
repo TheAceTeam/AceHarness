@@ -9,7 +9,6 @@ import { existsSync } from 'fs';
 import { getEngineConfigPath } from '@/lib/core/app-paths';
 import type { Engine } from './engine-interface';
 import { KiroCliEngineWrapper } from './kiro-cli-wrapper';
-import { CangjieMagicEngineWrapper } from './cangjie-magic-wrapper';
 import { OpenCodeEngineWrapper } from './opencode-wrapper';
 import { OpenCodeSdkEngineWrapper } from './opencode-sdk-wrapper';
 import { CodexEngineWrapper } from './codex-wrapper';
@@ -20,8 +19,9 @@ import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
 import { CodegenieSdkEngineWrapper } from './codegenie-sdk-wrapper';
+import { MagicCliEngineWrapper } from './magic-cli-wrapper';
 
-export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'cangjie-magic' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli';
+export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli' | 'magic-cli';
 export type EngineDriver = 'stdio' | 'sdk';
 
 interface EngineConfig {
@@ -281,14 +281,6 @@ async function instantiateResolvedEngine(engineType: EngineType, requestedType?:
       }
       return cursorEngine;
 
-    case 'cangjie-magic':
-      const cjEngine = new CangjieMagicEngineWrapper();
-      if (!(await cjEngine.isAvailable())) {
-        console.warn('[EngineFactory] CangjieMagic is not available');
-        return null;
-      }
-      return cjEngine;
-
     case 'opencode':
       const ocEngine = new OpenCodeEngineWrapper();
       if (!(await ocEngine.isAvailable())) {
@@ -345,6 +337,14 @@ async function instantiateResolvedEngine(engineType: EngineType, requestedType?:
       }
       return traeEngine;
 
+    case 'magic-cli':
+      const magicEngine = new MagicCliEngineWrapper();
+      if (!(await magicEngine.isAvailable())) {
+        console.warn('[EngineFactory] Magic CLI is not available, falling back to Claude Code');
+        return null;
+      }
+      return magicEngine;
+
     default:
       console.warn(`Unknown engine type: ${engineType}`);
       return null;
@@ -381,13 +381,9 @@ export async function isEngineAvailable(type: EngineType): Promise<boolean> {
       const ccCheck = new ClaudeCodeEngineWrapper();
       return await ccCheck.isAvailable();
 
-    case 'claude-code-acp':
+case 'claude-code-acp':
       const ccAcpCheck = new ClaudeCodeAcpEngineWrapper();
       return await ccAcpCheck.isAvailable();
-
-    case 'cangjie-magic':
-      const cjCheck = new CangjieMagicEngineWrapper();
-      return await cjCheck.isAvailable();
 
     case 'opencode':
       const ocCheck = new OpenCodeEngineWrapper();
@@ -420,6 +416,10 @@ export async function isEngineAvailable(type: EngineType): Promise<boolean> {
     case 'trae-cli':
       const traeCheck = new TraeCliEngineWrapper();
       return await traeCheck.isAvailable();
+
+    case 'magic-cli':
+      const magicCheck = new MagicCliEngineWrapper();
+      return await magicCheck.isAvailable();
 
     default:
       return false;

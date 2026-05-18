@@ -69,14 +69,6 @@ const engines: Engine[] = [
     endpoints: ['anthropic'],
   },
   {
-    id: 'cangjie-magic',
-    name: 'CangjieMagic',
-    description: '仓颉语言 AI Agent 框架，通过 MCP 协议提供智能工具调用能力',
-    status: 'available',
-    features: ['MCP 协议', 'JSON-RPC 2.0', '仓颉语言原生', 'Agent 工具调用'],
-    endpoints: ['cangjie'],
-  },
-  {
     id: 'kiro-cli',
     name: 'Kiro CLI',
     description: '基于 ACP 协议的 AI 编程助手，支持自定义 Agent 配置',
@@ -130,6 +122,14 @@ const engines: Engine[] = [
     description: 'Trae 命令行 AI 编程助手，支持 ACP 协议，提供智能代码编辑和执行能力',
     status: 'available',
     features: ['ACP 协议', '智能代码编辑', '代码执行', 'MCP 工具支持', '插件系统'],
+    endpoints: ['anthropic', 'openai'],
+  },
+  {
+    id: 'magic-cli',
+    name: 'Magic CLI',
+    description: '仓颉 Magic CLI，支持 ACP 协议，[repo url](https://gitcode.com/Cangjie-SIG/magic-cli)',
+    status: 'available',
+    features: ['ACP 协议', 'JSON-RPC 2.0', '仓颉原生', '流式输出'],
     endpoints: ['anthropic', 'openai'],
   },
 ];
@@ -253,11 +253,12 @@ export default function EnginesPage() {
       const hints: Record<string, string> = {
         'kiro-cli': '安装方法：curl -fsSL https://cli.kiro.dev/install | bash',
         'claude-code': '安装方法：npm install -g @anthropic-ai/claude-code',
-        'cangjie-magic': '请在环境变量中配置 CANGJIE_HOME、CANGJIE_MAGIC_PATH、OPENSSL_PATH、CANGJIE_STDX_PATH',
+
         'opencode': '安装方法：npm install -g opencode-ai',
         'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
         'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，可设置环境变量 ACEH_CODEGENIE_COMMAND 指向可执行文件（参见 CodeGenie 官方安装说明）',
         'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
+        'magic-cli': '请从 https://gitcode.com/Cangjie-SIG/magic-cli 克隆仓库，并将环境变量 MAGIC_CLI_PATH 指向 magic-cli.sh 的完整路径，或将 magic-cli.sh 所在目录加入 PATH',
       };
       const hint = hints[engineId] || '请确保已安装相应的命令行工具';
       toast('error', `引擎 ${engine?.name} 不可用。${hint}`);
@@ -710,7 +711,7 @@ export default function EnginesPage() {
                     placeholder="选择默认模型"
                     triggerClassName="h-9 text-sm"
                   />
-                  {!['cangjie-magic', 'codex'].includes(engine.id) && (
+                  {!['codex', 'magic-cli'].includes(engine.id) && (
                     <>
                       <Button
                         variant="outline"
@@ -761,7 +762,7 @@ export default function EnginesPage() {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground leading-relaxed mb-3">
-            Aceharness 提供包括 CangjieMagic、Opencode、Claude Code、Kiro CLI等 AI Agent 框架以提供完整的代码编辑和执行能力。
+            Aceharness 提供包括 Opencode、Claude Code、Kiro CLI等 AI Agent 框架以提供完整的代码编辑和执行能力。
             Aceharness 目前已支持完全支持 ACP和MCP的能力，后续将提供更多工具的支持。
           </p>
           <div className="text-sm text-muted-foreground leading-relaxed space-y-2">
@@ -775,14 +776,6 @@ export default function EnginesPage() {
               curl -fsSL https://cli.kiro.dev/install | bash
             </code>
             <p className="text-xs">安装后刷新可用性检查，即可切换使用 Kiro CLI 引擎。</p>
-            <p className="mt-2"><strong>配置 CangjieMagic：</strong></p>
-            <p className="text-xs">在环境变量中配置以下变量后刷新可用性检查：</p>
-            <code className="block bg-background/50 p-2 rounded text-xs whitespace-pre-line">
-{`CANGJIE_HOME — 仓颉 SDK 根目录
-CANGJIE_MAGIC_PATH — CangjieMagic 项目路径
-OPENSSL_PATH — OpenSSL 动态库路径
-CANGJIE_STDX_PATH — stdx 动态库路径`}
-            </code>
             <p className="mt-2"><strong>安装 OpenCode：</strong></p>
             <code className="block bg-background/50 p-2 rounded text-xs">
               npm install -g opencode-ai
@@ -803,6 +796,16 @@ CANGJIE_STDX_PATH — stdx 动态库路径`}
               curl -fsSL https://trae.cn/install | bash
             </code>
             <p className="text-xs">安装后刷新可用性检查，即可切换使用 Trae CLI 引擎。</p>
+            <p className="mt-2"><strong>配置 Magic CLI：</strong></p>
+            <p className="text-xs">从仓库克隆后，通过以下方式之一让 ACEHarness 找到 magic-cli.sh：</p>
+            <code className="block bg-background/50 p-2 rounded text-xs whitespace-pre-line">
+{`# 方式一：设置环境变量（推荐）
+export MAGIC_CLI_PATH=/path/to/magic-cli/scripts/magic-cli.sh
+
+# 方式二：将 magic-cli.sh 所在目录加入 PATH
+export PATH="/path/to/magic-cli/scripts:$PATH"`}
+            </code>
+            <p className="text-xs">配置后刷新可用性检查，即可切换使用 Magic CLI 引擎。</p>
           </div>
         </motion.div>
       </div>

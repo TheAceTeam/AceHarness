@@ -613,7 +613,7 @@ export class WorkflowManager extends EventEmitter {
   private async initializeEngine(workflowEngine?: string): Promise<void> {
     try {
       const requestedEngine = workflowEngine?.trim();
-      try {
+try {
         this.engineType = requestedEngine
           ? await resolveRequestedEngineType(requestedEngine)
           : await getConfiguredEngine();

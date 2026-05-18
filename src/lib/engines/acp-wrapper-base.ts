@@ -105,9 +105,10 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-      if (options.model && this.currentModelId !== options.model) {
+if (options.model && this.currentModelId !== options.model) {
         const tModel = Date.now();
         try {
+          // magic-cli doesn't support runtime model switching via ACP, so skip this step for it.
           await engine.setModel(options.model);
           this.currentModelId = options.model;
           logAcpTiming(timingLabel, 'wrap.W3_setModel', tModel);

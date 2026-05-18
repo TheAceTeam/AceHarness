@@ -10,7 +10,6 @@ import { CursorEngineWrapper } from '@/lib/engines/cursor-wrapper';
 import { TraeCliEngineWrapper } from '@/lib/engines/trae-cli-wrapper';
 import { NgaEngineWrapper } from '@/lib/engines/nga-wrapper';
 import { CodexEngineWrapper } from '@/lib/engines/codex-wrapper';
-import { CangjieMagicEngineWrapper } from '@/lib/engines/cangjie-magic-wrapper';
 
 async function hasModule(moduleName: string): Promise<boolean> {
   try {
@@ -19,17 +18,6 @@ async function hasModule(moduleName: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-async function resolveMagicPathForTest(): Promise<string | null> {
-  try {
-    const vars = await loadEnvVars();
-    const envObj = buildEnvObject(vars);
-    if (envObj.CANGJIE_MAGIC_PATH) return envObj.CANGJIE_MAGIC_PATH;
-  } catch {
-    // ignore and fall back to process env
-  }
-  return process.env.CANGJIE_MAGIC_PATH || null;
 }
 
 describe('wrapper availability in current environment', () => {
@@ -100,24 +88,6 @@ describe('wrapper availability in current environment', () => {
       commandExists('ngagent') ||
       commandExists('nga') ||
       (wrapper as any).findConfiguredCodeagent() !== null;
-    await expect(wrapper.isAvailable()).resolves.toBe(expected);
-  });
-
-  test('cangjie-magic matches env + cjpm availability', async () => {
-    const wrapper = new CangjieMagicEngineWrapper();
-    const home = await detectCangjieHome();
-    const magicPath = await resolveMagicPathForTest();
-    let expected = false;
-
-    if (home && magicPath) {
-      try {
-        const env = await buildCangjieSpawnEnv(home);
-        expected = isCjpmAvailable(env);
-      } catch {
-        expected = false;
-      }
-    }
-
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
   });
 });

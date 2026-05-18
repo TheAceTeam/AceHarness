@@ -18,7 +18,6 @@ const SUPPORTED_ENGINES = [
   'kiro-cli',
   'codex',
   'claude-code',
-  'cangjie-magic',
 ];
 
 const SUPPORTED_DRIVERS = ['sdk', 'stdio', 'all'];

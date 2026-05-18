@@ -176,7 +176,7 @@ const MODULES: ModuleSpec[] = [
     eta: '75s',
     bullets: [
       '切换引擎前请先安装 CLI 工具。',
-      '常用清单：claude-code / kiro-cli / opencode / nga / codegenie / cursor / codex / trae-cli / cangjie-magic。',
+      '常用清单：claude-code / kiro-cli / opencode / nga / codegenie / cursor / codex / trae-cli / magic-cli。',
       '引擎可用后再配模型，避免“模型可选但引擎不可用”。',
     ],
     notes: ['模型像大脑，引擎像腿。只长脑不长腿，走不远。'],
@@ -435,7 +435,7 @@ function renderModulePanel(moduleKey: ModuleKey) {
     return (
       <div className="rounded-xl border bg-card/60 p-4 space-y-2">
         <Badge variant="secondary">引擎预装清单</Badge>
-        {['claude-code', 'kiro-cli', 'opencode', 'nga', 'codegenie', 'cursor', 'codex', 'trae-cli', 'cangjie-magic'].map((item) => (
+        {['claude-code', 'kiro-cli', 'opencode', 'nga', 'codegenie', 'cursor', 'codex', 'trae-cli', 'magic-cli'].map((item) => (
           <div key={item} className="rounded-md border bg-background px-3 py-2 text-sm flex items-center justify-between">
             <span>{item}</span>
             <span className="text-xs text-muted-foreground">建议先安装</span>
@@ -1101,7 +1101,7 @@ export function StoryOnboarding({
                   <p className="text-muted-foreground">此处为演示核对项，不会写入真实配置。</p>
                   <div className="space-y-2">
                     {[
-                      ['engineReady', '确认引擎工具预装完成（claude-code / kiro-cli / opencode / nga / codegenie / cursor / codex / trae-cli / cangjie-magic）'],
+                      ['engineReady', '确认引擎工具预装完成（claude-code / kiro-cli / opencode / nga / codegenie / cursor / codex / trae-cli / magic-cli）'],
                       ['defaultModel', '确认默认模型策略（稳定优先）'],
                       ['agentGroup', '确认基础 Agent 角色分组（Defender / Attacker / Judge）'],
                       ['personalDirReady', '为用户配置个人工作目录（个人空间必需）'],
