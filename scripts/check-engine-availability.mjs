@@ -189,7 +189,7 @@ function tryClaudeSdk() {
 
 function tryOpenCodeSdk() {
   try {
-    const r = spawnSync(process.execPath, ['-e', "require('@opencode-ai/sdk'); console.log('ok')"], {
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', "import('@opencode-ai/sdk').then(()=>console.log('ok'))"], {
       cwd: process.cwd(),
       encoding: 'utf-8',
     });

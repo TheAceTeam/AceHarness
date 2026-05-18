@@ -75,6 +75,18 @@ function resolveWindowsCmdShell(): string {
   return candidates.find((candidate) => candidate.toLowerCase().endsWith('cmd.exe') && existsSync(candidate)) || candidates[0];
 }
 
+function resolveWindowsPowerShell(): string {
+  const candidates = [
+    process.env.PSHOME?.trim() ? join(process.env.PSHOME.trim(), 'powershell.exe') : '',
+    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    'pwsh.exe',
+    'powershell.exe',
+  ].filter(Boolean) as string[];
+
+  return candidates.find((candidate) => candidate.toLowerCase().endsWith('.exe') && existsSync(candidate)) || candidates[0];
+}
+
 function getExecutableCandidates(command: string): string[] {
   if (process.platform !== 'win32') return [command];
 
@@ -140,6 +152,36 @@ function findCommandViaLoginShell(command: string): string | null {
   }
 }
 
+function findCommandViaPowerShell(command: string): string | null {
+  if (process.platform !== 'win32') return null;
+  if (!/^[\w.-]+$/.test(command)) return null;
+
+  const shell = resolveWindowsPowerShell();
+  try {
+    const output = execFileSync(
+      shell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-Command -Name '${command}' -ErrorAction Stop | Select-Object -First 1 -ExpandProperty Source)`,
+      ],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 5000,
+        windowsHide: true,
+        env: windowsEnvForChildProcess(),
+      }
+    ).trim();
+
+    if (!output || output.includes('\n')) return null;
+    return existsSync(output) ? output : null;
+  } catch {
+    return null;
+  }
+}
+
 export function findCommand(command: string, extraPaths: string[] = []): string | null {
   if (!command || /[\r\n]/.test(command)) return null;
 
@@ -183,6 +225,9 @@ export function findCommand(command: string, extraPaths: string[] = []): string 
 
   const shellResolved = findCommandViaLoginShell(command);
   if (shellResolved) return shellResolved;
+
+  const powerShellResolved = findCommandViaPowerShell(command);
+  if (powerShellResolved) return powerShellResolved;
 
   return null;
 }

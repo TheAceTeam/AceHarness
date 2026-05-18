@@ -50,7 +50,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const { engine, defaultModel, driver } = await request.json();
+    const { engine, targetEngine, defaultModel, driver } = await request.json();
 
     if (!engine) {
       return NextResponse.json({ error: 'Engine is required' }, { status: 400 });
@@ -63,6 +63,8 @@ export async function POST(request: Request) {
       existing = JSON.parse(content);
     } catch { /* new file */ }
 
+    const driverTarget = String(targetEngine || engine || '').trim();
+
     const config: EngineConfig = {
       ...existing,
       engine,
@@ -73,27 +75,27 @@ export async function POST(request: Request) {
       config.defaultModel = defaultModel;
     }
     // Only update driver if explicitly provided
-    const normalizedDriver = normalizeDriverSelection(engine, driver);
+    const normalizedDriver = normalizeDriverSelection(driverTarget, driver);
     if (normalizedDriver) {
       config.drivers = {
         ...(config.drivers || {}),
-        [engine]: normalizedDriver,
+        [driverTarget]: normalizedDriver,
       };
-      if (config.engine === engine) {
+      if (config.engine === driverTarget) {
         config.driver = normalizedDriver;
       }
-    } else if (!supportsDriverSelection(engine)) {
-      if (config.engine === engine) {
+    } else if (!supportsDriverSelection(driverTarget)) {
+      if (config.engine === driverTarget) {
         delete config.driver;
       }
     } else {
-      const fallbackDriver = getDefaultDriver(engine);
+      const fallbackDriver = getDefaultDriver(driverTarget);
       if (fallbackDriver) {
         config.drivers = {
           ...(config.drivers || {}),
-          [engine]: fallbackDriver,
+          [driverTarget]: fallbackDriver,
         };
-        if (config.engine === engine && !config.driver) {
+        if (config.engine === driverTarget && !config.driver) {
           config.driver = fallbackDriver;
         }
       }
