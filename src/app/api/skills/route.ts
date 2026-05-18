@@ -1,10 +1,41 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { createReadStream, existsSync } from 'fs';
+import { createReadStream, createWriteStream, existsSync } from 'fs';
 import unzipper from 'unzipper';
+import { ZipFile } from 'yazl';
 import { getInstallSkillsDirPath, getRuntimeSkillsDirPath, getSkillsTempPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
+
+/** Zip directory contents using yazl (portable; avoids Windows missing `zip` and GBK stderr mojibake). */
+async function zipDirectoryContents(sourceDir: string, destZipPath: string): Promise<void> {
+  const zipfile = new ZipFile();
+
+  async function walk(rel: string): Promise<void> {
+    const abs = path.join(sourceDir, rel);
+    const entries = await fs.readdir(abs, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryRel = rel ? path.join(rel, entry.name) : entry.name;
+      if (entry.isDirectory()) {
+        await walk(entryRel);
+      } else {
+        const metadataPath = entryRel.split(path.sep).join('/');
+        zipfile.addFile(path.join(sourceDir, entryRel), metadataPath);
+      }
+    }
+  }
+
+  await walk('');
+
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(destZipPath);
+    out.on('error', reject);
+    out.on('close', () => resolve());
+    zipfile.outputStream.on('error', reject);
+    zipfile.outputStream.pipe(out);
+    zipfile.end();
+  });
+}
 
 /** Scan skills/ directory, find xxx/SKILL.md with valid frontmatter */
 async function discoverSkills(skillsDir: string) {
@@ -192,10 +223,7 @@ export async function PUT(request: NextRequest) {
     }
 
     const zipPath = getSkillsTempPath('skills-export.zip');
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-    await execAsync(`cd "${tmpDir}" && zip -r "${zipPath}" .`, { maxBuffer: 50 * 1024 * 1024 });
+    await zipDirectoryContents(tmpDir, zipPath);
 
     const zipBuffer = await fs.readFile(zipPath);
 
