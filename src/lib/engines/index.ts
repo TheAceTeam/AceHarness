@@ -13,6 +13,7 @@ export * from './kiro-cli-wrapper';
 export * from './opencode-wrapper';
 export * from './opencode-sdk-wrapper';
 export * from './nga-wrapper';
+export * from './nga-sdk-wrapper';
 export * from './codegenie-wrapper';
 export * from './codegenie-sdk-wrapper';
 export * from './codex-wrapper';

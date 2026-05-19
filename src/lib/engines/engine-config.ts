@@ -12,6 +12,7 @@ const ENGINE_CONFIG_DIRS: Record<string, string> = {
   'opencode': '.opencode',
   'opencode-sdk': '.opencode',
   'nga': '.opencode',
+  'nga-sdk': '.opencode',
   'codegenie': '.opencode',
   'codegenie-sdk': '.opencode',
   'codex': '.codex',

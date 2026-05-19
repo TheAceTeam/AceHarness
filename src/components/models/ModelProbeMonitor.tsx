@@ -103,7 +103,7 @@ interface GroupActionDialogState {
 const POLL_INTERVAL_MS = 30_000;
 const HISTORY_BAR_COUNT = 60;
 const DEFAULT_POLL_MINUTES = 5;
-const DRIVER_CAPABLE_ENGINES = new Set(['claude-code', 'opencode', 'codegenie']);
+const DRIVER_CAPABLE_ENGINES = new Set(['claude-code', 'opencode', 'nga', 'codegenie']);
 const PROBE_ENGINES = [
   'claude-code',
   'codex',

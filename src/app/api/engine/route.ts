@@ -14,14 +14,14 @@ interface EngineConfig {
   engine: string;
   defaultModel?: string;
   driver?: EngineDriver;
-  drivers?: Partial<Record<'claude-code' | 'opencode' | 'codegenie', EngineDriver>>;
+  drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
   updatedAt: string;
 }
 
 function getConfiguredDriver(config: EngineConfig, engine?: string | null): EngineDriver | undefined {
   const normalizedEngine = String(engine || '').trim();
   if (!supportsDriverSelection(normalizedEngine)) return undefined;
-  const driverKey = normalizedEngine as 'claude-code' | 'opencode' | 'codegenie';
+  const driverKey = normalizedEngine as 'claude-code' | 'opencode' | 'nga' | 'codegenie';
   return normalizeDriverSelection(normalizedEngine, config.drivers?.[driverKey] || config.driver);
 }
 

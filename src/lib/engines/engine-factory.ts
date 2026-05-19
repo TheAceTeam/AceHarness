@@ -17,17 +17,18 @@ import { ClaudeCodeEngineWrapper } from './claude-code-wrapper';
 import { ClaudeCodeAcpEngineWrapper } from './claude-code-acp-wrapper';
 import { TraeCliEngineWrapper } from './trae-cli-wrapper';
 import { NgaEngineWrapper } from './nga-wrapper';
+import { NgaSdkEngineWrapper } from './nga-sdk-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
 import { CodegenieSdkEngineWrapper } from './codegenie-sdk-wrapper';
 import { MagicCliEngineWrapper } from './magic-cli-wrapper';
 
-export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'opencode-sdk' | 'nga' | 'codegenie' | 'codegenie-sdk' | 'trae-cli' | 'magic-cli';
+export type EngineType = 'claude-code' | 'claude-code-acp' | 'kiro-cli' | 'codex' | 'cursor' | 'opencode' | 'opencode-sdk' | 'nga' | 'nga-sdk' | 'codegenie' | 'codegenie-sdk' | 'trae-cli' | 'magic-cli';
 export type EngineDriver = 'stdio' | 'sdk';
 
 interface EngineConfig {
   engine: EngineType;
   driver?: EngineDriver;
-  drivers?: Partial<Record<'claude-code' | 'opencode' | 'codegenie', EngineDriver>>;
+  drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
   updatedAt?: string;
 }
 
@@ -37,16 +38,18 @@ export interface EngineAvailabilityReport {
   drivers?: Partial<Record<EngineDriver, boolean>>;
 }
 
-const DRIVER_CAPABLE_ENGINES = new Set<EngineType | 'claude-code' | 'opencode' | 'codegenie'>(['claude-code', 'opencode', 'codegenie']);
-const DEFAULT_DRIVER_BY_ENGINE: Partial<Record<EngineType | 'claude-code' | 'opencode' | 'codegenie', EngineDriver>> = {
+const DRIVER_CAPABLE_ENGINES = new Set<EngineType | 'claude-code' | 'opencode' | 'nga' | 'codegenie'>(['claude-code', 'opencode', 'nga', 'codegenie']);
+const DEFAULT_DRIVER_BY_ENGINE: Partial<Record<EngineType | 'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>> = {
   'claude-code': 'sdk',
   'opencode': 'sdk',
+  'nga': 'stdio',
   'codegenie': 'stdio',
 };
 
 const EFFECTIVE_TO_LOGICAL_ENGINE: Partial<Record<EngineType, EngineType>> = {
   'claude-code-acp': 'claude-code',
   'opencode-sdk': 'opencode',
+  'nga-sdk': 'nga',
   'codegenie-sdk': 'codegenie',
 };
 
@@ -82,6 +85,10 @@ export function resolveEffectiveEngine(engine?: string | null, driver?: string |
 
   if (normalizedEngine === 'opencode') {
     return normalizedDriver === 'sdk' ? 'opencode-sdk' : 'opencode';
+  }
+
+  if (normalizedEngine === 'nga') {
+    return normalizedDriver === 'sdk' ? 'nga-sdk' : 'nga';
   }
 
   if (normalizedEngine === 'codegenie') {
@@ -133,11 +140,11 @@ async function selectPreferredEffectiveEngine(engine: EngineType, configuredDriv
 }
 
 function getConfiguredDriver(config: EngineConfig | null, engine?: string | null): EngineDriver | undefined {
-  const normalizedEngine = String(engine || '').trim() as 'claude-code' | 'opencode' | 'codegenie' | EngineType | '';
+  const normalizedEngine = String(engine || '').trim() as 'claude-code' | 'opencode' | 'nga' | 'codegenie' | EngineType | '';
   if (!normalizedEngine || !supportsDriverSelection(normalizedEngine)) {
     return undefined;
   }
-  const mapped = config?.drivers?.[normalizedEngine as 'claude-code' | 'opencode' | 'codegenie'];
+  const mapped = config?.drivers?.[normalizedEngine as 'claude-code' | 'opencode' | 'nga' | 'codegenie'];
   return normalizeDriverSelection(normalizedEngine, mapped ?? config?.driver);
 }
 
@@ -304,10 +311,22 @@ async function instantiateResolvedEngine(engineType: EngineType, requestedType?:
     case 'nga':
       const ngaEngine = new NgaEngineWrapper();
       if (!(await ngaEngine.isAvailable())) {
-        console.warn('[EngineFactory] NGA (nga) is not available');
-        return null;
+        console.warn('[EngineFactory] NGA stdio is not available, trying SDK fallback');
+        return await instantiateResolvedEngine('nga-sdk', requestedType || engineType);
       }
       return ngaEngine;
+
+    case 'nga-sdk':
+      const ngaSdkEngine = new NgaSdkEngineWrapper();
+      if (!(await ngaSdkEngine.isAvailable())) {
+        console.warn('[EngineFactory] NGA SDK is not available, trying stdio fallback');
+        if ((requestedType || engineType) === 'nga-sdk') {
+          const fallback = new NgaEngineWrapper();
+          if (await fallback.isAvailable()) return fallback;
+        }
+        return null;
+      }
+      return ngaSdkEngine;
 
     case 'codegenie':
       const codegenieEngine = new CodegenieEngineWrapper();
@@ -397,6 +416,10 @@ case 'claude-code-acp':
       const ngaCheck = new NgaEngineWrapper();
       return await ngaCheck.isAvailable();
 
+    case 'nga-sdk':
+      const ngaSdkCheck = new NgaSdkEngineWrapper();
+      return await ngaSdkCheck.isAvailable();
+
     case 'codegenie':
       const codegenieCheck = new CodegenieEngineWrapper();
       return await codegenieCheck.isAvailable();
@@ -442,6 +465,16 @@ export async function getEngineAvailabilityReport(type: EngineType | string): Pr
   if (engine === 'opencode') {
     const stdio = await new OpenCodeEngineWrapper().isAvailable();
     const sdk = await new OpenCodeSdkEngineWrapper().isAvailable();
+    return {
+      engine,
+      available: sdk || stdio,
+      drivers: { sdk, stdio },
+    };
+  }
+
+  if (engine === 'nga') {
+    const stdio = await new NgaEngineWrapper().isAvailable();
+    const sdk = await new NgaSdkEngineWrapper().isAvailable();
     return {
       engine,
       available: sdk || stdio,
