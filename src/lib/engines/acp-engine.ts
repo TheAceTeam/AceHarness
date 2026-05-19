@@ -91,6 +91,8 @@ export function logAcpTiming(engineType: string, phase: string, startedAt: numbe
 }
 
 const DEFAULT_ACP_PHASE_MS = 30_000;
+/** Default for `newSession` only (NGA memory sync can exceed 30s). */
+const DEFAULT_ACP_NEW_SESSION_MS = 60_000;
 const MIN_ACP_PHASE_MS = 1_000;
 const MAX_ACP_PHASE_MS = 900_000;
 
@@ -106,9 +108,9 @@ export function getAcpInitTimeoutMs(): number {
   return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_INIT_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
 }
 
-/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 30000. */
+/** Timeout for `connection.newSession` (ms). Env: `ACE_ACP_NEW_SESSION_TIMEOUT_MS`, default 60000. */
 export function getAcpNewSessionTimeoutMs(): number {
-  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_PHASE_MS);
+  return parseAcpPhaseTimeoutMs(process.env.ACE_ACP_NEW_SESSION_TIMEOUT_MS, DEFAULT_ACP_NEW_SESSION_MS);
 }
 
 /** Timeout for `session/load` when resuming (ms). Env: `ACE_ACP_LOAD_SESSION_TIMEOUT_MS`, default 30000. */
