@@ -179,7 +179,7 @@ export default function EnginesPage() {
     models.filter(m => !m.engines || m.engines.length === 0 || m.engines.includes(engineId));
 
   const getDriverForEngine = (engineId: string): 'stdio' | 'sdk' =>
-    driverSelections[engineId] || (engineId === 'codegenie' ? 'stdio' : 'sdk');
+    driverSelections[engineId] || (engineId === 'codegenie' || engineId === 'nga' ? 'stdio' : 'sdk');
 
   const getEngineReport = (engineId: string): EngineAvailabilityReport | undefined =>
     engineAvailability[engineId];
@@ -614,7 +614,7 @@ export default function EnginesPage() {
                 </div>
               </div>
 
-              {engine.status === 'available' && ['claude-code', 'opencode', 'codegenie'].includes(engine.id) && (
+              {engine.status === 'available' && ['claude-code', 'opencode', 'nga', 'codegenie'].includes(engine.id) && (
                 <div className="mt-4 pt-4 border-t border-border/50" onClick={(e) => e.stopPropagation()}>
                   <p className="text-xs font-medium text-muted-foreground mb-2">驱动模式：</p>
                   <div className="flex gap-2">
