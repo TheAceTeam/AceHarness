@@ -43,6 +43,7 @@ vite.config.ts
 
 
 .ace-outputs/
+.aceharness/
 
 runs/
 
