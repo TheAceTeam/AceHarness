@@ -60,6 +60,7 @@ import { cn } from '@/lib/core/utils';
 import { MultiCombobox } from '@/components/ui/combobox';
 import { PaginationBar } from '@/components/PaginationBar';
 import ModelProbeMonitor from '@/components/models/ModelProbeMonitor';
+import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
 
 interface Model {
   id: string;
@@ -308,10 +309,10 @@ export default function ModelsPage() {
     costMultiplier: 1,
     contextWindow: undefined,
   });
-  const [activeTab, setActiveTab] = useState<'catalog' | 'probe'>(() => {
+  const [activeTab, setActiveTab] = useState<'catalog' | 'probe' | 'diagnostics'>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('models-active-tab');
-      if (saved === 'catalog' || saved === 'probe') return saved;
+      if (saved === 'catalog' || saved === 'probe' || saved === 'diagnostics') return saved;
     }
     return 'catalog';
   });
@@ -549,11 +550,12 @@ export default function ModelsPage() {
         ) : null}
       </header>
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'catalog' | 'probe')} className="flex min-h-0 flex-1 flex-col">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'catalog' | 'probe' | 'diagnostics')} className="flex min-h-0 flex-1 flex-col">
         <div className="border-b bg-background/70 px-6 py-3">
-          <TabsList className="grid w-full max-w-[360px] grid-cols-2 rounded-2xl">
+          <TabsList className="grid w-full max-w-[540px] grid-cols-3 rounded-2xl">
             <TabsTrigger value="catalog" className="rounded-xl">模型管理</TabsTrigger>
             <TabsTrigger value="probe" className="rounded-xl">探针监控</TabsTrigger>
+            <TabsTrigger value="diagnostics" className="rounded-xl">诊断评测</TabsTrigger>
           </TabsList>
         </div>
 
@@ -793,6 +795,17 @@ export default function ModelsPage() {
 
         <TabsContent value="probe" className="mt-0 min-h-0 flex-1">
           <ModelProbeMonitor
+            managedModels={models.map((model) => ({
+              id: model.id,
+              name: model.name,
+              endpoints: model.endpoints || [],
+              engines: model.engines || [],
+            }))}
+          />
+        </TabsContent>
+
+        <TabsContent value="diagnostics" className="mt-0 min-h-0 flex-1">
+          <ModelDiagnosticsWorkbench
             managedModels={models.map((model) => ({
               id: model.id,
               name: model.name,
