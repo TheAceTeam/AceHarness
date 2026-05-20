@@ -149,7 +149,7 @@ describe('spec-coding API routes', () => {
         ]);
         expect(created.session.artifactSnapshots).toHaveLength(1);
         expect(created.session.specCoding.artifacts.requirements).toContain('Confirm requirements before generating workflow config');
-        expect(created.session.specCoding.artifacts.tasks).toContain('spec-coding-task:1');
+        expect(created.session.specCoding.artifacts.tasks).toContain('spec-coding-task:T1');
 
         response = await sessions.POST(makeRequest('/api/spec-coding/sessions', {
           token: owner.token,

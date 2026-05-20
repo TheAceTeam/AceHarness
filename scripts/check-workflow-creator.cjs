@@ -2,27 +2,25 @@
 /**
  * check-workflow-creator.cjs
  *
- * 使用 Haiku 4.5 真实调用 AI，测试 workflow-creator agent 能否产出通过验证的
- * workflow_draft <result> JSON（状态机模式）。
+ * 通过当前仓库的 engine wrapper 真实调用 AI，检查 workflow-creator agent 是否能产出
+ * 通过验证的 workflow_draft JSON，并统计通过率。
  *
- * 验证规则对齐 skills/aceharness-workflow-creator/scripts/validate-workflow.mjs
- * 和 src/lib/core/creator-validation.ts
- *
- * Usage:  npm run check:workflow-creator
- * Env:    ANTHROPIC_API_KEY
- * Exit:   0 = PASS, 1 = FAIL
+ * 默认:
+ *   engine = opencode
+ *   driver = sdk
+ *   model  = glm-4.7
  */
 
 const fs = require('fs');
 const path = require('path');
+const {
+  extractResultTag,
+  parseCommonArgs,
+  printCommonHelp,
+  runCheckSuite,
+} = require('./check-wrapper-runner.cjs');
 
-const MODEL = 'claude-haiku-4-5-20250514';
 const MAX_RETRIES = 2;
-const MAX_TOKENS = 4096;
-
-// ---------------------------------------------------------------------------
-// System prompt (from SKILL.md + PROMPT.md)
-// ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `你是 ACEHarness 工作流创建器。根据用户描述的测试/评审流程，生成一个 ACEHarness 状态机工作流配置。
 
@@ -60,10 +58,6 @@ const SYSTEM_PROMPT = `你是 ACEHarness 工作流创建器。根据用户描述
 </result>
 `;
 
-// ---------------------------------------------------------------------------
-// Build user prompt - optionally load spec-coding result for task binding
-// ---------------------------------------------------------------------------
-
 function buildUserPrompt() {
   let specContext = '';
   const specPath = path.join(__dirname, '.spec-coding-result.json');
@@ -92,173 +86,221 @@ ${specContext}
 请输出 <result> 标签包裹的 workflow_draft JSON。`;
 }
 
-// ---------------------------------------------------------------------------
-// Result extraction
-// ---------------------------------------------------------------------------
-
-function extractResult(text) {
-  const m = text.match(/<result>([\s\S]*?)<\/result>/);
-  if (!m) return { parsed: null, error: 'No <result>...</result> tags found' };
-  try {
-    return { parsed: JSON.parse(m[1].trim()), error: null };
-  } catch (e) {
-    try {
-      const fixed = m[1].trim().replace(/,\s*(}|])/g, '$1');
-      return { parsed: JSON.parse(fixed), error: null };
-    } catch {
-      return { parsed: null, error: `Invalid JSON: ${e.message}` };
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Validation (mirrors validate-workflow.mjs + creator-validation.ts)
-// ---------------------------------------------------------------------------
+const extractResult = extractResultTag;
 
 function validate(result) {
   const errors = [];
-  if (!result || typeof result !== 'object') return { valid: false, errors: ['Result must be object'] };
-  if (result.kind !== 'workflow_draft') errors.push('kind must be "workflow_draft"');
-  if (!result.payload || typeof result.payload !== 'object') return { valid: false, errors: [...errors, 'Missing payload'] };
+  if (!result || typeof result !== 'object') {
+    return { valid: false, errors: [`结果必须是 JSON 对象，但实际类型是 ${typeof result}。确保 <result> 内是合法 JSON`] };
+  }
+
+  if (result.kind !== 'workflow_draft') {
+    errors.push(`kind 必须是 "workflow_draft"，但实际值是 ${JSON.stringify(result.kind)}。顶层 key 有: [${Object.keys(result).join(', ')}]`);
+  }
+  if (!result.payload || typeof result.payload !== 'object') {
+    return { valid: false, errors: [...errors, `缺少 payload 对象。顶层 key 有: [${Object.keys(result).join(', ')}]。正确结构: {"kind":"workflow_draft","payload":{"filename":"...","summary":"...","config":{...}}}`] };
+  }
 
   const p = result.payload;
-  if (typeof p.filename !== 'string' || !p.filename.endsWith('.yaml')) errors.push('payload.filename must end with .yaml');
-  if (!p.config || typeof p.config !== 'object') return { valid: false, errors: [...errors, 'payload.config missing'] };
+  if (typeof p.filename !== 'string' || !p.filename.endsWith('.yaml')) {
+    errors.push(`payload.filename 必须以 .yaml 结尾，但实际值是 ${JSON.stringify(p.filename)}。示例: "review.yaml"`);
+  }
+  if (!p.config || typeof p.config !== 'object') {
+    return { valid: false, errors: [...errors, `payload.config 缺失。payload 的 key 有: [${Object.keys(p).join(', ')}]。config 必须包含 workflow 和 context 两个子对象`] };
+  }
 
   const cfg = p.config;
-  if (!cfg.workflow || typeof cfg.workflow !== 'object') return { valid: false, errors: [...errors, 'config.workflow missing'] };
-  if (!cfg.context || typeof cfg.context !== 'object') return { valid: false, errors: [...errors, 'config.context missing'] };
+  if (!cfg.workflow || typeof cfg.workflow !== 'object') {
+    return { valid: false, errors: [...errors, `config.workflow 缺失。config 的 key 有: [${Object.keys(cfg).join(', ')}]。workflow 必须包含 mode、name、states`] };
+  }
+  if (!cfg.context || typeof cfg.context !== 'object') {
+    return { valid: false, errors: [...errors, `config.context 缺失。config 的 key 有: [${Object.keys(cfg).join(', ')}]。context 必须包含 projectRoot 和 workspaceMode`] };
+  }
 
-  // context
   const pr = cfg.context.projectRoot;
-  if (typeof pr !== 'string' || !pr.startsWith('/')) errors.push('context.projectRoot must be absolute path (start with /)');
+  if (typeof pr !== 'string' || !pr.startsWith('/')) {
+    errors.push(`context.projectRoot 必须是绝对路径（以 / 开头），但实际值是 ${JSON.stringify(pr)}。示例: "/Users/dev/collab-editor"`);
+  }
 
-  // workflow states
   const wf = cfg.workflow;
   if (!Array.isArray(wf.states) || wf.states.length === 0) {
-    errors.push('workflow.states must be non-empty array');
+    errors.push(`workflow.states 必须是非空数组，但实际 ${wf.states === undefined ? '不存在' : Array.isArray(wf.states) ? '是空数组 []' : `类型是 ${typeof wf.states}`}。workflow 的 key 有: [${Object.keys(wf).join(', ')}]`);
     return { valid: false, errors };
   }
 
   const stateNames = new Set();
-  wf.states.forEach(s => stateNames.add(s.name));
+  wf.states.forEach((state) => stateNames.add(state.name));
+  const allStateNames = [...stateNames].filter(Boolean);
 
-  const initials = wf.states.filter(s => s.isInitial);
-  const finals = wf.states.filter(s => s.isFinal);
-  if (initials.length !== 1) errors.push(`Must have exactly 1 isInitial state (found ${initials.length})`);
-  if (finals.length < 1) errors.push('Must have at least 1 isFinal state');
+  const initials = wf.states.filter((state) => state.isInitial);
+  const finals = wf.states.filter((state) => state.isFinal);
+  if (initials.length !== 1) {
+    const initialNames = initials.map((s) => `"${s.name}"`).join(', ');
+    errors.push(`必须恰好有 1 个 isInitial 状态，但找到 ${initials.length} 个${initials.length > 0 ? ` [${initialNames}]` : ''}。所有状态: [${allStateNames.map((n) => `"${n}"`).join(', ')}]。注意: 用 isInitial（不是 initial）`);
+  }
+  if (finals.length < 1) {
+    errors.push(`必须至少有 1 个 isFinal 状态，但找到 0 个。所有状态: [${allStateNames.map((n) => `"${n}"`).join(', ')}]。注意: 用 isFinal（不是 final），终止状态的 steps=[] transitions=[]`);
+  }
 
   const requiredVerdicts = ['pass', 'conditional_pass', 'fail'];
 
-  for (const state of wf.states) {
-    if (!state.name) { errors.push('State missing name'); continue; }
-
-    if (state.isFinal) {
-      // Final states should have empty steps/transitions
-      if (state.steps && state.steps.length > 0) errors.push(`Final state "${state.name}": steps should be empty`);
+  for (let si = 0; si < wf.states.length; si++) {
+    const state = wf.states[si];
+    if (!state.name) {
+      errors.push(`states[${si}] 缺少 name 字段。该状态的 key 有: [${Object.keys(state).join(', ')}]`);
       continue;
     }
 
-    // Non-final: check steps
+    if (state.isFinal) {
+      if (state.steps && state.steps.length > 0) {
+        errors.push(`终止状态 "${state.name}": steps 必须为空数组，但实际有 ${state.steps.length} 个 step。终止状态不执行任何操作，设置 steps:[] transitions:[]`);
+      }
+      continue;
+    }
+
     if (!Array.isArray(state.steps) || state.steps.length === 0) {
-      errors.push(`State "${state.name}": needs at least 1 step`);
+      errors.push(`状态 "${state.name}": 非终止状态必须至少有 1 个 step，但 ${state.steps === undefined ? 'steps 不存在' : Array.isArray(state.steps) ? 'steps 是空数组' : `steps 类型是 ${typeof state.steps}`}。step 格式: {"name":"...","agent":"...","task":"..."}`);
     } else {
-      for (const step of state.steps) {
-        if (!step.name) errors.push(`State "${state.name}": step missing name`);
-        if (!step.agent) errors.push(`State "${state.name}": step missing agent`);
-        if (!step.task && !step.prompt) errors.push(`State "${state.name}": step missing task/prompt`);
+      for (let j = 0; j < state.steps.length; j++) {
+        const step = state.steps[j];
+        const stepKeys = step && typeof step === 'object' ? Object.keys(step) : [];
+        const stepMissing = [];
+        if (!step.name) stepMissing.push('name');
+        if (!step.agent) stepMissing.push('agent');
+        if (!step.task && !step.prompt) stepMissing.push('task');
+        if (stepMissing.length > 0) {
+          errors.push(`状态 "${state.name}" 的 steps[${j}] 缺少字段 [${stepMissing.join(', ')}]。当前有的 key: [${stepKeys.join(', ')}]。step 必须有 name、agent、task`);
+        }
       }
     }
 
-    // Non-final: check transitions (exactly 3 verdicts)
     const transitions = Array.isArray(state.transitions) ? state.transitions : [];
+    const foundVerdicts = transitions.map((t) => t?.condition?.verdict).filter(Boolean);
     for (const verdict of requiredVerdicts) {
-      const matches = transitions.filter(t => t?.condition?.verdict === verdict);
-      if (matches.length === 0) errors.push(`State "${state.name}": missing ${verdict} transition`);
-      else if (matches.length > 1) errors.push(`State "${state.name}": duplicate ${verdict} transition`);
+      const matches = transitions.filter((transition) => transition?.condition?.verdict === verdict);
+      if (matches.length === 0) {
+        errors.push(`状态 "${state.name}": 缺少 verdict="${verdict}" 的转移。当前有 ${transitions.length} 条转移，verdict 分别是 [${foundVerdicts.map((v) => `"${v}"`).join(', ') || '无'}]。非终止状态必须恰好有 pass、conditional_pass、fail 三条转移`);
+      } else if (matches.length > 1) {
+        errors.push(`状态 "${state.name}": verdict="${verdict}" 的转移重复了 ${matches.length} 次，必须恰好 1 次`);
+      }
     }
 
-    // Check transition targets exist
-    for (const t of transitions) {
-      if (t.to && !stateNames.has(t.to)) errors.push(`State "${state.name}": transition target "${t.to}" not found`);
+    for (const transition of transitions) {
+      const target = transition.target || transition.to;
+      if (transition.target && !transition.to) {
+        errors.push(`状态 "${state.name}": 转移使用了 "target":"${transition.target}"，但正确的字段名是 "to"（不是 target）。改为 "to":"${transition.target}"`);
+      }
+      if (transition.to && !stateNames.has(transition.to)) {
+        errors.push(`状态 "${state.name}": 转移目标 "${transition.to}" 不在已定义的状态列表中。可用状态: [${allStateNames.map((n) => `"${n}"`).join(', ')}]`);
+      }
     }
   }
 
   return { valid: errors.length === 0, errors };
 }
 
-// ---------------------------------------------------------------------------
-// Anthropic API
-// ---------------------------------------------------------------------------
+function printSummary(summary, options) {
+  if (options.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
 
-async function callHaiku(messages) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
-  const sys = messages.find(m => m.role === 'system');
-  const conv = messages.filter(m => m.role !== 'system');
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: MODEL, max_tokens: MAX_TOKENS, system: sys?.content || '', messages: conv }),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  return data.content.map(b => b.text).join('');
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-async function main() {
-  console.log('=== check:workflow-creator (Haiku 4.5) ===\n');
-
-  const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: buildUserPrompt() },
-  ];
-
-  for (let attempt = 1; attempt <= MAX_RETRIES + 1; attempt++) {
-    console.log(`Attempt ${attempt}/${MAX_RETRIES + 1}...`);
-    const t0 = Date.now();
-    try {
-      const output = await callHaiku(messages);
-      console.log(`  AI responded in ${((Date.now() - t0) / 1000).toFixed(1)}s (${output.length} chars)`);
-
-      const { parsed, error } = extractResult(output);
-      if (error) {
-        console.log(`  EXTRACT ERROR: ${error}`);
-        if (attempt <= MAX_RETRIES) {
-          messages.push({ role: 'assistant', content: output });
-          messages.push({ role: 'user', content: `错误: ${error}\n请输出修正后的 <result> JSON。` });
-          continue;
-        }
-        console.log('\nFAIL'); process.exit(1);
-      }
-
-      const { valid, errors } = validate(parsed);
-      if (!valid) {
-        console.log('  VALIDATION ERRORS:'); errors.forEach(e => console.log(`    - ${e}`));
-        if (attempt <= MAX_RETRIES) {
-          messages.push({ role: 'assistant', content: output });
-          messages.push({ role: 'user', content: `验证失败:\n${errors.map(e => '- ' + e).join('\n')}\n\n请修正后重新输出 <result> JSON。记住：isInitial/isFinal 不是 initial/final，转移用 to 不是 target，每个非终止状态恰好 3 条 verdict 转移。` });
-          continue;
-        }
-        console.log('\nFAIL'); process.exit(1);
-      }
-
-      // Success
-      const wf = parsed.payload.config.workflow;
-      console.log(`\n  PASS`);
-      console.log(`    filename: ${parsed.payload.filename}`);
-      console.log(`    states: ${wf.states.length} (${wf.states.map(s => s.name).join(' → ')})`);
-      console.log(`    steps: ${wf.states.reduce((n, s) => n + (s.steps?.length || 0), 0)}`);
-      process.exit(0);
-    } catch (err) {
-      console.error(`  ERROR: ${err.message}`);
-      if (attempt > MAX_RETRIES) { console.log('\nFAIL'); process.exit(1); }
+  console.log(`=== check:workflow-creator (${summary.engine}/${summary.driver}, ${summary.model}) ===\n`);
+  for (const run of summary.runs) {
+    const label = run.ok ? 'PASS' : 'FAIL';
+    console.log(`Run ${run.run}/${summary.total}: ${label} (${(run.durationMs / 1000).toFixed(1)}s)`);
+    if (run.sessionId) console.log(`  session: ${run.sessionId}`);
+    if (run.ok && run.parsed?.payload?.filename) console.log(`  filename: ${run.parsed.payload.filename}`);
+    if (!run.ok && run.error) console.log(`  error: ${run.error}`);
+    if (!run.ok && run.output) console.log(`  output: ${String(run.output).replace(/\s+/g, ' ').trim().slice(0, 240)}`);
+    if (!run.ok && run.validationErrors?.length) {
+      for (const item of run.validationErrors) console.log(`  - ${item}`);
     }
   }
+  console.log(`\nPass rate: ${summary.passed}/${summary.total} (${(summary.passRate * 100).toFixed(0)}%)`);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+async function main() {
+  const options = parseCommonArgs(process.argv.slice(2), {
+    engine: 'opencode',
+    driver: 'sdk',
+    model: 'glm-4.7',
+    timeoutMs: 180_000,
+    runs: 1,
+  });
+
+  if (options.help) {
+    printCommonHelp('check:workflow-creator', '\n示例:\n  npm run check:workflow-creator -- --engine opencode --driver sdk --model glm-4.7 --runs 3');
+    process.exit(0);
+  }
+
+  const summary = await runCheckSuite({
+    agent: 'workflow-creator',
+    step: 'check-workflow-creator',
+    systemPrompt: SYSTEM_PROMPT,
+    maxRetries: MAX_RETRIES,
+    createInitialMessages: () => [{ role: 'user', content: buildUserPrompt() }],
+    extractResult,
+    validate,
+    buildExecutionErrorPrompt: (error) => `执行失败：${error}\n请重新输出完整、合法的 <result> JSON。`,
+    buildRepairPrompt: ({ stage, error, errors }) => {
+      if (stage === 'extract') {
+        return `提取失败：${error}\n请只输出单个合法的 <result> JSON，不要在标签外输出正文。`;
+      }
+      return [
+        '验证失败，以下是具体问题：',
+        (errors || []).map((item) => `- ${item}`).join('\n'),
+        '',
+        '格式提醒：',
+        '- kind 必须是 "workflow_draft"',
+        '- 字段名: isInitial（不是 initial）、isFinal（不是 final）、to（不是 target）、verdict（不是 result）',
+        '- 非终止状态恰好 3 条转移: pass / conditional_pass / fail，用 condition.verdict 指定',
+        '- 终止状态: steps=[] transitions=[]',
+        '- step 格式: {"name":"...","agent":"...","task":"..."}',
+        '- 转移格式: {"to":"目标状态名","condition":{"verdict":"pass"}}',
+        '',
+        '请修正以上问题后重新输出完整的 <result> JSON。',
+      ].join('\n');
+    },
+  }, options);
+
+  printSummary(summary, options);
+  process.exit(summary.ok ? 0 : 1);
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.stack || error.message : error);
+  process.exit(1);
+});
+
+module.exports = {
+  definition: {
+    agent: 'workflow-creator',
+    step: 'check-workflow-creator',
+    systemPrompt: SYSTEM_PROMPT,
+    maxRetries: MAX_RETRIES,
+    createInitialMessages: () => [{ role: 'user', content: buildUserPrompt() }],
+    extractResult,
+    validate,
+    buildExecutionErrorPrompt: (error) => `执行失败：${error}\n请重新输出完整、合法的 <result> JSON。`,
+    buildRepairPrompt: ({ stage, error, errors }) => {
+      if (stage === 'extract') {
+        return `提取失败：${error}\n请只输出单个合法的 <result> JSON，不要在标签外输出正文。`;
+      }
+      return [
+        '验证失败，以下是具体问题：',
+        (errors || []).map((item) => `- ${item}`).join('\n'),
+        '',
+        '格式提醒：',
+        '- kind 必须是 "workflow_draft"',
+        '- 字段名: isInitial（不是 initial）、isFinal（不是 final）、to（不是 target）、verdict（不是 result）',
+        '- 非终止状态恰好 3 条转移: pass / conditional_pass / fail，用 condition.verdict 指定',
+        '- 终止状态: steps=[] transitions=[]',
+        '- step 格式: {"name":"...","agent":"...","task":"..."}',
+        '- 转移格式: {"to":"目标状态名","condition":{"verdict":"pass"}}',
+        '',
+        '请修正以上问题后重新输出完整的 <result> JSON。',
+      ].join('\n');
+    },
+  },
+};

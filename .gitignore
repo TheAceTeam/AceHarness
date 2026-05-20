@@ -47,6 +47,11 @@ vite.config.ts
 
 runs/
 
+# check script outputs
+scripts/.check-batch-logs/
+scripts/.spec-coding-result.json
+scripts/.clarification-qa-result.json
+
 .claude/
 .kiro/
 .opencode/

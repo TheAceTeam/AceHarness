@@ -793,19 +793,19 @@ function buildSpecCodingArtifacts(input: {
     ? input.phases.map((phase, index) => {
       const ownerText = phase.ownerAgents.length ? `（负责人：${phase.ownerAgents.join('、')}）` : '';
       return [
-        `- [ ] ${index + 1}. ${phase.title}${ownerText}`,
-        `  - [ ] ${index + 1}.1 明确 ${phase.title} 的验收标准`,
-        `    - _需求：${index + 1}_`,
-        `  - [ ] ${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
-        `    - _需求：${index + 1}_`,
+        `- [ ] T${index + 1} ${phase.title}${ownerText}`,
+        `  - [ ] T${index + 1}.1 明确 ${phase.title} 的验收标准`,
+        `    - _需求：T${index + 1}_`,
+        `  - [ ] T${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
+        `    - _需求：T${index + 1}_`,
       ].join('\n');
     }).join('\n\n')
     : [
-      '- [ ] 1. 需求澄清',
-      '  - [ ] 1.1 补齐目标、约束与验收标准',
-      '    - _需求：1_',
-      '  - [ ] 1.2 明确后续执行阶段与角色分工',
-      '    - _需求：1_',
+      '- [ ] T1 需求澄清',
+      '  - [ ] T1.1 补齐目标、约束与验收标准',
+      '    - _需求：T1_',
+      '  - [ ] T1.2 明确后续执行阶段与角色分工',
+      '    - _需求：T1_',
     ].join('\n');
   const tasks = [
     `# 实现计划：${input.workflowName}`,
