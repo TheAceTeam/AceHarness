@@ -279,7 +279,7 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
   const collapsibleActions = getCollapsibleActions();
 
   return (
-    <div className="w-full">
+    <div className="w-full py-1">
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -287,16 +287,16 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
             animate={{ height: 'auto', opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="overflow-hidden mb-2"
+            className="mb-1 overflow-hidden"
           >
-            <div className="flex flex-wrap gap-1.5 pb-1">
+            <div className="flex flex-wrap gap-1.5 pb-0.5">
               {collapsibleActions.map(a => (
                 <motion.button
                   key={a.label}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => { onAction(a.prompt); setExpanded(false); }}
-                  className={`inline-flex items-center gap-1 bg-gradient-to-r ${a.color} text-white text-[11px] font-medium px-2.5 py-1.5 rounded-lg border border-white/10`}
+                  className={`inline-flex items-center gap-1 bg-gradient-to-r ${a.color} rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white`}
                 >
                   <span className="material-symbols-outlined text-xs">{a.icon}</span>
                   {a.label}
@@ -307,13 +307,13 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
         )}
       </AnimatePresence>
 
-      <Suggestions className="mb-2 gap-1.5">
+      <Suggestions className="mb-1 gap-2">
         {pinnedActions.map((action) => (
           <Suggestion
             key={action.label}
             suggestion={action.prompt}
             onClick={() => onAction(action.prompt)}
-            className={`bg-gradient-to-r ${action.color} text-white text-[11px] font-medium border-white/10 shadow-sm hover:opacity-90`}
+            className={`h-10 rounded-full bg-gradient-to-r ${action.color} border-white/10 px-5 text-sm font-semibold text-white shadow-sm hover:opacity-90`}
             size="sm"
           >
             <span className="material-symbols-outlined text-xs">{action.icon}</span>
@@ -321,10 +321,10 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
           </Suggestion>
         ))}
       </Suggestions>
-      <div className="flex items-center justify-between gap-3 mb-1.5">
+      <div className="mb-0.5 flex items-center justify-between gap-3">
         <button
           onClick={() => setExpanded(e => !e)}
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           <span className="material-symbols-outlined text-sm">{expanded ? 'expand_more' : 'expand_less'}</span>
           {expanded ? '收起快捷操作' : '快捷操作'}

@@ -3,21 +3,21 @@
 import * as React from "react"
 import { useRef, useEffect } from "react"
 import { GripVertical } from "lucide-react"
-import { Group, Panel, Separator } from "react-resizable-panels"
-import type { PanelImperativeHandle } from "react-resizable-panels"
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels"
+import type { GroupProps, PanelImperativeHandle, PanelProps } from "react-resizable-panels"
 import { cn } from "@/lib/core/utils"
 
 const ResizablePanelGroup = ({
   className,
   ...props
-}: any) => (
-  <Group
+}: GroupProps) => (
+  <PanelGroup
     className={cn(className)}
     {...props}
   />
 )
 
-const ResizablePanel = (props: any) => <Panel {...props} />
+const ResizablePanel = (props: PanelProps) => <Panel {...props} />
 
 function HandleButton({ onClickHandle, handleIcon }: { onClickHandle?: () => void; handleIcon?: React.ReactNode }) {
   const ref = useRef<HTMLButtonElement>(null)
@@ -45,13 +45,13 @@ function HandleButton({ onClickHandle, handleIcon }: { onClickHandle?: () => voi
       ref={ref}
       type="button"
       data-resize-btn=""
-      className="z-10 flex h-6 w-3 items-center justify-center rounded-sm border bg-border hover:bg-accent transition-colors relative"
+      className="relative z-10 flex h-4 w-4 items-center justify-center rounded-sm border bg-border transition-colors hover:bg-accent cursor-inherit"
       onClick={(e) => {
         e.stopPropagation()
         onClickHandle?.()
       }}
     >
-      {handleIcon ?? <GripVertical className="h-3 w-3" />}
+      {handleIcon ?? <GripVertical className="h-2.5 w-2.5" />}
     </button>
   )
 }
@@ -63,17 +63,18 @@ const ResizableHandle = ({
   handleIcon,
   collapsed,
   ...props
-}: React.ComponentProps<typeof Separator> & {
+}: React.ComponentProps<typeof PanelResizeHandle> & {
   withHandle?: boolean
   onClickHandle?: () => void
   handleIcon?: React.ReactNode
   collapsed?: boolean
 }) => (
-  <Separator
+  <PanelResizeHandle
     className={cn(
-      "relative flex items-center justify-center bg-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1",
+      "relative flex items-center justify-center bg-border focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 data-[panel-group-direction=horizontal]:cursor-col-resize data-[panel-group-direction=vertical]:cursor-row-resize",
       "data-[panel-group-direction=horizontal]:w-px data-[panel-group-direction=horizontal]:after:absolute data-[panel-group-direction=horizontal]:after:inset-y-0 data-[panel-group-direction=horizontal]:after:left-1/2 data-[panel-group-direction=horizontal]:after:w-1 data-[panel-group-direction=horizontal]:after:-translate-x-1/2",
       "data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:absolute data-[panel-group-direction=vertical]:after:inset-x-0 data-[panel-group-direction=vertical]:after:top-1/2 data-[panel-group-direction=vertical]:after:h-1 data-[panel-group-direction=vertical]:after:-translate-y-1/2",
+      "data-[panel-group-direction=horizontal]:[&>[data-resize-btn]]:h-6 data-[panel-group-direction=horizontal]:[&>[data-resize-btn]]:w-3 data-[panel-group-direction=vertical]:[&>[data-resize-btn]]:h-3 data-[panel-group-direction=vertical]:[&>[data-resize-btn]]:w-8",
       collapsed ? "data-[panel-group-direction=horizontal]:w-3 data-[panel-group-direction=vertical]:h-3" : "",
       className
     )}
@@ -82,7 +83,7 @@ const ResizableHandle = ({
     {withHandle && (
       <HandleButton onClickHandle={onClickHandle} handleIcon={handleIcon} />
     )}
-  </Separator>
+  </PanelResizeHandle>
 )
 
 export { ResizablePanelGroup, ResizablePanel, ResizableHandle }

@@ -50,7 +50,7 @@ type SidebarSession = ChatSessionSummaryLike & {
   sessionWorkbenchState?: any;
 };
 
-type WorkflowBucketKey = 'active' | 'archived';
+type WorkflowBucketKey = 'creating' | 'ready' | 'active';
 
 type WorkflowAgentSessionGroup = {
   key: string;
@@ -190,6 +190,7 @@ function buildWorkflowAgentGroups(
   };
 
   return Array.from(groups.values())
+    .filter((group) => group.sessions.length > 0 || Boolean(group.sessionId))
     .map((group) => ({
       ...group,
       sessions: group.sessions.sort((a, b) => {
@@ -209,23 +210,20 @@ function buildWorkflowAgentGroups(
 
 function getWorkflowSessionBucket(input: {
   session: SidebarSession;
-  activeSessionId: string | null;
   pendingQuestionCount: number;
   runStatusById: Record<string, string>;
   relatedBinding?: SidebarSession['workflowBinding'];
 }): WorkflowBucketKey {
-  const { session, activeSessionId, pendingQuestionCount, runStatusById, relatedBinding = session.workflowBinding } = input;
+  const { session, pendingQuestionCount, runStatusById, relatedBinding = session.workflowBinding } = input;
   const runId = relatedBinding?.runId;
   const runStatus = runId ? runStatusById[runId] : '';
   if (runId) {
-    if (isActiveRunStatus(runStatus)) {
-      if (pendingQuestionCount > 0) return 'active';
-      if (session.id === activeSessionId && relatedBinding) return 'active';
-      return 'active';
-    }
-    return 'archived';
+    return isActiveRunStatus(runStatus) || pendingQuestionCount > 0 ? 'active' : 'ready';
   }
-  return 'archived';
+
+  const creationStatus = session.creationSession?.status;
+  if (creationStatus === 'draft' || creationStatus === 'confirmed') return 'creating';
+  return 'ready';
 }
 
 function getSelectionState(sessionIds: string[], selectedSessionIds: Set<string>): CheckedState {
@@ -298,7 +296,6 @@ function getDeleteConfirmationDescription(input: {
 export default function ChatSidebar() {
   const {
     sessions,
-    activeSession,
     activeSessionId,
     setActiveSessionId,
     createSession,
@@ -389,12 +386,14 @@ export default function ChatSidebar() {
   }, [sessions]);
   const visibleWorkflowBuckets = useMemo(() => {
     const buckets: Record<WorkflowBucketKey, WorkflowSessionGroup[]> = {
+      creating: [],
+      ready: [],
       active: [],
-      archived: [],
     };
     const groupMaps: Record<WorkflowBucketKey, Map<string, WorkflowSessionGroup>> = {
+      creating: new Map(),
+      ready: new Map(),
       active: new Map(),
-      archived: new Map(),
     };
 
     for (const session of visibleSessions as SidebarSession[]) {
@@ -403,7 +402,6 @@ export default function ChatSidebar() {
       const pendingCount = pendingQuestionsBySessionId.get(session.id)?.length || 0;
       const bucket = getWorkflowSessionBucket({
         session,
-        activeSessionId,
         pendingQuestionCount: pendingCount,
         runStatusById,
         relatedBinding,
@@ -451,19 +449,9 @@ export default function ChatSidebar() {
     }
 
     return buckets;
-  }, [activeSessionId, pendingQuestionsBySessionId, runStatusById, visibleSessions, workflowBindingByRelatedSessionId]);
+  }, [pendingQuestionsBySessionId, runStatusById, visibleSessions, workflowBindingByRelatedSessionId]);
   const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
   const selectedVisibleState = getSelectionState(visibleSessionIds, selectedSessionIds);
-
-  useEffect(() => {
-    if (!activeSession) return;
-    const kind = getWorkbenchSessionKind(activeSession);
-    const relatedToWorkflow = kind === 'run'
-      || kind === 'creation'
-      || workflowBindingByRelatedSessionId.has(activeSession.id);
-    const nextView = relatedToWorkflow ? 'runs' : 'chat';
-    setSessionView((prev) => (prev === nextView ? prev : nextView));
-  }, [activeSession, workflowBindingByRelatedSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -706,9 +694,9 @@ export default function ChatSidebar() {
         {sessionView === 'runs' ? (
           <div className="px-2 py-2">
             <WorkflowBucket
-              title="运行中"
-              icon="radio_button_checked"
-              groups={visibleWorkflowBuckets.active}
+              title="创建中"
+              icon="edit_note"
+              groups={visibleWorkflowBuckets.creating}
               selectable={manageMode}
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
@@ -725,9 +713,9 @@ export default function ChatSidebar() {
               forceOpen={normalizedSearch.length > 0}
             />
             <WorkflowBucket
-              title="非运行中"
-              icon="inventory_2"
-              groups={visibleWorkflowBuckets.archived}
+              title="未运行"
+              icon="schedule"
+              groups={visibleWorkflowBuckets.ready}
               selectable={manageMode}
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
@@ -741,6 +729,25 @@ export default function ChatSidebar() {
               onDeleteSession={(session) => { void requestDeleteSession(session); }}
               onRenameSession={(session, title) => renameSession(session.id, title)}
               forceOpen={normalizedSearch.length > 0}
+            />
+            <WorkflowBucket
+              title="运行中"
+              icon="radio_button_checked"
+              groups={visibleWorkflowBuckets.active}
+              selectable={manageMode}
+              selectedSessionIds={selectedSessionIds}
+              activeSessionId={activeSessionId}
+              loading={loading}
+              activeStreamingSessionIds={activeStreamingSessionIds}
+              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              sessionLoadingId={sessionLoadingId}
+              pendingQuestionsBySessionId={pendingQuestionsBySessionId}
+              onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
+              onSessionClick={setActiveSessionId}
+              onDeleteSession={(session) => { void requestDeleteSession(session); }}
+              onRenameSession={(session, title) => renameSession(session.id, title)}
+              forceOpen={normalizedSearch.length > 0}
+              defaultOpen
             />
           </div>
         ) : (
@@ -1403,8 +1410,21 @@ function WorkflowAgentGroup({
               />
             ))
           ) : (
-            <div className="px-3 py-2 text-[10px] text-muted-foreground">
-              {group.connected ? '已绑定会话，等待拉取会话摘要。' : '等待首次对话。'}
+            <div className="flex items-center justify-between gap-2 px-3 py-2">
+              <div className="text-[10px] text-muted-foreground">
+                {group.connected ? '已记录会话，可直接打开。' : '等待首次对话。'}
+              </div>
+              {group.sessionId ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => onSessionClick(group.sessionId!)}
+                >
+                  打开对话
+                </Button>
+              ) : null}
             </div>
           )}
         </div>
@@ -1499,9 +1519,6 @@ function SessionItem({
         onClick();
       }}
     >
-      {isRecentlyCompleted ? (
-        <div className="pointer-events-none absolute inset-y-3 left-2 w-1 rounded-full bg-emerald-500" />
-      ) : null}
       {selectable ? (
         <Checkbox
           aria-label={`选择 ${session.title}`}

@@ -34,3 +34,43 @@ export {
   type ModelSelectorItemProps,
   type ModelSelectorNameProps,
 } from './model-selector'
+
+export {
+  Artifact,
+  ArtifactHeader,
+  ArtifactTitle,
+  ArtifactActions,
+  ArtifactContent,
+  ArtifactCopyButton,
+  type ArtifactProps,
+  type ArtifactHeaderProps,
+  type ArtifactTitleProps,
+  type ArtifactActionsProps,
+  type ArtifactContentProps,
+  type ArtifactCopyButtonProps,
+} from './artifact'
+
+export {
+  Commit,
+  CommitActions,
+  CommitAuthor,
+  CommitAuthorAvatar,
+  CommitContent,
+  CommitCopyButton,
+  CommitFile,
+  CommitFileAdditions,
+  CommitFileChanges,
+  CommitFileDeletions,
+  CommitFileIcon,
+  CommitFileInfo,
+  CommitFilePath,
+  CommitFileStatus,
+  CommitFiles,
+  CommitHash,
+  CommitHeader,
+  CommitInfo,
+  CommitMessage,
+  CommitMetadata,
+  CommitSeparator,
+  CommitTimestamp,
+} from './commit'

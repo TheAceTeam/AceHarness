@@ -205,7 +205,7 @@ function renderMarkdownFragment(content: string) {
 }
 
 function normalizeLanguage(language: string) {
-  if (language === 'cangjie' || language === 'cj') return 'text';
+  if (language === 'cangjie' || language === 'cj') return 'cangjie';
   return language || 'text';
 }
 

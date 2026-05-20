@@ -82,6 +82,12 @@ interface SessionSummary {
   sessionWorkbenchState?: ChatSession['sessionWorkbenchState'];
 }
 
+function extractLastMessagePreview(messages: ChatMessage[]): string | undefined {
+  const raw = messages.filter(m => m.role !== 'error').slice(-1)[0]?.content;
+  if (!raw) return undefined;
+  return raw.replace(/<ace-process>[\s\S]*?<\/ace-process>/g, '').trim().slice(0, 100) || undefined;
+}
+
 interface DashboardChatContextType {
   isOpen: boolean;
   openChat: () => void;
@@ -126,6 +132,7 @@ interface DashboardChatContextType {
   rejectAction: (messageId: string, actionId: string) => void;
   undoActionById: (messageId: string, actionId: string) => Promise<void>;
   retryAction: (messageId: string, actionId: string) => Promise<void>;
+  reloadActionResult: (messageId: string, actionId: string) => Promise<void>;
   skillSettings: Record<string, boolean>;
   discoveredSkills: { name: string; label: string; description: string; source?: string; tags?: string[] }[];
   toggleSkill: (skill: string) => void;
@@ -159,7 +166,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   model: '', setModel: () => {},
   engine: '', effectiveEngine: '', setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
-  undoActionById: async () => {}, retryAction: async () => {},
+  undoActionById: async () => {}, retryAction: async () => {}, reloadActionResult: async () => {},
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
@@ -171,6 +178,60 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
 
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ACTIVE_SESSION_STORAGE_KEY = 'aceharness:chat:active-session-id';
+
+function appendStreamChunk(previous: string, next: string): string {
+  const base = String(previous || '');
+  const chunk = String(next || '');
+  if (!chunk) return base;
+  if (!base) return chunk;
+  if (chunk === base) return base;
+  if (chunk.startsWith(base)) return chunk;
+  return `${base}${chunk}`;
+}
+
+function buildFinalRawContent(
+  accumulatedRawStream: string,
+  accumulatedVisibleContent: string,
+  doneResult: string,
+): string {
+  const raw = String(accumulatedRawStream || '');
+  const visible = String(accumulatedVisibleContent || '');
+  const result = String(doneResult || '');
+
+  if (!raw) {
+    return result || visible;
+  }
+
+  if (!result) {
+    return raw;
+  }
+
+  const parsedRawText = String(parseActions(raw).text || '').trim();
+  const trimmedResult = result.trim();
+  const trimmedVisible = visible.trim();
+
+  if (!trimmedResult) {
+    return raw;
+  }
+
+  if (!parsedRawText) {
+    return appendStreamChunk(raw, result);
+  }
+
+  if (
+    trimmedResult === parsedRawText
+    || parsedRawText.endsWith(trimmedResult)
+    || trimmedResult.endsWith(parsedRawText)
+  ) {
+    return raw;
+  }
+
+  if (trimmedVisible && result.startsWith(visible)) {
+    return appendStreamChunk(raw, result.slice(visible.length));
+  }
+
+  return raw;
+}
 
 function readStoredActiveSessionId(): string | null {
   if (typeof window === 'undefined') return null;
@@ -622,7 +683,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           createdAt: reparsedSession.createdAt,
           updatedAt: reparsedSession.updatedAt,
           messageCount: reparsedSession.messages.length,
-          lastMessage: reparsedSession.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+          lastMessage: extractLastMessagePreview(reparsedSession.messages),
           creationSession: reparsedSession.creationSession,
           workflowBinding: reparsedSession.workflowBinding,
           agentBinding: reparsedSession.agentBinding,
@@ -694,9 +755,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const es = new EventSource(`/api/chat/stream?id=${checkData.chatId}`);
             activeEventSourceRef.current = es;
             let accumulated = initialStreamContent;
+            let accumulatedRawStream = initialStreamContent;
             let initialSnapshotReplayPending = Boolean(initialStreamContent);
+            let hasConnected = false;
+
+            es.addEventListener('connected', () => {
+              hasConnected = true;
+            });
 
             es.addEventListener('delta', (e) => {
+              if (!hasConnected) return;
               const { content } = JSON.parse(e.data);
               if (initialSnapshotReplayPending && content === initialStreamContent) {
                 initialSnapshotReplayPending = false;
@@ -704,13 +772,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               }
               initialSnapshotReplayPending = false;
               accumulated += content;
+              accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
               const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               setActiveSession(prev => {
                 if (!prev) return prev;
                 return {
                   ...prev,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulated } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
                 };
               });
             });
@@ -725,14 +794,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             });
 
             es.addEventListener('thinking', (e) => {
+              if (!hasConnected) return;
               const { content } = JSON.parse(e.data);
+              accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
               setActiveSession(prev => {
                 if (!prev) return prev;
-                const msg = prev.messages.find(m => m.id === recoveryMsg.id);
-                const prevRaw = msg?.rawContent || '';
                 return {
                   ...prev,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, rawContent: prevRaw + content } : m),
+                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, rawContent: accumulatedRawStream } : m),
                 };
               });
             });
@@ -746,8 +815,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               if (data.sessionId) {
                 setActiveSession(prev => prev ? { ...prev, backendSessionId: data.sessionId } : prev);
               }
-              const fullText = data.result || accumulated;
-              const { text: cleanText, cards, sidebarHints } = parseActions(fullText);
+              const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+              const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               setActiveSession(prev => {
                 if (!prev) return prev;
@@ -759,7 +828,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   } : prev.sessionWorkbenchState,
                   messages: prev.messages.map(m => m.id === recoveryMsg.id ? {
                     ...m, content: cleanText,
-                    rawContent: fullText !== cleanText ? fullText : m.rawContent,
+                    rawContent: fullRawContent !== cleanText ? fullRawContent : m.rawContent,
                     cards: cards.length > 0 ? cards : m.cards,
                     costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
                   } : m),
@@ -829,7 +898,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           createdAt: reparsed.createdAt,
           updatedAt: reparsed.updatedAt,
           messageCount: reparsed.messages.length,
-          lastMessage: reparsed.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+          lastMessage: extractLastMessagePreview(reparsed.messages),
           creationSession: reparsed.creationSession,
           workflowBinding: reparsed.workflowBinding,
           agentBinding: reparsed.agentBinding,
@@ -900,7 +969,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             title: updated.title,
             updatedAt: updated.updatedAt,
             messageCount: updated.messages.length,
-            lastMessage: updated.messages.filter(m => m.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+            lastMessage: extractLastMessagePreview(updated.messages),
             agentBinding: updated.agentBinding,
             workflowBinding: updated.workflowBinding,
             creationSession: updated.creationSession,
@@ -969,7 +1038,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       title: updated.title,
       updatedAt: updated.updatedAt,
       messageCount: updated.messages.length,
-      lastMessage: updated.messages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      lastMessage: extractLastMessagePreview(updated.messages),
       agentBinding: updated.agentBinding,
       workflowBinding: updated.workflowBinding,
       creationSession: updated.creationSession,
@@ -1013,7 +1082,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       title: updated.title,
       updatedAt: updated.updatedAt,
       messageCount: updated.messages.length,
-      lastMessage: updated.messages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      lastMessage: extractLastMessagePreview(updated.messages),
       agentBinding: updated.agentBinding,
       workflowBinding: updated.workflowBinding,
       creationSession: updated.creationSession,
@@ -1062,7 +1131,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       title: updated.title,
       updatedAt: updated.updatedAt,
       messageCount: updated.messages.length,
-      lastMessage: updated.messages.filter((msg) => msg.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      lastMessage: extractLastMessagePreview(updated.messages),
       agentBinding: updated.agentBinding,
       workflowBinding: updated.workflowBinding,
       creationSession: updated.creationSession,
@@ -1107,7 +1176,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       title: updated.title,
       updatedAt: updated.updatedAt,
       messageCount: updated.messages.length,
-      lastMessage: updated.messages.filter((msg) => msg.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      lastMessage: extractLastMessagePreview(updated.messages),
       agentBinding: updated.agentBinding,
       workflowBinding: updated.workflowBinding,
       creationSession: updated.creationSession,
@@ -1149,7 +1218,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       id, title, model,
       createdAt: session.createdAt, updatedAt: session.updatedAt,
       messageCount: initialMessages.length,
-      lastMessage: initialMessages.filter((message) => message.role !== 'error').slice(-1)[0]?.content?.slice(0, 100),
+      lastMessage: extractLastMessagePreview(initialMessages),
       agentBinding: session.agentBinding,
       sessionWorkbenchState: session.sessionWorkbenchState,
     };
@@ -1296,7 +1365,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const followUpMsgId = genId();
       const followUpEngine = effectiveEngine;
       const followUpMsg: ChatMessage = {
-        id: followUpMsgId, role: 'assistant', content: '', engine: followUpEngine, model: model || undefined, timestamp: Date.now(),
+        id: followUpMsgId, role: 'assistant', content: '', rawContent: '', engine: followUpEngine, model: model || undefined, timestamp: Date.now(),
       };
       updateActiveSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, followUpMsg] }));
       setLoading(true);
@@ -1316,21 +1385,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
         await new Promise<void>((resolve, reject) => {
           let accumulated = '';
+          let accumulatedRawStream = '';
           let reconnectAttempts = 0;
           const MAX_RECONNECTS = 3;
 
-          const connectSSE = () => {
-            const es = new EventSource(`/api/chat/stream?id=${chatId}`);
-            activeEventSourceRef.current = es;
+        const connectSSE = () => {
+          const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+          activeEventSourceRef.current = es;
+          let hasConnected = false;
 
-            es.addEventListener('delta', (e) => {
-              const { content } = JSON.parse(e.data);
-              accumulated += content;
+          es.addEventListener('connected', () => {
+            hasConnected = true;
+          });
+
+          es.addEventListener('delta', (e) => {
+            if (!hasConnected) return;
+            const { content } = JSON.parse(e.data);
+            accumulated += content;
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
               const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
               updateActiveSession(s => ({
                 ...s,
-                messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+                messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
               }));
             });
 
@@ -1342,8 +1419,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               if (data.sessionId) {
                 updateActiveSession(s => ({ ...s, backendSessionId: data.sessionId }));
               }
-              const fullText = data.result || accumulated;
-              const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullText);
+              const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+              const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullRawContent);
               const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
               const newActionStates: ActionState[] = newActions.map(a => ({
                 id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
@@ -1356,7 +1433,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 } : s.sessionWorkbenchState,
                 messages: s.messages.map(m => m.id === followUpMsgId ? {
                   ...m, content: cleanText,
-                  rawContent: fullText !== cleanText ? fullText : undefined,
+                  rawContent: fullRawContent !== cleanText ? fullRawContent : undefined,
                   actions: newActionStates.length > 0 ? newActionStates : undefined,
                   cards: newCards.length > 0 ? newCards : undefined,
                 } : m),
@@ -1465,7 +1542,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const previousEffectiveEngine = previousSession?.engine || globalEngineRef.current || '';
     const shouldStartFresh = !!previousSession?.backendSessionId
       && resolvedEngine !== previousEffectiveEngine;
-    const assistantMsg: ChatMessage = { id: assistantMsgId, role: 'assistant', content: '', engine: resolvedEngine, model: currentModel || undefined, timestamp: Date.now() };
+    const assistantMsg: ChatMessage = { id: assistantMsgId, role: 'assistant', content: '', rawContent: '', engine: resolvedEngine, model: currentModel || undefined, timestamp: Date.now() };
     updateActiveSession(s => ({
       ...s,
       engine: resolvedEngine || undefined,
@@ -1639,13 +1716,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           activeEventSourceRef.current = es;
           resetInactivityTimer();
           let accumulatedRawContent = '';
+          let accumulatedRawStream = '';
+          let hasConnected = false;
+
+          es.addEventListener('connected', () => {
+            resetInactivityTimer();
+            hasConnected = true;
+          });
 
           es.addEventListener('thinking', (e) => {
+            if (!hasConnected) return;
             resetInactivityTimer();
             const { content } = JSON.parse(e.data);
-            accumulatedRawContent += content;
+            accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             updateActiveSession(s => ({
-              ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawContent } : m),
+              ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
             }));
           });
 
@@ -1662,14 +1748,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           });
 
           es.addEventListener('delta', (e) => {
+            if (!hasConnected) return;
             resetInactivityTimer();
             const { content } = JSON.parse(e.data);
             accumulated += content;
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
             updateActiveSession(s => ({
               ...s,
-              messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, rawContent: accumulated } : m),
+              messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
             }));
           });
 
@@ -1702,9 +1790,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               resolve();
               return;
             }
-            const fullText = data.result || accumulated;
-            const streamText = accumulated || fullText;
-            const { text: cleanText, actions, cards, sidebarHints } = parseActions(fullText);
+            const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const { text: cleanText, actions, cards, sidebarHints } = parseActions(fullRawContent);
             const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
             const actionStates: ActionState[] = actions.map(a => ({
               id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
@@ -1717,7 +1804,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               } : s.sessionWorkbenchState,
               messages: s.messages.map(m => m.id === assistantMsgId ? {
                 ...m, content: cleanText,
-                rawContent: accumulatedRawContent || (streamText !== cleanText ? streamText : undefined),
+                rawContent: fullRawContent !== cleanText ? fullRawContent : undefined,
                 actions: actionStates.length > 0 ? actionStates : undefined,
                 cards: cards.length > 0 ? cards : undefined,
                 costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
@@ -1912,6 +1999,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [activeSession, updateAction, sendMessage]);
 
+  const reloadActionResult = useCallback(async (messageId: string, actionId: string) => {
+    const msg = activeSession?.messages.find(m => m.id === messageId);
+    const actionState = msg?.actions?.find(a => a.id === actionId);
+    if (!actionState) return;
+
+    updateAction(messageId, actionState.id, { status: 'executing', error: undefined });
+    try {
+      const { result, snapshot } = await executeAction(actionState.action);
+      updateAction(messageId, actionState.id, { status: 'success', result, snapshot });
+    } catch (err: any) {
+      const errorMsg = err.message || '重新加载失败';
+      updateAction(messageId, actionState.id, { status: 'error', error: errorMsg });
+    }
+  }, [activeSession, updateAction]);
+
   // --- Stop streaming ---
   const stopStreaming = useCallback(() => {
     interruptCurrentStream();
@@ -2028,7 +2130,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
       markSessionStreaming, unmarkSessionStreaming, model, setModel: handleSetModel,
       engine, effectiveEngine, setEngine: handleSetEngine,
-      confirmAction, rejectAction, undoActionById, retryAction,
+      confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,

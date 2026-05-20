@@ -487,9 +487,10 @@ describe('NewConfigModal backend draft isolation', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('刷新恢复工作流')).toBeTruthy();
+      expect(screen.getByText('刷新恢复工作流')).toBeTruthy();
     });
     expect(screen.getByText('restore-after-refresh.yaml')).toBeTruthy();
+    expect(screen.getAllByText('计划生成').length).toBeGreaterThan(0);
     expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
     expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
     expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
@@ -507,6 +508,91 @@ describe('NewConfigModal backend draft isolation', () => {
       && call.method === 'PUT'
       && call.body?.creationSession?.creationSessionId === 'unfinished-1'
     ))).toBe(true);
+  });
+
+  test('keeps restored step 2 instead of falling back to step 1 after hydration completes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/resume-step-2' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'resume-step-2',
+            chatSessionId: 'planning-step-2',
+            mode: 'ai-guided',
+            workflowName: '第二步恢复',
+            filename: 'resume-step-2.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/step-2',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: {
+              id: 'spec-step-2',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 2,
+              planningStage: 'awaiting-answers',
+              clarificationForm: {
+                type: 'clarification_form',
+                summary: '请补充关键范围',
+                knownFacts: [],
+                missingFields: ['scope'],
+                questions: [{
+                  id: 'scope',
+                  label: '范围',
+                  question: '这次先覆盖哪一块？',
+                  selectionMode: 'single',
+                  options: [{ id: 'api', label: 'API', description: '只做 API', recommended: true }],
+                }],
+              },
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/resume-step-2' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'resume-step-2' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="resume-step-2"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('补充问答').length).toBeGreaterThan(0);
+      expect(screen.getByText('这次先覆盖哪一块？')).toBeTruthy();
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(screen.getAllByText('补充问答').length).toBeGreaterThan(0);
+    expect(screen.getByText('这次先覆盖哪一块？')).toBeTruthy();
+    expect(screen.queryByDisplayValue('第二步恢复')).toBeNull();
   });
 
   test('does not restore completed homepage creation and records completion tags for new draft', async () => {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -36,6 +37,14 @@ const EVENT_TAG_CONFIG: Record<string, { label: string; className: string }> = {
   'route-decision': { label: '路由决策', className: 'border-blue-500/40 text-blue-600' },
   'state-error': { label: '异常', className: 'border-red-500/40 text-red-600' },
   'rollback': { label: '回退', className: 'border-orange-500/40 text-orange-600' },
+};
+
+const TOKEN_SERIES_COLORS = ['#38bdf8', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#14b8a6'];
+const TOKEN_COMPOSITION_COLORS = {
+  input: '#38bdf8',
+  output: '#8b5cf6',
+  cacheWrite: '#22c55e',
+  cacheRead: '#f59e0b',
 };
 
 interface SupervisorFlowRecord {
@@ -504,6 +513,43 @@ export default function StateMachineExecutionView({
     [flowHistory, flowKindFilter]
   );
 
+  const tokenByAgentChartData = useMemo(
+    () => (tokenAnalytics?.byAgent || [])
+      .slice()
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .slice(0, 8)
+      .map((item, index) => ({
+        name: item.name,
+        totalTokens: item.totalTokens,
+        fill: TOKEN_SERIES_COLORS[index % TOKEN_SERIES_COLORS.length],
+      })),
+    [tokenAnalytics]
+  );
+
+  const tokenByPhaseChartData = useMemo(
+    () => (tokenAnalytics?.byPhase || [])
+      .slice()
+      .sort((a, b) => b.totalTokens - a.totalTokens)
+      .slice(0, 8)
+      .map((item, index) => ({
+        name: formatStateName(item.name),
+        totalTokens: item.totalTokens,
+        fill: TOKEN_SERIES_COLORS[index % TOKEN_SERIES_COLORS.length],
+      })),
+    [tokenAnalytics]
+  );
+
+  const tokenCompositionData = useMemo(() => {
+    const total = tokenAnalytics?.total;
+    if (!total) return [];
+    return [
+      { name: '输入', value: total.inputTokens || 0, fill: TOKEN_COMPOSITION_COLORS.input },
+      { name: '输出', value: total.outputTokens || 0, fill: TOKEN_COMPOSITION_COLORS.output },
+      { name: '缓存写入', value: total.cacheCreationInputTokens || 0, fill: TOKEN_COMPOSITION_COLORS.cacheWrite },
+      { name: '缓存读取', value: total.cacheReadInputTokens || 0, fill: TOKEN_COMPOSITION_COLORS.cacheRead },
+    ].filter((item) => item.value > 0);
+  }, [tokenAnalytics]);
+
   const supervisorWaitingForHuman = currentState === '__human_approval__' || status === 'waiting';
 
   return (
@@ -766,7 +812,7 @@ export default function StateMachineExecutionView({
           </div>
         </TabsContent>
 
-        <TabsContent value="supervisor" className="flex-1 overflow-auto">
+        <TabsContent value="supervisor" className="overflow-visible">
           <div className="space-y-4">
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -908,7 +954,75 @@ export default function StateMachineExecutionView({
             </div>
 
             {tokenAnalytics?.hasData ? (
-              <div className="grid gap-4 xl:grid-cols-2">
+              <div className="grid gap-4">
+                <div className="grid gap-4 xl:grid-cols-12">
+                  <div className="xl:col-span-7 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold">Agent Token 排名</h3>
+                        <div className="mt-1 text-xs text-muted-foreground">按总 token 排序，优先展示消耗最高的参与者。</div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px]">Top {tokenByAgentChartData.length}</Badge>
+                    </div>
+                    <ResponsiveContainer width="100%" height={280}>
+                      <BarChart data={tokenByAgentChartData} layout="vertical" margin={{ top: 8, right: 12, left: 16, bottom: 0 }}>
+                        <CartesianGrid horizontal strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                        <XAxis type="number" hide />
+                        <YAxis
+                          type="category"
+                          dataKey="name"
+                          width={120}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }}
+                        />
+                        <Tooltip formatter={(value) => formatTokenCount(Number(value ?? 0))} />
+                        <Bar dataKey="totalTokens" radius={[0, 10, 10, 0]}>
+                          {tokenByAgentChartData.map((entry, index) => (
+                            <Cell key={`${entry.name}-${index}`} fill={entry.fill} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="xl:col-span-5 rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold">Token 构成</h3>
+                        <div className="mt-1 text-xs text-muted-foreground">观察输入、输出与缓存相关 token 的占比。</div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px]">{formatTokenCount(tokenAnalytics?.total.totalTokens || 0)}</Badge>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)] md:items-center">
+                      <div className="mx-auto h-[180px] w-[180px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={tokenCompositionData} dataKey="value" nameKey="name" innerRadius={46} outerRadius={74} paddingAngle={2}>
+                              {tokenCompositionData.map((entry) => (
+                                <Cell key={entry.name} fill={entry.fill} />
+                              ))}
+                            </Pie>
+                        <Tooltip formatter={(value) => formatTokenCount(Number(value ?? 0))} />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="space-y-2">
+                        {tokenCompositionData.map((item) => (
+                          <div key={item.name} className="flex items-center justify-between rounded-xl border bg-muted/20 px-3 py-2">
+                            <div className="inline-flex items-center gap-2 text-sm">
+                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.fill }} />
+                              <span>{item.name}</span>
+                            </div>
+                            <span className="text-sm font-medium">{formatTokenCount(item.value)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
                   <div className="mb-4 flex items-center justify-between gap-3">
                     <h3 className="font-semibold">按 Agent</h3>
@@ -936,6 +1050,29 @@ export default function StateMachineExecutionView({
 
                 <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
                   <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">阶段 Token 排名</h3>
+                      <div className="mt-1 text-xs text-muted-foreground">按状态/阶段聚合后的总 token 消耗。</div>
+                    </div>
+                    <Badge variant="outline" className="text-[10px]">Top {tokenByPhaseChartData.length}</Badge>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={tokenByPhaseChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.2} />
+                      <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 11 }} interval={0} height={42} />
+                      <YAxis hide />
+                        <Tooltip formatter={(value) => formatTokenCount(Number(value ?? 0))} />
+                      <Bar dataKey="totalTokens" radius={[10, 10, 0, 0]}>
+                        {tokenByPhaseChartData.map((entry, index) => (
+                          <Cell key={`${entry.name}-${index}`} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
+                  <div className="mb-4 flex items-center justify-between gap-3">
                     <h3 className="font-semibold">按阶段</h3>
                     <Badge variant="outline" className="text-[10px]">{tokenAnalytics.byPhase.length} 个</Badge>
                   </div>
@@ -958,6 +1095,7 @@ export default function StateMachineExecutionView({
                     ))}
                   </div>
                 </div>
+              </div>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">

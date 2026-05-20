@@ -329,16 +329,12 @@ export async function GET(request: NextRequest) {
         }
       };
 
+      send('connected', { chatId });
       const state = getEngineStream(chatId);
       if (state?.backendSessionId) {
         send('session', { sessionId: state.backendSessionId });
       }
-      if (state?.streamContent) {
-        send('delta', { content: state.streamContent });
-      }
       engineStreamEvents.on(chatId, onEngineStream);
-
-      send('connected', { chatId });
 
       // Wait for completion
       entry.promise

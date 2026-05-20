@@ -106,6 +106,7 @@ function stripHtmlTags(text: string): string {
 
 function stripToolNarrationBlocks(text: string): string {
   return String(text || '')
+    .replace(/\n?\s*<ace-process>[\s\S]*?<\/ace-process>\s*\n?/g, '\n')
     .replace(/\n{0,2}\*\*(?:📖 读取文件|💻 执行命令|🔍 搜索内容|🔍 搜索文件|📂 列出目录|🤖 子任务|🌐 获取网页|🔎 搜索网页|✏️ 编辑文件|📝 写入文件|📋 任务列表)[\s\S]*?(?=\n{2}\*\*|$)/g, '\n')
     .replace(/(?:^|\n)技能文件不在这个相对位置[^\n]*/g, '\n')
     .replace(/(?:^|\n)我先(?:看一下|缩小范围找|把)[^\n]*/g, '\n')

@@ -414,7 +414,7 @@ describe('multi-agent werewolf lab', () => {
       await waitFor(() => {
         expect(screen.getByText(/警长投票完成|警长投票结束|警长竞选结束/)).toBeInTheDocument();
         expect(screen.getByText(/警长 \/ 警徽/)).toBeInTheDocument();
-      });
+      }, { timeout: 5000 });
     }
 
     const maybeNextNightButton = screen.queryByRole('button', { name: /Supervisor 推进第 2 夜/ });

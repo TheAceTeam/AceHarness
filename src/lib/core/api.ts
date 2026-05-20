@@ -669,11 +669,15 @@ export const configApi = {
     return data;
   },
 
-  async saveConfig(filename: string, config: any): Promise<ApiResponse> {
+  async saveConfig(filename: string, config: any, options?: { creationSessionId?: string; specCoding?: any }): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({
+        config,
+        creationSessionId: options?.creationSessionId,
+        specCoding: options?.specCoding,
+      }),
     });
     if (!response.ok) {
       const data = await response.json().catch(() => null);
@@ -1654,6 +1658,7 @@ export const systemSettingsApi = {
   async get(): Promise<{
     gitcodeTokenConfigured: boolean;
     locale?: 'zh' | 'en';
+    engineAvailabilityCacheMinutes?: number;
     emailNotifications?: {
       enabled: boolean;
       smtpHost: string;
@@ -1675,6 +1680,7 @@ export const systemSettingsApi = {
 
   async save(data: {
     gitcodeToken?: string;
+    engineAvailabilityCacheMinutes?: number;
     emailNotifications?: {
       enabled?: boolean;
       smtpHost?: string;
@@ -1976,6 +1982,145 @@ export interface WorkspaceTreeResponse {
   availableRoots?: string[];
 }
 
+export type GitDiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+
+export interface GitDiffSummaryFile {
+  path: string;
+  repoPath: string;
+  previousPath?: string;
+  previousRepoPath?: string;
+  status: GitDiffFileStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitDiffSummaryResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  clean: boolean;
+  reason?: string;
+  head?: {
+    hash: string;
+    shortHash: string;
+    message: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: string;
+  } | null;
+  files: GitDiffSummaryFile[];
+  totals: {
+    files: number;
+    additions: number;
+    deletions: number;
+  };
+}
+
+export interface GitDiffFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  file: GitDiffSummaryFile & {
+    patch: string;
+    originalContent: string;
+    currentContent: string;
+    originalTooLarge: boolean;
+    currentTooLarge: boolean;
+    originalSize: number;
+    currentSize: number;
+  };
+}
+
+export type GitBrowserScope = 'unstaged' | 'staged' | 'untracked';
+
+export interface GitBrowserCommitSummary {
+  hash: string;
+  shortHash: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  additions: number;
+  deletions: number;
+  fileCount: number;
+}
+
+export interface GitBrowserFileDetail extends GitDiffSummaryFile {
+  patch: string;
+  originalContent: string;
+  currentContent: string;
+  originalTooLarge: boolean;
+  currentTooLarge: boolean;
+  originalSize: number;
+  currentSize: number;
+  baseLabel: string;
+  targetLabel: string;
+}
+
+export interface GitBrowserSummaryResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  reason?: string;
+  head?: {
+    hash: string;
+    shortHash: string;
+    message: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: string;
+  } | null;
+  workingTree: {
+    unstaged: GitDiffSummaryFile[];
+    staged: GitDiffSummaryFile[];
+    untracked: GitDiffSummaryFile[];
+  };
+  commits: GitBrowserCommitSummary[];
+  commitOffset: number;
+  commitLimit: number;
+  hasMoreCommits: boolean;
+}
+
+export interface GitBrowserFileListResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  scope: GitBrowserScope;
+  files: GitDiffSummaryFile[];
+}
+
+export interface GitBrowserScopeFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  scope: GitBrowserScope;
+  file: GitBrowserFileDetail;
+}
+
+export interface GitBrowserCommitDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  commit: GitBrowserCommitSummary;
+  patch: string;
+  files: GitDiffSummaryFile[];
+}
+
+export interface GitBrowserCommitFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  commit: GitBrowserCommitSummary;
+  file: GitBrowserFileDetail;
+}
+
 export type WorkspaceMode = 'default' | 'notebook';
 export type NotebookScope = 'personal' | 'global';
 export type NotebookSharePermission = 'read' | 'write';
@@ -2215,6 +2360,80 @@ export const workspaceApi = {
       throw new Error(data.message || data.error || '获取文件失败');
     }
     return res.blob();
+  },
+  async getGitDiff(workspace: string): Promise<GitDiffSummaryResponse> {
+    const res = await authFetch(`${API_BASE}/workspace/git-diff?workspace=${encodeURIComponent(workspace)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git Diff 失败');
+    }
+    return res.json();
+  },
+  async getGitDiffFile(workspace: string, file: string): Promise<GitDiffFileDetailResponse> {
+    const res = await authFetch(`${API_BASE}/workspace/git-diff?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git Diff 文件详情失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserSummary(workspace: string, options?: { commitOffset?: number; commitLimit?: number }): Promise<GitBrowserSummaryResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    if (options?.commitOffset != null) params.set('commitOffset', String(options.commitOffset));
+    if (options?.commitLimit != null) params.set('commitLimit', String(options.commitLimit));
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 浏览摘要失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserScopeFiles(workspace: string, scope: GitBrowserScope): Promise<GitBrowserFileListResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('scope', scope);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 分组文件失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserScopeFileDetail(workspace: string, scope: GitBrowserScope, file: string): Promise<GitBrowserScopeFileDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('scope', scope);
+    params.set('file', file);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 文件差异失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserCommitDetail(workspace: string, commit: string): Promise<GitBrowserCommitDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('commit', commit);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 提交详情失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserCommitFileDetail(workspace: string, commit: string, file: string): Promise<GitBrowserCommitFileDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('commit', commit);
+    params.set('file', file);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 提交文件差异失败');
+    }
+    return res.json();
   },
   async upload(workspace: string, targetPath: string, files: File[], options?: { conflict?: 'rename' | 'error'; relativePaths?: string[] }): Promise<{ success: boolean; count: number; files: Array<{ name: string; path: string; size: number }> }> {
     const formData = new FormData();

@@ -14,6 +14,7 @@ import { useEffect, forwardRef, useImperativeHandle, useRef, useState, useCallba
 import { Button } from '@/components/ui/button';
 import { createPortal } from 'react-dom';
 import { uploadImageFile } from '@/lib/core/client-image-upload';
+import { cn } from '@/lib/core/utils';
 
 export interface RichTextEditorHandle {
   clear: () => void;
@@ -41,8 +42,13 @@ interface RichTextEditorProps {
   showFullscreenToggle?: boolean;
   showToolbar?: boolean;
   footerContent?: React.ReactNode;
+  footerAfterCountContent?: React.ReactNode;
   trimPastedTrailingNewlines?: boolean;
   mentionItems?: Array<string | { id: string; label: string; description?: string }>;
+  footerInside?: boolean;
+  surfaceClassName?: string;
+  contentAreaClassName?: string;
+  footerClassName?: string;
 }
 
 type MentionItem = {
@@ -163,8 +169,13 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   showFullscreenToggle = false,
   showToolbar = false,
   footerContent,
+  footerAfterCountContent,
   trimPastedTrailingNewlines = false,
   mentionItems = EMPTY_MENTION_ITEMS,
+  footerInside = false,
+  surfaceClassName = '',
+  contentAreaClassName = '',
+  footerClassName = '',
 }, ref) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
@@ -697,6 +708,32 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
 
   const charCount = editor.storage.characterCount.characters();
   const isNearLimit = charCount > maxLength * 0.9;
+  const footerNode = (
+    <div
+      className={cn(
+        'flex items-center justify-between gap-2 mt-0.5 px-1',
+        footerInside && 'mt-0 border-t border-border/60 px-3 py-2',
+        footerClassName
+      )}
+    >
+      <div className="min-w-0 flex items-center gap-2">
+        {uploadingImages > 0 ? (
+          <span className="text-[10px] text-muted-foreground">图片上传中...</span>
+        ) : (
+          <span className="text-[10px] text-muted-foreground">Shift+Enter 换行</span>
+        )}
+      </div>
+      <div className="min-w-0 flex items-center justify-end gap-2">
+        {footerContent}
+        {maxLength < 50000 && (
+          <span className={`text-[10px] ${isNearLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
+            {charCount}/{maxLength}
+          </span>
+        )}
+        {footerAfterCountContent}
+      </div>
+    </div>
+  );
 
   if (isFullscreen) {
     const fullscreenContent = (
@@ -735,8 +772,12 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
 
   return (
     <div ref={editorContainerRef} className={`relative min-h-0 ${className}`}>
-      <div ref={editorWrapperRef} className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-input bg-background" style={{ maxHeight: `${maxHeight}px`, minHeight: `${minHeight}px` }}>
-        <div className="flex min-h-0 flex-1 items-start gap-1 px-2 py-1.5">
+      <div
+        ref={editorWrapperRef}
+        className={cn('flex min-h-0 flex-col overflow-hidden rounded-lg border border-input bg-background', surfaceClassName)}
+        style={{ maxHeight: `${maxHeight}px`, minHeight: `${minHeight}px` }}
+      >
+        <div className={cn('flex min-h-0 flex-1 items-start gap-1 px-2 py-1.5', contentAreaClassName)}>
           <div className="min-h-[32px] min-w-0 flex-1 overflow-y-auto">
             {showToolbar && <MenuBar editor={editor} />}
             <EditorContent editor={editor} className="outline-none [&_.ProseMirror]:!outline-none [&_.ProseMirror]:min-w-0 [&_.ProseMirror]:whitespace-pre-wrap [&_.ProseMirror]:break-words [&_.ProseMirror]:[overflow-wrap:anywhere] [&_.ProseMirror:focus]:!outline-none [&_.ProseMirror_h1]:text-lg [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:my-2 [&_.ProseMirror_h2]:text-base [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:my-2 [&_.ProseMirror_blockquote]:border-l-2 [&_.ProseMirror_blockquote]:border-primary/50 [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-muted-foreground [&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5 [&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5 [&_.ProseMirror_hr]:my-3 [&_.ProseMirror_hr]:border-border [&_.ProseMirror_code]:whitespace-pre-wrap [&_.ProseMirror_code]:break-words [&_.ProseMirror_code]:[overflow-wrap:anywhere] [&_.ProseMirror_pre]:max-w-full [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre_code]:whitespace-pre-wrap [&_.ProseMirror_pre_code]:break-words [&_.ProseMirror_pre_code]:[overflow-wrap:anywhere] [&_.ProseMirror_img]:my-2 [&_.ProseMirror_img]:max-h-36 [&_.ProseMirror_img]:max-w-[260px] [&_.ProseMirror_img]:rounded-md [&_.ProseMirror_img]:border [&_.ProseMirror_img]:border-border [&_.ProseMirror_img]:object-contain" style={{ maxHeight: `${maxHeight - 16}px` }} />
@@ -747,24 +788,9 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
             </Button>
           )}
         </div>
+        {footerInside && footerNode}
       </div>
-      <div className="flex items-center justify-between gap-2 mt-0.5 px-1">
-        <div className="min-w-0 flex items-center gap-2">
-          {uploadingImages > 0 ? (
-            <span className="text-[10px] text-muted-foreground">图片上传中...</span>
-          ) : (
-            <span className="text-[10px] text-muted-foreground">Shift+Enter 换行</span>
-          )}
-        </div>
-        <div className="min-w-0 flex items-center justify-end gap-2">
-          {footerContent}
-        {maxLength < 50000 && (
-          <span className={`text-[10px] ${isNearLimit ? 'text-destructive' : 'text-muted-foreground'}`}>
-            {charCount}/{maxLength}
-          </span>
-        )}
-        </div>
-      </div>
+      {!footerInside && footerNode}
     </div>
   );
 });

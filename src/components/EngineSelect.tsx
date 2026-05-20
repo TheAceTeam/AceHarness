@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { Globe } from 'lucide-react';
-import { SingleCombobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 
@@ -39,8 +39,8 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
 
   const globalLabel = getEngineMeta(globalEngine)?.name || globalEngine;
 
-  const options: ComboboxOption[] = useMemo(() => {
-    const items: ComboboxOption[] = [];
+  const options: AiModelSelectorOption[] = useMemo(() => {
+    const items: AiModelSelectorOption[] = [];
     if (allowGlobal) {
       items.push({
         value: '__global__',
@@ -57,13 +57,13 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
   }, [allowGlobal, globalLabel]);
 
   return (
-    <SingleCombobox
+    <AiModelSelectorField
       value={value || '__global__'}
       onValueChange={(v) => onChange(v === '__global__' ? '' : v)}
       options={options}
       placeholder="选择引擎"
-      triggerClassName={className}
-      searchable={false}
+      searchPlaceholder="搜索引擎..."
+      className={className}
     />
   );
 }

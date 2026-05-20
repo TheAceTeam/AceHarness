@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -68,6 +68,13 @@ interface SkillOption {
   tags?: string[];
 }
 
+interface SpecTaskOption {
+  id: string;
+  title: string;
+  phaseTitle?: string;
+  ownerAgents?: string[];
+}
+
 interface EditNodeModalProps {
   isOpen: boolean;
   type: 'phase' | 'step';
@@ -77,6 +84,7 @@ interface EditNodeModalProps {
   isNew?: boolean;
   existingPhases?: any[];
   existingSteps?: any[];
+  specTasks?: SpecTaskOption[];
   onClose: () => void;
   onSave: (data: any) => void;
   onDelete?: () => void;
@@ -91,6 +99,7 @@ export default function EditNodeModal({
   isNew = false,
   existingPhases = [],
   existingSteps = [],
+  specTasks = [],
   onClose,
   onSave,
   onDelete,
@@ -140,6 +149,11 @@ export default function EditNodeModal({
   const iterationEnabled = watch('iterationEnabled');
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
   const selectedAgent = roles.find((role) => role.name === selectedAgentName);
+  const selectedSpecTaskIds = inputToList(watch('specTaskId'));
+  const selectedSpecTaskDetails = useMemo(
+    () => specTasks.filter((task) => selectedSpecTaskIds.includes(task.id)),
+    [specTasks, selectedSpecTaskIds]
+  );
   const agentOptions = roles.map((role) => {
     const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean);
     return {
@@ -153,6 +167,11 @@ export default function EditNodeModal({
       ),
     };
   });
+  const specTaskOptions = specTasks.map((task) => ({
+    value: task.id,
+    label: task.id,
+    description: [task.title, task.phaseTitle, ...(task.ownerAgents || []).slice(0, 2)].filter(Boolean).join(' · '),
+  }));
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
@@ -236,29 +255,36 @@ export default function EditNodeModal({
       if (data?.agentInstanceId) stepData.agentInstanceId = data.agentInstanceId;
       if (Array.isArray(data?.channelIds) && data.channelIds.length > 0) stepData.channelIds = data.channelIds;
       const specTaskIds = inputToList(formData.specTaskId);
-      if (specTaskIds.length > 0) {
-        stepData.specTaskBinding = {
-          taskId: specTaskIds[0],
-          taskIds: specTaskIds,
-          requirementIds: inputToList(formData.requirementIds),
-          artifactKeys: inputToList(formData.artifactKeys),
-        };
-      }
+      stepData.specTaskBinding = specTaskIds.length > 0
+        ? {
+            taskId: specTaskIds[0],
+            taskIds: specTaskIds,
+            requirementIds: inputToList(formData.requirementIds),
+            artifactKeys: inputToList(formData.artifactKeys),
+          }
+        : undefined;
       onSave(stepData);
     }
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col p-0">
+      <DialogContent className="max-w-4xl w-[92vw] max-h-[88vh] flex flex-col p-0">
         <ComboboxPortalProvider>
-        <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
-          <DialogTitle>{isNew ? (isPhase ? '新建阶段' : '新建步骤') : (isPhase ? '编辑阶段' : '编辑步骤')}</DialogTitle>
+        <div className="flex items-start justify-between gap-4 border-b px-6 py-5 flex-shrink-0">
+          <div>
+            <DialogTitle className="text-xl">{isNew ? (isPhase ? '新建阶段' : '新建步骤') : (isPhase ? '编辑阶段' : '编辑步骤')}</DialogTitle>
+            {!isPhase ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                调整 Agent、任务描述、约束与 Spec 绑定。保存配置时会统一校验 task 覆盖情况。
+              </p>
+            ) : null}
+          </div>
           <Button type="button" variant="ghost" size="icon" onClick={onClose}>
             <span className="material-symbols-outlined">close</span>
           </Button>
         </div>
-        <form id="edit-node-form" onSubmit={handleSubmit(onSubmit)} className="flex-1 overflow-auto px-6 space-y-4">
+        <form id="edit-node-form" onSubmit={handleSubmit(onSubmit)} className="flex-1 overflow-auto px-6 py-5 space-y-5">
           {isNew && ((isPhase && existingPhases.length > 0) || (!isPhase && existingSteps.length > 0)) && (
             <div className="space-y-2">
               <Label>从现有复制</Label>
@@ -357,122 +383,155 @@ export default function EditNodeModal({
             </>
           ) : (
             <>
-              <div className="space-y-2">
-                <Label htmlFor="name">
-                  步骤名称 <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="name"
-                  {...register('name')}
-                  className={errors.name ? 'border-destructive' : ''}
-                />
-                {errors.name && (
-                  <p className="text-sm text-destructive">{errors.name.message as string}</p>
-                )}
-              </div>
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.95fr)]">
+                <div className="space-y-5">
+                  <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="name">
+                          步骤名称 <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id="name"
+                          {...register('name')}
+                          className={errors.name ? 'border-destructive' : ''}
+                        />
+                        {errors.name && (
+                          <p className="text-sm text-destructive">{errors.name.message as string}</p>
+                        )}
+                      </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="agent">
-                  Agent <span className="text-destructive">*</span>
-                </Label>
-                <SingleCombobox
-                  value={selectedAgentName}
-                  onValueChange={(v) => setValue('agent', v)}
-                  options={agentOptions}
-                  placeholder="选择 Agent..."
-                  triggerClassName={errors.agent ? 'border-destructive' : ''}
-                />
-                {selectedAgent ? (
-                  <div className="rounded-xl border bg-muted/20 p-3 text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {selectedAgent.roleType === 'supervisor' ? <Badge variant="outline" className="text-[10px]">Supervisor</Badge> : null}
-                      {selectedAgent.team ? <Badge variant="outline" className="text-[10px]">{selectedAgent.team}</Badge> : null}
-                      {selectedAgent.category ? <Badge variant="outline" className="text-[10px]">{selectedAgent.category}</Badge> : null}
+                      <div className="space-y-2">
+                        <Label htmlFor="agent">
+                          Agent <span className="text-destructive">*</span>
+                        </Label>
+                        <SingleCombobox
+                          value={selectedAgentName}
+                          onValueChange={(v) => setValue('agent', v)}
+                          options={agentOptions}
+                          placeholder="选择 Agent..."
+                          triggerClassName={errors.agent ? 'border-destructive' : ''}
+                        />
+                        {errors.agent && (
+                          <p className="text-sm text-destructive">{errors.agent.message as string}</p>
+                        )}
+                      </div>
                     </div>
-                    {selectedAgent.description ? (
-                      <p className="mt-2 leading-5 text-muted-foreground">{selectedAgent.description}</p>
-                    ) : (
-                      <p className="mt-2 leading-5 text-muted-foreground">暂无能力描述，请在 Agent 配置中补充 description。</p>
-                    )}
-                    {selectedAgent.capabilities?.length ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {selectedAgent.capabilities.slice(0, 6).map((capability) => (
-                          <Badge key={capability} variant="secondary" className="text-[10px] font-normal">
-                            {capability}
-                          </Badge>
-                        ))}
+
+                    {selectedAgent ? (
+                      <div className="rounded-xl border bg-muted/20 p-4 text-xs">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {selectedAgent.roleType === 'supervisor' ? <Badge variant="outline" className="text-[10px]">Supervisor</Badge> : null}
+                          {selectedAgent.team ? <Badge variant="outline" className="text-[10px]">{selectedAgent.team}</Badge> : null}
+                          {selectedAgent.category ? <Badge variant="outline" className="text-[10px]">{selectedAgent.category}</Badge> : null}
+                        </div>
+                        {selectedAgent.description ? (
+                          <p className="mt-2 leading-5 text-muted-foreground">{selectedAgent.description}</p>
+                        ) : (
+                          <p className="mt-2 leading-5 text-muted-foreground">暂无能力描述，请在 Agent 配置中补充 description。</p>
+                        )}
+                        {selectedAgent.capabilities?.length ? (
+                          <div className="mt-3 flex flex-wrap gap-1">
+                            {selectedAgent.capabilities.slice(0, 8).map((capability) => (
+                              <Badge key={capability} variant="secondary" className="text-[10px] font-normal">
+                                {capability}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="task">
+                        任务描述 <span className="text-destructive">*</span>
+                      </Label>
+                      <Textarea
+                        id="task"
+                        rows={7}
+                        {...register('task')}
+                        className={errors.task ? 'border-destructive' : ''}
+                      />
+                      {errors.task && (
+                        <p className="text-sm text-destructive">{errors.task.message as string}</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="constraints">约束条件（每行一条）</Label>
+                      <Textarea
+                        id="constraints"
+                        rows={5}
+                        {...register('constraints')}
+                        placeholder={"不得修改公共 API 接口\n必须保持向后兼容\n单个文件不超过 500 行"}
+                      />
+                    </div>
                   </div>
-                ) : null}
-                {errors.agent && (
-                  <p className="text-sm text-destructive">{errors.agent.message as string}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="task">
-                  任务描述 <span className="text-destructive">*</span>
-                </Label>
-                <Textarea
-                  id="task"
-                  rows={4}
-                  {...register('task')}
-                  className={errors.task ? 'border-destructive' : ''}
-                />
-                {errors.task && (
-                  <p className="text-sm text-destructive">{errors.task.message as string}</p>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="constraints">约束条件（每行一条）</Label>
-                <Textarea
-                  id="constraints"
-                  rows={3}
-                  {...register('constraints')}
-                  placeholder={"不得修改公共 API 接口\n必须保持向后兼容\n单个文件不超过 500 行"}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-1">
-                  <Label htmlFor="enableReviewPanel">启用专家模式</Label>
-                  <p className="text-xs text-muted-foreground">
-                    启用后将启动多个专家子 Agent 从不同角度进行分析
-                  </p>
                 </div>
-                <Switch
-                  id="enableReviewPanel"
-                  checked={watch('enableReviewPanel') as boolean}
-                  onCheckedChange={(v) => setValue('enableReviewPanel', v)}
-                />
-              </div>
 
-              {availableSkills.length > 0 && (
-                <div className="space-y-2">
-                  <Label>Skills</Label>
-                  <MultiCombobox
-                    value={watch('skills') || []}
-                    onValueChange={(v) => setValue('skills', v)}
-                    options={availableSkills.map(skill => ({
-                      value: skill.name,
-                      label: skill.name,
-                      description: skill.description,
-                    }))}
-                    placeholder="选择 Skills..."
-                  />
-                </div>
-              )}
+                <div className="space-y-5">
+                  <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="space-y-1">
+                        <Label htmlFor="enableReviewPanel">启用专家模式</Label>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          启用后将启动多个专家子 Agent 从不同角度进行分析
+                        </p>
+                      </div>
+                      <Switch
+                        id="enableReviewPanel"
+                        checked={watch('enableReviewPanel') as boolean}
+                        onCheckedChange={(v) => setValue('enableReviewPanel', v)}
+                      />
+                    </div>
 
-              {(watch('specTaskId') || showAdvancedBindings) && (
-                <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
+                    {availableSkills.length > 0 && (
+                      <div className="space-y-2">
+                        <Label>Skills</Label>
+                        <MultiCombobox
+                          value={watch('skills') || []}
+                          onValueChange={(v) => setValue('skills', v)}
+                          options={availableSkills.map(skill => ({
+                            value: skill.name,
+                            label: skill.name,
+                            description: skill.description,
+                          }))}
+                          placeholder="选择 Skills..."
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {(specTaskOptions.length > 0 || watch('specTaskId') || showAdvancedBindings) && (
+                    <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">
                   <div>
                     <div className="text-sm font-semibold">Spec 计划绑定</div>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      由系统根据 OpenSpec tasks.md 生成，只在这里查看；任务状态由工作流调度器自动更新。
+                      可手动调整当前步骤绑定的 tasks.md 任务；保存配置时系统会重新校验绑定完整性。
                     </p>
                   </div>
+                  <div className="space-y-2">
+                    <Label>绑定任务</Label>
+                    <MultiCombobox
+                      value={selectedSpecTaskIds}
+                      onValueChange={(value) => setValue('specTaskId', value.join(', '), { shouldDirty: true })}
+                      options={specTaskOptions}
+                      placeholder={specTaskOptions.length > 0 ? '选择要绑定的 tasks.md 任务...' : '当前没有可选任务'}
+                    />
+                  </div>
+                  {selectedSpecTaskDetails.length > 0 ? (
+                    <div className="space-y-2 rounded-xl border bg-background/70 p-3">
+                      <div className="text-xs font-medium text-muted-foreground">当前绑定任务</div>
+                      <div className="space-y-2">
+                        {selectedSpecTaskDetails.slice(0, 5).map((task) => (
+                          <div key={task.id} className="rounded-lg border bg-muted/20 px-3 py-2">
+                            <div className="text-xs font-medium">{task.id}</div>
+                            <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{task.title}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="rounded-xl border bg-background/60 p-3">
                     <button
                       type="button"
@@ -486,7 +545,7 @@ export default function EditNodeModal({
                       <div className="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
                         <div>
                           <div className="text-muted-foreground">Spec 任务</div>
-                          <div className="mt-1 truncate font-medium">{watch('specTaskId') || '未绑定'}</div>
+                          <div className="mt-1 break-words font-medium">{watch('specTaskId') || '未绑定'}</div>
                         </div>
                         <div>
                           <div className="text-muted-foreground">关联需求</div>
@@ -499,19 +558,21 @@ export default function EditNodeModal({
                       </div>
                     )}
                   </div>
+                    </div>
+                  )}
 
-                <div className="hidden">
-                  <input {...register('specTaskId')} />
-                  <input {...register('requirementIds')} />
-                  <input {...register('artifactKeys')} />
+                  <div className="hidden">
+                    <input {...register('specTaskId')} />
+                    <input {...register('requirementIds')} />
+                    <input {...register('artifactKeys')} />
+                  </div>
                 </div>
               </div>
-              )}
             </>
           )}
 
         </form>
-        <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
+        <div className="flex gap-2 justify-end p-6 border-t bg-background/95 flex-shrink-0">
           {onDelete && (
             <Button type="button" variant="destructive" onClick={onDelete} className="mr-auto">
               <span className="material-symbols-outlined text-base mr-1">delete</span>

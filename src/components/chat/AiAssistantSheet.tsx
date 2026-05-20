@@ -79,6 +79,7 @@ export function AiAssistantSheet({
     rejectAction,
     undoActionById,
     retryAction,
+    reloadActionResult,
   } = useChat();
 
   const [sheetSessionId, setSheetSessionId] = useState<string | null>(null);
@@ -364,6 +365,7 @@ export function AiAssistantSheet({
             onRejectAction={(actionId) => rejectAction(message.id, actionId)}
             onUndoAction={(actionId) => undoActionById(message.id, actionId)}
             onRetryAction={(actionId) => retryAction(message.id, actionId)}
+            onReloadActionResult={(actionId) => reloadActionResult(message.id, actionId)}
             onAction={(prompt) => { void send(prompt); }}
             onDelete={deleteMessage}
             onRetryFromMessage={retryFromMessage}
@@ -400,6 +402,7 @@ export function AiAssistantSheet({
     onInsertResult,
     openExportDialog,
     rejectAction,
+    reloadActionResult,
     retryAction,
     retryFromMessage,
     send,

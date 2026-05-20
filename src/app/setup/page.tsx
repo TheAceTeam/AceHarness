@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { SingleCombobox } from '@/components/ui/combobox';
+import { EngineSelect } from '@/components/EngineSelect';
+import { ModelSelect } from '@/components/ModelSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { RobotLogo } from '@/components/chat/ChatMessage';
 import AvatarPicker from '@/components/AvatarPicker';
@@ -524,14 +525,13 @@ export default function SetupPage() {
 
               <div className="border-t pt-4">
                 <label className="text-sm font-medium mb-1.5 block">默认引擎</label>
-                <SingleCombobox
+                <EngineSelect
                   value={engine}
-                  onValueChange={(v) => {
+                  onChange={(v) => {
                     setEngine(v);
                     setEngineAvailability((prev) => ({ ...prev, [v]: null }));
                   }}
-                  options={getConcreteEngines().map((item) => ({ value: item.id, label: item.name }))}
-                  placeholder="请选择默认引擎"
+                  className="h-10"
                 />
                 {checkingEngine && <p className="text-xs text-muted-foreground mt-1 animate-pulse">正在检测引擎可用性...</p>}
                 {!checkingEngine && engine && engineAvailability[engine] === false && (
@@ -541,12 +541,11 @@ export default function SetupPage() {
 
               <div>
                 <label className="text-sm font-medium mb-1.5 block">默认模型</label>
-                <SingleCombobox
+                <ModelSelect
                   value={defaultModel}
-                  onValueChange={setDefaultModel}
-                  options={availableModels}
-                  placeholder={checkingEngine ? '正在检测引擎...' : loadingModels ? '正在加载模型...' : '请选择默认模型'}
-                  disabled={!engine || checkingEngine || loadingModels || availableModels.length === 0}
+                  onChange={setDefaultModel}
+                  engine={engine}
+                  className="h-10"
                 />
                 <p className="text-xs text-muted-foreground mt-1">首次进入和 Agent 跟随系统时都会使用这里的默认模型</p>
               </div>

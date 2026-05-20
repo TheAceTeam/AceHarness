@@ -1,6 +1,7 @@
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-helpers';
 import { MockEngine } from './helpers/mock-engine';
+import { REAL_OPENCODE_CONNECTED_REPLAY } from './fixtures/real-engine-events';
 
 vi.mock('@/lib/engines/engine-factory', () => ({
   getOrCreateEngine: vi.fn(),
@@ -183,6 +184,37 @@ describe('chat stream flow', () => {
       chatId: 'chat-scoped',
       streamContent: 'planning output',
     });
+  });
+
+  test('GET does not replay buffered delta content before connected', async () => {
+    const engine = new MockEngine({ success: true, output: 'Hello!' });
+    const { getOrCreateEngine } = await import('@/lib/engines/engine-factory');
+    const { getEngineStream } = await import('@/lib/chat/stream-state');
+    (getOrCreateEngine as any).mockResolvedValue(engine);
+
+    const { POST, GET } = await import('@/app/api/chat/stream/route');
+    const createResponse = await POST(makeRequest('/api/chat/stream', {
+      json: { message: 'Hello', mode: 'dashboard' },
+    }));
+    const { chatId } = await responseJson(createResponse);
+
+    (getEngineStream as any).mockReturnValueOnce({
+      chatId,
+      backendSessionId: REAL_OPENCODE_CONNECTED_REPLAY.backendSessionId,
+      streamContent: REAL_OPENCODE_CONNECTED_REPLAY.replayDelta,
+      status: 'running',
+      engine: 'mock-engine',
+      model: '',
+    });
+
+    const response = await GET(makeRequest(`/api/chat/stream?id=${chatId}`));
+    expect(response.status).toBe(200);
+    const body = await response.text();
+
+    expect(body).toContain('event: connected');
+    expect(body).toContain('event: session');
+    expect(body).toContain(REAL_OPENCODE_CONNECTED_REPLAY.backendSessionId);
+    expect(body).not.toContain(REAL_OPENCODE_CONNECTED_REPLAY.replayDelta);
   });
 
   test('DELETE cancels engine and returns killed=true', async () => {

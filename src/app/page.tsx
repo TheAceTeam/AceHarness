@@ -148,7 +148,7 @@ function ChatPageContent() {
     deleteMessage, retryFromMessage, continueFromMessage,
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, setEngine,
-    confirmAction, rejectAction, undoActionById, retryAction,
+    confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
     skillSettings, setSessionWorkbenchState,
     appendSessionMessage,
     updateSessionMessage,
@@ -1007,6 +1007,7 @@ function ChatPageContent() {
       onRejectAction: (id: string) => void;
       onUndoAction: (id: string) => void;
       onRetryAction: (id: string) => void;
+      onReloadActionResult: (id: string) => void;
     }> = {};
     messages.forEach(msg => {
       callbacks[msg.id] = {
@@ -1014,10 +1015,11 @@ function ChatPageContent() {
         onRejectAction: (id) => rejectAction(msg.id, id),
         onUndoAction: (id) => undoActionById(msg.id, id),
         onRetryAction: (id) => retryAction(msg.id, id),
+        onReloadActionResult: (id) => reloadActionResult(msg.id, id),
       };
     });
     return callbacks;
-  }, [messages, confirmAction, rejectAction, undoActionById, retryAction]);
+  }, [messages, confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult]);
 
   const handleQuoteMessage = useCallback((messageId: string) => {
     const message = messages.find((item) => item.id === messageId);
@@ -1083,6 +1085,7 @@ function ChatPageContent() {
             onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
             onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
             onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
+            onReloadActionResult={messageCallbacks[msg.id]?.onReloadActionResult}
             onAction={handleQuickAction}
             onDelete={deleteMessage}
             onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
@@ -1382,52 +1385,61 @@ function ChatPageContent() {
                   )}
                 >
                   {messages.length > 0 && (
-                    <div className="mx-auto mb-2 max-w-4xl rounded-2xl border border-border/60 bg-background/70 px-2 py-2 backdrop-blur-sm">
+                    <div className="mx-auto mb-0.5 max-w-5xl rounded-2xl bg-background/70 px-1 py-1 backdrop-blur-sm">
                       <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
                     </div>
                   )}
-                  <div className="mx-auto flex max-w-4xl items-stretch gap-2">
-                    <div className="flex-1">
+                  <div className="mx-auto max-w-5xl">
+                    <div className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
                       <RichTextEditor
                         ref={editorRef}
                         content={input}
                         onEnter={handleEditorEnter}
                         onChange={(markdown) => setInput(markdown)}
-                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                        minHeight={76}
-                        className="[&_.ProseMirror]:text-[13px] [&_.ProseMirror]:leading-5 [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
+                        placeholder="描述你的需求或问题"
+                        minHeight={116}
+                        maxHeight={220}
+                        className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
                         disabled={false}
                         autoFocus={false}
                         showFullscreenToggle={!isMobile}
                         showToolbar={false}
                         mentionItems={mainInputMentionItems}
                         trimPastedTrailingNewlines
+                        footerInside
+                        surfaceClassName="rounded-[28px] border-0 bg-transparent shadow-none"
+                        contentAreaClassName="min-h-[68px] items-start px-6 pb-2 pt-4"
+                        footerClassName="gap-4 border-border/60 px-6 pb-3 pt-3"
                         footerContent={(
                           <>
                             <button
                               onClick={() => handleDebugToggle(!debugMode)}
-                              className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
+                              className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${debugMode ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                               title="调试模式：查看发送给 AI 的系统提示词"
                             >
-                              <span className="material-symbols-outlined text-sm">bug_report</span>
+                              <span className="material-symbols-outlined text-[16px]">bug_report</span>
                               调试
                             </button>
-                            <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
-                            <div className="w-24 shrink-0 sm:w-32">
-                              <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
+                            <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-primary/85" />
+                            <div className="ml-2 w-[9.5rem] shrink-0 sm:w-[10.5rem]">
+                              <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-9 rounded-full border-0 bg-transparent px-0.5 text-sm shadow-none" />
                             </div>
                           </>
                         )}
+                        footerAfterCountContent={(
+                          <div className="ml-5 flex items-center gap-3">
+                            {loading && (
+                              <Button className="h-10 w-10 rounded-2xl border border-destructive/20 px-0 shadow-sm transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
+                                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>stop</span>
+                              </Button>
+                            )}
+                            <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown()}>
+                              <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
+                            </Button>
+                          </div>
+                        )}
                       />
                     </div>
-                    {loading && (
-                      <Button className="h-[76px] self-stretch rounded-2xl border border-destructive/20 px-3 transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
-                        <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>stop</span>
-                      </Button>
-                    )}
-                    <Button className="h-[76px] self-stretch rounded-2xl px-4 transition-colors duration-150" onClick={handleSend} disabled={!getInputMarkdown()}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
-                    </Button>
                   </div>
                 </div>
               </div>

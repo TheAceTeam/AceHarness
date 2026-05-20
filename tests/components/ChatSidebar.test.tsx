@@ -11,6 +11,8 @@ const mockRenameSession = vi.fn();
 const mockSetActiveSessionId = vi.fn();
 const mockToggleSkill = vi.fn();
 const mockSetSkillsEnabled = vi.fn();
+const mockListHumanQuestions = vi.fn(async () => ({ questions: [] }));
+const mockListRuns = vi.fn(async () => ({ runs: [] as { id: string; status: string }[] }));
 
 let mockSessions: any[] = [
   { id: 'sess-1', title: 'Session One', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 5 },
@@ -39,6 +41,15 @@ vi.mock('@/contexts/ChatContext', () => ({
     toggleSkill: mockToggleSkill,
     setSkillsEnabled: mockSetSkillsEnabled,
   }),
+}));
+
+vi.mock('@/lib/core/api', () => ({
+  workflowApi: {
+    listHumanQuestions: () => mockListHumanQuestions(),
+  },
+  runsApi: {
+    listAll: () => mockListRuns(),
+  },
 }));
 
 vi.mock('@/lib/agent/agent-conversations', () => ({
@@ -78,6 +89,8 @@ describe('ChatSidebar', () => {
     mockActiveStreamingSessionIds = [];
     mockSkillSettings = {};
     mockDiscoveredSkills = [];
+    mockListHumanQuestions.mockResolvedValue({ questions: [] });
+    mockListRuns.mockResolvedValue({ runs: [] });
   });
 
   test('renders session list', () => {
@@ -112,7 +125,7 @@ describe('ChatSidebar', () => {
     expect(mockCreateSession).toHaveBeenCalled();
   });
 
-  test('separates workflow run sessions from normal and creation sessions', async () => {
+  test('separates workflow sessions into creating, ready, and active buckets', async () => {
     const user = userEvent.setup();
     mockSessions = [
       { id: 'plain-1', title: 'Plain Chat', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 1 },
@@ -147,7 +160,22 @@ describe('ChatSidebar', () => {
           updatedAt: Date.now(),
         },
       },
+      {
+        id: 'ready-1',
+        title: 'Ready Workflow',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 3,
+        workflowBinding: {
+          configFile: 'ready.yaml',
+          runId: 'run-ready-1',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
     ];
+    mockListRuns.mockResolvedValue({ runs: [{ id: 'run-1', status: 'running' }, { id: 'run-ready-1', status: 'completed' }] });
 
     render(<ChatSidebar />);
 
@@ -159,14 +187,51 @@ describe('ChatSidebar', () => {
 
     expect(screen.queryByText('Run Workflow')).toBeNull();
     expect(screen.queryByText('Plain Chat')).toBeNull();
-    await user.click(screen.getByRole('button', { name: /非运行中/ }));
     expect(screen.getByText('Draft Workflow')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
     expect(screen.getByText('工作流设计')).toBeTruthy();
 
+    await user.click(screen.getByRole('button', { name: /未运行/ }));
+    expect(screen.getAllByText('ready.yaml').length).toBeGreaterThan(0);
+
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
     await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
     expect(screen.getByText('运行会话')).toBeTruthy();
+  });
+
+  test('shows open button for recorded workflow agent session without loaded summary', async () => {
+    const user = userEvent.setup();
+    mockSessions = [
+      {
+        id: 'run-1',
+        title: 'Run Workflow',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        workflowBinding: {
+          configFile: 'workflow-run.yaml',
+          runId: 'run-1',
+          supervisorAgent: 'default-supervisor',
+          supervisorSessionId: 'supervisor-1',
+          attachedAgentSessions: {},
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    ];
+    mockListRuns.mockResolvedValue({ runs: [{ id: 'run-1', status: 'running' }] });
+
+    render(<ChatSidebar />);
+
+    await user.click(screen.getByRole('button', { name: /工作流/ }));
+    await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
+
+    expect(screen.getByText('default-supervisor')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /default-supervisor/ }));
+    expect(screen.getByText('已记录会话，可直接打开。')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '打开对话' }));
+    expect(mockSetActiveSessionId).toHaveBeenCalledWith('supervisor-1');
   });
 
   test('filters sessions within each tab', async () => {

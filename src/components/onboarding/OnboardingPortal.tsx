@@ -106,20 +106,25 @@ export default function OnboardingPortal() {
 
   return (
     <>
-      {!open && (
-        <div className={`fixed bottom-6 z-[50] transition-all ${chatOpen ? 'right-[420px]' : 'right-24'}`}>
-          <Button
-            className="w-14 h-14 rounded-full shadow-lg"
-            variant="outline"
-            onClick={() => {
-              void openWithRefresh();
-            }}
-            title="打开新手引导"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>school</span>
-          </Button>
-        </div>
-      )}
+      <div
+        className={`fixed bottom-6 z-[50] ${open ? 'pointer-events-none' : ''}`}
+        style={{
+          right: chatOpen ? 420 : 96,
+          opacity: open ? 0 : 1,
+          transition: 'right 300ms ease-in-out, opacity 300ms ease-in-out',
+        }}
+      >
+        <Button
+          className="w-14 h-14 rounded-full shadow-lg"
+          variant="outline"
+          onClick={() => {
+            void openWithRefresh();
+          }}
+          title="打开新手引导"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>school</span>
+        </Button>
+      </div>
       <StoryOnboarding
         open={open}
         role={role}

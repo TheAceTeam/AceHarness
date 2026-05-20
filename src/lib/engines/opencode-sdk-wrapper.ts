@@ -81,6 +81,20 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
   return { client: requireClient(), url: server.url };
 }
 
+function parseProviderModel(modelId: string | undefined): { model: { providerID: string; modelID: string }; variant?: string } | null {
+  const raw = String(modelId || '').trim();
+  if (!raw || !raw.includes('/')) return null;
+  const segments = raw.split('/').filter(Boolean);
+  const [providerID, ...rest] = segments;
+  const knownVariants = new Set(['minimal', 'low', 'medium', 'high', 'max']);
+  const maybeVariant = rest.length > 1 ? rest[rest.length - 1] : undefined;
+  const variant = maybeVariant && knownVariants.has(maybeVariant) ? maybeVariant : undefined;
+  const modelSegments = variant ? rest.slice(0, -1) : rest;
+  const modelID = modelSegments.join('/');
+  if (!providerID || !modelID) return null;
+  return { model: { providerID, modelID }, ...(variant ? { variant } : {}) };
+}
+
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
@@ -128,6 +142,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       } as EngineStreamEvent);
 
       const fullPrompt = buildFullPrompt(options);
+      const model = parseProviderModel(options.model);
 
       console.log(`[opencode-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
       const output = await sendPromptWithOpenCodeHttp({
@@ -136,11 +151,14 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         sessionId: this.currentSessionId,
         fullPrompt,
         eventBaseUrl: url,
+        promptBodyExtras: {
+          ...(model ? { model: model.model } : {}),
+          ...(model?.variant ? { variant: model.variant } : {}),
+        },
         workingDirectory: options.workingDirectory,
         timeoutMs: options.timeoutMs,
         signal: this.abortController.signal,
         emit: (event) => this.emit('stream', event),
-        disableStreaming: true,
       });
       this.collectedOutput = output;
 

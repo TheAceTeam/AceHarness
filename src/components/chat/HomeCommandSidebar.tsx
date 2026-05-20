@@ -6100,7 +6100,7 @@ export default function HomeCommandSidebar({
 
   return (
     <>
-      <style jsx>{`
+      <style>{`
         @keyframes seatFall {
           0% { transform: translateY(0) scale(1); opacity: 1; }
           35% { transform: translateY(2px) scale(1.05); opacity: 1; }

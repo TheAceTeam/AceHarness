@@ -214,14 +214,14 @@ export default function EnginesPage() {
     }
   };
 
-  const checkEngineAvailability = async () => {
+  const checkEngineAvailability = async (forceRefresh = false) => {
     setCheckingAvailability(true);
     const availability: Record<string, EngineAvailabilityReport> = {};
 
     for (const engine of engines) {
       if (engine.status === 'available') {
         try {
-          const response = await fetch(`/api/engine/availability?engine=${engine.id}`);
+          const response = await fetch(`/api/engine/availability?engine=${engine.id}${forceRefresh ? '&refresh=1' : ''}`);
           const data = await response.json();
           availability[engine.id] = {
             engine: engine.id,
@@ -755,7 +755,7 @@ export default function EnginesPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={checkEngineAvailability}
+              onClick={() => checkEngineAvailability(true)}
               disabled={checkingAvailability}
             >
               {checkingAvailability ? '检查中...' : '刷新可用性'}

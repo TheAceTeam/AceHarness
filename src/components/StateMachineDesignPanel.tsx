@@ -9,7 +9,8 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Checkbox } from './ui/checkbox';
-import { SingleCombobox } from '@/components/ui/combobox';
+import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
+import { ComboboxPortalProvider, SingleCombobox } from '@/components/ui/combobox';
 import {
   DndContext,
   closestCenter,
@@ -84,6 +85,18 @@ const VERDICT_TRANSITION_PRESETS = [
 
 type VerdictTransition = typeof VERDICT_TRANSITION_PRESETS[number]['verdict'];
 const REQUIRED_VERDICTS: VerdictTransition[] = ['pass', 'conditional_pass', 'fail'];
+const ISSUE_TYPE_OPTIONS = [
+  { value: 'design', label: '设计问题', desc: '架构/方案缺陷' },
+  { value: 'implementation', label: '实现问题', desc: 'Bug/代码错误' },
+  { value: 'performance', label: '性能问题', desc: '性能瓶颈/退化' },
+  { value: 'security', label: '安全问题', desc: '漏洞/安全缺陷' },
+  { value: 'test', label: '测试问题', desc: '测试用例失败' },
+] as const;
+const SEVERITY_OPTIONS = [
+  { value: 'critical', label: '严重' },
+  { value: 'major', label: '主要' },
+  { value: 'minor', label: '次要' },
+] as const;
 
 const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
 
@@ -161,7 +174,14 @@ function buildVerdictTransitions(
 ): StateTransition[] {
   const transitions = Array.isArray(existingTransitions) ? existingTransitions : state.transitions || [];
   return VERDICT_TRANSITION_PRESETS.map((preset) => {
-    const existing = transitions.find((transition) => transition.condition?.verdict === preset.verdict);
+    const existing = transitions.find((transition) => (
+      transition.condition?.verdict === preset.verdict
+      && !transition.condition?.issueTypes?.length
+      && !transition.condition?.severities?.length
+      && transition.condition?.minIssueCount === undefined
+      && transition.condition?.maxIssueCount === undefined
+      && !transition.condition?.custom?.trim()
+    ));
     return {
       to: existing?.to ?? '',
       condition: {
@@ -172,6 +192,23 @@ function buildVerdictTransitions(
       label: existing?.label || preset.defaultLabel,
     };
   });
+}
+
+function hasAdvancedTransitionFilters(transition?: StateTransition | null): boolean {
+  if (!transition) return false;
+  return Boolean(
+    transition.condition?.issueTypes?.length
+    || transition.condition?.severities?.length
+    || transition.condition?.minIssueCount !== undefined
+    || transition.condition?.maxIssueCount !== undefined
+    || transition.condition?.custom?.trim()
+  );
+}
+
+function getAdvancedVerdictTransitions(verdict: VerdictTransition, transitions: StateTransition[] = []): StateTransition[] {
+  return transitions
+    .filter((transition) => transition.condition?.verdict === verdict && hasAdvancedTransitionFilters(transition))
+    .sort((a, b) => (a.priority || 100) - (b.priority || 100));
 }
 
 function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
@@ -187,14 +224,26 @@ function getStateNodeErrors(state: StateMachineState, states: StateMachineState[
       errors.push(`缺少 ${verdict} 路径`);
       continue;
     }
-    if (matches.length > 1) {
-      errors.push(`${verdict} 路径重复`);
+    const fallbackMatches = matches.filter((transition) => !hasAdvancedTransitionFilters(transition));
+    if (fallbackMatches.length === 0) {
+      errors.push(`${verdict} 缺少兜底路径`);
+      continue;
     }
-    if (!matches[0]?.to?.trim()) {
+    if (fallbackMatches.length > 1) {
+      errors.push(`${verdict} 存在多条兜底路径`);
+    }
+    if (!fallbackMatches[0]?.to?.trim()) {
       errors.push(`${verdict} 未设置目标状态`);
-    } else if (!stateNames.has(matches[0].to)) {
+    } else if (!stateNames.has(fallbackMatches[0].to)) {
       errors.push(`${verdict} 指向不存在的状态`);
     }
+    matches.filter((transition) => hasAdvancedTransitionFilters(transition)).forEach((transition, index) => {
+      if (!transition.to?.trim()) {
+        errors.push(`${verdict} 高级规则 ${index + 1} 未设置目标状态`);
+      } else if (!stateNames.has(transition.to)) {
+        errors.push(`${verdict} 高级规则 ${index + 1} 指向不存在的状态`);
+      }
+    });
   }
 
   const nonVerdictTransitions = transitions.filter((transition) => !REQUIRED_VERDICTS.includes(transition.condition?.verdict as VerdictTransition));
@@ -231,43 +280,55 @@ function SortableStepRow({
     : 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800';
 
   return (
-    <div ref={setNodeRef} style={style} className={`flex items-center gap-2 p-2.5 rounded-lg border ${roleColor} group`}>
-      <button {...attributes} {...listeners} className="cursor-grab text-gray-400 hover:text-gray-600 flex-shrink-0">
+    <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2 transition-colors ${roleColor}`}>
+      <div className="flex items-start gap-2.5">
+      <button {...attributes} {...listeners} className="mt-0.5 cursor-grab text-gray-400 hover:text-gray-600 flex-shrink-0">
         <GripVertical className="w-4 h-4" />
       </button>
-      <span className="material-symbols-outlined text-sm flex-shrink-0">{roleIcon}</span>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">{step.name}</div>
-        <div className="text-xs text-gray-500 truncate">{step.agent}</div>
-        {(isParallel || step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {isParallel ? <Badge variant="outline" className="text-[10px] py-0">并发分支</Badge> : null}
-            {(step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) ? <Badge variant="outline" className="text-[10px] py-0">Spec 任务</Badge> : null}
+      <span className="material-symbols-outlined mt-0.5 text-sm flex-shrink-0">{roleIcon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold leading-5 break-words">{step.name}</div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+              <span className="truncate">{step.agent}</span>
+              {(isParallel || step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) && (
+                <>
+                  {isParallel ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">并发分支</Badge> : null}
+                  {(step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">Spec 任务</Badge> : null}
+                </>
+              )}
+            </div>
           </div>
-        )}
-      </div>
-      <div className="flex flex-wrap justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {canGroupPrevious && (
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
-            与上一并发
-          </Button>
-        )}
-        {canGroupNext && (
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
-            与下一并发
-          </Button>
-        )}
-        {isParallel && (
-          <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
-            拆分
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={onEdit}>
-          <span className="material-symbols-outlined text-sm">edit</span>
-        </Button>
-        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:text-destructive" onClick={onDelete}>
-          <Trash2 className="w-3 h-3" />
-        </Button>
+          <div className="flex items-center gap-1 rounded-full border border-border/70 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground shadow-sm opacity-45 transition-opacity group-hover:opacity-100">
+            <span className="material-symbols-outlined text-[12px]">edit</span>
+            <span>可编辑</span>
+          </div>
+        </div>
+          <div className="mt-1.5 flex flex-wrap items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+            {canGroupPrevious && (
+              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+                与上一并发
+              </Button>
+            )}
+            {canGroupNext && (
+              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+                与下一并发
+              </Button>
+            )}
+            {isParallel && (
+              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+                拆分
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={onEdit}>
+              <span className="material-symbols-outlined text-sm">edit</span>
+            </Button>
+            <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive hover:text-destructive" onClick={onDelete}>
+              <Trash2 className="w-3 h-3" />
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -359,192 +420,356 @@ function SortableStateListItem({
   );
 }
 
-// 固定 verdict 三分支编辑卡
+function AdvancedVerdictTransitionsModal({
+  open,
+  onOpenChange,
+  preset,
+  states,
+  transitions,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  preset: typeof VERDICT_TRANSITION_PRESETS[number];
+  states: StateMachineState[];
+  transitions: StateTransition[];
+  onSave: (transitions: StateTransition[]) => void;
+}) {
+  const [draft, setDraft] = useState<StateTransition[]>(transitions);
+
+  useEffect(() => {
+    if (open) setDraft(transitions);
+  }, [open, transitions]);
+
+  const updateTransition = (index: number, patch: Partial<StateTransition>) => {
+    setDraft((prev) => prev.map((item, itemIndex) => (
+      itemIndex === index
+        ? {
+            ...item,
+            ...patch,
+            condition: {
+              ...(item.condition || {}),
+              ...(patch.condition || {}),
+              verdict: preset.verdict,
+            },
+          }
+        : item
+    )));
+  };
+
+  const addRule = () => {
+    setDraft((prev) => [...prev, {
+      to: '',
+      label: `${preset.title}高级规则`,
+      priority: Math.max(1, (prev.at(-1)?.priority || preset.priority) - 1),
+      condition: {
+        verdict: preset.verdict,
+        custom: '',
+      },
+    }]);
+  };
+
+  const removeRule = (index: number) => setDraft((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+
+  const toggleListValue = (index: number, field: 'issueTypes' | 'severities', value: string) => {
+    const current = ((draft[index]?.condition as any)?.[field] || []) as string[];
+    const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+    updateTransition(index, {
+      condition: {
+        ...draft[index]?.condition,
+        [field]: next.length ? next : undefined,
+      },
+    });
+  };
+
+  const commit = () => {
+    const normalized = draft
+      .map((item) => ({
+        ...item,
+        label: item.label?.trim() || undefined,
+        priority: Number.isFinite(Number(item.priority)) ? Number(item.priority) : preset.priority,
+        condition: {
+          ...item.condition,
+          verdict: preset.verdict,
+          custom: item.condition?.custom?.trim() || undefined,
+          issueTypes: item.condition?.issueTypes?.length ? item.condition.issueTypes : undefined,
+          severities: item.condition?.severities?.length ? item.condition.severities : undefined,
+          minIssueCount: item.condition?.minIssueCount === undefined || item.condition?.minIssueCount === null || item.condition?.minIssueCount === ('' as any)
+            ? undefined
+            : Number(item.condition.minIssueCount),
+          maxIssueCount: item.condition?.maxIssueCount === undefined || item.condition?.maxIssueCount === null || item.condition?.maxIssueCount === ('' as any)
+            ? undefined
+            : Number(item.condition.maxIssueCount),
+        },
+      }))
+      .filter((item) => item.to?.trim())
+      .filter((item) => hasAdvancedTransitionFilters(item));
+    onSave(normalized);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl w-[92vw] max-h-[85vh] overflow-hidden p-0">
+        <ComboboxPortalProvider>
+          <DialogTitle className="sr-only">{preset.title}高级状态转移设置</DialogTitle>
+          <div className="flex max-h-[85vh] flex-col">
+            <div className="border-b px-6 py-4">
+              <div className="text-base font-semibold">{preset.title}高级状态转移设置</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                基础路径继续作为兜底。这里配置更细粒度的场景规则，并通过优先级控制命中顺序。
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto px-6 py-5 space-y-4">
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" size="sm" onClick={addRule}>
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  添加高级规则
+                </Button>
+              </div>
+              {draft.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
+                  暂无高级规则，未命中时将走基础兜底路径。
+                </div>
+              ) : draft.map((transition, index) => (
+                <div key={`${preset.verdict}-${index}`} className="rounded-2xl border bg-background/80 p-4 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium">规则 {index + 1}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">优先级数字越小越先命中。</div>
+                    </div>
+                    <Button type="button" variant="ghost" size="sm" className="text-rose-600" onClick={() => removeRule(index)}>
+                      <Trash2 className="mr-1 h-3.5 w-3.5" />
+                      删除
+                    </Button>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">跳转目标</Label>
+                      <SingleCombobox
+                        value={transition.to}
+                        onValueChange={(value) => updateTransition(index, { to: value })}
+                        options={states.map((state) => ({ value: state.name, label: state.name }))}
+                        placeholder="选择状态"
+                        searchable={false}
+                        triggerClassName="h-9"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">路径说明</Label>
+                      <Input
+                        className="h-9 text-sm"
+                        value={transition.label || ''}
+                        onChange={(e) => updateTransition(index, { label: e.target.value })}
+                        placeholder={`${preset.title}高级规则`}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">优先级</Label>
+                      <Input
+                        className="h-9 text-sm"
+                        type="number"
+                        value={transition.priority ?? preset.priority}
+                        onChange={(e) => updateTransition(index, { priority: parseInt(e.target.value, 10) || preset.priority })}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">模式匹配</Label>
+                    <Input
+                      className="h-9 text-sm"
+                      value={transition.condition?.custom || ''}
+                      onChange={(e) => updateTransition(index, { condition: { ...transition.condition, custom: e.target.value || undefined } })}
+                      placeholder="例如：timeout|memory leak|race condition"
+                    />
+                  </div>
+                  <div>
+                    <Label className="mb-1.5 block text-xs">问题类型过滤</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {ISSUE_TYPE_OPTIONS.map((opt) => {
+                        const selected = transition.condition?.issueTypes?.includes(opt.value as any);
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            title={opt.desc}
+                            className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
+                            onClick={() => toggleListValue(index, 'issueTypes', opt.value)}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="mb-1.5 block text-xs">严重程度过滤</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {SEVERITY_OPTIONS.map((opt) => {
+                        const selected = transition.condition?.severities?.includes(opt.value as any);
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
+                            onClick={() => toggleListValue(index, 'severities', opt.value)}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">最少问题数量</Label>
+                      <Input
+                        className="h-9 text-sm"
+                        type="number"
+                        min={0}
+                        value={transition.condition?.minIssueCount ?? ''}
+                        placeholder="不限"
+                        onChange={(e) => updateTransition(index, {
+                          condition: {
+                            ...transition.condition,
+                            minIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
+                          },
+                        })}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">最多问题数量</Label>
+                      <Input
+                        className="h-9 text-sm"
+                        type="number"
+                        min={0}
+                        value={transition.condition?.maxIssueCount ?? ''}
+                        placeholder="不限"
+                        onChange={(e) => updateTransition(index, {
+                          condition: {
+                            ...transition.condition,
+                            maxIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
+                          },
+                        })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t px-6 py-4 flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button>
+              <Button type="button" onClick={commit}>保存高级规则</Button>
+            </div>
+          </div>
+        </ComboboxPortalProvider>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function VerdictTransitionCard({
-  transition, states, onChange, preset,
+  transition, states, onChange, preset, advancedTransitions, onSaveAdvancedTransitions,
 }: {
   transition: StateTransition;
   states: StateMachineState[];
   onChange: (t: StateTransition) => void;
   preset: typeof VERDICT_TRANSITION_PRESETS[number];
+  advancedTransitions: StateTransition[];
+  onSaveAdvancedTransitions: (transitions: StateTransition[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const conditionSummary = () => {
-    const parts: string[] = [];
-    if (transition.condition.issueTypes?.length) {
-      parts.push(`问题类型: ${transition.condition.issueTypes.join('/')}`);
-    }
-    if (transition.condition.severities?.length) {
-      parts.push(`严重程度: ${transition.condition.severities.join('/')}`);
-    }
-    if (transition.condition.minIssueCount !== undefined) {
-      parts.push(`≥${transition.condition.minIssueCount}个问题`);
-    }
-    if (transition.condition.maxIssueCount !== undefined) {
-      parts.push(`≤${transition.condition.maxIssueCount}个问题`);
-    }
-    return parts.length ? parts.join(' · ') : '仅按 verdict 判定';
-  };
+  const conditionSummary = () => (
+    advancedTransitions.length > 0 ? `${advancedTransitions.length} 条高级规则` : '仅使用基础兜底路径'
+  );
 
   return (
-    <div className={`overflow-hidden rounded-2xl border ${preset.tone}`}>
-      <div className="flex items-start gap-3 p-4">
-        <button
-          type="button"
-          className="mt-0.5 rounded-full border border-border/60 bg-background/80 p-1 text-muted-foreground"
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        </button>
-        <div className="min-w-0 flex-1 space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+    <>
+      <div className={`overflow-hidden rounded-2xl border ${preset.tone}`}>
+        <div className="flex items-start gap-3 p-4">
+          <button
+            type="button"
+            className="mt-0.5 rounded-full border border-border/60 bg-background/80 p-1 text-muted-foreground"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
                   <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
-                  {!transition.to ? (
-                    <Badge variant="destructive" className="text-[10px]">
-                      未配置
-                    </Badge>
-                  ) : null}
+                  {!transition.to ? <Badge variant="destructive" className="text-[10px]">未配置</Badge> : null}
                 </div>
                 <div className="text-xs text-muted-foreground">{preset.description}</div>
                 {!transition.to ? (
-                  <div className="text-xs text-red-500">
-                    该路径还没有配置跳转目标，当前状态将无法通过保存校验。
-                  </div>
+                  <div className="text-xs text-red-500">该路径还没有配置跳转目标，当前状态将无法通过保存校验。</div>
                 ) : null}
               </div>
               <div className="rounded-full border bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground">
                 {conditionSummary()}
               </div>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-            <div className="space-y-1.5">
-              <Label className="text-xs">跳转目标</Label>
-              <SingleCombobox
-                value={transition.to}
-                onValueChange={(value) => onChange({ ...transition, to: value })}
-                options={states.map((state) => ({ value: state.name, label: state.name }))}
-                placeholder="选择状态"
-                triggerClassName="h-9 bg-background/90"
-                searchable={false}
-              />
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">路径说明</Label>
-              <Input
-                className="h-9 bg-background/90 text-sm"
-                value={transition.label || ''}
-                onChange={(e) => onChange({ ...transition, label: e.target.value })}
-                placeholder={preset.defaultLabel}
-              />
+
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+              <div className="space-y-1.5">
+                <Label className="text-xs">基础兜底目标</Label>
+                <SingleCombobox
+                  value={transition.to}
+                  onValueChange={(value) => onChange({ ...transition, to: value })}
+                  options={states.map((state) => ({ value: state.name, label: state.name }))}
+                  placeholder="选择状态"
+                  triggerClassName="h-9 bg-background/90"
+                  searchable={false}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">路径说明</Label>
+                <Input
+                  className="h-9 bg-background/90 text-sm"
+                  value={transition.label || ''}
+                  onChange={(e) => onChange({ ...transition, label: e.target.value })}
+                  placeholder={preset.defaultLabel}
+                />
+              </div>
             </div>
           </div>
         </div>
+
+        {expanded ? (
+          <div className="space-y-3 border-t border-border/50 bg-background/60 p-4">
+            <div className="flex items-start gap-2 rounded-xl bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+              <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>基础路径始终作为兜底。更细粒度的场景跳转请放到高级状态转移设置里，并通过优先级控制覆盖顺序。</span>
+            </div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border bg-background/70 px-3 py-3">
+              <div>
+                <div className="text-sm font-medium">高级状态转移设置</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {advancedTransitions.length > 0
+                    ? `已配置 ${advancedTransitions.length} 条高级规则，命中后会覆盖兜底路径。`
+                    : '默认不显示，只有需要覆盖更细场景时再配置。'}
+                </div>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setAdvancedOpen(true)}>
+                配置高级规则
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
-
-      {expanded ? (
-        <div className="space-y-3 border-t border-border/50 bg-background/60 p-4">
-          <div className="flex items-start gap-2 rounded-xl bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-            <span>这条路径的 verdict 已固定为 {preset.title}。下面这些条件只是额外收紧，不会替代 verdict 本身。</span>
-          </div>
-
-          <div>
-            <Label className="mb-1.5 block text-xs">问题类型过滤</Label>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { value: 'design', label: '设计问题', desc: '架构/方案缺陷' },
-                { value: 'implementation', label: '实现问题', desc: 'Bug/代码错误' },
-                { value: 'performance', label: '性能问题', desc: '性能瓶颈/退化' },
-                { value: 'security', label: '安全问题', desc: '漏洞/安全缺陷' },
-                { value: 'test', label: '测试问题', desc: '测试用例失败' },
-              ].map((opt) => {
-                const selected = transition.condition.issueTypes?.includes(opt.value as any);
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    title={opt.desc}
-                    onClick={() => {
-                      const current = transition.condition.issueTypes || [];
-                      const next = selected
-                        ? current.filter((item) => item !== opt.value)
-                        : [...current, opt.value as any];
-                      onChange({ ...transition, condition: { ...transition.condition, issueTypes: next.length ? next : undefined } });
-                    }}
-                    className={`rounded-full border px-2.5 py-1 text-xs transition-all ${selected ? 'border-blue-500 bg-blue-500 text-white' : 'border-border bg-background/90 text-muted-foreground hover:border-blue-300'}`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <Label className="mb-1.5 block text-xs">严重程度过滤</Label>
-            <div className="flex gap-2">
-              {[
-                { value: 'critical', label: '严重', color: 'border-red-500 bg-red-500 text-white' },
-                { value: 'major', label: '主要', color: 'border-orange-500 bg-orange-500 text-white' },
-                { value: 'minor', label: '次要', color: 'border-slate-500 bg-slate-500 text-white' },
-              ].map((opt) => {
-                const selected = transition.condition.severities?.includes(opt.value as any);
-                return (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => {
-                      const current = transition.condition.severities || [];
-                      const next = selected
-                        ? current.filter((item) => item !== opt.value)
-                        : [...current, opt.value as any];
-                      onChange({ ...transition, condition: { ...transition.condition, severities: next.length ? next : undefined } });
-                    }}
-                    className={`flex-1 rounded border py-1.5 text-xs font-medium transition-all ${selected ? opt.color : 'border-border bg-background/90 text-muted-foreground hover:border-gray-300'}`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="mb-1 block text-xs">最少问题数量</Label>
-              <Input
-                type="number"
-                className="h-9 bg-background/90 text-sm"
-                placeholder="不限"
-                value={transition.condition.minIssueCount ?? ''}
-                onChange={(e) => onChange({
-                  ...transition,
-                  condition: { ...transition.condition, minIssueCount: e.target.value ? Number(e.target.value) : undefined },
-                })}
-              />
-            </div>
-            <div>
-              <Label className="mb-1 block text-xs">最多问题数量</Label>
-              <Input
-                type="number"
-                className="h-9 bg-background/90 text-sm"
-                placeholder="不限"
-                value={transition.condition.maxIssueCount ?? ''}
-                onChange={(e) => onChange({
-                  ...transition,
-                  condition: { ...transition.condition, maxIssueCount: e.target.value ? Number(e.target.value) : undefined },
-                })}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <AdvancedVerdictTransitionsModal
+        open={advancedOpen}
+        onOpenChange={setAdvancedOpen}
+        preset={preset}
+        states={states}
+        transitions={advancedTransitions}
+        onSave={onSaveAdvancedTransitions}
+      />
+    </>
   );
 }
 
@@ -781,7 +1006,29 @@ export default function StateMachineDesignPanel({
         ? { ...transition, condition: { ...(transition.condition || {}), verdict }, priority: VERDICT_TRANSITION_PRESETS.find((preset) => preset.verdict === verdict)?.priority || item.priority }
         : item
     ));
-    updateState({ ...selectedState, transitions });
+    const advanced = (selectedState.transitions || []).filter((item) => (
+      item.condition?.verdict !== verdict || hasAdvancedTransitionFilters(item)
+    ));
+    updateState({ ...selectedState, transitions: [...transitions, ...advanced] });
+  };
+
+  const handleSaveAdvancedVerdictTransitions = (verdict: VerdictTransition, nextTransitions: StateTransition[]) => {
+    if (!selectedState) return;
+    const fallbackTransitions = buildVerdictTransitions(selectedState, states, selectedState.transitions);
+    const otherTransitions = (selectedState.transitions || []).filter((item) => item.condition?.verdict !== verdict);
+    const fallback = fallbackTransitions.find((item) => item.condition.verdict === verdict);
+    updateState({
+      ...selectedState,
+      transitions: [
+        ...otherTransitions,
+        ...fallbackTransitions.filter((item) => item.condition.verdict !== verdict),
+        ...(fallback ? [fallback] : []),
+        ...nextTransitions.map((item) => ({
+          ...item,
+          condition: { ...(item.condition || {}), verdict },
+        })),
+      ],
+    });
   };
 
   // 编辑步骤时的初始数据
@@ -821,7 +1068,7 @@ export default function StateMachineDesignPanel({
               <div className="space-y-1">
                 {states.map((state, index) => (
                   <SortableStateListItem
-                    key={state.name}
+                    key={index}
                     state={state}
                     index={index}
                     isSelected={selectedStateName === state.name}
@@ -859,7 +1106,11 @@ export default function StateMachineDesignPanel({
                     <Input
                       className="h-8 text-sm"
                       value={selectedState.name}
-                      onChange={(e) => updateState({ ...selectedState, name: e.target.value })}
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        setSelectedStateName(newName);
+                        updateState({ ...selectedState, name: newName });
+                      }}
                     />
                   </div>
                   <div className="flex items-end gap-4 pb-1">
@@ -886,6 +1137,25 @@ export default function StateMachineDesignPanel({
                     </label>
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs mb-1 block">最大自循环次数</Label>
+                    <Input
+                      className="h-8 text-sm"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={selectedState.maxSelfTransitions ?? 3}
+                      onChange={(e) => updateState({
+                        ...selectedState,
+                        maxSelfTransitions: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 1)),
+                      })}
+                    />
+                    <div className="mt-1 text-[11px] text-muted-foreground">
+                      限制状态连续回到自身的次数，超出后自动熔断，避免卡在同一状态反复循环。
+                    </div>
+                  </div>
+                </div>
                 <div>
                   <Label className="text-xs mb-1 block">描述</Label>
                   <Textarea
@@ -908,6 +1178,9 @@ export default function StateMachineDesignPanel({
                     {selectedState.isInitial && <Badge variant="outline" className="text-xs py-0">初始</Badge>}
                     {selectedState.isFinal && <Badge variant="outline" className="text-xs py-0">终止</Badge>}
                     {selectedState.requireHumanApproval && <Badge variant="outline" className="text-xs py-0 bg-orange-100 dark:bg-orange-900 text-orange-600">人工审查</Badge>}
+                    <Badge variant="outline" className="text-xs py-0">
+                      自循环上限 {selectedState.maxSelfTransitions ?? 3}
+                    </Badge>
                   </div>
                   {selectedState.description && (
                     <div className="text-xs text-muted-foreground mt-0.5">{selectedState.description}</div>
@@ -1030,7 +1303,7 @@ export default function StateMachineDesignPanel({
                 <div className="rounded-2xl border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                   <div className="flex items-start gap-2">
                     <ArrowRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                    <span>系统会按 verdict 固定识别三条路径。你只需要分别填写目标状态和可选的额外过滤条件，不再手工维护优先级。</span>
+                    <span>系统会按 verdict 固定识别三条基础路径。每条路径都必须保留一个兜底目标；更细的场景覆盖放到高级状态转移设置里，并按优先级命中。</span>
                   </div>
                 </div>
                 {selectedStateVerdictTransitions.map((transition) => {
@@ -1043,7 +1316,9 @@ export default function StateMachineDesignPanel({
                       transition={transition}
                       states={states}
                       preset={preset}
+                      advancedTransitions={getAdvancedVerdictTransitions(verdict, selectedState?.transitions || [])}
                       onChange={(nextTransition) => handleUpdateVerdictTransition(verdict, nextTransition)}
+                      onSaveAdvancedTransitions={(nextTransitions) => handleSaveAdvancedVerdictTransitions(verdict, nextTransitions)}
                     />
                   );
                 })}
@@ -1139,6 +1414,7 @@ export default function StateMachineDesignPanel({
           } : editingStepData}
           roles={availableAgents}
           availableSkills={availableSkills}
+          specTasks={[]}
           isNew={editingStep.isNew}
           existingPhases={[]}
           existingSteps={selectedState?.steps ?? []}

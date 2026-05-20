@@ -57,6 +57,11 @@ export interface CompileStepTaskBindingOptions {
    * but validation will fail so the creator can ask the draft author to repair it.
    */
   requireExplicit?: boolean;
+  /**
+   * When true, every leaf task in tasks.md must be covered by at least one
+   * workflow step binding. Uncovered tasks become validation errors.
+   */
+  requireFullCoverage?: boolean;
 }
 
 export function getSpecTaskBindingIds(binding?: SpecTaskBinding | null): string[] {
@@ -251,7 +256,9 @@ export function compileStepTaskBindings(
 
   const uncoveredTaskIds = leafTasks.map((task) => task.id).filter((id) => !covered.has(id));
   if (uncoveredTaskIds.length > 0) {
-    warnings.push(`以下 tasks.md 叶子任务尚未被 workflow step 覆盖: ${uncoveredTaskIds.join(', ')}`);
+    const message = `以下 tasks.md 叶子任务尚未被 workflow step 覆盖: ${uncoveredTaskIds.join(', ')}`;
+    if (options.requireFullCoverage) errors.push(message);
+    else warnings.push(message);
   }
 
   return {

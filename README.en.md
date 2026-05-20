@@ -235,10 +235,10 @@ npm run lint
 | Workflow and configuration | Zod 4, YAML, node-cron, tar-stream, unzipper, yazl |
 | Visualization | ReactFlow 11, Recharts 3, Mermaid 11 |
 | Forms and drag-and-drop | React Hook Form 7, @dnd-kit |
-| Markdown and docs | react-markdown, remark-gfm, rehype-raw, react-syntax-highlighter, KaTeX |
+| Markdown and docs | react-markdown, remark-gfm, rehype-raw, KaTeX |
 | AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `magic-cli` |
 | Testing | Vitest 4, Testing Library, jsdom |
-| Internationalization and themes | next-intl 4, next-themes |
+| Themes | next-themes |
 
 ### Documentation Maintenance
 

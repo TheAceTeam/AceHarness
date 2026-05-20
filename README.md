@@ -246,10 +246,10 @@ npm run lint
 | 工作流与配置 | Zod 4、YAML、node-cron、tar-stream、unzipper、yazl |
 | 可视化 | ReactFlow 11、Recharts 3、Mermaid 11 |
 | 表单与拖拽 | React Hook Form 7、@dnd-kit |
-| Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、react-syntax-highlighter、KaTeX |
+| Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、KaTeX |
 | AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` |
 | 测试 | Vitest 4、Testing Library、jsdom |
-| 国际化与主题 | next-intl 4、next-themes |
+| 主题 | next-themes |
 
 ### 文档维护
 

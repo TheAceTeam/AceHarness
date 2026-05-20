@@ -2,6 +2,15 @@ import http from 'http';
 import https from 'https';
 
 import type { EngineOptions, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
+import {
+  formatAceReasoning,
+  formatAceSubtaskResult,
+  formatAceToolCall,
+  formatAceToolResult,
+  formatAceSubtaskStart,
+  getAceToolTitle,
+  stringifyStructured,
+} from '@/lib/chat/ace-process-formatters';
 
 export type OpenCodeTextPart = {
   id?: string;
@@ -75,6 +84,10 @@ export type OpenCodeHttpClient = {
       body: OpenCodePromptBody;
       query?: { directory?: string };
     }) => Promise<{ data?: unknown; error?: unknown }>;
+    messages?: (options: {
+      path: { id: string };
+      query?: { directory?: string; limit?: number };
+    }) => Promise<{ data?: Array<{ parts?: OpenCodePart[]; info?: { role?: string } }>; error?: unknown }>;
   };
 };
 
@@ -127,6 +140,126 @@ export function formatError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+function normalizeSsePayload(payload: unknown): OpenCodeStreamEventPayload | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const event = payload as Record<string, unknown>;
+  const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : null;
+  if (data?.payload && typeof data.payload === 'object') {
+    return data.payload as OpenCodeStreamEventPayload;
+  }
+  if (data && typeof data.type === 'string') {
+    return data as unknown as OpenCodeStreamEventPayload;
+  }
+  if (typeof event.type === 'string') {
+    return event as OpenCodeStreamEventPayload;
+  }
+  return undefined;
+}
+
+function formatToolCall(part: OpenCodePart): string {
+  const toolName = String((part as any).tool || 'tool');
+  const state = (part as any).state || {};
+  const input = (state.input && typeof state.input === 'object') ? state.input as Record<string, unknown> : {};
+  return formatAceToolCall({
+    toolName,
+    rawInput: input,
+    title: getAceToolTitle(toolName),
+    toolId: String((part as any).id || state.id || ''),
+  });
+}
+
+function formatStructuredTaskResult(output: unknown, toolId?: string): string {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return '';
+  const obj = output as Record<string, unknown>;
+  const sessionId = String(
+    obj.sessionId
+      ?? obj.session_id
+      ?? obj.taskId
+      ?? obj.task_id
+      ?? '',
+  ).trim();
+  const resultText = String(
+    obj.resultText
+      ?? obj.result_text
+      ?? obj.result
+      ?? obj.output
+      ?? obj.message
+      ?? obj.text
+      ?? '',
+  ).trim();
+  return sessionId || resultText
+    ? formatAceSubtaskResult({ sessionId, resultText, toolId })
+    : '';
+}
+
+function formatToolResult(part: OpenCodePart): string {
+  const state = (part as any).state || {};
+  const toolId = String((part as any).id || state.id || '');
+  if (state.status === 'completed') {
+    if (String((part as any).tool || '') === 'task') {
+      const taskOutput = state.output;
+      const structuredTask = formatStructuredTaskResult(taskOutput, toolId);
+      if (structuredTask) return structuredTask;
+      const fallbackTaskOutput = taskOutput ?? stringifyStructured(taskOutput);
+      if (fallbackTaskOutput == null || fallbackTaskOutput === '') return '';
+      return formatAceToolResult({
+        toolName: 'task',
+        rawOutput: fallbackTaskOutput,
+        title: getAceToolTitle('task'),
+        toolId,
+      });
+    }
+    const output = stringifyStructured(state.output || '');
+    if (!output) return '';
+    return formatAceToolResult({
+      toolName: String((part as any).tool || 'tool'),
+      rawOutput: state.output || output,
+      title: getAceToolTitle(String((part as any).tool || 'tool')),
+      toolId,
+    });
+  }
+  if (state.status === 'error') {
+    const error = stringifyStructured(state.error || 'tool failed');
+    return error
+      ? formatAceToolResult({
+          toolName: String((part as any).tool || 'tool'),
+          rawOutput: { error },
+          title: getAceToolTitle(String((part as any).tool || 'tool')),
+          toolId,
+        })
+      : '';
+  }
+  return '';
+}
+
+function formatAgentOrSubtask(part: OpenCodePart): string {
+  if (part.type === 'agent') {
+    const name = String((part as any).name || '').trim();
+    return name
+      ? formatAceSubtaskStart({
+          title: name,
+          description: name,
+          agent: name,
+        })
+      : '';
+  }
+  if (part.type === 'subtask') {
+    const agent = String((part as any).agent || '').trim();
+    const description = String((part as any).description || '').trim();
+    const prompt = String((part as any).prompt || '').trim();
+    const body = description || prompt || agent;
+    return body
+      ? formatAceSubtaskStart({
+          title: description || agent,
+          description,
+          agent,
+          prompt,
+        })
+      : '';
+  }
+  return '';
 }
 
 export async function sendPromptWithOpenCodeHttp(options: {
@@ -213,6 +346,7 @@ async function sendPromptStreaming(options: {
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
   options.signal?.addEventListener('abort', onAbort, { once: true });
+  const existingAssistantPartIds = await loadAssistantPartIds(options.client, options.sessionId, options.query);
 
   let output = '';
   let idle = false;
@@ -222,6 +356,13 @@ async function sendPromptStreaming(options: {
   const partTypes = new Map<string, string>();
   const partBuffers = new Map<string, string>();
   const ignoredTextParts = new Set<string>();
+  let sawSessionNextText = false;
+  const sessionNextTextBuffer = { text: '' };
+  let sawSessionNextReasoning = false;
+  const sessionNextReasoningBuffers = new Map<string, string>();
+  const emittedStructuredPartStarts = new Set<string>();
+  const emittedStructuredPartFinishes = new Set<string>();
+  const pendingUnknownPartBuffers = new Map<string, string>();
 
   const timeoutMs = Math.max(1_000, options.timeoutMs || 120_000);
   const timer = setTimeout(() => {
@@ -276,18 +417,39 @@ async function sendPromptStreaming(options: {
     }
     promptAccepted = true;
 
+    const structuredPartPoller = pollSessionMessagesWhileRunning({
+      client: options.client,
+      sessionId: options.sessionId,
+      query: options.query,
+      signal: abortController.signal,
+      shouldStop: () => idle || streamEnded || Boolean(streamError),
+      onPart: handlePartUpdated,
+      ignorePartIds: existingAssistantPartIds,
+    });
+
     while (!idle && !streamEnded && !streamError && !abortController.signal.aborted) {
       await sleep(50);
     }
 
     if (streamEnded && !idle && !streamError) {
-      streamError = new Error(`[${options.engineName}] event stream ended before session.idle`);
+      streamError = new Error(`[${options.engineName}] event stream ended before session idle`);
     }
     if (streamError) throw new Error(formatError(streamError));
     if (!idle && options.signal?.aborted) throw new Error(`[${options.engineName}] prompt cancelled`);
     if (!idle && !promptAccepted) throw new Error(`[${options.engineName}] prompt was not accepted`);
     await streamDone.done;
-    return output;
+    await structuredPartPoller;
+    await syncLatestAssistantParts();
+    finalizeUnknownPartTypes();
+    const hydratedOutput = await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query);
+    if (hydratedOutput) {
+      if (!output) {
+        emitTextDelta(hydratedOutput);
+      } else if (hydratedOutput.startsWith(output) && hydratedOutput.length > output.length) {
+        emitTextDelta(hydratedOutput.slice(output.length));
+      }
+    }
+    return hydratedOutput || output;
   } catch (error) {
     if (promptAccepted) {
       throw new PromptAlreadyStartedError(formatError(error));
@@ -299,38 +461,179 @@ async function sendPromptStreaming(options: {
     abortController.abort();
   }
 
-  function handlePartUpdated(part: OpenCodePart): void {
-    if (!part?.id || !part.type) return;
-    partTypes.set(part.id, part.type);
-    if (part.type !== 'text') return;
-
-    const text = typeof part.text === 'string' ? part.text : '';
-    if (!text) return;
-    if (text === options.fullPrompt) {
-      ignoredTextParts.add(part.id);
-      return;
-    }
-    if (ignoredTextParts.has(part.id)) return;
-
-    const current = partBuffers.get(part.id) || '';
-    if (text.length <= current.length || !text.startsWith(current)) return;
-    const delta = text.slice(current.length);
-    partBuffers.set(part.id, text);
+  function emitTextDelta(delta: string): void {
+    if (!delta) return;
     output += delta;
     options.emit({ type: 'text', content: delta });
+  }
+
+  function emitReasoningDelta(delta: string): void {
+    if (!delta) return;
+    options.emit({ type: 'thought', content: formatAceReasoning(delta) });
+  }
+
+  function shouldSuppressPartReplay(partType: string): boolean {
+    return (partType === 'text' && sawSessionNextText)
+      || (partType === 'reasoning' && sawSessionNextReasoning);
+  }
+
+  function flushPendingUnknownPartBuffer(partID: string, partType: string): void {
+    const pending = pendingUnknownPartBuffers.get(partID) || '';
+    if (!pending) return;
+    pendingUnknownPartBuffers.delete(partID);
+    const current = partBuffers.get(partID) || '';
+    partBuffers.set(partID, current + pending);
+    if (shouldSuppressPartReplay(partType)) return;
+    if (partType === 'text') {
+      emitTextDelta(pending);
+    } else if (partType === 'reasoning') {
+      emitReasoningDelta(pending);
+    }
+  }
+
+  function emitSessionNextEndedDelta(current: string, finalText: string, kind: 'text' | 'reasoning'): void {
+    if (!finalText) return;
+    if (finalText === current) return;
+    if (current && !finalText.startsWith(current)) return;
+    const delta = current ? finalText.slice(current.length) : finalText;
+    if (!delta) return;
+    if (kind === 'text') {
+      emitTextDelta(delta);
+    } else {
+      emitReasoningDelta(delta);
+    }
+  }
+
+  async function syncLatestAssistantParts(): Promise<void> {
+    if (typeof options.client.session.messages !== 'function') return;
+    try {
+      const result = await options.client.session.messages({
+        path: { id: options.sessionId },
+        query: { ...(options.query || {}), limit: 10 },
+      });
+      if (result.error || !Array.isArray(result.data)) return;
+      const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
+      for (const message of assistantMessages) {
+        const parts = Array.isArray(message?.parts) ? message.parts : [];
+        for (const part of parts) {
+          handlePartUpdated(part);
+        }
+      }
+    } catch {
+      // ignore final hydration failures; done.result remains the last fallback
+    }
+  }
+
+  function handlePartUpdated(part: OpenCodePart): void {
+    if (!part?.id || !part.type) return;
+    if (existingAssistantPartIds.has(part.id)) return;
+    partTypes.set(part.id, part.type);
+    if (part.type === 'text' || part.type === 'reasoning') {
+      const text = typeof part.text === 'string' ? part.text : '';
+      if (!text) return;
+      if (part.type === 'text' && text === options.fullPrompt) {
+        ignoredTextParts.add(part.id);
+        return;
+      }
+      if (ignoredTextParts.has(part.id)) return;
+
+      flushPendingUnknownPartBuffer(part.id, part.type);
+      const current = partBuffers.get(part.id) || '';
+      partBuffers.set(part.id, text);
+      if (text.length <= current.length) return;
+      if (shouldSuppressPartReplay(part.type)) return;
+      if (!text.startsWith(current)) return;
+      const delta = text.slice(current.length);
+      if (part.type === 'text') {
+        emitTextDelta(delta);
+      } else {
+        emitReasoningDelta(delta);
+      }
+      return;
+    }
+
+    if (part.type === 'tool') {
+      const state = (part as any).state || {};
+      const status = String(state.status || '');
+      if ((status === 'pending' || status === 'running') && !emittedStructuredPartStarts.has(part.id)) {
+        emittedStructuredPartStarts.add(part.id);
+        options.emit({ type: 'text', content: formatToolCall(part) });
+      }
+      if ((status === 'completed' || status === 'error') && !emittedStructuredPartFinishes.has(part.id)) {
+        if (!emittedStructuredPartStarts.has(part.id)) {
+          emittedStructuredPartStarts.add(part.id);
+          options.emit({ type: 'text', content: formatToolCall(part) });
+        }
+        emittedStructuredPartFinishes.add(part.id);
+        const result = formatToolResult(part);
+        if (result) options.emit({ type: 'text', content: result });
+      }
+      return;
+    }
+
+    if ((part.type === 'agent' || part.type === 'subtask') && !emittedStructuredPartStarts.has(part.id)) {
+      emittedStructuredPartStarts.add(part.id);
+      const formatted = formatAgentOrSubtask(part);
+      if (formatted) options.emit({ type: 'text', content: formatted });
+    }
   }
 
   function handlePartDelta(properties: OpenCodeStreamEventPayload['properties']): void {
     const partID = properties?.partID;
     const delta = properties?.delta;
     if (!partID || typeof delta !== 'string' || properties?.field !== 'text') return;
+    if (existingAssistantPartIds.has(partID)) return;
     if (ignoredTextParts.has(partID)) return;
-    if (partTypes.get(partID) !== 'text') return;
+    const partType = partTypes.get(partID);
+    if (partType !== 'text' && partType !== 'reasoning') {
+      const current = pendingUnknownPartBuffers.get(partID) || '';
+      pendingUnknownPartBuffers.set(partID, current + delta);
+      return;
+    }
 
     const current = partBuffers.get(partID) || '';
     partBuffers.set(partID, current + delta);
-    output += delta;
-    options.emit({ type: 'text', content: delta });
+    if (partType === 'text') {
+      emitTextDelta(delta);
+    } else {
+      emitReasoningDelta(delta);
+    }
+  }
+
+  function handleSessionNextTextDelta(properties: OpenCodeStreamEventPayload['properties']): void {
+    const delta = properties?.delta;
+    if (typeof delta !== 'string' || !delta) return;
+    sawSessionNextText = true;
+    sessionNextTextBuffer.text += delta;
+    emitTextDelta(delta);
+  }
+
+  function handleSessionNextTextEnded(properties: OpenCodeStreamEventPayload['properties']): void {
+    const text = typeof properties?.text === 'string' ? properties.text : '';
+    if (!text) return;
+    sawSessionNextText = true;
+    emitSessionNextEndedDelta(sessionNextTextBuffer.text, text, 'text');
+    sessionNextTextBuffer.text = text;
+  }
+
+  function handleSessionNextReasoningDelta(properties: OpenCodeStreamEventPayload['properties']): void {
+    const reasoningID = typeof properties?.reasoningID === 'string' ? properties.reasoningID : '';
+    const delta = properties?.delta;
+    if (!reasoningID || typeof delta !== 'string' || !delta) return;
+    sawSessionNextReasoning = true;
+    const current = sessionNextReasoningBuffers.get(reasoningID) || '';
+    sessionNextReasoningBuffers.set(reasoningID, current + delta);
+    emitReasoningDelta(delta);
+  }
+
+  function handleSessionNextReasoningEnded(properties: OpenCodeStreamEventPayload['properties']): void {
+    const reasoningID = typeof properties?.reasoningID === 'string' ? properties.reasoningID : '';
+    const text = typeof properties?.text === 'string' ? properties.text : '';
+    if (!reasoningID || !text) return;
+    sawSessionNextReasoning = true;
+    const current = sessionNextReasoningBuffers.get(reasoningID) || '';
+    emitSessionNextEndedDelta(current, text, 'reasoning');
+    sessionNextReasoningBuffers.set(reasoningID, text);
   }
 
   function handlePayload(payload: OpenCodeStreamEventPayload | undefined): void {
@@ -338,7 +641,21 @@ async function sendPromptStreaming(options: {
 
     const type = payload?.type;
     const properties = payload?.properties;
+    if (!promptAccepted) {
+      if (type === 'session.error') {
+        streamError = properties?.error || payload;
+        abortController.abort();
+      }
+      return;
+    }
     if (type === 'session.idle') {
+      finalizeUnknownPartTypes();
+      idle = true;
+      abortController.abort();
+      return;
+    }
+    if (type === 'session.status' && properties?.status && (properties.status as any).type === 'idle') {
+      finalizeUnknownPartTypes();
       idle = true;
       abortController.abort();
       return;
@@ -354,7 +671,36 @@ async function sendPromptStreaming(options: {
     }
     if (type === 'message.part.delta') {
       handlePartDelta(properties);
+      return;
     }
+    if (type === 'session.next.text.started') {
+      return;
+    }
+    if (type === 'session.next.text.delta') {
+      handleSessionNextTextDelta(properties);
+      return;
+    }
+    if (type === 'session.next.text.ended') {
+      handleSessionNextTextEnded(properties);
+      return;
+    }
+    if (type === 'session.next.reasoning.started') {
+      if (typeof properties?.reasoningID === 'string' && !sessionNextReasoningBuffers.has(properties.reasoningID)) {
+        sessionNextReasoningBuffers.set(properties.reasoningID, '');
+      }
+      return;
+    }
+    if (type === 'session.next.reasoning.delta') {
+      handleSessionNextReasoningDelta(properties);
+      return;
+    }
+    if (type === 'session.next.reasoning.ended') {
+      handleSessionNextReasoningEnded(properties);
+    }
+  }
+
+  function finalizeUnknownPartTypes(): void {
+    pendingUnknownPartBuffers.clear();
   }
 }
 
@@ -383,7 +729,7 @@ function consumeSdkSseStream(options: {
     const stream = subscription.stream;
     if (!stream) return;
     for await (const payload of stream) {
-      options.onPayload(payload as OpenCodeStreamEventPayload);
+      options.onPayload(normalizeSsePayload(payload));
     }
   });
 
@@ -503,6 +849,87 @@ function collectTextDeep(value: unknown): string {
     if (text) return text;
   }
   return '';
+}
+
+async function hydrateOutputFromSessionMessages(
+  client: OpenCodeHttpClient,
+  sessionId: string,
+  query?: { directory?: string },
+): Promise<string> {
+  if (typeof client.session.messages !== 'function') return '';
+  const result = await client.session.messages({
+    path: { id: sessionId },
+    query: { ...(query || {}), limit: 20 },
+  });
+  if (result.error || !Array.isArray(result.data)) return '';
+  const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
+  const latestAssistant = assistantMessages[assistantMessages.length - 1];
+  return collectTextFromParts(latestAssistant?.parts).trim();
+}
+
+async function pollSessionMessagesWhileRunning(options: {
+  client: OpenCodeHttpClient;
+  sessionId: string;
+  query?: { directory?: string };
+  signal: AbortSignal;
+  shouldStop: () => boolean;
+  onPart: (part: OpenCodePart) => void;
+  ignorePartIds?: Set<string>;
+}): Promise<void> {
+  if (typeof options.client.session.messages !== 'function') return;
+  const seenSnapshots = new Map<string, string>();
+
+  while (!options.signal.aborted && !options.shouldStop()) {
+    try {
+      const result = await options.client.session.messages({
+        path: { id: options.sessionId },
+        query: { ...(options.query || {}), limit: 10 },
+      });
+      if (!result.error && Array.isArray(result.data)) {
+        const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
+        for (const message of assistantMessages) {
+          const parts = Array.isArray(message?.parts) ? message.parts : [];
+          for (const part of parts) {
+            if (!part?.id) continue;
+            if (options.ignorePartIds?.has(part.id)) continue;
+            const snapshot = JSON.stringify(part);
+            if (seenSnapshots.get(part.id) === snapshot) continue;
+            seenSnapshots.set(part.id, snapshot);
+            options.onPart(part);
+          }
+        }
+      }
+    } catch {
+      // ignore transient poll failures; SSE path remains primary
+    }
+
+    if (options.signal.aborted || options.shouldStop()) return;
+    await sleep(400);
+  }
+}
+
+async function loadAssistantPartIds(
+  client: OpenCodeHttpClient,
+  sessionId: string,
+  query?: { directory?: string },
+): Promise<Set<string>> {
+  if (typeof client.session.messages !== 'function') return new Set<string>();
+  try {
+    const result = await client.session.messages({
+      path: { id: sessionId },
+      query: { ...(query || {}), limit: 20 },
+    });
+    if (result.error || !Array.isArray(result.data)) return new Set<string>();
+    return new Set(
+      result.data
+        .filter((message) => message?.info?.role === 'assistant')
+        .flatMap((message) => (Array.isArray(message?.parts) ? message.parts : []))
+        .map((part) => String(part?.id || ''))
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set<string>();
+  }
 }
 
 function sleep(ms: number): Promise<void> {

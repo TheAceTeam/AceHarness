@@ -147,11 +147,27 @@ export async function POST(
     const session = creationSessionId ? await loadCreationSession(creationSessionId).catch(() => null) : null;
     const specCoding = body.specCoding || session?.specCoding;
     if (specCoding) {
-      const bindingCompilation = compileStepTaskBindings(normalizedConfig, specCoding);
+      const bindingCompilation = compileStepTaskBindings(normalizedConfig, specCoding, {
+        requireFullCoverage: true,
+      });
       normalizedConfig = bindingCompilation.config;
       bindingValidation = bindingCompilation.validation;
       if (session) {
         await updateCreationSession(session.id, { bindingValidation: bindingValidation as any });
+      }
+      if (!bindingValidation.ok) {
+        return NextResponse.json(
+          {
+            error: '配置验证失败',
+            details: bindingValidation.errors.map((message: string) => ({
+              path: ['workflow', 'specTaskBinding'],
+              message,
+              severity: 'error',
+            })),
+            bindingValidation,
+          },
+          { status: 400 }
+        );
       }
     }
 

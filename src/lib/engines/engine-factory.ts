@@ -7,6 +7,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { getEngineConfigPath } from '@/lib/core/app-paths';
+import { loadSystemSettings } from '@/lib/config/system-settings';
 import type { Engine } from './engine-interface';
 import { KiroCliEngineWrapper } from './kiro-cli-wrapper';
 import { OpenCodeEngineWrapper } from './opencode-wrapper';
@@ -38,6 +39,16 @@ export interface EngineAvailabilityReport {
   drivers?: Partial<Record<EngineDriver, boolean>>;
 }
 
+interface AvailabilityCacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+const DEFAULT_ENGINE_AVAILABILITY_TTL_MS = 30 * 60 * 1000;
+const ENGINE_AVAILABILITY_TTL_MIN_MS = 60 * 1000;
+const ENGINE_AVAILABILITY_TTL_MAX_MS = 24 * 60 * 60 * 1000;
+const ENGINE_AVAILABILITY_TTL_SETTINGS_CACHE_MS = 5 * 1000;
+
 const DRIVER_CAPABLE_ENGINES = new Set<EngineType | 'claude-code' | 'opencode' | 'nga' | 'codegenie'>(['claude-code', 'opencode', 'nga', 'codegenie']);
 const DEFAULT_DRIVER_BY_ENGINE: Partial<Record<EngineType | 'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>> = {
   'claude-code': 'sdk',
@@ -52,6 +63,67 @@ const EFFECTIVE_TO_LOGICAL_ENGINE: Partial<Record<EngineType, EngineType>> = {
   'nga-sdk': 'nga',
   'codegenie-sdk': 'codegenie',
 };
+
+const engineAvailabilityCache = new Map<string, AvailabilityCacheEntry<boolean>>();
+const engineAvailabilityInflight = new Map<string, Promise<boolean>>();
+const engineAvailabilityReportCache = new Map<string, AvailabilityCacheEntry<EngineAvailabilityReport>>();
+const engineAvailabilityReportInflight = new Map<string, Promise<EngineAvailabilityReport>>();
+let cachedEngineAvailabilityTtlMs = DEFAULT_ENGINE_AVAILABILITY_TTL_MS;
+let cachedEngineAvailabilityTtlLoadedAt = 0;
+let engineAvailabilityTtlPromise: Promise<number> | null = null;
+
+function readCacheValue<T>(cache: Map<string, AvailabilityCacheEntry<T>>, key: string): T | null {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function writeCacheValue<T>(cache: Map<string, AvailabilityCacheEntry<T>>, key: string, value: T): T {
+  cache.set(key, {
+    value,
+    expiresAt: Date.now() + cachedEngineAvailabilityTtlMs,
+  });
+  return value;
+}
+
+function normalizeEngineAvailabilityTtlMs(input?: number | null): number {
+  const numeric = Number(input);
+  if (!Number.isFinite(numeric)) return DEFAULT_ENGINE_AVAILABILITY_TTL_MS;
+  return Math.max(ENGINE_AVAILABILITY_TTL_MIN_MS, Math.min(ENGINE_AVAILABILITY_TTL_MAX_MS, Math.round(numeric)));
+}
+
+export async function getEngineAvailabilityCacheTtlMs(forceRefresh = false): Promise<number> {
+  const now = Date.now();
+  if (!forceRefresh && now - cachedEngineAvailabilityTtlLoadedAt < ENGINE_AVAILABILITY_TTL_SETTINGS_CACHE_MS) {
+    return cachedEngineAvailabilityTtlMs;
+  }
+  if (!forceRefresh && engineAvailabilityTtlPromise) {
+    return engineAvailabilityTtlPromise;
+  }
+
+  const loadPromise = loadSystemSettings()
+    .then((settings) => {
+      cachedEngineAvailabilityTtlMs = normalizeEngineAvailabilityTtlMs(
+        Number(settings.engineAvailabilityCacheMinutes || 30) * 60 * 1000
+      );
+      cachedEngineAvailabilityTtlLoadedAt = Date.now();
+      return cachedEngineAvailabilityTtlMs;
+    })
+    .catch(() => {
+      cachedEngineAvailabilityTtlMs = DEFAULT_ENGINE_AVAILABILITY_TTL_MS;
+      cachedEngineAvailabilityTtlLoadedAt = Date.now();
+      return cachedEngineAvailabilityTtlMs;
+    })
+    .finally(() => {
+      engineAvailabilityTtlPromise = null;
+    });
+  engineAvailabilityTtlPromise = loadPromise;
+  return loadPromise;
+}
 
 export function getLogicalEngineId(engine?: string | null): EngineType | null {
   const normalized = String(engine || '').trim() as EngineType | '';
@@ -114,15 +186,7 @@ async function selectPreferredEffectiveEngine(engine: EngineType, configuredDriv
   const explicitDriver = configuredDriver === 'sdk' || configuredDriver === 'stdio' ? configuredDriver : undefined;
   if (explicitDriver) {
     const explicitEngine = resolveEffectiveEngine(engine, explicitDriver);
-    const fallbackDriver = explicitDriver === 'sdk' ? 'stdio' : 'sdk';
-    const fallbackEngine = resolveEffectiveEngine(engine, fallbackDriver);
-    if (explicitEngine && await isEngineAvailable(explicitEngine)) {
-      return explicitEngine;
-    }
-    if (fallbackEngine && await isEngineAvailable(fallbackEngine)) {
-      return fallbackEngine;
-    }
-    return explicitEngine ?? fallbackEngine;
+    return explicitEngine;
   }
 
   const preferredDriver = getDefaultDriver(engine);
@@ -390,7 +454,7 @@ export async function createEngine(type?: EngineType): Promise<Engine | null> {
 /**
  * Check if an engine is available
  */
-export async function isEngineAvailable(type: EngineType): Promise<boolean> {
+async function probeEngineAvailability(type: EngineType): Promise<boolean> {
   switch (type) {
     case 'kiro-cli':
       const kiroEngine = new KiroCliEngineWrapper();
@@ -449,12 +513,39 @@ case 'claude-code-acp':
   }
 }
 
-export async function getEngineAvailabilityReport(type: EngineType | string): Promise<EngineAvailabilityReport> {
+export async function isEngineAvailable(
+  type: EngineType,
+  options?: { forceRefresh?: boolean }
+): Promise<boolean> {
+  await getEngineAvailabilityCacheTtlMs(options?.forceRefresh);
+  const cacheKey = String(type || '').trim();
+  if (!options?.forceRefresh) {
+    const cached = readCacheValue(engineAvailabilityCache, cacheKey);
+    if (cached !== null) return cached;
+    const inflight = engineAvailabilityInflight.get(cacheKey);
+    if (inflight) return inflight;
+  } else {
+    engineAvailabilityCache.delete(cacheKey);
+    engineAvailabilityInflight.delete(cacheKey);
+  }
+
+  const probePromise = probeEngineAvailability(type)
+    .then((value) => writeCacheValue(engineAvailabilityCache, cacheKey, value))
+    .finally(() => {
+      engineAvailabilityInflight.delete(cacheKey);
+    });
+  engineAvailabilityInflight.set(cacheKey, probePromise);
+  return probePromise;
+}
+
+async function probeEngineAvailabilityReport(type: EngineType | string): Promise<EngineAvailabilityReport> {
   const engine = String(type || '').trim();
 
   if (engine === 'claude-code') {
-    const sdk = await new ClaudeCodeEngineWrapper().isAvailable();
-    const stdio = await new ClaudeCodeAcpEngineWrapper().isAvailable();
+    const [sdk, stdio] = await Promise.all([
+      isEngineAvailable('claude-code', { forceRefresh: true }),
+      isEngineAvailable('claude-code-acp', { forceRefresh: true }),
+    ]);
     return {
       engine,
       available: sdk || stdio,
@@ -463,8 +554,10 @@ export async function getEngineAvailabilityReport(type: EngineType | string): Pr
   }
 
   if (engine === 'opencode') {
-    const stdio = await new OpenCodeEngineWrapper().isAvailable();
-    const sdk = await new OpenCodeSdkEngineWrapper().isAvailable();
+    const [stdio, sdk] = await Promise.all([
+      isEngineAvailable('opencode', { forceRefresh: true }),
+      isEngineAvailable('opencode-sdk', { forceRefresh: true }),
+    ]);
     return {
       engine,
       available: sdk || stdio,
@@ -483,8 +576,10 @@ export async function getEngineAvailabilityReport(type: EngineType | string): Pr
   }
 
   if (engine === 'codegenie') {
-    const stdio = await new CodegenieEngineWrapper().isAvailable();
-    const sdk = await new CodegenieSdkEngineWrapper().isAvailable();
+    const [stdio, sdk] = await Promise.all([
+      isEngineAvailable('codegenie', { forceRefresh: true }),
+      isEngineAvailable('codegenie-sdk', { forceRefresh: true }),
+    ]);
     return {
       engine,
       available: sdk || stdio,
@@ -494,6 +589,43 @@ export async function getEngineAvailabilityReport(type: EngineType | string): Pr
 
   return {
     engine,
-    available: await isEngineAvailable(engine as EngineType),
+    available: await isEngineAvailable(engine as EngineType, { forceRefresh: true }),
   };
+}
+
+export async function getEngineAvailabilityReport(
+  type: EngineType | string,
+  options?: { forceRefresh?: boolean }
+): Promise<EngineAvailabilityReport> {
+  await getEngineAvailabilityCacheTtlMs(options?.forceRefresh);
+  const engine = String(type || '').trim();
+  if (!options?.forceRefresh) {
+    const cached = readCacheValue(engineAvailabilityReportCache, engine);
+    if (cached) return cached;
+    const inflight = engineAvailabilityReportInflight.get(engine);
+    if (inflight) return inflight;
+  } else {
+    engineAvailabilityReportCache.delete(engine);
+    engineAvailabilityReportInflight.delete(engine);
+  }
+
+  const reportPromise = probeEngineAvailabilityReport(engine)
+    .then((report) => {
+      writeCacheValue(engineAvailabilityReportCache, engine, report);
+      writeCacheValue(engineAvailabilityCache, engine, report.available);
+      if (report.drivers?.sdk !== undefined) {
+        const sdkEngine = resolveEffectiveEngine(engine, 'sdk');
+        if (sdkEngine) writeCacheValue(engineAvailabilityCache, sdkEngine, Boolean(report.drivers.sdk));
+      }
+      if (report.drivers?.stdio !== undefined) {
+        const stdioEngine = resolveEffectiveEngine(engine, 'stdio');
+        if (stdioEngine) writeCacheValue(engineAvailabilityCache, stdioEngine, Boolean(report.drivers.stdio));
+      }
+      return report;
+    })
+    .finally(() => {
+      engineAvailabilityReportInflight.delete(engine);
+    });
+  engineAvailabilityReportInflight.set(engine, reportPromise);
+  return reportPromise;
 }

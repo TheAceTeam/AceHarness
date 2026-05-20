@@ -13,9 +13,17 @@
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
-import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import {
+  formatAceFileChangesResult,
+  formatAceReasoning,
+  formatAceToolCall,
+  formatAceToolResult,
+  getAceToolFallbackTitle,
+  getAceToolTitle,
+  resolveAceToolName,
+} from '@/lib/chat/ace-process-formatters';
 
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */
@@ -26,7 +34,6 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   private pendingTools = new Map<string, {
     title: string;
     kind: string;
-    icon: string;
     permissionTitle?: string;
     metadata: any;
   }>();
@@ -83,7 +90,10 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (!this.streaming) return;
       const text = this.extractText(content);
       if (text) {
-        this.emit('stream', { type: 'thought', content: text } as EngineStreamEvent);
+        this.emit('stream', {
+          type: 'thought',
+          content: formatAceReasoning(text),
+        } as EngineStreamEvent);
       }
     });
 
@@ -100,7 +110,6 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       this.pendingTools.set(toolId, {
         title,
         kind,
-        icon: this.toolIcon(title, kind),
         metadata: toolCall,
       });
     });
@@ -118,7 +127,6 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         this.pendingTools.set(toolId, {
           title,
           kind,
-          icon: this.toolIcon(title, kind),
           metadata: toolUpdate,
         });
       }
@@ -146,7 +154,6 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (pending) {
         // Enrich buffered tool with permission title (has actual command)
         pending.permissionTitle = title;
-        pending.icon = this.toolIcon(title, kind);
       } else if (!this.seenToolIds.has(toolId)) {
         // New tool from permission — buffer it
         this.seenToolIds.add(toolId);
@@ -154,7 +161,6 @@ export class CursorEngineWrapper extends ACPWrapperBase {
         this.pendingTools.set(toolId, {
           title,
           kind,
-          icon: this.toolIcon(title, kind),
           permissionTitle: title,
           metadata: toolCall,
         });
@@ -166,7 +172,17 @@ export class CursorEngineWrapper extends ACPWrapperBase {
       if (!this.streaming) return;
       const name = params?.title || params?.name || params?.description || 'Subagent task';
       this.lastBlockWasTool = true;
-      this.emitText(`\n\n**🤖 ${name}**\n`);
+      this.emitText(
+        formatAceToolCall({
+          toolName: 'task',
+          rawInput: {
+            description: params?.description || name,
+            agent: params?.agent || params?.subagent || '',
+            prompt: params?.prompt || '',
+          },
+          title: name,
+        }),
+      );
     });
 
     this.engine.on('error', (error) => {
@@ -186,104 +202,76 @@ export class CursorEngineWrapper extends ACPWrapperBase {
 
     // Build header from buffered info (or fallback to toolUpdate)
     const title = pending?.permissionTitle || pending?.title || toolUpdate.title || toolUpdate.kind || 'Tool';
-    const icon = pending?.icon || this.toolIcon(title, toolUpdate.kind || '');
+    const kind = pending?.kind || toolUpdate.kind || '';
     const metadata = pending?.metadata || toolUpdate;
     const rawInput = toolUpdate.rawInput || metadata?.rawInput || {};
-    const resolvedToolName =
-      rawInput.command ? 'bash'
-        : rawInput.pattern && rawInput.path ? 'grep'
-        : rawInput.pattern ? 'glob'
-        : rawInput.filePath ? 'read'
-        : title.toLowerCase().includes('task') ? 'task'
-        : title.toLowerCase().includes('write') || title.toLowerCase().includes('create') ? 'write'
-        : title.toLowerCase().includes('edit') || title.toLowerCase().includes('patch') ? 'edit'
-        : title.toLowerCase().includes('terminal') || title.toLowerCase().includes('bash') || title.toLowerCase().includes('shell') ? 'bash'
-        : 'tool';
+    const resolvedToolName = resolveAceToolName(title, rawInput);
 
-    let output = `\n\n**${resolvedToolName === 'tool' ? `${icon} ${title}` : this.getToolTitle(resolvedToolName)}**\n`;
-
-    // Extract command/path detail from rawInput if available
-    if (rawInput.command) {
-      const cmd = rawInput.command;
-      const cmdLines = cmd.split('\n');
-      if (cmdLines.length <= 1 && cmd.length <= 120) {
-        output += `\n💻 执行命令: \`${cmd}\`\n`;
-      } else {
-        output += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-        output += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
-      }
-    } else if (rawInput.pattern && rawInput.path) {
-      output += `\n🔍 搜索: \`${rawInput.pattern}\` in \`${rawInput.path}\`\n`;
-    } else if (rawInput.pattern) {
-      output += `\n🔍 搜索: \`${rawInput.pattern}\`\n`;
-    } else if (rawInput.filePath) {
-      output += `\n📖 文件: \`${rawInput.filePath}\`\n`;
-    }
-
-    // Append result
-    const result = this.formatCursorToolResult(toolUpdate);
-    if (result) {
-      output += result;
-    }
+    const requestBlock = this.buildCursorToolCallBlock(resolvedToolName, title, kind, rawInput);
+    const result = this.formatCursorToolResult(toolUpdate, resolvedToolName);
 
     this.lastBlockWasTool = true;
-    this.emitText(output, metadata);
+    if (requestBlock) this.emitText(requestBlock, metadata);
+    if (result) this.emitText(result, metadata);
   }
 
-  private toolIcon(title: string, kind: string): string {
-    const t = title.toLowerCase();
-    if (t.includes('terminal') || t.includes('bash') || t.includes('shell')) return '💻';
-    if (t.includes('write') || t.includes('create')) return '📝';
-    if (t.includes('edit') || t.includes('patch')) return '✏️';
-    if (t.includes('read')) return '📖';
-    if (t.includes('find') || t.includes('glob') || t.includes('list')) return '📁';
-    if (t.includes('grep') || t.includes('search') || kind === 'search') return '🔍';
-    if (t.includes('task')) return '🤖';
-    if (t.includes('fetch')) return '🌐';
-    if (t.includes('websearch')) return '🔎';
-    return '🔧';
+  private buildCursorToolCallBlock(toolName: string, title: string, kind: string, rawInput: any): string {
+    const resolvedTitle = toolName === 'tool'
+      ? getAceToolFallbackTitle(title, kind)
+      : this.getToolTitle(toolName);
+    return formatAceToolCall({ toolName, rawInput: rawInput || {}, title: resolvedTitle, toolId: String(rawInput?.id || '') || undefined });
   }
 
   /**
    * Format cursor tool_call_update result.
    * Cursor provides rawOutput (object) or content (array of diff/text blocks).
    */
-  private formatCursorToolResult(toolUpdate: any): string {
+  private formatCursorToolResult(toolUpdate: any, resolvedToolName: string): string {
     // Handle content array (e.g. diff results from Edit/Write)
     if (Array.isArray(toolUpdate.content) && toolUpdate.content.length > 0) {
-      const parts: string[] = [];
+      const changes: Array<Record<string, unknown>> = [];
+      const outputs: string[] = [];
       for (const block of toolUpdate.content) {
         if (block.type === 'diff' && block.path) {
           const path = block.path;
           if (block.newText && !block.oldText) {
-            const lines = block.newText.split('\n').length;
-            parts.push(`\n📝 写入文件: \`${path}\` (${lines} 行)\n`);
+            changes.push({
+              toolName: 'write',
+              title: getAceToolTitle('write'),
+              filePath: path,
+              content: block.newText,
+            });
           } else if (block.oldText && block.newText) {
-            const oldLines = block.oldText.split('\n').length;
-            const newLines = block.newText.split('\n').length;
-            const added = Math.max(0, newLines - oldLines);
-            const removed = Math.max(0, oldLines - newLines);
-            let stats = `${Math.min(oldLines, newLines)} 行修改`;
-            if (added > 0) stats += `, +${added} 行`;
-            if (removed > 0) stats += `, -${removed} 行`;
-            parts.push(`\n✏️ 编辑文件: \`${path}\` (${stats})\n`);
+            changes.push({
+              toolName: 'edit',
+              title: getAceToolTitle('edit'),
+              filePath: path,
+              oldString: block.oldText,
+              newString: block.newText,
+            });
           }
         } else if (block.type === 'text' && block.text) {
           const text = block.text.trim();
-          if (text) parts.push(`\n${text}\n`);
+          if (text) outputs.push(text);
         } else if (block.type === 'content' && block.content) {
           // Nested content block (e.g. from Read File)
           const inner = block.content;
           if (inner.type === 'text' && inner.text) {
             const text = inner.text.trim();
-            const lines = text.split('\n');
             if (text) {
-              parts.push(formatTextContent(text, { summaryLabel: '查看内容' }));
+              outputs.push(text);
             }
           }
         }
       }
-      if (parts.length > 0) return parts.join('');
+      if (changes.length > 0 || outputs.length > 0) {
+        return formatAceFileChangesResult({
+          changes,
+          fallbackToolName: resolvedToolName,
+          fallbackTitle: this.getToolTitle(resolvedToolName),
+          output: outputs.join('\n\n'),
+        });
+      }
     }
 
     // Handle rawOutput object
@@ -292,41 +280,43 @@ export class CursorEngineWrapper extends ACPWrapperBase {
 
     // Use base class helper for structured output
     if (typeof raw === 'object') {
+      if (
+        'output' in raw &&
+        typeof raw.output === 'string' &&
+        (String(toolUpdate?.title || '').toLowerCase().includes('task')
+          || String(toolUpdate?.kind || '').toLowerCase().includes('task'))
+      ) {
+        return formatAceToolResult({ toolName: 'task', rawOutput: raw, title: getAceToolTitle('task'), toolId: String(toolUpdate?.id || '') });
+      }
+
       // Error output
       if (raw.error) {
         const err = String(raw.error).trim();
         if (err.includes('IO error for operation on')) return '';
-        if (err.includes('Path does not exist')) return `\n${fenced(`⚠️ ${err}`)}\n`;
-        return `\n${fenced(`⚠️ ${err}`)}\n`;
+        return formatAceToolResult({ toolName: resolvedToolName, rawOutput: { error: err }, title: this.getToolTitle(resolvedToolName), toolId: String(toolUpdate?.id || '') });
       }
 
       // Structured command result with output field
       if ('output' in raw && typeof raw.output === 'string') {
-        const text = raw.output.trim();
-        if (!text) return raw.exit !== undefined && raw.exit !== 0 ? `\n(exit code: ${raw.exit})\n` : '';
-        let result = formatTextContent(text, { summaryLabel: '查看输出' });
-        if (raw.exit !== undefined && raw.exit !== 0) result += `(exit code: ${raw.exit})\n`;
-        return result;
+        if (!String(raw.output || '').trim() && (raw.exit === undefined || raw.exit === 0)) return '';
+        return formatAceToolResult({ toolName: resolvedToolName, rawOutput: raw, title: this.getToolTitle(resolvedToolName), toolId: String(toolUpdate?.id || '') });
       }
 
       // File content (Read File result)
       if (raw.content && typeof raw.content === 'string') {
         const lines = raw.content.split('\n');
-        if (lines.length > 15) {
-          return formatTextContent(raw.content, { summaryLabel: '查看内容' });
-        }
         if (lines.length > 0) {
-          return formatTextContent(raw.content, { summaryLabel: '查看内容' });
+          return formatAceToolResult({ toolName: resolvedToolName, rawOutput: raw, title: this.getToolTitle(resolvedToolName), toolId: String(toolUpdate?.id || '') });
         }
         return '';
       }
 
       // Search results summary
       if ('totalMatches' in raw) {
-        return `\n找到 ${raw.totalMatches} 个匹配${raw.truncated ? ' (已截断)' : ''}\n`;
+        return formatAceToolResult({ toolName: resolvedToolName, rawOutput: raw, title: this.getToolTitle(resolvedToolName), toolId: String(toolUpdate?.id || '') });
       }
       if ('totalFiles' in raw) {
-        return `\n找到 ${raw.totalFiles} 个文件${raw.truncated ? ' (已截断)' : ''}\n`;
+        return formatAceToolResult({ toolName: resolvedToolName, rawOutput: raw, title: this.getToolTitle(resolvedToolName), toolId: String(toolUpdate?.id || '') });
       }
     }
 
