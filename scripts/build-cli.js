@@ -14,8 +14,12 @@ const files = [
   path.join(srcDir, 'lib', 'core', 'command-exists.ts'),
   path.join(srcDir, 'lib', 'core', 'runtime-platform.ts'),
   path.join(srcDir, 'lib', 'core', 'models.ts'),
+  path.join(srcDir, 'lib', 'core', 'markdown-utils.ts'),
   path.join(srcDir, 'lib', 'run', 'runtime-configs.ts'),
   path.join(srcDir, 'lib', 'engines', 'acp-engine.ts'),
+  path.join(srcDir, 'lib', 'engines', 'engine-output.ts'),
+  path.join(srcDir, 'lib', 'engines', 'acp-wrapper-base.ts'),
+  path.join(srcDir, 'lib', 'engines', 'magic-cli-wrapper.ts'),
 ];
 
 function ensureDir(dirPath) {
