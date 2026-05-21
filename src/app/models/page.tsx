@@ -60,6 +60,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { cn } from '@/lib/core/utils';
 import { MultiCombobox } from '@/components/ui/combobox';
 import { PaginationBar } from '@/components/PaginationBar';
+import { useToast } from '@/components/ui/toast';
 import ModelProbeMonitor from '@/components/models/ModelProbeMonitor';
 import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
 import { EngineIcon } from '@/components/EngineIcon';
@@ -348,6 +349,7 @@ function SortableModelRow({
 
 export default function ModelsPage() {
   useDocumentTitle('模型管理');
+  const { toast } = useToast();
 
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(true);
@@ -365,6 +367,7 @@ export default function ModelsPage() {
   const [selectedStatus, setSelectedStatus] = useState<string[]>([]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editingModel, setEditingModel] = useState<Model | null>(null);
+  const [editingOriginalId, setEditingOriginalId] = useState<string | null>(null);
   const [creatingModel, setCreatingModel] = useState(false);
   const [newModel, setNewModel] = useState<Omit<Model, 'createdAt' | 'updatedAt'>>({
     id: '',
@@ -430,6 +433,32 @@ export default function ModelsPage() {
     }
   };
 
+  const serializeModelsForApi = useCallback((items: Model[]) => ({
+    models: items.map((model) => ({
+      value: model.id,
+      label: model.name,
+      endpoints: model.endpoints || [],
+      engines: model.engines || [],
+      status: model.status,
+      costMultiplier: model.costMultiplier,
+      contextWindow: model.contextWindow,
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+    })),
+  }), []);
+
+  const persistModels = useCallback(async (nextModels: Model[]) => {
+    const res = await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(serializeModelsForApi(nextModels)),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || '保存模型失败');
+    }
+  }, [serializeModelsForApi]);
+
   const allEndpoints = useMemo(() => {
     const set = new Set<string>();
     models.forEach((m) => m.endpoints.forEach((e) => set.add(e)));
@@ -450,10 +479,13 @@ export default function ModelsPage() {
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (over && active.id !== over.id) {
-      setModels((prev) => {
-        const oldIndex = prev.findIndex((m) => m.id === active.id);
-        const newIndex = prev.findIndex((m) => m.id === over.id);
-        return arrayMove(prev, oldIndex, newIndex);
+      const oldIndex = models.findIndex((m) => m.id === active.id);
+      const newIndex = models.findIndex((m) => m.id === over.id);
+      const nextModels = arrayMove(models, oldIndex, newIndex);
+      setModels(nextModels);
+      void persistModels(nextModels).catch(async (error) => {
+        toast('error', error instanceof Error ? error.message : '模型排序保存失败');
+        await loadModelsFromApi();
       });
     }
   }
@@ -539,50 +571,82 @@ export default function ModelsPage() {
     });
   }, [allPaginatedSelected, paginatedModels]);
 
-  const handleDelete = (model: Model) => {
-    setModels((prev) => prev.filter((m) => m.id !== model.id));
-    setSelectedModels((prev) => {
-      const next = new Set(prev);
-      next.delete(model.id);
-      return next;
-    });
+  const handleDelete = async (model: Model) => {
+    const nextModels = models.filter((m) => m.id !== model.id);
+    try {
+      await persistModels(nextModels);
+      setModels(nextModels);
+      setSelectedModels((prev) => {
+        const next = new Set(prev);
+        next.delete(model.id);
+        return next;
+      });
+      toast('success', `已删除模型 ${model.name}`);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '删除模型失败');
+      await loadModelsFromApi();
+    }
   };
 
-  const handleBatchDelete = () => {
-    setModels((prev) => prev.filter((m) => !selectedModels.has(m.id)));
-    setSelectedModels(new Set());
-    setDeleteDialogOpen(false);
+  const handleBatchDelete = async () => {
+    const nextModels = models.filter((m) => !selectedModels.has(m.id));
+    const deletedCount = selectedModels.size;
+    try {
+      await persistModels(nextModels);
+      setModels(nextModels);
+      setSelectedModels(new Set());
+      setDeleteDialogOpen(false);
+      toast('success', `已删除 ${deletedCount} 个模型`);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '批量删除模型失败');
+      await loadModelsFromApi();
+    }
   };
 
   const handleEdit = (model: Model) => {
     setEditingModel({ ...model });
+    setEditingOriginalId(model.id);
   };
 
-  const handleEditSave = () => {
-    if (!editingModel) return;
-    setModels((prev) =>
-      prev.map((m) => (m.id === editingModel.id ? { ...editingModel, updatedAt: new Date().toISOString() } : m))
-    );
-    setEditingModel(null);
+  const handleEditSave = async () => {
+    if (!editingModel || !editingOriginalId) return;
+    const updatedModel = { ...editingModel, updatedAt: new Date().toISOString() };
+    const nextModels = models.map((m) => (m.id === editingOriginalId ? updatedModel : m));
+    try {
+      await persistModels(nextModels);
+      setModels(nextModels);
+      setSelectedModels((prev) => {
+        if (editingOriginalId === updatedModel.id) return prev;
+        const next = new Set(prev);
+        if (next.delete(editingOriginalId)) next.add(updatedModel.id);
+        return next;
+      });
+      setEditingModel(null);
+      setEditingOriginalId(null);
+      toast('success', `已保存模型 ${updatedModel.name}`);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '保存模型失败');
+      await loadModelsFromApi();
+    }
   };
 
   const handleCreateSave = async () => {
     if (!newModel.id || !newModel.name) return;
+    const now = new Date().toISOString();
+    const createdModel: Model = {
+      ...newModel,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const nextModels = [...models, createdModel];
     try {
-      const res = await fetch('/api/models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newModel),
-      });
-      if (res.ok) {
-        await loadModelsFromApi();
-      } else {
-        const now = new Date().toISOString();
-        setModels((prev) => [...prev, { ...newModel, createdAt: now, updatedAt: now } as Model]);
-      }
-    } catch {
-      const now = new Date().toISOString();
-      setModels((prev) => [...prev, { ...newModel, createdAt: now, updatedAt: now } as Model]);
+      await persistModels(nextModels);
+      setModels(nextModels);
+      setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+      toast('success', `已创建模型 ${createdModel.name}`);
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '创建模型失败');
+      await loadModelsFromApi();
     }
     setCreatingModel(false);
   };
@@ -971,7 +1035,15 @@ export default function ModelsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editingModel !== null} onOpenChange={(open) => !open && setEditingModel(null)}>
+      <Dialog
+        open={editingModel !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditingModel(null);
+            setEditingOriginalId(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>编辑模型</DialogTitle>

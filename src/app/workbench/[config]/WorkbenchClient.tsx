@@ -14,6 +14,8 @@ import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
 import StateMachineDiagram from '@/components/StateMachineDiagram';
 import StateMachineDesignPanel from '@/components/StateMachineDesignPanel';
+import AgentsManager from '@/components/agents/AgentsManager';
+import SkillsManager from '@/components/skills/SkillsManager';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import AgentFormationDiagram from '@/components/AgentFormationDiagram';
 import DesignPanel from '@/components/DesignPanel';
@@ -1320,7 +1322,34 @@ export default function WorkbenchPage() {
     }
   }, [dispatch, workflowFrontendSessionId]);
 
-  const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'config'>('overview');
+  type DesignTab = 'overview' | 'orchestration' | 'config' | 'agents' | 'skills';
+  const [designTab, setDesignTab] = useState<DesignTab>('overview');
+
+  const refreshDesignPickerOptions = useCallback(async () => {
+    try {
+      const { agents: loadedAgents } = await agentApi.listAgents();
+      dispatch({ type: 'SET_AGENTS_CONFIG', payload: loadedAgents || [] });
+    } catch {
+      /* ignore */
+    }
+    try {
+      const skillsRes = await fetch('/api/skills');
+      const skillsData = await skillsRes.json();
+      setAvailableSkills(skillsData.skills?.map((s: any) => ({ name: s.name, description: s.description })) || []);
+    } catch {
+      /* ignore */
+    }
+  }, [dispatch]);
+
+  const handleDesignTabChange = useCallback((tab: DesignTab) => {
+    const leavingEmbeddedManager = (designTab === 'agents' || designTab === 'skills')
+      && tab !== 'agents'
+      && tab !== 'skills';
+    setDesignTab(tab);
+    if (leavingEmbeddedManager) {
+      void refreshDesignPickerOptions();
+    }
+  }, [designTab, refreshDesignPickerOptions]);
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
@@ -7695,24 +7724,38 @@ export default function WorkbenchPage() {
                 <div className="flex gap-0.5 px-2 pt-1">
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'overview' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('overview')}
+                    onClick={() => handleDesignTabChange('overview')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">dashboard</span>
                     概览
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'orchestration' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('orchestration')}
+                    onClick={() => handleDesignTabChange('orchestration')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">account_tree</span>
                     编排
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('config')}
+                    onClick={() => handleDesignTabChange('config')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">settings</span>
                     配置
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'agents' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => handleDesignTabChange('agents')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">smart_toy</span>
+                    Agent 管理
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'skills' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => handleDesignTabChange('skills')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">extension</span>
+                    Skills 管理
                   </button>
                 </div>
               </div>
@@ -7867,6 +7910,18 @@ export default function WorkbenchPage() {
                       onMoveGroup={handleMoveGroup}
                       onJoinGroup={handleJoinGroup} />
                   )}
+                </div>
+              )}
+
+              {designTab === 'agents' && (
+                <div className="flex-1 min-h-0 overflow-hidden bg-background">
+                  <AgentsManager embedded />
+                </div>
+              )}
+
+              {designTab === 'skills' && (
+                <div className="flex-1 min-h-0 overflow-hidden bg-background">
+                  <SkillsManager embedded />
                 </div>
               )}
 
