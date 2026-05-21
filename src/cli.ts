@@ -1,10 +1,9 @@
 import { existsSync } from 'fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
-import { resolveBinary as resolveMagicCliBinary } from './lib/engines/magic-cli-wrapper';
 import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from '@/lib/core/models';
@@ -159,6 +158,27 @@ const ENGINE_META: Array<{ id: EngineType; name: string }> = [
   { id: 'trae-cli', name: 'Trae CLI' },
   { id: 'magic-cli', name: 'Magic CLI' },
 ];
+
+const MAGIC_CLI_SEARCH_PATHS = [
+  '/Users/jump/projects/cangjie/magic-cli/scripts/magic-cli.sh',
+];
+
+function resolveMagicCliBinary(): string | null {
+  const envPath = process.env.MAGIC_CLI_PATH;
+  if (envPath && existsSync(envPath)) return envPath;
+
+  for (const candidate of MAGIC_CLI_SEARCH_PATHS) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  const pathDirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, 'magic-cli.sh');
+    if (existsSync(candidate)) return candidate;
+  }
+
+  return null;
+}
 
 const CLI_MESSAGES: Record<Locale, CliMessages> = {
   zh: {
