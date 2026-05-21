@@ -1,13 +1,19 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useChat } from '@/contexts/ChatContext';
-import { runsApi, workflowApi } from '@/lib/core/api';
+import { agoraApi, runsApi, workflowApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import type { CheckedState } from '@radix-ui/react-checkbox';
+import { EngineModelSelect } from '@/components/EngineModelSelect';
+import { Textarea } from '@/components/ui/textarea';
+import { useToast } from '@/components/ui/toast';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -23,15 +29,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { Pin } from 'lucide-react';
 import {
   buildWorkflowConversationDirectory,
   getCreationSessionStatusLabel,
+  isWorkflowDirectorySession,
+  getSessionDirectoryKind,
   getWorkbenchSessionKind,
   type ChatSessionSummaryLike,
 } from '@/lib/agent/conversations';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { getAgoraTopicExtensionActions } from '@/lib/agora/extensions';
+import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
+import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { RobotLogo } from './ChatMessage';
 
@@ -50,7 +69,39 @@ type SidebarSession = ChatSessionSummaryLike & {
   sessionWorkbenchState?: any;
 };
 
+export type SessionDirectoryView = 'conversation' | 'agora' | 'workflow';
 type WorkflowBucketKey = 'creating' | 'ready' | 'active';
+export const SESSION_DIRECTORY_ORDER_STORAGE_KEY = 'chat-session-directory-order';
+export const DEFAULT_SESSION_DIRECTORY_ORDER: SessionDirectoryView[] = ['conversation', 'agora', 'workflow'];
+
+const SESSION_DIRECTORY_META: Record<SessionDirectoryView, { label: string; icon: string }> = {
+  conversation: { label: '对话', icon: 'forum' },
+  agora: { label: '议场', icon: 'groups' },
+  workflow: { label: '工作流', icon: 'account_tree' },
+};
+
+export function normalizeSessionDirectoryOrder(order?: readonly string[] | null): SessionDirectoryView[] {
+  const next: SessionDirectoryView[] = [];
+  for (const item of order || []) {
+    if ((item === 'conversation' || item === 'agora' || item === 'workflow') && !next.includes(item)) {
+      next.push(item);
+    }
+  }
+  for (const item of DEFAULT_SESSION_DIRECTORY_ORDER) {
+    if (!next.includes(item)) next.push(item);
+  }
+  return next;
+}
+
+export function readStoredSessionDirectoryOrder(): SessionDirectoryView[] {
+  if (typeof window === 'undefined') return DEFAULT_SESSION_DIRECTORY_ORDER;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SESSION_DIRECTORY_ORDER_STORAGE_KEY) || '[]');
+    return normalizeSessionDirectoryOrder(Array.isArray(parsed) ? parsed : null);
+  } catch {
+    return DEFAULT_SESSION_DIRECTORY_ORDER;
+  }
+}
 
 type WorkflowAgentSessionGroup = {
   key: string;
@@ -69,6 +120,27 @@ type WorkflowSessionGroup = {
   sessions: SidebarSession[];
   agentGroups: WorkflowAgentSessionGroup[];
   pendingCount: number;
+};
+
+type TopicTemporaryGuestDraft = {
+  name: string;
+  personaPrompt: string;
+  engine: string;
+  model: string;
+};
+
+type PresetGuestCreateDraft = {
+  id: string;
+  presetId: string;
+  engine: string;
+  model: string;
+};
+
+type CustomGuestDraft = {
+  displayName: string;
+  personaPrompt: string;
+  engine: string;
+  model: string;
 };
 
 function hasWeChatBinding(session?: Pick<SidebarSession, 'sessionWorkbenchState'> | null): boolean {
@@ -242,8 +314,109 @@ function getUniqueSessionIds(sessions: Pick<SidebarSession, 'id'>[]): string[] {
   return Array.from(new Set(sessions.map((session) => session.id).filter(Boolean)));
 }
 
+function isAgoraGuestAvailable(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'status'>) {
+  return guest.status !== 'unavailable';
+}
+
+function getAgoraGuestRuntimeLabel(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'engine' | 'model'>) {
+  const engine = String(guest.engine || '').trim();
+  const model = String(guest.model || '').trim();
+  if (!engine && !model) return '跟随默认模型';
+  return [engine || '默认引擎', model || '默认模型'].join(' / ');
+}
+
+function formatAgoraUnavailableGuests(guests: Array<Pick<AgoraGuestConfig | AgoraGuestPreset, 'displayName' | 'statusReason'>>) {
+  return guests.map((guest) => `${guest.displayName}：${guest.statusReason || '模型或引擎未配置'}`).join('；');
+}
+
+function mapAgoraGuestToParticipant(guest: AgoraGuestConfig): CollaborationChatroomParticipant {
+  return {
+    id: `participant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: guest.displayName,
+    sourceType: guest.sourceType,
+    sourceAgent: guest.sourceAgent,
+    presetId: guest.presetId,
+    guestConfigId: guest.id,
+    runtimeAgentName: guest.runtimeAgentName,
+    personaPrompt: guest.personaPrompt,
+    systemPrompt: guest.systemPrompt,
+    useDefaultModel: false,
+    engine: guest.engine || '',
+    model: guest.model || '',
+    createdAt: Date.now(),
+  };
+}
+
+function mapTemporaryDraftToParticipant(draft: TopicTemporaryGuestDraft): CollaborationChatroomParticipant {
+  return {
+    id: `participant-temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: draft.name.trim(),
+    sourceType: 'custom',
+    personaPrompt: draft.personaPrompt.trim(),
+    useDefaultModel: !(draft.engine || draft.model),
+    engine: draft.engine,
+    model: draft.model,
+    createdAt: Date.now(),
+  };
+}
+
+function createAgoraWorkbenchState(title = '新议题', participants: CollaborationChatroomParticipant[] = []) {
+  const names = participants.map((participant) => participant.name).filter(Boolean);
+  return {
+    collaborationRoom: {
+      topic: title,
+      selectedAgents: names,
+      mode: 'group-chat' as const,
+      messages: [],
+      rounds: [],
+      agentSessions: {},
+      chatroom: createInitialChatroomState({
+        status: 'running',
+        topic: title,
+        participants: names,
+        participantRoster: participants,
+      }),
+    },
+  };
+}
+
+function getSidebarInitials(name: string) {
+  return name
+    .split(/[\s-_]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0] || '')
+    .join('')
+    .toUpperCase() || name.slice(0, 2).toUpperCase();
+}
+
+function getAgoraSessionTitle(session: SidebarSession): string {
+  const room = session.sessionWorkbenchState?.collaborationRoom;
+  const title = room?.chatroom?.topic || room?.topic || session.title || '新议题';
+  return title === '新议场' ? '新议题' : title;
+}
+
+function getAgoraSessionParticipants(session: SidebarSession): string[] {
+  const room = session.sessionWorkbenchState?.collaborationRoom;
+  const chatroom = room?.chatroom;
+  const names = [
+    ...((chatroom?.participantRoster || []).map((participant: any) => participant?.name).filter(Boolean)),
+    ...((chatroom?.participants || []).filter(Boolean)),
+    ...((room?.selectedAgents || []).filter(Boolean)),
+  ];
+  return Array.from(new Set(names));
+}
+
+function isLegacyEmptyAgoraSession(session: SidebarSession): boolean {
+  return !session.workflowBinding
+    && !session.creationSession
+    && !session.sessionWorkbenchState?.collaborationRoom
+    && session.title === '新议场'
+    && (session.messageCount || 0) === 0;
+}
+
 function getDeleteConfirmationDescription(input: {
-  view: 'chat' | 'runs';
+  view: SessionDirectoryView;
   sessions: SidebarSession[];
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   activeStreamingSessionIds: string[];
@@ -258,8 +431,11 @@ function getDeleteConfirmationDescription(input: {
     sessionLoadingId,
     runStatusById,
   } = input;
-  if (view === 'chat') {
+  if (view === 'conversation') {
     return `将删除选中的 ${sessions.length} 个对话，删除后无法恢复。`;
+  }
+  if (view === 'agora') {
+    return `将删除选中的 ${sessions.length} 个议场，删除后无法恢复。`;
   }
 
   const workflowCounts = new Map<string, number>();
@@ -293,11 +469,21 @@ function getDeleteConfirmationDescription(input: {
   return riskLines.join('\n');
 }
 
-export default function ChatSidebar() {
+export default function ChatSidebar({
+  sessionView: controlledSessionView,
+  onSessionViewChange,
+  onAgoraGuestDataChange,
+}: {
+  sessionView?: SessionDirectoryView;
+  onSessionViewChange?: (view: SessionDirectoryView) => void;
+  onAgoraGuestDataChange?: (data: { guests: AgoraGuestConfig[]; presets: AgoraGuestPreset[]; loading: boolean }) => void;
+}) {
   const {
     sessions,
     activeSessionId,
+    activeSession,
     setActiveSessionId,
+    setSessionWorkbenchState,
     createSession,
     deleteSession,
     deleteSessions,
@@ -312,18 +498,104 @@ export default function ChatSidebar() {
     setSkillsEnabled,
   } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
-  const [sessionView, setSessionView] = useState<'chat' | 'runs'>('chat');
+  const [internalSessionView, setInternalSessionView] = useState<SessionDirectoryView>('conversation');
+  const sessionView = controlledSessionView || internalSessionView;
+  const updateSessionView = useCallback((view: SessionDirectoryView) => {
+    if (!controlledSessionView) setInternalSessionView(view);
+    onSessionViewChange?.(view);
+  }, [controlledSessionView, onSessionViewChange]);
   const [manageMode, setManageMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
-  const [sessionSearchByView, setSessionSearchByView] = useState({ chat: '', runs: '' });
+  const [sessionSearchByView, setSessionSearchByView] = useState<Record<SessionDirectoryView, string>>({
+    conversation: '',
+    agora: '',
+    workflow: '',
+  });
+  const [sessionDirectoryOrder, setSessionDirectoryOrder] = useState<SessionDirectoryView[]>(readStoredSessionDirectoryOrder);
   const [pendingHumanQuestions, setPendingHumanQuestions] = useState<HumanQuestion[]>([]);
   const [runStatusById, setRunStatusById] = useState<Record<string, string>>({});
+  const [agoraTopicDialogOpen, setAgoraTopicDialogOpen] = useState(false);
+  const [agoraGuestDialogOpen, setAgoraGuestDialogOpen] = useState(false);
+  const [agoraGuestsLoading, setAgoraGuestsLoading] = useState(false);
+  const [agoraSavedGuests, setAgoraSavedGuests] = useState<AgoraGuestConfig[]>([]);
+  const [agoraGuestManageMode, setAgoraGuestManageMode] = useState(false);
+  const [agoraManagedGuestIds, setAgoraManagedGuestIds] = useState<Set<string>>(() => new Set());
+  const [agoraGuestDeleting, setAgoraGuestDeleting] = useState(false);
+  const [agoraGuestPresets, setAgoraGuestPresets] = useState<AgoraGuestPreset[]>([]);
+  const [agoraTopicTitle, setAgoraTopicTitle] = useState('新议题');
+  const [agoraSelectedGuestIds, setAgoraSelectedGuestIds] = useState<string[]>([]);
+  const [agoraTemporaryGuests, setAgoraTemporaryGuests] = useState<TopicTemporaryGuestDraft[]>([]);
+  const [agoraTemporaryDraft, setAgoraTemporaryDraft] = useState<TopicTemporaryGuestDraft>({
+    name: '',
+    personaPrompt: '',
+    engine: '',
+    model: '',
+  });
+  const [agoraPresetCreateDrafts, setAgoraPresetCreateDrafts] = useState<PresetGuestCreateDraft[]>([]);
+  const [agoraPresetSaving, setAgoraPresetSaving] = useState(false);
+  const [agoraCustomGuestDraft, setAgoraCustomGuestDraft] = useState<CustomGuestDraft>({
+    displayName: '',
+    personaPrompt: '',
+    engine: '',
+    model: '',
+  });
+  const [agoraCustomGuestSaving, setAgoraCustomGuestSaving] = useState(false);
   const { confirm, dialogProps } = useConfirmDialog();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    onAgoraGuestDataChange?.({
+      guests: agoraSavedGuests,
+      presets: agoraGuestPresets,
+      loading: agoraGuestsLoading,
+    });
+  }, [agoraGuestPresets, agoraGuestsLoading, agoraSavedGuests, onAgoraGuestDataChange]);
 
   const enabledCount = discoveredSkills.filter(s => !!skillSettings[s.name]).length;
+  const currentSessionView: SessionDirectoryView =
+    sessionView === 'conversation' || sessionView === 'agora' || sessionView === 'workflow'
+      ? sessionView
+      : 'conversation';
+  const orderedSessionDirectoryViews = useMemo(
+    () => normalizeSessionDirectoryOrder(sessionDirectoryOrder),
+    [sessionDirectoryOrder]
+  );
+  const sessionsWithActiveState = useMemo(() => {
+    if (!activeSession) return sessions as SidebarSession[];
+    const base = sessions as SidebarSession[];
+    let found = false;
+    const merged = base.map((session) => {
+      if (session.id !== activeSession.id) return session;
+      found = true;
+      return {
+        ...session,
+        title: activeSession.title,
+        lastMessage: session.lastMessage,
+        creationSession: activeSession.creationSession,
+        workflowBinding: activeSession.workflowBinding,
+        agentBinding: activeSession.agentBinding,
+        sessionWorkbenchState: activeSession.sessionWorkbenchState,
+      } as SidebarSession;
+    });
+    if (!found) {
+      merged.unshift({
+        id: activeSession.id,
+        title: activeSession.title,
+        updatedAt: activeSession.updatedAt,
+        messageCount: activeSession.messages.length,
+        lastMessage: activeSession.messages.filter((message) => message.role !== 'error').slice(-1)[0]?.content,
+        creationSession: activeSession.creationSession,
+        workflowBinding: activeSession.workflowBinding,
+        agentBinding: activeSession.agentBinding,
+        sessionWorkbenchState: activeSession.sessionWorkbenchState,
+      } as SidebarSession);
+    }
+    return merged;
+  }, [activeSession, sessions]);
+
   const groupedSessions = useMemo(() => {
     const workflowRelatedSessionIds = new Set<string>();
-    for (const session of sessions as SidebarSession[]) {
+    for (const session of sessionsWithActiveState) {
       const binding = session.workflowBinding;
       if (!binding) continue;
       workflowRelatedSessionIds.add(session.id);
@@ -332,16 +604,36 @@ export default function ChatSidebar() {
         if (sessionId) workflowRelatedSessionIds.add(sessionId);
       }
     }
-    const isWorkflowSession = (session: SidebarSession) => {
-      const kind = getWorkbenchSessionKind(session);
-      return kind === 'run' || kind === 'creation' || workflowRelatedSessionIds.has(session.id);
+    const grouped: Record<SessionDirectoryView, SidebarSession[]> = {
+      conversation: [],
+      agora: [],
+      workflow: [],
     };
-    const runs = (sessions as SidebarSession[]).filter(isWorkflowSession).sort(compareSidebarSessions);
-    const chat = (sessions as SidebarSession[]).filter((session) => !isWorkflowSession(session)).sort(compareSidebarSessions);
-    return { chat, runs };
-  }, [sessions]);
-  const baseVisibleSessions = sessionView === 'runs' ? groupedSessions.runs : groupedSessions.chat;
-  const sessionSearch = sessionSearchByView[sessionView];
+    for (const session of sessionsWithActiveState) {
+      const workbenchKind = getWorkbenchSessionKind(session);
+      if (isWorkflowDirectorySession(session) || workbenchKind === 'run' || workbenchKind === 'creation' || workflowRelatedSessionIds.has(session.id)) {
+        grouped.workflow.push(session);
+        continue;
+      }
+      if (isLegacyEmptyAgoraSession(session)) {
+        grouped.agora.push(session);
+        continue;
+      }
+      const directoryKind = getSessionDirectoryKind(session);
+      if (directoryKind === 'agora') {
+        grouped.agora.push(session);
+        continue;
+      }
+      grouped.conversation.push(session);
+    }
+    return {
+      conversation: grouped.conversation.sort(compareSidebarSessions),
+      agora: grouped.agora.sort(compareSidebarSessions),
+      workflow: grouped.workflow.sort(compareSidebarSessions),
+    };
+  }, [sessionsWithActiveState]);
+  const baseVisibleSessions = groupedSessions[currentSessionView];
+  const sessionSearch = sessionSearchByView[currentSessionView] || '';
   const normalizedSearch = sessionSearch.trim().toLowerCase();
   const visibleSessions = useMemo(() => {
     if (!normalizedSearch) return baseVisibleSessions;
@@ -353,6 +645,8 @@ export default function ChatSidebar() {
         session.workflowBinding?.runId,
         session.creationSession?.filename,
         session.creationSession?.workflowName,
+        session.sessionWorkbenchState?.collaborationRoom?.topic,
+        ...(session.sessionWorkbenchState?.collaborationRoom?.selectedAgents || []),
         session.agentBinding?.agentName,
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(normalizedSearch);
@@ -373,7 +667,7 @@ export default function ChatSidebar() {
   }, [pendingHumanQuestions]);
   const workflowBindingByRelatedSessionId = useMemo(() => {
     const map = new Map<string, NonNullable<SidebarSession['workflowBinding']>>();
-    for (const session of sessions as SidebarSession[]) {
+    for (const session of sessionsWithActiveState) {
       const binding = session.workflowBinding;
       if (!binding) continue;
       map.set(session.id, binding);
@@ -383,7 +677,7 @@ export default function ChatSidebar() {
       }
     }
     return map;
-  }, [sessions]);
+  }, [sessionsWithActiveState]);
   const visibleWorkflowBuckets = useMemo(() => {
     const buckets: Record<WorkflowBucketKey, WorkflowSessionGroup[]> = {
       creating: [],
@@ -485,8 +779,362 @@ export default function ChatSidebar() {
   }, [baseVisibleSessions]);
 
   useEffect(() => {
+    const visibleIds = new Set(agoraSavedGuests.map((guest) => guest.id));
+    setAgoraManagedGuestIds((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [agoraSavedGuests]);
+
+  useEffect(() => {
+    if (!activeSession || !isLegacyEmptyAgoraSession(activeSession as unknown as SidebarSession)) return;
+    renameSession(activeSession.id, '新议题');
+    setSessionWorkbenchState(createAgoraWorkbenchState('新议题'));
+  }, [activeSession, renameSession, setSessionWorkbenchState]);
+
+  useEffect(() => {
     setSelectedSessionIds((prev) => (prev.size === 0 ? prev : new Set()));
   }, [sessionSearch]);
+
+  useEffect(() => {
+    if (currentSessionView === 'agora') return;
+    setAgoraGuestManageMode(false);
+    setAgoraManagedGuestIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [currentSessionView]);
+
+  useEffect(() => {
+    if (agoraGuestManageMode && agoraSavedGuests.length === 0) {
+      setAgoraGuestManageMode(false);
+    }
+    if (agoraGuestManageMode) return;
+    setAgoraManagedGuestIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [agoraGuestManageMode, agoraSavedGuests.length]);
+
+  const loadAgoraGuests = useCallback(async () => {
+    setAgoraGuestsLoading(true);
+    try {
+      const data = await agoraApi.listGuests();
+      setAgoraSavedGuests(Array.isArray(data.guests) ? data.guests : []);
+      setAgoraGuestPresets(Array.isArray(data.presets) ? data.presets : []);
+    } catch (error: any) {
+      toast('warning', error?.message || '加载议场嘉宾失败');
+    } finally {
+      setAgoraGuestsLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    if (currentSessionView !== 'agora') return;
+    void loadAgoraGuests();
+  }, [currentSessionView, loadAgoraGuests]);
+
+  useEffect(() => {
+    const handler = () => {
+      updateSessionView('agora');
+      setAgoraGuestDialogOpen(true);
+      void loadAgoraGuests();
+    };
+    window.addEventListener('agora:create-guest', handler);
+    return () => window.removeEventListener('agora:create-guest', handler);
+  }, [loadAgoraGuests, updateSessionView]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (currentSessionView !== 'agora') return;
+      void loadAgoraGuests();
+    };
+    window.addEventListener('agora:guests-updated', handler);
+    return () => window.removeEventListener('agora:guests-updated', handler);
+  }, [currentSessionView, loadAgoraGuests]);
+
+  const selectSessionView = (view: SessionDirectoryView) => {
+    updateSessionView(view);
+    if (groupedSessions[view].some((session) => session.id === activeSessionId)) return;
+    setActiveSessionId(null);
+  };
+
+  const updateSessionDirectoryOrder = (nextOrder: SessionDirectoryView[]) => {
+    const normalized = normalizeSessionDirectoryOrder(nextOrder);
+    setSessionDirectoryOrder(normalized);
+    window.localStorage.setItem(SESSION_DIRECTORY_ORDER_STORAGE_KEY, JSON.stringify(normalized));
+  };
+
+  const moveSessionDirectoryView = (view: SessionDirectoryView, direction: -1 | 1) => {
+    const currentIndex = orderedSessionDirectoryViews.indexOf(view);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= orderedSessionDirectoryViews.length) return;
+    const nextOrder = [...orderedSessionDirectoryViews];
+    [nextOrder[currentIndex], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[currentIndex]];
+    updateSessionDirectoryOrder(nextOrder);
+  };
+
+  const openCreateAgoraTopicDialog = () => {
+    setAgoraTopicTitle('新议题');
+    setAgoraSelectedGuestIds([]);
+    setAgoraTemporaryGuests([]);
+    setAgoraTemporaryDraft({ name: '', personaPrompt: '', engine: '', model: '' });
+    setAgoraTopicDialogOpen(true);
+    void loadAgoraGuests();
+  };
+
+  const createAgoraSession = (participants: CollaborationChatroomParticipant[] = [], title = '新议题') => {
+    const topic = title.trim() || '新议题';
+    const sessionId = createSession({
+      title: topic,
+      sessionWorkbenchState: createAgoraWorkbenchState(topic, participants),
+    });
+    updateSessionView('agora');
+    setActiveSessionId(sessionId);
+  };
+
+  const addTemporaryGuestToTopicDraft = () => {
+    const name = agoraTemporaryDraft.name.trim();
+    const personaPrompt = agoraTemporaryDraft.personaPrompt.trim();
+    if (!name) {
+      toast('warning', '请填写临时嘉宾名称');
+      return;
+    }
+    if (!personaPrompt) {
+      toast('warning', '请填写临时嘉宾提示词');
+      return;
+    }
+    const existingNames = new Set([
+      ...agoraSavedGuests.filter((guest) => agoraSelectedGuestIds.includes(guest.id)).map((guest) => guest.displayName),
+      ...agoraTemporaryGuests.map((guest) => guest.name),
+    ]);
+    if (existingNames.has(name)) {
+      toast('warning', `嘉宾「${name}」已在议题中`);
+      return;
+    }
+    setAgoraTemporaryGuests((prev) => [...prev, { ...agoraTemporaryDraft, name, personaPrompt }]);
+    setAgoraTemporaryDraft({ name: '', personaPrompt: '', engine: '', model: '' });
+  };
+
+  const submitCreateAgoraTopic = () => {
+    const title = agoraTopicTitle.trim() || '新议题';
+    const selectedGuests = agoraSavedGuests.filter((guest) => agoraSelectedGuestIds.includes(guest.id));
+    const unavailable = selectedGuests.filter((guest) => !isAgoraGuestAvailable(guest));
+    if (unavailable.length) {
+      toast('warning', `以下嘉宾不可用：${formatAgoraUnavailableGuests(unavailable)}`);
+      return;
+    }
+    const participants = [
+      ...selectedGuests.filter(isAgoraGuestAvailable).map(mapAgoraGuestToParticipant),
+      ...agoraTemporaryGuests.map(mapTemporaryDraftToParticipant),
+    ];
+    if (!participants.length) {
+      toast('warning', '请至少选择或添加一位嘉宾');
+      return;
+    }
+    createAgoraSession(participants, title);
+    setAgoraTopicDialogOpen(false);
+  };
+
+  const createSelectedPresetGuests = async () => {
+    const selectedPresets = agoraPresetCreateDrafts
+      .map((draft) => {
+        const preset = agoraGuestPresets.find((item) => item.id === draft.presetId);
+        return preset ? { draft, preset } : null;
+      })
+      .filter((item): item is { draft: PresetGuestCreateDraft; preset: AgoraGuestPreset } => Boolean(item));
+    const unavailable = selectedPresets.filter((item) => !isAgoraGuestAvailable(item.preset));
+    if (unavailable.length) {
+      toast('warning', `以下嘉宾不可用：${formatAgoraUnavailableGuests(unavailable.map((item) => item.preset))}`);
+      return;
+    }
+    if (!selectedPresets.length) {
+      toast('warning', '请选择要创建的预设嘉宾');
+      return;
+    }
+    setAgoraPresetSaving(true);
+    try {
+      const created = await Promise.all(selectedPresets.map(async ({ draft, preset }) => {
+        const result = await agoraApi.saveGuest({
+          displayName: preset.displayName,
+          sourceType: 'preset',
+          presetId: preset.id,
+          sourceAgent: preset.templateAgent,
+          engine: draft.engine,
+          model: draft.model,
+        });
+        return result.guest;
+      }));
+      const unavailableCreated = created.filter((guest) => !isAgoraGuestAvailable(guest));
+      if (unavailableCreated.length) {
+        toast('warning', `以下嘉宾不可用：${formatAgoraUnavailableGuests(unavailableCreated)}`);
+      }
+      setAgoraSavedGuests((prev) => {
+        const nextById = new Map(prev.map((guest) => [guest.id, guest]));
+        created.forEach((guest) => nextById.set(guest.id, guest));
+        return Array.from(nextById.values()).sort((a, b) => a.createdAt - b.createdAt);
+      });
+      setAgoraPresetCreateDrafts([]);
+      window.dispatchEvent(new CustomEvent('agora:guests-updated'));
+      toast('success', `已创建 ${created.length} 位常驻嘉宾`);
+    } catch (error: any) {
+      toast('error', error?.message || '创建常驻嘉宾失败');
+    } finally {
+      setAgoraPresetSaving(false);
+    }
+  };
+
+  const addPresetCreateDraft = (preset: AgoraGuestPreset) => {
+    setAgoraPresetCreateDrafts((prev) => [
+      ...prev,
+      {
+        id: `preset-draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        presetId: preset.id,
+        engine: preset.engine || '',
+        model: preset.model || '',
+      },
+    ]);
+  };
+
+  const removePresetCreateDraft = (draftId: string) => {
+    setAgoraPresetCreateDrafts((prev) => prev.filter((draft) => draft.id !== draftId));
+  };
+
+  const updatePresetCreateDraft = (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'engine' | 'model'>>) => {
+    setAgoraPresetCreateDrafts((prev) => prev.map((draft) => (
+      draft.id === draftId ? { ...draft, ...patch } : draft
+    )));
+  };
+
+  const createCustomAgoraGuest = async () => {
+    const displayName = agoraCustomGuestDraft.displayName.trim();
+    const personaPrompt = agoraCustomGuestDraft.personaPrompt.trim();
+    if (!displayName) {
+      toast('warning', '请填写嘉宾名称');
+      return;
+    }
+    if (!personaPrompt) {
+      toast('warning', '请填写嘉宾提示词');
+      return;
+    }
+    setAgoraCustomGuestSaving(true);
+    try {
+      const result = await agoraApi.saveGuest({
+        displayName,
+        sourceType: 'custom',
+        personaPrompt,
+        engine: agoraCustomGuestDraft.engine,
+        model: agoraCustomGuestDraft.model,
+      });
+      setAgoraSavedGuests((prev) => {
+        const without = prev.filter((guest) => guest.id !== result.guest.id);
+        return [...without, result.guest].sort((a, b) => a.createdAt - b.createdAt);
+      });
+      setAgoraCustomGuestDraft({ displayName: '', personaPrompt: '', engine: '', model: '' });
+      window.dispatchEvent(new CustomEvent('agora:guests-updated'));
+      toast(isAgoraGuestAvailable(result.guest) ? 'success' : 'warning', isAgoraGuestAvailable(result.guest)
+        ? `已创建常驻嘉宾「${result.guest.displayName}」`
+        : `嘉宾「${result.guest.displayName}」不可用：${result.guest.statusReason || '模型或引擎未配置'}`);
+    } catch (error: any) {
+      toast('error', error?.message || '创建常驻嘉宾失败');
+    } finally {
+      setAgoraCustomGuestSaving(false);
+    }
+  };
+
+  const toggleAgoraManagedGuestSelected = (guestId: string, checked: boolean) => {
+    setAgoraManagedGuestIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(guestId);
+      else next.delete(guestId);
+      return next;
+    });
+  };
+
+  const toggleAllAgoraManagedGuestsSelected = (checked: boolean) => {
+    setAgoraManagedGuestIds(checked ? new Set(agoraSavedGuests.map((guest) => guest.id)) : new Set());
+  };
+
+  const deleteAgoraGuests = async (guests: AgoraGuestConfig[]) => {
+    const guestsToDelete = guests.filter((guest, index, list) => (
+      Boolean(guest.id) && list.findIndex((item) => item.id === guest.id) === index
+    ));
+    if (!guestsToDelete.length) return;
+    const ok = await confirm({
+      title: guestsToDelete.length > 1 ? '确认批量删除常驻嘉宾' : '确认删除常驻嘉宾',
+      description: guestsToDelete.length > 1
+        ? `删除选中的 ${guestsToDelete.length} 位常驻嘉宾后，已有议题中的嘉宾记录不会被自动移除，但后续不能再从常驻嘉宾中选择。`
+        : `删除「${guestsToDelete[0].displayName}」后，已有议题中的嘉宾记录不会被自动移除，但后续不能再从常驻嘉宾中选择。`,
+      confirmLabel: '删除',
+      cancelLabel: '取消',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setAgoraGuestDeleting(true);
+    try {
+      const results = await Promise.allSettled(guestsToDelete.map((guest) => agoraApi.deleteGuest(guest.id)));
+      const deletedIds: string[] = [];
+      const failedGuests: Array<{ guest: AgoraGuestConfig; message: string }> = [];
+
+      results.forEach((result, index) => {
+        const guest = guestsToDelete[index];
+        if (result.status === 'fulfilled') {
+          deletedIds.push(guest.id);
+          return;
+        }
+        failedGuests.push({
+          guest,
+          message: result.reason?.message || '删除失败',
+        });
+      });
+
+      if (deletedIds.length > 0) {
+        const deletedIdSet = new Set(deletedIds);
+        setAgoraSavedGuests((prev) => prev.filter((item) => !deletedIdSet.has(item.id)));
+        setAgoraSelectedGuestIds((prev) => prev.filter((id) => !deletedIdSet.has(id)));
+        setAgoraManagedGuestIds((prev) => new Set([...prev].filter((id) => !deletedIdSet.has(id))));
+        window.dispatchEvent(new CustomEvent('agora:guests-updated'));
+      }
+
+      if (failedGuests.length > 0) {
+        const failureSummary = failedGuests.length === 1
+          ? `${failedGuests[0].guest.displayName}：${failedGuests[0].message}`
+          : `${failedGuests.length} 位删除失败`;
+        toast(
+          deletedIds.length > 0 ? 'warning' : 'error',
+          deletedIds.length > 0 ? `已删除 ${deletedIds.length} 位常驻嘉宾，${failureSummary}` : failureSummary,
+        );
+        return;
+      }
+
+      toast('success', guestsToDelete.length > 1 ? `已删除 ${guestsToDelete.length} 位常驻嘉宾` : '已删除常驻嘉宾');
+    } catch (error: any) {
+      toast('error', error?.message || '删除常驻嘉宾失败');
+    } finally {
+      setAgoraGuestDeleting(false);
+    }
+  };
+
+  const deleteSelectedAgoraGuests = async () => {
+    const guestsToDelete = agoraSavedGuests.filter((guest) => agoraManagedGuestIds.has(guest.id));
+    if (!guestsToDelete.length) return;
+    await deleteAgoraGuests(guestsToDelete);
+  };
+
+  const createAgoraExtensionTopic = (actionId: string) => {
+    const action = getAgoraTopicExtensionActions().find((item) => item.id === actionId);
+    if (!action) return;
+    const topic = action.createTopic();
+    const sessionId = createSession({
+      title: topic.title,
+      sessionWorkbenchState: topic.sessionWorkbenchState,
+    });
+    updateSessionView('agora');
+    setActiveSessionId(sessionId);
+  };
+
+  const openAgoraSession = (session: SidebarSession) => {
+    if (isLegacyEmptyAgoraSession(session)) {
+      updateSessionView('agora');
+      setActiveSessionId(session.id);
+      return;
+    }
+    setActiveSessionId(session.id);
+  };
 
   const toggleSessionSelected = (sessionId: string, checked: boolean) => {
     setSelectedSessionIds((prev) => {
@@ -519,10 +1167,15 @@ export default function ChatSidebar() {
       .filter((session): session is SidebarSession => Boolean(session));
     const ids = getUniqueSessionIds(selectedSessions);
     if (ids.length === 0) return;
+    const deleteTitle = currentSessionView === 'workflow'
+      ? '确认删除工作流对话'
+      : currentSessionView === 'agora'
+        ? '确认删除议场'
+        : '确认删除对话';
     const ok = await confirm({
-      title: sessionView === 'runs' ? '确认删除工作流对话' : '确认删除对话',
+      title: deleteTitle,
       description: getDeleteConfirmationDescription({
-        view: sessionView,
+        view: currentSessionView,
         sessions: selectedSessions,
         pendingQuestionsBySessionId,
         activeStreamingSessionIds,
@@ -540,34 +1193,42 @@ export default function ChatSidebar() {
   };
 
   const requestDeleteSession = async (session: ChatSessionSummaryLike) => {
+    const sessionKind = getSessionDirectoryKind(session);
     const ok = await confirm({
-      title: '确认删除对话',
+      title: sessionKind === 'workflow' ? '确认删除工作流对话' : sessionKind === 'agora' ? '确认删除议场' : '确认删除对话',
       description: `删除「${session.title}」后无法恢复。`,
       confirmLabel: '删除',
       cancelLabel: '取消',
       variant: 'destructive',
     });
-    if (ok) deleteSession(session.id);
+    if (!ok) return;
+    deleteSession(session.id);
   };
 
+  const isAgoraView = currentSessionView === 'agora';
+  const createButtonLabel = isAgoraView ? '新建议题' : '新建';
+  const createButtonTitle = isAgoraView ? '新建议题' : '新建会话';
+  const handleCreateSession = isAgoraView ? openCreateAgoraTopicDialog : () => createSession();
+
   return (
-    <div className="w-full bg-muted/30 flex flex-col h-full">
-      {/* ACEHarness Header */}
-      <div className="p-3 border-b bg-gradient-to-r from-primary/10 to-blue-500/10">
+    <div className="w-full flex h-full flex-col bg-muted/30">
+      <div className="border-b bg-gradient-to-r from-primary/10 to-blue-500/10 p-3">
         <div className="mb-3 flex items-center gap-2">
           <RobotLogo size={28} />
-          <span className="font-bold text-sm bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">ACEHarness</span>
+          <span className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-sm font-bold text-transparent">ACEHarness</span>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <Button
+            type="button"
             size="sm"
             variant="default"
-            onClick={() => createSession()}
-            title="新建会话"
             className="h-8 justify-center gap-1.5 px-2 text-xs"
+            onClick={handleCreateSession}
+            title={createButtonTitle}
+            aria-label={createButtonTitle}
           >
             <span className="material-symbols-outlined text-sm" aria-hidden="true">add</span>
-            新建
+            {createButtonLabel}
           </Button>
           <Button
             type="button"
@@ -582,6 +1243,8 @@ export default function ChatSidebar() {
                 return !prev;
               });
             }}
+            title={manageMode ? '完成管理' : '批量管理'}
+            aria-label={manageMode ? '完成管理' : '批量管理'}
           >
             <span className="material-symbols-outlined text-sm" aria-hidden="true">
               {manageMode ? 'done' : 'checklist'}
@@ -593,44 +1256,103 @@ export default function ChatSidebar() {
 
       <div className="home-chat-scroll flex-1 overflow-y-auto">
         <div className="border-b border-border/40 px-3 py-2">
-          <div className="grid grid-cols-2 gap-1 rounded-md bg-muted p-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className={`h-7 justify-center gap-1 px-2 text-xs ${
-                sessionView === 'chat'
-                  ? 'bg-background text-primary ring-1 ring-primary/20 hover:bg-background'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setSessionView('chat')}
-            >
-              <span className="material-symbols-outlined text-sm">forum</span>
-              <span>对话</span>
-              <span className="ml-1 text-[10px] text-muted-foreground">
-                {groupedSessions.chat.length}
-              </span>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className={`h-7 justify-center gap-1 px-2 text-xs ${
-                sessionView === 'runs'
-                  ? 'bg-background text-primary ring-1 ring-primary/20 hover:bg-background'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setSessionView('runs')}
-            >
-              <span className="material-symbols-outlined text-sm">account_tree</span>
-              <span>工作流</span>
-              <span className="ml-1 text-[10px] text-muted-foreground">
-                {groupedSessions.runs.length}
-              </span>
-            </Button>
+          <div className="flex gap-1 rounded-md bg-muted p-1">
+            <div className="grid min-w-0 flex-1 grid-cols-3 gap-1">
+              {orderedSessionDirectoryViews.map((view) => {
+                const meta = SESSION_DIRECTORY_META[view];
+                return (
+                  <Button
+                    key={view}
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className={`h-7 justify-center gap-1 px-2 text-xs ${
+                      currentSessionView === view
+                        ? 'bg-background text-primary ring-1 ring-primary/20 hover:bg-background'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                    onClick={() => selectSessionView(view)}
+                  >
+                    <span className="material-symbols-outlined text-sm">{meta.icon}</span>
+                    <span>{meta.label}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">
+                      {groupedSessions[view].length}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                  title="调整入口顺序"
+                  aria-label="调整入口顺序"
+                >
+                  <span className="material-symbols-outlined text-[16px]">tune</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64 p-2">
+                <DropdownMenuLabel className="px-2 pb-2 pt-1">入口顺序</DropdownMenuLabel>
+                <div className="space-y-1">
+                  {orderedSessionDirectoryViews.map((view, index) => {
+                    const meta = SESSION_DIRECTORY_META[view];
+                    return (
+                      <div
+                        key={view}
+                        className="flex items-center gap-3 rounded-lg px-2 py-2 text-sm hover:bg-muted/45"
+                      >
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-[11px] font-medium text-muted-foreground">
+                          {index + 1}
+                        </span>
+                        <span className="material-symbols-outlined text-[18px] text-muted-foreground">{meta.icon}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium leading-5">{meta.label}</div>
+                          {index === 0 ? (
+                            <div className="text-[10px] leading-4 text-primary">默认加载</div>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-0.5">
+                          <button
+                            type="button"
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                            disabled={index === 0}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              moveSessionDirectoryView(view, -1);
+                            }}
+                            aria-label={`${meta.label}上移`}
+                            title="上移"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">keyboard_arrow_up</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                            disabled={index === orderedSessionDirectoryViews.length - 1}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              moveSessionDirectoryView(view, 1);
+                            }}
+                            aria-label={`${meta.label}下移`}
+                            title="下移"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">keyboard_arrow_down</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
+        {!isAgoraView ? (
         <div className="border-b border-border/40 px-3 py-2">
           <div className="relative">
             <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
@@ -638,15 +1360,19 @@ export default function ChatSidebar() {
             </span>
             <Input
               value={sessionSearch}
-              onChange={(event) => setSessionSearchByView((prev) => ({ ...prev, [sessionView]: event.target.value }))}
-              placeholder={sessionView === 'runs' ? '筛选工作流会话...' : '筛选对话...'}
+              onChange={(event) => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: event.target.value }))}
+              placeholder={
+                currentSessionView === 'workflow'
+                  ? '筛选工作流会话...'
+                  : '筛选对话...'
+              }
               className="h-8 pl-8 pr-8 text-xs"
             />
             {sessionSearch ? (
               <button
                 type="button"
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-                onClick={() => setSessionSearchByView((prev) => ({ ...prev, [sessionView]: '' }))}
+                onClick={() => setSessionSearchByView((prev) => ({ ...prev, [currentSessionView]: '' }))}
                 aria-label="清空筛选"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
@@ -654,12 +1380,19 @@ export default function ChatSidebar() {
             ) : null}
           </div>
         </div>
+        ) : null}
 
         {manageMode && visibleSessions.length > 0 && (
           <div className="flex items-center justify-between border-b border-border/40 px-3 py-2">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Checkbox
-                aria-label={sessionView === 'runs' ? '选择全部工作流对话' : '选择全部对话'}
+                aria-label={
+                  currentSessionView === 'workflow'
+                    ? '选择全部工作流对话'
+                    : currentSessionView === 'agora'
+                      ? '选择全部议场'
+                      : '选择全部对话'
+                }
                 checked={selectedVisibleState}
                 onCheckedChange={(checked) => toggleAllVisibleSelected(checkedStateToBoolean(checked))}
                 className="h-3.5 w-3.5"
@@ -683,15 +1416,15 @@ export default function ChatSidebar() {
           </div>
         )}
 
-        {sessionView === 'chat' && visibleSessions.length === 0 && (
+        {currentSessionView === 'conversation' && visibleSessions.length === 0 && (
           <EmptySessionState
-            kind={sessionView}
+            kind={currentSessionView}
             filtered={isFilteredEmpty}
             query={sessionSearch.trim()}
-            onCreate={sessionView === 'chat' && !isFilteredEmpty ? () => createSession() : undefined}
+            onCreate={!isFilteredEmpty ? () => createSession() : undefined}
           />
         )}
-        {sessionView === 'runs' ? (
+        {currentSessionView === 'workflow' ? (
           <div className="px-2 py-2">
             <WorkflowBucket
               title="创建中"
@@ -750,6 +1483,52 @@ export default function ChatSidebar() {
               defaultOpen
             />
           </div>
+        ) : currentSessionView === 'agora' ? (
+          <AgoraDirectory
+            sessions={visibleSessions as SidebarSession[]}
+            searchValue={sessionSearch}
+            savedGuests={agoraSavedGuests}
+            guestsLoading={agoraGuestsLoading}
+            guestManageMode={agoraGuestManageMode}
+            guestDeleting={agoraGuestDeleting}
+            selectedSavedGuestIds={agoraManagedGuestIds}
+            activeSessionId={activeSessionId}
+            selectable={manageMode}
+            selectedSessionIds={selectedSessionIds}
+            isFilteredEmpty={isFilteredEmpty}
+            activeStreamingSessionIds={activeStreamingSessionIds}
+            recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+            sessionLoadingId={sessionLoadingId}
+            onCreate={openCreateAgoraTopicDialog}
+            extensionActions={getAgoraTopicExtensionActions()}
+            onCreateExtensionTopic={createAgoraExtensionTopic}
+            onCreateGuest={() => {
+              setAgoraGuestDialogOpen(true);
+              void loadAgoraGuests();
+            }}
+            onToggleGuestManageMode={() => {
+              setAgoraGuestManageMode((prev) => {
+                if (prev) setAgoraManagedGuestIds(new Set());
+                return !prev;
+              });
+            }}
+            onToggleGuestSelect={toggleAgoraManagedGuestSelected}
+            onToggleAllGuestsSelected={toggleAllAgoraManagedGuestsSelected}
+            onDeleteSelectedGuests={() => { void deleteSelectedAgoraGuests(); }}
+            onSearchChange={(value) => setSessionSearchByView((prev) => ({ ...prev, agora: value }))}
+            onSessionClick={(sessionId) => {
+              const session = (visibleSessions as SidebarSession[]).find((item) => item.id === sessionId);
+              if (session) {
+                openAgoraSession(session);
+                return;
+              }
+              setActiveSessionId(sessionId);
+            }}
+            onSelectChange={toggleSessionSelected}
+            onDeleteSession={(session) => { void requestDeleteSession(session); }}
+            onRenameSession={(session, title) => renameSession(session.id, title)}
+            onDeleteGuest={(guest) => { void deleteAgoraGuests([guest]); }}
+          />
         ) : (
           <div className="home-chat-sidebar-card mx-2 my-2 overflow-hidden rounded-2xl border border-border/45 bg-background/35">
             {visibleSessions.map(session => (
@@ -757,7 +1536,7 @@ export default function ChatSidebar() {
                 key={session.id}
                 session={session}
                 active={session.id === activeSessionId}
-                selectable={manageMode && sessionView === 'chat'}
+                selectable={manageMode}
                 selected={selectedSessionIds.has(session.id)}
                 isStreaming={activeStreamingSessionIds.includes(session.id)}
                 isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
@@ -798,6 +1577,56 @@ export default function ChatSidebar() {
           onClose={() => setSkillModalOpen(false)}
         />
       )}
+      <AgoraTopicCreateDialog
+        open={agoraTopicDialogOpen}
+        title={agoraTopicTitle}
+        savedGuests={agoraSavedGuests}
+        selectedGuestIds={agoraSelectedGuestIds}
+        temporaryGuests={agoraTemporaryGuests}
+        temporaryDraft={agoraTemporaryDraft}
+        loading={agoraGuestsLoading}
+        onOpenChange={setAgoraTopicDialogOpen}
+        onTitleChange={setAgoraTopicTitle}
+        onToggleSavedGuest={(guestId, checked) => {
+          setAgoraSelectedGuestIds((prev) => (
+            checked
+              ? Array.from(new Set([...prev, guestId]))
+              : prev.filter((id) => id !== guestId)
+          ));
+        }}
+        onToggleAllSavedGuests={(checked) => {
+          const availableGuestIds = agoraSavedGuests.filter(isAgoraGuestAvailable).map((guest) => guest.id);
+          setAgoraSelectedGuestIds((prev) => (
+            checked
+              ? Array.from(new Set([...prev, ...availableGuestIds]))
+              : prev.filter((id) => !availableGuestIds.includes(id))
+          ));
+        }}
+        onTemporaryDraftChange={setAgoraTemporaryDraft}
+        onAddTemporaryGuest={addTemporaryGuestToTopicDraft}
+        onRemoveTemporaryGuest={(index) => setAgoraTemporaryGuests((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+        onCreateGuest={() => {
+          setAgoraGuestDialogOpen(true);
+          void loadAgoraGuests();
+        }}
+        onSubmit={submitCreateAgoraTopic}
+      />
+      <AgoraGuestManagerDialog
+        open={agoraGuestDialogOpen}
+        presets={agoraGuestPresets}
+        presetDrafts={agoraPresetCreateDrafts}
+        customDraft={agoraCustomGuestDraft}
+        loading={agoraGuestsLoading}
+        presetSaving={agoraPresetSaving}
+        customSaving={agoraCustomGuestSaving}
+        onOpenChange={setAgoraGuestDialogOpen}
+        onAddPresetDraft={addPresetCreateDraft}
+        onRemovePresetDraft={removePresetCreateDraft}
+        onPresetDraftChange={updatePresetCreateDraft}
+        onCreateSelectedPresets={() => { void createSelectedPresetGuests(); }}
+        onCustomDraftChange={setAgoraCustomGuestDraft}
+        onCreateCustom={() => { void createCustomAgoraGuest(); }}
+      />
       {dialogProps ? <ConfirmDialog {...dialogProps} /> : null}
     </div>
   );
@@ -998,29 +1827,961 @@ function SkillManagerModal({
   );
 }
 
+function AgoraTopicCreateDialog({
+  open,
+  title,
+  savedGuests,
+  selectedGuestIds,
+  temporaryGuests,
+  temporaryDraft,
+  loading,
+  onOpenChange,
+  onTitleChange,
+  onToggleSavedGuest,
+  onToggleAllSavedGuests,
+  onTemporaryDraftChange,
+  onAddTemporaryGuest,
+  onRemoveTemporaryGuest,
+  onCreateGuest,
+  onSubmit,
+}: {
+  open: boolean;
+  title: string;
+  savedGuests: AgoraGuestConfig[];
+  selectedGuestIds: string[];
+  temporaryGuests: TopicTemporaryGuestDraft[];
+  temporaryDraft: TopicTemporaryGuestDraft;
+  loading: boolean;
+  onOpenChange: (open: boolean) => void;
+  onTitleChange: (title: string) => void;
+  onToggleSavedGuest: (guestId: string, checked: boolean) => void;
+  onToggleAllSavedGuests: (checked: boolean) => void;
+  onTemporaryDraftChange: (draft: TopicTemporaryGuestDraft) => void;
+  onAddTemporaryGuest: () => void;
+  onRemoveTemporaryGuest: (index: number) => void;
+  onCreateGuest: () => void;
+  onSubmit: () => void;
+}) {
+  const availableSavedGuestIds = savedGuests.filter(isAgoraGuestAvailable).map((guest) => guest.id);
+  const selectedAvailableSavedGuestIds = availableSavedGuestIds.filter((id) => selectedGuestIds.includes(id));
+  const savedGuestSelectionState: CheckedState = availableSavedGuestIds.length === 0
+    ? false
+    : selectedAvailableSavedGuestIds.length === availableSavedGuestIds.length
+      ? true
+      : selectedAvailableSavedGuestIds.length > 0
+        ? 'indeterminate'
+        : false;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>新建议题</DialogTitle>
+          <DialogDescription>先选择本议题的嘉宾，创建后会进入群聊。</DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 max-h-[68vh] space-y-4 overflow-y-auto px-1 pb-1">
+          <div className="space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">议题名称</div>
+            <Input value={title} onChange={(event) => onTitleChange(event.target.value)} placeholder="新议题" />
+          </div>
+
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">常驻嘉宾</h3>
+                <p className="mt-1 text-xs text-muted-foreground">可多选加入当前议题。</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="h-8 text-xs" onClick={onCreateGuest}>
+                创建常驻嘉宾
+              </Button>
+            </div>
+            <div className="rounded-lg border">
+              {loading ? (
+                <div className="px-3 py-8 text-center text-xs text-muted-foreground">正在加载常驻嘉宾...</div>
+              ) : savedGuests.length ? (
+                <>
+                  <label className="flex cursor-pointer items-center gap-3 border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground hover:bg-muted/35">
+                    <Checkbox
+                      checked={savedGuestSelectionState}
+                      disabled={availableSavedGuestIds.length === 0}
+                      onCheckedChange={(checked) => onToggleAllSavedGuests(checkedStateToBoolean(checked))}
+                      className="mt-0.5"
+                    />
+                    <span className="font-medium text-foreground">全选可用嘉宾</span>
+                    <span className="ml-auto">
+                      {selectedAvailableSavedGuestIds.length}/{availableSavedGuestIds.length}
+                    </span>
+                  </label>
+                  {savedGuests.map((guest) => {
+                const available = isAgoraGuestAvailable(guest);
+                return (
+                  <label
+                    key={guest.id}
+                    className={`flex gap-3 border-b px-3 py-3 last:border-b-0 ${available ? 'cursor-pointer hover:bg-muted/40' : 'cursor-not-allowed bg-muted/20 opacity-70'}`}
+                  >
+                    <Checkbox
+                      checked={selectedGuestIds.includes(guest.id)}
+                      disabled={!available}
+                      onCheckedChange={(checked) => onToggleSavedGuest(guest.id, checked === true)}
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">{guest.displayName}</span>
+                        <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${available ? 'text-emerald-600' : 'text-destructive'}`}>
+                          {available ? '可用' : '不可用'}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 truncate text-xs text-muted-foreground">{getAgoraGuestRuntimeLabel(guest)}</div>
+                      {!available ? (
+                        <div className="mt-1 text-xs text-destructive">{guest.statusReason || '模型或引擎未配置'}</div>
+                      ) : null}
+                    </div>
+                  </label>
+                );
+              })}
+                </>
+              ) : (
+                <div className="px-3 py-8 text-center text-xs text-muted-foreground">暂无常驻嘉宾</div>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <div>
+              <h3 className="text-sm font-semibold">临时嘉宾</h3>
+              <p className="mt-1 text-xs text-muted-foreground">只加入当前议题，后续可在议题右侧升级为常驻嘉宾。</p>
+            </div>
+            {temporaryGuests.length ? (
+              <div className="space-y-1 rounded-lg border p-2">
+                {temporaryGuests.map((guest, index) => (
+                  <div key={`${guest.name}-${index}`} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
+                    <Avatar className="h-6 w-6 ring-1 ring-border/60">
+                      <AvatarImage src={resolveAgentAvatarSrc(undefined, guest.name)} alt={guest.name} className="object-cover" />
+                      <AvatarFallback className="bg-primary/10 text-[8px] font-semibold text-primary">{getSidebarInitials(guest.name)}</AvatarFallback>
+                    </Avatar>
+                    <span className="min-w-0 flex-1 truncate text-xs">{guest.name}</span>
+                    <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => onRemoveTemporaryGuest(index)}>
+                      <span className="material-symbols-outlined text-[14px]">close</span>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 md:grid-cols-2">
+              <Input
+                value={temporaryDraft.name}
+                onChange={(event) => onTemporaryDraftChange({ ...temporaryDraft, name: event.target.value })}
+                placeholder="临时嘉宾名称"
+              />
+              <EngineModelSelect
+                engine={temporaryDraft.engine}
+                model={temporaryDraft.model}
+                onEngineChange={(engine) => onTemporaryDraftChange({ ...temporaryDraft, engine })}
+                onModelChange={(model) => onTemporaryDraftChange({ ...temporaryDraft, model })}
+              />
+              <Textarea
+                value={temporaryDraft.personaPrompt}
+                onChange={(event) => onTemporaryDraftChange({ ...temporaryDraft, personaPrompt: event.target.value })}
+                rows={3}
+                className="md:col-span-2"
+                placeholder="输入临时嘉宾的人格、立场和发言方式"
+              />
+              <div className="md:col-span-2">
+                <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={onAddTemporaryGuest}>
+                  添加临时嘉宾
+                </Button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button onClick={onSubmit}>创建议题</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AgoraGuestManagerDialog({
+  open,
+  presets,
+  presetDrafts,
+  customDraft,
+  loading,
+  presetSaving,
+  customSaving,
+  onOpenChange,
+  onAddPresetDraft,
+  onRemovePresetDraft,
+  onPresetDraftChange,
+  onCreateSelectedPresets,
+  onCustomDraftChange,
+  onCreateCustom,
+}: {
+  open: boolean;
+  presets: AgoraGuestPreset[];
+  presetDrafts: PresetGuestCreateDraft[];
+  customDraft: CustomGuestDraft;
+  loading: boolean;
+  presetSaving: boolean;
+  customSaving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAddPresetDraft: (preset: AgoraGuestPreset) => void;
+  onRemovePresetDraft: (draftId: string) => void;
+  onPresetDraftChange: (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'engine' | 'model'>>) => void;
+  onCreateSelectedPresets: () => void;
+  onCustomDraftChange: (draft: CustomGuestDraft) => void;
+  onCreateCustom: () => void;
+}) {
+  const selectedPresets = presetDrafts
+    .map((draft) => {
+      const preset = presets.find((item) => item.id === draft.presetId);
+      return preset ? { draft, preset } : null;
+    })
+    .filter((item): item is { draft: PresetGuestCreateDraft; preset: AgoraGuestPreset } => Boolean(item));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>创建常驻嘉宾</DialogTitle>
+          <DialogDescription>常驻嘉宾是全局角色，可在不同议题中重复加入。</DialogDescription>
+        </DialogHeader>
+        <div className="-mx-1 max-h-[70vh] space-y-4 overflow-y-auto px-1 pb-1">
+          <section className="space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold">预设嘉宾</h3>
+              <p className="mt-1 text-xs text-muted-foreground">从左侧加入右侧待创建清单，确认后才会创建。</p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr]">
+              <div className="overflow-hidden rounded-lg border">
+                <div className="border-b bg-muted/25 px-3 py-2 text-xs font-medium text-muted-foreground">可选预设</div>
+                <div className="max-h-[350px] overflow-y-auto">
+                  {loading ? (
+                    <div className="px-3 py-8 text-center text-xs text-muted-foreground">正在加载...</div>
+                  ) : presets.length ? presets.map((preset) => {
+                    const available = isAgoraGuestAvailable(preset);
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        disabled={!available}
+                        className={`flex w-full gap-3 border-b px-3 py-3 text-left last:border-b-0 ${available ? 'hover:bg-muted/40' : 'cursor-not-allowed bg-muted/20 opacity-70'}`}
+                        onClick={() => onAddPresetDraft(preset)}
+                      >
+                        <span className="material-symbols-outlined mt-0.5 text-[16px] text-muted-foreground">add</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium">{preset.displayName}</span>
+                            <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${available ? 'text-emerald-600' : 'text-destructive'}`}>
+                              {available ? '可用' : '不可用'}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{preset.description}</div>
+                          {!available ? <div className="mt-1 text-xs text-destructive">{preset.statusReason || '模型或引擎未配置'}</div> : null}
+                        </div>
+                      </button>
+                    );
+                  }) : (
+                    <div className="px-3 py-8 text-center text-xs text-muted-foreground">没有可选预设</div>
+                  )}
+                </div>
+              </div>
+              <div className="hidden items-center text-muted-foreground md:flex">
+                <span className="material-symbols-outlined text-[20px]">arrow_forward</span>
+              </div>
+              <div className="overflow-hidden rounded-lg border">
+                <div className="flex items-center justify-between border-b bg-muted/25 px-3 py-2">
+                  <span className="text-xs font-medium text-muted-foreground">待创建</span>
+                  <Button type="button" size="sm" className="h-7 text-xs" disabled={!presetDrafts.length || presetSaving} onClick={onCreateSelectedPresets}>
+                    {presetSaving ? '创建中...' : '确认创建'}
+                  </Button>
+                </div>
+                <div className="max-h-[350px] overflow-y-auto">
+                  {selectedPresets.length ? selectedPresets.map(({ draft, preset }) => (
+                    <div key={draft.id} className="flex gap-3 border-b px-3 py-3 last:border-b-0">
+                      <span className="material-symbols-outlined mt-0.5 text-[16px] text-primary">check</span>
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="truncate text-sm font-medium">{preset.displayName}</div>
+                        <div className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">{preset.description}</div>
+                        <EngineModelSelect
+                          engine={draft.engine}
+                          model={draft.model}
+                          onEngineChange={(engine) => onPresetDraftChange(draft.id, { engine })}
+                          onModelChange={(model) => onPresetDraftChange(draft.id, { model })}
+                        />
+                      </div>
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onRemovePresetDraft(draft.id)}>
+                        <span className="material-symbols-outlined text-[15px]">close</span>
+                      </Button>
+                    </div>
+                  )) : (
+                    <div className="px-3 py-8 text-center text-xs text-muted-foreground">从左侧选择预设嘉宾</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold">自定义常驻嘉宾</h3>
+                <p className="mt-1 text-xs text-muted-foreground">保存后可加入任意议题。</p>
+              </div>
+              <Button type="button" size="sm" className="h-8 text-xs" disabled={customSaving} onClick={onCreateCustom}>
+                {customSaving ? '创建中...' : '创建自定义嘉宾'}
+              </Button>
+            </div>
+            <div className="grid gap-3 rounded-lg border p-3 md:grid-cols-2">
+              <Input
+                value={customDraft.displayName}
+                onChange={(event) => onCustomDraftChange({ ...customDraft, displayName: event.target.value })}
+                placeholder="嘉宾名称"
+              />
+              <EngineModelSelect
+                engine={customDraft.engine}
+                model={customDraft.model}
+                onEngineChange={(engine) => onCustomDraftChange({ ...customDraft, engine })}
+                onModelChange={(model) => onCustomDraftChange({ ...customDraft, model })}
+              />
+              <Textarea
+                value={customDraft.personaPrompt}
+                onChange={(event) => onCustomDraftChange({ ...customDraft, personaPrompt: event.target.value })}
+                rows={4}
+                className="md:col-span-2"
+                placeholder="输入这个嘉宾的性格、立场和发言方式"
+              />
+            </div>
+          </section>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AgoraDirectory({
+  sessions,
+  searchValue,
+  savedGuests,
+  guestsLoading,
+  guestManageMode,
+  guestDeleting,
+  selectedSavedGuestIds,
+  activeSessionId,
+  selectable,
+  selectedSessionIds,
+  isFilteredEmpty,
+  activeStreamingSessionIds,
+  recentlyCompletedSessionIds,
+  sessionLoadingId,
+  onCreate,
+  extensionActions,
+  onCreateExtensionTopic,
+  onCreateGuest,
+  onToggleGuestManageMode,
+  onToggleGuestSelect,
+  onToggleAllGuestsSelected,
+  onDeleteSelectedGuests,
+  onSearchChange,
+  onSessionClick,
+  onSelectChange,
+  onDeleteSession,
+  onRenameSession,
+  onDeleteGuest,
+}: {
+  sessions: SidebarSession[];
+  searchValue: string;
+  savedGuests: AgoraGuestConfig[];
+  guestsLoading: boolean;
+  guestManageMode: boolean;
+  guestDeleting: boolean;
+  selectedSavedGuestIds: Set<string>;
+  activeSessionId: string | null;
+  selectable: boolean;
+  selectedSessionIds: Set<string>;
+  isFilteredEmpty: boolean;
+  activeStreamingSessionIds: string[];
+  recentlyCompletedSessionIds: string[];
+  sessionLoadingId: string | null;
+  onCreate: () => void;
+  extensionActions: ReturnType<typeof getAgoraTopicExtensionActions>;
+  onCreateExtensionTopic: (actionId: string) => void;
+  onCreateGuest: () => void;
+  onToggleGuestManageMode: () => void;
+  onToggleGuestSelect: (guestId: string, checked: boolean) => void;
+  onToggleAllGuestsSelected: (checked: boolean) => void;
+  onDeleteSelectedGuests: () => void;
+  onSearchChange: (value: string) => void;
+  onSessionClick: (sessionId: string) => void;
+  onSelectChange: (sessionId: string, checked: boolean) => void;
+  onDeleteSession: (session: SidebarSession) => void;
+  onRenameSession: (session: SidebarSession, title: string) => void;
+  onDeleteGuest: (guest: AgoraGuestConfig) => void;
+}) {
+  const savedGuestIds = useMemo(() => savedGuests.map((guest) => guest.id), [savedGuests]);
+  const savedGuestSelectionState = getSelectionState(savedGuestIds, selectedSavedGuestIds);
+  const selectedSavedGuestCount = savedGuests.filter((guest) => selectedSavedGuestIds.has(guest.id)).length;
+  const [guideDismissed, setGuideDismissed] = useState(false);
+  const shouldShowStarterGuide = !guestsLoading
+    && sessions.length === 0
+    && savedGuests.length === 0
+    && searchValue.trim().length === 0;
+  const showStarterGuide = shouldShowStarterGuide && !guideDismissed;
+
+  useEffect(() => {
+    if (shouldShowStarterGuide) return;
+    setGuideDismissed(false);
+  }, [shouldShowStarterGuide]);
+
+  return (
+    <div className="px-2 pb-2 pt-1">
+      <div className="mb-3 px-0.5">
+        <div className="relative">
+          <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+            search
+          </span>
+          <Input
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="搜索议题"
+            className="h-8 border-transparent bg-muted/55 pl-8 pr-8 text-xs focus-visible:ring-1"
+          />
+          {searchValue ? (
+            <button
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={() => onSearchChange('')}
+              aria-label="清空筛选"
+            >
+              <span className="material-symbols-outlined text-sm">close</span>
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <AnimatePresence initial={false}>
+        {showStarterGuide ? (
+          <motion.div
+            key="agora-starter-guide"
+            initial={{ opacity: 0, y: -14, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.985 }}
+            transition={{ duration: 0.24, ease: 'easeOut' }}
+            className="mb-4 overflow-hidden rounded-2xl border border-violet-200/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,244,255,0.96))] shadow-[0_16px_42px_rgba(88,28,135,0.08)]"
+          >
+            <div className="border-b border-violet-100/80 px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Badge variant="outline" className="border-violet-200/80 bg-white/80 text-[10px] text-violet-700">
+                    议场引导
+                  </Badge>
+                  <div className="mt-2 text-sm font-semibold text-slate-900">先创建嘉宾，再打开第一场讨论</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    常驻嘉宾是可复用角色；议题用于承载一次具体讨论。
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0 rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-700"
+                  onClick={() => setGuideDismissed(true)}
+                  title="关闭引导"
+                  aria-label="关闭引导"
+                >
+                  <span className="material-symbols-outlined text-[16px]">close</span>
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2 px-3 py-3">
+              {[
+                {
+                  title: '创建常驻嘉宾',
+                  detail: '先准备几个可反复邀请的角色，后续每个议题都能直接复用。',
+                  icon: 'person_add',
+                },
+                {
+                  title: '新建议题',
+                  detail: '设定讨论主题并挑选嘉宾入场；没有常驻嘉宾时，也可以先加临时嘉宾。',
+                  icon: 'forum',
+                },
+              ].map((step, index) => (
+                <motion.div
+                  key={step.title}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.05 + index * 0.07, duration: 0.2, ease: 'easeOut' }}
+                  className="flex items-start gap-3 rounded-xl border border-violet-100/80 bg-white/80 px-3 py-2.5"
+                >
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700">
+                    <span className="material-symbols-outlined text-[15px]">{step.icon}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium text-slate-900">{index + 1}. {step.title}</div>
+                    <div className="mt-0.5 text-[11px] leading-5 text-slate-500">{step.detail}</div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 border-t border-violet-100/80 bg-white/60 px-3 py-3">
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 rounded-full bg-slate-900 px-3 text-xs text-white hover:bg-slate-800"
+                onClick={() => {
+                  setGuideDismissed(true);
+                  onCreateGuest();
+                }}
+              >
+                创建常驻嘉宾
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 rounded-full px-3 text-xs"
+                onClick={() => {
+                  setGuideDismissed(true);
+                  onCreate();
+                }}
+              >
+                新建议题
+              </Button>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+      <div className="mb-4">
+        <div className="mb-1 flex h-7 items-center justify-between px-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">议题</div>
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onCreate}
+              title="新建议题"
+              aria-label="新建议题"
+            >
+              <span className="material-symbols-outlined text-[15px]">add</span>
+            </Button>
+            {extensionActions.length ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    title="议题更多操作"
+                    aria-label="议题更多操作"
+                  >
+                    <span className="material-symbols-outlined text-[15px]">more_horiz</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  {extensionActions.map((action) => (
+                    <DropdownMenuItem key={action.id} onSelect={() => onCreateExtensionTopic(action.id)}>
+                      <span className="material-symbols-outlined mr-2 text-sm">{action.icon}</span>
+                      {action.label}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+          </div>
+        </div>
+        {sessions.length === 0 ? (
+          <div className="rounded-md px-2 py-2 text-xs text-muted-foreground">
+            {isFilteredEmpty ? '无匹配议题' : '暂无议题'}
+          </div>
+        ) : (
+          <div className="space-y-0.5">
+            {sessions.map((session) => (
+              <AgoraTopicItem
+                key={session.id}
+                session={session}
+                active={session.id === activeSessionId}
+                selectable={selectable}
+                selected={selectedSessionIds.has(session.id)}
+                isStreaming={activeStreamingSessionIds.includes(session.id)}
+                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isLoadingSession={sessionLoadingId === session.id}
+                onClick={() => onSessionClick(session.id)}
+                onSelectChange={(checked) => onSelectChange(session.id, checked)}
+                onDelete={() => onDeleteSession(session)}
+                onRename={(title) => onRenameSession(session, title)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="mb-1 flex h-7 items-center justify-between px-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">常驻嘉宾</div>
+          <div className="flex items-center gap-1">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{savedGuests.length}</span>
+            {savedGuests.length ? (
+              <Button
+                type="button"
+                variant={guestManageMode ? 'secondary' : 'ghost'}
+                size="icon"
+                className={`h-6 w-6 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground ${
+                  guestManageMode ? 'text-primary ring-1 ring-primary/20' : ''
+                }`}
+                onClick={onToggleGuestManageMode}
+                title={guestManageMode ? '完成嘉宾管理' : '批量管理嘉宾'}
+                aria-label={guestManageMode ? '完成嘉宾管理' : '批量管理嘉宾'}
+                disabled={guestDeleting}
+              >
+                <span className="material-symbols-outlined text-[15px]">{guestManageMode ? 'done' : 'checklist'}</span>
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onCreateGuest}
+              title="创建常驻嘉宾"
+              aria-label="创建常驻嘉宾"
+              disabled={guestDeleting}
+            >
+              <span className="material-symbols-outlined text-[15px]">person_add</span>
+            </Button>
+          </div>
+        </div>
+        {guestManageMode && savedGuests.length > 0 ? (
+          <div className="mb-2 flex items-center justify-between rounded-md border border-border/50 bg-background/70 px-2 py-1.5">
+            <div
+              className={`flex items-center gap-2 text-xs text-muted-foreground ${guestDeleting ? '' : 'cursor-pointer'}`}
+              onClick={guestDeleting ? undefined : () => onToggleAllGuestsSelected(savedGuestSelectionState !== true)}
+              onKeyDown={guestDeleting ? undefined : (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onToggleAllGuestsSelected(savedGuestSelectionState !== true);
+                }
+              }}
+              role="button"
+              tabIndex={guestDeleting ? -1 : 0}
+              aria-pressed={savedGuestSelectionState === true}
+            >
+              <Checkbox
+                aria-label="选择全部常驻嘉宾"
+                checked={savedGuestSelectionState}
+                onCheckedChange={(checked) => onToggleAllGuestsSelected(checkedStateToBoolean(checked))}
+                onClick={(event) => event.stopPropagation()}
+                className="h-3.5 w-3.5"
+                disabled={guestDeleting}
+              />
+              <span>全选</span>
+              {selectedSavedGuestCount > 0 ? (
+                <span className="text-primary">已选 {selectedSavedGuestCount}</span>
+              ) : null}
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={selectedSavedGuestCount === 0 || guestDeleting}
+              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+              onClick={onDeleteSelectedGuests}
+            >
+              <span className="material-symbols-outlined text-sm">delete</span>
+              {guestDeleting ? '删除中...' : '删除'}
+            </Button>
+          </div>
+        ) : null}
+        <div className="space-y-0.5">
+          {savedGuests.map((guest) => {
+            const guestSelected = selectedSavedGuestIds.has(guest.id);
+            return (
+            <div
+              key={guest.id}
+              className={`group flex min-h-10 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted/65 hover:text-foreground ${
+                guestManageMode ? 'cursor-pointer' : ''
+              } ${guestSelected ? 'bg-muted/70 text-foreground' : ''}`}
+              onClick={guestManageMode && !guestDeleting ? () => onToggleGuestSelect(guest.id, !guestSelected) : undefined}
+              onKeyDown={guestManageMode && !guestDeleting ? (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onToggleGuestSelect(guest.id, !guestSelected);
+                }
+              } : undefined}
+              role={guestManageMode ? 'button' : undefined}
+              tabIndex={guestManageMode && !guestDeleting ? 0 : undefined}
+              aria-pressed={guestManageMode ? guestSelected : undefined}
+            >
+              {guestManageMode ? (
+                <Checkbox
+                  aria-label={`选择 ${guest.displayName}`}
+                  checked={guestSelected}
+                  onCheckedChange={(checked) => onToggleGuestSelect(guest.id, checkedStateToBoolean(checked))}
+                  onClick={(event) => event.stopPropagation()}
+                  className="h-3.5 w-3.5 shrink-0"
+                  disabled={guestDeleting}
+                />
+              ) : null}
+              <Avatar className="h-6 w-6 ring-1 ring-border/60">
+                <AvatarImage src={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName || guest.displayName)} alt={guest.displayName} className="object-cover" />
+                <AvatarFallback className="bg-primary/10 text-[8px] font-semibold text-primary">
+                  {getSidebarInitials(guest.displayName)}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs text-foreground">{guest.displayName}</div>
+                <div className="truncate text-[10px] text-muted-foreground">{getAgoraGuestRuntimeLabel(guest)}</div>
+              </div>
+              <span
+                className={`h-1.5 w-1.5 shrink-0 rounded-full opacity-70 ${isAgoraGuestAvailable(guest) ? 'bg-emerald-500/70' : 'bg-destructive/70'}`}
+                aria-hidden="true"
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className={`h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive ${
+                  guestManageMode ? 'opacity-30' : 'opacity-0 group-hover:opacity-100'
+                }`}
+                onClick={() => onDeleteGuest(guest)}
+                title="删除常驻嘉宾"
+                aria-label={`删除 ${guest.displayName}`}
+                disabled={guestDeleting || guestManageMode}
+              >
+                <span className="material-symbols-outlined text-[13px]">delete</span>
+              </Button>
+            </div>
+          );})}
+          {savedGuests.length === 0 ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs text-muted-foreground hover:bg-muted/65 hover:text-foreground"
+              onClick={onCreateGuest}
+            >
+              <span className="material-symbols-outlined text-[15px]">person_add</span>
+              {guestsLoading ? '正在加载...' : '创建常驻嘉宾'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgoraTopicItem({
+  session,
+  active,
+  selectable,
+  selected,
+  isStreaming,
+  isRecentlyCompleted,
+  isLoadingSession,
+  onClick,
+  onSelectChange,
+  onDelete,
+  onRename,
+}: {
+  session: SidebarSession;
+  active: boolean;
+  selectable: boolean;
+  selected: boolean;
+  isStreaming: boolean;
+  isRecentlyCompleted: boolean;
+  isLoadingSession: boolean;
+  onClick: () => void;
+  onSelectChange: (checked: boolean) => void;
+  onDelete: () => void;
+  onRename: (title: string) => void;
+}) {
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const title = getAgoraSessionTitle(session);
+  const [renameValue, setRenameValue] = useState(title);
+  const guestCount = getAgoraSessionParticipants(session).length;
+  const statusText = isStreaming ? '发言中' : isLoadingSession ? '加载中' : isRecentlyCompleted ? '刚完成' : guestCount ? `${guestCount} 嘉宾` : '';
+
+  useEffect(() => {
+    if (!renameDialogOpen) setRenameValue(title);
+  }, [renameDialogOpen, title]);
+
+  const commitRename = () => {
+    const nextTitle = renameValue.trim();
+    if (nextTitle && nextTitle !== title) onRename(nextTitle);
+    setRenameValue(nextTitle || title);
+    setRenameDialogOpen(false);
+  };
+
+  const row = (
+    <div
+      className={`group relative flex min-h-8 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
+        active
+          ? 'bg-primary/12 text-foreground'
+          : 'text-muted-foreground hover:bg-muted/65 hover:text-foreground'
+      } ${isStreaming ? 'ring-1 ring-primary/20' : isRecentlyCompleted ? 'ring-1 ring-emerald-500/20' : ''}`}
+      onClick={() => {
+        if (selectable) {
+          onSelectChange(!selected);
+          return;
+        }
+        onClick();
+      }}
+    >
+      {selectable ? (
+        <Checkbox
+          aria-label={`选择 ${title}`}
+          checked={selected}
+          onCheckedChange={(checked) => onSelectChange(checkedStateToBoolean(checked))}
+          onClick={(event) => event.stopPropagation()}
+          className="h-3.5 w-3.5"
+        />
+      ) : (
+        <span className={`shrink-0 text-[15px] font-semibold ${active ? 'text-primary' : 'text-muted-foreground/70'}`}>#</span>
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium">{title}</div>
+        {statusText ? <div className="truncate text-[10px] text-muted-foreground/75">{statusText}</div> : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1">
+        {isStreaming ? (
+          <span className="relative flex h-2 w-2" aria-label="发言中">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+          </span>
+        ) : isLoadingSession ? (
+          <span className="material-symbols-outlined animate-spin text-[13px] text-primary">progress_activity</span>
+        ) : isRecentlyCompleted ? (
+          <span className="material-symbols-outlined text-[13px] text-emerald-600 dark:text-emerald-400">check_circle</span>
+        ) : null}
+      </div>
+      {!selectable ? (
+        <div className="absolute right-1 top-1 hidden items-center rounded-md bg-background/95 ring-1 ring-border/70 group-hover:flex">
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground"
+            onClick={(event) => {
+              event.stopPropagation();
+              setRenameDialogOpen(true);
+            }}
+            title="重命名议题"
+            aria-label={`重命名 ${title}`}
+          >
+            <span className="material-symbols-outlined text-[12px]">edit</span>
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+            title="删除议题"
+            aria-label={`删除 ${title}`}
+          >
+            <span className="material-symbols-outlined text-[12px]">delete</span>
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        <ContextMenuContent className="w-32" onClick={(event) => event.stopPropagation()}>
+          <ContextMenuItem
+            onSelect={(event) => {
+              event.preventDefault();
+              setRenameDialogOpen(true);
+            }}
+          >
+            <span className="material-symbols-outlined mr-2 text-sm">edit</span>
+            重命名
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
+            <span className="material-symbols-outlined mr-2 text-sm">delete</span>
+            删除
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent className="sm:max-w-[420px]">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              commitRename();
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>重命名议题</DialogTitle>
+            </DialogHeader>
+            <div className="py-4">
+              <Input
+                autoFocus
+                value={renameValue}
+                onChange={(event) => setRenameValue(event.target.value)}
+                placeholder="议题名称"
+                aria-label="议题名称"
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameDialogOpen(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={!renameValue.trim()}>
+                保存
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function EmptySessionState({
   kind,
   filtered,
   query,
   onCreate,
 }: {
-  kind: 'chat' | 'runs';
+  kind: SessionDirectoryView;
   filtered: boolean;
   query: string;
   onCreate?: () => void;
 }) {
-  const isWorkflow = kind === 'runs';
+  const isWorkflow = kind === 'workflow';
+  const isAgora = kind === 'agora';
   const title = filtered
     ? '没有匹配结果'
     : isWorkflow
       ? '暂无工作流'
-      : '暂无对话';
+      : isAgora
+        ? '暂无议场'
+        : '暂无对话';
   const description = filtered
     ? `没有找到包含“${query}”的会话。`
     : isWorkflow
       ? '运行态工作流会话会在启动工作流后出现在这里。'
-      : '新建对话，让 AI 帮你继续推进。';
-  const hint = filtered ? '调整关键词后再试' : isWorkflow ? '等待工作流运行' : '准备开始新的对话';
+      : isAgora
+        ? '群聊议场会在你创建多人协作房间后出现在这里。'
+        : '新建对话，让 AI 帮你继续推进。';
+  const hint = filtered
+    ? '调整关键词后再试'
+    : isWorkflow
+      ? '等待工作流运行'
+      : isAgora
+        ? '准备发起议场'
+        : '准备开始新的对话';
 
   return (
     <div className="px-3 py-6">
@@ -1229,7 +2990,6 @@ function WorkflowGroup({
 }) {
   const hasActiveSession = group.sessions.some((session) => session.id === activeSessionId);
   const [open, setOpen] = useState(hasActiveSession || group.pendingCount > 0 || forceOpen);
-  const agentCount = group.agentGroups.length;
   const groupSessionIds = useMemo(() => getUniqueSessionIds(group.sessions), [group.sessions]);
   const groupSelectionState = getSelectionState(groupSessionIds, selectedSessionIds);
 
@@ -1266,28 +3026,27 @@ function WorkflowGroup({
           </span>
         ) : null}
         <span className="rounded-full bg-background px-1.5 py-0.5 text-[9px] text-muted-foreground">
-          {agentCount}/{group.sessions.length}
+          {group.sessions.length} 议题
         </span>
       </div>
       {open ? (
         <div className="space-y-1 border-t border-border/40 p-1.5">
-          {group.agentGroups.map((agentGroup) => (
-            <WorkflowAgentGroup
-              key={agentGroup.key}
-              group={agentGroup}
+          {group.sessions.map((session) => (
+            <SessionItem
+              key={session.id}
+              session={session}
+              active={session.id === activeSessionId}
+              compact
               selectable={selectable}
-              selectedSessionIds={selectedSessionIds}
-              activeSessionId={activeSessionId}
-              loading={loading}
-              activeStreamingSessionIds={activeStreamingSessionIds}
-              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
-              sessionLoadingId={sessionLoadingId}
-              pendingQuestionsBySessionId={pendingQuestionsBySessionId}
-              onSelectSessions={onSelectSessions}
-              onSessionClick={onSessionClick}
-              onDeleteSession={onDeleteSession}
-              onRenameSession={onRenameSession}
-              forceOpen={forceOpen}
+              selected={selectedSessionIds.has(session.id)}
+              attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
+              isStreaming={activeStreamingSessionIds.includes(session.id)}
+              isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+              isLoadingSession={sessionLoadingId === session.id}
+              onClick={() => onSessionClick(session.id)}
+              onSelectChange={(checked) => onSelectSessions([session.id], checked)}
+              onDelete={() => onDeleteSession(session)}
+              onRename={(title) => onRenameSession(session, title)}
             />
           ))}
         </div>
@@ -1470,19 +3229,28 @@ function SessionItem({
   const [renameValue, setRenameValue] = useState(session.title);
   const isWeChatBound = hasWeChatBinding(session as SidebarSession);
   const summary = session.lastMessage?.slice(0, 40) || '空会话';
-  const statusBadge = session.workflowBinding
-    ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
+  const workflowTopic = session.sessionWorkbenchState?.collaborationRoom?.chatroom?.topic
+    || session.sessionWorkbenchState?.collaborationRoom?.topic
+    || '';
+  const isWorkflowAgoraTopic = Boolean(session.workflowBinding && session.sessionWorkbenchState?.collaborationRoom?.chatroom);
+  const statusBadge = isWorkflowAgoraTopic
+    ? { label: '协作议题', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
+    : session.workflowBinding
+      ? { label: '运行', tone: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' }
     : session.creationSession
       ? { label: '创建', tone: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
-    : session.agentBinding
+      : session.sessionWorkbenchState?.collaborationRoom
+        ? { label: '议场', tone: 'bg-sky-500/10 text-sky-700 dark:text-sky-300' }
+      : session.agentBinding
         ? { label: 'Agent', tone: 'bg-violet-500/10 text-violet-700 dark:text-violet-300' }
-      : null;
-  const subLabel = session.workflowBinding?.configFile
-    || (session.creationSession
+        : null;
+  const subLabel = session.workflowBinding
+    ? [session.workflowBinding.configFile, workflowTopic && workflowTopic !== session.workflowBinding.configFile ? workflowTopic : ''].filter(Boolean).join(' · ')
+    : session.creationSession
       ? `${session.creationSession.filename} · ${getCreationSessionStatusLabel(session.creationSession.status)}`
-      : '')
-    || session.agentBinding?.agentName
-    || '';
+      : workflowTopic
+        || session.agentBinding?.agentName
+        || '';
   const commitRename = () => {
     const nextTitle = renameValue.trim();
     if (nextTitle && nextTitle !== session.title) {

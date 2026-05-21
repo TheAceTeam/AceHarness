@@ -107,23 +107,27 @@ export default function OnboardingPortal() {
   return (
     <>
       <div
-        className={`fixed bottom-6 z-[50] ${open ? 'pointer-events-none' : ''}`}
+        className={`fixed bottom-24 z-[50] transition-[right,opacity,transform] duration-300 ${open ? 'pointer-events-none opacity-0' : 'opacity-100 translate-x-[calc(100%-22px)] hover:translate-x-0 focus-within:translate-x-0'}`}
         style={{
-          right: chatOpen ? 420 : 96,
-          opacity: open ? 0 : 1,
-          transition: 'right 300ms ease-in-out, opacity 300ms ease-in-out',
+          right: chatOpen ? 420 : 0,
+          transition: 'right 300ms ease-in-out, opacity 300ms ease-in-out, transform 220ms ease-in-out',
         }}
       >
-        <Button
-          className="w-14 h-14 rounded-full shadow-lg"
-          variant="outline"
-          onClick={() => {
-            void openWithRefresh();
-          }}
-          title="打开新手引导"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>school</span>
-        </Button>
+        <div className="relative flex items-center pl-4">
+          <div className="pointer-events-none absolute left-0 top-1/2 flex h-10 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-r-0 border-border/70 bg-background/94 text-muted-foreground shadow-sm backdrop-blur">
+            <span className="material-symbols-outlined text-[14px]">school</span>
+          </div>
+          <Button
+            className="h-14 w-14 rounded-full shadow-lg"
+            variant="outline"
+            onClick={() => {
+              void openWithRefresh();
+            }}
+            title="打开新手引导"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>school</span>
+          </Button>
+        </div>
       </div>
       <StoryOnboarding
         open={open}

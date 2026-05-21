@@ -34,7 +34,7 @@ export interface CommanderPanelProps {
 /**
  * Commander Panel
  *
- * Contains the Supervisor roundtable, workflow runtime panels,
+ * Contains workflow runtime panels,
  * and Werewolf Lab UI. All state is received via the ctx prop.
  */
 export function CommanderPanel({ ctx }: CommanderPanelProps) {
@@ -50,8 +50,8 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
     werewolfViewMode, werewolfAutoRunning, werewolfStepDelay,
     werewolfAdvancedSettingsOpen, werewolfLabConfig, werewolfDefaultEngine,
     werewolfDefaultModel, werewolfRehearsalStatus, werewolfRehearsing,
-    werewolfHistoryEntries, werewolfRoundtableSeats, workflowRoundtableSeats,
-    activeRoundtableSeat, selectedWerewolfBoard, plannedWerewolfAgents,
+    werewolfHistoryEntries, werewolfCollaborationSeats, workflowCollaborationSeats,
+    activeCollaborationSeat, selectedWerewolfBoard, plannedWerewolfAgents,
     autoWerewolfPlayers, collaborationRoom, collaborationDraft,
     collaborationTopic, collaborationBusy, collaborationMessages,
     collaborationRounds, collaborationTextareaRef, mentionSuggestions,
@@ -77,7 +77,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
     canSeeWerewolfMessage, shouldRevealWerewolfRoleForViewer,
     shouldHideWerewolfMessageFromChat, prepareWerewolfMessageForChat,
     listTemporaryWerewolfAgentNames, resolveWerewolfAgentRuntimeConfig,
-    workflowRoundtableAgents, preflightChecks, availableCollaborationAgents, reports,
+    workflowCollaborationGuests, preflightChecks, availableCollaborationAgents, reports,
     effectiveEngine, engine, model, activeSessionId, router,
   } = ctx;
 
@@ -137,11 +137,11 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
               <div className="rounded-2xl border p-4 space-y-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-medium">协作室</div>
+                    <div className="text-sm font-medium">Supervisor 协作</div>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
                       {isWerewolfLab
-                        ? 'Supervisor 主导回合制流程；人类负责开局、暂停、补充指令和关键节点推进。'
-                        : '由你主持当前议题，点名空闲 Agent 发言，或发起一轮多 Agent 圆桌讨论。'}
+                        ? '系统事件推进回合制流程；人类负责开局、暂停、补充指令和关键节点推进。'
+                        : '你可以直接补充当前议题，Supervisor 会按 @ 提及顺序把下一轮响应路由给对应 Agent 或全员。'}
                     </p>
                   </div>
                   <Badge variant={collaborationBusy ? 'secondary' : 'outline'}>
@@ -167,20 +167,20 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
-                        <label className="text-xs text-muted-foreground">本工作流圆桌席位</label>
+                        <label className="text-xs text-muted-foreground">本工作流 Agent</label>
                         <Badge variant="outline" className="text-[10px]">
-                          {workflowRoundtableAgents.length} 位
+                          {workflowCollaborationGuests.length} 位
                         </Badge>
                       </div>
-                      {workflowRoundtableSeats.length > 0 ? (
+                      {workflowCollaborationSeats.length > 0 ? (
                         <div className="rounded-2xl border bg-muted/10 p-3">
                           <div className="mb-2 flex items-center justify-between text-[10px] text-muted-foreground">
-                            <span>顺时针发言</span>
-                            <span>由被 @ 的 Agent 依次接话</span>
+                            <span>协作 Agent</span>
+                            <span>由被 @ 的 Agent 依次响应</span>
                           </div>
                           <div className="relative mx-auto aspect-square max-w-[360px]">
-                            {workflowRoundtableSeats.map((seat, index) => {
-                              const total = workflowRoundtableSeats.length;
+                            {workflowCollaborationSeats.map((seat, index) => {
+                              const total = workflowCollaborationSeats.length;
                               const angle = (Math.PI * 2 * index) / Math.max(total, 1) - Math.PI / 2;
                               const radius = total <= 4 ? 34 : total <= 6 ? 38 : 41;
                               const x = 50 + radius * Math.cos(angle);
@@ -219,41 +219,41 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                               );
                             })}
                             <div className="absolute left-1/2 top-1/2 flex h-32 w-32 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border bg-background/95 p-3 text-center shadow-sm">
-                              <div className="text-[10px] text-muted-foreground">当前席位</div>
-                              <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeRoundtableSeat?.nameClass || 'text-foreground'}`}>
-                                {activeRoundtableSeat?.name || '未选中'}
+                              <div className="text-[10px] text-muted-foreground">当前响应</div>
+                              <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeCollaborationSeat?.nameClass || 'text-foreground'}`}>
+                                {activeCollaborationSeat?.name || '未选中'}
                               </div>
-                              {activeRoundtableSeat?.seatNumber ? (
-                                <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
+                              {activeCollaborationSeat?.seatNumber ? (
+                                <div className="mt-1 text-[10px] text-muted-foreground">顺位 {activeCollaborationSeat.seatNumber}</div>
                               ) : null}
-                              <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat?.statusLabel || '待命'}</div>
-                              {activeRoundtableSeat?.meta ? (
+                              <div className="mt-1 text-[10px] text-muted-foreground">{activeCollaborationSeat?.statusLabel || '待命'}</div>
+                              {activeCollaborationSeat?.meta ? (
                                 <div className="mt-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[9px] text-muted-foreground">
-                                  {activeRoundtableSeat.meta}
+                                  {activeCollaborationSeat.meta}
                                 </div>
                               ) : null}
                             </div>
                           </div>
-                          {activeRoundtableSeat ? (
-                            <div className={`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`}>
+                          {activeCollaborationSeat ? (
+                            <div className={`mt-3 rounded-xl border p-3 text-xs ${activeCollaborationSeat.accentClass || 'bg-background'}`}>
                               <div className="flex items-center justify-between gap-2">
                                 <div className="min-w-0">
-                                  <div className={`font-medium ${activeRoundtableSeat.nameClass || 'text-foreground'}`}>{activeRoundtableSeat.name}</div>
-                                  {activeRoundtableSeat.seatNumber ? (
-                                    <div className="text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
+                                  <div className={`font-medium ${activeCollaborationSeat.nameClass || 'text-foreground'}`}>{activeCollaborationSeat.name}</div>
+                                  {activeCollaborationSeat.seatNumber ? (
+                                    <div className="text-[10px] text-muted-foreground">顺位 {activeCollaborationSeat.seatNumber}</div>
                                   ) : null}
                                 </div>
-                                <Badge variant="outline" className="text-[9px]">{activeRoundtableSeat.subtitle}</Badge>
+                                <Badge variant="outline" className="text-[9px]">{activeCollaborationSeat.subtitle}</Badge>
                               </div>
-                              <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeRoundtableSeat.detail}</div>
+                              <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeCollaborationSeat.detail}</div>
                             </div>
                           ) : null}
                         </div>
                       ) : (
-                        <div className="px-2 py-3 text-xs text-muted-foreground">暂无可用 Agent。</div>
+                        <div className="px-2 py-3 text-xs text-muted-foreground">暂无可路由的 Agent。</div>
                       )}
                       <div className="text-[11px] leading-5 text-muted-foreground">
-                        工作流下的 Agent 天然构成一个群聊圆桌。用 <span className="font-medium">@agent</span> 或 <span className="font-medium">@全员</span> 控制下一轮顺序发言；没有新的 @ 时，本轮自然结束。
+                        Supervisor 会在同一个协作议题里维护上下文。用 <span className="font-medium">@名称</span> 或 <span className="font-medium">@全员</span> 指定下一轮响应顺序。
                       </div>
                     </div>
 
@@ -262,16 +262,20 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       draft={collaborationDraft}
                       onDraftChange={setCollaborationDraft}
                       onSubmit={handleWorkflowGroupChat}
-                      submitLabel={collaborationBusy ? '群聊进行中...' : '发送到工作流群聊'}
-                      submitDisabled={collaborationBusy || workflowRoundtableAgents.length === 0}
-                      placeholder="写下本轮目标，并用 @agent 或 @全员 指定下一位发言者。"
-                      mentionTargets={workflowRoundtableAgents}
+                      submitLabel={collaborationBusy ? '协作处理中...' : '发送到协作线程'}
+                      submitDisabled={collaborationBusy || workflowCollaborationGuests.length === 0}
+                      placeholder="写下本轮目标，并用 @名称 或 @全员 指定下一位响应者。"
+                      mentionTargets={workflowCollaborationGuests}
                       onInsertMention={insertCollaborationMention}
                       inputRef={collaborationTextareaRef}
                       bottomRef={collaborationBottomRef}
-                      emptyText="还没有协作记录。可以先写一条主持人消息，用 @agent 或 @全员 指定下一位发言者。"
-                      helperText="工作流下的 Agent 天然构成一个群聊圆桌。用 @agent 或 @全员 控制下一轮顺序发言；没有新的 @ 时，本轮自然结束。"
+                      emptyText="还没有协作记录。可以先补一条指令，用 @名称 或 @全员 指定下一位响应者。"
+                      helperText="Supervisor 会在同一个协作议题里维护上下文，并按 @名称 或 @全员 路由下一轮响应。"
                       composerOverlay={renderMentionSuggestions()}
+                      onDeleteMessage={(message) => updateCollaborationRoom((room) => ({
+                        ...room,
+                        messages: (room.messages || []).filter((item) => item.id !== message.id),
+                      }))}
                       onTextareaKeyDown={(event) => {
                         handleCollaborationMentionKeyDown({
                           event,
@@ -295,10 +299,8 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       <div className="min-w-0">
                         <div className="text-sm font-medium">AI 狼人杀测试</div>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        {isWerewolfLab
-                          ? '先选择板子，由系统随机抽取临时人格；Supervisor 按流程推进，人类只在关键节点接入。'
-                          : '用当前 Agent 做回合制身份推理测试，验证多 Agent 发言、@点名、主持总结和投票结算。'}
-                      </p>
+                          先选择板子，由系统随机抽取临时人格；系统事件按流程推进，人类只在关键节点接入。
+                        </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <Button
@@ -341,7 +343,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       <div className="flex items-center justify-between gap-2">
                         <label className="text-xs text-muted-foreground">流程</label>
                         <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
-                          {isWerewolfConfigured ? 'Supervisor 主导中' : '等待确认开局'}
+                          {isWerewolfConfigured ? '系统推进中' : '等待确认开局'}
                         </Badge>
                       </div>
                       <div className="grid grid-cols-5 gap-1 text-[10px]">
@@ -363,7 +365,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       </div>
                       <div className={cn('rounded-lg border bg-muted/20 p-2 text-[10px] leading-5 text-muted-foreground', werewolfCardClass)}>
                         {isWerewolfConfigured
-                          ? `当前：${selectedWerewolfBoard.name}，第 ${werewolfState?.dayNumber || 1} 天。可以在人工介入里补充指令，再让 Supervisor 推进。`
+                          ? `当前：${selectedWerewolfBoard.name}，第 ${werewolfState?.dayNumber || 1} 天。可以在人工介入里补充指令，再继续推进。`
                           : `选择板子后会随机选择 ${selectedWerewolfBoard.playerCount} 个临时人格，并按 ${selectedWerewolfBoard.name} 分配身份。`}
                       </div>
                     </div>
@@ -374,7 +376,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       <div className="text-xs font-medium">视角</div>
                       <div className="text-[10px] leading-5 text-muted-foreground">
                         {werewolfViewMode === 'god'
-                          ? '上帝视角会显示所有身份。'
+                          ? '全局视角会显示所有身份。'
                           : effectiveWerewolfNightViewer
                             ? isWerewolfConfigured
                               ? `黑夜视角绑定：${effectiveWerewolfNightViewer}（${formatWerewolfRole(effectiveWerewolfNightViewerRole || 'villager')}）。狼人视角可见狼队，其余玩家只看自己。`
@@ -418,7 +420,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                         className={cn('h-7 px-2 text-xs', werewolfViewMode === 'god' ? werewolfGoldButtonClass : werewolfGhostButtonClass)}
                         onClick={() => persistWerewolfView('god', effectiveWerewolfNightViewer)}
                       >
-                        上帝视角
+                        全局视角
                       </Button>
                     </div>
                   </div>
@@ -472,7 +474,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       </div>
                       {werewolfViewMode === 'god' && werewolfState?.night ? (
                         <div className="sm:col-span-2">
-                          <div className="text-[10px] text-muted-foreground">上帝夜间记录</div>
+                          <div className="text-[10px] text-muted-foreground">全局夜间记录</div>
                           <div className="mt-1 leading-5">
                             N{werewolfState.night.round}：
                             {werewolfState.night.guarded ? ` 守护 ${werewolfState.night.guarded};` : ''}
@@ -538,7 +540,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       <div>
                         <div className="text-xs font-medium">高级设置</div>
                         <div className="text-[10px] leading-5 text-muted-foreground">
-                          支持默认 engine/model，并为每个临时玩家和 Supervisor 单独覆盖。演练会提前创建 session，成功项会保留。
+                          支持默认 engine/model，并为每个临时玩家和系统事件单独覆盖。演练会提前创建 session，成功项会保留。
                         </div>
                       </div>
                       <Button
@@ -661,8 +663,8 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                           <span>警长位高亮，死亡席位断线显示</span>
                         </div>
                         <div className="relative mx-auto aspect-square max-w-[420px]">
-                            {werewolfRoundtableSeats.map((seat, index) => {
-                            const total = werewolfRoundtableSeats.length;
+                            {werewolfCollaborationSeats.map((seat, index) => {
+                            const total = werewolfCollaborationSeats.length;
                             const angle = (Math.PI * 2 * index) / Math.max(total, 1) - Math.PI / 2;
                             const radius = total <= 6 ? 38 : total <= 9 ? 41 : 43;
                             const x = 50 + radius * Math.cos(angle);
@@ -732,34 +734,34 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                               </div>
                             ) : null}
                             <div className="text-[10px] text-muted-foreground">当前席位</div>
-                            <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeRoundtableSeat?.nameClass || 'text-foreground'}`}>
-                              {activeRoundtableSeat?.name || '未选中'}
+                            <div className={`mt-1 line-clamp-2 text-xs font-semibold ${activeCollaborationSeat?.nameClass || 'text-foreground'}`}>
+                              {activeCollaborationSeat?.name || '未选中'}
                             </div>
-                            {activeRoundtableSeat?.seatNumber ? (
-                              <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
+                            {activeCollaborationSeat?.seatNumber ? (
+                              <div className="mt-1 text-[10px] text-muted-foreground">{activeCollaborationSeat.seatNumber} 号位</div>
                             ) : null}
-                            <div className="mt-1 text-[10px] text-muted-foreground">{activeRoundtableSeat?.statusLabel || '待命'}</div>
-                            {activeRoundtableSeat?.meta ? (
+                            <div className="mt-1 text-[10px] text-muted-foreground">{activeCollaborationSeat?.statusLabel || '待命'}</div>
+                            {activeCollaborationSeat?.meta ? (
                               <div className="mt-1 rounded-full border bg-muted/40 px-2 py-0.5 text-[9px] text-muted-foreground">
-                                {activeRoundtableSeat.meta}
+                                {activeCollaborationSeat.meta}
                               </div>
                             ) : null}
                           </div>
                         </div>
-                        {activeRoundtableSeat ? (
-                          <div className={cn(`mt-3 rounded-xl border p-3 text-xs ${activeRoundtableSeat.accentClass || 'bg-background'}`, werewolfCardClass)}>
+                        {activeCollaborationSeat ? (
+                          <div className={cn(`mt-3 rounded-xl border p-3 text-xs ${activeCollaborationSeat.accentClass || 'bg-background'}`, werewolfCardClass)}>
                             <div className="flex items-center justify-between gap-2">
                               <div className="min-w-0">
-                                <div className={`font-medium ${activeRoundtableSeat.nameClass || 'text-foreground'}`}>{activeRoundtableSeat.name}</div>
-                                {activeRoundtableSeat.seatNumber ? (
-                                  <div className="text-[10px] text-muted-foreground">{activeRoundtableSeat.seatNumber} 号位</div>
+                                <div className={`font-medium ${activeCollaborationSeat.nameClass || 'text-foreground'}`}>{activeCollaborationSeat.name}</div>
+                                {activeCollaborationSeat.seatNumber ? (
+                                  <div className="text-[10px] text-muted-foreground">{activeCollaborationSeat.seatNumber} 号位</div>
                                 ) : null}
                               </div>
-                              <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>{activeRoundtableSeat.statusLabel}</Badge>
+                              <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>{activeCollaborationSeat.statusLabel}</Badge>
                             </div>
-                            <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeRoundtableSeat.detail}</div>
+                            <div className="mt-1 text-[11px] leading-5 text-muted-foreground">{activeCollaborationSeat.detail}</div>
                             {(() => {
-                              const player = werewolfState.players.find((item) => item.agentName === activeRoundtableSeat.id);
+                              const player = werewolfState.players.find((item) => item.agentName === activeCollaborationSeat.id);
                               if (!player) return null;
                               const revealRole = shouldRevealWerewolfRoleForViewer({
                                 player,
@@ -816,9 +818,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                     </div>
                   ) : (
                     <div className={cn('rounded-lg border bg-muted/20 p-3 text-xs text-muted-foreground', werewolfCardClass)}>
-                      {isWerewolfLab
-                        ? '请选择板子，系统会随机选择参与人格并分配身份。临时人格不进入业务 Agent 列表。'
-                        : '先选择 3 到 6 个 Agent，然后初始化测试局。Supervisor 会作为主持人，不参与玩家列表。'}
+                      请选择板子，系统会随机选择参与人格并分配身份。临时人格不进入业务 Agent 列表。
                     </div>
                   )}
 
@@ -828,21 +828,21 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                       draft={collaborationDraft}
                       onDraftChange={setCollaborationDraft}
                       onSubmit={handleWerewolfSupervisorStep}
-                      submitLabel={collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
+                      submitLabel={collaborationBusy ? '系统推进中...' : werewolfNextActionLabel}
                       submitDisabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
-                      placeholder="可选：写给 Supervisor 的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
+                      placeholder="可选：写给系统事件的补充指令，例如指定重点追问、暂停观察或调整发言顺序。"
                       mentionTargets={[]}
                       onInsertMention={insertCollaborationMention}
                       inputRef={collaborationTextareaRef}
                       bottomRef={collaborationBottomRef}
                       emptyText="还没有狼人杀记录。开始开局后，这里会显示回合消息、发言、票流和系统结算。"
-                      helperText={`当前介入点：${werewolfHumanInterventionLabel}。补充内容会交给 Supervisor 带入下一步。`}
+                      helperText={`当前介入点：${werewolfHumanInterventionLabel}。补充内容会交给系统事件带入下一步。`}
                       customControls={
                         <div className="flex items-center justify-between gap-2">
                           <div>
                             <div className="text-xs font-medium">人工介入</div>
                             <div className="text-[10px] leading-5 text-muted-foreground">
-                              Supervisor 主导回合推进；你可以在关键节点补充约束、追问方向或暂停观察。
+                              系统事件推进回合；你可以在关键节点补充约束、追问方向或暂停观察。
                             </div>
                           </div>
                           <Badge variant="outline" className={cn('text-[9px]', werewolfBadgeClass)}>
@@ -925,7 +925,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                         onClick={handleWerewolfSupervisorStep}
                         disabled={collaborationBusy || werewolfAutoRunning || werewolfState?.phase === 'ended' || (!isWerewolfLab && availableCollaborationAgents.length < 3)}
                       >
-                        {collaborationBusy ? 'Supervisor 推进中...' : werewolfNextActionLabel}
+                        {collaborationBusy ? '系统推进中...' : werewolfNextActionLabel}
                       </Button>
                     ) : null}
                     <Button
@@ -941,7 +941,7 @@ export function CommanderPanel({ ctx }: CommanderPanelProps) {
                   </div>
                   {!isWerewolfLab ? (
                     <div className="text-[10px] leading-5 text-muted-foreground">
-                      圆桌只会由 <span className="font-mono">@agent</span> 或 <span className="font-mono">@全员</span> 触发；没有新的 @ 时，本轮自然结束。
+                      协作线程只会由 <span className="font-mono">@名称</span> 或 <span className="font-mono">@全员</span> 触发下一轮响应。
                     </div>
                   ) : null}
                 </div>

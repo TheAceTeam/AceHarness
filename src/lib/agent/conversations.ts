@@ -1,3 +1,5 @@
+import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
+
 export interface WorkflowRunBindingLike {
   configFile: string;
   runId: string;
@@ -26,6 +28,7 @@ export interface ChatSessionSummaryLike {
   lastMessage?: string;
   creationSession?: WorkflowCreationBindingLike;
   workflowBinding?: WorkflowRunBindingLike;
+  sessionWorkbenchState?: SessionWorkbenchState;
 }
 
 export interface WorkflowConversationDirectoryEntry {
@@ -88,6 +91,20 @@ export function getWorkbenchSessionKind(
   if (session.workflowBinding) return 'run';
   if (session.creationSession) return 'creation';
   return 'plain';
+}
+
+export function isWorkflowDirectorySession(
+  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession'>
+): boolean {
+  return Boolean(session.workflowBinding || session.creationSession);
+}
+
+export function getSessionDirectoryKind(
+  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'>
+): 'workflow' | 'agora' | 'conversation' {
+  if (isWorkflowDirectorySession(session)) return 'workflow';
+  if (session.sessionWorkbenchState?.collaborationRoom) return 'agora';
+  return 'conversation';
 }
 
 export function getConversationSessionStatusLabel(

@@ -15,6 +15,7 @@ export function createInitialChatroomState(overrides?: Partial<CollaborationChat
     defaultEngine: overrides?.settings?.defaultEngine || '',
     defaultModel: overrides?.settings?.defaultModel || '',
     agentOverrides: overrides?.settings?.agentOverrides || {},
+    workspacePath: overrides?.settings?.workspacePath || '',
   };
   return {
     status: 'setup',
@@ -35,7 +36,7 @@ export function ensureChatroomRoomState(room?: CollaborationRoomState | null): C
   return {
     topic: room?.topic || '',
     selectedAgents: room?.selectedAgents || [],
-    mode: room?.mode || 'roundtable',
+    mode: room?.mode === 'free' ? 'free' : 'group-chat',
     messages: room?.messages || [],
     rounds: room?.rounds || [],
     agentSessions: room?.agentSessions || {},

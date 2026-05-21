@@ -284,7 +284,6 @@ const API_DATA: ApiCategory[] = [
       { method: 'GET', path: '/api/channels/bindings?integrationId=id', description: '列出渠道会话绑定', response: '{ bindings }' },
       { method: 'POST', path: '/api/channels/bindings', description: '创建或更新渠道 binding', requestBody: '{ integrationId, bindingType, externalConversationId, configFile?/runId?/agentName? }', response: '{ binding }' },
       { method: 'POST', path: '/api/channels/inbound/:integrationId', description: '外部平台 webhook 入口', requestBody: '{ secret, message: { conversationId, userId, text } }', response: '{ ok, replies, replyMessages, binding? }' },
-      { method: 'GET', path: '/api/channels/roundtables/:id', description: '读取某次圆桌运行记录', response: '{ roundtable }' },
     ],
   },
   {

@@ -1,5 +1,24 @@
-export type HomeSidebarTab = 'commander' | 'workflow' | 'agent' | 'chatroom';
+export const HOME_SIDEBAR_TABS = ['commander', 'workflow', 'agent'] as const;
+export type HomeSidebarTab = typeof HOME_SIDEBAR_TABS[number];
 export type HomeSidebarMode = 'hidden' | 'peek' | 'active';
+
+export function isHomeSidebarTab(value: unknown): value is HomeSidebarTab {
+  return value === 'commander' || value === 'workflow' || value === 'agent';
+}
+
+export function normalizeHomeSidebarTab(value: unknown): HomeSidebarTab | null {
+  return isHomeSidebarTab(value) ? value : null;
+}
+
+export function normalizeHomeSidebarTabs(values: unknown): HomeSidebarTab[] {
+  if (!Array.isArray(values)) return [];
+  const tabs: HomeSidebarTab[] = [];
+  for (const value of values) {
+    const tab = normalizeHomeSidebarTab(value);
+    if (tab && !tabs.includes(tab)) tabs.push(tab);
+  }
+  return tabs;
+}
 
 export type HomeSidebarIntent =
   | 'general'
@@ -154,13 +173,20 @@ export interface CollaborationChatroomTemporaryAgent {
 export interface CollaborationChatroomParticipant {
   id: string;
   name: string;
-  sourceType: 'agent' | 'custom';
+  sourceType: 'preset' | 'custom' | 'agent';
   sourceAgent?: string;
+  presetId?: string;
+  guestConfigId?: string;
+  runtimeAgentName?: string;
   personaPrompt?: string;
+  systemPrompt?: string;
   useDefaultModel?: boolean;
   engine?: string;
   model?: string;
+  openingStatus?: 'pending' | 'done' | 'failed';
+  openingError?: string;
   createdAt: number;
+  updatedAt?: number;
 }
 
 export interface CollaborationAgentExecutionOverride {
@@ -187,6 +213,7 @@ export interface CollaborationChatroomState {
     defaultEngine?: string;
     defaultModel?: string;
     agentOverrides?: Record<string, CollaborationAgentExecutionOverride>;
+    workspacePath?: string;
   };
   participantRoster?: CollaborationChatroomParticipant[];
   temporaryAgents?: CollaborationChatroomTemporaryAgent[];
@@ -298,7 +325,7 @@ export interface CollaborationWerewolfState {
 export interface CollaborationRoomState {
   topic?: string;
   selectedAgents?: string[];
-  mode?: 'free' | 'roundtable';
+  mode?: 'free' | 'group-chat';
   messages: CollaborationRoomMessage[];
   rounds: CollaborationRoomRound[];
   agentSessions?: Record<string, string>;
@@ -358,7 +385,7 @@ export interface SessionWorkbenchState {
     accountId?: string;
     externalConversationId: string;
     externalConversationName?: string;
-    bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+    bindingType: 'workflow-run' | 'agent-chat';
     targetLabel: string;
     webhookPath?: string;
     secret?: string;
@@ -373,7 +400,8 @@ export function inferHomeSidebarTab(
     hasCreationSession?: boolean;
   }
 ): HomeSidebarTab {
-  if (hint?.activeTab) return hint.activeTab;
+  const activeTab = normalizeHomeSidebarTab(hint?.activeTab);
+  if (activeTab) return activeTab;
   if (hint?.intent === 'create-agent') return 'agent';
   if (hint?.intent === 'create-workflow' || hint?.intent === 'workflow-review') return 'workflow';
   if (hint?.intent === 'workflow-run' || hint?.intent === 'supervisor-chat') return 'commander';

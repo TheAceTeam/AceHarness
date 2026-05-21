@@ -11,8 +11,6 @@ export type {
   ResultExtractionCapability,
   BreakpointResumeCapability,
   BreakpointData,
-  RoundtableCapability,
-  RoundtableSeat,
   PersistenceCapability,
   StreamingDisplayCapability,
   ChatDisplayMessage,
@@ -26,7 +24,6 @@ export type {
 export { createAgentCallingCapability } from './agent-calling';
 export { createResultExtractionCapability } from './result-extraction';
 export { createBreakpointResumeCapability } from './breakpoint-resume';
-export { createRoundtableCapability } from './roundtable';
 export { createPersistenceCapability } from './persistence';
 export { createStreamingDisplayCapability } from './streaming-display';
 export { createThemeCapability } from './theme';

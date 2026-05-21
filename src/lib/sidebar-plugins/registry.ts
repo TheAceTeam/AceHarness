@@ -14,10 +14,8 @@ import coreOptimize from './manifests/core-optimize.json';
 
 // Import TypeScript plugin definitions
 import supervisorPlugin from '@/plugins/supervisor';
-import werewolfPlugin from '@/plugins/werewolf';
 import createWorkflowPlugin from '@/plugins/create-workflow';
 import createAgentPlugin from '@/plugins/create-agent';
-import chatroomPlugin from '@/plugins/chatroom';
 
 // ─── Dual registry: JSON manifests (actions-only) + full plugins ───
 
@@ -28,10 +26,8 @@ const jsonManifests: HomePluginManifest[] = [
 
 const defaultFullPlugins: HomePlugin[] = [
   supervisorPlugin,
-  werewolfPlugin,
   createWorkflowPlugin,
   createAgentPlugin,
-  chatroomPlugin,
 ];
 
 let fullPlugins: HomePlugin[] = defaultFullPlugins.map((plugin) => ({ ...plugin }));

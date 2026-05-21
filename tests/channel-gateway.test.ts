@@ -127,25 +127,8 @@ describe('channel gateway', () => {
     expect(result.replies[0]).toContain('状态：running');
   });
 
-  it('switches the conversation binding to roundtable after /roundtable start', async () => {
+  it('rejects unknown channel commands', async () => {
     vi.resetModules();
-    vi.doMock('@/lib/core/user-store', () => ({
-      getUserById: vi.fn(async () => ({ id: 'user-1', username: 'alice', personalDir: aceHome })),
-    }));
-    vi.doMock('@/lib/roundtable/manager', () => ({
-      startRoundtable: vi.fn(async () => ({
-        id: 'roundtable-1',
-        topic: '讨论当前风险',
-        status: 'completed',
-        participants: ['default-supervisor', 'architect'],
-        messages: [
-          { speakerName: 'default-supervisor', content: '先确认当前阻塞。' },
-          { speakerName: 'architect', content: '我建议先收敛接口范围。' },
-        ],
-      })),
-      continueRoundtable: vi.fn(),
-    }));
-
     const channelStore = await import('@/lib/channel/store');
     const gateway = await import('@/lib/channel/gateway');
     const registryModule = await import('@/lib/workflow/registry');
@@ -154,7 +137,7 @@ describe('channel gateway', () => {
       name: 'Webhook',
       provider: 'wechat-bridge',
       createdBy: 'user-1',
-      capabilities: ['workflow-runtime', 'roundtable'],
+      capabilities: ['workflow-runtime'],
       defaultBinding: {
         bindingType: 'workflow-run',
         configFile: 'demo.yaml',
@@ -170,23 +153,25 @@ describe('channel gateway', () => {
         runId: 'run-1',
         supervisorAgent: 'default-supervisor',
         attachedAgentSessions: { architect: 'session-1' },
+        workflowFrontendSessionId: 'workflow-session-1',
       }),
+      injectLiveFeedback: vi.fn(),
     } as any);
 
     const result = await gateway.handleChannelInbound(integration.id, {
       secret: integration.secret,
       message: {
-        conversationId: 'conv-rt',
+        conversationId: 'conv-unknown',
         userId: 'external-u1',
-        text: '/roundtable start 讨论当前风险',
+        text: '/unknown 讨论当前风险',
       },
     });
 
     expect('challenge' in result).toBe(false);
     if ('challenge' in result) return;
-    expect(result.ok).toBe(true);
-    expect(result.binding?.bindingType).toBe('roundtable');
-    expect(result.binding?.roundtableId).toBe('roundtable-1');
-    expect(result.replies[0]).toContain('default-supervisor');
+    expect(result.ok).toBe(false);
+    expect(result.binding?.bindingType).toBe('workflow-run');
+    expect(result.metadata?.workflowAgoraSessionId).toBeUndefined();
+    expect(result.replies[0]).toContain('无法识别');
   });
 });

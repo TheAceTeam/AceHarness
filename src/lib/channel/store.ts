@@ -8,7 +8,7 @@ import type { ChannelProviderId } from '@/lib/channel/providers';
 const INTEGRATIONS_PATH = getWorkspaceDataFile('channels', 'integrations.yaml');
 const BINDINGS_PATH = getWorkspaceDataFile('channels', 'bindings.yaml');
 
-export type ChannelBindingType = 'workflow-run' | 'roundtable' | 'agent-chat';
+export type ChannelBindingType = 'workflow-run' | 'agent-chat';
 export type ChannelBindingStrategy = 'manual' | 'per-conversation-auto';
 
 export interface ChannelDefaultBinding {
@@ -17,8 +17,6 @@ export interface ChannelDefaultBinding {
   runId?: string;
   agentName?: string;
   workflowMode?: 'feedback-only' | 'full-control';
-  roundtableParticipants?: string[];
-  roundtableSummarizer?: string;
 }
 
 export interface ChannelIntegration {
@@ -54,9 +52,6 @@ export interface ChannelSessionBinding {
   agentName?: string;
   agentSessionId?: string;
   workflowMode?: 'feedback-only' | 'full-control';
-  roundtableId?: string;
-  roundtableParticipants?: string[];
-  roundtableSummarizer?: string;
   metadata?: Record<string, any>;
 }
 
@@ -104,12 +99,16 @@ function normalizeIntegrations(raw: unknown): ChannelIntegration[] {
   }));
 }
 
+function normalizeBindingType(value: unknown): ChannelBindingType {
+  return value === 'agent-chat' ? 'agent-chat' : 'workflow-run';
+}
+
 function normalizeBindings(raw: unknown): ChannelSessionBinding[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => ({
     id: typeof item?.id === 'string' ? item.id : randomUUID(),
     integrationId: typeof item?.integrationId === 'string' ? item.integrationId : '',
-    bindingType: (typeof item?.bindingType === 'string' ? item.bindingType : 'workflow-run') as ChannelBindingType,
+    bindingType: normalizeBindingType(item?.bindingType),
     createdBy: typeof item?.createdBy === 'string' ? item.createdBy : 'system',
     createdAt: typeof item?.createdAt === 'number' ? item.createdAt : Date.now(),
     updatedAt: typeof item?.updatedAt === 'number' ? item.updatedAt : Date.now(),
@@ -126,11 +125,6 @@ function normalizeBindings(raw: unknown): ChannelSessionBinding[] {
       : item?.workflowMode === 'full-control'
         ? 'full-control'
         : undefined) as ChannelSessionBinding['workflowMode'],
-    roundtableId: typeof item?.roundtableId === 'string' ? item.roundtableId : undefined,
-    roundtableParticipants: Array.isArray(item?.roundtableParticipants)
-      ? item.roundtableParticipants.filter((value: unknown): value is string => typeof value === 'string')
-      : undefined,
-    roundtableSummarizer: typeof item?.roundtableSummarizer === 'string' ? item.roundtableSummarizer : undefined,
     metadata: item?.metadata && typeof item.metadata === 'object' ? item.metadata : undefined,
   })).filter((item) => item.integrationId && item.externalConversationId);
 }
@@ -246,8 +240,6 @@ export async function createBindingFromDefault(input: {
     configFile: base.configFile,
     agentName: base.agentName,
     workflowMode: base.workflowMode || 'full-control',
-    roundtableParticipants: base.roundtableParticipants,
-    roundtableSummarizer: base.roundtableSummarizer,
   });
 }
 

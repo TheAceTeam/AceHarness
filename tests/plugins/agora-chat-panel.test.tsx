@@ -3,7 +3,7 @@ import React from 'react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ChatroomPanel } from '@/plugins/chatroom/ChatroomPanel';
+import { AgoraChatPanel } from '@/components/collaboration/agora/AgoraChatPanel';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import type { CollaborationRoomState } from '@/lib/core/home-sidebar-state';
 
@@ -19,23 +19,28 @@ const mockAgents = [
 
 const mockToast = vi.fn();
 const mockCallAgent = vi.fn(async (agentName: string, message: string) => {
+  let content: string;
   if (message.includes('输出收束总结')) {
-    return '共识：先做状态归一。\n分歧：是否先上投票。\n风险：体验和架构互相牵制。\n下一步：先重构 chatroom 状态。';
+    content = '共识：先做状态归一。\n分歧：是否先上投票。\n风险：体验和架构互相牵制。\n下一步：先重构议场状态。';
+  } else if (message.includes('议场正在就议题')) {
+    content = '方案A\n理由：优先保守推进。';
+  } else if (message.includes('@Agent-Beta')) {
+    content = `${agentName} 我先给观点，并请 @Agent-Beta 补充实现风险。`;
+  } else {
+    content = `${agentName} 的回复：我支持先做结构重建。`;
   }
-  if (message.includes('聊天室正在就议题')) {
-    return '方案A\n理由：优先保守推进。';
-  }
-  if (message.includes('@Agent-Beta')) {
-    return `${agentName} 我先给观点，并请 @Agent-Beta 补充实现风险。`;
-  }
-  return `${agentName} 的回复：我支持先做结构重建。`;
+  return {
+    status: 'done' as const,
+    content,
+    rawContent: content,
+  };
 });
 
 function createEmptyRoom(): CollaborationRoomState {
   return {
     topic: '',
     selectedAgents: [],
-    mode: 'roundtable',
+    mode: 'group-chat',
     messages: [],
     rounds: [],
     agentSessions: {},
@@ -51,7 +56,7 @@ function renderPanel() {
     }, []);
 
     return (
-      <ChatroomPanel
+      <AgoraChatPanel
         availableAgents={mockAgents}
         room={room}
         updateRoom={updateRoom}
@@ -65,14 +70,14 @@ function renderPanel() {
 }
 
 async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(screen.getByRole('button', { name: '新增成员' }));
+  await user.click(screen.getByRole('button', { name: '新增嘉宾' }));
   const input = await screen.findByPlaceholderText('例如：一辩架构师');
   await user.clear(input);
   await user.type(input, name);
-  await user.click(screen.getByRole('button', { name: '添加成员' }));
+  await user.click(screen.getByRole('button', { name: '添加嘉宾' }));
 }
 
-describe('chatroom plugin', () => {
+describe('built-in agora chat panel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.scrollTo = vi.fn();
@@ -90,64 +95,63 @@ describe('chatroom plugin', () => {
     }
   });
 
-  test('QuickActions shows chatroom action', () => {
+  test('QuickActions does not expose agora as a plugin action', () => {
     const onAction = vi.fn();
     render(<QuickActions onAction={onAction} />);
-    expect(screen.getByText('Agent 剧场')).toBeInTheDocument();
+    expect(screen.queryByText('议场')).toBeNull();
   });
 
-  test('QuickActionsBar shows chatroom in expanded section', async () => {
+  test('QuickActionsBar does not show agora as a plugin action', async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     render(<QuickActionsBar onAction={onAction} />);
 
-    expect(screen.queryByRole('button', { name: /Agent 剧场/ })).toBeNull();
     await user.click(screen.getByRole('button', { name: /快捷操作/ }));
-    expect(screen.getByRole('button', { name: /Agent 剧场/ })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Agent 剧场/ }));
-    expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:chatroom');
+    expect(screen.queryByRole('button', { name: /议场/ })).toBeNull();
   });
 
-  test('setup phase creates a product-style chatroom workspace', async () => {
+  test('setup phase creates a product-style agora workspace', async () => {
     const user = userEvent.setup();
     renderPanel();
 
-    expect(screen.getByText('安排聊天室成员')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '创建议题' })).toBeInTheDocument();
+    expect(screen.getByText('议场嘉宾')).toBeInTheDocument();
+    expect(screen.getByText('暂无嘉宾')).toBeInTheDocument();
     await addMember(user, 'Agent-Alpha');
     await addMember(user, 'Agent-Beta');
-    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构 chatroom 为产品级');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构议场为产品级');
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
 
-    expect(await screen.findByText('重构 chatroom 为产品级')).toBeInTheDocument();
-    expect(screen.getByText('2 位成员')).toBeInTheDocument();
-    expect(mockToast).toHaveBeenCalledWith('success', 'Agent 剧场已创建');
+    expect(await screen.findByText('重构议场为产品级')).toBeInTheDocument();
+    expect(screen.getByText('2 嘉宾')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith('success', '议场已创建');
   });
 
   test('temporary participant is added into the left list and auto-selected', async () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole('button', { name: '新增成员' }));
+    await user.click(screen.getByRole('button', { name: '新增嘉宾' }));
     const nameInput = await screen.findByPlaceholderText('例如：一辩架构师');
     await user.clear(nameInput);
     await user.type(nameInput, '反方架构师');
-    const dialog = screen.getByRole('dialog', { name: '新增聊天室成员' });
+    const dialog = screen.getByRole('dialog', { name: '新增议场嘉宾' });
     await user.click(within(dialog).getAllByRole('combobox')[0]);
-    await user.click(await screen.findByText('临时人格'));
+    await user.click(await screen.findByText('自定义嘉宾'));
     await user.type(
-      await screen.findByPlaceholderText(/描述这个成员的立场、关注点和表达方式/),
+      await screen.findByPlaceholderText(/描述这个嘉宾的立场、关注点和表达方式/),
       '反方辩手，专门从风险和反例出发质疑方案。'
     );
-    await user.click(screen.getByRole('button', { name: '添加成员' }));
+    await user.click(screen.getByRole('button', { name: '添加嘉宾' }));
 
     expect(screen.getAllByText('反方架构师').length).toBeGreaterThan(0);
 
     await addMember(user, 'Agent-Alpha');
     await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '临时参与者测试');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
 
     expect(await screen.findByText('临时参与者测试')).toBeInTheDocument();
-    expect(screen.getByText('2 位成员')).toBeInTheDocument();
+    expect(screen.getByText('2 嘉宾')).toBeInTheDocument();
   });
 
   test('sending a facilitated round runs agent replies and summary', async () => {
@@ -156,12 +160,12 @@ describe('chatroom plugin', () => {
 
     await addMember(user, 'Agent-Alpha');
     await addMember(user, 'Agent-Beta');
-    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构 chatroom 为产品级');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重构议场为产品级');
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
 
-    const textarea = await screen.findByPlaceholderText(/输入 AI 百灵鸟/);
+    const textarea = await screen.findByPlaceholderText(/在「重构议场为产品级」里发言/);
     await user.type(textarea, '@Agent-Alpha 先说你对架构的判断');
-    await user.click(screen.getByRole('button', { name: '发起本轮' }));
+    await user.click(screen.getByRole('button', { name: '发送' }));
 
     await waitFor(() => {
       expect(mockCallAgent).toHaveBeenCalled();
@@ -184,10 +188,10 @@ describe('chatroom plugin', () => {
     await addMember(user, 'Agent-Alpha');
     await addMember(user, 'Agent-Beta');
     await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '测试 mention');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
 
     await user.click(await screen.findByRole('button', { name: '@Agent-Alpha' }));
-    const textarea = screen.getByPlaceholderText(/输入 AI 百灵鸟/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/在「测试 mention」里发言/) as HTMLTextAreaElement;
     expect(textarea.value).toContain('@Agent-Alpha');
   });
 
@@ -198,10 +202,10 @@ describe('chatroom plugin', () => {
     await addMember(user, 'Agent-Alpha');
     await addMember(user, 'Agent-Beta');
     await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '测试投票');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
 
-    await user.click(screen.getByRole('button', { name: '发起投票' }));
-    await user.type(screen.getByPlaceholderText(/例如：chatroom 第一优先级/), '先做哪一步？');
+    await user.click(screen.getAllByRole('button', { name: '发起投票' })[0]);
+    await user.type(screen.getByPlaceholderText(/例如：议场第一优先级/), '先做哪一步？');
     await user.type(screen.getByPlaceholderText(/每行一个选项/), '方案A\n方案B');
     await user.click(screen.getByRole('button', { name: '开始投票' }));
 
@@ -218,10 +222,11 @@ describe('chatroom plugin', () => {
 
     await addMember(user, 'Agent-Alpha');
     await addMember(user, 'Agent-Beta');
-    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '结束房间');
-    await user.click(screen.getByRole('button', { name: '创建聊天室' }));
-    await user.click(await screen.findByRole('button', { name: '结束房间' }));
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), '重置议题');
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
+    await user.click(await screen.findByRole('button', { name: '重置议题' }));
 
-    expect(screen.getByText('安排聊天室成员')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '创建议题' })).toBeInTheDocument();
+    expect(screen.getByText('暂无嘉宾')).toBeInTheDocument();
   });
 });

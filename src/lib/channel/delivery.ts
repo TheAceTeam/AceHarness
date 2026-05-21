@@ -8,7 +8,7 @@ export interface OutboundChannelMessage {
   binding?: ChannelSessionBinding | null;
   metadata?: Record<string, any>;
   messages?: Array<{
-    kind: 'text' | 'roundtable-message' | 'roundtable-summary' | 'system';
+    kind: 'text' | 'system';
     speakerType?: 'human' | 'agent' | 'supervisor' | 'system';
     speakerName?: string;
     text: string;

@@ -270,7 +270,7 @@ function AccountContent() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold">微信接入</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">一键生成微信 webhook 地址，接桥接器并在线测试工作流运行时和圆桌消息。</p>
+                  <p className="mt-1 text-sm text-muted-foreground">一键生成微信 webhook 地址，接桥接器并在线测试工作流运行时消息。</p>
                 </div>
                 <Button variant="outline" size="sm" className="shrink-0 pointer-events-none" tabIndex={-1}>
                   打开

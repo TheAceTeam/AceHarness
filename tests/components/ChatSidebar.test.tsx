@@ -189,17 +189,17 @@ describe('ChatSidebar', () => {
     expect(screen.queryByText('Plain Chat')).toBeNull();
     expect(screen.getByText('Draft Workflow')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /Draft Workflow/ }));
-    expect(screen.getByText('工作流设计')).toBeTruthy();
+    expect(screen.getByText('Create Workflow')).toBeTruthy();
+    expect(screen.getByText('workflow-draft.yaml · 草稿')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: /未运行/ }));
     expect(screen.getAllByText('ready.yaml').length).toBeGreaterThan(0);
-
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
     await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
-    expect(screen.getByText('运行会话')).toBeTruthy();
+    expect(screen.getByText('运行')).toBeTruthy();
   });
 
-  test('shows open button for recorded workflow agent session without loaded summary', async () => {
+  test('shows workflow run sessions without loaded summary', async () => {
     const user = userEvent.setup();
     mockSessions = [
       {
@@ -227,11 +227,14 @@ describe('ChatSidebar', () => {
     await user.click(screen.getByRole('button', { name: /工作流/ }));
     await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
 
-    expect(screen.getByText('default-supervisor')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: /default-supervisor/ }));
-    expect(screen.getByText('已记录会话，可直接打开。')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: '打开对话' }));
-    expect(mockSetActiveSessionId).toHaveBeenCalledWith('supervisor-1');
+    expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);
+    expect(screen.getByText('运行')).toBeTruthy();
+
+    const runBadge = screen.getByText('运行');
+    const row = runBadge.closest('.home-chat-session-row');
+    expect(row).toBeTruthy();
+    await user.click(row as HTMLElement);
+    expect(mockSetActiveSessionId).toHaveBeenCalledWith('run-1');
   });
 
   test('filters sessions within each tab', async () => {
