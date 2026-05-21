@@ -2,12 +2,12 @@
 
 ## 概述
 
-首页侧边栏采用插件架构，所有功能（创建工作流、创建 Agent、工作流 Supervisor、AI 狼人杀等）都以插件形式注册。你可以通过添加插件来扩展侧边栏的功能，包括：
+首页侧边栏采用插件架构，创建工作流、创建 Agent、工作流运行管理等功能以插件形式注册。议场是内置功能，狼人杀是议场扩展，不属于首页侧边栏插件。你可以通过添加插件来扩展侧边栏的功能，包括：
 
 - **快捷操作** — 首页和对话框上方的按钮
 - **侧边栏面板** — Tab 内容区域
 - **主题** — 自定义视觉风格
-- **能力组合** — Agent 调用、圆桌可视化、断点恢复等
+- **能力组合** — Agent 调用、断点恢复、流式展示等
 
 ## 快速开始
 
@@ -234,7 +234,6 @@ intents: [
 | `agent-calling` | 流式调用 Agent | 多 Agent 对话、角色扮演 |
 | `result-extraction` | 解析 `<result>` JSON | 投票、决策提取 |
 | `breakpoint-resume` | 失败断点恢复 | 长流程中断续传 |
-| `roundtable` | 圆桌可视化 | 多 Agent 座位布局 |
 | `persistence` | 插件状态持久化 | 保存游戏进度、表单草稿 |
 | `streaming-display` | 流式显示到对话区 | 实时输出 Agent 回复 |
 | `theme` | 主题切换 | 自定义视觉风格 |
@@ -247,8 +246,7 @@ intents: [
 |------|------|----------|-----|
 | `create-workflow` | 创建工作流 | 创建工作流、启动运行 | 工作流 |
 | `create-agent` | 创建 Agent | 创建 Agent | 创建Agent |
-| `supervisor` | 工作流 Supervisor | — | 指挥官 |
-| `werewolf-lab` | AI 狼人杀 | AI 狼人杀 | 指挥官 |
+| `supervisor` | 工作流协作 | — | 指挥官 |
 
 ## 运行时 API
 
@@ -293,7 +291,6 @@ function MyPanel() {
 | `hasWorkflow` | boolean | 当前 session 绑定了工作流 |
 | `hasCollaboration` | boolean | 存在协作房间 |
 | `hasCreation` | boolean | 存在创建会话 |
-| `werewolfMode` | boolean | 狼人杀模式激活 |
 | `activeIntent` | string | 当前活跃的 intent |
 | `activePhase` | string | 当前状态机阶段 |
 
