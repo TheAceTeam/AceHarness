@@ -90,10 +90,19 @@ function getFileType(filePath: string): string {
   return filePath.split(".").pop()?.toLowerCase() || ""
 }
 
-function treeHasPath(tree: TreeNode[], targetPath: string): boolean {
+export function treeCanResolvePath(tree: TreeNode[], targetPath: string): boolean {
+  const normalizedTarget = targetPath.replace(/\\/g, "/")
   for (const node of tree) {
-    if (node.path === targetPath) return true
-    if (node.type === "directory" && node.children && treeHasPath(node.children, targetPath)) return true
+    const normalizedNodePath = node.path.replace(/\\/g, "/")
+    if (normalizedNodePath === normalizedTarget) return true
+    if (node.type !== "directory") continue
+    if (!normalizedTarget.startsWith(`${normalizedNodePath}/`)) {
+      if (node.children && treeCanResolvePath(node.children, normalizedTarget)) return true
+      continue
+    }
+    // A directory without loaded children means the tree has not proven the deeper path absent yet.
+    if (node.children === undefined) return true
+    if (treeCanResolvePath(node.children, normalizedTarget)) return true
   }
   return false
 }
@@ -576,7 +585,7 @@ export function WorkspaceEditor({
   React.useEffect(() => {
     if (!selectedFile) return
     if (treeLoading || treeError) return
-    if (treeHasPath(tree, selectedFile)) return
+    if (treeCanResolvePath(tree, selectedFile)) return
     setSelectedFile(null)
     setFileContent(null)
     setFileSize(null)

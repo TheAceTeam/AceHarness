@@ -17,7 +17,7 @@ import { createRun, updateRun } from '@/lib/run/store';
 import type { RunRecord } from '@/lib/run/store';
 import {
   saveRunState, saveProcessOutput, saveStreamContent, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
-  type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck,
+  type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck, type WorkflowGitState,
 } from '@/lib/run/state-persistence';
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
@@ -25,6 +25,7 @@ import { isWindows } from '@/lib/core/runtime-platform';
 import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -32,8 +33,14 @@ import { createDirectoryLinkSync } from '@/lib/core/directory-links';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { ensureDefaultSupervisorConfig } from '@/lib/core/default-supervisor';
 import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { appendWorkflowAgoraMessage, createWorkflowParticipants } from '@/lib/agora/workflow-topic';
 import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
 import { compactStepConclusion } from '@/lib/state-machine/utils';
+import {
+  ensureWorkflowGitState,
+  recordWorkflowGitSnapshot,
+  upsertWorkflowGitStepDiff,
+} from '@/lib/workflow/git-baseline';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
@@ -80,8 +87,20 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
   cache_read_input_tokens: 0,
 };
 
+const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
+const STREAM_IDLE_CHECK_MS = 30 * 1000;
+const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
+
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function replaceAgentSessionId(agentSessions: Map<string, string>, agentName: string, nextSessionId?: string | null): void {
+  if (nextSessionId) {
+    agentSessions.set(agentName, nextSessionId);
+  } else {
+    agentSessions.delete(agentName);
+  }
 }
 
 function normalizeEngineUsage(metadata?: EngineResultMetadata): EngineTokenUsage {
@@ -211,6 +230,7 @@ export class WorkflowManager extends EventEmitter {
   private currentEngine: Engine | null = null;
   /** Current engine type */
   private engineType: EngineType = 'claude-code';
+  private workflowGit: WorkflowGitState | null = null;
 
   /** Get the workspace skills subdir based on current engine type */
   private get workspaceSkillsSubdir(): string {
@@ -220,6 +240,56 @@ export class WorkflowManager extends EventEmitter {
   private resolveProjectRootPath(projectRoot?: string | null): string {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
+  }
+
+  private getWorkflowSupervisorAgentName(): string | undefined {
+    return (this.currentWorkflow as any)?.workflow?.supervisor?.agent
+      || this.agentConfigs.find((role: any) => role?.roleType === 'supervisor')?.name
+      || undefined;
+  }
+
+  private getWorkflowAgoraAgentSessions(): Record<string, string> {
+    return Object.fromEntries(
+      this.agents
+        .filter((agent) => Boolean(agent.sessionId))
+        .map((agent) => [agent.name, agent.sessionId as string])
+    );
+  }
+
+  private getWorkflowAgoraParticipants() {
+    const names = new Set<string>();
+    const addName = (name?: string | null) => {
+      const trimmed = String(name || '').trim();
+      if (trimmed) names.add(trimmed);
+    };
+    addName(this.getWorkflowSupervisorAgentName());
+    this.agents.forEach((agent) => addName(agent.name));
+    return createWorkflowParticipants([...names], {
+      coordinatorAgent: this.getWorkflowSupervisorAgentName(),
+    });
+  }
+
+  private async appendWorkflowTranscriptEvent(input: {
+    type: string;
+    title: string;
+    body?: string;
+    speakerName: string;
+    speakerType?: 'human' | 'agent' | 'system';
+    dedupeKey?: string;
+  }): Promise<void> {
+    if (!this._frontendSessionId) return;
+    await appendWorkflowAgoraMessage({
+      sessionId: this._frontendSessionId,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      speakerName: input.speakerName,
+      speakerType: input.speakerType || 'agent',
+      dedupeKey: input.dedupeKey,
+      participants: this.getWorkflowAgoraParticipants(),
+      agentSessions: this.getWorkflowAgoraAgentSessions(),
+      workspacePath: this.getWorkingDirectory() || undefined,
+    }).catch(() => {});
   }
 
   /**
@@ -688,7 +758,7 @@ try {
     this.currentEngine.on('stream', streamHandler);
 
     try {
-      const result = await this.currentEngine.execute({
+      const result = await executeEngineWithContextRecovery(this.currentEngine, {
         agent,
         step,
         prompt,
@@ -700,15 +770,24 @@ try {
         sessionId: options.resumeSessionId,
         appendSystemPrompt: options.appendSystemPrompt,
         runId: options.runId,
+      }, {
+        onContextReset: (event) => {
+          this.emit('log', {
+            agent,
+            level: 'warning',
+            message: `上下文超限，已清空 ${this.engineType} 会话并重试: ${event.method}`,
+          });
+        },
       });
 
       // Mark process as completed
+      const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
       const rawProc = processManager.getProcessRaw(processId);
       if (rawProc) {
         rawProc.status = result.success ? 'completed' : 'failed';
         rawProc.endTime = new Date();
         processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
-        rawProc.sessionId = result.sessionId;
+        rawProc.sessionId = resolvedSessionId || undefined;
         if (!result.success) processManager.setProcessError(processId, result.error || '');
       }
 
@@ -718,7 +797,7 @@ try {
       // Convert engine result to EngineJsonResult format
       return {
         result: result.success ? result.output : (result.error || result.output),
-        session_id: result.sessionId || '',
+        session_id: resolvedSessionId || '',
         is_error: !result.success,
         cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
         duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -786,6 +865,7 @@ try {
         globalContext: this.globalContext || undefined,
         phaseContexts: this.phaseContexts.size > 0 ? Object.fromEntries(this.phaseContexts) : undefined,
         workingDirectory: this.getWorkingDirectory() || undefined,
+        workspaceGit: this.workflowGit || undefined,
         attachedAgentSessions,
         workflowFrontendSessionId: this._frontendSessionId || null,
       };
@@ -802,6 +882,134 @@ try {
         });
       }
     } catch { /* non-critical */ }
+  }
+
+  private async ensureWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
+    if (!this.currentRunId || !workspacePath) return;
+    try {
+      this.workflowGit = await ensureWorkflowGitState({
+        workspacePath,
+        runId: this.currentRunId,
+        existing: this.workflowGit || undefined,
+      });
+      await this.persistState();
+      this.emit('log', {
+        agent: 'system',
+        level: 'info',
+        message: `Git 基线已建立: ${this.workflowGit.baselineCommit?.slice(0, 12) || this.workflowGit.baselineRef || 'baseline'}`,
+      });
+    } catch (error: any) {
+      this.workflowGit = {
+        enabled: false,
+        runId: this.currentRunId,
+        workspacePath,
+        repoRoot: workspacePath,
+        wasGitRepository: false,
+        initializedRepository: false,
+        snapshots: [],
+        stepDiffs: [],
+        error: error?.message || String(error),
+        updatedAt: new Date().toISOString(),
+      };
+      await this.persistState();
+      this.emit('log', {
+        agent: 'system',
+        level: 'warning',
+        message: `Git 基线建立失败: ${this.workflowGit.error}`,
+      });
+    }
+  }
+
+  private async recordStepGitBefore(input: {
+    stepLogId: string;
+    stepName: string;
+    phaseName?: string;
+    agent: string;
+  }): Promise<string | undefined> {
+    if (!this.workflowGit?.enabled) return undefined;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'step-before',
+        label: `步骤开始前: ${input.stepName}`,
+        stepName: input.stepName,
+        phaseName: input.phaseName,
+        agent: input.agent,
+      });
+      this.workflowGit = upsertWorkflowGitStepDiff(recorded.state, {
+        id: `git-step-${input.stepLogId}`,
+        stepLogId: input.stepLogId,
+        stepName: input.stepName,
+        phaseName: input.phaseName,
+        agent: input.agent,
+        status: 'running',
+        beforeSnapshotId: recorded.snapshot.id,
+        startedAt: new Date().toISOString(),
+      });
+      await this.persistState();
+      return recorded.snapshot.id;
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState();
+      return undefined;
+    }
+  }
+
+  private async recordStepGitAfter(input: {
+    stepLogId: string;
+    stepName: string;
+    phaseName?: string;
+    agent: string;
+    status: 'completed' | 'failed';
+    beforeSnapshotId?: string;
+  }): Promise<string | undefined> {
+    if (!this.workflowGit?.enabled) return undefined;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'step-after',
+        label: `步骤结束后: ${input.stepName}`,
+        stepName: input.stepName,
+        phaseName: input.phaseName,
+        agent: input.agent,
+      });
+      const existing = this.workflowGit.stepDiffs.find((item) => item.id === `git-step-${input.stepLogId}`);
+      this.workflowGit = upsertWorkflowGitStepDiff(recorded.state, {
+        id: `git-step-${input.stepLogId}`,
+        stepLogId: input.stepLogId,
+        stepName: input.stepName,
+        phaseName: input.phaseName,
+        agent: input.agent,
+        status: input.status,
+        beforeSnapshotId: existing?.beforeSnapshotId || input.beforeSnapshotId || recorded.snapshot.id,
+        afterSnapshotId: recorded.snapshot.id,
+        startedAt: existing?.startedAt || new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      await this.persistState();
+      return recorded.snapshot.id;
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState();
+      return undefined;
+    }
+  }
+
+  private async recordFinalGitSnapshot(status: 'completed' | 'failed' | 'stopped'): Promise<void> {
+    if (!this.workflowGit?.enabled) return;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'run-final',
+        label: `工作流结束: ${status}`,
+        phaseName: this.currentPhase || undefined,
+      });
+      this.workflowGit = recorded.state;
+      await this.persistState();
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState();
+    }
   }
 
   async recoverFromCrash(): Promise<void> {
@@ -866,6 +1074,7 @@ try {
     this.phaseContexts = new Map(Object.entries(initialContexts?.phaseContexts || {}));
     this.isolatedDir = null;
     this.currentProjectRoot = null;
+    this.workflowGit = null;
 
     // Reset process manager counters in case previous run left stale state
     processManager.reset();
@@ -903,6 +1112,7 @@ try {
         currentPhase: '准备阶段',
         currentStep: '初始化运行上下文',
         currentConfigFile: this.currentConfigFile,
+        workflowFrontendSessionId: this._frontendSessionId || null,
       });
       this.currentPhase = '准备阶段';
       this.currentStep = '初始化运行上下文';
@@ -918,6 +1128,7 @@ try {
           currentPhase: this.currentPhase,
           currentStep: this.currentStep,
           currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.persistState();
       };
@@ -956,6 +1167,12 @@ try {
 
       if (this.shouldStop) return;
 
+      const workflowGitWorkspacePath = this.getWorkingDirectory() || workflowConfig.context.projectRoot;
+      if (workflowGitWorkspacePath) {
+        await reportPreparingProgress('准备中：建立 Git 基线...', '建立 Git 基线');
+        await this.ensureWorkflowGitBaseline(workflowGitWorkspacePath);
+      }
+
       // === Preparing phase: load agents, init engine, sync skills ===
       await reportPreparingProgress('准备中：加载 Agent 配置...', '加载 Agent 配置');
       this.agentConfigs = await this.loadAgentConfigs();
@@ -991,21 +1208,37 @@ try {
       // === Switch to running ===
       this.status = 'running';
       this.currentStep = null;
-      this.emit('status', { status: 'running', message: '工作流已启动', runId, workingDirectory: this.getWorkingDirectory() });
+      this.emit('status', {
+        status: 'running',
+        message: '工作流已启动',
+        runId,
+        workingDirectory: this.getWorkingDirectory(),
+        workflowFrontendSessionId: this._frontendSessionId || null,
+      });
       await this.persistState();
 
       await this.executeWorkflow(workflowConfig);
 
       if (!this.shouldStop) {
         this.status = 'completed';
-        this.emit('status', { status: 'completed', message: '工作流执行完成' });
+        this.emit('status', {
+          status: 'completed',
+          message: '工作流执行完成',
+          runId,
+          workflowFrontendSessionId: this._frontendSessionId || null,
+        });
         await this.finalizeRun('completed');
       }
     } catch (error: any) {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
-        this.emit('status', { status: 'failed', message: error.message });
+        this.emit('status', {
+          status: 'failed',
+          message: error.message,
+          runId: this.currentRunId,
+          workflowFrontendSessionId: this._frontendSessionId || null,
+        });
         await this.finalizeRun('failed');
       }
       throw error;
@@ -1018,9 +1251,10 @@ try {
 
     // Cleanup copied skills from workspace
     await this.cleanupWorkspaceSkills();
+    await this.recordFinalGitSnapshot(status);
 
+    const completedSteps = this.agents.reduce((sum, a) => sum + a.completedTasks, 0);
     try {
-      const completedSteps = this.agents.reduce((sum, a) => sum + a.completedTasks, 0);
       await updateRun(this.currentRunId, {
         endTime: this.runEndTime,
         status,
@@ -1029,6 +1263,17 @@ try {
       });
     } catch { /* non-critical */ }
     await this.persistState();
+    if (this._frontendSessionId) {
+      await this.appendWorkflowTranscriptEvent({
+        type: status === 'completed' ? 'run-completed' : status === 'failed' ? 'run-failed' : 'run-stopped',
+        title: status === 'completed' ? '工作流执行完成' : status === 'failed' ? '工作流执行失败' : '工作流已停止',
+        body: status === 'completed'
+          ? `完成步骤：${completedSteps}`
+          : this.statusReason || '',
+        speakerName: this.getWorkflowSupervisorAgentName() || this.agents[0]?.name || '工作流协作',
+        dedupeKey: `workflow-run-${status}-${this.currentRunId}`,
+      });
+    }
     this.status = 'idle';
   }
 
@@ -1228,42 +1473,88 @@ try {
         iteration: phase.iteration,
       });
       await this.persistState();
-
-      if (phase.iteration?.enabled) {
-        await this.executeIterativePhase(phase, workflowConfig);
-      } else {
-        await this.executeLinearPhase(phase, workflowConfig);
+      const phaseLead = phase.steps[0]?.agent || this.agents[0]?.name || 'Supervisor';
+      const phaseCloser = [...phase.steps].reverse().find((step) => step.agent)?.agent || phaseLead;
+      if (this._frontendSessionId) {
+        await this.appendWorkflowTranscriptEvent({
+          type: 'phase-start',
+          title: `阶段开始：${phase.name}`,
+          body: `${phase.steps.length} 个步骤待处理。`,
+          speakerName: phaseLead,
+          dedupeKey: `workflow-phase-start-${this.currentRunId || this.currentConfigFile}-${phase.name}`,
+        });
       }
 
-      // Checkpoint with iterate support — loop allows re-running iterative phase
-      while (phase.checkpoint && !this.shouldStop) {
-        this.pendingCheckpoint = {
-          phase: phase.name,
-          checkpoint: phase.checkpoint.name,
-          message: phase.checkpoint.message,
-          isIterativePhase: !!phase.iteration?.enabled,
-        };
-        this.emit('checkpoint', {
-          ...this.pendingCheckpoint,
-          requiresApproval: true,
-        });
-        await this.persistState();
-        const action = await this.waitForApproval();
-        this.pendingCheckpoint = null;
-        if (action === 'iterate' && phase.iteration?.enabled) {
-          // Re-run the iterative phase for another round
+      try {
+        if (phase.iteration?.enabled) {
           await this.executeIterativePhase(phase, workflowConfig);
-          // Check if iteration is still running (not completed/escalated)
-          const iterState = this.iterationStates.get(phase.name);
-          if (iterState && (iterState.status === 'completed' || iterState.status === 'escalated')) {
-            // Iteration finished, show checkpoint one more time for final decision
-            continue;
+        } else {
+          await this.executeLinearPhase(phase, workflowConfig);
+        }
+
+        // Checkpoint with iterate support — loop allows re-running iterative phase
+        while (phase.checkpoint && !this.shouldStop) {
+          this.pendingCheckpoint = {
+            phase: phase.name,
+            checkpoint: phase.checkpoint.name,
+            message: phase.checkpoint.message,
+            isIterativePhase: !!phase.iteration?.enabled,
+          };
+          this.emit('checkpoint', {
+            ...this.pendingCheckpoint,
+            requiresApproval: true,
+          });
+          await this.persistState();
+          const action = await this.waitForApproval();
+          if (this._frontendSessionId) {
+            await this.appendWorkflowTranscriptEvent({
+              type: 'human-answer',
+              title: action === 'iterate' ? `请求继续迭代：${phase.name}` : `批准进入下一阶段：${phase.name}`,
+              body: action === 'iterate'
+                ? (this.iterationFeedback || '请再推进一轮迭代。')
+                : '确认当前阶段结果，可以继续后续环节。',
+              speakerName: '你',
+              speakerType: 'human',
+              dedupeKey: `workflow-phase-approval-${this.currentRunId || this.currentConfigFile}-${phase.name}-${Date.now()}`,
+            });
           }
-          // Iteration still running, break out to avoid double checkpoint
+          this.pendingCheckpoint = null;
+          if (action === 'iterate' && phase.iteration?.enabled) {
+            // Re-run the iterative phase for another round
+            await this.executeIterativePhase(phase, workflowConfig);
+            // Check if iteration is still running (not completed/escalated)
+            const iterState = this.iterationStates.get(phase.name);
+            if (iterState && (iterState.status === 'completed' || iterState.status === 'escalated')) {
+              // Iteration finished, show checkpoint one more time for final decision
+              continue;
+            }
+            // Iteration still running, break out to avoid double checkpoint
+            break;
+          }
+          // action === 'approve' → proceed to next phase
           break;
         }
-        // action === 'approve' → proceed to next phase
-        break;
+
+        if (!this.shouldStop && this._frontendSessionId) {
+          await this.appendWorkflowTranscriptEvent({
+            type: 'phase-complete',
+            title: `阶段完成：${phase.name}`,
+            body: `${phase.steps.length} 个步骤已处理。`,
+            speakerName: phaseCloser,
+            dedupeKey: `workflow-phase-complete-${this.currentRunId || this.currentConfigFile}-${phase.name}`,
+          });
+        }
+      } catch (error: any) {
+        if (this._frontendSessionId) {
+          await this.appendWorkflowTranscriptEvent({
+            type: 'phase-failed',
+            title: `阶段失败：${phase.name}`,
+            body: error?.message || String(error),
+            speakerName: phaseCloser,
+            dedupeKey: `workflow-phase-failed-${this.currentRunId || this.currentConfigFile}-${phase.name}`,
+          });
+        }
+        throw error;
       }
     }
   }
@@ -1543,6 +1834,12 @@ try {
     const stepId = randomUUID();
     this.currentStep = step.name;
     this.updateAgentStatus(step.agent, 'running', step.task);
+    const beforeSnapshotId = await this.recordStepGitBefore({
+      stepLogId: stepId,
+      stepName: step.name,
+      phaseName: phase.name,
+      agent: step.agent,
+    });
 
     const agent = this.agents.find((a) => a.name === step.agent);
     if (agent) agent.iterationCount++;
@@ -1557,6 +1854,15 @@ try {
       role: step.role,
     });
     await this.persistState();
+    if (this._frontendSessionId) {
+      await this.appendWorkflowTranscriptEvent({
+        type: 'step-start',
+        title: `步骤开始：${phase.name} / ${step.name}`,
+        body: `- Agent: ${step.agent}`,
+        speakerName: step.agent,
+        dedupeKey: `workflow-step-start-${stepId}`,
+      });
+    }
 
     try {
       let resultText: string;
@@ -1567,9 +1873,7 @@ try {
       const tokenUsage: TokenUsage = toPersistedTokenUsage(jsonResult.usage);
       this.updateAgentTokenUsage(step.agent, tokenUsage);
 
-      if (jsonResult.session_id) {
-        this.agentSessionIds.set(step.agent, jsonResult.session_id);
-      }
+      replaceAgentSessionId(this.agentSessionIds, step.agent, jsonResult.session_id);
 
       const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
 
@@ -1585,6 +1889,14 @@ try {
       this.updateAgentStatus(step.agent, 'completed');
       this.completedStepNames.push(step.name);
 
+      const afterSnapshotId = await this.recordStepGitAfter({
+        stepLogId: stepId,
+        stepName: step.name,
+        phaseName: phase.name,
+        agent: step.agent,
+        status: 'completed',
+        beforeSnapshotId,
+      });
       // Record step log
       this.stepLogs.push({
         id: stepId,
@@ -1599,6 +1911,9 @@ try {
         tokenUsage,
         sessionId: jsonResult.session_id || null,
         engineName: this.engineType,
+        gitStepDiffId: `git-step-${stepId}`,
+        gitBeforeSnapshotId: beforeSnapshotId,
+        gitAfterSnapshotId: afterSnapshotId,
       });
 
       this.emit('result', {
@@ -1616,6 +1931,18 @@ try {
 
       await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
       await this.persistState();
+      if (this._frontendSessionId) {
+        await this.appendWorkflowTranscriptEvent({
+          type: 'step-complete',
+          title: `步骤完成：${phase.name} / ${step.name}`,
+          body: [
+            `- Agent: ${step.agent}`,
+            displayOutput ? `- 结论: ${displayOutput.slice(0, 1200)}` : '',
+          ].filter(Boolean).join('\n'),
+          speakerName: step.agent,
+          dedupeKey: `workflow-step-complete-${stepId}`,
+        });
+      }
 
       return resultText;
     } catch (error: any) {
@@ -1642,6 +1969,14 @@ try {
 
         const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
 
+        const afterSnapshotId = await this.recordStepGitAfter({
+          stepLogId: stepId,
+          stepName: step.name,
+          phaseName: phase.name,
+          agent: step.agent,
+          status: 'completed',
+          beforeSnapshotId,
+        });
         this.stepLogs.push({
           id: stepId,
           stepName: step.name,
@@ -1655,6 +1990,9 @@ try {
           tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
           sessionId: null,
           engineName: this.engineType,
+          gitStepDiffId: `git-step-${stepId}`,
+          gitBeforeSnapshotId: beforeSnapshotId,
+          gitAfterSnapshotId: afterSnapshotId,
         });
 
         this.emit('result', {
@@ -1672,6 +2010,18 @@ try {
 
         await this.persistPhaseStepArtifacts(step.name, resultText, displayOutput);
         await this.persistState();
+        if (this._frontendSessionId) {
+          await this.appendWorkflowTranscriptEvent({
+            type: 'step-complete',
+            title: `步骤完成：${phase.name} / ${step.name}`,
+            body: [
+              `- Agent: ${step.agent}`,
+              displayOutput ? `- 结论: ${displayOutput.slice(0, 1200)}` : '',
+            ].filter(Boolean).join('\n'),
+            speakerName: step.agent,
+            dedupeKey: `workflow-step-complete-${stepId}`,
+          });
+        }
         return resultText;
       }
 
@@ -1682,6 +2032,14 @@ try {
       this.currentStep = null;
 
       // Record failed step log
+      const afterSnapshotId = await this.recordStepGitAfter({
+        stepLogId: stepId,
+        stepName: step.name,
+        phaseName: phase.name,
+        agent: step.agent,
+        status: 'failed',
+        beforeSnapshotId,
+      });
       this.stepLogs.push({
         id: stepId,
         stepName: step.name,
@@ -1692,6 +2050,9 @@ try {
         costUsd: 0,
         durationMs: 0,
         timestamp: new Date().toISOString(),
+        gitStepDiffId: `git-step-${stepId}`,
+        gitBeforeSnapshotId: beforeSnapshotId,
+        gitAfterSnapshotId: afterSnapshotId,
       });
 
       this.emit('result', {
@@ -1709,6 +2070,18 @@ try {
       }
 
       await this.persistState();
+      if (this._frontendSessionId) {
+        await this.appendWorkflowTranscriptEvent({
+          type: 'step-failed',
+          title: `步骤失败：${phase.name} / ${step.name}`,
+          body: [
+            `- Agent: ${step.agent}`,
+            `- 错误: ${errorMsg}`,
+          ].join('\n'),
+          speakerName: step.agent,
+          dedupeKey: `workflow-step-failed-${stepId}`,
+        });
+      }
       return '';
     }
   }
@@ -1873,9 +2246,13 @@ try {
     let lastFlush = 0;
     let activeProcessId = processId;
     let accumulatedStream = ''; // Accumulate stream content across feedback rounds
+    let lastStreamAt = Date.now();
+    let watchdogTriggeredForProcess = '';
     const streamHandler = (data: { id: string; step: string; total: string }) => {
       if (data.id !== activeProcessId) return;
       const now = Date.now();
+      lastStreamAt = now;
+      watchdogTriggeredForProcess = '';
       // Flush to disk every 3 seconds
       if (this.currentRunId && now - lastFlush > 3000) {
         lastFlush = now;
@@ -1886,6 +2263,19 @@ try {
       }
     };
     processManager.on('stream', streamHandler);
+    const idleWatchdog = setInterval(() => {
+      if (!activeProcessId || this.shouldStop || this.interruptFlag) return;
+      if (watchdogTriggeredForProcess === activeProcessId) return;
+      if (Date.now() - lastStreamAt < STREAM_IDLE_INTERRUPT_MS) return;
+      const proc = processManager.getProcess(activeProcessId);
+      if (!proc || proc.status !== 'running') return;
+      watchdogTriggeredForProcess = activeProcessId;
+      this.liveFeedback.push(AUTO_CONTINUE_FEEDBACK);
+      this.interruptFlag = true;
+      this.feedbackInterrupt = true;
+      this.emit('feedback-injected', { message: AUTO_CONTINUE_FEEDBACK, timestamp: new Date().toISOString(), automatic: true });
+      processManager.killProcess(activeProcessId);
+    }, STREAM_IDLE_CHECK_MS);
 
     let currentProcessId = processId;
     let currentPrompt = prompt;
@@ -1928,7 +2318,6 @@ try {
               accumulatedStream += (accumulatedStream ? '\n\n<!-- chunk-boundary -->\n\n' : '') + proc.streamContent;
             }
             const sessionId = proc?.sessionId;
-            if (!sessionId) throw err; // Can't resume without session ID
 
             const feedbackPrompt = this.liveFeedback.join('\n\n');
             this.liveFeedback = [];
@@ -1937,12 +2326,17 @@ try {
             if (this.currentRunId) {
               saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
             }
-            currentSessionId = sessionId;
+            currentSessionId = sessionId || undefined;
             currentPrompt = isFeedbackOnly
               ? `## 人工实时反馈\n用户在你执行过程中提供了补充反馈，请参考以下内容继续完成任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`
               : `## 人工实时反馈（紧急打断）\n用户紧急打断了当前执行，请立即处理以下反馈：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
+            if (!sessionId) {
+              currentPrompt = prompt + '\n\n' + currentPrompt;
+            }
             currentProcessId = `${step.agent}-${step.name}-interrupt-${Date.now()}`;
             activeProcessId = currentProcessId;
+            lastStreamAt = Date.now();
+            watchdogTriggeredForProcess = '';
             this.emit('step', {
               step: step.name,
               agent: step.agent,
@@ -1954,10 +2348,8 @@ try {
           throw err; // Non-interrupt error, propagate normally
         }
 
-        // Save session ID for potential resume
-        if (result.session_id) {
-          this.agentSessionIds.set(step.agent, result.session_id);
-        }
+        // Save or clear session ID for potential resume
+        replaceAgentSessionId(this.agentSessionIds, step.agent, result.session_id);
 
         // Accumulate stream content from this round
         const proc = processManager.getProcess(currentProcessId);
@@ -1992,6 +2384,8 @@ try {
           currentPrompt = `## 人工实时反馈\n以下是用户在你执行过程中提供的反馈意见，请基于这些反馈继续处理当前任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
           currentProcessId = `${step.agent}-${step.name}-feedback-${Date.now()}`;
           activeProcessId = currentProcessId;
+          lastStreamAt = Date.now();
+          watchdogTriggeredForProcess = '';
 
           this.emit('step', {
             step: step.name,
@@ -2015,6 +2409,7 @@ try {
         result: this.selectPreferredAgentOutput(accumulatedOutput, accumulatedStream),
       };
     } finally {
+      clearInterval(idleWatchdog);
       processManager.off('stream', streamHandler);
     }
   }
@@ -2556,6 +2951,12 @@ try {
     this.liveFeedback = [];
     this.globalContext = runState.globalContext || '';
     this.phaseContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.isolatedDir = runState.workingDirectory || null;
+    this.currentProjectRoot = runState.workingDirectory || workflowConfig.context.projectRoot || null;
+    if (runState.workingDirectory) {
+      workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
+    this.workflowGit = runState.workspaceGit || null;
 
     console.log(`[WorkflowManager.resume] runId=${runId}`);
     console.log(`[WorkflowManager.resume] completedSteps=`, this.completedStepNames);
@@ -2563,6 +2964,8 @@ try {
 
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+
+    await this.ensureWorkflowGitBaseline(workflowConfig.context.projectRoot || runState.workingDirectory);
 
     // Load agent configs
     this.agentConfigs = await this.loadAgentConfigs();
@@ -2780,6 +3183,10 @@ try {
     // Mark as stopped so resume() accepts it
     runState.status = 'stopped';
     runState.pendingCheckpoint = undefined;
+    if (runState.workspaceGit?.stepDiffs?.length) {
+      const removedIds = new Set((runState.stepLogs || []).slice(logIndex >= 0 ? logIndex : runState.stepLogs.length).map((log) => log.gitStepDiffId || `git-step-${log.id}`));
+      runState.workspaceGit.stepDiffs = runState.workspaceGit.stepDiffs.filter((diff) => !removedIds.has(diff.id));
+    }
     await saveRunState(runState);
 
     // Now delegate to normal resume

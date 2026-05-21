@@ -70,6 +70,60 @@ export interface PersistedStepLog {
   tokenUsage?: PersistedTokenUsage;
   sessionId?: string | null;
   engineName?: string;
+  gitStepDiffId?: string;
+  gitBeforeSnapshotId?: string;
+  gitAfterSnapshotId?: string;
+}
+
+export type WorkflowGitSnapshotKind = 'run-baseline' | 'step-before' | 'step-after' | 'run-final';
+
+export interface WorkflowGitSnapshot {
+  id: string;
+  ref: string;
+  commit: string;
+  shortCommit: string;
+  tree: string;
+  kind: WorkflowGitSnapshotKind;
+  label: string;
+  stepName?: string;
+  phaseName?: string;
+  stateName?: string;
+  agent?: string;
+  createdAt: string;
+  reusedFromId?: string;
+}
+
+export interface WorkflowGitStepDiff {
+  id: string;
+  stepLogId: string;
+  stepName: string;
+  phaseName?: string;
+  stateName?: string;
+  agent: string;
+  status: 'running' | 'completed' | 'failed';
+  beforeSnapshotId: string;
+  afterSnapshotId?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkflowGitState {
+  enabled: boolean;
+  runId: string;
+  workspacePath: string;
+  repoRoot: string;
+  wasGitRepository: boolean;
+  initializedRepository: boolean;
+  baselineSnapshotId?: string;
+  baselineRef?: string;
+  baselineCommit?: string;
+  snapshots: WorkflowGitSnapshot[];
+  stepDiffs: WorkflowGitStepDiff[];
+  lastSnapshotId?: string;
+  lastSnapshotTree?: string;
+  lastSnapshotCommit?: string;
+  error?: string;
+  updatedAt: string;
 }
 
 export interface PersistedQualityCommandResult {
@@ -257,6 +311,8 @@ export interface PersistedRunState {
   }>;
   /** 实际工作目录（隔离的 run-xxx 目录或原始 projectRoot） */
   workingDirectory?: string;
+  /** Git baseline and per-step snapshots captured by the workflow runner. */
+  workspaceGit?: WorkflowGitState;
   /** 运行绑定的 supervisor agent 名称 */
   supervisorAgent?: string;
   /** 运行绑定的 supervisor sessionId */

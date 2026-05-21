@@ -197,10 +197,15 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
     limit: 5,
   }).catch(() => []);
   const runSpecCoding = status?.runSpecCoding || null;
-  const displaySpecCoding = runSpecCoding || creationSession?.specCoding || null;
-  const specCodingPayload = displaySpecCoding
-    ? buildSpecCodingPayload(displaySpecCoding, runSpecCoding ? 'run' : 'creation')
-    : {};
+  const creationSpecCoding = creationSession?.specCoding || null;
+  const displaySpecCoding = runSpecCoding || creationSpecCoding || null;
+  const runSpecCodingPayload = runSpecCoding
+    ? buildSpecCodingPayload(runSpecCoding, 'run')
+    : null;
+  const creationSpecCodingPayload = creationSpecCoding
+    ? buildSpecCodingPayload(creationSpecCoding, 'creation')
+    : null;
+  const specCodingPayload = runSpecCodingPayload || creationSpecCodingPayload || {};
   const sourceOfTruth = displaySpecCoding
     ? await buildWorkflowStructureMapping(configFile, displaySpecCoding)
     : null;
@@ -239,6 +244,10 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
       bindingValidation: creationSession.bindingValidation,
     } : null,
     ...specCodingPayload,
+    creationSpecCodingSummary: creationSpecCodingPayload?.specCodingSummary || null,
+    creationSpecCodingDetails: creationSpecCodingPayload?.specCodingDetails || null,
+    runSpecCodingSummary: runSpecCodingPayload?.specCodingSummary || null,
+    runSpecCodingDetails: runSpecCodingPayload?.specCodingDetails || null,
     sourceOfTruth,
     finalReview,
     qualityChecks: status?.qualityChecks || [],

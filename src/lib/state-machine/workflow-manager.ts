@@ -25,6 +25,7 @@ import {
   type PersistedQualityCheck,
   type PersistedQualityCommandResult,
   type DeltaMergeState,
+  type WorkflowGitState,
   type HumanQuestion,
   type HumanQuestionAnswer,
   type HumanAnswerContext,
@@ -44,10 +45,12 @@ import { formatTimestamp } from '@/lib/core/utils';
 import { createEngine, getConfiguredEngine, getLogicalEngineId, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
-import { appendChatSessionMessage, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { appendWorkflowAgoraMessage, createWorkflowParticipants } from '@/lib/agora/workflow-topic';
 import {
   DEFAULT_SUPERVISOR_NAME,
   ensureDefaultSupervisorConfig,
@@ -81,6 +84,11 @@ import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/run/runtime-spe
 import { appendMemoryEntries } from '@/lib/workflow/memory-store';
 import { upsertRelationshipSignal } from '@/lib/agent/relationship-store';
 import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
+import {
+  ensureWorkflowGitState,
+  recordWorkflowGitSnapshot,
+  upsertWorkflowGitStepDiff,
+} from '@/lib/workflow/git-baseline';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -95,6 +103,10 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
   cache_creation_input_tokens: 0,
   cache_read_input_tokens: 0,
 };
+
+const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
+const STREAM_IDLE_CHECK_MS = 30 * 1000;
+const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -128,6 +140,11 @@ function addTokenUsage(agent: AgentState, usage: TokenUsage): void {
   agent.tokenUsage.outputTokens += usage.outputTokens;
   agent.tokenUsage.cacheCreationInputTokens = (agent.tokenUsage.cacheCreationInputTokens || 0) + (usage.cacheCreationInputTokens || 0);
   agent.tokenUsage.cacheReadInputTokens = (agent.tokenUsage.cacheReadInputTokens || 0) + (usage.cacheReadInputTokens || 0);
+}
+
+function replaceAgentStateSessionId(agent: AgentState | undefined | null, nextSessionId?: string | null): void {
+  if (!agent) return;
+  agent.sessionId = nextSessionId || null;
 }
 
 export interface AgentState {
@@ -352,6 +369,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   /** Current engine type */
   private engineType: EngineType = 'claude-code';
   private engineExecutionTail: Promise<void> = Promise.resolve();
+  private workflowGit: WorkflowGitState | null = null;
   /** Optional frontend chat session to auto-bind with this run */
   public _frontendSessionId?: string;
   /** Explicit creation session to bind to the next run */
@@ -365,6 +383,27 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private resolveProjectRootPath(projectRoot?: string | null): string {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
+  }
+
+  private getWorkflowAgoraAgentSessions(): Record<string, string> {
+    return Object.fromEntries(
+      this.agents
+        .filter((agent) => Boolean(agent.sessionId))
+        .map((agent) => [agent.name, agent.sessionId as string])
+    );
+  }
+
+  private getWorkflowAgoraParticipants() {
+    const names = new Set<string>();
+    const addName = (name?: string | null) => {
+      const trimmed = String(name || '').trim();
+      if (trimmed) names.add(trimmed);
+    };
+    addName(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
+    this.agents.forEach((agent) => addName(agent.name));
+    return createWorkflowParticipants([...names], {
+      coordinatorAgent: this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME,
+    });
   }
   constructor() {
     super();
@@ -907,6 +946,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     requirementsOrChecks?: string | PersistedQualityCheck[],
     maybePreflightChecks?: PersistedQualityCheck[],
     initialContexts?: { globalContext?: string; phaseContexts?: Record<string, string> },
+    requestedRunId?: string,
   ): Promise<void> {
     if (this.status === 'running' || this.status === 'preparing') {
       throw new Error('工作流已在运行中');
@@ -937,6 +977,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.latestSupervisorReview = null;
       this.currentRunSpecCoding = null;
       this.currentSpecRootDir = null;
+      this.workflowGit = null;
       this.stepTaskBindingsByStepKey.clear();
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;
@@ -981,7 +1022,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       const totalSteps = workflowConfig.workflow.states.reduce(
         (sum, s) => sum + s.steps.length, 0
       );
-      const runId = `run-${formatTimestamp()}`;
+      const runId = requestedRunId || `run-${formatTimestamp()}`;
       this.currentRunId = runId;
 
       await createRun({
@@ -1004,6 +1045,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         currentPhase: '准备阶段',
         currentStep: '初始化运行上下文',
         currentConfigFile: this.currentConfigFile,
+        workflowFrontendSessionId: this._frontendSessionId || null,
       });
       this.currentStep = '初始化运行上下文';
       await this.persistState();
@@ -1049,6 +1091,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           currentPhase: '准备阶段',
           currentStep: this.currentStep,
           currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.persistState();
       };
@@ -1087,6 +1130,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
 
       if (this.shouldStop) return;
+
+      const workflowGitWorkspacePath = this.getWorkingDirectory() || workflowConfig.context?.projectRoot;
+      if (workflowGitWorkspacePath) {
+        await reportPreparingProgress('准备中：建立 Git 基线...', '建立 Git 基线');
+        await this.ensureWorkflowGitBaseline(workflowGitWorkspacePath);
+      }
 
       // === Preparing phase: load agents, init engine, sync skills ===
       await reportPreparingProgress('准备中：加载 Agent 配置...', '加载 Agent 配置');
@@ -1139,6 +1188,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         endTime: this.runEndTime,
         currentConfigFile: this.currentConfigFile,
         workingDirectory: this.getWorkingDirectory(),
+        workflowFrontendSessionId: this._frontendSessionId || null,
       });
       await this.persistState();
 
@@ -1149,9 +1199,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
+          runId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.finalizeRun('completed');
       }
@@ -1162,9 +1214,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.emit('status', {
           status: 'failed',
           message: error.message,
+          runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.finalizeRun('failed');
       }
@@ -1244,25 +1298,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
     body?: string;
     tags?: string[];
     dedupeKey?: string;
+    speakerName?: string;
+    speakerType?: 'human' | 'agent' | 'system';
   }): Promise<void> {
     if (!this._frontendSessionId) return;
-    const supervisorAgent = this.agents.find((agent) => agent.name === this.currentSupervisorAgent);
-    const tags = ['supervisor', ...(input.tags || [])].filter(Boolean);
-    await appendChatSessionMessage(this._frontendSessionId, {
-      role: 'assistant',
-      content: [
-        `<workflow-event type="${input.type}" tags="${tags.join(',')}">`,
-        input.title,
-        this.currentRunId ? `- Run ID: ${this.currentRunId}` : '',
-        this.currentConfigFile ? `- 配置文件: ${this.currentConfigFile}` : '',
-        `- Supervisor: ${this.currentSupervisorAgent}`,
-        supervisorAgent?.sessionId ? `- Supervisor Session: ${supervisorAgent.sessionId}` : '',
-        input.body || '',
-        '</workflow-event>',
-      ].filter(Boolean).join('\n'),
-    }, {
-      backendSessionId: supervisorAgent?.sessionId || undefined,
+    const speakerName = input.speakerName || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    await appendWorkflowAgoraMessage({
+      sessionId: this._frontendSessionId,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      speakerName,
+      speakerType: input.speakerType || 'agent',
       dedupeKey: input.dedupeKey,
+      participants: this.getWorkflowAgoraParticipants(),
+      agentSessions: this.getWorkflowAgoraAgentSessions(),
+      workspacePath: this.getWorkingDirectory() || undefined,
     }).catch(() => {});
   }
 
@@ -1372,6 +1423,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       body: answerText,
       tags: ['human', 'answered'],
       dedupeKey: `workflow-human-answer-${questionId}-${now}`,
+      speakerName: '你',
+      speakerType: 'human',
     });
     this.emit('human-question-answered', { question: updated, answer });
     this.emit('status', { status: this.status, pendingHumanQuestion: null, currentConfigFile: this.currentConfigFile });
@@ -1430,6 +1483,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     // Cleanup copied skills from workspace
     await this.cleanupWorkspaceSkills();
+    await this.recordFinalGitSnapshot(status);
 
     // 持久化 spec 模式：运行完成后标记 delta 可人工合入 master
     if (status === 'completed' && this.currentRunSpecCoding?.persistMode === 'repository' && this.currentRunId) {
@@ -1457,6 +1511,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await this.persistState(status);
     } catch (err) {
     }
+
+    await this.appendSupervisorChatEvent({
+      type: status === 'completed' ? 'run-completed' : status === 'failed' ? 'run-failed' : 'run-stopped',
+      title: status === 'completed' ? '工作流执行完成' : status === 'failed' ? '工作流执行失败' : '工作流已停止',
+      body: status === 'completed'
+        ? `完成步骤：${this.agents.reduce((sum, agent) => sum + agent.completedTasks, 0)}`
+        : this.statusReason || '',
+      speakerName: this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME,
+      dedupeKey: `workflow-run-${status}-${this.currentRunId}`,
+    });
 
     this.status = 'idle';
   }
@@ -1597,6 +1661,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           },
         } : {}),
         workingDirectory: this.getWorkingDirectory() || undefined,
+        workspaceGit: this.workflowGit || undefined,
         supervisorAgent: this.currentSupervisorAgent,
         supervisorSessionId,
         attachedAgentSessions,
@@ -1636,6 +1701,125 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private extractJsonObject(raw: string): any | null {
     return extractStructuredJsonObject(raw);
+  }
+
+  private async ensureWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
+    if (!this.currentRunId || !workspacePath) return;
+    try {
+      this.workflowGit = await ensureWorkflowGitState({
+        workspacePath,
+        runId: this.currentRunId,
+        existing: this.workflowGit || undefined,
+      });
+      await this.persistState();
+    } catch (error: any) {
+      this.workflowGit = {
+        enabled: false,
+        runId: this.currentRunId,
+        workspacePath,
+        repoRoot: workspacePath,
+        wasGitRepository: false,
+        initializedRepository: false,
+        snapshots: [],
+        stepDiffs: [],
+        error: error?.message || String(error),
+        updatedAt: new Date().toISOString(),
+      };
+      await this.persistState();
+    }
+  }
+
+  private async recordStepGitBefore(input: {
+    stepLogId: string;
+    stepName: string;
+    stateName?: string;
+    agent: string;
+  }): Promise<string | undefined> {
+    if (!this.workflowGit?.enabled) return undefined;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'step-before',
+        label: `步骤开始前: ${input.stepName}`,
+        stepName: input.stepName,
+        stateName: input.stateName,
+        agent: input.agent,
+      });
+      this.workflowGit = upsertWorkflowGitStepDiff(recorded.state, {
+        id: `git-step-${input.stepLogId}`,
+        stepLogId: input.stepLogId,
+        stepName: input.stepName,
+        stateName: input.stateName,
+        agent: input.agent,
+        status: 'running',
+        beforeSnapshotId: recorded.snapshot.id,
+        startedAt: new Date().toISOString(),
+      });
+      await this.persistState();
+      return recorded.snapshot.id;
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState();
+      return undefined;
+    }
+  }
+
+  private async recordStepGitAfter(input: {
+    stepLogId: string;
+    stepName: string;
+    stateName?: string;
+    agent: string;
+    status: 'completed' | 'failed';
+    beforeSnapshotId?: string;
+  }): Promise<string | undefined> {
+    if (!this.workflowGit?.enabled) return undefined;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'step-after',
+        label: `步骤结束后: ${input.stepName}`,
+        stepName: input.stepName,
+        stateName: input.stateName,
+        agent: input.agent,
+      });
+      const existing = this.workflowGit.stepDiffs.find((item) => item.id === `git-step-${input.stepLogId}`);
+      this.workflowGit = upsertWorkflowGitStepDiff(recorded.state, {
+        id: `git-step-${input.stepLogId}`,
+        stepLogId: input.stepLogId,
+        stepName: input.stepName,
+        stateName: input.stateName,
+        agent: input.agent,
+        status: input.status,
+        beforeSnapshotId: existing?.beforeSnapshotId || input.beforeSnapshotId || recorded.snapshot.id,
+        afterSnapshotId: recorded.snapshot.id,
+        startedAt: existing?.startedAt || new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      await this.persistState();
+      return recorded.snapshot.id;
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState();
+      return undefined;
+    }
+  }
+
+  private async recordFinalGitSnapshot(status: 'completed' | 'failed' | 'stopped'): Promise<void> {
+    if (!this.workflowGit?.enabled) return;
+    try {
+      const recorded = await recordWorkflowGitSnapshot({
+        state: this.workflowGit,
+        kind: 'run-final',
+        label: `工作流结束: ${status}`,
+        stateName: this.currentState || undefined,
+        agent: this.currentSupervisorAgent || undefined,
+      });
+      this.workflowGit = recorded.state;
+      await this.persistState(status);
+    } catch (error: any) {
+      this.workflowGit = { ...this.workflowGit, error: error?.message || String(error), updatedAt: new Date().toISOString() };
+      await this.persistState(status);
+    }
   }
 
   private buildFallbackFinalReview(status: 'completed' | 'failed' | 'stopped'): WorkflowFinalReview {
@@ -1916,7 +2100,7 @@ try {
       engine.on('stream', streamHandler);
 
       try {
-        const result = await engine.execute({
+        const result = await executeEngineWithContextRecovery(engine, {
           agent, step, prompt, systemPrompt, model,
           workingDirectory: options.workingDirectory,
           allowedTools: options.allowedTools,
@@ -1924,15 +2108,24 @@ try {
           sessionId: options.resumeSessionId,
           appendSystemPrompt: options.appendSystemPrompt,
           runId: options.runId,
+        }, {
+          onContextReset: (event) => {
+            this.emit('log', {
+              agent,
+              level: 'warning',
+              message: `上下文超限，已清空 ${this.engineType} 会话并重试: ${event.method}`,
+            });
+          },
         });
 
         // Mark process as completed
+        const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
         const rawProc = processManager.getProcessRaw(processId);
         if (rawProc) {
           rawProc.status = 'completed';
           rawProc.endTime = new Date();
           processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
-          rawProc.sessionId = result.sessionId;
+          rawProc.sessionId = resolvedSessionId || undefined;
         }
 
         // If engine reports failure, throw so the step is marked as failed
@@ -1950,7 +2143,7 @@ try {
 
         return {
           result: result.output,
-          session_id: result.sessionId || '',
+          session_id: resolvedSessionId || '',
           is_error: false,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
@@ -2609,6 +2802,8 @@ try {
     config: StateMachineWorkflowConfig,
     requirements?: string
   ): Promise<StateExecutionResult> {
+    const stateLead = state.steps[0]?.agent || this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    const stateCloser = [...state.steps].reverse().find((step) => step.agent)?.agent || stateLead;
     this.emit('state-executing', {
       state: state.name,
       stepCount: state.steps.length,
@@ -2621,6 +2816,13 @@ try {
       });
       await this.persistState();
     }
+    await this.appendSupervisorChatEvent({
+      type: 'state-start',
+      title: `状态开始：${state.name}`,
+      body: `${state.steps.length} 个步骤待处理。`,
+      speakerName: stateLead,
+      dedupeKey: `workflow-state-start-${this.currentRunId || this.currentConfigFile}-${state.name}`,
+    });
 
     const stepOutputs: string[] = [];
     const issues: Issue[] = [];
@@ -2686,13 +2888,21 @@ try {
 
     // Add issues to tracker
     this.issueTracker.push(...issues);
+    const summary = this.generateStateSummary(state, issues);
+    await this.appendSupervisorChatEvent({
+      type: verdict === 'fail' ? 'state-failed' : 'state-complete',
+      title: verdict === 'fail' ? `状态失败：${state.name}` : `状态完成：${state.name}`,
+      body: summary,
+      speakerName: stateCloser,
+      dedupeKey: `workflow-state-${verdict === 'fail' ? 'failed' : 'complete'}-${this.currentRunId || this.currentConfigFile}-${state.name}`,
+    });
 
     return {
       stateName: state.name,
       verdict,
       issues,
       stepOutputs,
-      summary: this.generateStateSummary(state, issues),
+      summary,
     };
   }
 
@@ -2791,6 +3001,12 @@ try {
 
     const stepId = randomUUID();
     const stepKey = `${state.name}-${step.name}`;
+    const beforeSnapshotId = await this.recordStepGitBefore({
+      stepLogId: stepId,
+      stepName: stepKey,
+      stateName: state.name,
+      agent: runtimeAgentName,
+    });
 
     agent.status = 'running';
     agent.currentTask = step.name;
@@ -2830,6 +3046,7 @@ try {
       body: `- Agent: ${runtimeAgentName}`,
       tags: ['task', 'running', runtimeAgentName],
       dedupeKey: `workflow-step-start-${stepId}`,
+      speakerName: runtimeAgentName,
     });
 
     try {
@@ -2872,10 +3089,8 @@ try {
       agent.costUsd += stepResult.costUsd;
       agent.lastOutput = output;
       agent.summary = conclusion;
-      // Store session ID for reuse across iterations of the same runtime agent
-      if (stepResult.sessionId) {
-        agent.sessionId = stepResult.sessionId;
-      }
+      // Store or clear session ID for reuse across iterations of the same runtime agent
+      replaceAgentStateSessionId(agent, stepResult.sessionId);
       this.markStepInactive(stepKey);
       if (!this.completedSteps.includes(stepKey)) {
         this.completedSteps.push(stepKey);
@@ -2889,6 +3104,14 @@ try {
         validation: `Step completed: ${state.name} / ${step.name}`,
       });
 
+      const afterSnapshotId = await this.recordStepGitAfter({
+        stepLogId: stepId,
+        stepName: stepKey,
+        stateName: state.name,
+        agent: runtimeAgentName,
+        status: 'completed',
+        beforeSnapshotId,
+      });
       // Record step log for persistence
       this.stepLogs.push({
         id: stepId,
@@ -2903,6 +3126,9 @@ try {
         tokenUsage: stepResult.tokenUsage,
         sessionId: stepResult.sessionId || null,
         engineName: this.engineType,
+        gitStepDiffId: `git-step-${stepId}`,
+        gitBeforeSnapshotId: beforeSnapshotId,
+        gitAfterSnapshotId: afterSnapshotId,
       });
 
       this.emit('agents', { agents: this.agents });
@@ -2926,6 +3152,7 @@ try {
         ].filter(Boolean).join('\n'),
         tags: ['task', 'completed', runtimeAgentName],
         dedupeKey: `workflow-step-complete-${stepId}`,
+        speakerName: runtimeAgentName,
       });
 
       // 记录步骤完成的流转线
@@ -2984,6 +3211,14 @@ try {
         updatedBy: `system:${runtimeAgentName}`,
         validation: `Step failed: ${state.name} / ${step.name}: ${errorMsg}`,
       });
+      const afterSnapshotId = await this.recordStepGitAfter({
+        stepLogId: stepId,
+        stepName: stepKey,
+        stateName: state.name,
+        agent: runtimeAgentName,
+        status: 'failed',
+        beforeSnapshotId,
+      });
       this.stepLogs.push({
         id: stepId,
         stepName: stepKey,
@@ -2997,6 +3232,9 @@ try {
         tokenUsage: toPersistedTokenUsage(ZERO_ENGINE_USAGE),
         sessionId: null,
         engineName: this.engineType,
+        gitStepDiffId: `git-step-${stepId}`,
+        gitBeforeSnapshotId: beforeSnapshotId,
+        gitAfterSnapshotId: afterSnapshotId,
       });
 
       this.emit('agents', { agents: this.agents });
@@ -3010,6 +3248,7 @@ try {
         ].join('\n'),
         tags: ['task', 'failed', runtimeAgentName],
         dedupeKey: `workflow-step-failed-${stepId}`,
+        speakerName: runtimeAgentName,
       });
 
       // Save error output
@@ -3553,9 +3792,13 @@ try {
 
     // Set up periodic stream content flushing to disk (so frontend can read it)
     let lastFlush = 0;
+    let lastStreamAt = Date.now();
+    let watchdogTriggeredForProcess = '';
     const streamFlushHandler = (data: { id: string; step: string; total: string }) => {
       if (data.id !== currentProcessId) return;
       const now = Date.now();
+      lastStreamAt = now;
+      watchdogTriggeredForProcess = '';
       if (this.currentRunId && now - lastFlush > 2000) {
         lastFlush = now;
         const proc = processManager.getProcess(currentProcessId);
@@ -3569,6 +3812,19 @@ try {
       }
     };
     processManager.on('stream', streamFlushHandler);
+    const idleWatchdog = setInterval(() => {
+      if (!currentProcessId || this.shouldStop || this.interruptFlag) return;
+      if (watchdogTriggeredForProcess === currentProcessId) return;
+      if (Date.now() - lastStreamAt < STREAM_IDLE_INTERRUPT_MS) return;
+      const proc = processManager.getProcess(currentProcessId);
+      if (!proc || proc.status !== 'running') return;
+      watchdogTriggeredForProcess = currentProcessId;
+      this.liveFeedback.push(AUTO_CONTINUE_FEEDBACK);
+      this.interruptFlag = true;
+      this.feedbackInterrupt = true;
+      this.emit('feedback-injected', { message: AUTO_CONTINUE_FEEDBACK, timestamp: new Date().toISOString(), automatic: true });
+      this.cancelCurrentProcesses();
+    }, STREAM_IDLE_CHECK_MS);
 
     // Feedback loop: run agent, handle interrupts and pending feedback
     try {
@@ -3643,6 +3899,8 @@ try {
             currentPrompt = context + '\n\n' + currentPrompt;
           }
           currentProcessId = stepId || currentProcessId;
+          lastStreamAt = Date.now();
+          watchdogTriggeredForProcess = '';
           this.upsertCurrentProcess({
             pid: Date.now(),
             id: currentProcessId,
@@ -3684,10 +3942,8 @@ try {
       accumulatedTokenUsage.cacheCreationInputTokens = (accumulatedTokenUsage.cacheCreationInputTokens || 0) + (resultTokenUsage.cacheCreationInputTokens || 0);
       accumulatedTokenUsage.cacheReadInputTokens = (accumulatedTokenUsage.cacheReadInputTokens || 0) + (resultTokenUsage.cacheReadInputTokens || 0);
 
-      // Always capture session_id for reuse
-      if (result.session_id) {
-        currentSessionId = result.session_id;
-      }
+      // Always capture the latest session_id for reuse; clear if recovery could not produce one.
+      currentSessionId = result.session_id || undefined;
 
       // Check for pending live feedback after completion
       if (this.liveFeedback.length > 0 && !this.shouldStop) {
@@ -3704,6 +3960,8 @@ try {
         currentSessionId = sessionId;
         currentPrompt = `## 人工实时反馈\n以下是用户在你执行过程中提供的反馈意见，请基于这些反馈继续处理当前任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
         currentProcessId = stepId || currentProcessId;
+        lastStreamAt = Date.now();
+        watchdogTriggeredForProcess = '';
         this.upsertCurrentProcess({
           pid: Date.now(),
           id: currentProcessId,
@@ -3722,6 +3980,7 @@ try {
       break;
     }
     } finally {
+      clearInterval(idleWatchdog);
       processManager.off('stream', streamFlushHandler);
     }
 
@@ -3749,6 +4008,14 @@ try {
       const target = this.pendingForceTransition;
       this.pendingForceTransition = null;
       this.emit('transition-forced', { from: result.stateName, to: target });
+      await this.appendSupervisorChatEvent({
+        type: 'human-answer',
+        title: `人工指定下一状态：${target}`,
+        body: this.pendingForceInstruction || `从「${result.stateName}」转入「${target}」。`,
+        speakerName: '你',
+        speakerType: 'human',
+        dedupeKey: `workflow-forced-transition-${this.currentRunId || this.currentConfigFile}-${result.stateName}-${target}-${Date.now()}`,
+      });
       return target;
     }
 
@@ -4025,6 +4292,9 @@ try {
     this.runStartTime = runState.startTime || null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.isolatedDir = runState.workingDirectory || null;
+    this.currentProjectRoot = runState.workingDirectory || null;
+    this.workflowGit = runState.workspaceGit || null;
     this.currentRunSpecCoding = runState.runSpecCoding
       ? normalizeSpecCodingDocument(runState.runSpecCoding)
       : null;
@@ -4086,6 +4356,10 @@ try {
     const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
+    if (runState.workingDirectory) {
+      workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
     this.currentWorkflowConfig = workflowConfig;
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
@@ -4102,6 +4376,7 @@ try {
 
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {
@@ -4549,9 +4824,7 @@ try {
         }
       );
       const answer = result.result || '[无输出]';
-      if (result.session_id && agentState) {
-        agentState.sessionId = result.session_id;
-      }
+      replaceAgentStateSessionId(agentState, result.session_id);
       
       this.agentFlow.push({
         id: `flow-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

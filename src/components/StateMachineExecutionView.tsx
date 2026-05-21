@@ -155,6 +155,7 @@ interface StateMachineExecutionViewProps {
   } | null;
   overviewFooter?: ReactNode;
   supervisorInteractionPanel?: ReactNode;
+  supervisorDirectPanel?: ReactNode;
   supervisorFooter?: ReactNode;
   activeTabOverride?: string | null;
   hasPendingHumanQuestion?: boolean;
@@ -193,6 +194,7 @@ export default function StateMachineExecutionView({
   tokenAnalytics,
   overviewFooter,
   supervisorInteractionPanel,
+  supervisorDirectPanel,
   supervisorFooter,
   activeTabOverride,
   hasPendingHumanQuestion,
@@ -553,43 +555,45 @@ export default function StateMachineExecutionView({
   const supervisorWaitingForHuman = currentState === '__human_approval__' || status === 'waiting';
 
   return (
-    <div className="h-full flex flex-col">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-        <TabsList className="grid w-full grid-cols-5 mb-4">
-          <TabsTrigger value="overview" className="flex items-center gap-2">
-            <Activity className="w-4 h-4" />
-            <span>总览</span>
-          </TabsTrigger>
-          <TabsTrigger value="trace" className="flex items-center gap-2">
-            <GitBranch className="w-4 h-4" />
-            <span>状态图</span>
-          </TabsTrigger>
-          <TabsTrigger value="history" className="flex items-center gap-2">
-            <GitBranch className="w-4 h-4" />
-            <span>流转历史</span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="supervisor"
-            className={`flex items-center gap-2 ${
-              hasPendingHumanQuestion
-                ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
-                : ''
-            }`}
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
-            {hasPendingHumanQuestion && (
-              <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="token" className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-base">toll</span>
-            <span>Token</span>
-          </TabsTrigger>
-        </TabsList>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="sticky top-0 z-10 -mx-4 mb-4 border-b border-border/60 bg-background/95 px-4 pb-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="overview" className="flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              <span>总览</span>
+            </TabsTrigger>
+            <TabsTrigger value="trace" className="flex items-center gap-2">
+              <GitBranch className="w-4 h-4" />
+              <span>状态图</span>
+            </TabsTrigger>
+            <TabsTrigger value="history" className="flex items-center gap-2">
+              <GitBranch className="w-4 h-4" />
+              <span>流转历史</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="supervisor"
+              className={`flex items-center gap-2 ${
+                hasPendingHumanQuestion
+                  ? 'border border-amber-300 bg-amber-100 text-amber-900 shadow-sm data-[state=active]:bg-amber-500 data-[state=active]:text-black animate-pulse'
+                  : ''
+              }`}
+            >
+              <MessageSquare className="w-4 h-4" />
+              <span>{hasPendingHumanQuestion ? 'Supervisor 待处理' : 'Supervisor'}</span>
+              {hasPendingHumanQuestion && (
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-amber-200" />
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="token" className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-base">toll</span>
+              <span>Token</span>
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* 总览视图 */}
-        <TabsContent value="overview" className="flex-1 overflow-auto">
+        <TabsContent value="overview" className="min-h-0 flex-1 overflow-auto">
           <div className="space-y-6">
             {concurrencyGroupsToDisplay.length > 0 && (
               <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700 space-y-4">
@@ -676,7 +680,7 @@ export default function StateMachineExecutionView({
         </TabsContent>
 
         {/* 状态图视图 */}
-        <TabsContent value="trace" className="flex-1 overflow-hidden">
+        <TabsContent value="trace" className="min-h-0 flex-1 overflow-hidden">
           <StateMachineDiagram
             states={states}
             currentState={currentState}
@@ -693,7 +697,7 @@ export default function StateMachineExecutionView({
         </TabsContent>
 
 
-        <TabsContent value="history" className="flex-1 overflow-auto">
+        <TabsContent value="history" className="min-h-0 flex-1 overflow-auto">
           <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-700 dark:bg-gray-800">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -812,7 +816,12 @@ export default function StateMachineExecutionView({
           </div>
         </TabsContent>
 
-        <TabsContent value="supervisor" className="overflow-visible">
+        <TabsContent value="supervisor" className={supervisorDirectPanel ? 'min-h-0 flex-1 overflow-hidden' : 'overflow-visible'}>
+          {supervisorDirectPanel ? (
+            <div className="h-full min-h-0 overflow-hidden">
+              {supervisorDirectPanel}
+            </div>
+          ) : (
           <div className="space-y-4">
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -822,7 +831,7 @@ export default function StateMachineExecutionView({
                     <h3 className="font-semibold">Supervisor 工作台</h3>
                   </div>
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    用会话方式查看 Supervisor 的决策、Agent 交互、人工等待和执行任务状态。
+                    Supervisor 仍负责智能路由、阶段审阅和人工等待；协作消息由议场承载。
                   </p>
                 </div>
                 <Badge variant={supervisorWaitingForHuman ? 'destructive' : status === 'running' ? 'secondary' : 'outline'} className="text-[10px]">
@@ -844,14 +853,14 @@ export default function StateMachineExecutionView({
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold">Supervisor 面板</h3>
+                  <h3 className="font-semibold">Supervisor 协作</h3>
                   <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    默认聚焦当前圆桌会话与人工处理入口，编队状态和会话记录按需展开。
+                    默认聚焦当前 Supervisor 绑定的协作消息与人工处理入口，编队状态和会话记录按需展开。
                   </p>
                 </div>
                 <Tabs value={supervisorPanelTab} onValueChange={(value) => setSupervisorPanelTab(value as typeof supervisorPanelTab)} className="w-full">
                   <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:grid-cols-4">
-                    <TabsTrigger value="human" className={hasPendingHumanQuestion ? 'text-amber-700' : ''}>圆桌会议</TabsTrigger>
+                    <TabsTrigger value="human" className={hasPendingHumanQuestion ? 'text-amber-700' : ''}>协作消息</TabsTrigger>
                     <TabsTrigger value="formation">编队状态</TabsTrigger>
                     <TabsTrigger value="timeline">会话记录</TabsTrigger>
                     <TabsTrigger value="summary">结算总结</TabsTrigger>
@@ -913,9 +922,10 @@ export default function StateMachineExecutionView({
               </div>
             </div>
           </div>
+          )}
         </TabsContent>
 
-        <TabsContent value="token" className="flex-1 overflow-auto">
+        <TabsContent value="token" className="min-h-0 flex-1 overflow-auto">
           <div className="space-y-4">
             <div className="rounded-2xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-800">
               <div className="flex flex-wrap items-start justify-between gap-3">
