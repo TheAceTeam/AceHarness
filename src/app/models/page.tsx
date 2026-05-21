@@ -35,6 +35,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -61,6 +62,9 @@ import { MultiCombobox } from '@/components/ui/combobox';
 import { PaginationBar } from '@/components/PaginationBar';
 import ModelProbeMonitor from '@/components/models/ModelProbeMonitor';
 import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
+import { EngineIcon } from '@/components/EngineIcon';
+import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
+import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 
 interface Model {
   id: string;
@@ -72,6 +76,48 @@ interface Model {
   contextWindow?: number;
   createdAt?: string;
   updatedAt?: string;
+}
+
+function EndpointTag({ endpoint, iconOnly = false }: { endpoint: string; iconOnly?: boolean }) {
+  const label = getEndpointDisplayName(endpoint);
+  const hasWordmark = endpointHasWordmark(endpoint);
+  const showText = !iconOnly && !hasWordmark;
+  return (
+    <Badge
+      variant="secondary"
+      title={label}
+      className={cn(
+        'max-w-full rounded-full border border-border/70 bg-background/80 text-[11px] font-medium leading-none text-foreground shadow-sm',
+        iconOnly ? 'h-7 w-7 justify-center p-0' : showText ? 'h-8 gap-1.5 px-2.5' : 'h-8 px-2.5'
+      )}
+    >
+      <EndpointIcon
+        endpoint={endpoint}
+        mode={iconOnly ? 'mark' : hasWordmark ? 'logo' : 'mark'}
+        className={hasWordmark && !iconOnly ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
+        alt={label}
+        decorative={iconOnly}
+      />
+      {iconOnly || !showText ? <span className="sr-only">{label}</span> : <span className="truncate">{label}</span>}
+    </Badge>
+  );
+}
+
+function EngineTag({ engine, compact = false }: { engine: string; compact?: boolean }) {
+  const label = getEngineDisplayName(engine) || engine;
+  return (
+    <Badge
+      variant="outline"
+      title={label}
+      className={cn(
+        'max-w-full rounded-full border-border/70 bg-background/80 text-[11px] font-medium leading-none text-foreground shadow-sm',
+        compact ? 'h-8 gap-1.5 px-2.5' : 'h-8 gap-1.5 px-2.5'
+      )}
+    >
+      <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={label} decorative={false} />
+      <span className="truncate">{engine}</span>
+    </Badge>
+  );
 }
 
 function SortableModelCard({
@@ -108,7 +154,7 @@ function SortableModelCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        'group relative rounded-[20px] border bg-card p-5 transition-all',
+        'group relative flex min-h-[252px] flex-col rounded-[22px] border bg-card px-5 py-5 transition-all',
         isDragging && 'z-50 shadow-2xl',
         selected && 'ring-2 ring-primary'
       )}
@@ -125,16 +171,16 @@ function SortableModelCard({
         <Checkbox checked={selected} onCheckedChange={onToggleSelect} />
       </div>
 
-      <div className="ml-6 mt-4">
-        <div className="mb-2 flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
+      <div className="ml-8 flex min-h-[212px] flex-1 flex-col">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <Cpu className="h-4 w-4 text-primary" />
           </div>
-          <div>
-            <h3 className="font-semibold leading-tight">{model.name}</h3>
+          <div className="min-w-0">
+            <h3 className="line-clamp-2 text-[15px] font-semibold leading-6">{model.name}</h3>
             <span
               className={cn(
-                'mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium',
+                'mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium',
                 status.class
               )}
             >
@@ -143,18 +189,30 @@ function SortableModelCard({
           </div>
         </div>
 
-        <div className="mb-3 space-y-1 text-sm text-muted-foreground">
-          <div className="flex items-center gap-1.5">
-            <Globe className="h-3 w-3" />
-            <span>{model.endpoints.join(', ')}</span>
+        <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
+          <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2.5">
+            <Globe className="mt-2 h-3.5 w-3.5 text-muted-foreground/80" />
+            <div className="flex min-w-0 flex-wrap gap-1.5">
+              {model.endpoints.length > 0 ? (
+                model.endpoints.map((endpoint) => (
+                  <EndpointTag key={`${model.id}-endpoint-${endpoint}`} endpoint={endpoint} />
+                ))
+              ) : (
+                <span className="py-1 text-xs text-muted-foreground">未配置端点</span>
+              )}
+            </div>
           </div>
           {model.engines.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <Settings className="h-3 w-3" />
-              <span>{model.engines.join(', ')}</span>
+            <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-2.5">
+              <Settings className="mt-2 h-3.5 w-3.5 text-muted-foreground/80" />
+              <div className="flex min-w-0 flex-wrap gap-1.5">
+                {model.engines.map((engine) => (
+                  <EngineTag key={`${model.id}-engine-${engine}`} engine={engine} compact />
+                ))}
+              </div>
             </div>
           )}
-          <div className="flex items-center gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pl-[22px] text-xs">
             {model.contextWindow && (
               <span>{model.contextWindow.toLocaleString()} ctx</span>
             )}
@@ -162,12 +220,12 @@ function SortableModelCard({
           </div>
         </div>
 
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <div className="flex items-center gap-3">
+        <div className="mt-auto flex items-end justify-between gap-3 border-t border-border/60 pt-4 text-xs text-muted-foreground">
+          <div className="flex min-w-0 flex-col gap-1">
             {model.createdAt && <span>创建: {new Date(model.createdAt).toLocaleDateString()}</span>}
             {model.updatedAt && <span>修改: {new Date(model.updatedAt).toLocaleDateString()}</span>}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
               <Edit className="h-3.5 w-3.5" />
             </Button>
@@ -248,11 +306,19 @@ function SortableModelRow({
           {status.label}
         </span>
       </TableCell>
-      <TableCell className="text-sm text-muted-foreground">
-        {model.endpoints.join(', ')}
+      <TableCell>
+        <div className="flex flex-wrap gap-1.5">
+          {model.endpoints.map((endpoint) => (
+            <EndpointTag key={`${model.id}-endpoint-row-${endpoint}`} endpoint={endpoint} iconOnly />
+          ))}
+        </div>
       </TableCell>
-      <TableCell className="text-sm text-muted-foreground">
-        {model.engines.join(', ')}
+      <TableCell>
+        <div className="flex flex-wrap gap-1.5">
+          {model.engines.map((engine) => (
+            <EngineTag key={`${model.id}-engine-row-${engine}`} engine={engine} compact />
+          ))}
+        </div>
       </TableCell>
       <TableCell className="text-sm text-muted-foreground">
         {model.contextWindow ? model.contextWindow.toLocaleString() : '-'}
@@ -611,15 +677,43 @@ export default function ModelsPage() {
                     </Button>
                   </div>
 
-                  <div className="w-[140px]">
-                    <MultiCombobox
-                      options={allEndpoints.map((e) => ({ label: e, value: e }))}
-                      value={selectedEndpoints}
-                      onValueChange={setSelectedEndpoints}
-                      placeholder="端点筛选"
-                      emptyText="全部端点"
-                    />
-                  </div>
+                  {allEndpoints.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="mr-1 text-xs text-muted-foreground">端点:</span>
+                      {allEndpoints.map((endpoint) => {
+                        const label = getEndpointDisplayName(endpoint);
+                        const hasWordmark = endpointHasWordmark(endpoint);
+                        const isActive = selectedEndpoints.includes(endpoint);
+                        return (
+                          <Button
+                            key={endpoint}
+                            variant={isActive ? 'secondary' : 'outline'}
+                            size="sm"
+                            className={cn(
+                              'h-8 gap-1.5 rounded-lg px-2.5 text-xs',
+                              isActive && 'ring-1 ring-primary/50'
+                            )}
+                            onClick={() => {
+                              setSelectedEndpoints((prev) =>
+                                isActive
+                                  ? prev.filter((value) => value !== endpoint)
+                                  : [...prev, endpoint]
+                              );
+                            }}
+                          >
+                            <EndpointIcon
+                              endpoint={endpoint}
+                              mode={hasWordmark ? 'logo' : 'mark'}
+                              className={hasWordmark ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
+                              alt={label}
+                              decorative={false}
+                            />
+                            {hasWordmark ? <span className="sr-only">{label}</span> : label}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {allEngines.length > 0 && (
                     <div className="flex items-center gap-1.5">
@@ -632,7 +726,7 @@ export default function ModelsPage() {
                             variant={isActive ? 'secondary' : 'outline'}
                             size="sm"
                             className={cn(
-                              'h-7 rounded-lg px-2.5 text-xs',
+                              'h-8 gap-1.5 rounded-lg px-2.5 text-xs',
                               isActive && 'ring-1 ring-primary/50'
                             )}
                             onClick={() => {
@@ -643,6 +737,7 @@ export default function ModelsPage() {
                               );
                             }}
                           >
+                            <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />
                             {engine}
                           </Button>
                         );
