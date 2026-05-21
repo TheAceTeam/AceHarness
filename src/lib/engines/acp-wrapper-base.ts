@@ -58,6 +58,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected streaming = false;
   protected collectedOutput = '';
   protected currentModelId: string | null = null;
+  protected diagnosticLoggingEnabled = false;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
@@ -67,13 +68,30 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     const timingLabel = this.getName();
     const tExecute = Date.now();
     try {
+      this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
       this.seenToolIds.clear();
       this.lastBlockWasTool = false;
       this.collectedOutput = '';
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper execute start',
+        detail: `sessionId=${options.sessionId || '<new>'}, model=${options.model || '<default>'}`,
+        metadata: {
+          step: options.step,
+          agent: options.agent,
+          workingDirectory: options.workingDirectory,
+          timeoutMs: options.timeoutMs,
+        },
+        verbose: true,
+      });
 
       // Reuse existing engine if resuming a session, otherwise create new
       const canReuse = options.sessionId && this.engine && this.currentSessionId === options.sessionId;
       if (!canReuse) {
+        this.emitDiagnosticLog({
+          message: 'ACP wrapper preparing fresh engine/session',
+          detail: options.sessionId ? `resume ${options.sessionId}` : 'create new session',
+          verbose: true,
+        });
         const tStop = Date.now();
         // Stop previous engine if any
         if (this.engine) {
@@ -100,11 +118,22 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         }
         this.currentModelId = null;
         if (this.currentSessionId) {
+          this.emitDiagnosticLog({
+            message: 'ACP session ready',
+            detail: this.currentSessionId,
+            verbose: true,
+          });
           this.emit('stream', {
             type: 'session',
             content: this.currentSessionId,
           } as EngineStreamEvent);
         }
+      } else {
+        this.emitDiagnosticLog({
+          message: 'ACP wrapper reusing in-memory session',
+          detail: options.sessionId || this.currentSessionId || '',
+          verbose: true,
+        });
       }
 
       const engine = this.engine;
@@ -112,14 +141,27 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-if (options.model && this.currentModelId !== options.model) {
+      if (options.model && this.currentModelId !== options.model) {
         const tModel = Date.now();
         try {
+          this.emitDiagnosticLog({
+            message: 'ACP set model',
+            detail: options.model,
+            verbose: true,
+          });
           // magic-cli doesn't support runtime model switching via ACP, so skip this step for it.
           await engine.setModel(options.model);
           this.currentModelId = options.model;
           logAcpTiming(timingLabel, 'wrap.W3_setModel', tModel);
         } catch (modelErr: any) {
+          this.emitDiagnosticLog({
+            level: 'error',
+            message: 'ACP set model failed',
+            detail: modelErr.message,
+            metadata: {
+              model: options.model,
+            },
+          });
           // Emit the error to the stream so the user sees available models in the UI
           this.emit('stream', {
             type: 'text',
@@ -146,6 +188,11 @@ if (options.model && this.currentModelId !== options.model) {
         }
       }
       console.log(`[${this.getName()}] calling sendPrompt...`);
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper sendPrompt start',
+        detail: `promptLength=${fullPrompt.length}`,
+        verbose: true,
+      });
       const tPrompt = Date.now();
       const promptResult = await engine.sendPrompt(fullPrompt);
       logAcpTiming(timingLabel, 'wrap.W4_sendPrompt_includes_agent', tPrompt);
@@ -153,6 +200,17 @@ if (options.model && this.currentModelId !== options.model) {
       const stopReason = promptResult.stopReason;
       console.log(`[${this.getName()}] sendPrompt returned: stopReason=${stopReason}`);
       this.streaming = false;
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper sendPrompt done',
+        detail: `stopReason=${stopReason || 'n/a'}`,
+        metadata: {
+          sessionId: this.currentSessionId,
+          stopReason,
+          usage: promptResult.usage,
+          outputLength: this.collectedOutput.length,
+        },
+        verbose: true,
+      });
 
       // Treat end_turn and undefined/null (normal completion) as success
       const isSuccess = !stopReason || stopReason === 'end_turn';
@@ -175,6 +233,12 @@ if (options.model && this.currentModelId !== options.model) {
       // Some ACP engines may close the connection right after streaming final output.
       // In this case, treat the run as successful if we already captured non-empty content.
       if (isConnectionClosed && hasUsableOutput) {
+        this.emitDiagnosticLog({
+          level: 'warning',
+          message: 'ACP connection closed after streaming output',
+          detail: `outputLength=${normalizedOutput.length}`,
+          verbose: true,
+        });
         return {
           success: true,
           output: normalizedOutput,
@@ -184,6 +248,16 @@ if (options.model && this.currentModelId !== options.model) {
         };
       }
 
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'ACP wrapper execute failed',
+        detail: errorMessage,
+        metadata: {
+          outputLength: normalizedOutput.length,
+          hasUsableOutput,
+          isConnectionClosed,
+        },
+      });
       return {
         success: false,
         output: '',
@@ -203,7 +277,10 @@ if (options.model && this.currentModelId !== options.model) {
   }
 
   protected async startNewEngine(options: EngineOptions): Promise<void> {
-    const config = this.getACPConfig(options);
+    const config = {
+      ...this.getACPConfig(options),
+      diagnosticLogging: this.diagnosticLoggingEnabled,
+    };
     this.engine = new ACPEngine(config);
     this.setupEngineEvents();
     await this.engine.start();
@@ -238,6 +315,27 @@ if (options.model && this.currentModelId !== options.model) {
     if (!normalized) return;
     this.collectedOutput += normalized;
     this.emit('stream', { type: 'text', content: normalized, metadata } as EngineStreamEvent);
+  }
+
+  protected emitDiagnosticLog(input: {
+    message: string;
+    detail?: string;
+    level?: 'info' | 'warning' | 'error';
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.diagnosticLoggingEnabled) return;
+    const { message, detail, level, metadata, verbose } = input;
+    this.emit('stream', {
+      type: 'log',
+      content: message,
+      metadata: {
+        ...(detail ? { detail } : {}),
+        ...(level ? { level } : {}),
+        ...(metadata !== undefined ? { payload: metadata } : {}),
+        ...(verbose !== undefined ? { verbose } : {}),
+      },
+    } as EngineStreamEvent);
   }
 
   protected getToolTitle(toolName: string): string {
@@ -331,16 +429,57 @@ if (options.model && this.currentModelId !== options.model) {
             description: params?.description || name,
             agent: params?.agent || params?.subagent || '',
             prompt: params?.prompt || '',
+            sessionId: params?.sessionId || params?.session_id || params?.id || params?.taskId || params?.task_id || '',
           },
           title: name,
+          toolId: String(params?.id || params?.taskId || params?.task_id || ''),
         }),
         params,
       );
     });
 
-    this.engine.on('log', () => { /* skip */ });
+    this.engine.on('log', (payload) => {
+      if (!this.streaming) return;
+      if (typeof payload === 'string') {
+        this.emitDiagnosticLog({
+          message: 'ACP engine log',
+          detail: payload.trim(),
+          verbose: true,
+        });
+        return;
+      }
+      if (payload && typeof payload === 'object' && 'message' in payload) {
+        const entry = payload as Record<string, unknown>;
+        this.emitDiagnosticLog({
+          message: String(entry.message || 'ACP engine log'),
+          detail: typeof entry.detail === 'string' ? entry.detail : undefined,
+          level: entry.level === 'info' || entry.level === 'warning' || entry.level === 'error'
+            ? entry.level
+            : undefined,
+          metadata: entry,
+          verbose: entry.verbose === undefined ? true : Boolean(entry.verbose),
+        });
+      }
+    });
+
+    this.engine.on('exit', (info) => {
+      if (!this.streaming) return;
+      this.emitDiagnosticLog({
+        level: info?.code === 0 && !info?.signal ? 'info' : 'error',
+        message: 'ACP engine exit event',
+        detail: `code=${info?.code ?? 'null'}, signal=${info?.signal ?? 'null'}`,
+        metadata: info,
+        verbose: true,
+      });
+    });
 
     this.engine.on('error', (error) => {
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'ACP engine error event',
+        detail: error instanceof Error ? error.message : String(error),
+        verbose: true,
+      });
       this.emit('stream', {
         type: 'text',
         content: `\n\n❌ 错误: ${error instanceof Error ? error.message : String(error)}\n`

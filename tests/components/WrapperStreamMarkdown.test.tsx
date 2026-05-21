@@ -5,7 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { extractAceProcessBlocks, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
+import { extractAceProcessBlocks, mergeAceSubtaskChunks, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { sendPromptWithOpenCodeHttp } from '@/lib/engines/opencode-http-adapter';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
 import { createStreamingDisplayCapability } from '@/lib/sidebar-plugins/capabilities/streaming-display';
@@ -23,6 +23,7 @@ import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/core/sche
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { formatAceToolResult } from '@/lib/chat/ace-process-formatters';
 import {
   REAL_OPENCODE_CONNECTED_REPLAY,
   REAL_OPENCODE_DONE_RESULT,
@@ -111,14 +112,18 @@ function renderWrapperStream(
 }
 
 async function openAllDetails(container: HTMLElement) {
-  const detailsNodes = Array.from(container.querySelectorAll('details'));
-  for (const details of detailsNodes) {
-    (details as HTMLDetailsElement).open = true;
-    fireEvent(details, new Event('toggle'));
-  }
-  const collapsibleTriggers = Array.from(container.querySelectorAll('button[aria-expanded="false"]'));
-  for (const trigger of collapsibleTriggers) {
-    fireEvent.click(trigger);
+  for (let pass = 0; pass < 5; pass++) {
+    const detailsNodes = Array.from(container.querySelectorAll('details:not([open])'));
+    for (const details of detailsNodes) {
+      (details as HTMLDetailsElement).open = true;
+      fireEvent(details, new Event('toggle'));
+    }
+    const collapsibleTriggers = Array.from(container.querySelectorAll('button[aria-expanded="false"]'));
+    if (!detailsNodes.length && !collapsibleTriggers.length) break;
+    for (const trigger of collapsibleTriggers) {
+      fireEvent.click(trigger);
+    }
+    await Promise.resolve();
   }
   await Promise.resolve();
 }
@@ -2014,6 +2019,86 @@ describe('Wrapper stream markdown rendering', () => {
     expect(within(subtaskCards[0].node).getByText('README renders through the shared chat pipeline.')).toBeInTheDocument();
   });
 
+  test('ace-process renders subtask titles with robot prefix and keeps internal messages inside the subtask card', async () => {
+    const view = renderWrapperStream([
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'subtask-start',
+          { title: 'Find workflow config files', description: 'Find workflow config files', agent: 'worker', prompt: 'Find config files.', toolId: 'task-find-config' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: '\nChecking configs/workflows first.\n',
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-call',
+          { toolId: 'nested-glob', toolName: 'glob', title: '🔍 搜索文件', pattern: '*.yaml', path: 'configs' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-result',
+          { toolId: 'nested-glob', toolName: 'glob', title: '🔍 搜索文件', output: 'configs/workflows/demo.yaml' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'subtask-result',
+          { toolId: 'task-find-config', resultText: 'Found workflow config files.' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: '\nBack in the parent assistant message.\n',
+      },
+    ]);
+
+    await openAllDetails(view.container);
+
+    const subtaskCards = getSubtaskCards(view.container);
+    expect(subtaskCards).toHaveLength(1);
+    expect(subtaskCards[0].text).toContain('🤖 Find workflow config files');
+    expect(within(subtaskCards[0].node).getByText('Checking configs/workflows first.')).toBeInTheDocument();
+    expect(subtaskCards[0].text).toContain('configs/workflows/demo.yaml');
+    expect(within(subtaskCards[0].node).getByText('Found workflow config files.')).toBeInTheDocument();
+
+    expect(screen.getByText('Back in the parent assistant message.')).toBeInTheDocument();
+    expectNoProtocolLeak(view.container);
+  });
+
+  test('ace-process chunk merging keeps subtask stream chunks together for Workbench-style rendering', () => {
+    const chunks = mergeAceSubtaskChunks([
+      wrapAceProcessBlock(
+        'subtask-start',
+        { title: 'Find workflow config files', description: 'Find workflow config files', toolId: 'task-find-config' },
+        '',
+      ),
+      'Checking configs/workflows first.',
+      wrapAceProcessBlock(
+        'subtask-result',
+        { toolId: 'task-find-config', resultText: 'Found workflow config files.' },
+        '',
+      ),
+      'Parent message continues.',
+    ]);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toContain('Find workflow config files');
+    expect(chunks[0]).toContain('Checking configs/workflows first.');
+    expect(chunks[0]).toContain('Found workflow config files.');
+    expect(chunks[1]).toBe('Parent message continues.');
+  });
+
   test('streaming assistant bubble does not leak action json text', () => {
     const actionJson = '```json\n{"type":"config.list","params":{},"description":"列出当前可用的工作流配置，便于按名称、模式和用途整理"}\n```';
     const view = render(
@@ -2753,5 +2838,24 @@ describe('Wrapper stream markdown rendering', () => {
     }
     expect(parsed.cleanText).toContain('Visible text');
     expect(parsed.cleanText).not.toContain('<think>');
+  });
+
+  test('shared ace tool formatter repairs Windows mojibake in tool results', () => {
+    const raw = formatAceToolResult({
+      toolName: 'read',
+      title: '📖 读取文件',
+      rawOutput: {
+        content: 'descriptionZH: ACEHarness 瑙勮寖缂栫爜鎶€鑳姐€傚皢绮楅渶姹傝浆鍖栦负缁撴瀯鍖栫殑闇€姹傛枃妗ｃ€佽璁℃枃妗ｅ拰瀹炵幇璁″垝銆�',
+      },
+    });
+
+    const parsed = extractAceProcessBlocks(raw);
+    const block = parsed.blocks[0];
+    expect(block.kind).toBe('tool-result');
+    if (block.meta.kind === 'tool-result') {
+      expect(block.meta.content).toContain('规范编码');
+      expect(block.meta.content).toContain('需求文档');
+      expect(block.meta.content).not.toContain('瑙勮');
+    }
   });
 });

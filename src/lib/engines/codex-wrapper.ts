@@ -216,6 +216,9 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     }
 
     // Create or reuse thread
+    if (options.forceNewSession && !options.sessionId) {
+      this.currentThread = null;
+    }
     if (options.sessionId) {
       this.currentThread = this.codexInstance.resumeThread(
         options.sessionId,

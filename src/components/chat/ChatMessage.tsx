@@ -1,6 +1,6 @@
 'use client';
 
-import { ActionState, parseActions, stripMachineResultBlocks } from '@/lib/chat/actions';
+import { ActionState, getStreamingResultDisplay, parseActions, stripMachineResultBlocks } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
@@ -12,7 +12,6 @@ import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { Message, MessageContent, MessageActions, MessageAction } from '@/components/ai-elements/message';
-import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent } from '@/components/ai-elements/chain-of-thought';
 import { Tool, ToolHeader, ToolContent } from '@/components/ai-elements/tool';
 import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai-elements/reasoning';
 import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai-elements/task';
@@ -34,8 +33,6 @@ import type { BundledLanguage } from 'shiki';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
-const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
-const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
 const WEREWOLF_CHAT_COLORS = [
   { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/30 bg-rose-50 text-rose-950 dark:bg-rose-950/75 dark:text-rose-100' },
   { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/30 bg-sky-50 text-sky-950 dark:bg-sky-950/75 dark:text-sky-100' },
@@ -47,17 +44,59 @@ const WEREWOLF_CHAT_COLORS = [
   { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/30 bg-fuchsia-50 text-fuchsia-950 dark:bg-fuchsia-950/75 dark:text-fuchsia-100' },
 ] as const;
 const CHUNK_BOUNDARY_PATTERN = /<!--\s*chunk-boundary\s*-->/gi;
+const VISIBLE_SESSION_TAG_SEPARATOR = ' · ';
+const VISIBLE_SESSION_TAGS = {
+  '创建工作流': {
+    kind: 'workflow',
+    icon: 'account_tree',
+    className: 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300',
+  },
+  '创建 Agent': {
+    kind: 'agent',
+    icon: 'smart_toy',
+    className: 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300',
+  },
+  '上下文压缩': {
+    kind: 'compact',
+    icon: 'compress',
+    className: 'border-sky-500/25 bg-sky-500/8 text-sky-700 dark:text-sky-300',
+  },
+} as const;
+
+function parseVisibleSessionTag(content: string): null | {
+  type: keyof typeof VISIBLE_SESSION_TAGS;
+  label: string;
+  icon: string;
+  className: string;
+} {
+  const text = String(content || '').trim();
+  const separatorIndex = text.indexOf(VISIBLE_SESSION_TAG_SEPARATOR);
+  if (separatorIndex <= 0) return null;
+  const type = text.slice(0, separatorIndex).trim() as keyof typeof VISIBLE_SESSION_TAGS;
+  const label = text.slice(separatorIndex + VISIBLE_SESSION_TAG_SEPARATOR.length).trim();
+  const config = VISIBLE_SESSION_TAGS[type];
+  if (!config || !label) return null;
+  return {
+    type,
+    label,
+    icon: config.icon,
+    className: config.className,
+  };
+}
 
 type SubtaskProcessEntry = {
   kind: 'subtask';
   title: string;
   description: string;
+  internalText: string;
   agent: string;
   prompt: string;
   toolId: string;
   sessionId: string;
   sessionFingerprint: string;
   result: string;
+  startBlockEnd: number;
+  resultBlockStart: number | null;
   state: 'input-available' | 'output-available';
   anchorStart: number;
   anchorEnd: number;
@@ -95,6 +134,7 @@ type ProcessTimelineState = {
 };
 
 const ASSISTANT_MARKDOWN_CLASS = 'text-sm prose-sm prose-neutral dark:prose-invert max-w-none [&_pre]:bg-background [&_pre]:border-0 [&_pre]:shadow-none [&_pre]:rounded [&_pre]:p-0 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain';
+const STANDARD_CHAT_BUBBLE_WIDTH_CLASS = 'max-w-[52rem] min-w-0';
 
 function normalizeProcessBody(body: string): string {
   return String(body || '')
@@ -169,6 +209,11 @@ function normalizeToolIdentityValue(value: unknown): string {
     .replace(/\\/g, '/')
     .replace(/\s+/g, ' ')
     .toLowerCase();
+}
+
+function formatSubtaskTitle(title: string): string {
+  const normalized = String(title || '').trim() || '子任务';
+  return normalized.startsWith('🤖') ? normalized : `🤖 ${normalized}`;
 }
 
 function extractReadPath(meta: Partial<AceToolCallPayload | AceToolResultPayload> | null | undefined, fallbackText = ''): string {
@@ -289,7 +334,7 @@ function buildSubtaskEntries(blocks: AceProcessBlock[]): SubtaskProcessEntry[] {
       const meta = block.meta as AceSubtaskStartPayload;
       const toolId = String(meta.toolId || '').trim();
       const sessionId = String(meta.sessionId || '').trim();
-      const title = String(meta.title || '').trim() || '子任务';
+      const title = formatSubtaskTitle(String(meta.title || '').trim() || '子任务');
       const description = String(meta.description || '').trim() || normalizeProcessBody(block.body);
       const agent = String(meta.agent || '').trim();
       const prompt = String(meta.prompt || '').trim();
@@ -309,12 +354,15 @@ function buildSubtaskEntries(blocks: AceProcessBlock[]): SubtaskProcessEntry[] {
         kind: 'subtask',
         title,
         description,
+        internalText: '',
         agent,
         prompt,
         toolId,
         sessionId,
         sessionFingerprint,
         result: '',
+        startBlockEnd: block.end,
+        resultBlockStart: null,
         state: 'input-available',
         anchorStart: block.start,
         anchorEnd: block.end,
@@ -345,6 +393,7 @@ function buildSubtaskEntries(blocks: AceProcessBlock[]): SubtaskProcessEntry[] {
       target.toolId = target.toolId || toolId;
       target.sessionId = target.sessionId || sessionId;
       target.state = 'output-available';
+      target.resultBlockStart = block.start;
       target.anchorEnd = Math.max(target.anchorEnd, block.end);
       target.blockStarts.push(block.start);
       bindSubtaskIdentity(targetIndex, target.toolId, target.sessionId, target.sessionFingerprint, target.state);
@@ -352,14 +401,17 @@ function buildSubtaskEntries(blocks: AceProcessBlock[]): SubtaskProcessEntry[] {
       const nextIndex = entries.length;
       entries.push({
         kind: 'subtask',
-        title: '子任务结果',
+        title: formatSubtaskTitle('子任务结果'),
         description: '',
+        internalText: '',
         agent: '',
         prompt: '',
         toolId,
         sessionId,
         sessionFingerprint: '',
         result: resultBody,
+        startBlockEnd: block.start,
+        resultBlockStart: block.start,
         state: 'output-available',
         anchorStart: block.start,
         anchorEnd: block.end,
@@ -657,6 +709,14 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
   const renderedKeys = new Set<string>();
   const toolEntriesByBlockStart = new Map<number, { key: string; entry: ToolProcessEntry }>();
   const subtaskEntriesByBlockStart = new Map<number, { key: string; entry: SubtaskProcessEntry }>();
+  const subtaskTextRanges = subtaskEntries
+    .map((entry) => ({
+      entry,
+      start: entry.startBlockEnd,
+      end: entry.resultBlockStart ?? ((entry.toolId || entry.sessionId) ? source.length : entry.startBlockEnd),
+    }))
+    .filter(({ start, end }) => end > start)
+    .sort((a, b) => a.start - b.start);
 
   toolEntries.forEach((entry, index) => {
     const key = entry.toolId || `${entry.toolName}-${entry.anchorStart}-${index}`;
@@ -667,10 +727,37 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
     entry.blockStarts.forEach((start) => subtaskEntriesByBlockStart.set(start, { key, entry }));
   });
 
+  for (const range of subtaskTextRanges) {
+    range.entry.internalText = sanitizeTimelineText(source.slice(range.start, range.end), isStreaming);
+  }
+
   let cursor = 0;
   for (const [index, block] of blocks.entries()) {
+    const enclosingSubtaskRange = subtaskTextRanges.find((range) => block.start >= range.start && block.end <= range.end);
+    if (enclosingSubtaskRange) {
+      cursor = Math.max(cursor, block.end);
+      continue;
+    }
+
     if (block.start > cursor) {
-      const text = sanitizeTimelineText(source.slice(cursor, block.start), isStreaming);
+      const nextTextStart = block.start;
+      for (const range of subtaskTextRanges) {
+        if (range.end <= cursor || range.start >= nextTextStart) continue;
+        const textBeforeSubtask = sanitizeTimelineText(source.slice(cursor, range.start), isStreaming);
+        if (textBeforeSubtask) {
+          items.push({
+            kind: 'text',
+            key: `text-${cursor}-${range.start}`,
+            start: cursor,
+            end: range.start,
+            text: textBeforeSubtask,
+          });
+        }
+        cursor = Math.max(cursor, range.end);
+      }
+      const text = cursor < nextTextStart
+        ? sanitizeTimelineText(source.slice(cursor, nextTextStart), isStreaming)
+        : '';
       if (text) {
         items.push({
           kind: 'text',
@@ -723,15 +810,32 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
   }
 
   if (cursor < source.length) {
-    const text = sanitizeTimelineText(source.slice(cursor), isStreaming);
-    if (text) {
-      items.push({
-        kind: 'text',
-        key: `text-${cursor}-${source.length}`,
-        start: cursor,
-        end: source.length,
-        text,
-      });
+    let trailingCursor = cursor;
+    for (const range of subtaskTextRanges) {
+      if (range.end <= trailingCursor) continue;
+      const textBeforeSubtask = sanitizeTimelineText(source.slice(trailingCursor, range.start), isStreaming);
+      if (textBeforeSubtask) {
+        items.push({
+          kind: 'text',
+          key: `text-${trailingCursor}-${range.start}`,
+          start: trailingCursor,
+          end: range.start,
+          text: textBeforeSubtask,
+        });
+      }
+      trailingCursor = Math.max(trailingCursor, range.end);
+    }
+    if (trailingCursor < source.length) {
+      const text = sanitizeTimelineText(source.slice(trailingCursor), isStreaming);
+      if (text) {
+        items.push({
+          kind: 'text',
+          key: `text-${trailingCursor}-${source.length}`,
+          start: trailingCursor,
+          end: source.length,
+          text,
+        });
+      }
     }
   }
 
@@ -880,6 +984,46 @@ function ProcessCodeBlock({
           ) : null}
         </Artifact>
       )
+  );
+}
+
+function formatStreamingResultBody(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  const fenceMatch = trimmed.match(/^(```|~~~)(?:json|card)?\s*([\s\S]*?)(?:\1)?$/i);
+  const body = (fenceMatch ? fenceMatch[2] : trimmed).trim();
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return body;
+  }
+}
+
+function StreamingResultPanel({ result }: { result: { text: string; complete: boolean } }) {
+  const body = formatStreamingResultBody(result.text);
+  if (!body) return null;
+  const state = result.complete ? 'output-available' : 'input-available';
+  return (
+    <Tool
+      defaultOpen
+      className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
+      data-testid="ace-result-generation-panel"
+    >
+      <ToolHeader
+        type="dynamic-tool"
+        toolName="result"
+        title={result.complete ? '结构化结果已生成' : '结构化结果生成中'}
+        state={state}
+        hideDefaultIcon
+        className="bg-muted/30"
+      />
+      <ToolContent className="space-y-3">
+        <div className="text-xs leading-5 text-muted-foreground">
+          系统正在接收机器可读结果；完成后会自动渲染为卡片或执行对应的结构化处理。
+        </div>
+        <ProcessCodeBlock text={body} language="json" />
+      </ToolContent>
+    </Tool>
   );
 }
 
@@ -1292,7 +1436,7 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
         const shouldOpen = shouldOpenProcessCard({
           isStreaming,
           state: entry.state,
-          hasRequest: Boolean(entry.description || entry.prompt || entry.agent || entry.sessionId),
+          hasRequest: Boolean(entry.description || entry.internalText || entry.prompt || entry.agent || entry.sessionId),
           hasResult: Boolean(entry.result),
           defaultCollapsed: true,
         });
@@ -1326,6 +1470,12 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
                   <div className="prose-sm max-w-none text-sm dark:prose-invert [&_p]:my-1">
                     <Markdown>{entry.description}</Markdown>
                   </div>
+                </div>
+              ) : null}
+              {entry.internalText ? (
+                <div className="space-y-1">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">过程</div>
+                  <WrapperProcessBlocks content={entry.internalText} isStreaming={isStreaming && entry.state !== 'output-available'} />
                 </div>
               ) : null}
               {(entry.agent || entry.sessionId) ? (
@@ -1364,36 +1514,6 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
       })}
     </div>
   );
-}
-
-function parseWorkflowEvent(content: string) {
-  const match = content.trim().match(WORKFLOW_EVENT_PATTERN);
-  if (!match) return null;
-
-  const attrs = new Map<string, string>();
-  match[1].replace(/([a-zA-Z0-9_-]+)="([^"]*)"/g, (_, key: string, value: string) => {
-    attrs.set(key, value);
-    return '';
-  });
-
-  const bodyLines = match[2].split('\n').map((line) => line.trim()).filter(Boolean);
-  const title = bodyLines[0] || 'Workflow 事件';
-  const body = bodyLines.slice(1).join('\n');
-  return {
-    type: attrs.get('type') || 'event',
-    tags: (attrs.get('tags') || '').split(',').map((tag) => tag.trim()).filter(Boolean),
-    title,
-    body,
-  };
-}
-
-function getWorkflowEventIcon(type: string) {
-  if (type.includes('human') || type.includes('approval')) return 'person_alert';
-  if (type.includes('failed')) return 'error';
-  if (type.includes('complete')) return 'task_alt';
-  if (type.includes('step')) return 'footprint';
-  if (type.includes('review')) return 'rate_review';
-  return 'account_tree';
 }
 
 async function loadModelLabels(): Promise<Map<string, string>> {
@@ -1767,7 +1887,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
   const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
   const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
   const isPending = isStreaming || message.content?.includes('正在推进') || message.content?.includes('处理中');
-  const visibleContent = visible ? (message.content || '') : formatHiddenWerewolfContent(card);
+  const visibleContent = visible ? (message.rawContent || message.content || '') : formatHiddenWerewolfContent(card);
   const hasVisibleContent = Boolean(visibleContent.trim());
   const roleBadgeText = visible
     ? (card.roleLabel || (isSupervisor ? '法官' : isSystem ? '系统' : '玩家'))
@@ -1805,7 +1925,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
           {visible ? (isSystem ? '系' : getWerewolfInitial(card.speakerName || 'A')) : '隐'}
         </div>
       )}
-      <div className="max-w-[85%] space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         <div className={`relative overflow-hidden rounded-[28px] rounded-tl-[16px] border px-4 py-3 text-sm ${bubbleShellClass}`}>
           <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
@@ -1838,7 +1958,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
             </div>
           ) : (
             <div className="prose-sm prose-neutral max-w-none leading-6 text-current/95 dark:prose-invert [&_p]:my-1">
-              <Markdown>{visibleContent}</Markdown>
+              <WrapperProcessBlocks content={visibleContent} isStreaming={isStreaming} />
               {isStreaming ? (
                 <div className="mt-3 inline-flex rounded-full border border-current/15 bg-background/30 px-2 py-1 opacity-85">
                   <WerewolfSpeakingIndicator compact />
@@ -1878,12 +1998,13 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
       ? 'text-muted-foreground'
       : 'text-violet-700 dark:text-violet-300';
   const initial = String(card?.speakerName || 'A').replace(/\s+/g, '').slice(0, 1) || 'A';
+  const content = message.rawContent || message.content || '';
   return (
     <div className="group flex items-start gap-3">
       <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
         {isSystem ? '系' : initial}
       </div>
-      <div className="max-w-[85%] space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         <div className={`rounded-[24px] rounded-tl-[14px] border px-4 py-3 ${bubbleClass}`}>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className={`font-semibold ${nameClass}`}>{card?.speakerName || 'Agent'}</span>
@@ -1894,7 +2015,7 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
             ) : null}
           </div>
           <div className="prose-sm prose-neutral max-w-none leading-6 text-current dark:prose-invert [&_p]:my-1">
-            <Markdown>{message.content || ''}</Markdown>
+            <WrapperProcessBlocks content={content} isStreaming={isStreaming} />
           </div>
           {isStreaming ? <div className="mt-2 text-[11px] opacity-70">发言中...</div> : null}
         </div>
@@ -1908,18 +2029,14 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
 
 export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, werewolfView, currentUser }: ChatMessageProps) {
   const { toast } = useToast();
-  const processSource = stripResultBlocks(message.rawContent || message.content || '');
+  const rawMessageContent = message.rawContent || message.content || '';
+  const processSource = stripResultBlocks(rawMessageContent);
+  const streamingResult = isStreaming ? getStreamingResultDisplay(rawMessageContent) : null;
   const [modelLabel, setModelLabel] = useState(message.model || '');
-  const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
-  const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
-  const werewolfCard = message.role === 'assistant' ? getWerewolfCard(message) : null;
-  const collaborationCard = message.role === 'assistant' ? getCollaborationCard(message) : null;
+  const visibleSessionTag = message.role === 'user' ? parseVisibleSessionTag(message.content || '') : null;
+  const werewolfCard = getWerewolfCard(message);
+  const collaborationCard = getCollaborationCard(message);
   const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
-  const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
-  const actionTagClassName = isWorkflowActionTag
-    ? 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300'
-    : 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300';
-  const actionTagIcon = isWorkflowActionTag ? 'account_tree' : 'smart_toy';
 
   useEffect(() => {
     let cancelled = false;
@@ -1961,12 +2078,60 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   const destructiveActionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
 
   if (message.role === 'user') {
-    if (isActionTagMessage) {
+    if (collaborationCard) {
+      const extraCards = getCollaborationExtraCards(message);
+      return (
+        <div className="group">
+          <CollaborationChatBubble card={collaborationCard} message={message} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="回复">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {onEditMessage && (
+                <button onClick={() => onEditMessage(message.id)} className={actionButtonClass} title="编辑">
+                  <span className="material-symbols-outlined text-sm">edit</span>
+                </button>
+              )}
+              {onRetryFromMessage && (
+                <button onClick={() => onRetryFromMessage(message.id)} className={actionButtonClass} title="重试">
+                  <span className="material-symbols-outlined text-sm">refresh</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {extraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {extraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (visibleSessionTag) {
       return (
         <div className="group flex justify-center">
           <div className="flex flex-col items-center gap-1">
-            <div className={`home-chat-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${actionTagClassName}`}>
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
+            <div className={`home-chat-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${visibleSessionTag.className}`}>
+              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{visibleSessionTag.icon}</span>
               <span className="whitespace-normal break-all">{message.content}</span>
             </div>
             {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
@@ -1991,7 +2156,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     }
     return (
       <Message from="user" className="items-start gap-2">
-        <MessageContent className="max-w-[78%] space-y-1">
+        <MessageContent className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
           {sourceLabel ? (
             <div className="flex justify-end">
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 backdrop-blur-sm dark:text-emerald-300">
@@ -2040,62 +2205,95 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     );
   }
 
-  if (workflowEvent) {
-    return (
-      <div className="group flex justify-center">
-        <div className="max-w-[86%] space-y-1">
-          <ChainOfThought defaultOpen={false} className="home-chat-surface rounded-2xl border-amber-500/25 bg-amber-500/8 px-4 py-3 text-xs text-amber-900 dark:text-amber-100">
-            <ChainOfThoughtHeader className="text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100">
-              <span className="material-symbols-outlined text-amber-500 mr-1" style={{ fontSize: '17px' }}>
-                {getWorkflowEventIcon(workflowEvent.type)}
-              </span>
-              <span className="font-medium flex-1">{workflowEvent.title}</span>
-              <span className="rounded-full border border-amber-500/25 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-300 mr-1">
-                {workflowEvent.type}
-              </span>
-            </ChainOfThoughtHeader>
-            <ChainOfThoughtContent>
-              {workflowEvent.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {workflowEvent.tags.slice(0, 4).map((tag, index) => (
-                    <span key={`${message.id}-workflow-tag-${tag}-${index}`} className="rounded-full bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {workflowEvent.body ? (
-                <div className="whitespace-pre-line leading-5 text-muted-foreground">
-                  {workflowEvent.body}
-                </div>
-              ) : null}
-              {sentAt ? (
-                <div className="text-[11px] text-muted-foreground opacity-70">
-                  {sentAt}
-                </div>
-              ) : null}
-            </ChainOfThoughtContent>
-          </ChainOfThought>
-          <div className={`${actionBarClass} justify-start px-1`}>
-            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
-            </button>
-            {onDelete && (
-              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
-                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (message.role === 'error') {
     const isTimeout = message.content.includes('超时') || message.content.includes('timeout');
+    if (werewolfCard) {
+      const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
+      return (
+        <div className="group">
+          <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {isTimeout && onContinue && (
+                <button onClick={() => onContinue(message.id)} className={actionButtonClass} title="继续">
+                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {visibleExtraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {visibleExtraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    if (collaborationCard) {
+      const extraCards = getCollaborationExtraCards(message);
+      return (
+        <div className="group">
+          <CollaborationChatBubble card={collaborationCard} message={message} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="回复">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {isTimeout && onContinue && (
+                <button onClick={() => onContinue(message.id)} className={actionButtonClass} title="继续">
+                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {extraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {extraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     return (
       <div className="group flex items-start gap-2">
-        <div className="max-w-[80%] space-y-1">
+        <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
           <div className="home-chat-bubble home-chat-bubble-error rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-destructive">
             <span className="material-symbols-outlined text-sm mr-1 align-middle">{isTimeout ? 'schedule' : 'error'}</span>
             {message.content}
@@ -2141,8 +2339,30 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   if (werewolfCard) {
     const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
     return (
-      <div>
+      <div className="group">
         <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
+        {!isStreaming ? (
+          <div className={`ml-10 ${actionBarClass}`}>
+            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+              <span className="material-symbols-outlined text-sm">content_copy</span>
+            </button>
+            {onQuoteMessage && (
+              <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
+                <span className="material-symbols-outlined text-sm">format_quote</span>
+              </button>
+            )}
+            {onSaveAsNotebook && (
+              <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                <span className="material-symbols-outlined text-sm">note_add</span>
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                <span className="material-symbols-outlined text-sm">delete</span>
+              </button>
+            )}
+          </div>
+        ) : null}
         {visibleExtraCards.length ? (
           <div className="ml-10 max-w-[85%] space-y-2">
             {visibleExtraCards.map((card, index) => (
@@ -2193,13 +2413,14 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   // Assistant message
   const hasAssistantBubbleContent = Boolean(
     processTimelineState.timelineItems.length
+    || streamingResult
     || isStreaming
   );
 
   return (
       <div className="group flex items-start gap-2">
         <AssistantAvatar />
-      <div className="max-w-[85%] min-w-0 space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         {sourceLabel ? (
           <div>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 backdrop-blur-sm dark:text-emerald-300">
@@ -2210,8 +2431,13 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
         {hasAssistantBubbleContent && (
           <div className="home-chat-bubble home-chat-bubble-assistant rounded-2xl rounded-tl-sm px-4 py-2.5">
             <div className="space-y-3">
-              <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />
-              {isStreaming && (
+              {processTimelineState.timelineItems.length ? (
+                <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />
+              ) : null}
+              {streamingResult ? (
+                <StreamingResultPanel result={streamingResult} />
+              ) : null}
+              {isStreaming && !streamingResult && (
                 <div className="pt-1">
                   <ThinkingBot />
                 </div>

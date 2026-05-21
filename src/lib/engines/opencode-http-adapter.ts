@@ -105,6 +105,16 @@ export const ZERO_USAGE_METADATA: EngineResultMetadata = {
   num_turns: 0,
 };
 
+type OpenCodeAdapterLogLevel = 'info' | 'warning' | 'error';
+
+type OpenCodeAdapterLogFn = (entry: {
+  level?: OpenCodeAdapterLogLevel;
+  message: string;
+  detail?: string;
+  metadata?: unknown;
+  verbose?: boolean;
+}) => void;
+
 function isDebugEnabled(): boolean {
   return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_TIMING_DEBUG === 'true';
 }
@@ -273,6 +283,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
   timeoutMs?: number;
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
+  log?: OpenCodeAdapterLogFn;
   disableStreaming?: boolean;
 }): Promise<string> {
   const promptBody: OpenCodePromptBody = {
@@ -282,11 +293,17 @@ export async function sendPromptWithOpenCodeHttp(options: {
   const query = options.workingDirectory ? { directory: options.workingDirectory } : undefined;
 
   if (options.disableStreaming || ((!options.eventBaseUrl && !options.client.event?.subscribe) || !options.client.session.promptAsync)) {
+    options.log?.({
+      message: 'Using blocking prompt path',
+      detail: options.disableStreaming ? 'streaming disabled by caller' : 'event stream API unavailable',
+      verbose: true,
+    });
     return await sendPromptBlocking({
       client: options.client,
       sessionId: options.sessionId,
       promptBody,
       query,
+      log: options.log,
     });
   }
 
@@ -300,11 +317,17 @@ export async function sendPromptWithOpenCodeHttp(options: {
     if (error instanceof PromptAlreadyStartedError) throw error;
     if (options.signal?.aborted) throw error;
     console.warn(`[${options.engineName}] streaming prompt failed, falling back to blocking prompt: ${formatError(error)}`);
+    options.log?.({
+      level: 'warning',
+      message: 'Streaming prompt failed; falling back to blocking prompt',
+      detail: formatError(error),
+    });
     return await sendPromptBlocking({
       client: options.client,
       sessionId: options.sessionId,
       promptBody,
       query,
+      log: options.log,
     });
   }
 }
@@ -314,7 +337,13 @@ async function sendPromptBlocking(options: {
   sessionId: string;
   promptBody: OpenCodePromptBody;
   query?: { directory?: string };
+  log?: OpenCodeAdapterLogFn;
 }): Promise<string> {
+  options.log?.({
+    message: 'Blocking prompt start',
+    detail: `sessionId=${options.sessionId}`,
+    verbose: true,
+  });
   const promptResult = await options.client.session.prompt({
     path: { id: options.sessionId },
     body: options.promptBody,
@@ -327,7 +356,13 @@ async function sendPromptBlocking(options: {
   if (promptResult.data?.info?.error) {
     throw new Error(formatError(promptResult.data.info.error));
   }
-  return extractOutput(promptResult.data);
+  const output = extractOutput(promptResult.data);
+  options.log?.({
+    message: 'Blocking prompt done',
+    detail: `outputLength=${output.length}`,
+    verbose: true,
+  });
+  return output;
 }
 
 async function sendPromptStreaming(options: {
@@ -342,6 +377,7 @@ async function sendPromptStreaming(options: {
   timeoutMs?: number;
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
+  log?: OpenCodeAdapterLogFn;
 }): Promise<string> {
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
@@ -365,8 +401,22 @@ async function sendPromptStreaming(options: {
   const pendingUnknownPartBuffers = new Map<string, string>();
 
   const timeoutMs = Math.max(1_000, options.timeoutMs || 120_000);
+  options.log?.({
+    message: 'Streaming prompt start',
+    detail: `sessionId=${options.sessionId}, timeout=${timeoutMs}ms`,
+    metadata: {
+      workingDirectory: options.workingDirectory,
+      hasRawSse: Boolean(options.eventBaseUrl),
+    },
+    verbose: true,
+  });
   const timer = setTimeout(() => {
     streamError = new Error(`[${options.engineName}] streaming prompt timed out after ${timeoutMs}ms`);
+    options.log?.({
+      level: 'error',
+      message: 'Streaming prompt timeout',
+      detail: `${timeoutMs}ms`,
+    });
     abortController.abort();
   }, timeoutMs);
 
@@ -378,13 +428,51 @@ async function sendPromptStreaming(options: {
         directory: options.workingDirectory,
         signal: abortController.signal,
         onPayload: handlePayload,
+        onConnected: (detail) => {
+          options.log?.({
+            message: 'Raw SSE connected',
+            detail,
+            verbose: true,
+          });
+        },
+        onEnded: () => {
+          options.log?.({
+            message: 'Raw SSE ended',
+            verbose: true,
+          });
+        },
+        onError: (error) => {
+          options.log?.({
+            level: 'error',
+            message: 'Raw SSE error',
+            detail: formatError(error),
+          });
+        },
       })
       : consumeSdkSseStream({
         client: options.client,
         directory: options.workingDirectory,
         signal: abortController.signal,
         onPayload: handlePayload,
+        onConnected: () => {
+          options.log?.({
+            message: 'SDK SSE connected',
+            detail: options.workingDirectory || '',
+            verbose: true,
+          });
+        },
+        onEnded: () => {
+          options.log?.({
+            message: 'SDK SSE ended',
+            verbose: true,
+          });
+        },
         onError: (error) => {
+          options.log?.({
+            level: 'error',
+            message: 'SDK SSE error',
+            detail: formatError(error),
+          });
           if (!abortController.signal.aborted) {
             streamError = error;
             abortController.abort();
@@ -401,6 +489,11 @@ async function sendPromptStreaming(options: {
       });
 
     await streamDone.connected;
+    options.log?.({
+      message: 'Event stream connection ready',
+      detail: options.eventBaseUrl || 'sdk.subscribe',
+      verbose: true,
+    });
 
     await sleep(25);
     if (streamEnded && !streamError) {
@@ -416,6 +509,11 @@ async function sendPromptStreaming(options: {
       throw new Error(formatError(promptResult.error));
     }
     promptAccepted = true;
+    options.log?.({
+      message: 'promptAsync accepted',
+      detail: `sessionId=${options.sessionId}`,
+      verbose: true,
+    });
 
     const structuredPartPoller = pollSessionMessagesWhileRunning({
       client: options.client,
@@ -449,6 +547,11 @@ async function sendPromptStreaming(options: {
         emitTextDelta(hydratedOutput.slice(output.length));
       }
     }
+    options.log?.({
+      message: 'Streaming prompt done',
+      detail: `outputLength=${(hydratedOutput || output).length}`,
+      verbose: true,
+    });
     return hydratedOutput || output;
   } catch (error) {
     if (promptAccepted) {
@@ -641,27 +744,57 @@ async function sendPromptStreaming(options: {
 
     const type = payload?.type;
     const properties = payload?.properties;
+    options.log?.({
+      message: `OpenCode SSE event: ${type || 'unknown'}`,
+      detail: typeof properties?.field === 'string'
+        ? `field=${properties.field}`
+        : typeof properties?.status === 'string'
+          ? `status=${properties.status}`
+          : undefined,
+      metadata: payload,
+      verbose: true,
+    });
     if (!promptAccepted) {
       if (type === 'session.error') {
         streamError = properties?.error || payload;
+        options.log?.({
+          level: 'error',
+          message: 'OpenCode SSE session.error before prompt accepted',
+          detail: formatError(properties?.error || payload),
+        });
         abortController.abort();
       }
       return;
     }
     if (type === 'session.idle') {
       finalizeUnknownPartTypes();
+      options.log?.({
+        message: 'OpenCode session idle',
+        detail: options.sessionId,
+        verbose: true,
+      });
       idle = true;
       abortController.abort();
       return;
     }
     if (type === 'session.status' && properties?.status && (properties.status as any).type === 'idle') {
       finalizeUnknownPartTypes();
+      options.log?.({
+        message: 'OpenCode session status idle',
+        detail: options.sessionId,
+        verbose: true,
+      });
       idle = true;
       abortController.abort();
       return;
     }
     if (type === 'session.error') {
       streamError = properties?.error || payload;
+      options.log?.({
+        level: 'error',
+        message: 'OpenCode session.error',
+        detail: formatError(properties?.error || payload),
+      });
       abortController.abort();
       return;
     }
@@ -715,6 +848,8 @@ function consumeSdkSseStream(options: {
   directory?: string;
   signal: AbortSignal;
   onPayload: (payload: OpenCodeStreamEventPayload | undefined) => void;
+  onConnected?: () => void;
+  onEnded?: () => void;
   onError: (error: unknown) => void;
 }): { connected: Promise<void>; done: Promise<void> } {
   const connected = options.client.event!.subscribe({
@@ -726,11 +861,13 @@ function consumeSdkSseStream(options: {
   });
 
   const done = connected.then(async (subscription) => {
+    options.onConnected?.();
     const stream = subscription.stream;
     if (!stream) return;
     for await (const payload of stream) {
       options.onPayload(normalizeSsePayload(payload));
     }
+    options.onEnded?.();
   });
 
   return { connected: connected.then(() => undefined), done };
@@ -742,6 +879,9 @@ function consumeRawSseStream(options: {
   directory?: string;
   signal: AbortSignal;
   onPayload: (payload: OpenCodeStreamEventPayload | undefined) => void;
+  onConnected?: (detail: string) => void;
+  onEnded?: () => void;
+  onError?: (error: unknown) => void;
 }): { connected: Promise<void>; done: Promise<void> } {
   let resolveConnected!: () => void;
   let rejectConnected!: (error: unknown) => void;
@@ -774,6 +914,7 @@ function consumeRawSseStream(options: {
       if (isDebugEnabled()) {
         console.log(`[${options.label}] raw SSE connected: ${url.href}`);
       }
+      options.onConnected?.(url.href);
       resolveConnected();
       response.setEncoding('utf8');
       response.on('data', (chunk) => {
@@ -787,16 +928,19 @@ function consumeRawSseStream(options: {
       });
       response.on('end', () => {
         if (isDebugEnabled()) console.log(`[${options.label}] raw SSE ended`);
+        options.onEnded?.();
         resolve();
       });
       response.on('error', (error) => {
         if (isDebugEnabled()) console.log(`[${options.label}] raw SSE response error: ${formatError(error)}`);
+        options.onError?.(error);
         reject(error);
       });
     });
 
     request.on('error', (error) => {
       if (isDebugEnabled()) console.log(`[${options.label}] raw SSE request error: ${formatError(error)}`);
+      options.onError?.(error);
       if (!settledConnection) rejectConnected(error);
       reject(error);
     });

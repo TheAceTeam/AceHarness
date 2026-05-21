@@ -113,8 +113,20 @@ function resultToCard(type: string, result: any): CardSchema | null {
                   ],
                 },
                 { type: 'actions' as const, items: [
-                  { label: '打开', prompt: `查看工作流配置 ${c.filename} 的详细内容`, icon: 'open_in_new' },
-                  { label: '启动', prompt: `启动工作流 ${c.filename}`, icon: 'play_arrow' },
+                  {
+                    label: '打开',
+                    prompt: c.filename
+                      ? `__HOME_ACTION__:workflow_open:${encodeURIComponent(String(c.filename))}`
+                      : `查看工作流配置 ${c.name || ''} 的详细内容`,
+                    icon: 'open_in_new',
+                  },
+                  {
+                    label: '启动',
+                    prompt: c.filename
+                      ? `__HOME_ACTION__:workflow_start:${encodeURIComponent(String(c.filename))}`
+                      : `启动工作流 ${c.name || ''}`,
+                    icon: 'play_arrow',
+                  },
                 ]},
               ],
             })),

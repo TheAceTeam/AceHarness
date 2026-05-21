@@ -13,6 +13,14 @@ import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit 
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input';
 import { normalizeAssistantDisplay } from '@/lib/chat/actions';
 
+function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyKey): boolean {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function normalizeSessionId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant' | 'error';
@@ -69,7 +77,7 @@ export default function ChatModal() {
           timestamp: Date.now(),
         }]);
       } else {
-        if (data.sessionId) setSessionId(data.sessionId);
+        if (hasOwnKey(data, 'sessionId')) setSessionId(normalizeSessionId(data.sessionId));
         setMessages(prev => [...prev, {
           id: makeMessageId(),
           role: 'assistant',
@@ -126,19 +134,26 @@ export default function ChatModal() {
   return (
     <>
       {!isOpen && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="fixed bottom-6 right-6 h-14 w-14 rounded-full p-0 shadow-lg z-50 hover:bg-transparent"
-          onClick={toggleChat}
-          title="ACEHarness 在线"
-        >
-          <Persona
-            state="idle"
-            variant="obsidian"
-            className="h-14 w-14 rounded-full"
-          />
-        </Button>
+        <div className="fixed bottom-6 right-0 z-50 translate-x-[calc(100%-22px)] transition-transform duration-200 hover:translate-x-0 focus-within:translate-x-0">
+          <div className="relative flex items-center pl-4">
+            <div className="pointer-events-none absolute left-0 top-1/2 flex h-10 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-r-0 border-border/70 bg-background/94 text-muted-foreground shadow-sm backdrop-blur">
+              <span className="material-symbols-outlined text-[14px]">bolt</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-14 w-14 rounded-full p-0 shadow-lg hover:bg-transparent"
+              onClick={toggleChat}
+              title="ACEHarness 在线"
+            >
+              <Persona
+                state="idle"
+                variant="obsidian"
+                className="h-14 w-14 rounded-full"
+              />
+            </Button>
+          </div>
+        </div>
       )}
 
       {isOpen && (

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
 import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type EngineType } from '@/lib/engines/engine-factory';
+import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
 import { loadChatSettings } from '@/lib/chat/settings';
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
 import { createDeterministicAvatarConfig } from '@/lib/agent/personas';
@@ -333,7 +334,7 @@ export async function POST(request: NextRequest) {
       if (event.type === 'text') chunks.push(event.content);
     });
 
-    const result = await engine.execute({
+    const result = await executeEngineWithContextRecovery(engine, {
       agent: 'agent-creator',
       step: 'draft-agent',
       prompt,

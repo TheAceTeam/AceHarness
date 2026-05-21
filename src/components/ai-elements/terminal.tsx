@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/core/utils";
 import Ansi from "ansi-to-react";
 import { CheckIcon, CopyIcon, TerminalIcon, Trash2Icon } from "lucide-react";
-import type { ComponentProps, HTMLAttributes } from "react";
+import type { ComponentProps, HTMLAttributes, MutableRefObject } from "react";
 import {
   createContext,
+  forwardRef,
   useCallback,
   useContext,
   useEffect,
@@ -187,13 +188,21 @@ export const TerminalClearButton = ({
 
 export type TerminalContentProps = HTMLAttributes<HTMLDivElement>;
 
-export const TerminalContent = ({
+export const TerminalContent = forwardRef<HTMLDivElement, TerminalContentProps>(function TerminalContent({
   className,
   children,
   ...props
-}: TerminalContentProps) => {
+}, forwardedRef) {
   const { output, isStreaming, autoScroll } = useContext(TerminalContext);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const setRefs = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node;
+    if (typeof forwardedRef === "function") {
+      forwardedRef(node);
+    } else if (forwardedRef) {
+      (forwardedRef as MutableRefObject<HTMLDivElement | null>).current = node;
+    }
+  }, [forwardedRef]);
 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
@@ -207,7 +216,7 @@ export const TerminalContent = ({
         "max-h-96 overflow-auto p-4 font-mono text-sm leading-relaxed",
         className
       )}
-      ref={containerRef}
+      ref={setRefs}
       {...props}
     >
       {children ?? (
@@ -220,7 +229,7 @@ export const TerminalContent = ({
       )}
     </div>
   );
-};
+});
 
 export type TerminalProps = HTMLAttributes<HTMLDivElement> & {
   output: string;

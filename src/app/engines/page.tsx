@@ -87,17 +87,17 @@ const engines: Engine[] = [
   {
     id: 'nga',
     name: 'NGA',
-    description: '基于 OpenCode 的 ngagent 套壳，ACP 与 OpenCode 一致，默认关闭自动更新',
+    description: 'OpenCode 兼容 CLI，支持 ACP 协议、流式输出与命令行接入',
     status: 'available',
-    features: ['ACP 协议', '与 OpenCode 兼容', '流式输出', '默认 --disable-update'],
+    features: ['ACP 协议', 'OpenCode 兼容', '流式输出', '命令行集成'],
     endpoints: ['anthropic', 'openai'],
   },
   {
     id: 'codegenie',
     name: 'CodeGenie',
-    description: 'OpenCode 内核的 CodeGenie CLI，通过 `codegenie acp` 走 ACP stdio，与 OpenCode 参数一致',
+    description: 'OpenCode 兼容 CLI，支持 ACP 协议、流式输出与命令行接入',
     status: 'available',
-    features: ['ACP 协议', 'OpenCode 内核', '流式输出', 'codegenie acp'],
+    features: ['ACP 协议', 'OpenCode 兼容', '流式输出', '命令行集成'],
     endpoints: ['anthropic', 'openai'],
   },
   {
@@ -256,9 +256,9 @@ export default function EnginesPage() {
 
         'opencode': '安装方法：npm install -g opencode-ai',
         'nga': '请确保已安装 ngagent 并把 nga 命令加入 PATH',
-        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，可设置环境变量 ACEH_CODEGENIE_COMMAND 指向可执行文件（参见 CodeGenie 官方安装说明）',
+        'codegenie': '请确保已安装 codegenie 并把命令加入 PATH；若 IDE 里找不到命令，请按 CodeGenie 官方安装说明补齐可执行路径',
         'trae-cli': '安装方法：curl -fsSL https://trae.cn/install | bash',
-        'magic-cli': '请从 https://gitcode.com/Cangjie-SIG/magic-cli 克隆仓库，并将环境变量 MAGIC_CLI_PATH 指向 magic-cli.sh 的完整路径，或将 magic-cli.sh 所在目录加入 PATH',
+        'magic-cli': '请从 https://gitcode.com/Cangjie-SIG/magic-cli 克隆仓库，并确保当前运行环境可以直接调用 magic-cli.sh',
       };
       const hint = hints[engineId] || '请确保已安装相应的命令行工具';
       toast('error', `引擎 ${engine?.name} 不可用。${hint}`);
@@ -797,15 +797,14 @@ export default function EnginesPage() {
             </code>
             <p className="text-xs">安装后刷新可用性检查，即可切换使用 Trae CLI 引擎。</p>
             <p className="mt-2"><strong>配置 Magic CLI：</strong></p>
-            <p className="text-xs">从仓库克隆后，通过以下方式之一让 ACEHarness 找到 magic-cli.sh：</p>
-            <code className="block bg-background/50 p-2 rounded text-xs whitespace-pre-line">
-{`# 方式一：设置环境变量（推荐）
-export MAGIC_CLI_PATH=/path/to/magic-cli/scripts/magic-cli.sh
-
-# 方式二：将 magic-cli.sh 所在目录加入 PATH
-export PATH="/path/to/magic-cli/scripts:$PATH"`}
-            </code>
-            <p className="text-xs">配置后刷新可用性检查，即可切换使用 Magic CLI 引擎。</p>
+            <p className="text-xs">从仓库克隆后，确保当前运行环境可以直接调用 magic-cli.sh；完成后刷新可用性检查，即可切换使用 Magic CLI 引擎。</p>
+            <p className="mt-3"><strong>ACE Service 使用指导：</strong></p>
+            <div className="rounded-lg border border-border/60 bg-background/50 p-3 text-xs leading-6 text-muted-foreground space-y-1.5">
+              <p>全局安装后，使用 <code>ace</code> 或 <code>ace start</code> 启动本地 ACE Service。首次启动会引导你完成语言、默认引擎、默认模型、管理员账号和网络模式配置。</p>
+              <p>启动向导里可直接开启后台运行。后台模式会把服务脱离当前终端继续运行，适合常驻使用。</p>
+              <p>若同时启用守护进程，ACE 会以 daemon 模式托管后台服务；当后台实例异常退出时，会自动重新拉起。</p>
+              <p>服务启动后，可用 <code>ace service</code> 查看当前受管实例，并按提示停止指定实例。</p>
+            </div>
           </div>
         </motion.div>
       </div>

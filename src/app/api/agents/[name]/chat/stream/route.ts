@@ -7,6 +7,7 @@ import {
   type ExecuteAgentChatInput,
 } from '@/lib/agent/chat-service';
 import { extractStructuredResult } from '@/lib/ai/result-channel';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 
 export const dynamic = 'force-dynamic';
 
@@ -90,7 +91,7 @@ export async function POST(
 
     const execPromise = (async () => {
       if (!prepared.isTemporaryWerewolf) {
-        return prepared.engine.execute({
+        return executeEngineWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: prepared.mode,
           prompt: prepared.prompt,
@@ -101,6 +102,10 @@ export async function POST(
           sessionId: prepared.resumeSessionId || undefined,
           appendSystemPrompt: Boolean(prepared.resumeSessionId),
           mcpServers: prepared.roleConfig.mcpServers,
+        }, {
+          onContextReset: () => {
+            agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
+          },
         });
       }
 
@@ -109,7 +114,7 @@ export async function POST(
       let lastResult: any = null;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const isRetry = attempt > 0;
-        const result = await prepared.engine.execute({
+        const result = await executeEngineWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: isRetry ? `${prepared.mode}-result-retry-${attempt}` : prepared.mode,
           prompt: isRetry
@@ -127,9 +132,14 @@ export async function POST(
           sessionId: latestSessionId,
           appendSystemPrompt: false,
           mcpServers: prepared.roleConfig.mcpServers,
+        }, {
+          onContextReset: () => {
+            latestSessionId = undefined;
+            agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
+          },
         });
         lastResult = result;
-        latestSessionId = result.sessionId || latestSessionId;
+        latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
         if (hasWerewolfResult(result.output || '')) return result;
       }
       return lastResult;
@@ -140,7 +150,7 @@ export async function POST(
         rawOutput: result.output || '',
         success: result.success,
         error: result.error || null,
-        sessionId: result.sessionId || prepared.resumeSessionId || null,
+        sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
       });
       return finalResult;
     }).finally(() => {

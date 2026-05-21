@@ -68,6 +68,7 @@ async function loadSharedEngineAvailability(forceRefresh = false): Promise<Recor
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [globalEngine, setGlobalEngine] = useState('claude-code');
+  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
 
@@ -88,7 +89,10 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
         if (!cancelled) setModels(d.models || []);
       }).catch(() => {});
       fetch('/api/engine').then(r => r.json()).then(d => {
-        if (!cancelled && d.engine) setGlobalEngine(d.engine);
+        if (!cancelled) {
+          if (d.engine) setGlobalEngine(d.engine);
+          setGlobalDefaultModel(typeof d.defaultModel === 'string' ? d.defaultModel : '');
+        }
       }).catch(() => {});
 
       const availability = await loadSharedEngineAvailability();
@@ -200,8 +204,9 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     return result;
   }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
 
-  const modelLabel = models.find(m => m.value === model)?.label || model || '选择模型';
-  const triggerLabel = modelLabel;
+  const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
+  const modelLabel = models.find(m => m.value === model)?.label || model;
+  const triggerLabel = modelLabel || defaultModelLabel || '选择模型';
   const triggerIcon = <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />;
 
   const handleValueChange = (val: string) => {

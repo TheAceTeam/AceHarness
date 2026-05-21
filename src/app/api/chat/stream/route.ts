@@ -17,6 +17,7 @@ import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { requireAuth } from '@/lib/auth/middleware';
 import { EventEmitter } from 'events';
 import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 
 export const dynamic = 'force-dynamic';
 
@@ -167,7 +168,7 @@ export async function POST(request: NextRequest) {
       engine.on('stream', onEngineStream);
 
       const startedAt = Date.now();
-      const execPromise = engine.execute({
+      const execPromise = executeEngineWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
         prompt: message,
@@ -176,16 +177,19 @@ export async function POST(request: NextRequest) {
         workingDirectory: engineRuntimeDirectory,
         sessionId: validResumeSid,
         appendSystemPrompt: !!validResumeSid && !!systemPrompt,
+      }, {
+        onContextReset: () => {
+          engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
+        },
       }).then((result) => {
         if (isAceTimingDebug()) {
           console.log(
             `[ACE_TIMING][chat/stream][${chatId}] S2_engine_execute_wall: ${Date.now() - startedAt}ms (platform overhead ≈ S1; agent+ACP ≈ wrap.W4 / acp.6)`
           );
         }
-        if (result.sessionId) {
-          setEngineStreamSessionId(chatId, result.sessionId);
-          if (proc) proc.sessionId = result.sessionId;
-        }
+        const resolvedSessionId = resolveRecoveredSessionId(result, validResumeSid);
+        setEngineStreamSessionId(chatId, resolvedSessionId || undefined);
+        if (proc) proc.sessionId = resolvedSessionId || undefined;
         const state = getEngineStream(chatId);
         const output = result.output || state?.streamContent || '';
 
@@ -203,7 +207,7 @@ export async function POST(request: NextRequest) {
         const metadata = result.metadata;
         return {
           result: output,
-          session_id: result.sessionId,
+          session_id: resolvedSessionId ?? null,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd') ?? 0,
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs') ?? (Date.now() - startedAt),
           usage: normalizeUsage(metadata),
@@ -341,7 +345,7 @@ export async function GET(request: NextRequest) {
         .then((result: any) => {
           send('done', {
             result: result.result,
-            sessionId: result.session_id,
+            sessionId: result.session_id ?? null,
             costUsd: result.cost_usd,
             durationMs: result.duration_ms,
             usage: result.usage,

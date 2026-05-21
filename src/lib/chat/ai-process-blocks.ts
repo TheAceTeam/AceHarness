@@ -94,6 +94,7 @@ export interface AceProcessBlock<T extends AceProcessPayload = AceProcessPayload
 }
 
 const ACE_PROCESS_BLOCK_RE = /<ace-process>\s*([\s\S]*?)\s*<\/ace-process>/g;
+export const ACE_CHUNK_BOUNDARY = '\n\n<!-- chunk-boundary -->\n\n';
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -252,4 +253,62 @@ export function extractAceProcessBlocks(content: string): {
     cleanText: withoutAceBlocks.replace(/\n{3,}/g, '\n\n').trim(),
     blocks,
   };
+}
+
+function getOpenSubtaskCountAfterChunk(chunk: string, initialOpenCount: number): number {
+  let openCount = Math.max(0, initialOpenCount);
+  const { blocks } = extractAceProcessBlocks(chunk);
+  for (const block of blocks) {
+    if (block.kind === 'subtask-start') {
+      openCount++;
+    } else if (block.kind === 'subtask-result' && openCount > 0) {
+      openCount--;
+    }
+  }
+  return openCount;
+}
+
+export function mergeAceSubtaskChunkItems<T extends { content: string }>(
+  items: T[],
+  joiner = ACE_CHUNK_BOUNDARY,
+): T[] {
+  const merged: T[] = [];
+  let pending: T | null = null;
+  let openSubtasks = 0;
+
+  for (const item of items) {
+    const content = String(item.content || '');
+
+    if (!pending) {
+      const nextOpenSubtasks = getOpenSubtaskCountAfterChunk(content, 0);
+      if (nextOpenSubtasks > 0) {
+        pending = { ...item, content } as T;
+        openSubtasks = nextOpenSubtasks;
+      } else {
+        merged.push(item);
+      }
+      continue;
+    }
+
+    pending = {
+      ...pending,
+      content: `${pending.content}${joiner}${content}`,
+    };
+    openSubtasks = getOpenSubtaskCountAfterChunk(content, openSubtasks);
+    if (openSubtasks === 0) {
+      merged.push(pending);
+      pending = null;
+    }
+  }
+
+  if (pending) {
+    merged.push(pending);
+  }
+
+  return merged;
+}
+
+export function mergeAceSubtaskChunks(chunks: string[], joiner = ACE_CHUNK_BOUNDARY): string[] {
+  return mergeAceSubtaskChunkItems(chunks.map((content) => ({ content: String(content || '') })), joiner)
+    .map((item) => item.content);
 }

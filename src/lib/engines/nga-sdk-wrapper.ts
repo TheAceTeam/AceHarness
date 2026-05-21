@@ -240,6 +240,28 @@ async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: st
 export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
+  private diagnosticLoggingEnabled = false;
+
+  private emitDiagnosticLog(input: {
+    message: string;
+    detail?: string;
+    level?: 'info' | 'warning' | 'error';
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.diagnosticLoggingEnabled) return;
+    const { message, detail, level, metadata, verbose } = input;
+    this.emit('stream', {
+      type: 'log',
+      content: message,
+      metadata: {
+        ...(detail ? { detail } : {}),
+        ...(level ? { level } : {}),
+        ...(metadata !== undefined ? { payload: metadata } : {}),
+        ...(verbose !== undefined ? { verbose } : {}),
+      },
+    } as EngineStreamEvent);
+  }
 
   getName(): string {
     return 'nga-sdk';
@@ -261,15 +283,46 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
   async execute(options: EngineOptions): Promise<EngineResult> {
     const startedAt = Date.now();
     this.collectedOutput = '';
+    this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
+    this.emitDiagnosticLog({
+      message: 'NGA SDK execute start',
+      detail: `sessionId=${options.sessionId || '<new>'}, model=${options.model || '<default>'}`,
+      metadata: {
+        workingDirectory: options.workingDirectory,
+        timeoutMs: options.timeoutMs,
+      },
+      verbose: true,
+    });
 
     try {
+      this.emitDiagnosticLog({
+        message: 'Ensuring NGA SDK client',
+        detail: options.workingDirectory,
+        verbose: true,
+      });
       const { client, baseUrl } = await ensureClient();
+      this.emitDiagnosticLog({
+        message: 'NGA SDK client ready',
+        detail: baseUrl,
+        verbose: true,
+      });
 
       if (options.sessionId) {
         this.currentSessionId = options.sessionId;
         console.log(`[nga-sdk] resuming session: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'Resuming NGA session',
+          detail: this.currentSessionId,
+          verbose: true,
+        });
       } else {
+        this.currentSessionId = null;
         console.log(`[nga-sdk] creating session via ${baseUrl}`);
+        this.emitDiagnosticLog({
+          message: 'Creating NGA session',
+          detail: baseUrl,
+          verbose: true,
+        });
         const sessionResult = await client.session.create({
           body: {},
           query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
@@ -279,6 +332,11 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
         }
         this.currentSessionId = getSessionId(sessionResult.data);
         console.log(`[nga-sdk] session created: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'NGA session created',
+          detail: this.currentSessionId || '',
+          verbose: true,
+        });
       }
 
       if (!this.currentSessionId) {
@@ -294,6 +352,11 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
       const model = parseProviderModel(options.model);
 
       console.log(`[nga-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
+      this.emitDiagnosticLog({
+        message: 'NGA SDK prompt start',
+        detail: `sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`,
+        verbose: true,
+      });
       const output = await sendPromptWithOpenCodeHttp({
         engineName: 'nga-sdk',
         client,
@@ -307,6 +370,7 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
         workingDirectory: options.workingDirectory,
         timeoutMs: options.timeoutMs,
         emit: (event) => this.emit('stream', event),
+        ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
       });
       if (!output.trim()) {
         throw new Error('NGA SDK prompt returned empty output');
@@ -315,6 +379,14 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
 
       const durationMs = Date.now() - startedAt;
       console.log(`[nga-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
+      this.emitDiagnosticLog({
+        message: 'NGA SDK execute done',
+        detail: `outputLength=${output.length}, duration=${durationMs}ms`,
+        metadata: {
+          sessionId: this.currentSessionId,
+        },
+        verbose: true,
+      });
 
       return {
         success: true,
@@ -327,6 +399,11 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
       };
     } catch (error: any) {
       const errorMessage = error?.message || 'NGA SDK error';
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'NGA SDK execute failed',
+        detail: errorMessage,
+      });
       this.emit('stream', { type: 'error', content: errorMessage } as EngineStreamEvent);
       return {
         success: false,

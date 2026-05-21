@@ -1,4 +1,5 @@
 import { wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
+import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -30,6 +31,10 @@ const KNOWN_TOOLS = new Set([
   'multiedit',
   'patch',
 ]);
+
+function normalizeToolText(value: string): string {
+  return repairWindowsMojibake(value);
+}
 
 export function getAceToolTitle(toolName: string): string {
   const titleMap: Record<string, string> = {
@@ -76,7 +81,7 @@ export function getAceToolFallbackTitle(titleOrName: string, kind?: string): str
 }
 
 export function extractTextFromUnknown(value: unknown): string {
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return normalizeToolText(value);
   if (value == null) return '';
 
   if (Array.isArray(value)) {
@@ -88,11 +93,11 @@ export function extractTextFromUnknown(value: unknown): string {
 
   if (typeof value === 'object') {
     const obj = value as UnknownRecord;
-    if (typeof obj.text === 'string') return obj.text;
+    if (typeof obj.text === 'string') return normalizeToolText(obj.text);
     if (obj.text && typeof obj.text === 'object' && typeof (obj.text as UnknownRecord).value === 'string') {
-      return String((obj.text as UnknownRecord).value);
+      return normalizeToolText(String((obj.text as UnknownRecord).value));
     }
-    if (typeof obj.content === 'string') return obj.content;
+    if (typeof obj.content === 'string') return normalizeToolText(obj.content);
     if (obj.content != null) {
       const nestedContent = extractTextFromUnknown(obj.content);
       if (nestedContent) return nestedContent;
@@ -101,8 +106,8 @@ export function extractTextFromUnknown(value: unknown): string {
       const nestedMessage = extractTextFromUnknown(obj.message);
       if (nestedMessage) return nestedMessage;
     }
-    if (typeof obj.output === 'string') return obj.output;
-    if (typeof obj.result === 'string') return obj.result;
+    if (typeof obj.output === 'string') return normalizeToolText(obj.output);
+    if (typeof obj.result === 'string') return normalizeToolText(obj.result);
   }
 
   return '';
@@ -110,11 +115,11 @@ export function extractTextFromUnknown(value: unknown): string {
 
 export function stringifyStructured(value: unknown): string {
   if (value == null) return '';
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') return normalizeToolText(value);
   try {
-    return JSON.stringify(value, null, 2);
+    return normalizeToolText(JSON.stringify(value, null, 2));
   } catch {
-    return String(value);
+    return normalizeToolText(String(value));
   }
 }
 
@@ -490,7 +495,7 @@ export function formatAceToolResult(params: {
         toolName,
         title,
         filePath: normalizeFilePath(obj),
-        content: obj.content,
+        content: normalizeToolText(obj.content),
       }, ''), params.toolId);
     }
     if (Array.isArray(obj.todos)) {
@@ -545,7 +550,7 @@ export function formatAceToolResult(params: {
     ) {
       const stdout = typeof obj.stdout === 'string' ? obj.stdout : '';
       const stderr = typeof obj.stderr === 'string' ? obj.stderr : '';
-      const output = typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '');
+      const output = normalizeToolText(typeof obj.output === 'string' ? obj.output : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : ''));
       const exitCode = extractExitCode(obj);
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title, output, exitCode }, ''), params.toolId);
     }

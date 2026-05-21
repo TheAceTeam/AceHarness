@@ -179,8 +179,10 @@ export class CursorEngineWrapper extends ACPWrapperBase {
             description: params?.description || name,
             agent: params?.agent || params?.subagent || '',
             prompt: params?.prompt || '',
+            sessionId: params?.sessionId || params?.session_id || params?.id || params?.taskId || params?.task_id || '',
           },
           title: name,
+          toolId: String(params?.id || params?.taskId || params?.task_id || ''),
         }),
       );
     });

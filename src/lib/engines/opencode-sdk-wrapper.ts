@@ -99,6 +99,28 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
   private abortController: AbortController | null = null;
+  private diagnosticLoggingEnabled = false;
+
+  private emitDiagnosticLog(input: {
+    message: string;
+    detail?: string;
+    level?: 'info' | 'warning' | 'error';
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.diagnosticLoggingEnabled) return;
+    const { message, detail, level, metadata, verbose } = input;
+    this.emit('stream', {
+      type: 'log',
+      content: message,
+      metadata: {
+        ...(detail ? { detail } : {}),
+        ...(level ? { level } : {}),
+        ...(metadata !== undefined ? { payload: metadata } : {}),
+        ...(verbose !== undefined ? { verbose } : {}),
+      },
+    } as EngineStreamEvent);
+  }
 
   getName(): string {
     return 'opencode-sdk';
@@ -112,16 +134,47 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
     const startTime = Date.now();
     this.collectedOutput = '';
     this.abortController = new AbortController();
+    this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
+    this.emitDiagnosticLog({
+      message: 'OpenCode SDK execute start',
+      detail: `sessionId=${options.sessionId || '<new>'}, model=${options.model || '<default>'}`,
+      metadata: {
+        workingDirectory: options.workingDirectory,
+        timeoutMs: options.timeoutMs,
+      },
+      verbose: true,
+    });
 
     try {
+      this.emitDiagnosticLog({
+        message: 'Ensuring OpenCode SDK server/client',
+        detail: options.workingDirectory,
+        verbose: true,
+      });
       const { client, url } = await ensureServer();
+      this.emitDiagnosticLog({
+        message: 'OpenCode SDK server ready',
+        detail: url,
+        verbose: true,
+      });
 
       // Create or resume session
       if (options.sessionId) {
         this.currentSessionId = options.sessionId;
         console.log(`[opencode-sdk] resuming session: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'Resuming OpenCode session',
+          detail: this.currentSessionId,
+          verbose: true,
+        });
       } else {
+        this.currentSessionId = null;
         console.log('[opencode-sdk] creating new session...');
+        this.emitDiagnosticLog({
+          message: 'Creating OpenCode session',
+          detail: options.workingDirectory,
+          verbose: true,
+        });
         const sessionResult = await client.session.create({
           body: {},
           query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
@@ -131,6 +184,11 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         }
         this.currentSessionId = getSessionId(sessionResult.data);
         console.log(`[opencode-sdk] session created: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'OpenCode session created',
+          detail: this.currentSessionId || '',
+          verbose: true,
+        });
       }
 
       if (!this.currentSessionId) {
@@ -145,6 +203,11 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       const model = parseProviderModel(options.model);
 
       console.log(`[opencode-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
+      this.emitDiagnosticLog({
+        message: 'OpenCode SDK prompt start',
+        detail: `sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`,
+        verbose: true,
+      });
       const output = await sendPromptWithOpenCodeHttp({
         engineName: 'opencode-sdk',
         client,
@@ -159,11 +222,20 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         timeoutMs: options.timeoutMs,
         signal: this.abortController.signal,
         emit: (event) => this.emit('stream', event),
+        ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
       });
       this.collectedOutput = output;
 
       const durationMs = Date.now() - startTime;
       console.log(`[opencode-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
+      this.emitDiagnosticLog({
+        message: 'OpenCode SDK execute done',
+        detail: `outputLength=${output.length}, duration=${durationMs}ms`,
+        metadata: {
+          sessionId: this.currentSessionId,
+        },
+        verbose: true,
+      });
       return {
         success: true,
         output: normalizeEngineOutput(output),
@@ -175,6 +247,11 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       };
     } catch (error: any) {
       const errorMessage = error?.message || 'OpenCode SDK error';
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'OpenCode SDK execute failed',
+        detail: errorMessage,
+      });
       this.emit('stream', { type: 'error', content: errorMessage } as EngineStreamEvent);
       return {
         success: false,

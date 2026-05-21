@@ -165,11 +165,59 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
   },
 };
 
+function getFencedCodeBlockRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const openRegex = /^([ \t]{0,3})(`{3,}|~{3,})([^\r\n]*)/gm;
+  let match: RegExpExecArray | null;
+  while ((match = openRegex.exec(markdown)) !== null) {
+    const start = match.index;
+    const marker = match[2];
+    const markerChar = marker[0];
+    const markerWidth = marker.length;
+    const lineEnd = markdown.indexOf('\n', openRegex.lastIndex);
+    const openingLineEnd = lineEnd === -1 ? markdown.length : lineEnd + 1;
+
+    const closeRegex = new RegExp(`^[ \\t]{0,3}${markerChar}{${markerWidth},}[ \\t]*$`, 'gm');
+    closeRegex.lastIndex = openingLineEnd;
+    const close = closeRegex.exec(markdown);
+    if (!close) {
+      ranges.push([start, markdown.length]);
+      openRegex.lastIndex = markdown.length;
+      break;
+    }
+
+    const closeLineEnd = markdown.indexOf('\n', close.index + close[0].length);
+    const end = closeLineEnd === -1 ? close.index + close[0].length : closeLineEnd + 1;
+    ranges.push([start, end]);
+    openRegex.lastIndex = end;
+  }
+  return ranges;
+}
+
+function getAceProcessRanges(markdown: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  const aceProcessRegex = /<ace-process>[\s\S]*?<\/ace-process>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = aceProcessRegex.exec(markdown)) !== null) {
+    ranges.push([match.index, match.index + match[0].length]);
+  }
+  return ranges;
+}
+
+function isInsideRanges(index: number, ranges: Array<[number, number]>): boolean {
+  return ranges.some(([start, end]) => index >= start && index < end);
+}
+
 export function getResultSections(markdown: string): ResultSection[] {
   const sections: ResultSection[] = [];
+  const skipRanges = [
+    ...getFencedCodeBlockRanges(markdown),
+    ...getAceProcessRanges(markdown),
+  ];
   const resultRegex = /<result>([\s\S]*?)<\/result>/gi;
   let match: RegExpExecArray | null;
   while ((match = resultRegex.exec(markdown)) !== null) {
+    if (isInsideRanges(match.index, skipRanges)) continue;
     sections.push({
       start: match.index,
       end: match.index + match[0].length,

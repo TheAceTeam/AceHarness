@@ -23,8 +23,10 @@ function parseTemporaryRoleConfig(body: any): RoleConfig | null {
     systemPrompt,
     constraints: Array.isArray(raw.constraints) ? raw.constraints.filter((item: unknown): item is string => typeof item === 'string') : ['不调用工具', '不修改文件'],
     allowedTools: [],
-    category: 'temporary-lab',
-    tags: ['temporary', 'werewolf-lab'],
+    category: typeof raw.category === 'string' ? raw.category : 'temporary-lab',
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((item: unknown): item is string => typeof item === 'string')
+      : ['temporary'],
     alwaysAvailableForChat: false,
   } as RoleConfig;
 }

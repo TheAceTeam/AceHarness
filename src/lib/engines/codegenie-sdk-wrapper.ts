@@ -243,6 +243,28 @@ async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: st
 export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
+  private diagnosticLoggingEnabled = false;
+
+  private emitDiagnosticLog(input: {
+    message: string;
+    detail?: string;
+    level?: 'info' | 'warning' | 'error';
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.diagnosticLoggingEnabled) return;
+    const { message, detail, level, metadata, verbose } = input;
+    this.emit('stream', {
+      type: 'log',
+      content: message,
+      metadata: {
+        ...(detail ? { detail } : {}),
+        ...(level ? { level } : {}),
+        ...(metadata !== undefined ? { payload: metadata } : {}),
+        ...(verbose !== undefined ? { verbose } : {}),
+      },
+    } as EngineStreamEvent);
+  }
 
   getName(): string {
     return 'codegenie-sdk';
@@ -264,15 +286,46 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
   async execute(options: EngineOptions): Promise<EngineResult> {
     const startedAt = Date.now();
     this.collectedOutput = '';
+    this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
+    this.emitDiagnosticLog({
+      message: 'CodeGenie SDK execute start',
+      detail: `sessionId=${options.sessionId || '<new>'}, model=${options.model || '<default>'}`,
+      metadata: {
+        workingDirectory: options.workingDirectory,
+        timeoutMs: options.timeoutMs,
+      },
+      verbose: true,
+    });
 
     try {
+      this.emitDiagnosticLog({
+        message: 'Ensuring CodeGenie SDK client',
+        detail: options.workingDirectory,
+        verbose: true,
+      });
       const { client, baseUrl } = await ensureClient();
+      this.emitDiagnosticLog({
+        message: 'CodeGenie SDK client ready',
+        detail: baseUrl,
+        verbose: true,
+      });
 
       if (options.sessionId) {
         this.currentSessionId = options.sessionId;
         console.log(`[codegenie-sdk] resuming session: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'Resuming CodeGenie session',
+          detail: this.currentSessionId,
+          verbose: true,
+        });
       } else {
+        this.currentSessionId = null;
         console.log(`[codegenie-sdk] creating session via ${baseUrl}`);
+        this.emitDiagnosticLog({
+          message: 'Creating CodeGenie session',
+          detail: baseUrl,
+          verbose: true,
+        });
         const sessionResult = await client.session.create({
           body: {},
           query: options.workingDirectory ? { directory: options.workingDirectory } : undefined,
@@ -282,6 +335,11 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         }
         this.currentSessionId = getSessionId(sessionResult.data);
         console.log(`[codegenie-sdk] session created: ${this.currentSessionId}`);
+        this.emitDiagnosticLog({
+          message: 'CodeGenie session created',
+          detail: this.currentSessionId || '',
+          verbose: true,
+        });
       }
 
       if (!this.currentSessionId) {
@@ -296,6 +354,11 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
       const fullPrompt = buildFullPrompt(options);
 
       console.log(`[codegenie-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
+      this.emitDiagnosticLog({
+        message: 'CodeGenie SDK prompt start',
+        detail: `sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`,
+        verbose: true,
+      });
       const model = parseProviderModel(options.model);
       const output = await sendPromptWithOpenCodeHttp({
         engineName: 'codegenie-sdk',
@@ -310,6 +373,7 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         workingDirectory: options.workingDirectory,
         timeoutMs: options.timeoutMs,
         emit: (event) => this.emit('stream', event),
+        ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
       });
       if (!output.trim()) {
         throw new Error('CodeGenie SDK prompt returned empty output');
@@ -318,6 +382,14 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
 
       const durationMs = Date.now() - startedAt;
       console.log(`[codegenie-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
+      this.emitDiagnosticLog({
+        message: 'CodeGenie SDK execute done',
+        detail: `outputLength=${output.length}, duration=${durationMs}ms`,
+        metadata: {
+          sessionId: this.currentSessionId,
+        },
+        verbose: true,
+      });
 
       return {
         success: true,
@@ -330,6 +402,11 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
       };
     } catch (error: any) {
       const errorMessage = error?.message || 'CodeGenie SDK error';
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'CodeGenie SDK execute failed',
+        detail: errorMessage,
+      });
       this.emit('stream', { type: 'error', content: errorMessage } as EngineStreamEvent);
       return {
         success: false,

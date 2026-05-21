@@ -3,6 +3,7 @@ import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-f
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
 import { recordModelProbeObservation } from '@/lib/models/probes';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 
 const CHAT_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
         reject(new Error(`聊天请求超过 ${CHAT_TIMEOUT_MS / 60000} 分钟，已自动销毁`));
       }, CHAT_TIMEOUT_MS);
 
-      engine.execute({
+      executeEngineWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
         prompt: message,
@@ -105,7 +106,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       result: result.output || chunks.join(''),
-      sessionId: result.sessionId,
+      sessionId: resolveRecoveredSessionId(result, sessionId),
       engine: engineType,
       isError: !result.success,
     });

@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
-import { cleanup, waitFor, screen } from '@testing-library/react';
+import { cleanup, render, waitFor, screen } from '@testing-library/react';
 
 const chatContextMock = {
   ...defaultChatContextMock,
@@ -46,7 +46,16 @@ vi.mock('@/components/chat/cards/UniversalCard', () => ({
 }));
 
 vi.mock('@/components/chat/ChatMessage', () => ({
+  default: ({ message }: { message: { content?: string; cards?: any[] } }) => (
+    <div data-testid="chat-message">
+      <div data-testid="wrapper-process-blocks">{message.content}</div>
+      {(message.cards || []).map((_: any, index: number) => (
+        <div key={index} data-testid="universal-card" />
+      ))}
+    </div>
+  ),
   ThinkingBot: () => <div data-testid="thinking-bot" />,
+  WrapperProcessBlocks: ({ content }: { content: string }) => <div data-testid="wrapper-process-blocks">{content}</div>,
 }));
 
 vi.mock('@/components/ui/combobox', () => ({
@@ -166,7 +175,7 @@ vi.mock('@/components/ui/table', () => ({
   TableRow: ({ children }: { children: React.ReactNode }) => <tr>{children}</tr>,
 }));
 
-import NewConfigModal from '@/components/NewConfigModal';
+import NewConfigModal, { ModalAiGenerationPanel, getDisplayContentForAiStream } from '@/components/NewConfigModal';
 
 type FetchCall = {
   url: string;
@@ -977,5 +986,59 @@ describe('NewConfigModal backend draft isolation', () => {
     });
     // Should NOT show step 4 content
     expect(screen.queryByText('返回修改')).toBeNull();
+  });
+});
+
+describe('NewConfigModal AI process rendering helpers', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test('modal AI content hides machine result and workflow draft JSON while preserving visible process stream', () => {
+    const content = [
+      '<ace-process>{"kind":"reasoning","body":"Checking requirements"}</ace-process>',
+      'Visible answer',
+      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '```json',
+      '{"kind":"plan_draft","payload":{"summary":"hidden"}}',
+      '```',
+    ].join('\n');
+
+    render(<ModalAiGenerationPanel content={content} />);
+
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Checking requirements');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Visible answer');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('workflow_draft');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('plan_draft');
+  });
+
+  test('modal AI content keeps card payloads renderable without leaking raw JSON', () => {
+    const content = [
+      'Before card',
+      '```json',
+      '{"kind":"card","payload":{"header":{"title":"运行摘要"},"blocks":[{"type":"text","content":"已完成"}]}}',
+      '```',
+    ].join('\n');
+
+    render(<ModalAiGenerationPanel content={content} />);
+
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Before card');
+    expect(screen.getByTestId('universal-card')).toBeTruthy();
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('运行摘要');
+  });
+
+  test('display helper strips result and draft side channels before modal rendering', () => {
+    const display = getDisplayContentForAiStream([
+      'Visible answer',
+      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '```json',
+      '{"type":"plan_draft","payload":{"summary":"hidden"}}',
+      '```',
+    ].join('\n'));
+
+    expect(display).toContain('Visible answer');
+    expect(display).not.toContain('<result>');
+    expect(display).not.toContain('workflow_draft');
+    expect(display).not.toContain('plan_draft');
   });
 });
