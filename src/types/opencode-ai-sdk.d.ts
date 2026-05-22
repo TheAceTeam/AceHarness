@@ -60,6 +60,16 @@ declare module '@opencode-ai/sdk' {
     baseUrl: string;
   }): OpencodeClient;
 
+  export function createOpencodeServer(options?: {
+    port?: number;
+    hostname?: string;
+    timeout?: number;
+    signal?: AbortSignal;
+    config?: {
+      logLevel?: string;
+    };
+  }): Promise<ServerHandle>;
+
   export function createOpencode(options?: {
     port?: number;
     hostname?: string;

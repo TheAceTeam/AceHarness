@@ -272,6 +272,16 @@ function writeStoredActiveSessionId(sessionId: string | null): void {
   } catch {}
 }
 
+function readStoredActiveSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = window.sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+    return stored && stored.trim() ? stored.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 // --- Server API helpers ---
 function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
@@ -494,6 +504,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const compactInFlightRef = useRef(false);
   const recentCompletionTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const sessionLoadTokenRef = useRef(0);
+  const hasHydratedStoredSessionRef = useRef(false);
   const skillSettingsRef = useRef(skillSettings);
   const modelRef = useRef(model);
   const engineRef = useRef(engine);
@@ -507,12 +518,29 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Load session list on mount
   useEffect(() => {
+    let cancelled = false;
     apiListSessions().then(list => {
+      if (cancelled) return;
       setSessions(list);
+
+      const storedActiveSessionId = readStoredActiveSessionId();
+      if (!storedActiveSessionId) return;
+
+      const storedSessionExists = list.some((session) => session.id === storedActiveSessionId);
+      if (!storedSessionExists) {
+        writeStoredActiveSessionId(null);
+      }
+
+      setActiveSessionId((prev) => (prev ? prev : storedSessionExists ? storedActiveSessionId : null));
+      hasHydratedStoredSessionRef.current = true;
     });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
+    if (!hasHydratedStoredSessionRef.current && !activeSessionId) return;
     writeStoredActiveSessionId(activeSessionId);
   }, [activeSessionId]);
 

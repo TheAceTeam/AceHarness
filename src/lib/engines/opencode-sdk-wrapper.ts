@@ -3,12 +3,17 @@
  *
  * Uses @opencode-ai/sdk to communicate with OpenCode via HTTP API
  * instead of stdio ACP. One server instance serves all sessions.
+ *
+ * Note: the upstream SDK's createOpencode({ env }) helper currently does not
+ * forward custom env vars into the spawned `opencode serve` process. We work
+ * around that here by temporarily patching process.env during server startup,
+ * then restoring it immediately after the child process is launched.
  */
 
+import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
-import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import {
   buildFullPrompt,
@@ -20,7 +25,9 @@ import {
 
 /** Singleton server instance shared across all sessions */
 let serverInstance: { url: string; close: () => void } | null = null;
+let serverEnvFingerprint: string | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
+let serverStartingFingerprint: string | null = null;
 let clientInstance: OpenCodeHttpClient | null = null;
 
 async function runtimeImport<T = any>(moduleName: string): Promise<T> {
@@ -41,35 +48,101 @@ function requireClient(): OpenCodeHttpClient {
   return clientInstance;
 }
 
+function getOpencodeCommand(): string {
+  return findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'opencode';
+}
+
+function fingerprintEnv(env: NodeJS.ProcessEnv): string {
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${String(value ?? '')}`)
+    .join('\n');
+}
+
+async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => Promise<T>): Promise<T> {
+  const snapshot = new Map<string, string | undefined>();
+  const keys = new Set<string>([
+    ...Object.keys(process.env),
+    ...Object.keys(env),
+  ]);
+
+  for (const key of keys) {
+    snapshot.set(key, process.env[key]);
+  }
+
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await action();
+  } finally {
+    for (const key of keys) {
+      const original = snapshot.get(key);
+      if (original === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = original;
+      }
+    }
+  }
+}
+
 async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string }> {
-  if (clientInstance && serverInstance) {
+  const serverEnv = buildConfiguredProcessEnvSync();
+  const nextFingerprint = fingerprintEnv(serverEnv);
+
+  if (clientInstance && serverInstance && serverEnvFingerprint === nextFingerprint) {
     return { client: clientInstance, url: serverInstance.url };
   }
 
-  if (serverStarting) {
+  if (serverStarting && serverStartingFingerprint === nextFingerprint) {
     const server = await serverStarting;
     return { client: requireClient(), url: server.url };
   }
 
+  if (serverStarting) {
+    try {
+      await serverStarting;
+    } catch {
+      // ignore: we are about to start a fresh server below
+    }
+  }
+
+  if (serverInstance && serverEnvFingerprint !== nextFingerprint) {
+    console.log('[opencode-sdk] configured env changed, restarting HTTP server...');
+    OpenCodeSdkEngineWrapper.shutdown();
+  }
+
+  serverStartingFingerprint = nextFingerprint;
   serverStarting = (async () => {
-    const { createOpencode } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
-    console.log('[opencode-sdk] starting HTTP server...');
+    const { createOpencodeClient, createOpencodeServer } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
+    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand()}...`);
 
-    const serverEnv = buildConfiguredProcessEnvSync();
+    const server = await withTemporaryProcessEnv(serverEnv, async () => {
+      return await createOpencodeServer({
+        port: 0,
+        hostname: '127.0.0.1',
+      } as any);
+    });
 
-    const result = await createOpencode({
-      port: 0,
-      hostname: '127.0.0.1',
-      ...(serverEnv && { env: serverEnv } as any),
-    } as any);
-    serverInstance = result.server;
-    clientInstance = result.client as unknown as OpenCodeHttpClient;
-    console.log(`[opencode-sdk] server started at ${result.server.url}`);
-    return result.server;
-  })();
+    serverInstance = server;
+    serverEnvFingerprint = nextFingerprint;
+    clientInstance = createOpencodeClient({
+      baseUrl: server.url,
+    }) as unknown as OpenCodeHttpClient;
+    console.log(`[opencode-sdk] server started at ${server.url}`);
+    return server;
+  })().finally(() => {
+    serverStarting = null;
+    serverStartingFingerprint = null;
+  });
 
   const server = await serverStarting;
-  serverStarting = null;
   return { client: requireClient(), url: server.url };
 }
 
@@ -119,7 +192,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
+    return !!serverInstance || !!serverStarting || !!findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {
@@ -265,7 +338,9 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
     if (serverInstance) {
       serverInstance.close();
       serverInstance = null;
-      clientInstance = null;
     }
+    serverEnvFingerprint = null;
+    serverStartingFingerprint = null;
+    clientInstance = null;
   }
 }

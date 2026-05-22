@@ -65,6 +65,7 @@ const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
 
 const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
 const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
+const SESSION_DIRECTORY_VIEW_STORAGE_KEY = 'aceharness:chat:session-directory-view';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
@@ -125,6 +126,27 @@ function useIsMobile() {
     return () => window.removeEventListener('resize', check);
   }, []);
   return isMobile;
+}
+
+function isSessionDirectoryView(value: unknown): value is SessionDirectoryView {
+  return value === 'conversation' || value === 'agora' || value === 'workflow';
+}
+
+function readStoredSessionDirectoryView(): SessionDirectoryView | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = window.sessionStorage.getItem(SESSION_DIRECTORY_VIEW_STORAGE_KEY);
+    return isSessionDirectoryView(stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSessionDirectoryView(view: SessionDirectoryView): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(SESSION_DIRECTORY_VIEW_STORAGE_KEY, view);
+  } catch {}
 }
 
 function hasInlineCommandWhitespace(value: string): boolean {
@@ -496,7 +518,9 @@ function ChatPageContent() {
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
   const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
-  const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => readStoredSessionDirectoryOrder()[0] || 'conversation');
+  const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => (
+    readStoredSessionDirectoryView() || readStoredSessionDirectoryOrder()[0] || 'conversation'
+  ));
   const [origin, setOrigin] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
@@ -640,6 +664,10 @@ function ChatPageContent() {
     || hasCollaborationSidebarContext
     || hasHintSidebarContext;
   const availableHomeSidebarTabsKey = availableHomeSidebarTabs.join('|');
+
+  useEffect(() => {
+    writeStoredSessionDirectoryView(sessionDirectoryView);
+  }, [sessionDirectoryView]);
 
   useEffect(() => {
     if (!parsedSidebarHint) return;
@@ -1070,20 +1098,35 @@ function ChatPageContent() {
     summary?: string;
     shouldOpenModal?: boolean;
   }) => {
+    const buildNextHomeSidebar = (prev: HomeSidebarHint | null | undefined): HomeSidebarHint => ({
+      type: 'home_sidebar',
+      ...(prev || {}),
+      ...(patch.tab ? { activeTab: patch.tab } : {}),
+      ...(patch.mode ? { mode: patch.mode } : {}),
+      ...(patch.intent ? { intent: patch.intent } : {}),
+      ...(patch.stage ? { stage: patch.stage } : {}),
+      ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
+      ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
+      ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
+    });
+
     if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
     if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
+
+    if (!activeSessionId && !activeSession) {
+      setSidebarOpen(true);
+      setSessionDirectoryView('conversation');
+      createSession({
+        title: '新对话',
+        sessionWorkbenchState: {
+          homeSidebar: buildNextHomeSidebar(null),
+        },
+      });
+      return;
+    }
+
     setSessionWorkbenchState((prev) => {
-      const nextHomeSidebar: HomeSidebarHint = {
-        type: 'home_sidebar',
-        ...(prev?.homeSidebar || {}),
-        ...(patch.tab ? { activeTab: patch.tab } : {}),
-        ...(patch.mode ? { mode: patch.mode } : {}),
-        ...(patch.intent ? { intent: patch.intent } : {}),
-        ...(patch.stage ? { stage: patch.stage } : {}),
-        ...(patch.reason !== undefined ? { reason: patch.reason } : {}),
-        ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
-        ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
-      };
+      const nextHomeSidebar = buildNextHomeSidebar(prev?.homeSidebar);
       if (JSON.stringify(prev?.homeSidebar || null) === JSON.stringify(nextHomeSidebar)) {
         return prev || { homeSidebar: nextHomeSidebar };
       }
@@ -1092,7 +1135,7 @@ function ChatPageContent() {
         homeSidebar: nextHomeSidebar,
       };
     });
-  }, [setSessionWorkbenchState]);
+  }, [activeSession, activeSessionId, createSession, setSessionWorkbenchState]);
 
   const openHomeSidebar = useCallback((
     tab?: HomeSidebarTab,
@@ -1208,9 +1251,13 @@ function ChatPageContent() {
       stopStreaming();
       await Promise.resolve();
     }
+    if (!activeSessionId && !activeSession) {
+      setSidebarOpen(true);
+      setSessionDirectoryView('conversation');
+    }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, toast, unlockAutoScroll]);
+  }, [activeSession, activeSessionId, compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, toast, unlockAutoScroll]);
 
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
@@ -1370,9 +1417,15 @@ function ChatPageContent() {
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
+      if (!activeSessionId && !activeSession) {
+        setSidebarOpen(true);
+        setSessionDirectoryView('conversation');
+      }
       sendMessage(prompt);
     }
   }, [
+    activeSession,
+    activeSessionId,
     decodeWorkflowActionFilename,
     handleWorkflowOpenAction,
     handleWorkflowStartAction,

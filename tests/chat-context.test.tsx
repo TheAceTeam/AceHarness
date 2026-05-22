@@ -78,7 +78,26 @@ describe('ChatProvider', () => {
     vi.restoreAllMocks();
   });
 
-  test('loads session summaries without auto-restoring an active session', async () => {
+  test('loads session summaries and restores the stored active session', async () => {
+    render(
+      <ChatProvider>
+        <ContextProbe />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('session-count').textContent).toBe('2');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('active-session').textContent).toBe('sess-2');
+    });
+    expect(sessionStorage.getItem(ACTIVE_SESSION_STORAGE_KEY)).toBe('sess-2');
+  });
+
+  test('drops a stale stored active session id when it no longer exists', async () => {
+    sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, 'missing-session');
+
     render(
       <ChatProvider>
         <ContextProbe />
