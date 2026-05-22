@@ -14,6 +14,8 @@ export interface EngineOptions {
   allowedTools?: string[];
   timeoutMs?: number;
   sessionId?: string;
+  /** Force a fresh backend session even if the wrapper has an in-memory session. */
+  forceNewSession?: boolean;
   appendSystemPrompt?: boolean;
   runId?: string;
   /** MCP server configs */
@@ -22,6 +24,8 @@ export interface EngineOptions {
   agents?: Record<string, any>;
   /** Frontend session tracking */
   frontendSessionId?: string;
+  /** Enable high-detail wrapper/transport lifecycle logs for diagnostics only. */
+  diagnosticLogging?: boolean;
 }
 
 export interface EngineTokenUsage {
@@ -65,6 +69,22 @@ export interface EngineResult {
   metadata?: EngineResultMetadata;
 }
 
+export interface EngineContextCompactOptions {
+  sessionId: string;
+  prompt: string;
+  systemPrompt: string;
+  model: string;
+  workingDirectory: string;
+  error?: string;
+}
+
+export interface EngineContextCompactResult {
+  sessionId?: string;
+  prompt?: string;
+  summary?: string;
+  method?: 'native' | 'manual';
+}
+
 export interface EngineStreamEvent {
   type: 'text' | 'tool' | 'thought' | 'error' | 'log' | 'session';
   content: string;
@@ -73,6 +93,7 @@ export interface EngineStreamEvent {
 
 export interface Engine {
   execute(options: EngineOptions): Promise<EngineResult>;
+  compactContext?(options: EngineContextCompactOptions): Promise<EngineContextCompactResult | null>;
   cancel(): void;
   isAvailable(): Promise<boolean>;
   getName(): string;

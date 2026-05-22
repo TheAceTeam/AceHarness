@@ -66,6 +66,20 @@ describe('result-channel', () => {
     ]);
   });
 
+  test('ignores result examples inside ace-process tool payloads', () => {
+    const markdown = [
+      '基于工具结果继续整理。',
+      '<ace-process>{"kind":"tool-result","toolName":"read","title":"读取","output":"<result>{\\"kind\\":\\"plan_draft\\",\\"payload\\":{\\"summary\\":\\"模板示例\\"}}</result>"}</ace-process>',
+      '<result>{"kind":"plan_draft","payload":{"summary":"正式草案","artifacts":{"requirements":"# req","design":"# design","tasks":"# tasks"}}}</result>',
+    ].join('\n');
+
+    expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
+      '{"kind":"plan_draft","payload":{"summary":"正式草案","artifacts":{"requirements":"# req","design":"# design","tasks":"# tasks"}}}',
+    ]);
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'plan_draft');
+    expect(parsed?.payload?.summary).toBe('正式草案');
+  });
+
   test('extracts first matching structured result when multiple result sections exist', () => {
     const markdown = [
       '<result>{"kind":"card","payload":{"blocks":[{"type":"text","content":"first"}]}}</result>',

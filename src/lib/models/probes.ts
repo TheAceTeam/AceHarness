@@ -11,6 +11,7 @@ import {
   type EngineDriver,
   type EngineType,
 } from '@/lib/engines/engine-factory';
+import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
 import type {
   CreateModelProbeInput,
   ModelProbeAvailabilityWindow,
@@ -428,7 +429,7 @@ async function executeProbeRun(probe: ModelProbeRecord): Promise<ModelProbeRunRe
 
   try {
     const responseStartedAt = Date.now();
-    const result = await engine.execute({
+    const result = await executeEngineWithContextRecovery(engine, {
       agent: 'model-probe-monitor',
       step: 'availability-check',
       prompt: 'Reply with exactly OK.',

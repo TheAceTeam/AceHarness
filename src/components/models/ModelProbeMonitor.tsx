@@ -48,6 +48,8 @@ import { ComboboxPortalProvider, SingleCombobox } from '@/components/ui/combobox
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/core/utils';
+import { EngineIcon } from '@/components/EngineIcon';
+import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import type { ModelProbeListResponse, ModelProbeRuntimeStatus, ModelProbeSummary } from '@/lib/models/probe-types';
 
@@ -115,13 +117,6 @@ const PROBE_ENGINES = [
   'trae-cli',
 ] as const;
 const AVAILABILITY_WINDOWS: AvailabilityWindow[] = [7, 15, 30];
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  cangjie: 'Cangjie',
-  mixed: 'Mixed',
-  unknown: 'Unassigned',
-};
 
 function readStoredAuthUser(): AuthViewer | null {
   if (typeof window === 'undefined') return null;
@@ -201,8 +196,57 @@ function driverLabel(driver?: string): string {
   return 'AUTO';
 }
 
-function providerLabel(endpoint?: string): string {
-  return PROVIDER_LABELS[endpoint || ''] || endpoint || PROVIDER_LABELS.unknown;
+function ProbeEndpointBadge({ endpoint, iconOnly = false }: { endpoint?: string; iconOnly?: boolean }) {
+  const value = endpoint || 'unknown';
+  const label = getEndpointDisplayName(value);
+  const hasWordmark = endpointHasWordmark(value);
+  const showText = !iconOnly && !hasWordmark;
+  return (
+    <Badge
+      variant="secondary"
+      title={label}
+      className={cn(
+        'h-7 rounded-full border border-border/70 bg-background/80 px-2 text-muted-foreground shadow-sm',
+        iconOnly ? 'w-7 justify-center px-0' : showText ? 'gap-1.5 px-2.5' : 'px-2.5'
+      )}
+    >
+      <EndpointIcon
+        endpoint={value}
+        mode={iconOnly ? 'mark' : hasWordmark ? 'logo' : 'mark'}
+        className={hasWordmark && !iconOnly ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
+        alt={label}
+        decorative={iconOnly}
+      />
+      {iconOnly || !showText ? <span className="sr-only">{label}</span> : <span className="text-xs font-medium leading-none">{label}</span>}
+    </Badge>
+  );
+}
+
+function ProbeEngineBadge({ engine, compact = false }: { engine: string; compact?: boolean }) {
+  const label = getEngineDisplayName(engine) || engine;
+  return (
+    <Badge
+      variant="outline"
+      title={label}
+      className={cn(
+        'rounded-full border-border/70 bg-background/80 text-foreground shadow-sm',
+        compact ? 'h-7 gap-1.5 px-2.5' : 'gap-1.5 px-2.5 py-1'
+      )}
+    >
+      <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={label} decorative={false} />
+      <span className="text-xs font-medium leading-none">{label}</span>
+    </Badge>
+  );
+}
+
+function ProbeEngineAvatar({ engine }: { engine: string }) {
+  const label = getEngineDisplayName(engine) || engine;
+  return (
+    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] border border-border/70 bg-card text-foreground/80 shadow-sm">
+      <EngineIcon engineId={engine} className="h-7 w-7" alt={label} decorative={false} />
+      <span className="sr-only">{label}</span>
+    </div>
+  );
 }
 
 function statusMeta(status: ModelProbeRuntimeStatus): {
@@ -392,6 +436,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
   const engineOptions = useMemo(() => PROBE_ENGINES.map((engine) => ({
     value: engine,
     label: getEngineDisplayName(engine),
+    icon: <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />,
   })), []);
 
   const driverOptions = useMemo(() => ([
@@ -1040,9 +1085,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                       <div>
                         <div className="flex items-center gap-3">
                           <h3 className="text-2xl font-semibold">{group.groupName}</h3>
-                          <Badge variant="secondary" className="rounded-full bg-amber-500/15 px-3 py-1 text-amber-600 dark:text-amber-400">
-                            {group.provider}
-                          </Badge>
+                      <ProbeEndpointBadge endpoint={group.provider} />
                         </div>
                         <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
                           <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
@@ -1094,16 +1137,25 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                             </div>
 
                             <div className="flex min-w-0 items-center gap-4">
-                              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[18px] border border-border/70 bg-card text-xl font-semibold text-foreground/80 shadow-sm">
-                                AI
-                              </div>
+                              <ProbeEngineAvatar engine={probe.engine} />
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <h4 className="break-words text-xl font-semibold">{probe.name}</h4>
-                                  <span className="text-xs text-muted-foreground">{driverLabel(probe.driver)}</span>
+                                  <Badge variant="secondary" className="rounded-full px-2.5 py-1 text-xs text-muted-foreground">
+                                    {driverLabel(probe.driver)}
+                                  </Badge>
                                 </div>
                                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                                  <span>{providerLabel(probe.endpoints[0])}</span>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {probe.endpoints.length > 0 ? (
+                                      probe.endpoints.map((endpoint) => (
+                                        <ProbeEndpointBadge key={`${probe.id}-${endpoint}`} endpoint={endpoint} iconOnly />
+                                      ))
+                                    ) : (
+                                      <ProbeEndpointBadge endpoint={undefined} iconOnly />
+                                    )}
+                                  </div>
+                                  <ProbeEngineBadge engine={probe.engine} compact />
                                   <span className="break-all">{probe.model}</span>
                                 </div>
                               </div>

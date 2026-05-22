@@ -6,6 +6,7 @@ import { configApi, agentApi, runsApi, workflowApi, scheduleApi } from '@/lib/co
 import { getWorkspaceSkillPath } from '@/lib/core/app-paths';
 import { extractJsonObject as extractResultJsonObject } from '@/lib/ai/result-channel';
 import { type HomeSidebarHint } from '@/lib/core/home-sidebar-state';
+import { extractAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 
 // Action 类型枚举
 export type ActionType =
@@ -144,6 +145,22 @@ export interface ActionState {
 
 // --- 解析 ---
 
+function isActionLike(obj: any): obj is Pick<ActionBlock, 'type' | 'params' | 'description'> {
+  if (!obj || typeof obj !== 'object') return false;
+  if (typeof obj.type !== 'string' || !(obj.type in ACTION_REGISTRY)) return false;
+  if (typeof obj.description !== 'string' || !obj.description.trim()) return false;
+  if (obj.params !== undefined && (typeof obj.params !== 'object' || Array.isArray(obj.params) || obj.params === null)) return false;
+  return true;
+}
+
+function isLegacyActionFencePayload(obj: any): obj is Pick<ActionBlock, 'type' | 'params' | 'description'> {
+  if (!obj || typeof obj !== 'object') return false;
+  if (typeof obj.type !== 'string' || !obj.type.trim()) return false;
+  if (typeof obj.description !== 'string' || !obj.description.trim()) return false;
+  if (obj.params !== undefined && (typeof obj.params !== 'object' || Array.isArray(obj.params) || obj.params === null)) return false;
+  return true;
+}
+
 /** Check if a parsed JSON object looks like a card */
 function isCardLike(obj: any): boolean {
   return obj && typeof obj === 'object' && (
@@ -249,6 +266,10 @@ function extractBalancedJson(str: string, start: number): string | null {
   return null;
 }
 
+function isInsideRanges(pos: number, ranges: Array<[number, number]>): boolean {
+  return ranges.some(([start, end]) => pos >= start && pos < end);
+}
+
 /** Collect byte ranges of all fenced code blocks (``` or ~~~, 3+ chars) */
 function getFencedCodeBlockRanges(markdown: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
@@ -272,7 +293,7 @@ function getFencedCodeBlockRanges(markdown: string): Array<[number, number]> {
 }
 
 function isInsideCodeBlock(pos: number, ranges: Array<[number, number]>): boolean {
-  return ranges.some(([start, end]) => pos >= start && pos < end);
+  return isInsideRanges(pos, ranges);
 }
 
 function stripDanglingTrailingFence(content: string): string {
@@ -330,7 +351,7 @@ function stripIncompleteStreamingFence(content: string): string {
   return content.slice(0, lastStart).trimEnd();
 }
 
-function getResultSections(markdown: string): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
+function getResultSections(markdown: string, skipRanges: Array<[number, number]> = []): Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> {
   const sections: Array<{ start: number; end: number; contentStart: number; contentEnd: number; content: string }> = [];
   const codeBlockRanges = getFencedCodeBlockRanges(markdown);
   const resultRegex = /<result>([\s\S]*?)<\/result>/g;
@@ -338,6 +359,7 @@ function getResultSections(markdown: string): Array<{ start: number; end: number
   while ((match = resultRegex.exec(markdown)) !== null) {
     // Skip <result> tags that are inside fenced code blocks
     if (isInsideCodeBlock(match.index, codeBlockRanges)) continue;
+    if (isInsideRanges(match.index, skipRanges)) continue;
     const start = match.index;
     const end = start + match[0].length;
     const contentStart = start + '<result>'.length;
@@ -353,16 +375,25 @@ function getResultSections(markdown: string): Array<{ start: number; end: number
   return sections;
 }
 
-function getDanglingResultRanges(markdown: string): Array<[number, number]> {
+function looksLikeMachineResultBody(body: string): boolean {
+  const trimmed = String(body || '').trimStart();
+  if (!trimmed) return false;
+  return /^(?:\{|\[|```(?:json|card)?\b|~~~(?:json|card)?\b)/i.test(trimmed);
+}
+
+function getDanglingResultRanges(markdown: string, skipRanges: Array<[number, number]> = []): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   const codeBlockRanges = getFencedCodeBlockRanges(markdown);
   const openRegex = /<result>/gi;
   let match: RegExpExecArray | null;
   while ((match = openRegex.exec(markdown)) !== null) {
     if (isInsideCodeBlock(match.index, codeBlockRanges)) continue;
+    if (isInsideRanges(match.index, skipRanges)) continue;
     const contentStart = match.index + match[0].length;
     const closeIndex = markdown.toLowerCase().indexOf('</result>', contentStart);
     if (closeIndex === -1) {
+      const body = markdown.slice(contentStart);
+      if (!looksLikeMachineResultBody(body)) continue;
       ranges.push([match.index, markdown.length]);
       break;
     }
@@ -397,12 +428,14 @@ function getResultBodySections(markdown: string): Array<{
     const bodyStart = start + match[0].length;
     const closeIndex = markdown.toLowerCase().indexOf('</result>', bodyStart);
     if (closeIndex === -1) {
+      const body = markdown.slice(bodyStart);
+      if (!looksLikeMachineResultBody(body)) continue;
       sections.push({
         start,
         end: markdown.length,
         bodyStart,
         bodyEnd: markdown.length,
-        body: markdown.slice(bodyStart),
+        body,
         complete: false,
       });
       break;
@@ -420,6 +453,21 @@ function getResultBodySections(markdown: string): Array<{
     openRegex.lastIndex = end;
   }
   return sections;
+}
+
+export function stripMachineResultBlocks(markdown: string): string {
+  const source = String(markdown || '');
+  const sections = getResultBodySections(source);
+  if (sections.length === 0) return source;
+
+  let cursor = 0;
+  let output = '';
+  for (const section of sections) {
+    output += source.slice(cursor, section.start);
+    cursor = section.end;
+  }
+  output += source.slice(cursor);
+  return output;
 }
 
 export function getStreamingResultDisplay(markdown: string): { text: string; complete: boolean } | null {
@@ -603,9 +651,11 @@ function collectMachineJsonFenceRemovals(
 ): Array<[number, number]> {
   const removals: Array<[number, number]> = [];
   for (const block of getFencedCodeBlocks(markdown)) {
-    if (skipRanges.some(([start, end]) => block.start >= start && block.start < end)) continue;
+    if (isInsideRanges(block.start, skipRanges)) continue;
     if (block.lang !== 'json' && block.lang !== 'card') continue;
     const parsed = extractResultJsonObject(block.content);
+    const kind = getMachineResultKind(parsed);
+    if (!MACHINE_RESULT_KINDS.has(kind)) continue;
     if (!collectMachinePayload(parsed, block.lang, cards, sidebarHints)) continue;
     removals.push([block.start, block.end]);
   }
@@ -642,50 +692,31 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
   const cards: any[] = [];
   const sidebarHints: HomeSidebarHint[] = [];
   const removals: [number, number][] = [];
+  const aceProcessRanges = extractAceProcessBlocks(markdown).blocks.map((block) => [block.start, block.end] as [number, number]);
 
-  // First pass: only parse action blocks globally.
-  // Card/json rendering is restricted to <result>...</result>.
-  const codeBlockRegex = /```(action)\s*\n/g;
-  let match;
-  while ((match = codeBlockRegex.exec(markdown)) !== null) {
-    const lang = match[1];
-    const contentStart = match.index + match[0].length;
-
-    // Use balanced brace matching to extract JSON
-    const jsonStr = extractBalancedJson(markdown, contentStart);
-    if (!jsonStr) continue;
-
-    // The JSON starts at some offset from contentStart
-    const jsonStartInContent = markdown.indexOf('{', contentStart);
-    const jsonEnd = jsonStartInContent + jsonStr.length;
-
-    // Find the closing ``` — must be on its own line after the JSON
-    // Search from jsonEnd, skip whitespace/newlines
-    let searchPos = jsonEnd;
-    while (searchPos < markdown.length && (markdown[searchPos] === ' ' || markdown[searchPos] === '\n' || markdown[searchPos] === '\r')) {
-      searchPos++;
-    }
-    // The closing ``` should be right here (or very close)
-    const closingIdx = markdown.indexOf('```', searchPos);
-    // Only accept if closing is within a reasonable distance (not a different code block)
-    const blockEnd = (closingIdx !== -1 && closingIdx - jsonEnd < 10) ? closingIdx + 3 : jsonEnd;
-
+  // First pass: parse action blocks globally.
+  // In practice some models emit action payloads in ```json instead of ```action.
+  // Those should still become ActionCards and never leak raw JSON into visible markdown.
+  for (const block of getFencedCodeBlocks(markdown)) {
+    if (isInsideRanges(block.start, aceProcessRanges)) continue;
+    if (block.lang !== 'action' && block.lang !== 'json') continue;
     try {
-      const parsed = JSON.parse(jsonStr);
-
-      if (lang === 'action' && parsed.type && parsed.description) {
-        actions.push({ type: parsed.type, params: parsed.params || {}, description: parsed.description });
-        removals.push([match.index, blockEnd]);
-        // Advance regex past this block to avoid re-matching nested ```
-        codeBlockRegex.lastIndex = blockEnd;
+      const parsed = JSON.parse(block.content);
+      if (block.lang === 'action' && isLegacyActionFencePayload(parsed)) {
+        actions.push({ type: parsed.type as ActionType, params: parsed.params || {}, description: parsed.description });
+        removals.push([block.start, block.end]);
         continue;
       }
+      if (block.lang === 'json' && isActionLike(parsed)) {
+        actions.push({ type: parsed.type, params: parsed.params || {}, description: parsed.description });
+        removals.push([block.start, block.end]);
+      }
     } catch {
-      // not valid JSON, leave as-is
+      // keep malformed blocks visible; callers may rely on seeing bad payloads during debugging
     }
   }
 
-  const resultSections = getResultSections(markdown);
+  const resultSections = getResultSections(markdown, aceProcessRanges);
   const resultPlainTexts: string[] = [];
   for (const section of resultSections) {
     // <result> is reserved for machine-readable side-channel output.
@@ -758,7 +789,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     }
   }
 
-  const danglingResultRanges = getDanglingResultRanges(markdown);
+  const danglingResultRanges = getDanglingResultRanges(markdown, aceProcessRanges);
   for (const range of danglingResultRanges) {
     removals.push(range);
   }
@@ -770,6 +801,7 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
     [
       ...resultSections.map((section) => [section.start, section.end] as [number, number]),
       ...danglingResultRanges,
+      ...aceProcessRanges,
     ],
   ));
 

@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { renderWithProviders, defaultChatContextMock } from '../helpers/component-wrapper';
-import { cleanup, waitFor, screen } from '@testing-library/react';
+import { cleanup, render, waitFor, screen } from '@testing-library/react';
 
 const chatContextMock = {
   ...defaultChatContextMock,
@@ -46,7 +46,16 @@ vi.mock('@/components/chat/cards/UniversalCard', () => ({
 }));
 
 vi.mock('@/components/chat/ChatMessage', () => ({
+  default: ({ message }: { message: { content?: string; cards?: any[] } }) => (
+    <div data-testid="chat-message">
+      <div data-testid="wrapper-process-blocks">{message.content}</div>
+      {(message.cards || []).map((_: any, index: number) => (
+        <div key={index} data-testid="universal-card" />
+      ))}
+    </div>
+  ),
   ThinkingBot: () => <div data-testid="thinking-bot" />,
+  WrapperProcessBlocks: ({ content }: { content: string }) => <div data-testid="wrapper-process-blocks">{content}</div>,
 }));
 
 vi.mock('@/components/ui/combobox', () => ({
@@ -166,7 +175,7 @@ vi.mock('@/components/ui/table', () => ({
   TableRow: ({ children }: { children: React.ReactNode }) => <tr>{children}</tr>,
 }));
 
-import NewConfigModal from '@/components/NewConfigModal';
+import NewConfigModal, { ModalAiGenerationPanel, getDisplayContentForAiStream } from '@/components/NewConfigModal';
 
 type FetchCall = {
   url: string;
@@ -487,9 +496,10 @@ describe('NewConfigModal backend draft isolation', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue('刷新恢复工作流')).toBeTruthy();
+      expect(screen.getByText('刷新恢复工作流')).toBeTruthy();
     });
     expect(screen.getByText('restore-after-refresh.yaml')).toBeTruthy();
+    expect(screen.getAllByText('计划生成').length).toBeGreaterThan(0);
     expect(fetchCalls.some((call) => call.url === '/api/chat/sessions' && call.method === 'POST')).toBe(false);
     expect(fetchCalls.some((call) => call.url === '/api/spec-coding/sessions' && call.method === 'POST')).toBe(false);
     expect(chatContextMock.updateSessionCreationBinding).toHaveBeenCalledWith(
@@ -507,6 +517,91 @@ describe('NewConfigModal backend draft isolation', () => {
       && call.method === 'PUT'
       && call.body?.creationSession?.creationSessionId === 'unfinished-1'
     ))).toBe(true);
+  });
+
+  test('keeps restored step 2 instead of falling back to step 1 after hydration completes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/resume-step-2' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'resume-step-2',
+            chatSessionId: 'planning-step-2',
+            mode: 'ai-guided',
+            workflowName: '第二步恢复',
+            filename: 'resume-step-2.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/step-2',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: {
+              id: 'spec-step-2',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 2,
+              planningStage: 'awaiting-answers',
+              clarificationForm: {
+                type: 'clarification_form',
+                summary: '请补充关键范围',
+                knownFacts: [],
+                missingFields: ['scope'],
+                questions: [{
+                  id: 'scope',
+                  label: '范围',
+                  question: '这次先覆盖哪一块？',
+                  selectionMode: 'single',
+                  options: [{ id: 'api', label: 'API', description: '只做 API', recommended: true }],
+                }],
+              },
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/spec-coding/sessions/resume-step-2' && method === 'PUT') {
+        return createJsonResponse({ session: { id: 'resume-step-2' } });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="resume-step-2"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText('补充问答').length).toBeGreaterThan(0);
+      expect(screen.getByText('这次先覆盖哪一块？')).toBeTruthy();
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(screen.getAllByText('补充问答').length).toBeGreaterThan(0);
+    expect(screen.getByText('这次先覆盖哪一块？')).toBeTruthy();
+    expect(screen.queryByDisplayValue('第二步恢复')).toBeNull();
   });
 
   test('does not restore completed homepage creation and records completion tags for new draft', async () => {
@@ -891,5 +986,59 @@ describe('NewConfigModal backend draft isolation', () => {
     });
     // Should NOT show step 4 content
     expect(screen.queryByText('返回修改')).toBeNull();
+  });
+});
+
+describe('NewConfigModal AI process rendering helpers', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test('modal AI content hides machine result and workflow draft JSON while preserving visible process stream', () => {
+    const content = [
+      '<ace-process>{"kind":"reasoning","body":"Checking requirements"}</ace-process>',
+      'Visible answer',
+      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '```json',
+      '{"kind":"plan_draft","payload":{"summary":"hidden"}}',
+      '```',
+    ].join('\n');
+
+    render(<ModalAiGenerationPanel content={content} />);
+
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Checking requirements');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Visible answer');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('workflow_draft');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('plan_draft');
+  });
+
+  test('modal AI content keeps card payloads renderable without leaking raw JSON', () => {
+    const content = [
+      'Before card',
+      '```json',
+      '{"kind":"card","payload":{"header":{"title":"运行摘要"},"blocks":[{"type":"text","content":"已完成"}]}}',
+      '```',
+    ].join('\n');
+
+    render(<ModalAiGenerationPanel content={content} />);
+
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Before card');
+    expect(screen.getByTestId('universal-card')).toBeTruthy();
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('运行摘要');
+  });
+
+  test('display helper strips result and draft side channels before modal rendering', () => {
+    const display = getDisplayContentForAiStream([
+      'Visible answer',
+      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '```json',
+      '{"type":"plan_draft","payload":{"summary":"hidden"}}',
+      '```',
+    ].join('\n'));
+
+    expect(display).toContain('Visible answer');
+    expect(display).not.toContain('<result>');
+    expect(display).not.toContain('workflow_draft');
+    expect(display).not.toContain('plan_draft');
   });
 });

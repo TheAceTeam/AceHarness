@@ -5,15 +5,19 @@ import { useEffect, useCallback, useState, useRef, useMemo } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
+import type { RichTextEditorHandle } from '@/components/ui/RichTextEditor';
 import { ClipLoader } from 'react-spinners';
 import BrandLoadingScreen from '@/components/BrandLoadingScreen';
-import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type NotebookScope } from '@/lib/core/api';
+import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, workspaceApi, specCodingApi, type GitBrowserSummaryResponse, type NotebookScope } from '@/lib/core/api';
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
 import StateMachineDiagram from '@/components/StateMachineDiagram';
 import StateMachineDesignPanel from '@/components/StateMachineDesignPanel';
+import AgentsManager from '@/components/agents/AgentsManager';
+import SkillsManager from '@/components/skills/SkillsManager';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
+import AgentFormationDiagram from '@/components/AgentFormationDiagram';
 import DesignPanel from '@/components/DesignPanel';
 import AgentPanel from '@/components/AgentPanel';
 import AgentConfigPanel from '@/components/AgentConfigPanel';
@@ -28,6 +32,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ModelSelect } from '@/components/ModelSelect';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -37,6 +42,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Switch } from '@/components/ui/switch';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { EngineSelect } from '@/components/EngineSelect';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -51,17 +57,14 @@ import { useAttentionSignal } from '@/hooks/useAttentionSignal';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
-import { RobotLogo } from '@/components/chat/ChatMessage';
-import WorkflowSupervisorChatPanel from '@/components/workflow/WorkflowSupervisorChatPanel';
+import { RobotLogo, WrapperProcessBlocks } from '@/components/chat/ChatMessage';
+import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
+import { mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
 import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
-  getConversationSessionStatusLabel,
-  listSessionsForAgent,
-  listSessionsForWorkflow,
-  type ChatSessionSummaryLike,
 } from '@/lib/agent/conversations';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
@@ -69,32 +72,45 @@ import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
+import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
+import { cn } from '@/lib/core/utils';
 import styles from './page.module.css';
 
-const loadingPanel = (label: string) => (
-  <div className="flex h-full min-h-[240px] items-center justify-center text-xs text-muted-foreground">
-    正在加载{label}...
+const loadingPanel = () => (
+  <div className="flex h-full min-h-[240px] flex-col justify-center gap-4 bg-background p-6">
+    <div className="mx-auto w-full max-w-xl space-y-4">
+      <BrandLoadingScreen message="正在加载工作台资源..." fullscreen={false} />
+      <div className="rounded-2xl border bg-background/80 p-4 space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-4 w-56" />
+        <Skeleton className="h-28 w-full rounded-xl" />
+      </div>
+    </div>
   </div>
 );
 const ProcessPanel = dynamic(() => import('@/components/ProcessPanel'), {
   ssr: false,
-  loading: () => loadingPanel('进程面板'),
+  loading: () => loadingPanel(),
 });
 const DocumentsPanel = dynamic(() => import('@/components/DocumentsPanel'), {
   ssr: false,
-  loading: () => loadingPanel('文档面板'),
+  loading: () => loadingPanel(),
 });
 const SchedulesPanel = dynamic(() => import('@/components/SchedulesPanel'), {
   ssr: false,
-  loading: () => loadingPanel('定时任务'),
+  loading: () => loadingPanel(),
 });
 const WorkspaceEditor = dynamic(
   () => import('@/components/workspace/WorkspaceEditor').then((mod) => mod.WorkspaceEditor),
   {
     ssr: false,
-    loading: () => loadingPanel('工作区编辑器'),
+    loading: () => loadingPanel(),
   }
 );
+const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
+  ssr: false,
+  loading: () => <div className="h-24 rounded-[24px] border bg-muted/30" />,
+});
 
 const MonacoEditor = dynamic(
   async () => {
@@ -105,19 +121,116 @@ const MonacoEditor = dynamic(
   },
   {
     ssr: false,
-    loading: () => (
-      <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-        正在加载编辑器...
-      </div>
-    ),
+    loading: () => loadingPanel(),
   }
 );
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
+type RunWorkbenchTab = 'execution' | 'workspace' | 'changes';
+
+function countGitWorkingTreeFiles(summary?: GitBrowserSummaryResponse | null): number {
+  if (!summary?.available) return 0;
+  const changed = new Set<string>();
+  for (const file of summary.workingTree.unstaged || []) changed.add(file.path);
+  for (const file of summary.workingTree.staged || []) changed.add(file.path);
+  for (const file of summary.workingTree.untracked || []) changed.add(file.path);
+  return changed.size;
+}
+
+function WorkbenchExecutionLoadingSkeleton() {
+  return (
+    <div className="flex h-full flex-col bg-background">
+      <div className="border-b px-6 py-5">
+        <div className="text-sm font-semibold">执行追踪</div>
+      </div>
+      <div className="flex-1 overflow-auto p-6">
+        <div className="mx-auto flex h-full max-w-4xl flex-col justify-center gap-6">
+          <BrandLoadingScreen message="正在加载工作流视图..." fullscreen={false} />
+          <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+            <div className="rounded-2xl border bg-background/80 p-4 space-y-4">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-4 w-72" />
+              <Skeleton className="h-[220px] w-full rounded-xl" />
+            </div>
+            <div className="rounded-2xl border bg-background/80 p-4 space-y-3">
+              <Skeleton className="h-5 w-32" />
+              <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-16 w-full rounded-xl" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+                <Skeleton className="h-16 w-full rounded-xl" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WorkbenchAgentDetailSkeleton() {
+  return (
+    <div className="h-full overflow-auto">
+      <div className="bg-muted border-b p-3.5">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-10 w-10 rounded-full" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-5 w-14 rounded-full" />
+        </div>
+      </div>
+      <div className="space-y-4 p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+          <Skeleton className="h-20 w-full rounded-xl" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-8" />
+          </div>
+          <Skeleton className="h-24 w-full rounded-xl" />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-5 w-8 rounded-full" />
+          </div>
+          <Skeleton className="h-10 w-full rounded-xl" />
+          <Skeleton className="h-10 w-full rounded-xl" />
+          <Skeleton className="h-10 w-3/4 rounded-xl" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function isAbsoluteProjectPath(path: string) {
   return path.startsWith('/') || WINDOWS_DRIVE_ABSOLUTE_PATH.test(path) || UNC_ABSOLUTE_PATH.test(path);
+}
+
+function getRunWorkbenchTabFromSearchParams(searchParams: { get: (key: string) => string | null }): RunWorkbenchTab {
+  if (searchParams.get('changes') === '1') return 'changes';
+  if (searchParams.get('workspace') === '1') return 'workspace';
+  return 'execution';
+}
+
+function toRelativeWorkspaceFilePath(workspacePath: string, filePath?: string | null): string | null {
+  const normalizedWorkspace = String(workspacePath || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+  const normalizedFile = String(filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalizedWorkspace || !normalizedFile) return null;
+  const normalizedAbsoluteFile = String(filePath || '').replace(/\\/g, '/');
+  if (normalizedAbsoluteFile === normalizedWorkspace) return null;
+  if (isAbsoluteProjectPath(normalizedAbsoluteFile)) {
+    if (!normalizedAbsoluteFile.startsWith(`${normalizedWorkspace}/`)) return null;
+    return normalizedAbsoluteFile.slice(normalizedWorkspace.length + 1) || null;
+  }
+  return normalizedFile || null;
 }
 
 type RuntimeSpecTask = {
@@ -150,9 +263,7 @@ type ContextWorkspaceDialogProps = {
   description: string;
   modeLabel: string;
   globalDraft: string;
-  onGlobalDraftChange: (value: string) => void;
   phaseDrafts: Record<string, string>;
-  onPhaseDraftChange: (name: string, value: string) => void;
   focusTarget: string;
   onFocusTargetChange: (value: string) => void;
   footerText: string;
@@ -165,8 +276,8 @@ type ContextWorkspaceDialogProps = {
   startContextScopeLabel: string;
   projectRoot?: string;
   onCancel: () => void;
-  onSkipPreflight?: () => void;
-  onConfirm: () => void;
+  onSkipPreflight?: (contexts: WorkflowStartContexts) => void;
+  onConfirm: (contexts: WorkflowStartContexts) => void;
 };
 
 type MonacoEditorInstance = {
@@ -414,17 +525,66 @@ function getSpecMergeStatusLabel(status?: DeltaMergeState['status']) {
   return status ? SPEC_MERGE_STATUS_LABELS[status] || status : '未开始';
 }
 
+function normalizeStartupProgressLabel(label: string) {
+  if (label === '正在正式启动，准备执行启动前检查') return '正在正式启动，正在执行启动前检查';
+  if (label === '已进入演练模式，准备执行启动前检查') return '已进入演练模式，正在执行启动前检查';
+  return label;
+}
+
+function AceAwareMarkdown({
+  content,
+  isStreaming = false,
+  className = '',
+}: {
+  content: string;
+  isStreaming?: boolean;
+  className?: string;
+}) {
+  const prepared = String(content || '');
+  if (prepared.includes('<ace-process>')) {
+    return (
+      <div className={className}>
+        <WrapperProcessBlocks content={prepared} isStreaming={isStreaming} />
+      </div>
+    );
+  }
+  return (
+    <div className={className}>
+      <Markdown>{prepared}</Markdown>
+    </div>
+  );
+}
+
 function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   const [activeTab, setActiveTab] = useState<'overview' | 'global' | 'state'>('state');
-  const startupFlowEnabled = Boolean(props.preflightPreview || props.onSkipPreflight);
-  const [startupStep, setStartupStep] = useState<'context' | 'preflight'>(startupFlowEnabled ? 'context' : 'preflight');
-  const filledCount = props.startContextTargets.filter((name) => (props.phaseDrafts[name] || '').trim().length > 0).length;
+  const startupFlowEnabled = (props.preflightPreview?.commands?.length || 0) > 0;
+  const [startupStep, setStartupStep] = useState<'context' | 'preflight'>('context');
+  const [localGlobalDraft, setLocalGlobalDraft] = useState(props.globalDraft);
+  const [localPhaseDrafts, setLocalPhaseDrafts] = useState<Record<string, string>>(props.phaseDrafts);
+  const [localFocusTarget, setLocalFocusTarget] = useState(props.focusTarget || props.startContextTargets[0] || '');
+  const filledCount = props.startContextTargets.filter((name) => (localPhaseDrafts[name] || '').trim().length > 0).length;
   const coverage = props.startContextTargets.length > 0 ? Math.round((filledCount / props.startContextTargets.length) * 100) : 0;
-  const currentTarget = props.focusTarget || props.startContextTargets[0] || '';
-  const currentTargetValue = currentTarget ? (props.phaseDrafts[currentTarget] || '') : '';
+  const currentTarget = localFocusTarget || props.startContextTargets[0] || '';
+  const currentTargetValue = currentTarget ? (localPhaseDrafts[currentTarget] || '') : '';
   const previewCommands = props.preflightPreview?.commands || [];
   const workflowCommandCount = previewCommands.filter((item) => item.origin === 'workflow').length;
   const inferredCommandCount = previewCommands.filter((item) => item.origin === 'inferred').length;
+
+  useEffect(() => {
+    setLocalGlobalDraft(props.globalDraft);
+  }, [props.globalDraft]);
+
+  useEffect(() => {
+    setLocalPhaseDrafts(props.phaseDrafts);
+  }, [props.phaseDrafts]);
+
+  useEffect(() => {
+    setLocalFocusTarget(props.focusTarget || props.startContextTargets[0] || '');
+  }, [props.focusTarget, props.startContextTargets]);
+
+  useEffect(() => {
+    setStartupStep('context');
+  }, [startupFlowEnabled, props.preflightPreview]);
 
   return (
     <div className="flex max-h-[92vh] w-[1120px] max-w-full flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl sm:rounded-3xl">
@@ -464,7 +624,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                 <div className={`flex h-8 w-8 items-center justify-center rounded-full border text-xs font-semibold ${startupStep === 'preflight' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground'}`}>
                   2
                 </div>
-                <div className="text-sm font-medium">确认检查与启动方式</div>
+                <div className="text-sm font-medium">确认检查并启动</div>
               </div>
             </div>
           </div>
@@ -514,6 +674,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                           key={`context-target-${name}`}
                           value={`${name} ${index + 1}`}
                           onSelect={() => {
+                            setLocalFocusTarget(name);
                             props.onFocusTargetChange(name);
                             setActiveTab('state');
                           }}
@@ -569,12 +730,13 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                       <div className="mt-4"><Progress value={coverage} className="h-2" /></div>
                       <div className="mt-4 space-y-2">
                         {props.startContextTargets.slice(0, 6).map((name) => {
-                          const filled = (props.phaseDrafts[name] || '').trim().length > 0;
+                          const filled = (localPhaseDrafts[name] || '').trim().length > 0;
                           return (
                             <button
                               key={`context-summary-${name}`}
                               type="button"
                               onClick={() => {
+                                setLocalFocusTarget(name);
                                 props.onFocusTargetChange(name);
                                 setActiveTab('state');
                               }}
@@ -629,8 +791,8 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                       <Badge variant="secondary" className="rounded-full px-2.5 text-[10px]">共享</Badge>
                     </div>
                     <Textarea
-                      value={props.globalDraft}
-                      onChange={(e) => props.onGlobalDraftChange(e.target.value)}
+                      value={localGlobalDraft}
+                      onChange={(e) => setLocalGlobalDraft(e.target.value)}
                       placeholder="例如：优先保持现有架构、接口变更先兼容旧调用方、代码风格跟随仓库现状"
                       rows={16}
                       className="mt-4 min-h-[220px] resize-none rounded-2xl border-border/60 bg-background/90 text-sm leading-6 shadow-sm sm:min-h-[320px] lg:min-h-[420px]"
@@ -658,7 +820,8 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                       value={currentTargetValue}
                       onChange={(e) => {
                         if (!currentTarget) return;
-                        props.onPhaseDraftChange(currentTarget, e.target.value);
+                        const nextValue = e.target.value;
+                        setLocalPhaseDrafts((prev) => ({ ...prev, [currentTarget]: nextValue }));
                       }}
                       placeholder={currentTarget ? `输入仅对「${currentTarget}」生效的上下文` : `先从左侧选择一个${props.startContextScopeLabel}`}
                       rows={16}
@@ -756,9 +919,24 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
                   <Button variant="secondary" onClick={() => setStartupStep('context')} disabled={props.actionBusy}>上一步</Button>
                   <Button variant="ghost" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
                   {props.onSkipPreflight ? (
-                    <Button variant="outline" onClick={props.onSkipPreflight} disabled={props.actionBusy}>跳过检查启动</Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => props.onSkipPreflight?.({
+                        globalContext: localGlobalDraft,
+                        phaseContexts: localPhaseDrafts,
+                      })}
+                      disabled={props.actionBusy}
+                    >
+                      跳过检查启动
+                    </Button>
                   ) : null}
-                  <Button onClick={props.onConfirm} disabled={props.actionDisabled}>
+                  <Button
+                    onClick={() => props.onConfirm({
+                      globalContext: localGlobalDraft,
+                      phaseContexts: localPhaseDrafts,
+                    })}
+                    disabled={props.actionDisabled}
+                  >
                     {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
                   </Button>
                 </>
@@ -766,7 +944,13 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             ) : (
               <>
                 <Button variant="secondary" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
-                <Button onClick={props.onConfirm} disabled={props.actionDisabled}>
+                <Button
+                  onClick={() => props.onConfirm({
+                    globalContext: localGlobalDraft,
+                    phaseContexts: localPhaseDrafts,
+                  })}
+                  disabled={props.actionDisabled}
+                >
                   {props.actionBusy ? props.actionBusyLabel : props.actionLabel}
                 </Button>
               </>
@@ -857,10 +1041,11 @@ export default function WorkbenchPage() {
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
-  const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
+  const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => getRunWorkbenchTabFromSearchParams(searchParams));
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
+  const [workspaceChangeCount, setWorkspaceChangeCount] = useState(0);
   const [smIssueTracker, setSmIssueTracker] = useState<any[]>([]);
   const [smTransitionCount, setSmTransitionCount] = useState(0);
   const [runStartTime, setRunStartTime] = useState<string | null>(null);
@@ -883,6 +1068,7 @@ export default function WorkbenchPage() {
   const [liveStream, setLiveStream] = useState<string[]>([]);
   const [showLiveStream, setShowLiveStream] = useState(false);
   const [liveStreamFullscreen, setLiveStreamFullscreen] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'detail' | 'live'>('detail');
   const [isNewNode, setIsNewNode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
@@ -912,11 +1098,17 @@ export default function WorkbenchPage() {
 
   const openWorkspaceEditorAtPath = useCallback((path: string, title?: string, filePath?: string | null) => {
     if (!path) return;
+    const relativeFilePath = toRelativeWorkspaceFilePath(path, filePath);
     setWorkspaceEditorPath(path);
     setWorkspaceEditorTitle(title);
     setWorkspaceEditorFilePath(filePath || null);
-    setWorkspaceEditorOpen(true);
-  }, []);
+    setRunWorkbenchTab('workspace');
+    updateUrl({
+      workspace: '1',
+      changes: null,
+      workspaceFile: relativeFilePath,
+    });
+  }, [updateUrl]);
   const [agentFlow, setAgentFlow] = useState<{
     id: string;
     type: 'stream' | 'request' | 'response' | 'supervisor';
@@ -1083,13 +1275,18 @@ export default function WorkbenchPage() {
   } | null>(null);
   const [qualityChecks, setQualityChecks] = useState<QualityCheckRecord[]>([]);
   const [preflightChecks, setPreflightChecks] = useState<QualityCheckRecord[]>([]);
-  const [chatSessions, setChatSessions] = useState<ChatSessionSummaryLike[]>([]);
   const [memoryLayers, setMemoryLayers] = useState<WorkflowMemoryLayers | null>(null);
   const [workflowFrontendSessionId, setWorkflowFrontendSessionId] = useState<string | null>(null);
   const [workbenchConversationSessionId, setWorkbenchConversationSessionId] = useState<string | null>(null);
   const liveStreamFeedbackRef = useRef<HTMLInputElement>(null);
+  const liveFeedbackEditorRef = useRef<RichTextEditorHandle>(null);
+  const [liveFeedbackDraft, setLiveFeedbackDraft] = useState('');
   const [sendingFeedback, setSendingFeedback] = useState(false);
   const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
+  const [liveStreamSource, setLiveStreamSource] = useState<{ stateName: string | null; stepName: string | null }>({
+    stateName: null,
+    stepName: null,
+  });
   const [showContextEditor, setShowContextEditor] = useState(false);
   const [contextEditorGlobalDraft, setContextEditorGlobalDraft] = useState('');
   const [contextEditorPhaseDrafts, setContextEditorPhaseDrafts] = useState<Record<string, string>>({});
@@ -1103,13 +1300,17 @@ export default function WorkbenchPage() {
   const [applyingOptimization, setApplyingOptimization] = useState(false);
   const [showStartWorkflowDialog, setShowStartWorkflowDialog] = useState(false);
   const [pendingStartRequest, setPendingStartRequest] = useState<WorkflowStartRequest | null>(null);
+  const autoStartHandledRef = useRef(false);
   const [startGlobalContextDraft, setStartGlobalContextDraft] = useState('');
   const [startPhaseContextDrafts, setStartPhaseContextDrafts] = useState<Record<string, string>>({});
   const [startContextFocusTarget, setStartContextFocusTarget] = useState('');
+  const [startupCancelRequested, setStartupCancelRequested] = useState(false);
+  const startupCancelRequestedRef = useRef(false);
+  const startupCreatedRunIdRef = useRef<string | null>(null);
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
-    const targetSessionId = sessionId || workflowFrontendSessionId;
+    const targetSessionId = workflowFrontendSessionId || sessionId;
     if (!targetSessionId) return;
 
     setWorkbenchConversationSessionId(targetSessionId);
@@ -1121,7 +1322,34 @@ export default function WorkbenchPage() {
     }
   }, [dispatch, workflowFrontendSessionId]);
 
-  const [designTab, setDesignTab] = useState<'overview' | 'orchestration' | 'config'>('overview');
+  type DesignTab = 'overview' | 'orchestration' | 'config' | 'agents' | 'skills';
+  const [designTab, setDesignTab] = useState<DesignTab>('overview');
+
+  const refreshDesignPickerOptions = useCallback(async () => {
+    try {
+      const { agents: loadedAgents } = await agentApi.listAgents();
+      dispatch({ type: 'SET_AGENTS_CONFIG', payload: loadedAgents || [] });
+    } catch {
+      /* ignore */
+    }
+    try {
+      const skillsRes = await fetch('/api/skills');
+      const skillsData = await skillsRes.json();
+      setAvailableSkills(skillsData.skills?.map((s: any) => ({ name: s.name, description: s.description })) || []);
+    } catch {
+      /* ignore */
+    }
+  }, [dispatch]);
+
+  const handleDesignTabChange = useCallback((tab: DesignTab) => {
+    const leavingEmbeddedManager = (designTab === 'agents' || designTab === 'skills')
+      && tab !== 'agents'
+      && tab !== 'skills';
+    setDesignTab(tab);
+    if (leavingEmbeddedManager) {
+      void refreshDesignPickerOptions();
+    }
+  }, [designTab, refreshDesignPickerOptions]);
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
@@ -1240,6 +1468,33 @@ export default function WorkbenchPage() {
     } catch {}
     return projectRoot;
   }, [projectRoot]);
+
+  const currentRunWorkspacePath = useMemo(
+    () => state.workingDirectory || resolvedProjectRoot || projectRoot || '',
+    [projectRoot, resolvedProjectRoot, state.workingDirectory],
+  );
+
+  const handleRunWorkbenchTabChange = useCallback((tab: RunWorkbenchTab) => {
+    setRunWorkbenchTab(tab);
+    updateUrl({
+      workspace: tab === 'workspace' ? '1' : null,
+      changes: tab === 'changes' ? '1' : null,
+    });
+  }, [updateUrl]);
+
+  const refreshWorkspaceChangeCount = useCallback(async () => {
+    const targetWorkspace = String(currentRunWorkspacePath || '').trim();
+    if (!targetWorkspace) {
+      setWorkspaceChangeCount(0);
+      return;
+    }
+    try {
+      const summary = await workspaceApi.getGitBrowserSummary(targetWorkspace, { commitLimit: 1 });
+      setWorkspaceChangeCount(countGitWorkingTreeFiles(summary));
+    } catch {
+      setWorkspaceChangeCount(0);
+    }
+  }, [currentRunWorkspacePath]);
 
   useEffect(() => {
     setRuntimeAgentDraft((prev) => ({
@@ -2004,6 +2259,8 @@ export default function WorkbenchPage() {
   }, [agents, configuredWorkflowAgents]);
 
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
+  const forceCompletableStep = workflowStatus === 'running' ? (currentStep || activeSteps[0] || '') : '';
+  const canForceCompleteStep = workflowStatus === 'running' && Boolean(forceCompletableStep);
   const canStartWorkflow = isRunMode && !starting && (!isRunning || workspaceMode === 'isolated-copy');
   const preparingProgress = useMemo(() => {
     if (workflowStatus !== 'preparing') return null;
@@ -2196,6 +2453,24 @@ export default function WorkbenchPage() {
     });
     return result;
   }, [agentConfigs, orderedWorkflowAgents, runtimeSupervisorAgent]);
+  const workflowAgoraInitialGuests = useMemo(() => (
+    supervisorFormationAgents.map((agent) => ({
+      name: agent.name,
+      sourceAgent: agent.name,
+      runtimeAgentName: agent.name,
+    }))
+  ), [supervisorFormationAgents]);
+  const workflowAgoraAgentSessionIds = useMemo(() => {
+    const result: Record<string, string> = {};
+    displayWorkflowAgents.forEach((agent) => {
+      const sessionId = String(agent.sessionId || '').trim();
+      if (agent.name && sessionId) result[agent.name] = sessionId;
+    });
+    if (runtimeSupervisorAgent && runtimeSupervisorSessionId) {
+      result[runtimeSupervisorAgent] = runtimeSupervisorSessionId;
+    }
+    return result;
+  }, [displayWorkflowAgents, runtimeSupervisorAgent, runtimeSupervisorSessionId]);
   const workflowTokenAnalytics = useMemo(() => {
     const stepNameToPhase = new Map<string, string>();
     if (workflowConfig?.workflow?.mode === 'state-machine') {
@@ -2282,17 +2557,16 @@ export default function WorkbenchPage() {
       if (refreshedAgent) {
         if (refreshedAgent !== selectedAgent) {
           dispatch({ type: 'SET_SELECTED_AGENT', payload: refreshedAgent });
+          if (selectedStep) {
+            dispatch({ type: 'SET_SELECTED_STEP', payload: selectedStep });
+          }
         }
         return;
       }
     }
     dispatch({ type: 'SET_SELECTED_AGENT', payload: orderedWorkflowAgents[0] });
-  }, [orderedWorkflowAgents, selectedAgent, dispatch]);
+  }, [orderedWorkflowAgents, selectedAgent, selectedStep, dispatch]);
 
-  const workflowRelatedSessions = useMemo(
-    () => listSessionsForWorkflow(chatSessions, configFile),
-    [chatSessions, configFile]
-  );
   const displayQualityChecks = useMemo(() => {
     const merged = [...preflightChecks, ...qualityChecks];
     const seen = new Set<string>();
@@ -2407,33 +2681,6 @@ export default function WorkbenchPage() {
 
   useDocumentTitle(attentionSignal.active ? attentionSignal.title || null : workflowTitle);
 
-  const loadChatSessions = useCallback(async () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    if (!token) {
-      setChatSessions([]);
-      return;
-    }
-    try {
-      const response = await fetch('/api/chat/sessions', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (response.status === 401) {
-        setChatSessions([]);
-        return;
-      }
-      const data = await response.json();
-      setChatSessions(data.sessions || []);
-    } catch {
-      setChatSessions([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadChatSessions();
-  }, [loadChatSessions]);
-
   const totalSteps = workflowConfig?.workflow?.mode === 'state-machine'
     ? (workflowConfig?.workflow?.states?.reduce(
         (sum: number, state: any) => sum + (state.steps?.length ?? 0), 0
@@ -2510,8 +2757,15 @@ export default function WorkbenchPage() {
         setAgentFlow((status as any).agentFlow);
       }
       setCreationSessionSummary((status as any).creationSession || null);
-      setSpecCodingSummary((status as any).specCodingSummary || null);
-      setSpecCodingDetails((status as any).specCodingDetails || null);
+      const preferRunSpec = state.viewMode === 'run' || state.viewMode === 'history';
+      const nextSpecCodingSummary = preferRunSpec
+        ? ((status as any).runSpecCodingSummary || (status as any).specCodingSummary || (status as any).creationSpecCodingSummary || null)
+        : ((status as any).creationSpecCodingSummary || ((status as any).specCodingSummary?.source === 'creation' ? (status as any).specCodingSummary : null));
+      const nextSpecCodingDetails = preferRunSpec
+        ? ((status as any).runSpecCodingDetails || (status as any).specCodingDetails || (status as any).creationSpecCodingDetails || null)
+        : ((status as any).creationSpecCodingDetails || ((status as any).specCodingSummary?.source === 'creation' ? (status as any).specCodingDetails : null));
+      setSpecCodingSummary(nextSpecCodingSummary);
+      setSpecCodingDetails(nextSpecCodingDetails);
       setSpecCodingSourceOfTruth((status as any).sourceOfTruth || null);
       setPersistMode(status.persistMode);
       setDeltaSpecMerged(Boolean(status.deltaSpecMerged));
@@ -2816,7 +3070,6 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (isHistoryMode) {
       loadHistory();
-      void loadWorkflowConfig({ background: true });
       return;
     }
 
@@ -2856,6 +3109,11 @@ export default function WorkbenchPage() {
       setViewingHistoryRun(false);
     }
   }, [dispatch, searchParams, state.viewMode, viewingHistoryRun]);
+
+  useEffect(() => {
+    const nextTab = getRunWorkbenchTabFromSearchParams(searchParams);
+    setRunWorkbenchTab((prev) => (prev === nextTab ? prev : nextTab));
+  }, [searchParamsString]);
 
   // Auto-load run from URL ?run=xxx on mount
   useEffect(() => {
@@ -2915,6 +3173,15 @@ export default function WorkbenchPage() {
     let timer = setInterval(poll, interval);
     return () => clearInterval(timer);
   }, [viewMode, isRunning, workflowStatus]);
+
+  useEffect(() => {
+    if (viewMode !== 'run') return;
+    void refreshWorkspaceChangeCount();
+    const timer = window.setInterval(() => {
+      void refreshWorkspaceChangeCount();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshWorkspaceChangeCount, viewMode]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig) {
@@ -3378,6 +3645,8 @@ export default function WorkbenchPage() {
     setEditingName(false);
   };
 
+  const hasContextEditableRun = Boolean(runId || initialRunId || selectedRun?.id);
+
   const requestStartWorkflow = useCallback(async (
     mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
     options?: {
@@ -3409,6 +3678,40 @@ export default function WorkbenchPage() {
     setShowStartWorkflowDialog(true);
   }, [configFile, globalContext, phaseContexts, rehearsalMode, startContextTargets, toast]);
 
+  useEffect(() => {
+    if (autoStartHandledRef.current) return;
+    if (searchParams.get('autoStart') !== '1') return;
+    if (pageLoading || !workflowConfig) return;
+
+    autoStartHandledRef.current = true;
+    if (!canStartWorkflow) {
+      if (isRunning) {
+        toast('warning', '该工作流当前正在运行，无法重复启动');
+      }
+      updateUrl({ autoStart: null, mode: 'run' });
+      return;
+    }
+
+    void requestStartWorkflow('real');
+    updateUrl({ autoStart: null, mode: 'run' });
+  }, [canStartWorkflow, isRunning, pageLoading, requestStartWorkflow, searchParams, toast, updateUrl, workflowConfig]);
+
+  const requestCancelStartup = useCallback(async () => {
+    if (startupCancelRequestedRef.current) return;
+    startupCancelRequestedRef.current = true;
+    setStartupCancelRequested(true);
+    setRehearsalProgressSteps((prev) => [...prev, '已请求取消启动，正在等待当前步骤结束']);
+    const createdRunId = startupCreatedRunIdRef.current;
+    if (createdRunId) {
+      try {
+        await workflowApi.stop(configFile);
+        setRehearsalProgressSteps((prev) => [...prev, '已停止已创建的运行']);
+      } catch (error: any) {
+        setRehearsalProgressSteps((prev) => [...prev, `取消停止请求失败：${error?.message || '未知错误'}`]);
+      }
+    }
+  }, [configFile]);
+
   const startWorkflow = async (
     mode: 'rehearsal' | 'real' = (rehearsalMode ? 'rehearsal' : 'real'),
     options?: {
@@ -3432,6 +3735,9 @@ export default function WorkbenchPage() {
       return;
     }
 
+    startupCancelRequestedRef.current = false;
+    setStartupCancelRequested(false);
+    startupCreatedRunIdRef.current = null;
     setStarting(true);
     try {
       const normalizedPhaseContexts = Object.fromEntries(
@@ -3445,8 +3751,8 @@ export default function WorkbenchPage() {
       setStartupProgressMode(mode);
       setRehearsalProgressSteps([
         isRehearsalStart
-          ? (skipPreflight ? '已进入演练模式，跳过启动前检查并准备执行' : '已进入演练模式，准备执行启动前检查')
-          : (skipPreflight ? '正在正式启动，已跳过启动前检查' : '正在正式启动，准备执行启动前检查'),
+          ? (skipPreflight ? '已进入演练模式，跳过启动前检查，正在创建演练运行' : '已进入演练模式，正在执行启动前检查')
+          : (skipPreflight ? '正在正式启动，已跳过启动前检查，正在创建运行' : '正在正式启动，正在执行启动前检查'),
       ]);
       setRehearsalProgressDialogOpen(true);
       if (!isRehearsalStart) {
@@ -3460,6 +3766,10 @@ export default function WorkbenchPage() {
       };
       if (!skipPreflight) {
         preflight = await workflowApi.preflight(configFile);
+      }
+      if (startupCancelRequestedRef.current) {
+        setRehearsalProgressSteps((prev) => [...prev, '启动已取消']);
+        return;
       }
       setPreflightChecks(preflight.checks || []);
       if (!skipPreflight) {
@@ -3495,6 +3805,10 @@ export default function WorkbenchPage() {
         }
         addLog('system', 'warning', `启动前检查存在 ${preflight.warningCount} 项警告，已人工确认后继续执行`);
       }
+      if (startupCancelRequestedRef.current) {
+        setRehearsalProgressSteps((prev) => [...prev, '启动已取消']);
+        return;
+      }
       clearTransientRunUiState();
       dispatch({ type: 'RESET_RUN' });
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
@@ -3510,6 +3824,20 @@ export default function WorkbenchPage() {
           phaseContexts: normalizedPhaseContexts,
         },
       });
+      startupCreatedRunIdRef.current = startResult.runId || null;
+      if (startupCancelRequestedRef.current) {
+        if (startResult.runId) {
+          try {
+            await workflowApi.stop(configFile);
+            setRehearsalProgressSteps((prev) => [...prev, '启动已取消，已停止刚创建的运行']);
+          } catch (error: any) {
+            setRehearsalProgressSteps((prev) => [...prev, `启动已取消，但停止运行失败：${error?.message || '未知错误'}`]);
+          }
+        } else {
+          setRehearsalProgressSteps((prev) => [...prev, '启动已取消']);
+        }
+        return;
+      }
       if (!isRehearsalStart && startResult.runId) {
         dispatch({ type: 'SET_RUN_ID', payload: startResult.runId });
         dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
@@ -3521,11 +3849,10 @@ export default function WorkbenchPage() {
         setRehearsalProgressDialogOpen(false);
         setRehearsalInfo((startResult as any).rehearsal);
         setRehearsalResultDialogOpen(true);
-      } else {
-        setRehearsalProgressSteps((prev) => [...prev, '正式运行已创建，正在进入执行界面']);
-        setRehearsalProgressDialogOpen(false);
-        startLiveStream();
-      }
+    } else {
+      setRehearsalProgressSteps((prev) => [...prev, '正式运行已创建，正在进入执行界面']);
+      setRehearsalProgressDialogOpen(false);
+    }
       addLog('system', 'success', isRehearsalStart ? '演练模式执行完成' : '工作流启动成功，等待执行...');
       // Fetch status shortly after start to catch initial state
       setTimeout(fetchCurrentStatus, 500);
@@ -3536,24 +3863,26 @@ export default function WorkbenchPage() {
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'failed' });
       addLog('system', 'error', `启动失败: ${error.message}`);
     } finally {
+      startupCancelRequestedRef.current = false;
+      setStartupCancelRequested(false);
+      startupCreatedRunIdRef.current = null;
       setStarting(false);
     }
   };
 
-  const confirmStartWorkflow = useCallback((preflightMode: 'run' | 'skip' = 'run') => {
+  const confirmStartWorkflow = useCallback((contexts: WorkflowStartContexts, preflightMode: 'run' | 'skip' = 'run') => {
     if (!pendingStartRequest) return;
     const request = pendingStartRequest;
     setShowStartWorkflowDialog(false);
     setPendingStartRequest(null);
+    setStartGlobalContextDraft(contexts.globalContext);
+    setStartPhaseContextDrafts(contexts.phaseContexts);
     void startWorkflow(request.mode, {
       skipPreflight: request.skipPreflight || preflightMode === 'skip',
       preflightChecks: request.preflightChecks,
-      initialContexts: {
-        globalContext: startGlobalContextDraft,
-        phaseContexts: startPhaseContextDrafts,
-      },
+      initialContexts: contexts,
     });
-  }, [pendingStartRequest, startGlobalContextDraft, startPhaseContextDrafts, startWorkflow]);
+  }, [pendingStartRequest, startWorkflow]);
 
   const stopWorkflow = async () => {
     try {
@@ -3638,11 +3967,27 @@ export default function WorkbenchPage() {
   };
 
   const forceCompleteStep = async () => {
+    const stepName = forceCompletableStep;
+    if (!stepName) {
+      toast('warning', '当前没有正在运行的步骤，无法强制放行');
+      return;
+    }
+
+    const ok = await confirm({
+      title: '确认强制放行当前步骤',
+      description: `这会中断当前步骤「${stepName}」，并把已产生的实时输出作为该步骤结果继续推进工作流。只有在你确认当前输出已经足够时才使用。`,
+      confirmLabel: '确认强制放行',
+      cancelLabel: '取消',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+
     try {
       const result = await workflowApi.forceCompleteStep(configFile);
-      addLog('system', 'info', `步骤 "${result.step}" 已完成 (${result.outputLength} 字符)`);
+      addLog('system', 'info', `步骤 "${result.step}" 已强制放行 (${result.outputLength} 字符)`);
+      fetchCurrentStatus();
     } catch (error: any) {
-      addLog('system', 'error', `完成失败: ${error.message}`);
+      addLog('system', 'error', `强制放行失败: ${error.message}`);
       toast('error', error.message);
     }
   };
@@ -3902,13 +4247,36 @@ export default function WorkbenchPage() {
 
   const selectStep = (step: any) => {
     dispatch({ type: 'SET_SELECTED_STEP', payload: step });
+    setRightPanelTab('detail');
     setShowSystemPrompt(false);
     setFullStepOutput(null);
     const agent = agents.find((a) => a.name === step.agent);
     if (agent) {
       dispatch({ type: 'SET_SELECTED_AGENT', payload: agent });
+      dispatch({ type: 'SET_SELECTED_STEP', payload: step });
       dispatch({ type: 'SET_ACTIVE_TAB', payload: 'agents' });
     }
+  };
+
+  const selectStateDetails = (stateName: string) => {
+    setFocusedState(stateName);
+    setRightPanelTab('detail');
+    const states = workflowConfig?.workflow?.states || [];
+    const state = states.find((item: any) => item.name === stateName);
+    const steps = state?.steps || [];
+    if (!steps.length) return;
+
+    const runningStep = steps.find((step: any) => {
+      const candidates = [step.name, `${stateName}-${step.name}`];
+      return [currentStep, ...activeSteps].filter(Boolean).some((active) =>
+        candidates.some((candidate) =>
+          active === candidate
+          || active?.startsWith(`${candidate}-迭代`)
+          || active?.endsWith(`-${candidate}`)
+        )
+      );
+    });
+    selectStep(runningStep || steps[0]);
   };
 
   const selectStepByLogName = (logStepName: string) => {
@@ -3953,7 +4321,7 @@ export default function WorkbenchPage() {
         // Try stream file first (has chunk separators for visual separation)
         const streamContent = await streamApi.getStreamContent(rid, fileName);
         if (streamContent) {
-          const chunks = streamContent.split(CHUNK_SEP).filter(Boolean);
+          const chunks = mergeAceSubtaskChunks(streamContent.split(CHUNK_SEP).filter(Boolean));
           if (chunks.length > 1) {
             setMarkdownModal({ title: fileName, chunks });
             return;
@@ -3984,7 +4352,7 @@ export default function WorkbenchPage() {
       try {
         const streamContent = await streamApi.getStreamContent(rid, fileName);
         if (streamContent) {
-          const chunks = streamContent.split(CHUNK_SEP).filter(Boolean);
+          const chunks = mergeAceSubtaskChunks(streamContent.split(CHUNK_SEP).filter(Boolean));
           if (chunks.length > 1) {
             setMarkdownModal({ title: fileName, chunks });
             return;
@@ -4093,10 +4461,84 @@ export default function WorkbenchPage() {
     return { timestamp: null, content: chunk, isHumanFeedback: false };
   };
 
+  const resolveLiveStreamSource = useCallback((rawStepName?: string | null) => {
+    const fallbackStateName = (selectedStep as any)?.__stateName || currentPhase || null;
+    const fallbackStepName = selectedStep?.name || null;
+    const trimmed = String(rawStepName || '').trim();
+    if (!trimmed) {
+      return {
+        stateName: fallbackStateName,
+        stepName: fallbackStepName,
+      };
+    }
+
+    const rawBase = trimmed.replace(/-迭代\d+$/, '');
+
+    if (workflowConfig?.workflow?.mode === 'state-machine') {
+      const preferredStates = new Set<string>();
+      if ((selectedStep as any)?.__stateName) preferredStates.add((selectedStep as any).__stateName);
+      if (currentPhase) preferredStates.add(currentPhase);
+      const states = workflowConfig.workflow.states || [];
+      const sortedStates = [
+        ...states.filter((state: any) => preferredStates.has(state.name)),
+        ...states.filter((state: any) => !preferredStates.has(state.name)),
+      ];
+
+      for (const state of sortedStates) {
+        for (const step of state.steps || []) {
+          const stepName = String(step?.name || '').trim();
+          if (!stepName) continue;
+          const stepBase = stepName.replace(/-迭代\d+$/, '');
+          const fullName = `${state.name}-${stepName}`;
+          const fullBaseName = `${state.name}-${stepBase}`;
+          if (
+            rawBase === stepName
+            || rawBase === stepBase
+            || rawBase === fullName
+            || rawBase === fullBaseName
+            || rawBase.endsWith(`-${stepName}`)
+            || rawBase.endsWith(`-${stepBase}`)
+          ) {
+            return {
+              stateName: state.name,
+              stepName,
+            };
+          }
+        }
+      }
+    } else {
+      for (const phase of workflowConfig?.workflow?.phases || []) {
+        for (const step of phase.steps || []) {
+          const stepName = String(step?.name || '').trim();
+          if (!stepName) continue;
+          const stepBase = stepName.replace(/-迭代\d+$/, '');
+          if (
+            rawBase === stepName
+            || rawBase === stepBase
+            || rawBase.endsWith(`-${stepName}`)
+            || rawBase.endsWith(`-${stepBase}`)
+          ) {
+            return {
+              stateName: phase.name,
+              stepName,
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      stateName: fallbackStateName,
+      stepName: fallbackStepName || rawBase || trimmed,
+    };
+  }, [currentPhase, selectedStep, workflowConfig]);
+
   // --- Live stream via SSE (opencode) or polling fallback (claude-code) ---
   const startLiveStream = () => {
     setShowLiveStream(true);
     if (liveStreamFeedbackRef.current) liveStreamFeedbackRef.current.value = '';
+    setLiveFeedbackDraft('');
+    liveFeedbackEditorRef.current?.clear();
     liveStreamLenRef.current = 0;
     liveStreamRawRef.current = '';
     setLiveStreamVisibleCount(LIVE_STREAM_PAGE_SIZE);
@@ -4114,6 +4556,8 @@ export default function WorkbenchPage() {
 
     const rid = runId || selectedRun?.id;
     const activeStep = currentStep || selectedStep?.name;
+    liveStreamStepRef.current = activeStep || '';
+    setLiveStreamSource(resolveLiveStreamSource(activeStep));
 
     // Try SSE live stream if we have runId + step
     if (rid && activeStep) {
@@ -4174,6 +4618,7 @@ export default function WorkbenchPage() {
 
         if (curStep !== liveStreamStepRef.current) {
           liveStreamStepRef.current = curStep;
+          setLiveStreamSource(resolveLiveStreamSource(curStep));
           liveStreamLenRef.current = 0;
           liveStreamRawRef.current = '';
           setLiveStream([]);
@@ -4255,7 +4700,7 @@ export default function WorkbenchPage() {
   }, [currentStep]);
 
   const sendLiveFeedback = async (interrupt?: boolean) => {
-    const feedback = liveStreamFeedbackRef.current?.value || '';
+    const feedback = liveFeedbackEditorRef.current?.getMarkdown() || liveFeedbackDraft || liveStreamFeedbackRef.current?.value || '';
     if (!feedback.trim() || sendingFeedback) return;
     setSendingFeedback(true);
     try {
@@ -4269,6 +4714,8 @@ export default function WorkbenchPage() {
       
       const res = await workflowApi.injectFeedback(feedback.trim(), interrupt, configFile);
       if (liveStreamFeedbackRef.current) liveStreamFeedbackRef.current.value = '';
+      setLiveFeedbackDraft('');
+      liveFeedbackEditorRef.current?.clear();
       if (interrupt) {
         if (res.interrupted) {
           toast('success', '已打断当前执行，反馈将立即处理');
@@ -4292,7 +4739,256 @@ export default function WorkbenchPage() {
     }
   };
 
+  const renderLiveStreamItems = () => {
+    if (liveStream.length === 0 && inlineFeedbacks.length === 0) {
+      return <div className="py-8 text-center text-sm text-muted-foreground">(等待输出...)</div>;
+    }
+
+    type Item = { type: 'chunk'; content: string; index: number } | { type: 'feedback'; message: string; timestamp: string };
+    const items: Item[] = [];
+    const streamFeedbackMessages = new Set<string>();
+    for (const chunk of liveStream) {
+      const parsed = parseChunk(chunk);
+      if (parsed.isHumanFeedback) {
+        const feedbacks = parsed.content.trim().split('\n\n').map(f => f.trim()).filter(Boolean);
+        for (const fb of feedbacks) streamFeedbackMessages.add(fb);
+      }
+    }
+    let fbIdx = 0;
+    for (let i = 0; i < liveStream.length; i++) {
+      while (fbIdx < inlineFeedbacks.length && inlineFeedbacks[fbIdx].streamIndex <= i) {
+        if (!streamFeedbackMessages.has(inlineFeedbacks[fbIdx].message.trim())) {
+          items.push({ type: 'feedback', message: inlineFeedbacks[fbIdx].message, timestamp: inlineFeedbacks[fbIdx].timestamp });
+        }
+        fbIdx++;
+      }
+      items.push({ type: 'chunk', content: liveStream[i], index: i });
+    }
+    while (fbIdx < inlineFeedbacks.length) {
+      if (!streamFeedbackMessages.has(inlineFeedbacks[fbIdx].message.trim())) {
+        items.push({ type: 'feedback', message: inlineFeedbacks[fbIdx].message, timestamp: inlineFeedbacks[fbIdx].timestamp });
+      }
+      fbIdx++;
+    }
+
+    const TODO_MARKER = '<!-- todo-list-marker -->';
+    let lastTodoIdx = -1;
+    for (let j = items.length - 1; j >= 0; j--) {
+      if (items[j].type === 'chunk' && (items[j] as any).content.includes(TODO_MARKER)) {
+        if (lastTodoIdx === -1) lastTodoIdx = j;
+        else (items[j] as any).content = '';
+      }
+    }
+
+    const rawFilteredItems = items.filter((it) => {
+      if (it.type === 'feedback') return true;
+      const c = (it as any).content as string;
+      if (!c) return false;
+      const parsedIt = parseChunk(c);
+      if (parsedIt.isHumanFeedback) return false;
+      const stripped = c.replace(/\*\*🔧 .+?\*\*/g, '').replace(/<!--.*?-->/gs, '').trim();
+      return stripped.length > 1;
+    });
+
+    const filteredItems: Item[] = [];
+    let pendingChunkItems: Array<{ type: 'chunk'; content: string; index: number }> = [];
+    const flushPendingChunkItems = () => {
+      if (!pendingChunkItems.length) return;
+      filteredItems.push(...mergeAceSubtaskChunkItems(pendingChunkItems, CHUNK_SEP));
+      pendingChunkItems = [];
+    };
+    for (const rawItem of rawFilteredItems) {
+      if (rawItem.type === 'chunk') pendingChunkItems.push(rawItem);
+      else {
+        flushPendingChunkItems();
+        filteredItems.push(rawItem);
+      }
+    }
+    flushPendingChunkItems();
+
+    const hasMore = filteredItems.length > liveStreamVisibleCount;
+    const visibleItems = hasMore ? filteredItems.slice(filteredItems.length - liveStreamVisibleCount) : filteredItems;
+
+    return (
+      <div className="space-y-3">
+        {hasMore && (
+          <div className="py-2 text-center">
+            <button
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              onClick={() => setLiveStreamVisibleCount(prev => prev + LIVE_STREAM_PAGE_SIZE)}
+            >
+              加载更早的 {filteredItems.length - liveStreamVisibleCount} 条内容...
+            </button>
+          </div>
+        )}
+        {visibleItems.map((item, i) => {
+          if (item.type === 'feedback') {
+            return (
+              <div key={`fb-${i}`} className="group flex justify-end">
+                <div className="relative max-w-[86%] rounded-lg border border-primary/30 bg-primary/15 px-3 py-2">
+                  <div className="mb-0.5 flex items-center justify-end gap-1 text-right font-mono text-[10px] text-muted-foreground">
+                    {new Date(item.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {isRunning && (
+                      <button
+                        onClick={() => recallFeedback(item.message)}
+                        className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                        title="撤回"
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>undo</span>
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-sm">{item.message}</div>
+                </div>
+              </div>
+            );
+          }
+          const parsed = parseChunk(item.content);
+          if (parsed.isHumanFeedback) {
+            return (
+              <div key={`c-${i}`} className="flex justify-end">
+                <div className="max-w-[86%] rounded-lg border border-primary/30 bg-primary/15 px-3 py-2">
+                  {parsed.timestamp && (
+                    <div className="mb-0.5 text-right font-mono text-[10px] text-muted-foreground">
+                      {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </div>
+                  )}
+                  <div className="text-sm">
+                    <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={`c-${i}`} className="border-b border-border/50 pb-3 last:border-0">
+              {parsed.timestamp && (
+                <div className="mb-1 font-mono text-[10px] text-muted-foreground">
+                  {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </div>
+              )}
+              <div className="text-sm">
+                <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
+              </div>
+            </div>
+          );
+        })}
+        {isRunning && (() => {
+          const lastChunk = liveStream[liveStream.length - 1] || '';
+          const isExecuting = /\*\*🔧 .+?\*\*[^]*$/.test(lastChunk) && !/<\/details>\s*$/.test(lastChunk.trim());
+          return (
+            <div className={styles.thinkingBot}>
+              <RobotLogo size={28} />
+              <span className={styles.thinkingText}>{isExecuting ? '执行中' : '思考中'}</span>
+              <span className={styles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
+            </div>
+          );
+        })()}
+      </div>
+    );
+  };
+
+  const renderLiveStreamPanel = () => (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex shrink-0 items-start justify-between gap-3 px-3 pb-2 pt-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="max-w-full text-[10px] font-normal">
+              <span className="mr-1 text-muted-foreground">状态</span>
+              <span className="truncate">{liveStreamSource.stateName ? formatStateName(liveStreamSource.stateName) : '未定位'}</span>
+            </Badge>
+            <Badge variant="outline" className="max-w-full text-[10px] font-normal">
+              <span className="mr-1 text-muted-foreground">步骤</span>
+              <span className="truncate">{liveStreamSource.stepName || '未定位'}</span>
+            </Badge>
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 px-0"
+          onClick={() => {
+            if (liveStreamScrollLocked) unlockLiveStreamScroll();
+            else {
+              liveStreamUserScrolledUp.current = true;
+              setLiveStreamScrollLocked(true);
+            }
+          }}
+          title={liveStreamScrollLocked ? '解除滚动锁并跳到底部' : '锁定当前滚动位置'}
+        >
+          <span className="material-symbols-outlined text-base">{liveStreamScrollLocked ? 'lock' : 'lock_open'}</span>
+        </Button>
+      </div>
+      <div
+        ref={liveStreamScrollRef}
+        className="min-h-0 flex-1 overflow-auto px-4 pb-4"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+          liveStreamUserScrolledUp.current = !atBottom;
+          setLiveStreamScrollLocked(!atBottom);
+          if (el.scrollTop === 0 && liveStream.length > liveStreamVisibleCount) {
+            setLiveStreamVisibleCount(prev => prev + LIVE_STREAM_PAGE_SIZE);
+          }
+        }}
+      >
+        {renderLiveStreamItems()}
+      </div>
+      <div className="p-3 pt-0">
+        <div className="home-chat-composer relative overflow-hidden rounded-[24px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+          <RichTextEditor
+            ref={liveFeedbackEditorRef}
+            content={liveFeedbackDraft}
+            onChange={(markdown) => setLiveFeedbackDraft(markdown)}
+            onEnter={() => { void sendLiveFeedback(); }}
+            placeholder="输入实时反馈"
+            minHeight={96}
+            maxHeight={180}
+            disabled={sendingFeedback || !isRunning}
+            autoFocus={false}
+            showFullscreenToggle={false}
+            showToolbar={false}
+            trimPastedTrailingNewlines
+            footerInside
+            surfaceClassName="rounded-[24px] border-0 bg-transparent shadow-none"
+            contentAreaClassName="min-h-[58px] items-start px-4 pb-2 pt-3"
+            footerClassName="gap-3 border-border/60 px-4 pb-3 pt-2"
+            footerContent={<span className="text-[10px] text-muted-foreground">实时反馈</span>}
+            footerAfterCountContent={(
+              <div className="ml-2 flex items-center gap-2">
+                <Button
+                  className="h-9 w-9 rounded-2xl px-0"
+                  size="sm"
+                  onClick={() => sendLiveFeedback()}
+                  disabled={sendingFeedback || !liveFeedbackDraft.trim() || !isRunning}
+                  title="发送反馈"
+                >
+                  <span className="material-symbols-outlined text-sm">send</span>
+                </Button>
+                <Button
+                  className="h-9 w-9 rounded-2xl px-0"
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => sendLiveFeedback(true)}
+                  disabled={sendingFeedback || !liveFeedbackDraft.trim() || !isRunning}
+                  title="打断当前执行，立即处理反馈"
+                >
+                  <span className="material-symbols-outlined text-sm">bolt</span>
+                </Button>
+              </div>
+            )}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
   const openContextEditor = (_scope: 'global' | 'phase' = 'global', phase?: string) => {
+    const rid = runId || initialRunId || selectedRun?.id;
+    if (!rid) {
+      toast('warning', '当前没有可编辑上下文的运行记录');
+      return;
+    }
     const nextPhaseDrafts = Object.fromEntries(
       startContextTargets.map((name: string) => [name, phaseContexts[name] || ''])
     ) as Record<string, string>;
@@ -4302,16 +4998,19 @@ export default function WorkbenchPage() {
     setShowContextEditor(true);
   };
 
-  const saveContext = async () => {
+  const saveContext = async (contexts: WorkflowStartContexts) => {
     try {
       setSavingContextEditor(true);
       const rid = runId || initialRunId || selectedRun?.id;
 
-      await workflowApi.setContext('global', contextEditorGlobalDraft, undefined, rid || undefined, configFile);
-      dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: contextEditorGlobalDraft });
+      setContextEditorGlobalDraft(contexts.globalContext);
+      setContextEditorPhaseDrafts(contexts.phaseContexts);
+
+      await workflowApi.setContext('global', contexts.globalContext, undefined, rid || undefined, configFile);
+      dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: contexts.globalContext });
 
       for (const name of startContextTargets) {
-        const nextValue = contextEditorPhaseDrafts[name] || '';
+        const nextValue = contexts.phaseContexts[name] || '';
         await workflowApi.setContext('phase', nextValue, name, rid || undefined, configFile);
         dispatch({ type: 'SET_PHASE_CONTEXT', payload: { phase: name, context: nextValue } });
       }
@@ -4545,9 +5244,14 @@ export default function WorkbenchPage() {
         ...newConfig.workflow.phases[editingNode.phaseIndex], ...data,
       };
     } else if (editingNode.stepIndex !== undefined) {
-      newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex] = {
-        ...newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex], ...data,
+      const existingStep = newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex] || {};
+      const nextStep = {
+        ...existingStep, ...data,
       };
+      if (Object.prototype.hasOwnProperty.call(data, 'specTaskBinding') && !data.specTaskBinding) {
+        delete nextStep.specTaskBinding;
+      }
+      newConfig.workflow.phases[editingNode.phaseIndex].steps[editingNode.stepIndex] = nextStep;
     }
     dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
     dispatch({ type: 'SET_SHOW_EDIT_NODE_MODAL', payload: false });
@@ -4756,7 +5460,27 @@ export default function WorkbenchPage() {
           skills,
         },
       };
-      await configApi.saveConfig(configFile, config);
+      const specCodingDocument = specCodingSummary && specCodingDetails ? {
+        id: specCodingSummary.id,
+        version: specCodingSummary.version,
+        status: specCodingSummary.status,
+        summary: specCodingSummary.summary,
+        workflowName: workflowConfig?.workflow?.name || configFile,
+        phases: specCodingDetails.phases || [],
+        assignments: specCodingDetails.assignments || [],
+        checkpoints: specCodingDetails.checkpoints || [],
+        tasks: specCodingDetails.tasks || [],
+        progress: specCodingSummary.progress,
+        revisions: specCodingDetails.revisions || [],
+        artifacts: specCodingDetails.artifacts || {},
+        linkedConfigFilename: configFile,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } : undefined;
+      await configApi.saveConfig(configFile, config, {
+        creationSessionId: creationSessionSummary?.id,
+        specCoding: specCodingDocument,
+      });
       toast('success', '配置已保存，下次运行时生效');
       dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
       dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
@@ -5886,8 +6610,9 @@ export default function WorkbenchPage() {
 
   return (
     <div className="flex flex-col h-screen bg-background/80 text-foreground">
-      <div className="shrink-0 bg-muted border-b flex flex-wrap items-center px-4 py-2 gap-x-4 gap-y-2">
-        <div className="flex items-center gap-2 shrink-0 min-w-0">
+      <div className="shrink-0 border-b bg-muted">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
+          <div className="flex items-center gap-2 shrink-0 min-w-0">
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => router.push('/workflows')}>
             <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span><span className="hidden sm:inline"> 返回</span>
           </Button>
@@ -5920,8 +6645,8 @@ export default function WorkbenchPage() {
               <span className="truncate" title={workflowConfig?.workflow?.name || configFile}>{workflowConfig?.workflow?.name || configFile}</span>
             )}
           </h1>
-        </div>
-        <div className="flex gap-0.5 bg-background/50 rounded-md p-0.5 shrink-0">
+          </div>
+          <div className="flex gap-0.5 bg-background/50 rounded-md p-0.5 shrink-0">
           <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isRunMode ? 'bg-primary text-primary-foreground' : ''}`}
             onClick={() => switchViewMode('run')}>
             <span className="material-symbols-outlined text-sm">home</span><span className="hidden sm:inline ml-1">首页</span>
@@ -5934,8 +6659,8 @@ export default function WorkbenchPage() {
             onClick={() => switchViewMode('history')}>
             <span className="material-symbols-outlined text-sm">history</span><span className="hidden sm:inline ml-1">历史</span>
           </Button>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
           {isRunMode && (<>
             <div className={`hidden md:flex items-center gap-2 rounded-md border px-2 py-1 transition-colors ${
               rehearsalMode ? 'bg-background/40' : 'bg-amber-500/10 border-amber-500/30'
@@ -5994,14 +6719,16 @@ export default function WorkbenchPage() {
               <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => dispatch({ type: 'SET_SHOW_PROCESS_PANEL', payload: !showProcessPanel })}>
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span><span className="hidden sm:inline">进程</span>
               </Button>
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => openContextEditor('global')} title="全局上下文">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => openContextEditor('global')}
+                disabled={!hasContextEditableRun}
+                title={hasContextEditableRun ? '全局上下文' : '当前没有可编辑上下文的运行记录'}
+              >
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit_note</span><span className="hidden sm:inline">上下文</span>
               </Button>
-              {projectRoot && (
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => openWorkspaceEditorAtPath(state.workingDirectory || resolvedProjectRoot || projectRoot, '工作区')} title="打开工作区编辑器">
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>folder_open</span><span className="hidden sm:inline">工作区</span>
-                </Button>
-              )}
             </ButtonGroup>
           </>)}
           {isDesignMode && (
@@ -6014,8 +6741,8 @@ export default function WorkbenchPage() {
               {saving ? '保存中...' : '保存配置'}
             </Button>
           )}
-        </div>
-        <div className="flex items-center gap-2 ml-auto shrink-0">
+          </div>
+          <div className="flex items-center gap-2 ml-auto shrink-0">
           {workflowStatus === 'idle' && (
             <Badge variant="secondary"><span className="w-2 h-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
           )}
@@ -6033,6 +6760,7 @@ export default function WorkbenchPage() {
           )}
           <ThemeToggle />
         </div>
+        </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
@@ -6040,63 +6768,95 @@ export default function WorkbenchPage() {
           <ResizablePanels
             leftPanel={
               <div className="flex flex-col h-full overflow-hidden">
-              {/* Requirements panel - prominent at top */}
-              <div className="border-b shrink-0 max-h-[50%] overflow-y-auto overflow-x-hidden">
-                <button
-                  className="w-full flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent hover:from-primary/15 transition-colors"
-                  onClick={() => setShowRunRequirements(!showRunRequirements)}
-                >
-                  <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>assignment</span>
-                  <span className="text-sm font-semibold text-primary">配置</span>
-                  {!showRunRequirements && requirements && <span className="text-[10px] text-muted-foreground truncate flex-1 text-left ml-1">{requirements.substring(0, 50)}{requirements.length > 50 ? '...' : ''}</span>}
-                  <span className="material-symbols-outlined text-muted-foreground ml-auto" style={{ fontSize: 16 }}>{showRunRequirements ? 'expand_less' : 'expand_more'}</span>
-                </button>
-                {showRunRequirements && (
-                  <div className="px-4 py-3 space-y-2.5 bg-card/50">
-                    {projectRoot && (
-                      <div>
-                        <Label className="text-xs font-medium text-muted-foreground">项目根目录</Label>
-                        <p className="text-sm mt-1">{projectRoot}</p>
+              <ResizablePanelGroup orientation="vertical" className="h-full">
+                <ResizablePanel defaultSize={32} minSize={18}>
+                  <div className="flex h-full flex-col overflow-hidden border-b">
+                    <button
+                      className="w-full flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent hover:from-primary/15 transition-colors"
+                      onClick={() => setShowRunRequirements(!showRunRequirements)}
+                    >
+                      <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>assignment</span>
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="text-sm font-semibold text-primary">运行摘要</div>
+                        {!showRunRequirements ? (
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+                            <span>{workspaceMode === 'isolated-copy' ? '副本执行' : '目录执行'}</span>
+                            <span>·</span>
+                            <span>{timeoutMinutes} 分钟超时</span>
+                            <span>·</span>
+                            <span>{skills.length} Skills</span>
+                          </div>
+                        ) : null}
                       </div>
-                    )}
-                    <div>
-                      <Label className="text-xs font-medium text-muted-foreground">工作区模式</Label>
-                      <p className="text-sm mt-1">{workspaceMode === 'isolated-copy' ? '先创建副本工程再执行' : '直接在工作目录执行'}</p>
-                    </div>
-                    {requirements && (
-                      <div>
-                        <Label className="text-xs font-medium text-muted-foreground">需求描述</Label>
-                        <div className="text-sm mt-1 leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
-                          <Markdown>{requirements}</Markdown>
+                      <span className="material-symbols-outlined text-muted-foreground ml-auto" style={{ fontSize: 16 }}>{showRunRequirements ? 'expand_less' : 'expand_more'}</span>
+                    </button>
+                    {showRunRequirements ? (
+                      <div className="flex-1 overflow-y-auto overflow-x-hidden bg-card/50 px-4 py-3">
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="rounded-xl border bg-background/75 p-3">
+                              <div className="text-[10px] text-muted-foreground">工作区模式</div>
+                              <div className="mt-1 text-xs font-medium leading-5">{workspaceMode === 'isolated-copy' ? '先创建副本工程再执行' : '直接在工作目录执行'}</div>
+                            </div>
+                            <div className="rounded-xl border bg-background/75 p-3">
+                              <div className="text-[10px] text-muted-foreground">步骤超时</div>
+                              <div className="mt-1 text-xs font-medium leading-5">{timeoutMinutes} 分钟</div>
+                            </div>
+                          </div>
+                          {projectRoot ? (
+                            <div className="rounded-xl border bg-background/75 p-3">
+                              <div className="text-[10px] text-muted-foreground">项目根目录</div>
+                              <div className="mt-1 break-all text-xs leading-5">{projectRoot}</div>
+                            </div>
+                          ) : null}
+                          <div className="rounded-xl border bg-background/75 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-[10px] text-muted-foreground">需求描述</div>
+                              {requirements ? <Badge variant="outline" className="text-[10px]">Markdown</Badge> : null}
+                            </div>
+                            <div className="mt-2 text-xs leading-6 prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
+                              {requirements?.trim() ? (
+                                <Markdown>{requirements}</Markdown>
+                              ) : (
+                                <div className="text-xs text-muted-foreground">暂无需求描述</div>
+                              )}
+                            </div>
+                          </div>
+                          {skills.length > 0 ? (
+                            <div className="rounded-xl border bg-background/75 p-3">
+                              <div className="text-[10px] text-muted-foreground">Skills</div>
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {skills.slice(0, showAllSkills ? skills.length : 8).map((s) => (
+                                  <Badge key={s} variant="secondary" className="text-[10px] font-normal">{s}</Badge>
+                                ))}
+                                {skills.length > 8 && (
+                                  <button
+                                    className="text-[10px] text-muted-foreground hover:text-foreground px-1"
+                                    onClick={() => setShowAllSkills(!showAllSkills)}
+                                  >
+                                    {showAllSkills ? '收起' : `+${skills.length - 8} 更多`}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
-                    )}
-                    <div>
-                      <Label className="text-xs font-medium text-muted-foreground">步骤超时</Label>
-                      <p className="text-sm mt-1">{timeoutMinutes} 分钟</p>
-                    </div>
-                    {skills.length > 0 && (
-                      <div>
-                        <Label className="text-xs font-medium text-muted-foreground">Skills ({skills.length})</Label>
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {skills.slice(0, showAllSkills ? skills.length : 6).map((s) => (
-                            <Badge key={s} variant="secondary" className="text-[10px] font-normal">{s}</Badge>
-                          ))}
-                          {skills.length > 6 && (
-                            <button
-                              className="text-[10px] text-muted-foreground hover:text-foreground px-1"
-                              onClick={() => setShowAllSkills(!showAllSkills)}
-                            >
-                              {showAllSkills ? '收起' : `+${skills.length - 6} 更多`}
-                            </button>
-                          )}
+                    ) : (
+                      <div className="border-t bg-card/30 px-4 py-2">
+                        <div className="flex flex-wrap gap-1.5">
+                          {projectRoot ? <Badge variant="outline" className="max-w-full truncate text-[10px]">{projectRoot}</Badge> : null}
+                          <Badge variant="secondary" className="text-[10px]">{workspaceMode === 'isolated-copy' ? '副本执行' : '目录执行'}</Badge>
+                          <Badge variant="secondary" className="text-[10px]">{timeoutMinutes} 分钟</Badge>
+                          {requirements?.trim() ? <Badge variant="outline" className="text-[10px]">已填写需求</Badge> : null}
                         </div>
                       </div>
                     )}
                   </div>
-                )}
-              </div>
-              <Tabs value={activeTab === 'spec-coding' ? 'spec' : activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 overflow-hidden">
+                </ResizablePanel>
+                <ResizableHandle withHandle />
+                <ResizablePanel defaultSize={68} minSize={28}>
+              <Tabs value={activeTab === 'spec-coding' ? 'spec' : activeTab} onValueChange={(val) => dispatch({ type: 'SET_ACTIVE_TAB', payload: val })} className="flex flex-col flex-1 h-full overflow-hidden">
                 <TabsList className="w-full rounded-none border-b flex-shrink-0 px-1 !flex flex-wrap h-auto gap-0.5 py-1">
                   <TabsTrigger value="workflow" className="flex items-center justify-center gap-1 text-xs h-7 px-2">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>dashboard</span>总览
@@ -6144,19 +6904,45 @@ export default function WorkbenchPage() {
 
                         return (
                           <>
-                      <div>
-                        <h3 className="text-base font-semibold mb-2">{workflowConfig.workflow.name}</h3>
-                        <div className="text-sm text-muted-foreground mb-4 leading-relaxed prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
+                      <div className="rounded-2xl border border-border/60 bg-background/75 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>account_tree</span>
+                              <h3 className="text-sm font-semibold leading-5">{workflowConfig.workflow.name}</h3>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              <Badge variant="outline" className="text-[10px]">
+                                {workflowConfig.workflow.mode === 'state-machine' ? '状态机' : '阶段式'}
+                              </Badge>
+                              {workflowStatus ? (
+                                <Badge variant="secondary" className="text-[10px]">
+                                  {workflowStatus}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="mt-3 text-xs text-muted-foreground leading-6 prose prose-sm dark:prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
                           {workflowConfig.workflow.description?.trim() ? (
                             <Markdown>{workflowConfig.workflow.description}</Markdown>
                           ) : (
-                            <div className="text-sm text-muted-foreground">暂无工作流描述</div>
+                            <div className="text-xs text-muted-foreground">暂无工作流描述</div>
                           )}
                         </div>
-                        <div className="flex gap-3">
-                          <div className="flex-1 bg-muted p-3 rounded-md text-center"><span className="block text-xs text-muted-foreground mb-1">{workflowConfig.workflow.mode === 'state-machine' ? '状态' : '阶段'}</span><span className="block text-xl font-semibold">{workflowConfig.workflow.mode === 'state-machine' ? (workflowConfig.workflow.states?.length ?? 0) : (workflowConfig.workflow.phases?.length ?? 0)}</span></div>
-                          <div className="flex-1 bg-muted p-3 rounded-md text-center"><span className="block text-xs text-muted-foreground mb-1">步骤</span><span className="block text-xl font-semibold">{totalSteps}</span></div>
-                          <div className="flex-1 bg-muted p-3 rounded-md text-center"><span className="block text-xs text-muted-foreground mb-1">Agent</span><span className="block text-xl font-semibold">{agentConfigs.length}</span></div>
+                        <div className="mt-4 grid grid-cols-3 gap-2">
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">{workflowConfig.workflow.mode === 'state-machine' ? '状态' : '阶段'}</div>
+                            <div className="mt-1 text-base font-semibold">{workflowConfig.workflow.mode === 'state-machine' ? (workflowConfig.workflow.states?.length ?? 0) : (workflowConfig.workflow.phases?.length ?? 0)}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">步骤</div>
+                            <div className="mt-1 text-base font-semibold">{totalSteps}</div>
+                          </div>
+                          <div className="rounded-xl border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">Agent</div>
+                            <div className="mt-1 text-base font-semibold">{agentConfigs.length}</div>
+                          </div>
                         </div>
                       </div>
                       <div className="flex flex-col gap-2 mt-4">
@@ -6191,9 +6977,13 @@ export default function WorkbenchPage() {
                             }`}
                             onClick={() => {
                               // 触发流程图跳转到该节点
-                              setFocusedState(phase.name);
-                              if (phase.steps.length > 0) {
-                                selectStep(phase.steps[0]);
+                              if (workflowConfig.workflow.mode === 'state-machine') {
+                                selectStateDetails(phase.name);
+                              } else {
+                                setFocusedState(phase.name);
+                                if (phase.steps.length > 0) {
+                                  selectStep(phase.steps[0]);
+                                }
                               }
                             }}
                           >
@@ -6258,7 +7048,6 @@ export default function WorkbenchPage() {
                         {orderedWorkflowAgents.map((agent) => {
                           const roleConfig = agentConfigs.find((role: any) => role.name === agent.name);
                           const entry = workflowDirectory.find((item) => item.label === agent.name);
-                          const relatedSession = listSessionsForAgent(workflowRelatedSessions, agent.name)[0];
                           const avatarSrc = resolveAgentAvatarSrc(roleConfig?.avatar, agent.name, {
                             team: roleConfig?.team || agent.team || 'blue',
                             roleType: roleConfig?.roleType || 'normal',
@@ -6293,7 +7082,7 @@ export default function WorkbenchPage() {
                               </td>
                               <td className="py-2 pr-2 text-muted-foreground truncate max-w-[80px]">{agent.model || '—'}</td>
                               <td className="py-2">
-                                {relatedSession && workflowStatus === 'running' ? (
+                                {workflowFrontendSessionId ? (
                                   <Button
                                     size="sm"
                                     variant="ghost"
@@ -6301,8 +7090,9 @@ export default function WorkbenchPage() {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       e.preventDefault();
-                                      openWorkbenchConversation(relatedSession.id, agent);
+                                      openWorkbenchConversation(workflowFrontendSessionId, agent);
                                     }}
+                                    title="打开本次运行的 Supervisor 协作议题"
                                   >
                                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>message</span>
                                   </Button>
@@ -6365,86 +7155,213 @@ export default function WorkbenchPage() {
                 </TabsContent>
 {isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
           </div></TabsContent>}
+                </div>
+              </Tabs>
+                </ResizablePanel>
+              </ResizablePanelGroup>
               </div>
-            </Tabs>
-            </div>
             }
             centerPanel={
-              <div className="flex flex-col h-full">
-                <div className="h-10 bg-muted border-b flex items-center px-4"><h2 className="text-sm font-semibold m-0">执行追踪</h2></div>
-                <div className="flex-1 min-h-0 overflow-auto">
-                  {workflowConfig ? (
-                    workflowConfig.workflow.mode === 'state-machine' ? (
-                      isDesignMode ? (
-                        <StateMachineDiagram
-                          states={workflowConfig.workflow.states || []}
-                          currentState={currentPhase}
-                          currentStep={currentStep}
-                          completedSteps={completedSteps}
-                          stateHistory={smStateHistory}
-                          isRunning={isRunning}
-                          onStepClick={(step) => selectStep(step)}
-                          onForceTransition={handleForceTransition}
-                        />
-                      ) : (
-                        <div className="h-full p-4">
-                          <StateMachineExecutionView
-                            states={workflowConfig.workflow.states || []}
-                            currentState={currentPhase}
-                            currentStep={currentStep}
-                            activeSteps={activeSteps}
-                            activeConcurrencyGroups={activeConcurrencyGroups}
-                            completedSteps={completedSteps}
-                            stateHistory={smStateHistory}
-                            issueTracker={smIssueTracker}
-                            transitionCount={smTransitionCount}
-                            maxTransitions={workflowConfig.workflow.maxTransitions || 50}
-                            status={workflowStatus as any}
-                            isRunning={isRunning}
-                            focusedState={focusedState}
-                            startTime={runStartTime}
-                            endTime={runEndTime}
-                            supervisorFlow={supervisorFlow}
-                            agentFlow={agentFlow}
-                            tokenAnalytics={workflowTokenAnalytics}
-                            executionTrace={executionTrace}
-                            overviewFooter={renderRuntimeInsightPanels()}
-                            supervisorInteractionPanel={(
-                              <WorkflowSupervisorChatPanel
-                                sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
-                                configFile={configFile}
-                                runId={runId || selectedRun?.id || null}
-                                supervisorAgent={runtimeSupervisorAgent}
-                                supervisorSessionId={runtimeSupervisorSessionId}
-                                mentionCandidates={workflowAgentNames}
-                                pendingHumanQuestion={pendingHumanQuestion}
-                                submittingHumanQuestion={submittingHumanQuestion}
-                                onSubmitHumanQuestion={handleSubmitHumanQuestion}
-                              />
+              <div className="flex h-full flex-col overflow-hidden">
+                <div className="shrink-0 border-b bg-muted px-4 py-2">
+                  <div className="mx-auto flex w-full max-w-5xl justify-center">
+                    <div className="grid w-full max-w-4xl grid-cols-1 gap-2 md:grid-cols-3">
+                      {[
+                        {
+                          key: 'execution' as const,
+                          title: '执行追踪',
+                          subtitle: '运行态势 / Supervisor / Token',
+                          icon: 'monitoring',
+                          disabled: false,
+                        },
+                        {
+                          key: 'workspace' as const,
+                          title: '工作区',
+                          subtitle: '文件浏览 / 编辑器',
+                          icon: 'folder_open',
+                          disabled: !currentRunWorkspacePath,
+                        },
+                        {
+                          key: 'changes' as const,
+                          title: '变更',
+                          subtitle: 'Git 工作树 / 差异浏览',
+                          icon: 'history',
+                          disabled: !currentRunWorkspacePath,
+                        },
+                      ].map((tab) => {
+                        const active = runWorkbenchTab === tab.key;
+                        return (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => !tab.disabled && handleRunWorkbenchTabChange(tab.key)}
+                            disabled={tab.disabled}
+                            className={cn(
+                              'flex min-h-[58px] flex-col items-center justify-center gap-1 rounded-xl border px-3 py-2 text-center transition-colors',
+                              active
+                                ? 'border-primary bg-background text-foreground shadow-sm'
+                                : 'border-border/60 bg-muted/25 text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                              tab.disabled && 'cursor-not-allowed opacity-45 hover:bg-muted/25 hover:text-muted-foreground',
                             )}
-                            supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
-                            activeTabOverride={executionViewTabOverride}
-                            hasPendingHumanQuestion={!!pendingHumanQuestion}
-                            formationAgents={supervisorFormationAgents}
-                            supervisorAgent={runtimeSupervisorAgent}
-                            onStateClick={(s) => setFocusedState(s)}
-                            onStepClick={(step) => selectStep(step)}
-                            onForceTransition={handleForceTransition}
+                          >
+                            <div className="flex items-center gap-1.5 text-sm font-semibold leading-none">
+                              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{tab.icon}</span>
+                              <span>{tab.title}</span>
+                              {tab.key === 'changes' ? (
+                                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
+                                  {workspaceChangeCount > 99 ? '99+' : workspaceChangeCount}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="text-[10px] leading-3.5">{tab.subtitle}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  {runWorkbenchTab === 'execution' ? (
+                    <div className="flex h-full flex-col">
+                      <div className="flex-1 min-h-0 overflow-hidden">
+                        {workflowConfig ? (
+                          workflowConfig.workflow.mode === 'state-machine' ? (
+                            isDesignMode ? (
+                              <StateMachineDiagram
+                                states={workflowConfig.workflow.states || []}
+                                currentState={currentPhase}
+                                currentStep={currentStep}
+                                completedSteps={completedSteps}
+                                stateHistory={smStateHistory}
+                                isRunning={isRunning}
+                                onStateClick={selectStateDetails}
+                                onStepClick={(step) => selectStep(step)}
+                                onForceTransition={handleForceTransition}
+                              />
+                            ) : (
+                              <div className="h-full p-4">
+                                <StateMachineExecutionView
+                                  states={workflowConfig.workflow.states || []}
+                                  currentState={currentPhase}
+                                  currentStep={currentStep}
+                                  activeSteps={activeSteps}
+                                  activeConcurrencyGroups={activeConcurrencyGroups}
+                                  completedSteps={completedSteps}
+                                  stateHistory={smStateHistory}
+                                  issueTracker={smIssueTracker}
+                                  transitionCount={smTransitionCount}
+                                  maxTransitions={workflowConfig.workflow.maxTransitions || 50}
+                                  status={workflowStatus as any}
+                                  isRunning={isRunning}
+                                  focusedState={focusedState}
+                                  startTime={runStartTime}
+                                  endTime={runEndTime}
+                                  supervisorFlow={supervisorFlow}
+                                  agentFlow={agentFlow}
+                                  tokenAnalytics={workflowTokenAnalytics}
+                                  executionTrace={executionTrace}
+                                  overviewFooter={renderRuntimeInsightPanels()}
+                                  supervisorDirectPanel={(
+                                    <WorkflowSupervisorAgoraPanel
+                                      sessionId={workbenchConversationSessionId || workflowFrontendSessionId}
+                                      title={`Supervisor 协作 · ${workflowBaseTitle}`}
+                                      configFile={configFile}
+                                      runId={runId || selectedRun?.id || null}
+                                      supervisorAgent={runtimeSupervisorAgent}
+                                      supervisorSessionId={runtimeSupervisorSessionId}
+                                      workingDirectory={currentRunWorkspacePath || projectRoot || ''}
+                                      workflowStatus={workflowStatus}
+                                      initialGuests={workflowAgoraInitialGuests}
+                                      agentSessionIds={workflowAgoraAgentSessionIds}
+                                      pendingHumanQuestion={pendingHumanQuestion}
+                                      submittingHumanQuestion={submittingHumanQuestion}
+                                      onSubmitHumanQuestion={handleSubmitHumanQuestion}
+                                      formationPanel={(
+                                        <div className="h-full min-h-0 bg-muted/20 p-4">
+                                          <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">
+                                            <AgentFormationDiagram
+                                              states={workflowConfig.workflow.states || []}
+                                              agents={supervisorFormationAgents}
+                                              supervisorAgent={runtimeSupervisorAgent}
+                                              currentStep={currentStep}
+                                              activeSteps={activeSteps}
+                                              status={workflowStatus as any}
+                                              className="h-full"
+                                            />
+                                          </div>
+                                        </div>
+                                      )}
+                                      summaryPanel={workflowStatus === 'completed' && finalReview ? (
+                                        <div className="h-full overflow-y-auto bg-muted/20 p-4">
+                                          {renderFinalReviewCard()}
+                                        </div>
+                                      ) : (
+                                        <div className="flex h-full items-center justify-center bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                                          工作流完成后会在这里展示战后总结。
+                                        </div>
+                                      )}
+                                    />
+                                  )}
+                                  supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
+                                  activeTabOverride={executionViewTabOverride}
+                                  hasPendingHumanQuestion={!!pendingHumanQuestion}
+                                  formationAgents={supervisorFormationAgents}
+                                  supervisorAgent={runtimeSupervisorAgent}
+                                  onStateClick={selectStateDetails}
+                                  onStepClick={(step) => selectStep(step)}
+                                  onForceTransition={handleForceTransition}
+                                />
+                              </div>
+                            )
+                          ) : (
+                            <FlowDiagram workflow={workflowConfig.workflow} currentPhase={currentPhase} currentStep={currentStep}
+                              agents={agents} completedSteps={completedSteps} failedSteps={failedSteps} iterationStates={iterationStates} onSelectStep={selectStep}
+                              pendingCheckpointPhase={pendingCheckpointPhase || undefined}
+                              onSelectCheckpoint={(cp) => {
+                                const phase = workflowConfig.workflow.phases?.find((p: any) => p.checkpoint?.name === cp.name);
+                                dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: cp.message });
+                                dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: !!phase?.iteration?.enabled });
+                                dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
+                              }} />
+                          )
+                        ) : (<WorkbenchExecutionLoadingSkeleton />)}
+                      </div>
+                    </div>
+                  ) : runWorkbenchTab === 'workspace' ? (
+                    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
+                      {currentRunWorkspacePath ? (
+                        <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-border/60 bg-background shadow-sm">
+                          <WorkspaceEditor
+                            open
+                            onOpenChange={() => {}}
+                            workspacePath={workspaceEditorPath || currentRunWorkspacePath}
+                            initialFilePath={workspaceEditorFilePath}
+                            title={workspaceEditorTitle}
+                            presentation="page"
                           />
                         </div>
-                      )
-                    ) : (
-                      <FlowDiagram workflow={workflowConfig.workflow} currentPhase={currentPhase} currentStep={currentStep}
-                        agents={agents} completedSteps={completedSteps} failedSteps={failedSteps} iterationStates={iterationStates} onSelectStep={selectStep}
-                        pendingCheckpointPhase={pendingCheckpointPhase || undefined}
-                        onSelectCheckpoint={(cp) => {
-                          const phase = workflowConfig.workflow.phases?.find((p: any) => p.checkpoint?.name === cp.name);
-                          dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: cp.message });
-                          dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: !!phase?.iteration?.enabled });
-                          dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: true });
-                        }} />
-                    )
-                  ) : (<div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">monitoring</span><p>加载中...</p></div>)}
+                      ) : (
+                        <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-background/70 p-6 text-center text-sm text-muted-foreground">
+                          当前运行还没有可用的工作区目录。
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
+                      {currentRunWorkspacePath ? (
+                        <GitWorkspaceDiffPanel
+                          workspacePath={currentRunWorkspacePath}
+                          runId={runId || selectedRun?.id || null}
+                          isRunning={isRunning}
+                          presentation="embedded"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-background/70 p-6 text-center text-sm text-muted-foreground">
+                          当前运行还没有可用的 Git 工作区。
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             }
@@ -6457,6 +7374,11 @@ export default function WorkbenchPage() {
                   const isCurrentStepRunning = selectedStep && isRunning && (
                     currentStep === selectedStep.name || currentStep?.startsWith(selectedStep.name + '-迭代')
                     || currentStep?.endsWith('-' + selectedStep.name)
+                    || activeSteps.some((stepName) =>
+                      stepName === selectedStep.name
+                      || stepName.startsWith(selectedStep.name + '-迭代')
+                      || stepName.endsWith('-' + selectedStep.name)
+                    )
                   );
                   // For steps with iteration suffix (e.g. "设计修复方案-迭代2"), also check the base name
                   // in completedSteps/failedSteps, since FlowDiagram marks non-last rounds as completed
@@ -6485,8 +7407,36 @@ export default function WorkbenchPage() {
                   const shouldShowStepError = !!rawStepResult?.error && !!isStepFailed && !isRunning && workflowStatus !== 'completed';
                   const stepResult = rawStepResult?.error && !shouldShowStepError ? null : rawStepResult;
                   return (<>
-                <div className="h-10 bg-muted border-b flex items-center px-4"><h2 className="text-sm font-semibold m-0">{selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : 'Agent 详情'}</h2></div>
-                <div className="flex-1 min-h-0 overflow-auto">
+                <div className="border-b bg-muted">
+                  <div className="flex h-10 items-center justify-between gap-2 px-3">
+                    <h2 className="min-w-0 truncate text-sm font-semibold">
+                      {rightPanelTab === 'live'
+                        ? '实时输出'
+                        : selectedStep ? (stepKey !== selectedStep.name ? stepKey : selectedStep.name) : selectedAgent ? selectedAgent.name : 'Agent 详情'}
+                    </h2>
+                  </div>
+                  <div className="flex gap-1 px-2 pb-1">
+                    {[
+                      { key: 'detail' as const, label: '详情', icon: 'info' },
+                      { key: 'live' as const, label: '实时', icon: 'cell_tower' },
+                    ].map((tab) => (
+                      <button
+                        key={tab.key}
+                        type="button"
+                        onClick={() => {
+                          setRightPanelTab(tab.key);
+                          if (tab.key === 'live') startLiveStream();
+                        }}
+                        className={`flex h-7 flex-1 items-center justify-center gap-1 rounded-md px-2 text-xs transition-colors ${rightPanelTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'}`}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{tab.icon}</span>
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className={`flex-1 min-h-0 ${rightPanelTab === 'detail' ? 'overflow-auto' : 'overflow-hidden'}`}>
+                  {rightPanelTab === 'live' ? renderLiveStreamPanel() : (<>
               {selectedStep && (
                 <div className="bg-muted border-b p-3.5">
                   <div className="flex items-center gap-2 mb-2.5">
@@ -6494,6 +7444,13 @@ export default function WorkbenchPage() {
                       {selectedStep.role === 'attacker' ? 'swords' : selectedStep.role === 'judge' ? 'gavel' : 'shield'}
                     </span>
                     <span className="text-sm font-semibold flex-1">{selectedStep.name}</span>
+                    {isCurrentStepRunning ? (
+                      <Badge className="border-blue-500/30 bg-blue-500/10 text-[10px] text-blue-600">运行中</Badge>
+                    ) : isStepDone ? (
+                      <Badge className="border-emerald-500/30 bg-emerald-500/10 text-[10px] text-emerald-600">已完成</Badge>
+                    ) : isStepFailed ? (
+                      <Badge variant="destructive" className="text-[10px]">失败</Badge>
+                    ) : null}
                     {selectedStep.agent && (
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{selectedStep.agent}</Badge>
                     )}
@@ -6515,6 +7472,29 @@ export default function WorkbenchPage() {
                       </ul>
                     </div>
                   )}
+                  {isCurrentStepRunning ? (
+                    <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                      <div className="flex items-start gap-2">
+                        <span className="material-symbols-outlined mt-0.5 text-amber-600" style={{ fontSize: 16 }}>warning</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-amber-700 dark:text-amber-300">强制放行当前步骤</div>
+                          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                            仅当你确认实时输出已经足够作为结果时使用。系统会中断当前步骤，并用已有输出继续推进工作流。
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="mt-2 h-8 text-xs"
+                            onClick={forceCompleteStep}
+                            disabled={!canForceCompleteStep}
+                          >
+                            <span className="material-symbols-outlined mr-1 text-sm">published_with_changes</span>
+                            强制放行当前步骤
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                   {selectedRoleConfig && (
                     <div className="border-t pt-2.5">
                       <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider">Agent 配置</div>
@@ -6622,7 +7602,7 @@ export default function WorkbenchPage() {
                         <div className={`${styles.markdownContent} bg-background border rounded p-2 text-sm leading-relaxed max-h-[200px] overflow-y-auto mt-1.5`}>
                           {dedupedChunks.map((chunk, i) => (
                             <div key={i} className={i < dedupedChunks.length - 1 ? 'border-b border-border/50 pb-3 mb-3' : ''}>
-                              <Markdown>{prepareChunkForDisplay(chunk)}</Markdown>
+                              <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
                             </div>
                           ))}
                         </div>
@@ -6714,20 +7694,6 @@ export default function WorkbenchPage() {
                   )}
                 </div>
               )}
-              {/* Live stream button — visible only during actual execution */}
-              {workflowStatus === 'running' && (
-                <div className="bg-muted border-b p-3.5">
-                  <div className="text-xs text-muted-foreground font-medium mb-1 uppercase tracking-wider"><span className="material-symbols-outlined text-xs">sync</span> {currentStep ? `当前步骤: ${currentStep}` : '工作流运行中'}</div>
-                  <div className="flex gap-2 mt-1.5">
-                    <Button size="sm" className="text-xs" onClick={startLiveStream}>
-                      <span className="material-symbols-outlined text-sm">cell_tower</span> 查看实时输出
-                    </Button>
-                    <Button size="sm" variant="secondary" className="text-xs" onClick={forceCompleteStep}>
-                      <span className="material-symbols-outlined text-sm">done</span> 完成
-                    </Button>
-                  </div>
-                </div>
-              )}
               {selectedAgent ? (<AgentPanel agent={selectedAgent} logs={logs} onClearLogs={(name) => dispatch({ type: 'CLEAR_AGENT_LOGS', payload: name })}
                 stepSummary={selectedStep && stepResult?.output ? stepResult.output : undefined}
                 persistedStepLogs={persistedStepLogs}
@@ -6741,7 +7707,8 @@ export default function WorkbenchPage() {
                 systemPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.systemPrompt}
                 iterationPrompt={agentConfigs.find((role: any) => role.name === selectedAgent.name)?.iterationPrompt}
                 compact={!!selectedStep} />
-              ) : (<div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
+              ) : (pageLoading || !workflowConfig ? <WorkbenchAgentDetailSkeleton /> : <div className="flex flex-col items-center justify-center h-full text-muted-foreground"><span className="material-symbols-outlined text-5xl mb-4">smart_toy</span><p>选择一个 Agent 查看详情</p></div>)}
+              </>)}
             </div>
                   </>);
                 })()}
@@ -6757,24 +7724,38 @@ export default function WorkbenchPage() {
                 <div className="flex gap-0.5 px-2 pt-1">
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'overview' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('overview')}
+                    onClick={() => handleDesignTabChange('overview')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">dashboard</span>
                     概览
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'orchestration' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('orchestration')}
+                    onClick={() => handleDesignTabChange('orchestration')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">account_tree</span>
                     编排
                   </button>
                   <button
                     className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'config' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => setDesignTab('config')}
+                    onClick={() => handleDesignTabChange('config')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">settings</span>
                     配置
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'agents' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => handleDesignTabChange('agents')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">smart_toy</span>
+                    Agent 管理
+                  </button>
+                  <button
+                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'skills' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => handleDesignTabChange('skills')}
+                  >
+                    <span className="material-symbols-outlined text-sm mr-1 align-middle">extension</span>
+                    Skills 管理
                   </button>
                 </div>
               </div>
@@ -6929,6 +7910,18 @@ export default function WorkbenchPage() {
                       onMoveGroup={handleMoveGroup}
                       onJoinGroup={handleJoinGroup} />
                   )}
+                </div>
+              )}
+
+              {designTab === 'agents' && (
+                <div className="flex-1 min-h-0 overflow-hidden bg-background">
+                  <AgentsManager embedded />
+                </div>
+              )}
+
+              {designTab === 'skills' && (
+                <div className="flex-1 min-h-0 overflow-hidden bg-background">
+                  <SkillsManager embedded />
                 </div>
               )}
 
@@ -7248,6 +8241,14 @@ export default function WorkbenchPage() {
       </div></div>)}
       {editingNode && (<EditNodeModal isOpen={showEditNodeModal} type={editingNode.type} data={getEditingNodeData()} roles={agentConfigs}
         availableSkills={availableSkills}
+        specTasks={(specCodingDetails?.tasks || [])
+          .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
+          .map((task: any) => ({
+            id: task.id,
+            title: task.title,
+            phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
+            ownerAgents: task.ownerAgents || [],
+          }))}
         isNew={isNewNode}
         existingPhases={editingConfig?.workflow?.phases || []}
         existingSteps={editingConfig?.workflow?.phases?.flatMap((p: any) => p.steps) || []}
@@ -7285,9 +8286,9 @@ export default function WorkbenchPage() {
           </div>
         </div>
       </div>)}
-      {showLiveStream && (
+      {false && showLiveStream && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={stopLiveStream}>
-          <div className={`bg-card rounded-lg border flex flex-col ${liveStreamFullscreen ? 'w-full h-full rounded-none' : 'w-[80%] max-w-[800px] max-h-[80vh]'}`} onClick={(e) => e.stopPropagation()}>
+          <div className={`bg-card rounded-lg border flex min-h-0 flex-col ${liveStreamFullscreen ? 'w-full h-full rounded-none' : 'h-[80vh] w-[80%] max-w-[800px]'}`} onClick={(e) => e.stopPropagation()}>
             <div className="p-5 border-b flex justify-between items-center">
               <h3 className="text-lg font-semibold"><span className="material-symbols-outlined text-lg mr-2 align-middle">cell_tower</span>实时输出 {currentStep ? `- ${currentStep}` : ''}</h3>
               <div className="flex items-center gap-1">
@@ -7313,7 +8314,7 @@ export default function WorkbenchPage() {
                 <Button variant="secondary" size="sm" onClick={stopLiveStream}>关闭</Button>
               </div>
             </div>
-            <div ref={liveStreamScrollRef} className="p-5 flex-1 overflow-auto" onScroll={(e) => {
+            <div ref={liveStreamScrollRef} className="min-h-0 flex-1 overflow-auto p-5" onScroll={(e) => {
               const el = e.currentTarget;
               const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
               liveStreamUserScrolledUp.current = !atBottom;
@@ -7373,7 +8374,7 @@ export default function WorkbenchPage() {
                         }
                       }
                     }
-                    const filteredItems = items.filter(it => {
+                    const rawFilteredItems = items.filter(it => {
                       if (it.type === 'feedback') return true;
                       const c = (it as any).content as string;
                       if (!c) return false;
@@ -7385,6 +8386,23 @@ export default function WorkbenchPage() {
                       if (stripped.length <= 1) return false;
                       return true;
                     });
+                    const filteredItems: Item[] = [];
+                    let pendingChunkItems: Array<{ type: 'chunk'; content: string; index: number }> = [];
+                    const flushPendingChunkItems = () => {
+                      if (!pendingChunkItems.length) return;
+                      filteredItems.push(...mergeAceSubtaskChunkItems(pendingChunkItems, CHUNK_SEP));
+                      pendingChunkItems = [];
+                    };
+                    for (const rawItem of rawFilteredItems) {
+                      if (rawItem.type === 'chunk') {
+                        const chunkItem = rawItem as Extract<Item, { type: 'chunk' }>;
+                        pendingChunkItems.push({ type: 'chunk', content: chunkItem.content, index: chunkItem.index });
+                      } else {
+                        flushPendingChunkItems();
+                        filteredItems.push(rawItem);
+                      }
+                    }
+                    flushPendingChunkItems();
                     const hasMore = filteredItems.length > liveStreamVisibleCount;
                     const visibleItems = hasMore ? filteredItems.slice(filteredItems.length - liveStreamVisibleCount) : filteredItems;
                     return (<>
@@ -7431,7 +8449,7 @@ export default function WorkbenchPage() {
                                 </div>
                               )}
                               <div className="text-sm">
-                                <Markdown>{prepareChunkForDisplay(parsed.content)}</Markdown>
+                              <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
                               </div>
                             </div>
                           </div>
@@ -7445,7 +8463,7 @@ export default function WorkbenchPage() {
                             </div>
                           )}
                           <div className="text-sm">
-                            <Markdown>{prepareChunkForDisplay(parsed.content)}</Markdown>
+                            <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
                           </div>
                         </div>
                       );
@@ -7545,14 +8563,14 @@ export default function WorkbenchPage() {
                     });
                     return filtered.map((chunk, i) => (
                       <div key={i} className={`${styles.markdownContent} text-sm border-b border-border/50 pb-3 last:border-0`}>
-                        <Markdown>{prepareChunkForDisplay(chunk)}</Markdown>
+                        <AceAwareMarkdown content={prepareChunkForDisplay(chunk)} />
                       </div>
                     ));
                   })()}
                 </div>
               ) : (
                 <div className={styles.markdownContent}>
-                  <Markdown>{prepareChunkForDisplay(markdownModal.chunks[0])}</Markdown>
+                  <AceAwareMarkdown content={prepareChunkForDisplay(markdownModal.chunks[0])} />
                 </div>
               )}
             </div>
@@ -8168,21 +9186,25 @@ export default function WorkbenchPage() {
       >
           <div className="mx-auto w-fit max-w-[96vw]" onClick={(e) => e.stopPropagation()}>
             <ContextWorkspaceDialog
-              title={pendingStartRequest.mode === 'rehearsal' ? '启动前上下文确认' : '工作流启动前上下文确认'}
-              description={`在真正启动前，把本次运行的全局背景和${startContextScopeLabel}约束补齐，后续执行会直接复用这些信息。`}
-              modeLabel={pendingStartRequest.mode === 'rehearsal' ? '演练启动' : '正式启动'}
+              title={pendingStartRequest.mode === 'rehearsal' ? '设置演练上下文' : '设置启动上下文'}
+              description={`补齐本次运行的全局背景和${startContextScopeLabel}约束；确认后会直接带着这些上下文进入${pendingStartRequest.mode === 'rehearsal' ? '演练' : '启动'}流程。`}
+              modeLabel={
+                pendingStartRequest.mode === 'rehearsal'
+                  ? '演练'
+                  : pendingStartRequest.skipPreflight
+                    ? '跳过检查'
+                    : '正式启动'
+              }
               globalDraft={startGlobalContextDraft}
-              onGlobalDraftChange={setStartGlobalContextDraft}
               phaseDrafts={startPhaseContextDrafts}
-              onPhaseDraftChange={(name, value) => setStartPhaseContextDrafts((prev) => ({ ...prev, [name]: value }))}
               focusTarget={startContextFocusTarget}
               onFocusTargetChange={setStartContextFocusTarget}
               footerText={pendingStartRequest.preflightPreview?.commands?.length
-                ? '先补齐本次启动上下文，再到下一步确认危险命令和最终启动方式。'
+                ? '先补齐本次启动上下文，再在下一步确认检查命令并启动。'
                 : '留空的项会沿用当前已保存内容；这里只覆盖你本次确认后提交的文本。'}
               actionLabel={pendingStartRequest.preflightPreview?.commands?.length
                 ? (pendingStartRequest.mode === 'rehearsal' ? '执行检查并开始演练' : '执行检查并直接启动')
-                : (pendingStartRequest.mode === 'rehearsal' ? '开始演练' : '确认启动')}
+                : (pendingStartRequest.mode === 'rehearsal' ? '保存上下文并开始演练' : pendingStartRequest.skipPreflight ? '保存上下文并直接启动' : '保存上下文并启动')}
               actionBusyLabel="启动中..."
               actionBusy={starting}
               actionDisabled={starting}
@@ -8194,8 +9216,12 @@ export default function WorkbenchPage() {
                 setShowStartWorkflowDialog(false);
                 setPendingStartRequest(null);
               }}
-              onSkipPreflight={pendingStartRequest.preflightPreview?.commands?.length ? () => confirmStartWorkflow('skip') : undefined}
-              onConfirm={() => confirmStartWorkflow('run')}
+              onSkipPreflight={
+                pendingStartRequest.mode === 'real' && (Boolean(pendingStartRequest.skipPreflight) || Boolean(pendingStartRequest.preflightPreview?.commands?.length))
+                  ? (contexts) => confirmStartWorkflow(contexts, 'skip')
+                  : undefined
+              }
+              onConfirm={(contexts) => confirmStartWorkflow(contexts, pendingStartRequest.skipPreflight ? 'skip' : 'run')}
             />
           </div>
         </div>
@@ -8209,9 +9235,7 @@ export default function WorkbenchPage() {
               description={`统一编辑全局上下文和${startContextScopeLabel}上下文。保存后会立即更新当前 run 的 prompt 注入内容。`}
               modeLabel="运行中可修改"
               globalDraft={contextEditorGlobalDraft}
-              onGlobalDraftChange={setContextEditorGlobalDraft}
               phaseDrafts={contextEditorPhaseDrafts}
-              onPhaseDraftChange={(name, value) => setContextEditorPhaseDrafts((prev) => ({ ...prev, [name]: value }))}
               focusTarget={contextEditorFocusTarget}
               onFocusTargetChange={setContextEditorFocusTarget}
               footerText="保存会逐项更新当前运行上下文，后续步骤会按新内容继续执行。"
@@ -8362,9 +9386,7 @@ export default function WorkbenchPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={rehearsalProgressDialogOpen} onOpenChange={(open) => {
-        if (!starting) setRehearsalProgressDialogOpen(open);
-      }}>
+      <Dialog open={rehearsalProgressDialogOpen} onOpenChange={setRehearsalProgressDialogOpen}>
         <DialogContent className="sm:max-w-lg p-0 overflow-hidden">
           <div className="flex flex-col">
             <div className="border-b px-6 py-4">
@@ -8384,7 +9406,7 @@ export default function WorkbenchPage() {
                   <span className={`material-symbols-outlined mt-0.5 text-sm ${index === rehearsalProgressSteps.length - 1 && starting ? 'animate-spin text-primary' : 'text-emerald-500'}`}>
                     {index === rehearsalProgressSteps.length - 1 && starting ? 'progress_activity' : 'check_circle'}
                   </span>
-                  <div className="text-sm text-foreground leading-6">{item}</div>
+                  <div className="text-sm text-foreground leading-6">{normalizeStartupProgressLabel(item)}</div>
                 </div>
               ))}
               {rehearsalProgressSteps.length === 0 ? (
@@ -8393,10 +9415,21 @@ export default function WorkbenchPage() {
                 </div>
               ) : null}
             </div>
-            <div className="border-t px-6 py-4 flex justify-end">
-              <Button variant="outline" onClick={() => setRehearsalProgressDialogOpen(false)} disabled={starting}>
-                {starting ? (startupProgressMode === 'rehearsal' ? '演练进行中...' : '正式启动中...') : '关闭'}
-              </Button>
+            <div className="border-t px-6 py-4 flex justify-end gap-2">
+              {starting ? (
+                <>
+                  <Button variant="outline" onClick={() => setRehearsalProgressDialogOpen(false)}>
+                    后台继续
+                  </Button>
+                  <Button variant="destructive" onClick={() => void requestCancelStartup()} disabled={startupCancelRequested}>
+                    {startupCancelRequested ? '取消中...' : '取消启动'}
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" onClick={() => setRehearsalProgressDialogOpen(false)}>
+                  关闭
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>
@@ -8418,16 +9451,6 @@ export default function WorkbenchPage() {
           void saveSpecCodingArtifactToNotebook();
         }}
       />
-
-      {(workspaceEditorPath || resolvedProjectRoot) && (
-        <WorkspaceEditor
-          open={workspaceEditorOpen}
-          onOpenChange={setWorkspaceEditorOpen}
-          workspacePath={workspaceEditorPath || state.workingDirectory || resolvedProjectRoot}
-          initialFilePath={workspaceEditorFilePath}
-          title={workspaceEditorTitle}
-        />
-      )}
     </div>
   );
 }

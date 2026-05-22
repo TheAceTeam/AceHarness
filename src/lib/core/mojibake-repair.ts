@@ -5,6 +5,7 @@ const COMMON_CJK_CHARS = '的一是不了在人有我他这为之大来以个中
 const COMMON_PUNCT = '，。！？；：（）《》、';
 const MOJIBAKE_MARKERS = /[銆锛鈥馃猬鉁鏌璇鍒闃]/g;
 const STRONG_GARBLED_PATTERNS = /(瑙勮|缂栫|鎶€|鍐呭|鏂囨。|璇存槑|闇€|姹傛|鍒涘缓|璁″垝|鐩綍|spec\.md)/;
+const WINDOWS_ENCODINGS = ['gbk', 'cp936', 'gb18030'] as const;
 
 function scoreText(text: string): number {
   if (!text) return 0;
@@ -15,6 +16,7 @@ function scoreText(text: string): number {
     if ((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')) score += 1;
   }
   score -= (text.match(/\uFFFD/g)?.length || 0) * 6;
+  score -= (text.match(/[\uE000-\uF8FF]/g)?.length || 0) * 5;
   score -= (text.match(MOJIBAKE_MARKERS)?.length || 0) * 2;
   return score;
 }
@@ -24,22 +26,28 @@ export function repairWindowsMojibake(text: string): string {
     return text;
   }
 
-  let repaired = text;
-  try {
-    repaired = iconv.decode(iconv.encode(text, 'gb18030'), 'utf8');
-  } catch {
+  let best = text;
+  let bestScore = scoreText(text);
+  for (const encoding of WINDOWS_ENCODINGS) {
+    try {
+      const candidate = iconv.decode(iconv.encode(text, encoding), 'utf8');
+      const score = scoreText(candidate);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    } catch {
+      // Keep trying other Windows encodings.
+    }
+  }
+
+  if (!best || best === text) {
     return text;
   }
 
-  if (!repaired || repaired === text) {
-    return text;
-  }
-
-  const originalScore = scoreText(text);
-  const repairedScore = scoreText(repaired);
   if (STRONG_GARBLED_PATTERNS.test(text)) {
-    return repaired;
+    return best;
   }
 
-  return repairedScore > originalScore + 4 ? repaired : text;
+  return bestScore > scoreText(text) + 4 ? best : text;
 }

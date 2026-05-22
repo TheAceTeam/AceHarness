@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import Ansi from 'ansi-to-react';
 import {
   Activity,
+  ArrowDown,
   BarChart3,
   Bird,
   Boxes,
@@ -12,10 +14,13 @@ import {
   ClipboardCheck,
   Clock3,
   Code2,
+  Download,
   FileJson2,
   Gauge,
   GitBranch,
   Loader2,
+  Lock,
+  LockOpen,
   Play,
   RotateCcw,
   ShieldCheck,
@@ -56,6 +61,7 @@ import {
   TestSuiteStats,
   type TestStatus as AiTestStatus,
 } from '@/components/ai-elements/test-results';
+import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import { SingleCombobox } from '@/components/ui/combobox';
@@ -119,6 +125,7 @@ const CAPABILITY_ICONS: Record<string, typeof Gauge> = {
 };
 
 const LOCAL_RESULT_STORAGE_KEY = 'ace-model-diagnostics:last-result';
+const LOCAL_ACTIVE_RUN_STORAGE_KEY = 'ace-model-diagnostics:active-run';
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MODEL_CAPABILITY_OPTIONS = [
   { id: 'json_output', label: 'JSON', description: '嵌套 JSON / 类型 / checksum' },
@@ -130,6 +137,43 @@ const MODEL_CAPABILITY_OPTIONS = [
   { id: 'consistency', label: '一致性', description: '重复 probe 稳定性' },
 ];
 const DEFAULT_MODEL_CAPABILITY_IDS = MODEL_CAPABILITY_OPTIONS.map((item) => item.id);
+
+type DiagnosticStreamRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+interface ActiveDiagnosticRunStorage {
+  runId: string;
+  requestBody: ModelDiagnosticsRequestBody;
+  startedAt: string;
+}
+
+interface ModelDiagnosticsRequestBody {
+  engine: string;
+  driver: DiagnosticDriver;
+  model: string;
+  timeoutMs: number;
+  includeEngineDebug: boolean;
+  includeModelScore: boolean;
+  modelCapabilityIds: string[];
+}
+
+type DiagnosticStreamPayload =
+  | {
+      type: 'run';
+      runId: string;
+      status: DiagnosticStreamRunStatus;
+      run?: {
+        id: string;
+        request?: Partial<ModelDiagnosticsRequestBody>;
+        status: DiagnosticStreamRunStatus;
+        startedAt?: string;
+        updatedAt?: string;
+        finishedAt?: string;
+        error?: string;
+      };
+    }
+  | { type: 'log'; runId?: string; log: DiagnosticLogEntry }
+  | { type: 'result'; runId?: string; result: ModelDiagnosticsResponse }
+  | { type: 'error'; runId?: string; error: string };
 
 const RUN_EVIDENCE_META: Record<string, { title: string; goal: string; checks: string[] }> = {
   'engine-single-turn': {
@@ -275,6 +319,58 @@ function createClientLog(message: string, detail?: string): DiagnosticLogEntry {
   };
 }
 
+function normalizeRequestBody(value: Partial<ModelDiagnosticsRequestBody> | undefined): ModelDiagnosticsRequestBody | null {
+  if (!value) return null;
+  const engine = String(value.engine || '').trim();
+  if (!engine) return null;
+  return {
+    engine,
+    driver: value.driver === 'sdk' || value.driver === 'stdio' ? value.driver : 'auto',
+    model: String(value.model || ''),
+    timeoutMs: Number.isFinite(value.timeoutMs) ? Number(value.timeoutMs) : DEFAULT_TIMEOUT_MS,
+    includeEngineDebug: value.includeEngineDebug !== false,
+    includeModelScore: value.includeModelScore !== false,
+    modelCapabilityIds: Array.isArray(value.modelCapabilityIds) ? value.modelCapabilityIds.map(String) : [],
+  };
+}
+
+function readActiveDiagnosticRun(): ActiveDiagnosticRunStorage | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LOCAL_ACTIVE_RUN_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ActiveDiagnosticRunStorage>;
+    const runId = String(parsed.runId || '').trim();
+    const requestBody = normalizeRequestBody(parsed.requestBody);
+    if (!runId || !requestBody) return null;
+    return {
+      runId,
+      requestBody,
+      startedAt: String(parsed.startedAt || new Date().toISOString()),
+    };
+  } catch {
+    localStorage.removeItem(LOCAL_ACTIVE_RUN_STORAGE_KEY);
+    return null;
+  }
+}
+
+function saveActiveDiagnosticRun(input: ActiveDiagnosticRunStorage) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(LOCAL_ACTIVE_RUN_STORAGE_KEY, JSON.stringify(input));
+}
+
+function clearActiveDiagnosticRun(runId?: string) {
+  if (typeof window === 'undefined') return;
+  if (!runId) {
+    localStorage.removeItem(LOCAL_ACTIVE_RUN_STORAGE_KEY);
+    return;
+  }
+  const active = readActiveDiagnosticRun();
+  if (!active || active.runId === runId) {
+    localStorage.removeItem(LOCAL_ACTIVE_RUN_STORAGE_KEY);
+  }
+}
+
 const ANSI = {
   reset: '\u001b[0m',
   dim: '\u001b[2m',
@@ -341,6 +437,14 @@ function localSavedLabel(value: string | null): string {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return '已保存';
   return `已保存 ${new Date(timestamp).toLocaleString()}`;
+}
+
+function sanitizeLogFilenamePart(value?: string): string {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized || 'default';
 }
 
 function trimStoredText(value?: string, maxLength = 8_000): string | undefined {
@@ -420,6 +524,44 @@ function capabilityResultSummary(capability: ModelCapabilityScore, runs: Diagnos
     warning: statuses.filter((status) => status === 'warning').length,
     total: statuses.length,
     duration: runs.length > 0 ? runs.reduce((sum, run) => sum + run.durationMs, 0) : undefined,
+  };
+}
+
+function failedCapabilityIdsFromResult(result: ModelDiagnosticsResponse | null): string[] {
+  const capabilities = result?.modelEvaluation?.capabilities || [];
+  return DEFAULT_MODEL_CAPABILITY_IDS.filter((id) => {
+    const capability = capabilities.find((item) => item.id === id);
+    if (!capability) return false;
+    return capability.status === 'failed' || capability.status === 'warning' || capability.score < 80;
+  });
+}
+
+function remainingRequestBodyFromLogs(
+  requestBody: ModelDiagnosticsRequestBody,
+  logs: DiagnosticLogEntry[],
+): ModelDiagnosticsRequestBody | null {
+  const text = logs.map((log) => log.message).join('\n');
+  const completedCapabilities = new Set<string>();
+  if (text.includes('JSON 输出 probe 完成')) completedCapabilities.add('json_output');
+  if (text.includes('代码生成 probe 完成')) completedCapabilities.add('code_generation');
+  if (text.includes('骑车鹈鹕绘图 probe 完成')) completedCapabilities.add('drawing_pelican');
+  if (text.includes('数学能力 probe 完成')) completedCapabilities.add('math');
+  if (text.includes('推理能力 probe 完成')) completedCapabilities.add('reasoning');
+  if (text.includes('结构化输出 probe 完成')) completedCapabilities.add('structured_output');
+  if (text.includes('一致性首轮 probe 完成') && text.includes('一致性复测 probe 完成')) {
+    completedCapabilities.add('consistency');
+  }
+
+  const engineDebugComplete = text.includes('多轮记忆 probe 完成') || text.includes('多轮记忆 probe 跳过');
+  const remainingCapabilityIds = requestBody.modelCapabilityIds.filter((id) => !completedCapabilities.has(id));
+  const includeEngineDebug = requestBody.includeEngineDebug && !engineDebugComplete;
+  const includeModelScore = requestBody.includeModelScore && remainingCapabilityIds.length > 0;
+  if (!includeEngineDebug && !includeModelScore) return null;
+  return {
+    ...requestBody,
+    includeEngineDebug,
+    includeModelScore,
+    modelCapabilityIds: includeModelScore ? remainingCapabilityIds : [],
   };
 }
 
@@ -553,6 +695,15 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [detailedLogs, setDetailedLogs] = useState(false);
   const [selectedCapabilityId, setSelectedCapabilityId] = useState<string | null>(null);
+  const [logScrollLocked, setLogScrollLocked] = useState(false);
+  const [showLogScrollBtn, setShowLogScrollBtn] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [lastInterruptedRun, setLastInterruptedRun] = useState<ActiveDiagnosticRunStorage | null>(null);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
+  const logProgrammaticScrollRef = useRef(false);
+  const logScrollResetTimerRef = useRef<number | null>(null);
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const restoredRunRef = useRef(false);
 
   const engineOptions = useMemo(() => ENGINE_OPTIONS.map((id) => ({
     value: id,
@@ -601,6 +752,20 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     });
   };
 
+  const applyRequestBodyToControls = useCallback((requestBody: ModelDiagnosticsRequestBody) => {
+    setEngine(requestBody.engine);
+    setDriver(supportsDriverSelection(requestBody.engine) ? requestBody.driver : 'auto');
+    setModel(requestBody.model);
+    setTimeoutMs(String(requestBody.timeoutMs || DEFAULT_TIMEOUT_MS));
+    setIncludeEngineDebug(requestBody.includeEngineDebug);
+    setIncludeModelScore(requestBody.includeModelScore);
+    setSelectedModelCapabilityIds(
+      requestBody.includeModelScore
+        ? DEFAULT_MODEL_CAPABILITY_IDS.filter((id) => requestBody.modelCapabilityIds.includes(id))
+        : DEFAULT_MODEL_CAPABILITY_IDS,
+    );
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -618,6 +783,12 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       }
     } catch {
       localStorage.removeItem(LOCAL_RESULT_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (logScrollResetTimerRef.current !== null) {
+      window.clearTimeout(logScrollResetTimerRef.current);
     }
   }, []);
 
@@ -650,6 +821,211 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     }
   };
 
+  const clearLogScrollResetTimer = useCallback(() => {
+    if (logScrollResetTimerRef.current !== null) {
+      window.clearTimeout(logScrollResetTimerRef.current);
+      logScrollResetTimerRef.current = null;
+    }
+  }, []);
+
+  const releaseProgrammaticLogScroll = useCallback(() => {
+    clearLogScrollResetTimer();
+    logScrollResetTimerRef.current = window.setTimeout(() => {
+      logProgrammaticScrollRef.current = false;
+      logScrollResetTimerRef.current = null;
+    }, 500);
+  }, [clearLogScrollResetTimer]);
+
+  const unlockLogScroll = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    setLogScrollLocked(false);
+    setShowLogScrollBtn(false);
+    logProgrammaticScrollRef.current = true;
+    const container = logScrollRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    }
+    releaseProgrammaticLogScroll();
+  }, [releaseProgrammaticLogScroll]);
+
+  const handleLogScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    if (logProgrammaticScrollRef.current) return;
+    const container = event.currentTarget;
+    const threshold = 80;
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+    setLogScrollLocked(!nearBottom);
+    setShowLogScrollBtn(!nearBottom && (running || logs.length > 0));
+  }, [logs.length, running]);
+
+  const toggleLogScrollLock = useCallback(() => {
+    if (logScrollLocked) {
+      unlockLogScroll();
+      return;
+    }
+    setLogScrollLocked(true);
+    setShowLogScrollBtn(running || logs.length > 0);
+  }, [logScrollLocked, logs.length, running, unlockLogScroll]);
+
+  const consumeDiagnosticStream = useCallback(async (
+    requestBody: ModelDiagnosticsRequestBody,
+    options: {
+      action: 'start' | 'resume';
+      runId?: string;
+      initialLogs?: DiagnosticLogEntry[];
+      toastMessage?: string;
+      restored?: boolean;
+    },
+  ) => {
+    streamAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    streamAbortControllerRef.current = abortController;
+
+    setRunning(true);
+    setResult(null);
+    setActiveRunId(options.runId || null);
+    applyRequestBodyToControls(requestBody);
+    clearLogScrollResetTimer();
+    logProgrammaticScrollRef.current = false;
+    setLogScrollLocked(false);
+    setShowLogScrollBtn(false);
+    if (options.initialLogs) setLogs(options.initialLogs);
+
+    const toastId = options.toastMessage ? toast('loading', options.toastMessage) : null;
+    let streamRunId = options.runId || '';
+    let finalResult: ModelDiagnosticsResponse | null = null;
+
+    try {
+      const response = await authFetch('/api/models/diagnostics/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(options.action === 'resume' ? {} : requestBody),
+          action: options.action,
+          ...(options.runId ? { runId: options.runId } : {}),
+        }),
+        signal: abortController.signal,
+      });
+      if (!response.ok) {
+        const json = await response.json().catch(() => null);
+        throw new Error(json?.error || (options.action === 'resume' ? '诊断任务无法恢复' : '诊断评测失败'));
+      }
+      if (!response.body) {
+        throw new Error('当前环境不支持诊断日志流');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const payload = JSON.parse(line) as DiagnosticStreamPayload;
+
+          if (payload.type === 'run') {
+            streamRunId = payload.runId;
+            setActiveRunId(payload.runId);
+            saveActiveDiagnosticRun({
+              runId: payload.runId,
+              requestBody: normalizeRequestBody(payload.run?.request) || requestBody,
+              startedAt: payload.run?.startedAt || new Date().toISOString(),
+            });
+            setLastInterruptedRun(null);
+          } else if (payload.type === 'log') {
+            setLogs((prev) => {
+              if (prev.some((item) => item.id === payload.log.id)) return prev;
+              return [...prev, payload.log];
+            });
+          } else if (payload.type === 'result') {
+            finalResult = payload.result;
+            setResult(payload.result);
+            if (payload.result.logs?.length) setLogs(payload.result.logs);
+            clearActiveDiagnosticRun(payload.runId || streamRunId);
+            if (payload.result.error?.includes('停止')) {
+              setLastInterruptedRun({ runId: payload.runId || streamRunId, requestBody, startedAt: new Date().toISOString() });
+            } else {
+              saveDiagnosticResult(payload.result);
+              setLastInterruptedRun(null);
+            }
+          } else if (payload.type === 'error') {
+            clearActiveDiagnosticRun(payload.runId || streamRunId);
+            setLastInterruptedRun({ runId: payload.runId || streamRunId, requestBody, startedAt: new Date().toISOString() });
+            throw new Error(payload.error || '诊断评测失败');
+          }
+        }
+
+        if (done) break;
+      }
+
+      if (!finalResult) {
+        throw new Error('诊断评测没有返回结果');
+      }
+      if (toastId != null) {
+        updateToast(
+          toastId,
+          finalResult.error?.includes('停止') ? 'warning' : finalResult.ok ? 'success' : 'warning',
+          finalResult.error?.includes('停止') ? '诊断任务已停止' : finalResult.ok ? '诊断评测完成' : '诊断完成，但存在风险项',
+        );
+      }
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      clearActiveDiagnosticRun(streamRunId || options.runId);
+      setLastInterruptedRun({ runId: streamRunId || options.runId || `local-${Date.now()}`, requestBody, startedAt: new Date().toISOString() });
+      setLogs((prev) => [
+        ...prev,
+        {
+          id: `client-error-${Date.now()}`,
+          at: new Date().toISOString(),
+          elapsedMs: prev[prev.length - 1]?.elapsedMs || 0,
+          level: error instanceof Error && error.message.includes('停止') ? 'warning' : 'error',
+          message: error instanceof Error && error.message.includes('停止') ? '诊断任务已停止' : '诊断请求失败',
+          detail: error instanceof Error ? error.message : '诊断评测失败',
+        },
+      ]);
+      if (toastId != null) {
+        updateToast(
+          toastId,
+          error instanceof Error && error.message.includes('停止') ? 'warning' : 'error',
+          error instanceof Error ? error.message : '诊断评测失败',
+        );
+      } else if (options.restored) {
+        toast('warning', error instanceof Error ? error.message : '诊断任务无法恢复');
+      }
+    } finally {
+      if (streamAbortControllerRef.current === abortController) {
+        streamAbortControllerRef.current = null;
+      }
+      setRunning(false);
+      setActiveRunId(null);
+    }
+  }, [applyRequestBodyToControls, clearLogScrollResetTimer, saveDiagnosticResult, toast, updateToast]);
+
+  useEffect(() => {
+    if (restoredRunRef.current) return;
+    restoredRunRef.current = true;
+    const active = readActiveDiagnosticRun();
+    if (!active) return;
+    void consumeDiagnosticStream(active.requestBody, {
+      action: 'resume',
+      runId: active.runId,
+      restored: true,
+      initialLogs: [
+        createClientLog(
+          '已恢复诊断任务',
+          `runId=${active.runId}, engine=${active.requestBody.engine}, driver=${active.requestBody.driver}, model=${active.requestBody.model || '默认模型'}`,
+        ),
+      ],
+    });
+  }, [consumeDiagnosticStream]);
+
+  useEffect(() => () => {
+    streamAbortControllerRef.current?.abort();
+  }, []);
+
   const runDiagnostics = async () => {
     if (!engine) {
       toast('warning', '请选择要诊断的引擎');
@@ -678,83 +1054,123 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       modelCapabilityIds: includeModelScore ? selectedModelCapabilityIds : [],
     };
 
-    setRunning(true);
     setResult(null);
-    setLogs([
-      createClientLog(
-        '已提交诊断任务',
-        `engine=${requestBody.engine}, driver=${requestBody.driver}, model=${requestBody.model || '默认模型'}, capabilities=${includeModelScore ? selectedModelCapabilityLabel : '跳过模型评分'}`,
-      ),
-    ]);
-    const toastId = toast('loading', '正在运行诊断评测...');
+    await consumeDiagnosticStream(requestBody, {
+      action: 'start',
+      toastMessage: '正在运行诊断评测...',
+      initialLogs: [
+        createClientLog(
+          '已提交诊断任务',
+          `engine=${requestBody.engine}, driver=${requestBody.driver}, model=${requestBody.model || '默认模型'}, capabilities=${includeModelScore ? selectedModelCapabilityLabel : '跳过模型评分'}`,
+        ),
+      ],
+    });
+  };
+
+  const stopDiagnostics = useCallback(async () => {
+    const runId = activeRunId || readActiveDiagnosticRun()?.runId;
+    if (!runId) {
+      streamAbortControllerRef.current?.abort();
+      setRunning(false);
+      return;
+    }
     try {
-      const response = await authFetch('/api/models/diagnostics/stream', {
+      await authFetch('/api/models/diagnostics/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({ action: 'cancel', runId }),
       });
-      if (!response.ok) {
-        const json = await response.json().catch(() => null);
-        throw new Error(json?.error || '诊断评测失败');
-      }
-      if (!response.body) {
-        throw new Error('当前环境不支持诊断日志流');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let finalResult: ModelDiagnosticsResponse | null = null;
-
-      while (true) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const payload = JSON.parse(line) as
-            | { type: 'log'; log: DiagnosticLogEntry }
-            | { type: 'result'; result: ModelDiagnosticsResponse }
-            | { type: 'error'; error: string };
-
-          if (payload.type === 'log') {
-            setLogs((prev) => [...prev, payload.log]);
-          } else if (payload.type === 'result') {
-            finalResult = payload.result;
-            setResult(payload.result);
-            if (payload.result.logs?.length) setLogs(payload.result.logs);
-            saveDiagnosticResult(payload.result);
-          } else if (payload.type === 'error') {
-            throw new Error(payload.error || '诊断评测失败');
-          }
-        }
-
-        if (done) break;
-      }
-
-      if (!finalResult) {
-        throw new Error('诊断评测没有返回结果');
-      }
-      updateToast(toastId, finalResult.ok ? 'success' : 'warning', finalResult.ok ? '诊断评测完成' : '诊断完成，但存在风险项');
-    } catch (error) {
+      const active = readActiveDiagnosticRun();
+      clearActiveDiagnosticRun(runId);
+      setLastInterruptedRun(active || {
+        runId,
+        requestBody: {
+          engine,
+          driver: supportsDriverSelection(engine) ? driver : 'auto',
+          model,
+          timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
+          includeEngineDebug,
+          includeModelScore,
+          modelCapabilityIds: includeModelScore ? selectedModelCapabilityIds : [],
+        },
+        startedAt: new Date().toISOString(),
+      });
+      streamAbortControllerRef.current?.abort();
       setLogs((prev) => [
         ...prev,
         {
-          id: `client-error-${Date.now()}`,
+          id: `client-stop-${Date.now()}`,
           at: new Date().toISOString(),
           elapsedMs: prev[prev.length - 1]?.elapsedMs || 0,
-          level: 'error',
-          message: '诊断请求失败',
-          detail: error instanceof Error ? error.message : '诊断评测失败',
+          level: 'warning',
+          message: '已请求停止诊断任务',
+          detail: `runId=${runId}`,
         },
       ]);
-      updateToast(toastId, 'error', error instanceof Error ? error.message : '诊断评测失败');
+      toast('warning', '已停止诊断任务');
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '停止诊断失败');
     } finally {
       setRunning(false);
+      setActiveRunId(null);
     }
-  };
+  }, [activeRunId, driver, engine, includeEngineDebug, includeModelScore, model, selectedModelCapabilityIds, timeoutMs, toast]);
+
+  const failedCapabilityIds = useMemo(() => failedCapabilityIdsFromResult(result), [result]);
+
+  const retryFailedDiagnostics = useCallback(async () => {
+    if (!result) return;
+    const retryCapabilityIds = failedCapabilityIds.length > 0 ? failedCapabilityIds : selectedModelCapabilityIds;
+    const shouldRetryEngineDebug = !result.engineDebug?.available
+      || (result.engineDebug?.stages || []).some((stage) => stage.status === 'failed' || stage.status === 'warning');
+    const requestBody: ModelDiagnosticsRequestBody = {
+      engine: result.engine || engine,
+      driver: result.driver || (supportsDriverSelection(engine) ? driver : 'auto'),
+      model: result.model || model,
+      timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
+      includeEngineDebug: shouldRetryEngineDebug,
+      includeModelScore: retryCapabilityIds.length > 0,
+      modelCapabilityIds: retryCapabilityIds,
+    };
+    await consumeDiagnosticStream(requestBody, {
+      action: 'start',
+      toastMessage: '正在重试失败环节...',
+      initialLogs: [
+        createClientLog(
+          '已提交失败环节重试',
+          [
+            shouldRetryEngineDebug ? 'engine-debug=retry' : 'engine-debug=skip',
+            retryCapabilityIds.length > 0 ? `capabilities=${retryCapabilityIds.join(',')}` : 'capabilities=skip',
+          ].join(', '),
+        ),
+      ],
+    });
+  }, [consumeDiagnosticStream, driver, engine, failedCapabilityIds, model, result, selectedModelCapabilityIds, timeoutMs]);
+
+  const continueInterruptedDiagnostics = useCallback(async () => {
+    const interrupted = lastInterruptedRun;
+    if (!interrupted) return;
+    const requestBody = remainingRequestBodyFromLogs(interrupted.requestBody, logs);
+    if (!requestBody) {
+      toast('warning', '没有可继续的未完成环节');
+      setLastInterruptedRun(null);
+      return;
+    }
+    await consumeDiagnosticStream(requestBody, {
+      action: 'start',
+      toastMessage: '正在继续未完成诊断...',
+      initialLogs: [
+        ...logs,
+        createClientLog(
+          '已继续未完成诊断',
+          [
+            requestBody.includeEngineDebug ? 'engine-debug=continue' : 'engine-debug=skip',
+            requestBody.includeModelScore ? `capabilities=${requestBody.modelCapabilityIds.join(',')}` : 'capabilities=skip',
+          ].join(', '),
+        ),
+      ],
+    });
+  }, [consumeDiagnosticStream, lastInterruptedRun, logs, toast]);
 
   const allRuns = useMemo(() => {
     const runs: DiagnosticPromptRun[] = [];
@@ -797,6 +1213,42 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     () => buildDiagnosticTerminalOutput(logs, result, running, detailedLogs),
     [detailedLogs, logs, result, running],
   );
+  const terminalLines = useMemo(() => terminalOutput.split('\n'), [terminalOutput]);
+  const terminalLineItems = useMemo(
+    () => terminalLines.map((line, index) => ({
+      key: `diagnostic-line-${index}`,
+      node: (
+        <pre className="m-0 whitespace-pre-wrap break-words">
+          <Ansi>{line || ' '}</Ansi>
+        </pre>
+      ),
+    })),
+    [terminalLines],
+  );
+
+  const downloadDiagnosticLogs = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = [
+        'diagnostic-log',
+        sanitizeLogFilenamePart(engine),
+        sanitizeLogFilenamePart(model || 'default-model'),
+        detailedLogs ? 'full' : 'summary',
+        stamp,
+      ].join('.') + '.log';
+      const blob = new Blob([terminalOutput], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast('success', '诊断日志已开始下载');
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '下载诊断日志失败');
+    }
+  }, [detailedLogs, engine, model, terminalOutput, toast]);
 
   const overallScore = result?.modelEvaluation?.overallScore ?? null;
   const ringScore = overallScore ?? 0;
@@ -957,14 +1409,39 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                   {running ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
                   {running ? '运行中' : '开始评测'}
                 </Button>
+                {running ? (
+                  <Button variant="destructive" onClick={stopDiagnostics} className="min-w-[112px]">
+                    <XCircle className="mr-2 h-4 w-4" />
+                    停止诊断
+                  </Button>
+                ) : null}
+                {!running && result && (!result.ok || failedCapabilityIds.length > 0) ? (
+                  <Button variant="outline" onClick={retryFailedDiagnostics} className="min-w-[132px]">
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    重试失败环节
+                  </Button>
+                ) : null}
+                {!running && lastInterruptedRun ? (
+                  <Button variant="outline" onClick={continueInterruptedDiagnostics} className="min-w-[132px]">
+                    <Play className="mr-2 h-4 w-4" />
+                    继续未完成
+                  </Button>
+                ) : null}
                 <Button
                   variant="outline"
                   onClick={() => {
+                    streamAbortControllerRef.current?.abort();
                     setResult(null);
                     setLogs([]);
                     setSavedAt(null);
+                    setActiveRunId(null);
+                    clearLogScrollResetTimer();
+                    logProgrammaticScrollRef.current = false;
+                    setLogScrollLocked(false);
+                    setShowLogScrollBtn(false);
                     if (typeof window !== 'undefined') {
                       localStorage.removeItem(LOCAL_RESULT_STORAGE_KEY);
+                      localStorage.removeItem(LOCAL_ACTIVE_RUN_STORAGE_KEY);
                     }
                   }}
                   disabled={running || (!result && logs.length === 0)}
@@ -1069,7 +1546,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-lg font-semibold">运行日志</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Terminal 会逐步刷新；详细模式会显示每个 stream event、fullDetail、prompt、event samples、metrics 和完整输出预览。</p>
+                <p className="mt-1 text-sm text-muted-foreground">诊断日志会逐步刷新；详细模式会显示每个 stream event、fullDetail、prompt、event samples、metrics 和完整输出预览。</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2">
@@ -1080,13 +1557,37 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                   {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
                   {running ? '运行中' : `${logs.length} 条`}
                 </Badge>
+                <Button
+                  variant={logScrollLocked ? 'secondary' : 'outline'}
+                  size="sm"
+                  onClick={toggleLogScrollLock}
+                  className="gap-2"
+                  title={logScrollLocked ? '解除滚动锁并跳到底部' : '锁定当前滚动位置'}
+                >
+                  {logScrollLocked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+                  {logScrollLocked ? '滚动已锁定' : '跟随滚动'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={downloadDiagnosticLogs}
+                  className="gap-2"
+                >
+                  <Download className="h-4 w-4" />
+                  下载日志
+                </Button>
               </div>
             </div>
 
             <div className="mt-4">
-              <Terminal output={terminalOutput} isStreaming={running} className="border-border/70 shadow-sm">
+              <Terminal
+                output={terminalOutput}
+                isStreaming={running}
+                autoScroll={!logScrollLocked}
+                className="border-border/70 shadow-sm"
+              >
                 <TerminalHeader className="border-zinc-800/80 bg-zinc-950/95">
-                  <TerminalTitle>详细日志</TerminalTitle>
+                  <TerminalTitle>诊断日志</TerminalTitle>
                   <div className="flex items-center gap-2">
                     <TerminalStatus>streaming</TerminalStatus>
                     <TerminalActions>
@@ -1094,7 +1595,33 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                     </TerminalActions>
                   </div>
                 </TerminalHeader>
-                <TerminalContent className="max-h-[560px] text-[12px] leading-5" />
+                <div className="relative">
+                  <TerminalContent
+                    ref={logScrollRef}
+                    onScroll={handleLogScroll}
+                    className="max-h-[560px] text-[12px] leading-5"
+                  >
+                    <div data-testid="diagnostic-log-virtual-list">
+                      <VirtualMessageList
+                        items={terminalLineItems}
+                        estimatedItemHeight={20}
+                        itemGap={0}
+                        scrollContainerRef={logScrollRef}
+                      />
+                    </div>
+                  </TerminalContent>
+                  {showLogScrollBtn ? (
+                    <button
+                      type="button"
+                      onClick={() => unlockLogScroll()}
+                      title="解除滚动锁并跳到最新日志"
+                      className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-primary/20 bg-background/92 px-3 py-1.5 text-xs text-foreground shadow-sm backdrop-blur-md transition-colors duration-150 hover:bg-background"
+                    >
+                      <ArrowDown className="h-3.5 w-3.5 text-primary" />
+                      解除锁定
+                    </button>
+                  ) : null}
+                </div>
               </Terminal>
             </div>
           </section>

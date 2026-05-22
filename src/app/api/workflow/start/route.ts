@@ -9,7 +9,15 @@ import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { createRun } from '@/lib/run/store';
 import { saveRunState, type PersistedRunState } from '@/lib/run/state-persistence';
 import { loadCreationSession, loadLatestCreationSessionByFilename, cloneSpecCodingForRun, updateCreationSession } from '@/lib/spec/coding-store';
-import { appendChatSessionMessage, loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { loadChatSession, saveChatSession, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import {
+  appendWorkflowAgoraMessage,
+  appendWorkflowAgoraOpeningMessages,
+  createWorkflowAgoraWorkbenchState,
+  createWorkflowParticipants,
+  ensureWorkflowAgoraSession,
+  extractWorkflowParticipantNames,
+} from '@/lib/agora/workflow-topic';
 import { countWorkflowSteps } from '@/lib/workflow/step-counter';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { writeFile } from 'fs/promises';
@@ -21,38 +29,73 @@ async function ensureWorkflowChatSession(input: {
   configFile: string;
   workflowName?: string;
   supervisorAgent?: string;
+  participantNames?: string[];
+  participants?: ReturnType<typeof createWorkflowParticipants>;
+  agentSessions?: Record<string, string>;
+  workspacePath?: string;
   userId: string;
-}): Promise<string> {
+}): Promise<{ sessionId: string; sessionWorkbenchState: any }> {
+  const title = `${input.workflowName || input.configFile} · 工作流协作`;
+  const participants = input.participants?.length ? input.participants : createWorkflowParticipants(input.participantNames?.length
+    ? input.participantNames
+    : [input.supervisorAgent || 'default-supervisor'], { coordinatorAgent: input.supervisorAgent });
   if (input.frontendSessionId) {
     const existing = await loadChatSession(input.frontendSessionId).catch(() => null);
-    if (existing) return input.frontendSessionId;
+    if (existing) {
+      const sessionWorkbenchState = await ensureWorkflowAgoraSession({
+        sessionId: input.frontendSessionId,
+        title,
+        participants,
+        workspacePath: input.workspacePath,
+        agentSessions: input.agentSessions,
+      });
+      await appendWorkflowAgoraOpeningMessages({
+        sessionId: input.frontendSessionId,
+        participants,
+        workspacePath: input.workspacePath,
+        agentSessions: input.agentSessions,
+      });
+      return { sessionId: input.frontendSessionId, sessionWorkbenchState };
+    }
   }
 
   const now = Date.now();
   const id = `workflow-${now}-${randomUUID().slice(0, 8)}`;
-  const title = `${input.workflowName || input.configFile} · Supervisor`;
+  const sessionWorkbenchState = createWorkflowAgoraWorkbenchState({
+    title,
+    participants,
+    workspacePath: input.workspacePath,
+    agentSessions: input.agentSessions,
+  });
   await saveChatSession({
     id,
     title,
     model: 'claude-sonnet-4-6',
-    messages: [{
-      id: `${now}-workflow-run-created`,
-      role: 'assistant',
-      content: [
-        '<workflow-event type="run-created" tags="workflow,supervisor">',
-        `工作流运行会话已创建。`,
-        `- 配置文件: ${input.configFile}`,
-        `- Supervisor: ${input.supervisorAgent || 'default-supervisor'}`,
-        '</workflow-event>',
-      ].join('\n'),
-      timestamp: now,
-    }],
+    sessionWorkbenchState,
+    messages: [],
     createdAt: now,
     updatedAt: now,
     createdBy: input.userId,
     visibility: 'public',
   });
-  return id;
+  await appendWorkflowAgoraOpeningMessages({
+    sessionId: id,
+    participants,
+    workspacePath: input.workspacePath,
+    agentSessions: input.agentSessions,
+    createdAt: now,
+  });
+  await appendWorkflowAgoraMessage({
+    sessionId: id,
+    type: 'run-created',
+    title: '工作流协作议题已创建',
+    speakerName: input.supervisorAgent || '工作流协作',
+    dedupeKey: `${now}-workflow-run-created`,
+    participants,
+    workspacePath: input.workspacePath,
+    agentSessions: input.agentSessions,
+  });
+  return { sessionId: id, sessionWorkbenchState };
 }
 
 function normalizeInitialContexts(input: any): { globalContext: string; phaseContexts: Record<string, string> } {
@@ -68,6 +111,9 @@ function normalizeInitialContexts(input: any): { globalContext: string; phaseCon
 
 async function startRehearsalRun(input: {
   configFile: string;
+  workflowSessionId?: string;
+  participants?: ReturnType<typeof createWorkflowParticipants>;
+  agentSessions?: Record<string, string>;
   frontendSessionId?: string;
   creationSessionId?: string;
   userId: string;
@@ -168,6 +214,38 @@ async function startRehearsalRun(input: {
   };
   await saveRunState(state);
 
+  const workflowSessionId = input.workflowSessionId || input.frontendSessionId;
+  if (workflowSessionId) {
+    const workspacePath = config?.context?.projectRoot || config?.context?.workingDirectory;
+    await appendWorkflowAgoraMessage({
+      sessionId: workflowSessionId,
+      type: 'run-starting',
+      title: '演练开始',
+      body: [`配置文件：${input.configFile}`, `协调嘉宾：${state.supervisorAgent || 'default-supervisor'}`].join('\n'),
+      speakerName: state.supervisorAgent || 'default-supervisor',
+      dedupeKey: `workflow-rehearsal-starting-${runId}`,
+      participants: input.participants,
+      agentSessions: input.agentSessions,
+      workspacePath,
+      createdAt: Date.parse(now) || Date.now(),
+    }).catch(() => {});
+    await appendWorkflowAgoraMessage({
+      sessionId: workflowSessionId,
+      type: 'state-review',
+      title: '演练总结',
+      body: [
+        summary,
+        recommendedNextSteps.length ? `建议：${recommendedNextSteps.join('；')}` : '',
+      ].filter(Boolean).join('\n'),
+      speakerName: state.supervisorAgent || 'default-supervisor',
+      dedupeKey: `workflow-rehearsal-completed-${runId}`,
+      participants: input.participants,
+      agentSessions: input.agentSessions,
+      workspacePath,
+      createdAt: (Date.parse(now) || Date.now()) + 1,
+    }).catch(() => {});
+  }
+
   if (input.frontendSessionId) {
     await updateChatSessionWorkflowBinding(input.frontendSessionId, {
       configFile: input.configFile,
@@ -240,17 +318,25 @@ export async function POST(request: NextRequest) {
       await updateCreationSession(boundCreationSession.id, { bindingValidation });
     }
     const supervisorAgent = config?.workflow?.supervisor?.agent || 'default-supervisor';
-    const workflowChatSessionId = await ensureWorkflowChatSession({
+    const participantNames = extractWorkflowParticipantNames(config, supervisorAgent);
+    const workflowParticipants = createWorkflowParticipants(participantNames, { coordinatorAgent: supervisorAgent });
+    const workflowChatSession = await ensureWorkflowChatSession({
       frontendSessionId: typeof frontendSessionId === 'string' ? frontendSessionId : undefined,
       configFile,
       workflowName: config?.workflow?.name,
       supervisorAgent,
+      participantNames,
+      participants: workflowParticipants,
+      workspacePath: config?.context?.projectRoot || config?.context?.workingDirectory,
       userId: user.id,
     });
+    const workflowChatSessionId = workflowChatSession.sessionId;
 
     if (rehearsal) {
       const result = await startRehearsalRun({
         configFile,
+        workflowSessionId: workflowChatSessionId,
+        participants: workflowParticipants,
         frontendSessionId: workflowChatSessionId,
         creationSessionId: typeof creationSessionId === 'string' ? creationSessionId : undefined,
         userId: user.id,
@@ -262,6 +348,7 @@ export async function POST(request: NextRequest) {
         success: true,
         message: '演练模式已完成',
         frontendSessionId: workflowChatSessionId,
+        sessionWorkbenchState: workflowChatSession.sessionWorkbenchState,
         rehearsal: {
           enabled: true,
           runId: result.runId,
@@ -290,16 +377,16 @@ export async function POST(request: NextRequest) {
     (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
     (manager as any)._initialContexts = initialContexts;
     const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    await appendChatSessionMessage(workflowChatSessionId, {
-      role: 'assistant',
-      content: [
-        '<workflow-event type="run-starting" tags="workflow,run,supervisor">',
-        `工作流开始启动。`,
-        `- 配置文件: ${configFile}`,
-        `- Supervisor: ${supervisorAgent}`,
-        '</workflow-event>',
-      ].join('\n'),
-    }, { dedupeKey: `${Date.now()}-workflow-run-starting` }).catch(() => {});
+    await appendWorkflowAgoraMessage({
+      sessionId: workflowChatSessionId,
+      type: 'run-starting',
+      title: '工作流开始启动',
+      body: [`配置文件：${configFile}`, `协调嘉宾：${supervisorAgent}`].join('\n'),
+      speakerName: supervisorAgent,
+      dedupeKey: `workflow-run-starting-${runId}`,
+      participants: workflowParticipants,
+      workspacePath: config?.context?.projectRoot || config?.context?.workingDirectory,
+    }).catch(() => {});
     (manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId).catch((err: any) => {
       console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
       // Ensure status reflects the failure so frontend can detect it
@@ -315,6 +402,7 @@ export async function POST(request: NextRequest) {
       message: '工作流已启动',
       runId,
       frontendSessionId: workflowChatSessionId,
+      sessionWorkbenchState: workflowChatSession.sessionWorkbenchState,
     });
   } catch (error: any) {
     return NextResponse.json(

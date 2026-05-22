@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import ReactFlow, {
   Background,
@@ -15,6 +15,7 @@ import ReactFlow, {
   type NodeTypes,
   useEdgesState,
   useNodesState,
+  useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
@@ -411,28 +412,50 @@ function buildGraph(
 }
 
 function AgentFormationDiagramInner(props: AgentFormationDiagramProps) {
+  const { fitView } = useReactFlow();
   const graph = useMemo(
     () => buildGraph(props.agents, props.states, props.supervisorAgent, props.currentStep, props.activeSteps, props.status),
     [props.agents, props.states, props.supervisorAgent, props.currentStep, props.activeSteps, props.status]
   );
   const [nodes, setNodes, onNodesChange] = useNodesState(graph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph.edges);
+  const layoutSignatureRef = useRef('');
 
   useEffect(() => {
     setNodes(graph.nodes);
     setEdges(graph.edges);
   }, [graph, setEdges, setNodes]);
 
+  useEffect(() => {
+    const signature = JSON.stringify({
+      agents: props.agents.map((agent) => agent.name),
+      states: props.states.map((state) => `${state.name}:${state.steps?.length || 0}`),
+    });
+    const layoutChanged = layoutSignatureRef.current !== signature;
+    layoutSignatureRef.current = signature;
+
+    const timer = window.setTimeout(() => {
+      fitView({
+        padding: layoutChanged ? 0.08 : 0.12,
+        duration: 240,
+        includeHiddenNodes: false,
+        maxZoom: 1.18,
+      });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [fitView, props.agents, props.states, nodes.length, edges.length]);
+
   if (props.agents.length === 0) {
     return (
-      <div className="flex h-[320px] items-center justify-center rounded-2xl border border-dashed text-sm text-muted-foreground">
+      <div className="flex h-full min-h-[clamp(420px,46vh,620px)] items-center justify-center rounded-2xl border border-dashed text-sm text-muted-foreground">
         当前没有可展示的 Agent 编队
       </div>
     );
   }
 
   return (
-    <div className={`relative w-full overflow-hidden rounded-2xl border border-border/60 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.03),rgba(15,23,42,0.01))] dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_32%),linear-gradient(180deg,rgba(2,6,23,0.88),rgba(15,23,42,0.74))] ${props.className || 'h-[360px]'}`}>
+    <div className={`relative w-full overflow-hidden rounded-2xl border border-border/60 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.03),rgba(15,23,42,0.01))] dark:bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_32%),linear-gradient(180deg,rgba(2,6,23,0.88),rgba(15,23,42,0.74))] ${props.className || 'h-[clamp(420px,46vh,620px)]'}`}>
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:32px_32px]" />
       <motion.div
         className="pointer-events-none absolute left-1/2 top-[88px] h-40 w-40 -translate-x-1/2 rounded-full bg-amber-400/10 blur-3xl"
@@ -449,7 +472,7 @@ function AgentFormationDiagramInner(props: AgentFormationDiagramProps) {
         onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        fitViewOptions={{ padding: 0.08, maxZoom: 1.18 }}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={false}
@@ -459,6 +482,8 @@ function AgentFormationDiagramInner(props: AgentFormationDiagramProps) {
         zoomOnScroll
         zoomOnPinch
         zoomOnDoubleClick
+        minZoom={0.35}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.92 }}
         proOptions={{ hideAttribution: true }}
       >
         <Controls showInteractive={false} />

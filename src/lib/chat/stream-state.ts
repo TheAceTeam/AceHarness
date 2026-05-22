@@ -37,9 +37,23 @@ export function appendEngineStreamContent(chatId: string, chunk: string): void {
 }
 
 export function setEngineStreamSessionId(chatId: string, backendSessionId?: string): void {
-  if (!backendSessionId) return;
   const state = chatsById.get(chatId);
   if (!state) return;
+  if (!backendSessionId) {
+    const previousBackendSessionId = state.backendSessionId;
+    if (previousBackendSessionId) {
+      const mapped = backendToChatId.get(previousBackendSessionId);
+      if (mapped === chatId) backendToChatId.delete(previousBackendSessionId);
+    }
+    if (state.frontendSessionId) {
+      const entry = frontendToBackendSessionId.get(state.frontendSessionId);
+      if (entry?.backendSessionId === previousBackendSessionId) {
+        frontendToBackendSessionId.delete(state.frontendSessionId);
+      }
+    }
+    state.backendSessionId = undefined;
+    return;
+  }
   state.backendSessionId = backendSessionId;
   backendToChatId.set(backendSessionId, chatId);
   if (state.frontendSessionId) {

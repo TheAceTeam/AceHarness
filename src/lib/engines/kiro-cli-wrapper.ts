@@ -10,6 +10,11 @@ import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import {
+  formatAceFileChangesResult,
+  formatAceToolResult,
+  getAceToolTitle,
+} from '@/lib/chat/ace-process-formatters';
 
 export class KiroCliEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -28,81 +33,114 @@ export class KiroCliEngineWrapper extends ACPWrapperBase {
     };
   }
 
-  /**
-   * Kiro-cli returns tool results in { items: [{ Text: "..." }, { Json: {...} }, ...] } format.
-   */
-  protected extractToolOutput(raw: any): string {
-    // rawOutput may be a JSON string — parse it first
-    let data = raw;
-    if (typeof data === 'string') {
-      try { data = JSON.parse(data); } catch { return raw; }
+  protected formatToolResult(output: string, metadata: any): string {
+    const raw = this.parseRawOutput(metadata?.rawOutput);
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) {
+      return super.formatToolResult(output, metadata);
     }
-    if (data && typeof data === 'object' && Array.isArray(data.items)) {
-      const parts = data.items
-        .map((item: any) => {
-          if (typeof item === 'string') return item;
-          if (item.Text) return item.Text;
-          if (item.text) return item.text;
-          if (item.Json) return this.formatJsonItem(item.Json);
-          return '';
-        })
-        .filter(Boolean);
-      if (parts.length > 0) return parts.join('\n');
+
+    const toolName = this.resolveToolName(metadata || {});
+    const title = this.getToolTitle(toolName);
+    const blocks: string[] = [];
+    const textParts: string[] = [];
+
+    for (const item of raw.items) {
+      if (typeof item === 'string') {
+        textParts.push(item);
+        continue;
+      }
+      if (!item || typeof item !== 'object') continue;
+      if (typeof item.Text === 'string') {
+        textParts.push(item.Text);
+        continue;
+      }
+      if (typeof item.text === 'string') {
+        textParts.push(item.text);
+        continue;
+      }
+      if (item.Json) {
+        const block = this.formatJsonItem(item.Json, metadata, toolName);
+        if (block) {
+          blocks.push(block);
+        }
+        continue;
+      }
     }
-    return super.extractToolOutput(data);
+
+    const text = textParts.map((part) => String(part || '').trim()).filter(Boolean).join('\n');
+    if (text) {
+      blocks.push(formatAceToolResult({ toolName, rawOutput: { output: text }, title }));
+    }
+
+    if (blocks.length > 0) return blocks.join('').trimEnd();
+    return super.formatToolResult(output, metadata);
   }
 
-  /**
-   * Format a Json item from kiro tool output into readable text.
-   */
-  private formatJsonItem(json: any): string {
-    if (!json || typeof json !== 'object') return JSON.stringify(json);
+  private parseRawOutput(raw: any): any {
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return raw; }
+    }
+    return raw;
+  }
 
-    // Task list: { tasks: [...], description: "..." }
+  private formatJsonItem(json: any, metadata: any, fallbackToolName: string): string {
+    if (!json || typeof json !== 'object') return '';
+
     if (Array.isArray(json.tasks)) {
-      const header = json.description ? `📋 ${json.description}` : '📋 任务列表';
-      const items = json.tasks.map((t: any) => {
-        const check = t.completed ? '✅' : '⬜';
-        return `${check} ${t.id || '-'}. ${t.task_description || t.description || ''}`;
-      }).join('\n');
-      return `${header}\n${items}`;
+      return formatAceToolResult({
+        toolName: 'todo',
+        rawOutput: {
+          todos: json.tasks.map((task: any) => ({
+            content: String(task?.task_description || task?.description || task?.text || task?.id || ''),
+            status: task?.completed ? 'completed' : 'pending',
+          })),
+        },
+        title: getAceToolTitle('todo'),
+      });
     }
 
-    // Command result: { exit_status, stdout, stderr }
     if ('exit_status' in json || 'stdout' in json || 'stderr' in json) {
-      const parts: string[] = [];
-      if (json.stdout) parts.push(json.stdout.trim());
-      if (json.stderr) parts.push(`⚠️ ${json.stderr.trim()}`);
-      if (json.exit_status && json.exit_status !== 'exit status: 0') {
-        parts.push(`(${json.exit_status})`);
-      }
-      return parts.join('\n') || '(无输出)';
+      return formatAceToolResult({
+        toolName: fallbackToolName,
+        rawOutput: json,
+        title: this.getToolTitle(fallbackToolName),
+      });
     }
 
-    // File content: { content, path }
-    if ('content' in json && typeof json.content === 'string') {
-      const label = json.path ? `📄 ${json.path}` : '';
-      return label ? `${label}\n${json.content}` : json.content;
+    if (typeof json.content === 'string') {
+      return formatAceToolResult({
+        toolName: 'read',
+        rawOutput: { content: json.content, filePath: json.path || '' },
+        title: getAceToolTitle('read'),
+      });
     }
 
-    // Search results: { numMatches, numFiles, results: [{file, count}] }
     if ('numMatches' in json && Array.isArray(json.results)) {
-      const header = `🔍 找到 ${json.numMatches} 个匹配，${json.numFiles} 个文件${json.truncated ? ' (已截断)' : ''}`;
-      const top = json.results.slice(0, 15).map((r: any) => {
-        const shortPath = r.file?.replace(/^.*\/src\//, 'src/') || r.file;
-        return `  ${shortPath} (${r.count})`;
-      }).join('\n');
-      const more = json.results.length > 15 ? `\n  ... 及其他 ${json.results.length - 15} 个文件` : '';
-      return `${header}\n${top}${more}`;
+      return formatAceToolResult({
+        toolName: 'grep',
+        rawOutput: {
+          totalMatches: json.numMatches,
+          totalFiles: json.numFiles,
+          results: json.results,
+          truncated: json.truncated,
+        },
+        title: getAceToolTitle('grep'),
+      });
     }
 
-    // Modified files list
     if (Array.isArray(json.modified_files) && json.modified_files.length > 0) {
-      return `📝 修改的文件:\n${json.modified_files.map((f: string) => `  - ${f}`).join('\n')}`;
+      return formatAceFileChangesResult({
+        changes: json.modified_files.map((filePath: string) => ({ filePath, kind: 'update' })),
+        fallbackToolName: 'edit',
+        fallbackTitle: getAceToolTitle('edit'),
+      });
     }
 
-    // Fallback: compact JSON
-    return JSON.stringify(json, null, 2);
+    return formatAceToolResult({
+      toolName: fallbackToolName,
+      rawOutput: json,
+      title: this.getToolTitle(fallbackToolName),
+    });
   }
 
   async isAvailable(): Promise<boolean> {

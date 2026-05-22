@@ -1,0 +1,29 @@
+<svg width="500" height="500" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="backGrad" x1="52" y1="32" x2="210" y2="404" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D53AF8"/>
+      <stop offset="1" stop-color="#7FB8F4"/>
+    </linearGradient>
+    <linearGradient id="midGrad" x1="100" y1="77" x2="345" y2="411" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8A63F0"/>
+      <stop offset="1" stop-color="#67B4F2"/>
+    </linearGradient>
+    <linearGradient id="frontGrad" x1="171" y1="127" x2="428" y2="473" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#75A8EE"/>
+      <stop offset="0.58" stop-color="#72B7F0"/>
+      <stop offset="1" stop-color="#A1ECE0"/>
+    </linearGradient>
+    <radialGradient id="frontGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(220 438) rotate(-21) scale(163 113)">
+      <stop offset="0" stop-color="#9DF1DE"/>
+      <stop offset="1" stop-color="#9DF1DE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="20" y="28" width="332" height="372" rx="84" fill="url(#backGrad)"/>
+  <rect x="84" y="82" width="324" height="366" rx="84" fill="url(#midGrad)" fill-opacity="0.88"/>
+
+  <path d="M176 172C207 139 250 123 309 123H368C435 123 480 170 480 240V281C480 365 425 440 344 464L208 500C170 500 146 476 146 438V239C146 209 156 187 176 172Z" fill="url(#frontGrad)"/>
+  <path d="M176 172C207 139 250 123 309 123H368C435 123 480 170 480 240V281C480 365 425 440 344 464L208 500C170 500 146 476 146 438V239C146 209 156 187 176 172Z" fill="url(#frontGlow)"/>
+
+  <path d="M331.393 177.088C322.424 178.588 309.785 183.044 299.853 188.206C271.318 203.037 245.54 231.78 232.573 263.222C223.768 284.574 221.499 301.03 222.29 337.812C222.912 366.738 223.995 373.091 230.662 386.911C234.356 394.57 236.626 397.739 242.851 403.926C255.688 416.686 269.673 422.267 289 422.341C307.541 422.411 324.434 417.19 344.5 405.185C366.829 391.826 392.077 366.072 400.3 348.265C402.443 343.624 402.508 342.371 402.808 300.164L403.117 256.828L400.808 257.554C378.16 264.671 342.524 276.585 339.348 278.101C337.064 279.192 333.095 282.329 330.528 285.074C314.098 302.639 317.888 326.811 336.998 326.338C340.024 326.263 345.158 325.256 348.407 324.101C351.655 322.945 354.693 322 355.157 322C355.62 322 356 326.7 356 332.445V342.889L350.822 347.986C340.642 358.007 323.261 367.687 311.217 370.044C290.88 374.023 273.847 362.477 270.014 342.114C268.339 333.215 268.731 293.228 270.581 284.208C274.624 264.504 287.727 246.257 305.558 235.501C323.558 224.642 344.221 225.647 355.311 237.922C357.337 240.165 359.232 242 359.522 242C359.812 242 369.238 233.826 380.468 223.835L400.887 205.669L397.693 201.203C384.26 182.418 357.569 172.709 331.393 177.088Z" fill="#F8F8F8"/>
+</svg>

@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { SchemaDisplay, type SchemaDisplayField, type SchemaDisplaySchema } from '@/components/ai-elements/schema-display';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -42,6 +43,8 @@ interface DebugResult {
   error?: string;
   loading?: boolean;
 }
+
+type ParsedSchemaField = SchemaDisplayField;
 
 const METHOD_COLORS: Record<string, string> = {
   GET: 'bg-blue-500/15 text-blue-500 border-blue-500/30',
@@ -281,7 +284,6 @@ const API_DATA: ApiCategory[] = [
       { method: 'GET', path: '/api/channels/bindings?integrationId=id', description: '列出渠道会话绑定', response: '{ bindings }' },
       { method: 'POST', path: '/api/channels/bindings', description: '创建或更新渠道 binding', requestBody: '{ integrationId, bindingType, externalConversationId, configFile?/runId?/agentName? }', response: '{ binding }' },
       { method: 'POST', path: '/api/channels/inbound/:integrationId', description: '外部平台 webhook 入口', requestBody: '{ secret, message: { conversationId, userId, text } }', response: '{ ok, replies, replyMessages, binding? }' },
-      { method: 'GET', path: '/api/channels/roundtables/:id', description: '读取某次圆桌运行记录', response: '{ roundtable }' },
     ],
   },
   {
@@ -432,6 +434,121 @@ function inferTypedValue(typeExpr: string, key: string): unknown {
   return sampleValueForKey(key);
 }
 
+function splitTopLevelSchemaParts(input: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    if (quote) {
+      current += char;
+      if (char === quote && input[i - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '{' || char === '[' || char === '(') {
+      depth += 1;
+      current += char;
+      continue;
+    }
+    if (char === '}' || char === ']' || char === ')') {
+      depth = Math.max(0, depth - 1);
+      current += char;
+      continue;
+    }
+    if (char === ',' && depth === 0) {
+      if (current.trim()) parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function splitSchemaKeyAndType(part: string): { key: string; typeExpr: string } | null {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < part.length; i += 1) {
+    const char = part[i];
+    if (quote) {
+      if (char === quote && part[i - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '{' || char === '[' || char === '(') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}' || char === ']' || char === ')') {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (char === ':' && depth === 0) {
+      return {
+        key: part.slice(0, i).trim(),
+        typeExpr: part.slice(i + 1).trim(),
+      };
+    }
+  }
+  return null;
+}
+
+function parseSchemaFields(schema: string): ParsedSchemaField[] {
+  const trimmed = schema.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return [];
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) return [];
+
+  return splitTopLevelSchemaParts(inner).reduce<ParsedSchemaField[]>((fields, part) => {
+      if (!part || part === '...' || part.startsWith('[')) return fields;
+      const entry = splitSchemaKeyAndType(part);
+      if (!entry) return fields;
+      const rawKey = entry.key.trim();
+      const required = !rawKey.endsWith('?');
+      const name = rawKey.replace(/\?$/, '').trim();
+      if (!name) return fields;
+      const typeExpr = entry.typeExpr.trim();
+      const normalizedType = typeExpr || 'unknown';
+      const objectChildren = normalizedType.startsWith('{') && normalizedType.endsWith('}')
+        ? parseSchemaFields(normalizedType)
+        : undefined;
+
+      fields.push({
+        name,
+        type: objectChildren?.length ? 'object' : normalizedType,
+        required,
+        children: objectChildren?.length ? objectChildren : undefined,
+      } satisfies ParsedSchemaField);
+      return fields;
+    }, []);
+}
+
+function schemaToDisplayModel(schema?: string): SchemaDisplaySchema | null {
+  if (!schema) return null;
+  const trimmed = schema.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return { type: 'scalar', raw: trimmed };
+  }
+  const fields = parseSchemaFields(trimmed);
+  if (!fields.length) {
+    return { type: 'scalar', raw: trimmed };
+  }
+  return { type: 'object', fields };
+}
+
 function schemaToExample(schema?: string): string {
   if (!schema) return '';
   const trimmed = schema.trim();
@@ -441,15 +558,15 @@ function schemaToExample(schema?: string): string {
   if (!inner) return '{}';
 
   const result: Record<string, unknown> = {};
-  for (const rawPart of inner.split(',')) {
+  for (const rawPart of splitTopLevelSchemaParts(inner)) {
     const part = rawPart.trim();
     if (!part || part === '...') continue;
     if (part.startsWith('[')) continue;
 
-    const colonIdx = part.indexOf(':');
-    if (colonIdx >= 0) {
-      const rawKey = part.slice(0, colonIdx).trim().replace(/\?$/, '');
-      const typeExpr = part.slice(colonIdx + 1).trim();
+    const entry = splitSchemaKeyAndType(part);
+    if (entry) {
+      const rawKey = entry.key.trim().replace(/\?$/, '');
+      const typeExpr = entry.typeExpr.trim();
       if (!rawKey) continue;
       result[rawKey] = inferTypedValue(typeExpr, rawKey);
       continue;
@@ -763,6 +880,8 @@ export default function ApiDocsPage() {
               const debugResult = debugResults[key];
               const requestExample = normalizeCodeBlock(endpoint.exampleBody || schemaToExample(endpoint.requestBody));
               const responseExample = normalizeCodeBlock(endpoint.exampleResponse || schemaToExample(endpoint.response));
+              const requestSchema = schemaToDisplayModel(endpoint.requestBody);
+              const responseSchema = schemaToDisplayModel(endpoint.response);
               const examplePath = materializeExamplePath(endpoint.path);
 
               return (
@@ -821,18 +940,18 @@ export default function ApiDocsPage() {
                             <div className="text-xs font-medium text-muted-foreground">Path</div>
                             <code className="block break-all rounded bg-muted/50 px-3 py-2 text-xs">{endpoint.path}</code>
                           </div>
-                          {endpoint.requestBody && (
+                          {endpoint.requestBody && requestSchema ? (
                             <div className="grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)]">
-                              <div className="text-xs font-medium text-muted-foreground">Request</div>
-                              <code className="block rounded bg-muted/50 px-3 py-2 text-xs">{endpoint.requestBody}</code>
+                              <div className="pt-2 text-xs font-medium text-muted-foreground">Request</div>
+                              <SchemaDisplay title="Request Schema" schema={requestSchema} />
                             </div>
-                          )}
-                          {endpoint.response && (
+                          ) : null}
+                          {endpoint.response && responseSchema ? (
                             <div className="grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)]">
-                              <div className="text-xs font-medium text-muted-foreground">Response</div>
-                              <code className="block rounded bg-muted/50 px-3 py-2 text-xs">{endpoint.response}</code>
+                              <div className="pt-2 text-xs font-medium text-muted-foreground">Response</div>
+                              <SchemaDisplay title="Response Schema" schema={responseSchema} />
                             </div>
-                          )}
+                          ) : null}
                         </div>
                       </section>
 

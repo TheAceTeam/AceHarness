@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cangjieGrammar } from "@/lib/cangjie/shiki-cangjie";
 import { cn } from "@/lib/core/utils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react";
@@ -25,6 +26,7 @@ import type {
   BundledLanguage,
   BundledTheme,
   HighlighterGeneric,
+  LanguageRegistration,
   ThemedToken,
 } from "shiki";
 import { createHighlighter } from "shiki";
@@ -110,7 +112,7 @@ const LineSpan = ({
 // Types
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
-  language: BundledLanguage;
+  language: string;
   showLineNumbers?: boolean;
 };
 
@@ -124,6 +126,8 @@ interface CodeBlockContextType {
   code: string;
 }
 
+type SupportedCodeLanguage = BundledLanguage | "cangjie" | "text";
+
 // Context
 const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
@@ -132,7 +136,7 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
 // Highlighter cache (singleton per language)
 const highlighterCache = new Map<
   string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
+  Promise<HighlighterGeneric<SupportedCodeLanguage, BundledTheme>>
 >();
 
 // Token cache
@@ -141,7 +145,7 @@ const tokensCache = new Map<string, TokenizedCode>();
 // Subscribers for async token updates
 const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
 
-const getTokensCacheKey = (code: string, language: BundledLanguage) => {
+const getTokensCacheKey = (code: string, language: SupportedCodeLanguage) => {
   const start = code.slice(0, 100);
   const end = code.length > 100 ? code.slice(-100) : "";
   return `${language}:${code.length}:${start}:${end}`;
@@ -170,18 +174,21 @@ const KNOWN_BUNDLED_LANGUAGES = new Set([
   "csv", "log",
 ]);
 
-const normalizeLang = (language: string): BundledLanguage => {
+const normalizeLang = (language: string): SupportedCodeLanguage => {
   const lower = language.toLowerCase().trim();
+  if (lower === "cj" || lower === "cangjie") {
+    return "cangjie";
+  }
   if (KNOWN_BUNDLED_LANGUAGES.has(lower)) {
     return lower as BundledLanguage;
   }
-  // Fallback to txt for unknown languages (e.g. "action", "output", etc.)
-  return "txt" as BundledLanguage;
+  // Fallback to text for unknown languages (e.g. "action", "output", etc.)
+  return "text";
 };
 
 const getHighlighter = (
-  language: BundledLanguage
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
+  language: SupportedCodeLanguage
+): Promise<HighlighterGeneric<SupportedCodeLanguage, BundledTheme>> => {
   const safeLang = normalizeLang(language);
   const cached = highlighterCache.get(safeLang);
   if (cached) {
@@ -189,9 +196,11 @@ const getHighlighter = (
   }
 
   const highlighterPromise = createHighlighter({
-    langs: [safeLang],
+    langs: safeLang === "cangjie"
+      ? [cangjieGrammar as LanguageRegistration]
+      : [safeLang],
     themes: ["github-light", "github-dark"],
-  });
+  }) as Promise<HighlighterGeneric<SupportedCodeLanguage, BundledTheme>>;
 
   highlighterCache.set(safeLang, highlighterPromise);
   return highlighterPromise;
@@ -216,7 +225,7 @@ const createRawTokens = (code: string): TokenizedCode => ({
 // Synchronous highlight with callback for async results
 export const highlightCode = (
   code: string,
-  language: BundledLanguage,
+  language: SupportedCodeLanguage,
   // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
   callback?: (result: TokenizedCode) => void
 ): TokenizedCode | null => {
@@ -241,7 +250,11 @@ export const highlightCode = (
     // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
     .then((highlighter) => {
       const availableLangs = highlighter.getLoadedLanguages();
-      const langToUse = availableLangs.includes(language) ? language : "text";
+      const langToUse = availableLangs.includes(language as BundledLanguage)
+        ? language
+        : (language === "cangjie" && availableLangs.includes("cangjie" as BundledLanguage))
+          ? "cangjie"
+          : "text";
 
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
@@ -410,7 +423,7 @@ export const CodeBlockContent = ({
   showLineNumbers = false,
 }: {
   code: string;
-  language: BundledLanguage;
+  language: string;
   showLineNumbers?: boolean;
 }) => {
   // Normalize language early — unknown langs (e.g. "action") fall back to "text"
@@ -427,19 +440,10 @@ export const CodeBlockContent = ({
 
   // Async highlighting result (populated after shiki loads)
   const [asyncTokens, setAsyncTokens] = useState<TokenizedCode | null>(null);
-  const asyncKeyRef = useRef({ code, language });
-
-  // Invalidate stale async tokens synchronously during render
-  if (
-    asyncKeyRef.current.code !== code ||
-    asyncKeyRef.current.language !== language
-  ) {
-    asyncKeyRef.current = { code, language };
-    setAsyncTokens(null);
-  }
 
   useEffect(() => {
     let cancelled = false;
+    setAsyncTokens(null);
 
     highlightCode(code, language, (result) => {
       if (!cancelled) {

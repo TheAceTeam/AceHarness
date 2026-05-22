@@ -1,16 +1,16 @@
 import { definePlugin } from '@/lib/sidebar-plugins';
 
 /**
- * 工作流 Supervisor 插件
+ * 工作流协作插件
  *
- * 提供多 Agent 圆桌协作、@mention 驱动对话、工作流运行监控。
+ * 提供工作流运行监控、人工问题处理和协作视图。
  */
 export default definePlugin({
   id: 'supervisor',
-  name: '工作流 Supervisor',
+  name: '工作流协作',
   version: '1.0.0',
   enabled: true,
-  capabilities: ['agent-calling', 'result-extraction', 'roundtable', 'persistence', 'streaming-display', 'animations'],
+  capabilities: ['agent-calling', 'result-extraction', 'persistence', 'streaming-display', 'animations'],
 
   tab: {
     id: 'commander',
@@ -29,7 +29,7 @@ export default definePlugin({
   },
 
   intents: [
-    { id: 'supervisor-chat', targetTab: 'commander', initialStage: 'running', description: '进入 Supervisor 多 Agent 协作模式' },
+    { id: 'supervisor-chat', targetTab: 'commander', initialStage: 'running', description: '进入工作流协作模式' },
     { id: 'workflow-run', targetTab: 'commander', initialStage: 'running', description: '启动工作流运行' },
   ],
 });

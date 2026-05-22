@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1040" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness 核心亮点总览</title>
-  <desc id="desc">六张亮点卡片展示 ACEHarness 的对话创建、Spec Coding、状态机、Supervisor、对抗式评审和工程可观测能力。</desc>
+  <title id="title">ACEHarness 核心能力总览</title>
+  <desc id="desc">六张能力卡片展示 ACEHarness 的需求计划建模、工作流编排、多 Agent 协作、知识沉淀、能力扩展和外部渠道接入。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#07111F"/>
@@ -15,9 +15,9 @@
       <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.24"/>
       <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="glowOrange" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FB923C" stop-opacity="0.18"/>
-      <stop offset="100%" stop-color="#FB923C" stop-opacity="0"/>
+    <radialGradient id="glowGreen" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#22C55E" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#22C55E" stop-opacity="0"/>
     </radialGradient>
     <filter id="shadow" x="-12%" y="-16%" width="124%" height="140%">
       <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.38"/>
@@ -33,13 +33,13 @@
 
   <rect width="1600" height="1040" fill="url(#bg)"/>
   <circle cx="230" cy="150" r="270" fill="url(#glowBlue)"/>
-  <circle cx="1360" cy="890" r="310" fill="url(#glowOrange)"/>
+  <circle cx="1360" cy="890" r="310" fill="url(#glowGreen)"/>
   <path d="M0 150C238 86 462 240 714 220C986 198 1194 92 1600 168V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
   <path d="M0 858C292 756 560 920 824 884C1134 842 1340 716 1600 780V1040H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
   <g class="font">
-    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">ACEHarness 核心亮点</text>
-    <text x="80" y="172" fill="#CBD5E1" font-size="20">从需求澄清到工作台运行，再到审查、恢复、复盘和团队知识沉淀。</text>
+    <text x="80" y="126" fill="#F8FAFC" font-size="52" font-weight="800">ACEHarness 核心能力</text>
+    <text x="80" y="172" fill="#CBD5E1" font-size="20">围绕规划、执行、协作、沉淀、扩展和接入，组织真实工程任务的 AI 协作闭环。</text>
   </g>
 
   <g class="font" filter="url(#shadow)">
@@ -47,90 +47,90 @@
     <rect x="80" y="250" width="7" height="266" rx="4" fill="#38BDF8"/>
     <circle cx="128" cy="300" r="19" fill="#0EA5E9" fill-opacity="0.20" stroke="#7DD3FC"/>
     <text x="128" y="307" text-anchor="middle" fill="#BAE6FD" font-size="17" font-weight="700">01</text>
-    <text x="160" y="294" fill="#7DD3FC" class="label">CREATE WITH CHAT OR FORM</text>
-    <text x="160" y="334" class="title">对话式与手动创建</text>
+    <text x="160" y="294" fill="#7DD3FC" class="label">REQUIREMENTS AND PLAN</text>
+    <text x="160" y="334" class="title">需求与计划建模</text>
     <text x="128" y="378" class="muted">
-      <tspan x="128" dy="0">首页对话可把自然语言需求收敛成工作流草案。</tspan>
-      <tspan x="128" dy="28">手动创建适合明确模式、目录、引擎和运行参数。</tspan>
-      <tspan x="128" dy="28">进入控制台后可通过 Onboarding 查看完整引导。</tspan>
+      <tspan x="128" dy="0">Spec Driven Development 从澄清需求开始。</tspan>
+      <tspan x="128" dy="28">生成 requirements / design / tasks 正式制品。</tspan>
+      <tspan x="128" dy="28">再绑定到工作流配置、步骤和任务执行。</tspan>
     </text>
-    <rect x="128" y="460" width="314" height="34" rx="17" class="chip"/>
-    <text x="285" y="482" text-anchor="middle" fill="#BAE6FD" font-size="15" font-weight="700">会话动作确认 / 工作流草案 / 模板复用</text>
+    <rect x="128" y="460" width="322" height="34" rx="17" class="chip"/>
+    <text x="289" y="482" text-anchor="middle" fill="#BAE6FD" font-size="15" font-weight="700">可审查计划 / 任务绑定 / 持续修订</text>
 
     <rect x="572" y="250" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
-    <rect x="572" y="250" width="7" height="266" rx="4" fill="#F59E0B"/>
-    <circle cx="620" cy="300" r="19" fill="#F59E0B" fill-opacity="0.20" stroke="#FCD34D"/>
-    <text x="620" y="307" text-anchor="middle" fill="#FEF3C7" font-size="17" font-weight="700">02</text>
-    <text x="652" y="294" fill="#FCD34D" class="label">SPEC CODING LOOP</text>
-    <text x="652" y="334" class="title">Spec 与步骤绑定</text>
+    <rect x="572" y="250" width="7" height="266" rx="4" fill="#22C55E"/>
+    <circle cx="620" cy="300" r="19" fill="#22C55E" fill-opacity="0.20" stroke="#86EFAC"/>
+    <text x="620" y="307" text-anchor="middle" fill="#DCFCE7" font-size="17" font-weight="700">02</text>
+    <text x="652" y="294" fill="#86EFAC" class="label">WORKFLOW CONTROL</text>
+    <text x="652" y="334" class="title">工作流编排与执行控制</text>
     <text x="620" y="378" class="muted">
-      <tspan x="620" dy="0">requirements / design / tasks 先形成计划制品。</tspan>
-      <tspan x="620" dy="28">创建工作流时建立步骤与任务的绑定关系。</tspan>
-      <tspan x="620" dy="28">任务状态由系统维护，不依赖 Agent 文本勾选。</tspan>
+      <tspan x="620" dy="0">状态机用条件和优先级表达复杂转移。</tspan>
+      <tspan x="620" dy="28">Supervisor 路由缺失上下文，对抗式迭代审查质量。</tspan>
+      <tspan x="620" dy="28">并发步骤、Preflight、人工检查点和 Git 断点保障运行。</tspan>
     </text>
-    <rect x="620" y="460" width="306" height="34" rx="17" class="chip"/>
-    <text x="773" y="482" text-anchor="middle" fill="#FEF3C7" font-size="15" font-weight="700">运行态 Spec / 持久化同步 / 修订校验</text>
+    <rect x="620" y="460" width="342" height="34" rx="17" class="chip"/>
+    <text x="791" y="482" text-anchor="middle" fill="#DCFCE7" font-size="15" font-weight="700">高级转移 / Supervisor / 对抗审查 / Git 断点</text>
 
     <rect x="1064" y="250" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
-    <rect x="1064" y="250" width="7" height="266" rx="4" fill="#22C55E"/>
-    <circle cx="1112" cy="300" r="19" fill="#22C55E" fill-opacity="0.20" stroke="#86EFAC"/>
-    <text x="1112" y="307" text-anchor="middle" fill="#DCFCE7" font-size="17" font-weight="700">03</text>
-    <text x="1144" y="294" fill="#86EFAC" class="label">STATE MACHINE RUNTIME</text>
-    <text x="1144" y="334" class="title">状态机驱动执行</text>
+    <rect x="1064" y="250" width="7" height="266" rx="4" fill="#F59E0B"/>
+    <circle cx="1112" cy="300" r="19" fill="#F59E0B" fill-opacity="0.20" stroke="#FCD34D"/>
+    <text x="1112" y="307" text-anchor="middle" fill="#FEF3C7" font-size="17" font-weight="700">03</text>
+    <text x="1144" y="294" fill="#FCD34D" class="label">MULTI-AGENT AGORA</text>
+    <text x="1144" y="334" class="title">多 Agent 协作空间</text>
     <text x="1112" y="378" class="muted">
-      <tspan x="1112" dy="0">每个状态可根据结构化 verdict 继续或回退。</tspan>
-      <tspan x="1112" dy="28">人工检查点支持确认、反馈注入和强制跳转。</tspan>
-      <tspan x="1112" dy="28">失败或服务重启后可从运行记录恢复。</tspan>
+      <tspan x="1112" dy="0">工作流 Agent 议场承载执行讨论和复盘。</tspan>
+      <tspan x="1112" dy="28">话题模式议场用于方案比较和日常协作。</tspan>
+      <tspan x="1112" dy="28">多位 AI 嘉宾在同一上下文里持续协作。</tspan>
     </text>
-    <rect x="1112" y="460" width="292" height="34" rx="17" class="chip"/>
-    <text x="1258" y="482" text-anchor="middle" fill="#DCFCE7" font-size="15" font-weight="700">条件流转 / 检查点 / 恢复运行</text>
+    <rect x="1112" y="460" width="314" height="34" rx="17" class="chip"/>
+    <text x="1269" y="482" text-anchor="middle" fill="#FEF3C7" font-size="15" font-weight="700">工作流议场 / 话题议场 / 群聊上下文</text>
 
     <rect x="80" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="80" y="558" width="7" height="266" rx="4" fill="#A78BFA"/>
     <circle cx="128" cy="608" r="19" fill="#8B5CF6" fill-opacity="0.20" stroke="#C4B5FD"/>
     <text x="128" y="615" text-anchor="middle" fill="#EDE9FE" font-size="17" font-weight="700">04</text>
-    <text x="160" y="602" fill="#C4B5FD" class="label">SUPERVISOR ROUTING</text>
-    <text x="160" y="642" class="title">Supervisor 智能路由</text>
+    <text x="160" y="602" fill="#C4B5FD" class="label">MEMORY AND NOTEBOOK</text>
+    <text x="160" y="642" class="title">知识沉淀与长期上下文</text>
     <text x="128" y="686" class="muted">
-      <tspan x="128" dy="0">Agent 只声明缺什么信息，不需要知道团队名单。</tspan>
-      <tspan x="128" dy="28">Supervisor 通过关键词、轻量模型和用户兜底路由。</tspan>
-      <tspan x="128" dy="28">Plan Loop 让执行前先补齐关键上下文。</tspan>
+      <tspan x="128" dy="0">角色、项目、工作流、会话形成多层永久记忆。</tspan>
+      <tspan x="128" dy="28">后续运行按上下文召回历史经验。</tspan>
+      <tspan x="128" dy="28">Cangjie Notebook 沉淀文档、产物和复盘。</tspan>
     </text>
-    <rect x="128" y="768" width="306" height="34" rx="17" class="chip"/>
-    <text x="281" y="790" text-anchor="middle" fill="#EDE9FE" font-size="15" font-weight="700">NEED_INFO / 路由回放 / 低成本协作</text>
+    <rect x="128" y="768" width="318" height="34" rx="17" class="chip"/>
+    <text x="287" y="790" text-anchor="middle" fill="#EDE9FE" font-size="15" font-weight="700">永久记忆 / 协同编辑 / 快照分享</text>
 
     <rect x="572" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="572" y="558" width="7" height="266" rx="4" fill="#F43F5E"/>
     <circle cx="620" cy="608" r="19" fill="#F43F5E" fill-opacity="0.20" stroke="#FDA4AF"/>
     <text x="620" y="615" text-anchor="middle" fill="#FFE4E6" font-size="17" font-weight="700">05</text>
-    <text x="652" y="602" fill="#FDA4AF" class="label">ADVERSARIAL REVIEW</text>
-    <text x="652" y="642" class="title">红蓝对抗式评审</text>
+    <text x="652" y="602" fill="#FDA4AF" class="label">EXTENSION AND GOVERNANCE</text>
+    <text x="652" y="642" class="title">能力扩展与模型治理</text>
     <text x="620" y="686" class="muted">
-      <tspan x="620" dy="0">Defender 红队负责方案、实现和证据补齐。</tspan>
-      <tspan x="620" dy="28">Attacker 蓝队主动攻击方案、审查质量和边界。</tspan>
-      <tspan x="620" dy="28">Judge 输出结构化判决，驱动继续迭代或通过。</tspan>
+      <tspan x="620" dy="0">Skill 市场安装领域能力包和专用流程。</tspan>
+      <tspan x="620" dy="28">支持导入、导出、同步和运行时注入。</tspan>
+      <tspan x="620" dy="28">诊断台评估模型、引擎和 driver 链路。</tspan>
     </text>
-    <rect x="620" y="768" width="300" height="34" rx="17" class="chip"/>
-    <text x="770" y="790" text-anchor="middle" fill="#FFE4E6" font-size="15" font-weight="700">Defender / Attacker / Judge</text>
+    <rect x="620" y="768" width="322" height="34" rx="17" class="chip"/>
+    <text x="781" y="790" text-anchor="middle" fill="#FFE4E6" font-size="15" font-weight="700">Skill 市场 / 模型 probe / 链路诊断</text>
 
     <rect x="1064" y="558" width="456" height="266" rx="26" fill="url(#panel)" stroke="#334155"/>
     <rect x="1064" y="558" width="7" height="266" rx="4" fill="#14B8A6"/>
     <circle cx="1112" cy="608" r="19" fill="#14B8A6" fill-opacity="0.20" stroke="#5EEAD4"/>
     <text x="1112" y="615" text-anchor="middle" fill="#CCFBF1" font-size="17" font-weight="700">06</text>
-    <text x="1144" y="602" fill="#5EEAD4" class="label">OBSERVABILITY AND MEMORY</text>
-    <text x="1144" y="642" class="title">可观测与知识沉淀</text>
+    <text x="1144" y="602" fill="#5EEAD4" class="label">EXTERNAL CHANNELS</text>
+    <text x="1144" y="642" class="title">外部渠道接入</text>
     <text x="1112" y="686" class="muted">
-      <tspan x="1112" dy="0">工作台展示流式输出、步骤结果、状态图和日志。</tspan>
-      <tspan x="1112" dy="28">Dashboard 统计运行趋势、Token 成本和 Prompt 质量。</tspan>
-      <tspan x="1112" dy="28">Workspace、Notebook、Skills 承接产物与团队经验。</tspan>
+      <tspan x="1112" dy="0">首页对话可绑定微信 ClawBot 会话。</tspan>
+      <tspan x="1112" dy="28">外部消息进入同一个 ACEHarness 上下文。</tspan>
+      <tspan x="1112" dy="28">工作流人工检查点可通过 WeChat 和邮件触达。</tspan>
     </text>
-    <rect x="1112" y="768" width="330" height="34" rx="17" class="chip"/>
-    <text x="1277" y="790" text-anchor="middle" fill="#CCFBF1" font-size="15" font-weight="700">运行历史 / 成本追踪 / 资产复用</text>
+    <rect x="1112" y="768" width="318" height="34" rx="17" class="chip"/>
+    <text x="1271" y="790" text-anchor="middle" fill="#CCFBF1" font-size="15" font-weight="700">ClawBot / WeChat / 邮件通知</text>
   </g>
 
   <g class="font">
     <rect x="80" y="880" width="1440" height="74" rx="24" fill="#0B1220" fill-opacity="0.86" stroke="#334155"/>
     <text x="122" y="925" fill="#F8FAFC" font-size="21" font-weight="700">定位</text>
-    <text x="188" y="925" fill="#CBD5E1" font-size="18">ACEHarness 面向真实工程任务，把创建、计划、执行、审查、恢复和复盘组织成可追踪的本地协作闭环。</text>
+    <text x="188" y="925" fill="#CBD5E1" font-size="18">ACEHarness 将 AI 工程任务从一次性对话升级为可规划、可协作、可治理、可沉淀的本地工作系统。</text>
   </g>
 </svg>

@@ -38,10 +38,11 @@ interface ActionCardProps {
   onReject: () => void;
   onUndo: () => void;
   onRetry: () => void;
+  onReloadResult?: () => void;
   onAction?: (prompt: string) => void;
 }
 
-export default function ActionCard({ action, onConfirm, onReject, onUndo, onRetry, onAction }: ActionCardProps) {
+export default function ActionCard({ action, onConfirm, onReject, onUndo, onRetry, onReloadResult, onAction }: ActionCardProps) {
   const router = useRouter();
   const risk = RISK_MAP[action.action.type];
 
@@ -100,7 +101,7 @@ export default function ActionCard({ action, onConfirm, onReject, onUndo, onRetr
       {/* Result */}
       {action.status === 'success' && action.result && (
         <div className="pl-6">
-          <ResultRenderer type={action.action.type} result={action.result} onAction={onAction} />
+          <ResultRenderer type={action.action.type} result={action.result} onAction={onAction} onReloadResult={onReloadResult} />
         </div>
       )}
 

@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Globe } from 'lucide-react';
 import { ModelOption } from '@/lib/core/models';
-import { SingleCombobox, type ComboboxOption } from '@/components/ui/combobox';
+import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { useToast } from '@/components/ui/toast';
 
 interface ModelSelectProps {
@@ -66,9 +66,9 @@ export function ModelSelect({ value, onChange, className = '', engine, allowGlob
     })
     : allModels;
 
-  const options: ComboboxOption[] = useMemo(
+  const options: AiModelSelectorOption[] = useMemo(
     () => {
-      const items: ComboboxOption[] = [];
+      const items: AiModelSelectorOption[] = [];
       if (allowGlobal) {
         items.push({
           value: '__global__',
@@ -76,7 +76,12 @@ export function ModelSelect({ value, onChange, className = '', engine, allowGlob
           icon: <Globe className="h-4 w-4 shrink-0 text-muted-foreground" />,
         });
       }
-      items.push(...models.map(m => ({ value: m.value, label: `${m.label} (${m.costMultiplier}x)` })));
+      items.push(...models.map(m => ({
+        value: m.value,
+        label: m.label,
+        description: `${m.costMultiplier}x`,
+        keywords: [m.value],
+      })));
       return items;
     },
     [allowGlobal, globalDefaultModel, models],
@@ -96,13 +101,14 @@ export function ModelSelect({ value, onChange, className = '', engine, allowGlob
   };
 
   return (
-    <SingleCombobox
+    <AiModelSelectorField
       value={value || (allowGlobal ? '__global__' : '')}
       onValueChange={handleChange}
       options={options}
       placeholder="选择模型"
+      searchPlaceholder="搜索模型..."
       disabled={loading}
-      triggerClassName={className}
+      className={className}
     />
   );
 }

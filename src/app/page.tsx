@@ -7,17 +7,24 @@ import dynamic from 'next/dynamic';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  PromptInputCommand,
+  PromptInputCommandEmpty,
+  PromptInputCommandGroup,
+  PromptInputCommandItem,
+  PromptInputCommandList,
+} from '@/components/ai-elements/prompt-input';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
+import { workspaceApi, type AgoraGuestConfig, type AgoraGuestPreset, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
 import { Switch } from '@/components/ui/switch';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useSidebarPluginPreferences } from '@/hooks/useSidebarPluginPreferences';
-import ChatSidebar from '@/components/chat/ChatSidebar';
+import ChatSidebar, { readStoredSessionDirectoryOrder, type SessionDirectoryView } from '@/components/chat/ChatSidebar';
 import WeChatSessionBindDialog from '@/components/chat/WeChatSessionBindDialog';
 import ChatMessage, { RobotLogo } from '@/components/chat/ChatMessage';
 import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse';
@@ -29,9 +36,10 @@ import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
-  type CollaborationRoomState,
   inferHomeSidebarMode,
   inferHomeSidebarTab,
+  normalizeHomeSidebarTab,
+  normalizeHomeSidebarTabs,
   type HomeSidebarHint,
   type HomeSidebarMode,
   type HomeSidebarTab,
@@ -40,13 +48,10 @@ import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { getSessionDirectoryKind } from '@/lib/agent/conversations';
+import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 import { cn } from '@/lib/core/utils';
-import {
-  DEFAULT_WEREWOLF_BOARD_ID,
-  TEMP_WEREWOLF_SUPERVISOR,
-  listTemporaryWerewolfAgentNames,
-} from '@/plugins/werewolf/agents';
 import pkgJson from '../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
@@ -64,6 +69,14 @@ const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
 });
+const AgoraShell = dynamic(() => import('@/components/collaboration/AgoraShell').then(m => m.AgoraShell), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+      正在进入议场...
+    </div>
+  ),
+});
 const DEFAULT_WIDTH = 264;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
@@ -72,30 +85,6 @@ const MIN_HOME_SIDEBAR_SIZE = 20;
 const MAX_HOME_SIDEBAR_SIZE = 46;
 const MOBILE_BREAKPOINT = 768;
 type AgentBindingTeam = 'blue' | 'red' | 'judge' | 'black-gold';
-
-function createWerewolfLabRoom(now = Date.now()): CollaborationRoomState {
-  const players = listTemporaryWerewolfAgentNames();
-  return {
-    topic: '多Agent能力实验室：AI 狼人杀',
-    selectedAgents: [TEMP_WEREWOLF_SUPERVISOR.name, ...players],
-    mode: 'roundtable',
-    messages: [],
-    rounds: [],
-    agentSessions: {},
-    werewolf: {
-      enabled: true,
-      phase: 'setup',
-      dayNumber: 1,
-      boardId: DEFAULT_WEREWOLF_BOARD_ID,
-      boardName: '预女猎',
-      players: [],
-      eliminated: [],
-      votes: [],
-      revealedRoles: false,
-      lastSummary: '请先选择板子，系统会随机选择参与人格并分配身份。',
-    },
-  };
-}
 
 function getAgentBindingTeamLabel(team?: AgentBindingTeam) {
   switch (team) {
@@ -138,24 +127,356 @@ function useIsMobile() {
   return isMobile;
 }
 
+function hasInlineCommandWhitespace(value: string): boolean {
+  return Array.from(value).some((char) => char.trim().length === 0);
+}
+
+function createAgoraWorkbenchState(title = '新议题') {
+  return {
+    collaborationRoom: {
+      topic: title,
+      selectedAgents: [],
+      mode: 'group-chat' as const,
+      messages: [],
+      rounds: [],
+      agentSessions: {},
+      chatroom: createInitialChatroomState({
+        status: 'running',
+        topic: title,
+      }),
+    },
+  };
+}
+
+function AgoraZenMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 1024 1024" className={className} fill="none" aria-hidden="true">
+      <path
+        d="M386.7 599.7c2.2-153.5 125.9-192.9 125.9-192.9s102 43.5 120.1 141.3c0.7 5.4 9.4 83.5-60.8 130.4-68.7-40.8-60.8-182-60.8-182s-24.6 50.3-23.1 103.2c4.3 42.1 1.4 91.7 94.1 144 5.1-0.7 123.7-63.8 112.9-191.5-28.2-132.4-137.5-173.9-137.5-173.9s65.4-55.5 61.4-127.9c-5.8-103.6-101.9-137-101.9-137s70.9 55 68 137.2c-2.9 82.2-73.8 106-73.8 106s-70.9-23.8-76.7-107.3c-0.7-96.4 75.2-141.3 75.2-141.3S407 151.4 400.5 252.6c-1.5 73.4 64.4 124.3 64.4 124.3s-138.2 69.3-128.8 214.6C331 751.8 509.7 838.8 509.7 838.8s-104.9-95.1-123-239.1z"
+        fill="currentColor"
+      />
+      <path
+        d="M697.9 727.4c-131 25.8-183.1 101.2-183.1 101.2s85.4-78.1 191.8-74.7c118 4.8 156.3 66.6 156.3 66.6s-37.6 52.3-131.7 62.5c-139.4 2.8-193-27-208.4-38.4 18.7 15.1 89.1 64.7 209.8 67C886 902.6 928 817 928 817s-73.1-105.2-230.1-89.6zM282.5 882.2c-94.8-14.3-127.4-61.8-125.9-68.6 21-55 110.7-72.7 110.7-72.7S150.1 724.7 98 819.1c8.7 14.9 46.3 78.8 183.1 93 141.8 3.4 222.2-68.6 222.2-68.6s-65.9 53.7-220.8 38.7z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+const AGORA_ATLAS_URL = '/images/agora.png';
+const AGORA_ATLAS_SIZE = 2048;
+const AGORA_ATLAS_MARGIN = 64;
+const AGORA_ATLAS_GAP = 40;
+const AGORA_ATLAS_CELL = 352;
+
+function getAgoraSpriteOffset(row: number, col: number) {
+  const x = AGORA_ATLAS_MARGIN + col * (AGORA_ATLAS_CELL + AGORA_ATLAS_GAP);
+  const y = AGORA_ATLAS_MARGIN + row * (AGORA_ATLAS_CELL + AGORA_ATLAS_GAP);
+  return `${-x}px ${-y}px`;
+}
+
+function AgoraSprite({
+  row,
+  col,
+  className,
+  style,
+  animate,
+  transition,
+}: {
+  row: number;
+  col: number;
+  className?: string;
+  style?: React.CSSProperties;
+  animate?: React.ComponentProps<typeof motion.div>['animate'];
+  transition?: React.ComponentProps<typeof motion.div>['transition'];
+}) {
+  return (
+    <motion.div
+      aria-hidden="true"
+      className={cn('absolute bg-no-repeat', className)}
+      style={{
+        backgroundImage: `url(${AGORA_ATLAS_URL})`,
+        backgroundSize: `${AGORA_ATLAS_SIZE}px ${AGORA_ATLAS_SIZE}px`,
+        backgroundPosition: getAgoraSpriteOffset(row, col),
+        ...style,
+      }}
+      animate={animate}
+      transition={transition}
+    />
+  );
+}
+
+function AgoraForumBackdrop({ className }: { className?: string }) {
+  return (
+    <div className={cn('pointer-events-none absolute inset-0 overflow-hidden', className)} aria-hidden="true">
+      <div className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0.14),transparent)]" />
+      <div className="absolute inset-x-0 bottom-0 h-32 bg-[linear-gradient(180deg,transparent,rgba(248,246,241,0.72))]" />
+      <div className="absolute inset-y-0 left-0 w-20 bg-[linear-gradient(90deg,rgba(248,246,241,0.56),transparent)]" />
+      <div className="absolute inset-y-0 right-0 w-20 bg-[linear-gradient(270deg,rgba(248,246,241,0.56),transparent)]" />
+
+      <AgoraSprite
+        row={3}
+        col={2}
+        className="left-1/2 top-[15%] h-[240px] w-[240px] -translate-x-1/2"
+        style={{ opacity: 0.14, filter: 'blur(0.2px)' }}
+        animate={{ scale: [1, 1.08, 1], rotate: [0, 3, 0], opacity: [0.08, 0.18, 0.08] }}
+        transition={{ duration: 9.2, repeat: Infinity, ease: 'easeInOut' }}
+      />
+
+      <AgoraSprite
+        row={0}
+        col={0}
+        className="h-[260px] w-[260px]"
+        style={{ left: '-1%', bottom: '41%', opacity: 0.22 }}
+        animate={{ y: [0, -12, 0], x: [0, -6, 0], opacity: [0.14, 0.26, 0.14] }}
+        transition={{ duration: 8.6, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={0}
+        col={1}
+        className="h-[294px] w-[294px]"
+        style={{ left: '15%', bottom: '39%', opacity: 0.18 }}
+        animate={{ y: [0, -14, 0], x: [0, 6, 0], opacity: [0.12, 0.22, 0.12] }}
+        transition={{ duration: 9.8, delay: 0.6, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={0}
+        col={2}
+        className="left-1/2 h-[300px] w-[300px] -translate-x-1/2"
+        style={{ bottom: '35%', opacity: 0.12 }}
+        animate={{ y: [0, -10, 0], scale: [1, 1.03, 1], opacity: [0.08, 0.14, 0.08] }}
+        transition={{ duration: 10.6, delay: 0.2, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={0}
+        col={3}
+        className="h-[292px] w-[292px]"
+        style={{ right: '14%', bottom: '38%', opacity: 0.18 }}
+        animate={{ y: [0, -13, 0], x: [0, -6, 0], opacity: [0.12, 0.22, 0.12] }}
+        transition={{ duration: 9.4, delay: 0.4, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={0}
+        col={4}
+        className="h-[248px] w-[248px]"
+        style={{ right: '-1%', bottom: '41%', opacity: 0.22 }}
+        animate={{ y: [0, -11, 0], x: [0, 5, 0], opacity: [0.14, 0.26, 0.14] }}
+        transition={{ duration: 9.8, delay: 0.9, repeat: Infinity, ease: 'easeInOut' }}
+      />
+
+      <AgoraSprite
+        row={1}
+        col={0}
+        className="h-[236px] w-[236px]"
+        style={{ left: '3%', bottom: '8%', opacity: 0.12 }}
+        animate={{ scale: [1, 1.01, 1], opacity: [0.08, 0.15, 0.08], filter: ['blur(0px)', 'blur(0.15px)', 'blur(0px)'] }}
+        transition={{ duration: 7.2, delay: 0.3, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={1}
+        col={2}
+        className="left-1/2 h-[276px] w-[276px] -translate-x-1/2"
+        style={{ bottom: '5%', opacity: 0.1 }}
+        animate={{ scale: [1, 1.012, 1], opacity: [0.06, 0.12, 0.06], filter: ['blur(0px)', 'blur(0.18px)', 'blur(0px)'] }}
+        transition={{ duration: 8.2, delay: 0.8, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={1}
+        col={3}
+        className="h-[288px] w-[288px]"
+        style={{ right: '2%', bottom: '4%', opacity: 0.12 }}
+        animate={{ scale: [1, 1.01, 1], opacity: [0.08, 0.15, 0.08], filter: ['blur(0px)', 'blur(0.15px)', 'blur(0px)'] }}
+        transition={{ duration: 7.8, delay: 0.1, repeat: Infinity, ease: 'easeInOut' }}
+      />
+
+      <AgoraSprite
+        row={4}
+        col={0}
+        className="h-[140px] w-[140px]"
+        style={{ left: '3%', bottom: '1%', opacity: 0.14 }}
+        animate={{ scale: [1, 1.012, 1], opacity: [0.08, 0.16, 0.08] }}
+        transition={{ duration: 7.2, delay: 0.5, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={4}
+        col={4}
+        className="h-[228px] w-[228px]"
+        style={{ right: '0%', bottom: '0%', opacity: 0.13 }}
+        animate={{ scale: [1, 1.012, 1], opacity: [0.08, 0.15, 0.08] }}
+        transition={{ duration: 8.8, delay: 0.7, repeat: Infinity, ease: 'easeInOut' }}
+      />
+    </div>
+  );
+}
+
+function AgoraForumForeground({ className }: { className?: string }) {
+  return (
+    <div className={cn('pointer-events-none absolute inset-0 z-20 overflow-visible', className)} aria-hidden="true">
+      <AgoraSprite
+        row={1}
+        col={0}
+        className="-left-6 bottom-5 h-[240px] w-[240px] sm:-left-8 sm:h-[288px] sm:w-[288px] lg:-left-12 lg:h-[332px] lg:w-[332px]"
+        style={{ opacity: 0.58, filter: 'contrast(1.05) saturate(1.03) drop-shadow(0 24px 40px rgba(87,65,40,0.16))' }}
+        animate={{
+          scale: [1, 1.015, 1],
+          opacity: [0.46, 0.62, 0.46],
+          filter: [
+            'contrast(1.05) saturate(1.03) drop-shadow(0 24px 40px rgba(87,65,40,0.14))',
+            'contrast(1.07) saturate(1.04) drop-shadow(0 30px 46px rgba(87,65,40,0.2))',
+            'contrast(1.05) saturate(1.03) drop-shadow(0 24px 40px rgba(87,65,40,0.14))',
+          ],
+        }}
+        transition={{ duration: 5.8, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={1}
+        col={4}
+        className="-right-5 bottom-4 h-[242px] w-[242px] sm:-right-7 sm:h-[292px] sm:w-[292px] lg:-right-10 lg:h-[336px] lg:w-[336px]"
+        style={{ opacity: 0.6, filter: 'contrast(1.06) saturate(1.04) drop-shadow(0 24px 42px rgba(87,65,40,0.16))' }}
+        animate={{
+          scale: [1, 1.016, 1],
+          opacity: [0.46, 0.64, 0.46],
+          filter: [
+            'contrast(1.06) saturate(1.04) drop-shadow(0 24px 42px rgba(87,65,40,0.14))',
+            'contrast(1.08) saturate(1.05) drop-shadow(0 30px 48px rgba(87,65,40,0.2))',
+            'contrast(1.06) saturate(1.04) drop-shadow(0 24px 42px rgba(87,65,40,0.14))',
+          ],
+        }}
+        transition={{ duration: 5.6, delay: 0.28, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={5}
+        col={2}
+        className="left-1/2 bottom-[-18px] h-[180px] w-[180px] -translate-x-1/2 sm:bottom-[-24px] sm:h-[216px] sm:w-[216px] lg:bottom-[-34px] lg:h-[264px] lg:w-[264px]"
+        style={{ opacity: 0.42, filter: 'contrast(1.03) drop-shadow(0 20px 32px rgba(87,65,40,0.12))' }}
+        animate={{
+          scale: [1, 1.012, 1],
+          opacity: [0.3, 0.46, 0.3],
+          filter: [
+            'contrast(1.03) drop-shadow(0 20px 32px rgba(87,65,40,0.1))',
+            'contrast(1.05) drop-shadow(0 24px 36px rgba(87,65,40,0.16))',
+            'contrast(1.03) drop-shadow(0 20px 32px rgba(87,65,40,0.1))',
+          ],
+        }}
+        transition={{ duration: 6.4, delay: 0.52, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={2}
+        col={0}
+        className="left-8 top-8 h-[124px] w-[124px] sm:left-12 sm:top-10 sm:h-[152px] sm:w-[152px] lg:left-20 lg:top-12 lg:h-[182px] lg:w-[182px]"
+        style={{ opacity: 0.36, filter: 'drop-shadow(0 16px 28px rgba(87,65,40,0.1))' }}
+        animate={{
+          scale: [1, 1.014, 1],
+          opacity: [0.24, 0.4, 0.24],
+          filter: [
+            'drop-shadow(0 16px 28px rgba(87,65,40,0.08))',
+            'drop-shadow(0 20px 32px rgba(87,65,40,0.14))',
+            'drop-shadow(0 16px 28px rgba(87,65,40,0.08))',
+          ],
+        }}
+        transition={{ duration: 6.1, delay: 0.2, repeat: Infinity, ease: 'easeInOut' }}
+      />
+      <AgoraSprite
+        row={2}
+        col={4}
+        className="right-8 top-10 h-[124px] w-[124px] sm:right-12 sm:top-10 sm:h-[150px] sm:w-[150px] lg:right-20 lg:top-12 lg:h-[178px] lg:w-[178px]"
+        style={{ opacity: 0.34, filter: 'drop-shadow(0 16px 28px rgba(87,65,40,0.1))' }}
+        animate={{
+          scale: [1, 1.014, 1],
+          opacity: [0.22, 0.38, 0.22],
+          filter: [
+            'drop-shadow(0 16px 28px rgba(87,65,40,0.08))',
+            'drop-shadow(0 20px 32px rgba(87,65,40,0.14))',
+            'drop-shadow(0 16px 28px rgba(87,65,40,0.08))',
+          ],
+        }}
+        transition={{ duration: 5.9, delay: 0.62, repeat: Infinity, ease: 'easeInOut' }}
+      />
+    </div>
+  );
+}
+
+function AgoraZenCover({
+  hasExistingTopics,
+  onCreate,
+  onCreateGuest,
+}: {
+  hasExistingTopics: boolean;
+  onCreate: () => void;
+  onCreateGuest: () => void;
+}) {
+  return (
+    <div className="relative flex h-full min-h-[520px] items-center justify-center overflow-hidden px-4 py-8 md:px-8 lg:px-16">
+      <AgoraForumBackdrop className="inset-0" />
+      <div className="relative z-10 w-full max-w-5xl overflow-visible">
+        <section className="relative overflow-hidden rounded-[40px] border border-stone-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,246,241,0.82))] px-8 py-12 shadow-[0_26px_80px_rgba(71,85,105,0.12)] backdrop-blur-[2px] sm:px-12 sm:py-16">
+          <div className="absolute inset-x-0 bottom-0 h-48 bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.08)_12px,rgba(148,163,184,0.08)_13px)] opacity-80" />
+          <div className="absolute inset-x-10 top-10 h-px bg-gradient-to-r from-transparent via-stone-300/70 to-transparent" />
+          <div className="absolute inset-x-16 top-16 h-px bg-gradient-to-r from-transparent via-stone-200/80 to-transparent" />
+
+          <div className="relative mx-auto flex max-w-3xl flex-col items-center text-center">
+            <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-full border border-violet-300/40 bg-violet-50/70 text-violet-500 shadow-[0_0_0_12px_rgba(139,92,246,0.06)]">
+              <AgoraZenMark className="h-12 w-12" />
+            </div>
+
+            <div className="text-[11px] uppercase tracking-[0.42em] text-stone-400">Agora</div>
+            <h2 className="mt-4 font-serif text-3xl font-semibold tracking-[0.08em] text-stone-800 sm:text-5xl">
+              议论广场
+            </h2>
+            <p className="mt-5 max-w-2xl text-base leading-8 text-stone-500 sm:text-lg">
+              围绕具体议题展开协作讨论，让过程、观点与结论自然沉淀。
+            </p>
+            <p className="mt-2 text-sm text-stone-400">
+              {hasExistingTopics ? '从左侧继续已有议题，或开启一场新的协作讨论。' : '从一个清晰议题开始，把讨论与结论留在同一处。'}
+            </p>
+
+            <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+              <Button
+                className="h-11 rounded-full bg-stone-900 px-6 text-sm text-stone-50 hover:bg-stone-800"
+                onClick={onCreate}
+              >
+                <span className="material-symbols-outlined mr-2 text-[18px]">add_circle</span>
+                新建议题
+              </Button>
+              <button
+                type="button"
+                className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm text-stone-500 shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+                onClick={onCreateGuest}
+              >
+                <span className="material-symbols-outlined mr-2 align-[-3px] text-[16px]">gesture</span>
+                {hasExistingTopics ? '左侧选择议题即可进入讨论' : '创建常驻嘉宾'}
+              </button>
+            </div>
+          </div>
+        </section>
+        <AgoraForumForeground className="-inset-x-10 -inset-y-6 sm:-inset-x-12 lg:-inset-x-16" />
+      </div>
+    </div>
+  );
+}
+
 function ChatPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   useSidebarPluginPreferences();
   const {
-    activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, stopStreaming,
+    activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, compactActiveSession, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, setEngine,
-    confirmAction, rejectAction, undoActionById, retryAction,
+    confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
     skillSettings, setSessionWorkbenchState,
     appendSessionMessage,
     updateSessionMessage,
+    workingDirectory,
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
-  const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);  const [notebookExporting, setNotebookExporting] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);
+  const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState<{ type: 'conversation' } | { type: 'assistant'; messageId: string } | null>(null);
   const [exportFileName, setExportFileName] = useState('');
@@ -175,6 +496,7 @@ function ChatPageContent() {
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
   const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
+  const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => readStoredSessionDirectoryOrder()[0] || 'conversation');
   const [origin, setOrigin] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
@@ -197,7 +519,37 @@ function ChatPageContent() {
     if (!Number.isFinite(saved)) return DEFAULT_HOME_SIDEBAR_SIZE;
     return Math.min(MAX_HOME_SIDEBAR_SIZE, Math.max(MIN_HOME_SIDEBAR_SIZE, saved));
   });
+  const [agoraGuestData, setAgoraGuestData] = useState<{
+    guests: AgoraGuestConfig[];
+    presets: AgoraGuestPreset[];
+    loading: boolean;
+    loaded: boolean;
+  }>({
+    guests: [],
+    presets: [],
+    loading: false,
+    loaded: false,
+  });
+  const handleAgoraGuestDataChange = useCallback((data: { guests: AgoraGuestConfig[]; presets: AgoraGuestPreset[]; loading: boolean }) => {
+    setAgoraGuestData((prev) => {
+      if (
+        prev.loaded
+        && prev.guests === data.guests
+        && prev.presets === data.presets
+        && prev.loading === data.loading
+      ) {
+        return prev;
+      }
+      return {
+        guests: data.guests,
+        presets: data.presets,
+        loading: data.loading,
+        loaded: true,
+      };
+    });
+  }, []);
   const starterHandledRef = useRef(false);
+  const homeEntryResetHandledRef = useRef(false);
   const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
   const lastHomeSidebarSyncRef = useRef('');
 
@@ -222,6 +574,13 @@ function ChatPageContent() {
   const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding);
   const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
   const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
+  const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
+  const isBuiltInAgoraMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
+  const hasExistingAgoraTopics = useMemo(
+    () => sessions.some((session) => getSessionDirectoryKind(session) === 'agora'),
+    [sessions]
+  );
+  const showAgoraZenCover = sessionDirectoryView === 'agora' && !activeSession && !loading;
   const hasCommanderSidebarContext = hasWorkflowSidebarContext || hasCollaborationSidebarContext;
   const hasHintSidebarContext = Boolean(
     latestSidebarHint?.intent
@@ -247,7 +606,7 @@ function ChatPageContent() {
   const sessionScopedSidebarTabs = useMemo<HomeSidebarTab[]>(() => {
     const tabs = new Set<HomeSidebarTab>();
     // If hint explicitly specifies tabs, use those as the primary source
-    const hintTabs = latestSidebarHint?.tabs || [];
+    const hintTabs = normalizeHomeSidebarTabs(latestSidebarHint?.tabs);
     if (hintTabs.length > 0) {
       for (const tab of hintTabs) {
         if (tab === 'commander' && !hasCommanderSidebarContext) continue;
@@ -380,7 +739,7 @@ function ChatPageContent() {
   useEffect(() => {
     if (isMobile) return;
 
-    const hintedTab = latestSidebarHint?.activeTab;
+    const hintedTab = normalizeHomeSidebarTab(latestSidebarHint?.activeTab);
     const nextTab = hintedTab && availableHomeSidebarTabs.includes(hintedTab)
       ? hintedTab
       : availableHomeSidebarTabs[0] || derivedHomeSidebarTab;
@@ -447,6 +806,21 @@ function ChatPageContent() {
   }, [editContent, editDialogOpen, editingMessageId]);
 
   useEffect(() => {
+    if (homeEntryResetHandledRef.current) return;
+    homeEntryResetHandledRef.current = true;
+
+    const hasExplicitSessionTarget = Boolean(
+      searchParams.get('sessionId')
+      || searchParams.get('agentName')
+      || searchParams.get('starterPrompt')
+      || searchParams.get('starterAction')
+    );
+    if (hasExplicitSessionTarget) return;
+
+    setActiveSessionId(null);
+  }, [searchParams, setActiveSessionId]);
+
+  useEffect(() => {
     const targetSessionId = searchParams.get('sessionId');
     if (!targetSessionId || starterHandledRef.current) return;
 
@@ -454,6 +828,10 @@ function ChatPageContent() {
     const sidebarTab = searchParams.get('sidebarTab');
     if (sidebarTab === 'agent' || sidebarTab === 'workflow' || sidebarTab === 'commander') {
       openHomeSidebar(sidebarTab);
+    }
+    const targetSession = sessions.find((session) => session.id === targetSessionId);
+    if (targetSession) {
+      setSessionDirectoryView(getSessionDirectoryKind(targetSession));
     }
     setActiveSessionId(targetSessionId);
 
@@ -463,7 +841,7 @@ function ChatPageContent() {
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [pathname, router, searchParams, setActiveSessionId]);
+  }, [pathname, router, searchParams, sessions, setActiveSessionId]);
 
   useEffect(() => {
     const starterAgent = searchParams.get('agentName');
@@ -506,6 +884,10 @@ function ChatPageContent() {
     const sessionTitle = searchParams.get('sessionTitle');
     const existingSessionId = searchParams.get('sessionId');
     if (existingSessionId) {
+      const targetSession = sessions.find((session) => session.id === existingSessionId);
+      if (targetSession) {
+        setSessionDirectoryView(getSessionDirectoryKind(targetSession));
+      }
       setActiveSessionId(existingSessionId);
     } else {
       createSession({ title: sessionTitle?.trim() || '新对话' });
@@ -525,11 +907,37 @@ function ChatPageContent() {
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, pathname, router, searchParams, setActiveSessionId]);
+  }, [createSession, pathname, router, searchParams, sessions, setActiveSessionId]);
 
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
   }, [input]);
+
+  const homepageSlashCommands = useMemo(() => ([
+    {
+      id: 'compact',
+      command: '/compact',
+      title: '压缩上下文',
+      subtext: '刷新当前会话的 session 上下文容量',
+      icon: 'compress',
+      aliases: ['compact', 'context'],
+    },
+  ]), []);
+
+  const slashQuery = useMemo(() => {
+    const text = input.trim();
+    return text.startsWith('/') && !hasInlineCommandWhitespace(text) ? text.slice(1).toLowerCase() : '';
+  }, [input]);
+
+  const filteredSlashCommands = useMemo(() => {
+    const text = input.trim();
+    if (!text.startsWith('/') || hasInlineCommandWhitespace(text)) return [];
+    if (!slashQuery) return homepageSlashCommands;
+    return homepageSlashCommands.filter((item) => {
+      const haystack = [item.command, item.title, item.subtext, ...item.aliases].join(' ').toLowerCase();
+      return haystack.includes(slashQuery);
+    });
+  }, [homepageSlashCommands, input, slashQuery]);
 
   const getEditMarkdown = useCallback(() => {
     return editEditorRef.current?.getMarkdown().trim() || editContent.trim();
@@ -722,13 +1130,22 @@ function ChatPageContent() {
     } catch {}
   }, [homeSidebarMode]);
 
+  useEffect(() => {
+    const shouldOpen = filteredSlashCommands.length > 0 && input.trim().startsWith('/') && !hasCollaborationSidebarContext;
+    setSlashMenuOpen(shouldOpen);
+    if (!shouldOpen) setSlashActiveIndex(0);
+  }, [filteredSlashCommands.length, hasCollaborationSidebarContext, input]);
+
+  useEffect(() => {
+    setSlashActiveIndex(0);
+  }, [slashQuery]);
+
   const mainInputMentionItems = useMemo(() => {
     const room = activeSession?.sessionWorkbenchState?.collaborationRoom;
     if (!room || !hasCollaborationSidebarContext) return [];
     const names = new Set<string>();
-    if (homeSidebarTab === 'chatroom') {
+    if (isBuiltInAgoraMode) {
       names.add('全员');
-      names.add('AI 百灵鸟');
       (room.chatroom?.participants || []).forEach((participant) => {
         const name = String(participant || '').trim();
         if (name) names.add(name);
@@ -743,11 +1160,30 @@ function ChatPageContent() {
       });
     }
     return Array.from(names);
-  }, [activeSession?.sessionWorkbenchState?.collaborationRoom, hasCollaborationSidebarContext, homeSidebarTab]);
+  }, [activeSession?.sessionWorkbenchState?.collaborationRoom, hasCollaborationSidebarContext, homeSidebarTab, isBuiltInAgoraMode]);
 
   const submitMessage = useCallback(async (text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
+    if (normalized === '/compact') {
+      if (loading) {
+        toast('warning', '当前正在生成，请先停止后再压缩上下文');
+        return;
+      }
+      unlockAutoScroll();
+      setInput('');
+      editorRef.current?.clear();
+      setSlashMenuOpen(false);
+      try {
+        await compactActiveSession();
+        toast('success', '上下文已压缩，后续对话会使用新的 session 接力');
+      } catch (error: any) {
+        toast('error', error?.message || '上下文压缩失败');
+      } finally {
+        editorRef.current?.focus();
+      }
+      return;
+    }
     if (editingMessageId) {
       deleteMessage(editingMessageId);
       setEditingMessageId(null);
@@ -759,14 +1195,6 @@ function ChatPageContent() {
 
     // Route to collaboration room if active
     if (hasCollaborationSidebarContext && collaborationMessageHandlerRef.current) {
-      if (homeSidebarTab === 'chatroom' && activeSessionId && appendSessionMessage) {
-        await appendSessionMessage(activeSessionId, {
-          role: 'user',
-          content: normalized,
-          rawContent: normalized,
-          timestamp: Date.now(),
-        });
-      }
       collaborationMessageHandlerRef.current(normalized);
       editorRef.current?.focus();
       return;
@@ -778,7 +1206,13 @@ function ChatPageContent() {
     }
     await sendMessage(normalized);
     editorRef.current?.focus();
-  }, [activeSessionId, appendSessionMessage, deleteMessage, editingMessageId, hasCollaborationSidebarContext, homeSidebarTab, loading, sendMessage, stopStreaming, unlockAutoScroll]);
+  }, [compactActiveSession, deleteMessage, editingMessageId, hasCollaborationSidebarContext, loading, sendMessage, stopStreaming, toast, unlockAutoScroll]);
+
+  const applySlashCommand = useCallback(async (commandId: string) => {
+    if (commandId === 'compact') {
+      await submitMessage('/compact');
+    }
+  }, [submitMessage]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -789,10 +1223,101 @@ function ChatPageContent() {
   const handleEditorEnter = useCallback(async (text: string) => {
     const markdown = text.trim() || getInputMarkdown();
     if (!markdown) return;
+    if (slashMenuOpen && filteredSlashCommands.length > 0) {
+      const index = Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1));
+      await applySlashCommand(filteredSlashCommands[index].id);
+      return;
+    }
     await submitMessage(markdown);
-  }, [getInputMarkdown, submitMessage]);
+  }, [applySlashCommand, filteredSlashCommands, getInputMarkdown, slashActiveIndex, slashMenuOpen, submitMessage]);
+
+  useEffect(() => {
+    if (!slashMenuOpen) return;
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (!slashMenuOpen || filteredSlashCommands.length === 0) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashActiveIndex((prev) => (prev + 1) % filteredSlashCommands.length);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashActiveIndex((prev) => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+      } else if (event.key === 'Tab') {
+        event.preventDefault();
+        const index = Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1));
+        void applySlashCommand(filteredSlashCommands[index].id);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        setSlashMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeydown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeydown, true);
+    };
+  }, [applySlashCommand, filteredSlashCommands, slashActiveIndex, slashMenuOpen]);
+
+  const handleCreateAgoraSession = useCallback(() => {
+    createSession({
+      title: '新议题',
+      sessionWorkbenchState: createAgoraWorkbenchState('新议题'),
+    });
+    setSessionDirectoryView('agora');
+  }, [createSession]);
+
+  const handleCreateAgoraGuest = useCallback(() => {
+    setSidebarOpen(true);
+    setSessionDirectoryView('agora');
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('agora:create-guest'));
+    }, 0);
+  }, []);
+
+  const decodeWorkflowActionFilename = useCallback((prompt: string, prefix: string) => {
+    if (!prompt.startsWith(prefix)) return '';
+    try {
+      return decodeURIComponent(prompt.slice(prefix.length)).trim();
+    } catch {
+      return '';
+    }
+  }, []);
+
+  const handleWorkflowOpenAction = useCallback((configFile: string) => {
+    if (!configFile) {
+      toast('warning', '缺少工作流配置文件');
+      return;
+    }
+    unlockAutoScroll();
+    setInput('');
+    editorRef.current?.clear();
+    if (loading) stopStreaming();
+    router.push(`/workbench/${encodeURIComponent(configFile)}`);
+  }, [loading, router, stopStreaming, toast, unlockAutoScroll]);
+
+  const handleWorkflowStartAction = useCallback((configFile: string) => {
+    if (!configFile) {
+      toast('warning', '缺少工作流配置文件');
+      return;
+    }
+    unlockAutoScroll();
+    setInput('');
+    editorRef.current?.clear();
+    if (loading) stopStreaming();
+    router.push(`/workbench/${encodeURIComponent(configFile)}?mode=run&autoStart=1`);
+  }, [loading, router, stopStreaming, toast, unlockAutoScroll]);
 
   const handleQuickAction = useCallback((prompt: string) => {
+    if (prompt.startsWith('__HOME_ACTION__:workflow_open:')) {
+      const workflowOpenConfig = decodeWorkflowActionFilename(prompt, '__HOME_ACTION__:workflow_open:');
+      handleWorkflowOpenAction(workflowOpenConfig);
+      return;
+    }
+
+    if (prompt.startsWith('__HOME_ACTION__:workflow_start:')) {
+      const workflowStartConfig = decodeWorkflowActionFilename(prompt, '__HOME_ACTION__:workflow_start:');
+      handleWorkflowStartAction(workflowStartConfig);
+      return;
+    }
+
     if (prompt === '__HOME_ACTION__:create_workflow') {
       openHomeSidebar('workflow', 'create-workflow', 'clarifying', { shouldOpenModal: true });
       unlockAutoScroll();
@@ -808,51 +1333,6 @@ function ChatPageContent() {
       setInput('');
       editorRef.current?.clear();
       if (loading) stopStreaming();
-      return;
-    }
-
-    if (prompt === '__HOME_ACTION__:werewolf_lab') {
-      const now = Date.now();
-      const sessionId = createSession({
-        title: '多Agent能力实验室 · AI 狼人杀',
-        sessionWorkbenchState: {
-          homeSidebar: {
-            type: 'home_sidebar',
-            mode: 'active',
-            activeTab: 'commander',
-            tabs: ['commander'],
-            intent: 'supervisor-chat',
-            stage: 'running',
-            reason: '启动多Agent能力实验室，用 AI 狼人杀测试群聊、点名、回合制和投票能力。',
-            summary: '这是一个多Agent协作能力测试对话。右侧协作室已预置 AI 狼人杀实验流程，可选择板子、随机角色和视角后由 Supervisor 推进。',
-            recommendedNextAction: '在右侧协作室选择板子，必要时刷新随机角色，然后点击“确认角色并开局”。',
-          },
-          collaborationRoom: createWerewolfLabRoom(now),
-        },
-        messages: [
-          {
-            role: 'user',
-            content: '启动多Agent能力实验室：AI 狼人杀',
-            timestamp: now,
-          },
-          {
-            role: 'assistant',
-            content: [
-              '已创建一个 AI 狼人杀实验对话。',
-              '',
-              '右侧协作室已预置 20 个临时测试人格。先选择板子和参与人格，再让 Supervisor 按流程推进发言、投票和结算。',
-            ].join('\n'),
-            timestamp: now + 1,
-          },
-        ],
-      });
-      setActiveSessionId(sessionId);
-      setHomeSidebarTab('commander');
-      setHomeSidebarMode('active');
-      unlockAutoScroll();
-      setInput('');
-      editorRef.current?.clear();
-      toast('success', '已创建多Agent能力实验室对话');
       return;
     }
 
@@ -888,7 +1368,15 @@ function ChatPageContent() {
       if (loading) stopStreaming();
       sendMessage(prompt);
     }
-  }, [loading, openHomeSidebar, stopStreaming, unlockAutoScroll]);
+  }, [
+    decodeWorkflowActionFilename,
+    handleWorkflowOpenAction,
+    handleWorkflowStartAction,
+    loading,
+    openHomeSidebar,
+    stopStreaming,
+    unlockAutoScroll,
+  ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
     setDebugMode(checked);
@@ -930,6 +1418,10 @@ function ChatPageContent() {
     const sessionTitle = searchParams.get('sessionTitle');
     const existingSessionId = searchParams.get('sessionId');
     if (existingSessionId) {
+      const targetSession = sessions.find((session) => session.id === existingSessionId);
+      if (targetSession) {
+        setSessionDirectoryView(getSessionDirectoryKind(targetSession));
+      }
       setActiveSessionId(existingSessionId);
     } else {
       createSession({ title: sessionTitle?.trim() || '新对话' });
@@ -952,9 +1444,10 @@ function ChatPageContent() {
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, handleQuickAction, pathname, router, searchParams, setActiveSessionId]);
+  }, [createSession, handleQuickAction, pathname, router, searchParams, sessions, setActiveSessionId]);
 
   const messages = activeSession?.messages || [];
+  const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
 
   useEffect(() => {
     setHistoryExpanded(false);
@@ -1007,6 +1500,7 @@ function ChatPageContent() {
       onRejectAction: (id: string) => void;
       onUndoAction: (id: string) => void;
       onRetryAction: (id: string) => void;
+      onReloadActionResult: (id: string) => void;
     }> = {};
     messages.forEach(msg => {
       callbacks[msg.id] = {
@@ -1014,10 +1508,11 @@ function ChatPageContent() {
         onRejectAction: (id) => rejectAction(msg.id, id),
         onUndoAction: (id) => undoActionById(msg.id, id),
         onRetryAction: (id) => retryAction(msg.id, id),
+        onReloadActionResult: (id) => reloadActionResult(msg.id, id),
       };
     });
     return callbacks;
-  }, [messages, confirmAction, rejectAction, undoActionById, retryAction]);
+  }, [messages, confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult]);
 
   const handleQuoteMessage = useCallback((messageId: string) => {
     const message = messages.find((item) => item.id === messageId);
@@ -1038,6 +1533,14 @@ function ChatPageContent() {
     editorRef.current?.insertMarkdown(quoteMarkdown);
     editorRef.current?.focus();
   }, [messages]);
+
+  const handleInsertIntoMainInput = useCallback((markdown: string) => {
+    const content = String(markdown || '').trim();
+    if (!content) return;
+    const prefix = editorRef.current?.isEmpty() ? '' : '\n\n';
+    editorRef.current?.insertMarkdown(`${prefix}${content}`);
+    editorRef.current?.focus();
+  }, []);
 
   const isChatroomCentralTranscript = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.chatroom);
   const recentWindowSize = useMemo(() => computeAdaptiveRecentWindow(messages as any[], {
@@ -1083,6 +1586,7 @@ function ChatPageContent() {
             onRejectAction={messageCallbacks[msg.id]?.onRejectAction}
             onUndoAction={messageCallbacks[msg.id]?.onUndoAction}
             onRetryAction={messageCallbacks[msg.id]?.onRetryAction}
+            onReloadActionResult={messageCallbacks[msg.id]?.onReloadActionResult}
             onAction={handleQuickAction}
             onDelete={deleteMessage}
             onRetryFromMessage={msg.role === 'user' ? retryFromMessage : undefined}
@@ -1143,7 +1647,6 @@ function ChatPageContent() {
 
   const activeAgentBinding = activeSession?.agentBinding;
   const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
-  const isWerewolfLabMode = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom?.werewolf?.enabled);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -1197,7 +1700,11 @@ function ChatPageContent() {
           }
           style={{ width: isMobile ? `${Math.min(sidebarWidth, 320)}px` : `${sidebarWidth}px` }}
         >
-          <ChatSidebar />
+          <ChatSidebar
+            sessionView={sessionDirectoryView}
+            onSessionViewChange={setSessionDirectoryView}
+            onAgoraGuestDataChange={handleAgoraGuestDataChange}
+          />
           {/* Resize handle (desktop only) */}
           {!isMobile && (
             <div
@@ -1283,6 +1790,58 @@ function ChatPageContent() {
         </div>
 
         <div className="flex-1 min-h-0">
+          {isBuiltInAgoraMode ? (
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="min-h-0 flex-1">
+                <AgoraShell
+                  activeSessionId={activeSessionId}
+                  sessionTitle={activeSession?.title}
+                  sessionWorkbenchState={activeSession?.sessionWorkbenchState}
+                  setSessionWorkbenchState={setSessionWorkbenchState}
+                  appendSessionMessage={appendSessionMessage}
+                  workingDirectory={workingDirectory}
+                  onInsertIntoMainInput={handleInsertIntoMainInput}
+                  onRegisterMainInputHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
+                  initialSavedGuests={agoraGuestData.loaded ? agoraGuestData.guests : undefined}
+                  initialGuestPresets={agoraGuestData.loaded ? agoraGuestData.presets : undefined}
+                  currentUser={currentUser}
+                />
+              </div>
+              <div className="home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16">
+                <div className="mx-auto max-w-5xl">
+                  <div className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+                    <RichTextEditor
+                      ref={editorRef}
+                      content={input}
+                      onEnter={handleEditorEnter}
+                      onChange={(markdown) => setInput(markdown)}
+                      placeholder="输入议场消息"
+                      minHeight={116}
+                      maxHeight={220}
+                      className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
+                      disabled={false}
+                      autoFocus={false}
+                      showFullscreenToggle={false}
+                      showToolbar={false}
+                      mentionItems={mainInputMentionItems}
+                      trimPastedTrailingNewlines
+                      footerInside
+                      surfaceClassName="rounded-[28px] border-0 bg-transparent shadow-none"
+                      contentAreaClassName="min-h-[68px] items-start px-6 pb-2 pt-4"
+                      footerClassName="justify-end gap-4 border-border/60 px-6 pb-3 pt-3"
+                      footerAfterCountContent={(
+                        <div className="ml-5 flex items-center gap-3">
+                          <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown()}>
+                            <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
+                          </Button>
+                        </div>
+                      )}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
           <ResizablePanelGroup
             orientation="horizontal"
             className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
@@ -1298,13 +1857,19 @@ function ChatPageContent() {
                       isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
-                    {messages.length === 0 && sessionLoadingId === activeSessionId ? (
+                    {messages.length === 0 && isCurrentSessionLoading ? (
                       <div className="flex h-full items-center justify-center">
                         <div className="home-chat-surface flex items-center gap-3 rounded-2xl px-4 py-3 text-sm text-muted-foreground">
                           <span className="material-symbols-outlined animate-spin text-base text-primary">progress_activity</span>
                           <span>正在加载对话...</span>
                         </div>
                       </div>
+                    ) : showAgoraZenCover ? (
+                      <AgoraZenCover
+                        hasExistingTopics={hasExistingAgoraTopics}
+                        onCreate={handleCreateAgoraSession}
+                        onCreateGuest={handleCreateAgoraGuest}
+                      />
                     ) : messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
                         <div className="text-center">
@@ -1375,61 +1940,101 @@ function ChatPageContent() {
                   )}
                 </div>
 
-                <div
-                  className={cn(
-                    'home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16',
-                    isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
-                  )}
-                >
-                  {messages.length > 0 && (
-                    <div className="mx-auto mb-2 max-w-4xl rounded-2xl border border-border/60 bg-background/70 px-2 py-2 backdrop-blur-sm">
-                      <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
-                    </div>
-                  )}
-                  <div className="mx-auto flex max-w-4xl items-stretch gap-2">
-                    <div className="flex-1">
-                      <RichTextEditor
-                        ref={editorRef}
-                        content={input}
-                        onEnter={handleEditorEnter}
-                        onChange={(markdown) => setInput(markdown)}
-                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                        minHeight={76}
-                        className="[&_.ProseMirror]:text-[13px] [&_.ProseMirror]:leading-5 [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
-                        disabled={false}
-                        autoFocus={false}
-                        showFullscreenToggle={!isMobile}
-                        showToolbar={false}
-                        mentionItems={mainInputMentionItems}
-                        trimPastedTrailingNewlines
-                        footerContent={(
-                          <>
-                            <button
-                              onClick={() => handleDebugToggle(!debugMode)}
-                              className={`inline-flex items-center gap-1 text-[10px] transition-colors ${debugMode ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}`}
-                              title="调试模式：查看发送给 AI 的系统提示词"
-                            >
-                              <span className="material-symbols-outlined text-sm">bug_report</span>
-                              调试
-                            </button>
-                            <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-75" />
-                            <div className="w-24 shrink-0 sm:w-32">
-                              <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-6 text-[9px]" />
-                            </div>
-                          </>
-                        )}
-                      />
-                    </div>
-                    {loading && (
-                      <Button className="h-[76px] self-stretch rounded-2xl border border-destructive/20 px-3 transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
-                        <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>stop</span>
-                      </Button>
+                {!showAgoraZenCover ? (
+                  <div
+                    className={cn(
+                      'home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16',
+                      isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
                     )}
-                    <Button className="h-[76px] self-stretch rounded-2xl px-4 transition-colors duration-150" onClick={handleSend} disabled={!getInputMarkdown()}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
-                    </Button>
+                  >
+                    {messages.length > 0 && (
+                      <div className="mx-auto mb-0.5 max-w-5xl rounded-2xl bg-background/70 px-1 py-1 backdrop-blur-sm">
+                        <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
+                      </div>
+                    )}
+                    <div className="mx-auto max-w-5xl">
+                      <div className="home-chat-composer relative rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+                        {slashMenuOpen ? (
+                          <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-[320px] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
+                            <PromptInputCommand className="bg-transparent">
+                              <PromptInputCommandList className="max-h-64 p-1">
+                                <PromptInputCommandEmpty>无匹配命令</PromptInputCommandEmpty>
+                                <PromptInputCommandGroup heading="命令">
+                                  {filteredSlashCommands.map((item, index) => (
+                                    <PromptInputCommandItem
+                                      key={item.id}
+                                      value={`${item.command} ${item.title}`}
+                                      className={cn(
+                                        'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2',
+                                        index === slashActiveIndex && 'bg-accent text-accent-foreground'
+                                      )}
+                                      onMouseEnter={() => setSlashActiveIndex(index)}
+                                      onSelect={() => { void applySlashCommand(item.id); }}
+                                    >
+                                      <span className="material-symbols-outlined text-[18px] text-muted-foreground">{item.icon}</span>
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-sm font-medium">{item.command}</span>
+                                        <span className="block truncate text-xs text-muted-foreground">{item.subtext}</span>
+                                      </span>
+                                    </PromptInputCommandItem>
+                                  ))}
+                                </PromptInputCommandGroup>
+                              </PromptInputCommandList>
+                            </PromptInputCommand>
+                          </div>
+                        ) : null}
+                        <RichTextEditor
+                          ref={editorRef}
+                          content={input}
+                          onEnter={handleEditorEnter}
+                          onChange={(markdown) => setInput(markdown)}
+                          placeholder="描述你的需求或问题"
+                          minHeight={116}
+                          maxHeight={220}
+                          className="[&_.ProseMirror]:text-[15px] [&_.ProseMirror]:leading-6 [&_.ProseMirror]:text-foreground [&_.ProseMirror_p]:my-0.5 [&_.ProseMirror_h1]:!text-base [&_.ProseMirror_h2]:!text-sm"
+                          disabled={false}
+                          autoFocus={false}
+                          showFullscreenToggle={!isMobile}
+                          showToolbar={false}
+                          mentionItems={mainInputMentionItems}
+                          trimPastedTrailingNewlines
+                          footerInside
+                          surfaceClassName="rounded-[28px] border-0 bg-transparent shadow-none"
+                          contentAreaClassName="min-h-[68px] items-start px-6 pb-2 pt-4"
+                          footerClassName="gap-4 border-border/60 px-6 pb-3 pt-3"
+                          footerContent={(
+                            <>
+                              <button
+                                onClick={() => handleDebugToggle(!debugMode)}
+                                className={`inline-flex items-center gap-1.5 text-[12px] transition-colors ${debugMode ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                title="调试模式：查看发送给 AI 的系统提示词"
+                              >
+                                <span className="material-symbols-outlined text-[16px]">bug_report</span>
+                                调试
+                              </button>
+                              <Switch checked={debugMode} onCheckedChange={handleDebugToggle} className="scale-[0.82] data-[state=unchecked]:bg-slate-200 data-[state=checked]:bg-primary/85" />
+                              <div className="ml-2 w-[9.5rem] shrink-0 sm:w-[10.5rem]">
+                                <EngineModelSelect engine={engine} model={model} onEngineChange={setEngine} onModelChange={setModel} className="h-9 rounded-full border-0 bg-transparent px-0.5 text-sm shadow-none" />
+                              </div>
+                            </>
+                          )}
+                          footerAfterCountContent={(
+                            <div className="ml-5 flex items-center gap-3">
+                              {loading && (
+                                <Button className="h-10 w-10 rounded-2xl border border-destructive/20 px-0 shadow-sm transition-colors duration-150" variant="destructive" onClick={stopStreaming} title="停止生成">
+                                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>stop</span>
+                                </Button>
+                              )}
+                              <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown()}>
+                                <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
+                              </Button>
+                            </div>
+                          )}
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ) : null}
               </div>
             </ResizablePanel>
 
@@ -1487,12 +2092,17 @@ function ChatPageContent() {
                 >
                   <span className="material-symbols-outlined text-3xl">right_panel_open</span>
                   <span className="[writing-mode:vertical-rl] tracking-[0.2em]">
-                    {homeSidebarTab === 'commander' ? '指挥官' : homeSidebarTab === 'workflow' ? '工作流' : 'Agent'}
+                    {homeSidebarTab === 'commander'
+                      ? '指挥官'
+                      : homeSidebarTab === 'workflow'
+                        ? '工作流'
+                        : 'Agent'}
                   </span>
                 </button>
               </div>
             ) : null}
           </ResizablePanelGroup>
+          )}
         </div>
 
         {/* Edit Dialog */}
@@ -1544,18 +2154,35 @@ function ChatPageContent() {
 
         <Dialog open={debugMode} onOpenChange={setDebugMode}>
           <DialogContent
-            className="max-w-3xl overflow-hidden p-0 flex flex-col gap-0"
+            overlayClassName="bg-slate-950/35 backdrop-blur-[3px]"
+            className="w-[min(92vw,860px)] max-w-none overflow-hidden rounded-[18px] border border-white/80 bg-[#f6f7f9] p-0 shadow-[0_24px_80px_rgba(15,23,42,0.35),0_1px_0_rgba(255,255,255,0.75)_inset] dark:border-white/10 dark:bg-[#1e1f23]"
             resizableHeight
             defaultHeight={620}
             minHeight={360}
             maxHeight={900}
           >
-            <DialogHeader className="border-b px-6 py-4">
-              <DialogTitle>System Prompt（实时）</DialogTitle>
+            <DialogHeader className="relative flex h-12 shrink-0 flex-row items-center justify-center space-y-0 border-b border-black/10 bg-gradient-to-b from-white/95 to-slate-100/95 px-5 dark:border-white/10 dark:from-[#34363b]/95 dark:to-[#25272b]/95">
+              <div className="absolute left-5 flex items-center gap-2">
+                <DialogClose
+                  className="h-3.5 w-3.5 rounded-full border border-red-500/70 bg-[#ff5f57] shadow-[0_1px_1px_rgba(0,0,0,0.18)] outline-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  aria-label="关闭"
+                />
+                <span className="h-3.5 w-3.5 rounded-full border border-amber-500/70 bg-[#ffbd2e] shadow-[0_1px_1px_rgba(0,0,0,0.18)]" aria-hidden="true" />
+                <span className="h-3.5 w-3.5 rounded-full border border-emerald-500/70 bg-[#28c840] shadow-[0_1px_1px_rgba(0,0,0,0.18)]" aria-hidden="true" />
+              </div>
+              <DialogTitle className="text-[13px] font-medium leading-none text-slate-700 dark:text-slate-200">
+                System Prompt（实时）
+              </DialogTitle>
+              <div className="absolute right-5 hidden items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400 sm:flex">
+                <span className={cn('h-2 w-2 rounded-full', debugLoading ? 'bg-amber-400' : 'bg-emerald-400')} />
+                {debugLoading ? 'Loading' : 'Live'}
+              </div>
             </DialogHeader>
-            <pre className="min-h-0 flex-1 overflow-y-auto bg-black px-6 py-5 text-xs leading-relaxed text-green-300 whitespace-pre-wrap break-words">
-              {debugLoading ? '加载中...' : (debugPrompt || '')}
-            </pre>
+            <div className="min-h-0 flex-1 bg-[#ebeef3] p-3 dark:bg-[#17181c]">
+              <pre className="h-full min-h-0 overflow-y-auto rounded-xl border border-black/10 bg-white px-5 py-4 font-mono text-[12px] leading-6 text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.06)_inset] whitespace-pre-wrap break-words dark:border-white/10 dark:bg-[#111216] dark:text-slate-200">
+                {debugLoading ? '加载中...' : (debugPrompt || '')}
+              </pre>
+            </div>
           </DialogContent>
         </Dialog>
 

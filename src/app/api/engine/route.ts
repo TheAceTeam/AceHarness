@@ -75,29 +75,39 @@ export async function POST(request: Request) {
       config.defaultModel = defaultModel;
     }
     // Only update driver if explicitly provided
-    const normalizedDriver = normalizeDriverSelection(driverTarget, driver);
-    if (normalizedDriver) {
-      config.drivers = {
-        ...(config.drivers || {}),
-        [driverTarget]: normalizedDriver,
-      };
-      if (config.engine === driverTarget) {
-        config.driver = normalizedDriver;
+    if (driver !== undefined) {
+      const normalizedDriver = normalizeDriverSelection(driverTarget, driver);
+      if (normalizedDriver) {
+        config.drivers = {
+          ...(config.drivers || {}),
+          [driverTarget]: normalizedDriver,
+        };
+        if (config.engine === driverTarget) {
+          config.driver = normalizedDriver;
+        }
       }
     } else if (!supportsDriverSelection(driverTarget)) {
       if (config.engine === driverTarget) {
         delete config.driver;
       }
     } else {
-      const fallbackDriver = getDefaultDriver(driverTarget);
-      if (fallbackDriver) {
-        config.drivers = {
-          ...(config.drivers || {}),
-          [driverTarget]: fallbackDriver,
-        };
-        if (config.engine === driverTarget && !config.driver) {
-          config.driver = fallbackDriver;
+      // No driver provided — preserve existing; only set default if nothing stored
+      const existingDriver = config.drivers?.[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie'];
+      if (!existingDriver) {
+        const fallbackDriver = getDefaultDriver(driverTarget);
+        if (fallbackDriver) {
+          config.drivers = {
+            ...(config.drivers || {}),
+            [driverTarget]: fallbackDriver,
+          };
+          if (config.engine === driverTarget && !config.driver) {
+            config.driver = fallbackDriver;
+          }
         }
+      }
+      // Sync top-level driver field to match stored per-engine driver
+      if (config.engine === driverTarget && !config.driver && config.drivers?.[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie']) {
+        config.driver = config.drivers[driverTarget as 'claude-code' | 'opencode' | 'nga' | 'codegenie'];
       }
     }
 

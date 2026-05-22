@@ -382,6 +382,54 @@ describe('spec-coding-store', () => {
     });
   });
 
+  test('blocked task checkbox marker parses and syncs as [!]', async () => {
+    await withIsolatedAceHome(async () => {
+      const { normalizeSpecCodingDocument, updateSpecCodingTaskStatuses } = await loadStore();
+      const base: any = {
+        id: 'spec-blocked',
+        version: 1,
+        status: 'confirmed',
+        title: 'Blocked marker spec',
+        workflowName: 'Blocked marker workflow',
+        summary: 'baseline',
+        goals: [],
+        nonGoals: [],
+        constraints: [],
+        requirements: [],
+        phases: [{ id: 'phase-1', title: 'Implement', ownerAgents: [], status: 'pending' }],
+        assignments: [],
+        checkpoints: [],
+        tasks: [],
+        progress: { overallStatus: 'pending', completedPhaseIds: [], activePhaseId: 'phase-1' },
+        revisions: [{ id: 'rev-1', version: 1, summary: 'initial', createdAt: new Date().toISOString() }],
+        artifacts: {
+          requirements: '',
+          design: '',
+          tasks: [
+            '# tasks.md',
+            '',
+            '- [!] T4.3 修复渲染状态',
+            '  关联需求： R3',
+          ].join('\n'),
+        },
+        linkedConfigFilename: 'blocked.yaml',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const normalized = normalizeSpecCodingDocument(base);
+      expect(normalized.tasks[0].id).toBe('T4.3');
+      expect(normalized.tasks[0].title).toBe('修复渲染状态');
+      expect(normalized.tasks[0].status).toBe('blocked');
+
+      const completed = updateSpecCodingTaskStatuses(normalized, {
+        updates: [{ id: 'T4.3', status: 'completed' }],
+        updatedBy: 'test',
+      });
+      expect(completed.artifacts.tasks).toContain('- [x] T4.3 修复渲染状态');
+    });
+  });
+
   test('rebuildSpecCodingPreservingArtifacts merges rebuilt structure with existing artifacts', async () => {
     await withIsolatedAceHome(async () => {
       const { buildSpecCodingFromWorkflowConfig, rebuildSpecCodingPreservingArtifacts } = await loadStore();

@@ -1,6 +1,8 @@
 'use client';
 
 import { Badge } from '@/components/ui/badge';
+import Markdown from '@/components/Markdown';
+import { WrapperProcessBlocks } from '@/components/chat/ChatMessage';
 import { cn } from '@/lib/core/utils';
 
 export function getCollaborationSpeakerAvatarSrc() {
@@ -13,12 +15,12 @@ export function getCollaborationInitials(name: string) {
 
 export function getCollaborationMessageKindLabel(message: any) {
   return message.speakerType === 'human'
-    ? '主持'
+    ? '人工'
     : message.speakerType === 'supervisor'
-      ? '总结'
+      ? 'Supervisor'
       : message.speakerType === 'system'
         ? '系统'
-        : 'Agent';
+        : '协作 Agent';
 }
 
 export function handleCollaborationMentionKeyDown({
@@ -121,6 +123,8 @@ export function renderWerewolfSurfaceMessage({
   const werewolfVisual = getWerewolfSpeakerVisual(message.speakerName, werewolfState?.players);
   const werewolfPlayer = werewolfState?.players?.find((item: any) => item.agentName === message.speakerName);
   const isStreamingPlaceholder = message.status === 'pending' && !displayMessage.content.trim();
+  const visibleContent = displayMessage.content || '';
+  const hasProcessContent = visibleContent.includes('<ace-process>');
   const tone =
     werewolfVisual
       ? `${werewolfVisual.card} shadow-[0_14px_30px_rgba(0,0,0,0.28)]`
@@ -189,7 +193,11 @@ export function renderWerewolfSurfaceMessage({
             </span>
           </div>
         ) : null}
-        {!isStreamingPlaceholder ? displayMessage.content : null}
+        {!isStreamingPlaceholder ? (
+          hasProcessContent
+            ? <WrapperProcessBlocks content={visibleContent} isStreaming={message.status === 'pending'} />
+            : <Markdown>{visibleContent}</Markdown>
+        ) : null}
       </div>
     </div>
   );

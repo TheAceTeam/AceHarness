@@ -35,7 +35,7 @@ export const ENGINE_META: Record<EngineType, EngineMeta> = {
   nga: {
     id: 'nga',
     name: 'NGA',
-    iconPath: '/engines/opencode.svg',
+    iconPath: '/engines/code-agent.svg',
   },
   'nga-sdk': {
     id: 'nga-sdk',
@@ -45,12 +45,12 @@ export const ENGINE_META: Record<EngineType, EngineMeta> = {
   codegenie: {
     id: 'codegenie',
     name: 'CodeGenie',
-    iconPath: '/engines/opencode.svg',
+    iconPath: '/engines/code-genie.svg',
   },
   'codegenie-sdk': {
     id: 'codegenie-sdk',
     name: 'CodeGenie (SDK)',
-    iconPath: '/engines/opencode.svg',
+    iconPath: '/engines/code-genie.svg',
   },
   codex: {
     id: 'codex',

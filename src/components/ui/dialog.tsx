@@ -31,12 +31,13 @@ type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.
   defaultHeight?: number
   minHeight?: number
   maxHeight?: number
+  overlayClassName?: string
 }
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, resizableHeight = false, defaultHeight, minHeight = 280, maxHeight, style, ...props }, ref) => {
+>(({ className, children, resizableHeight = false, defaultHeight, minHeight = 280, maxHeight, overlayClassName, style, ...props }, ref) => {
   const [height, setHeight] = React.useState<number | null>(defaultHeight ?? null)
   const startRef = React.useRef<{ y: number; height: number } | null>(null)
 
@@ -72,7 +73,7 @@ const DialogContent = React.forwardRef<
 
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(

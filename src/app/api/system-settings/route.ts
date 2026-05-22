@@ -10,6 +10,9 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     gitcodeTokenConfigured: Boolean(settings.gitcodeToken),
     locale: settings.locale || 'zh',
+    engineAvailabilityCacheMinutes: Number.isFinite(settings.engineAvailabilityCacheMinutes)
+      ? Math.max(1, Math.min(24 * 60, Number(settings.engineAvailabilityCacheMinutes)))
+      : 30,
     emailNotifications: {
       enabled: Boolean(settings.emailNotifications?.enabled),
       smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -53,10 +56,14 @@ export async function PUT(request: NextRequest) {
         subjectPrefix: typeof body.emailNotifications.subjectPrefix === 'string' ? body.emailNotifications.subjectPrefix.trim() : settings.emailNotifications?.subjectPrefix,
       }
       : settings.emailNotifications;
+    const nextEngineAvailabilityCacheMinutes = Number.isFinite(Number(body.engineAvailabilityCacheMinutes))
+      ? Math.max(1, Math.min(24 * 60, Number(body.engineAvailabilityCacheMinutes)))
+      : settings.engineAvailabilityCacheMinutes;
     await saveSystemSettings({
       ...settings,
       gitcodeToken: typeof body.gitcodeToken === 'string' ? body.gitcodeToken.trim() : settings.gitcodeToken,
       locale: body.locale === 'en' ? 'en' : body.locale === 'zh' ? 'zh' : settings.locale,
+      engineAvailabilityCacheMinutes: nextEngineAvailabilityCacheMinutes,
       emailNotifications: nextEmailSettings,
     });
     return NextResponse.json({ success: true });

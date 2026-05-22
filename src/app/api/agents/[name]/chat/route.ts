@@ -24,16 +24,22 @@ function parseTemporaryRoleConfig(body: any): RoleConfig | null {
     systemPrompt,
     constraints: Array.isArray(raw.constraints) ? raw.constraints.filter((item: unknown): item is string => typeof item === 'string') : ['不调用工具', '不修改文件'],
     allowedTools: [],
-    category: 'temporary-lab',
-    tags: ['temporary', 'werewolf-lab'],
+    category: typeof raw.category === 'string' ? raw.category : 'temporary-lab',
+    tags: Array.isArray(raw.tags)
+      ? raw.tags.filter((item: unknown): item is string => typeof item === 'string')
+      : ['temporary'],
     alwaysAvailableForChat: false,
   } as RoleConfig;
 }
 
 function isTemporaryWerewolfChat(body: any): boolean {
   return body?.workflowContext?.temporaryLab === 'werewolf'
-    || body?.temporaryRoleConfig?.category === 'temporary-lab'
-    || (Array.isArray(body?.temporaryRoleConfig?.tags) && body.temporaryRoleConfig.tags.includes('werewolf-lab'));
+    || body?.temporaryRoleConfig?.category === 'werewolf-lab'
+    || (
+      body?.workflowContext?.temporaryLab !== 'agora'
+      && Array.isArray(body?.temporaryRoleConfig?.tags)
+      && body.temporaryRoleConfig.tags.includes('werewolf-lab')
+    );
 }
 
 export async function POST(

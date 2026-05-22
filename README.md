@@ -11,7 +11,7 @@
 
 ***仓颉团队出品***
 
-***企业级 AI Multi-Agent 智能协作系统 -- 状态机驱动 / Supervisor 智能路由 / 对抗式迭代 / 对话式创建***
+***企业级 AI Multi-Agent 智能协作系统 -- Spec Driven Development / 状态机工作流 / Supervisor 智能路由 / 对抗式迭代 / 多 Agent 议场 / 长期记忆***
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -20,12 +20,12 @@
 
 Your team of AIs, collaborating to get work done.
 
-ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。它把「对话式创建」「状态机工作流」「红蓝对抗式评审」「Supervisor 路由」「运行记录与成本追踪」组合在一起，让复杂研发任务可以被拆解、执行、回退、审查和复盘。
+ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。它把 Spec Driven Development、状态机工作流、Supervisor 智能路由、对抗式迭代、多 Agent 议场、Git 基线断点、多层永久记忆、Notebook 知识沉淀、Skill 能力扩展和模型/引擎诊断组合在一起，让复杂研发任务可以被规划、执行、协作、审查、回退、恢复和复盘。
 
 ![ACEHarness 产品总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png)
 
 <p><strong>核心能力亮点</strong></p>
-<p>从产品全景进入日常工作流，下面六个模块构成 ACEHarness 的工程任务闭环。</p>
+<p>从产品全景进入日常工作流，ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工程任务闭环。</p>
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
@@ -59,7 +59,6 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 
 - Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
 - AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli` 等至少一种
-- `ANTHROPIC_API_KEY`：默认对话和工作流执行所需，见 `.env.example`
 
 ### 安装与运行
 
@@ -103,6 +102,16 @@ ACE_HOST=0.0.0.0 ACE_PORT=3000 npm start
 
 启动后访问 `http://127.0.0.1:3000`。如果使用 PowerShell 运行生产模式，同样先设置 `$env:ACE_HOST` 和 `$env:ACE_PORT`，再执行 `npm start`。
 
+ACE Service 的全局 CLI 用法：
+
+```bash
+ace              # 启动 ACE Service
+ace start        # 显式启动 ACE Service
+ace service      # 查看并停止当前受管的 ACE 实例
+```
+
+启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。
+
 ---
 
 ## 核心机制
@@ -111,10 +120,62 @@ ACE_HOST=0.0.0.0 ACE_PORT=3000 npm start
 
 ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程任务拆成可计划、可回退、可审查、可恢复、可复盘的闭环：
 
-- **创建与计划**：从首页对话或手动表单创建工作流，Spec Coding 将需求整理成 `requirements.md`、`design.md`、`tasks.md`，并在创建阶段绑定步骤与任务。
-- **运行与协作**：状态机根据结构化判决决定继续、回退或进入人工检查点；Supervisor 在 Agent 缺信息时负责路由补上下文。
-- **审查与恢复**：Defender 红队、Attacker 蓝队和 Judge 形成对抗式评审；失败、重启或人工介入后仍可基于运行记录恢复。
-- **观测与沉淀**：工作台展示流式输出、状态图、日志、成本和 Prompt 分析，产物可进入 Workspace、Notebook、Skills 或持久化 Spec。
+### 需求与计划建模
+
+**Spec Driven Development 模式支持**  
+从需求澄清开始生成 `requirements / design / tasks`，再绑定到工作流配置和任务执行，让复杂工程任务先形成可审查、可追踪、可迭代的正式计划。
+
+### 工作流编排与执行控制
+
+**状态机工作流的高级转移策略**  
+用状态、步骤、条件和优先级描述工程决策路径，支持比线性流程更复杂的回退、重试、审查、分支和条件跳转。
+
+**状态机步骤并发模式**  
+同一状态内可并发调度多个步骤或 Agent 任务，用于并行实现、评审、测试和信息收集，再由后续状态汇总结果并决定下一步转移。
+
+**Supervisor 智能路由**  
+当 Agent 缺少上下文或需要人类输入时，由 Supervisor 负责识别需求、路由到合适的 Agent 或用户，并把补充信息带回当前工作流。
+
+**对抗式迭代**  
+Defender、Attacker 和 Judge 可以形成红蓝对抗式审查闭环，让方案、代码、测试和证据在进入下一阶段前经过主动质疑和结构化裁决。
+
+**工作流 Preflight 检查**  
+启动前运行配置或自动推断出的质量检查，提前发现环境、构建、测试和依赖问题，避免工作流带病执行。
+
+**人工检查点支持 WeChat、邮件通知**  
+人工审批、补充问题、风险确认和关键决策可以通过页面、微信和邮件触达，让长流程在需要人介入时及时停住并继续。
+
+**工作基线与步骤级代码变更可回退断点**  
+基于 Git 建立运行基线，按步骤记录代码变更快照，用于审查、定位、比较和回退，让 AI 对代码库的修改可观察、可追溯。
+
+### 多 Agent 协作空间
+
+**工作流 Agent 议场功能**  
+工作流执行过程可进入多 Agent 群聊式协作空间，让计划、分歧、补充上下文、执行讨论和复盘集中在同一议题里。
+
+**话题模式议场**  
+独立于工作流的多 Agent 群聊，用“话题”推进讨论、方案比较、决策和日常协作。
+
+### 知识沉淀与长期上下文
+
+**多层永久记忆**  
+按角色、项目、工作流、会话等层级沉淀经验，后续运行可按上下文召回，减少重复解释和重复踩坑。
+
+**Cangjie Notebook 协同编辑文档**  
+用个人/团队 Notebook 管理文档、笔记、运行产物和复盘材料，支持协作编辑、快照恢复和分享。
+
+### 能力扩展与模型治理
+
+**Skill 市场接入**  
+从 Skill 市场安装能力包，也支持导入、导出和同步，让 Agent 在对话和工作流中使用领域知识与专用操作流程。
+
+**模型/引擎诊断台**  
+诊断不同模型、引擎、SDK/ACP 链路的连接、流式事件、结构化输出、代码、数学、推理等能力，帮助选择和排查执行后端。
+
+### 外部渠道接入
+
+**对话模式支持绑定微信 ClawBot 会话**  
+首页对话可以绑定外部微信会话，把外部消息接入同一上下文，让 ACEHarness 的对话能力延伸到常用沟通渠道。
 
 ---
 
@@ -130,6 +191,15 @@ ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程�
 
 ![产品界面总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.svg)
 
+ACEHarness 的界面围绕日常工程工作流组织：
+
+- **首页对话**：承接普通 AI 对话、工作流创建、议场入口和微信 ClawBot 会话绑定。
+- **议场**：以话题或工作流为中心组织多 Agent 群聊，适合方案讨论、分歧收敛和执行复盘。
+- **工作流工作台**：展示状态机运行、步骤流式输出、人工检查点、Preflight 结果、Git 步骤变更和运行恢复。
+- **Workspace 与变更**：内嵌文件编辑、目录浏览、Git diff、步骤级变更和 baseline 对比。
+- **Cangjie Notebook**：沉淀文档、笔记、运行产物和复盘材料，支持个人/团队空间、协作编辑、快照和分享。
+- **模型/引擎诊断台**：用标准 probe 评估模型与执行后端，定位 SDK、ACP、HTTP driver 和流式事件问题。
+
 ## 工作流案例
 
 ![工作流案例总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflow-cases-overview.svg)
@@ -140,42 +210,78 @@ ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程�
 
 ## 渠道接入
 
-ACEHarness 现已支持把工作流运行时对话和多 Agent 圆桌桥接到外部聊天平台。当前内置了 `Feishu`、`DingTalk`、`WeChat Bridge`、`Generic Webhook` 四类 provider 模板，可通过 `POST /api/channels/setup` 一键生成 webhook 和共享密钥，再由外部平台或桥接器把消息投递到 `/api/channels/inbound/:integrationId`。
+ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent 议场桥接到外部聊天平台。当前内置了 `Feishu`、`DingTalk`、`WeChat Bridge`、`Generic Webhook` 四类 provider 模板，可通过 `POST /api/channels/setup` 一键生成 webhook 和共享密钥，再由外部平台或桥接器把消息投递到 `/api/channels/inbound/:integrationId`。
 
 详细说明见：[渠道接入文档](./docs/channel-integrations.md)。
 
-### 环境变量 (`.env.local`)
+### ACE Service
 
-复制 `.env.example` 为 `.env.local` 后填入真实值。下表只列出示例文件中已有的应用变量。
+`server.js` 会在启动时加载 `.env`、`.env.local` 以及当前模式对应的 `.env.development*` / `.env.production*`；shell、进程管理器或启动脚本里已存在的环境变量优先级更高，不会被文件覆盖。
 
-| 变量 | 说明 | 必填 |
-|------|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 | 是 |
-| `ANTHROPIC_BASE_URL` | 自定义 API 地址（代理/自建网关） | 否 |
-| `ANTHROPIC_TIMEOUT` | Claude CLI 相关请求超时时间（毫秒） | 否 |
-| `OPENAI_API_KEY` | OpenAI API 密钥 | 否 |
-| `OPENAI_BASE_URL` | OpenAI 兼容 API 地址 | 否 |
-| `NEXT_PUBLIC_API_BASE` | 前后端分离时的后端地址 | 否 |
+核心启动与运行目录变量：
 
-`server.js` 还支持以下运行时变量，可在 shell、进程管理器或启动脚本中设置：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
+| 变量 | 说明 | 默认值 / 优先级 |
+|------|------|-----------------|
 | `ACE_HOST` | 服务监听地址 | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness 服务端口 | `3000` |
-| `PORT` | 通用服务端口，优先级高于 `ACE_PORT` | 未设置 |
+| `PORT` | 通用服务端口 | 优先级高于 `ACE_PORT` |
+| `ACE_HOME` | ACE 运行根目录，决定 `config/`、`data/`、`cache/`、`logs/`、`workspace/` 等运行时数据位置 | 未设置时按平台回退 |
+| `APPDATA` | Windows 下 `ACE_HOME` 的回退根目录 | `<APPDATA>/ACEHarness` |
+| `XDG_DATA_HOME` | Linux / macOS 下 `ACE_HOME` 的回退根目录 | `<XDG_DATA_HOME>/aceharness` |
+| `ACE_INSTALL_ROOT` | 安装根目录；用于定位 `server.js`、`configs/`、`dist/` 等安装内容 | 未设置时由启动器自动设为当前安装目录 |
+| `ACE_LOCALE` | ACE CLI 与服务默认语言 | 优先级高于 `LANG` / `LC_ALL` |
+| `LANG` | 语言回退变量 | 在 `ACE_LOCALE` 未设置时参与解析 |
+| `LC_ALL` | 语言回退变量 | 在 `ACE_LOCALE`、`LANG` 未设置时参与解析 |
+| `NODE_ENV` | 运行模式；同时影响 `.env*` 加载和部分调试默认值 | `production`（受管服务子进程默认如此） |
 
-### 执行引擎 (`.engine.json`)
+对外地址与渠道恢复变量：
 
-```json
-{ "engine": "claude-code" }
+| 变量 | 说明 | 默认值 / 优先级 |
+|------|------|-----------------|
+| `ACE_PUBLIC_ORIGIN` | 对外访问的绝对地址；用于 webhook、回调 URL、官方微信桥接等场景 | 优先级最高 |
+| `NEXT_PUBLIC_ACE_ORIGIN` | 对外地址回退值 | 次于 `ACE_PUBLIC_ORIGIN` |
+| `NEXT_PUBLIC_APP_ORIGIN` | 对外地址回退值 | 次于 `NEXT_PUBLIC_ACE_ORIGIN` |
+| `ACE_WECHAT_AUTO_RESTORE` | 是否在服务启动后自动恢复官方微信 bridge | 默认开启；设为 `0` / `false` 可关闭 |
+| `ACE_WECHAT_RESTORE_DELAY_MS` | 官方微信 bridge 自动恢复延迟（毫秒） | `3000` |
+
+诊断与 ACP / 流式运行变量：
+
+| 变量 | 说明 | 默认值 / 优先级 |
+|------|------|-----------------|
+| `ACE_TIMING_DEBUG` | 打印服务与 ACP 阶段耗时日志 | 本地开发默认开，生产 / 测试默认关 |
+| `ACE_ACP_TIMING_DEBUG` | 同上，专门控制 ACP 耗时日志 | 可与 `ACE_TIMING_DEBUG` 叠加使用 |
+| `ACE_ACP_STREAM_DEBUG` | 打印 ACP stream 事件级调试信息 | 未设置时跟随引擎诊断开关 |
+| `ACE_ACP_INIT_TIMEOUT_MS` | ACP `connection.initialize` 超时（毫秒） | `30000` |
+| `ACE_ACP_NEW_SESSION_TIMEOUT_MS` | ACP `newSession` 超时（毫秒） | `60000` |
+| `ACE_ACP_LOAD_SESSION_TIMEOUT_MS` | ACP `session/load` 超时（毫秒） | `30000` |
+| `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS` | 模型发现接口总超时（毫秒） | `init + newSession + 15000` |
+| `ACE_CHAT_STREAM_DEBUG` | Claude Code SDK 流式输出调试 | 默认关闭 |
+| `ACE_CLAUDE_CODE_EXECUTABLE` | 指定 Claude Code 可执行文件路径 | 未设置时回退到 `CLAUDE_CODE_EXECUTABLE` 或自动探测 |
+| `ACE_CLAUDE_API_RETRY_ATTEMPTS` | Claude Code SDK API 重试次数上限 | `12` |
+| `ACE_CLAUDE_API_RETRY_MIN_DELAY_MS` | Claude Code SDK API 最小重试间隔（毫秒） | `10000` |
+
+按引擎生效的 ACE 变量：
+
+| 变量 | 说明 | 默认值 / 优先级 |
+|------|------|-----------------|
+| `ACE_CODEGENIE_BIN` | CodeGenie 可执行文件路径 | 未设置时按 PATH / SDK 配置探测 |
+| `ACE_CODEGENIE_SDK_BASE_URL` | CodeGenie SDK 服务地址 | 未设置时使用内置默认 |
+| `ACE_CODEGENIE_SDK_COMMAND` | CodeGenie SDK 启动命令 | 未设置时按 PATH / SDK 配置探测 |
+| `ACE_CODEGENIE_SDK_TIMEOUT_MS` | CodeGenie SDK 请求超时（毫秒） | 未设置时使用内置默认 |
+| `ACE_NGA_BIN` | NGA 可执行文件路径 | 未设置时按 PATH / SDK 配置探测 |
+| `ACE_NGA_SDK_BASE_URL` | NGA SDK 服务地址 | 未设置时使用内置默认 |
+| `ACE_NGA_SDK_COMMAND` | NGA SDK 启动命令 | 未设置时按 PATH / SDK 配置探测 |
+| `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK 请求超时（毫秒） | 未设置时使用内置默认 |
+
+全局 CLI 用法：
+
+```bash
+ace              # 启动 ACE Service
+ace start        # 显式启动 ACE Service
+ace service      # 查看并停止当前受管的 ACE 实例
 ```
 
-支持的执行引擎包括 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`（Cursor CLI）、`codex`、`trae-cli`。
-
-子进程会继承 `process.env`，无需额外配置。切换引擎只需在引擎页面选择本机可用的 CLI 工具即可。
-
----
+启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。
 
 ## 文档
 
@@ -222,6 +328,7 @@ CLI 命令来源：`src/cli.ts`。
 ```bash
 ace                # 启动 ACEHarness
 ace start          # 启动 ACEHarness
+ace service        # 查看并停止 ACE 服务
 ace reset --force  # 重置本地 ACE 配置
 ace --help         # 查看帮助
 ```
@@ -246,17 +353,17 @@ npm run lint
 | 工作流与配置 | Zod 4、YAML、node-cron、tar-stream、unzipper、yazl |
 | 可视化 | ReactFlow 11、Recharts 3、Mermaid 11 |
 | 表单与拖拽 | React Hook Form 7、@dnd-kit |
-| Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、react-syntax-highlighter、KaTeX |
+| Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、KaTeX |
 | AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` |
 | 测试 | Vitest 4、Testing Library、jsdom |
-| 国际化与主题 | next-intl 4、next-themes |
+| 主题 | next-themes |
 
 ### 文档维护
 
 当以下内容变化时，请同步更新本 README：
 
 - `package.json` scripts、`bin`、`files` 或发布流程变化
-- `.env.example` 中的环境变量变化
+- 文档中列出的环境变量变化
 - `src/app/` 页面入口、API 分类或主要用户流程变化
 - `src/lib/` 中工作流、Spec Coding、引擎、认证、Notebook 等核心机制变化
 - `configs/`、`skills/` 或内置 Agent 能力变化

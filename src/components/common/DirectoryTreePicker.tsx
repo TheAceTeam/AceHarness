@@ -335,7 +335,7 @@ export default function DirectoryTreePicker({
           </DialogHeader>
 
           <div className="h-[min(76vh,720px)] min-h-[520px] overflow-hidden">
-            <ResizablePanelGroup direction="horizontal" className="h-full rounded-lg border">
+            <ResizablePanelGroup orientation="horizontal" className="h-full rounded-lg border">
               <ResizablePanel defaultSize={72} minSize={45}>
                 <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
                   <div className="flex flex-wrap items-center gap-2 border-b p-3">

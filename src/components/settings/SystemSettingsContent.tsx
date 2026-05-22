@@ -8,8 +8,10 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { EnvironmentVariables } from '@/components/ai-elements/environment-variables';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { Progress } from '@/components/ui/progress';                                                                                                 
+import { copyText } from '@/lib/core/clipboard';
 import {
   cangjieSdkApi,
   envApi,
@@ -114,6 +116,7 @@ export default function SystemSettingsContent() {
 
   const [gitcodeToken, setGitcodeToken] = useState('');
   const [gitcodeConfigured, setGitcodeConfigured] = useState(false);
+  const [engineAvailabilityCacheMinutes, setEngineAvailabilityCacheMinutes] = useState('30');
   const [tokenLoading, setTokenLoading] = useState(true);
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
@@ -144,6 +147,22 @@ export default function SystemSettingsContent() {
         : item
     ));
   }, [managedHomeActive, sdkOverview?.effective.cangjieHome, vars]);
+
+  const environmentVariableItems = useMemo(() => displayVars.map((item, index) => ({
+    key: item.key,
+    value: item.value,
+    enabled: item.enabled,
+    required: item.key.trim() === 'CANGJIE_HOME',
+    description: item.key.trim() === 'CANGJIE_HOME'
+      ? '仓颉 SDK 根目录，Markdown/编辑器运行仓颉代码时会读取此变量。'
+      : undefined,
+    maskValue: /TOKEN|SECRET|PASSWORD|KEY/u.test(item.key.trim()),
+    disableValueEdit: managedHomeActive && item.key.trim() === 'CANGJIE_HOME',
+    keyError: varErrors[index]?.key,
+    valueHint: managedHomeActive && item.key.trim() === 'CANGJIE_HOME'
+      ? '当前已启用托管 SDK，此处展示有效路径，原始环境变量回退值不会被覆盖。'
+      : undefined,
+  })), [displayVars, managedHomeActive, varErrors]);
 
   const groupedCatalog = useMemo(() => {
     const groups: Record<SdkChannel, SdkCatalogEntry[]> = { nightly: [], sts: [], lts: [] };
@@ -208,6 +227,7 @@ export default function SystemSettingsContent() {
     try {
       const settings = await systemSettingsApi.get();
       setGitcodeConfigured(settings.gitcodeTokenConfigured);
+      setEngineAvailabilityCacheMinutes(String(settings.engineAvailabilityCacheMinutes || 30));
       setEmailForm({
         enabled: Boolean(settings.emailNotifications?.enabled),
         smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -291,6 +311,13 @@ export default function SystemSettingsContent() {
     }
   };
 
+  const copyEnvVar = async (index: number) => {
+    const item = vars[index];
+    if (!item) return;
+    const ok = await copyText(`export ${item.key.trim()}="${item.value}"`);
+    toast(ok ? 'success' : 'error', ok ? `已复制 ${item.key.trim() || '环境变量'} 导出命令` : '复制失败');
+  };
+
   const saveGitcodeToken = async () => {
     const trimmed = gitcodeToken.trim();
     if (!trimmed) {
@@ -308,6 +335,30 @@ export default function SystemSettingsContent() {
       await loadTokenSettings();
     } catch (error: any) {
       const message = error?.message || '保存 GitCode Token 失败';
+      setTokenError(message);
+      toast('error', message);
+    } finally {
+      setTokenSaving(false);
+    }
+  };
+
+  const saveEngineAvailabilityCache = async () => {
+    const minutes = Number(engineAvailabilityCacheMinutes);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 24 * 60) {
+      setTokenError('引擎可用性缓存时长必须在 1 到 1440 分钟之间');
+      return;
+    }
+
+    setTokenSaving(true);
+    setTokenError(null);
+    try {
+      await systemSettingsApi.save({
+        engineAvailabilityCacheMinutes: Math.round(minutes),
+      });
+      toast('success', '引擎可用性缓存时长已保存');
+      await loadTokenSettings();
+    } catch (error: any) {
+      const message = error?.message || '保存引擎可用性缓存时长失败';
       setTokenError(message);
       toast('error', message);
     } finally {
@@ -437,6 +488,33 @@ export default function SystemSettingsContent() {
               placeholder={gitcodeConfigured ? '已配置，输入新值可覆盖' : '请输入 GitCode Token'}
             />
             <div className="text-sm text-muted-foreground">当前状态：{tokenLoading ? '加载中...' : gitcodeConfigured ? '✓ 已配置' : '未配置'}</div>
+          </div>
+
+          <div className="border-t pt-4 space-y-2">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium">引擎可用性缓存时长</div>
+                <div className="mt-1 text-xs text-muted-foreground">所有模型/引擎选择框和引擎管理页都会复用这份可用性结果。默认 30 分钟；手动点击“刷新可用性”会强制重查。</div>
+              </div>
+              <Button size="sm" variant="outline" onClick={saveEngineAvailabilityCache} disabled={tokenSaving || tokenLoading}>
+                {tokenSaving ? '保存中...' : '保存时长'}
+              </Button>
+            </div>
+            <div className="flex items-center gap-3">
+              <Input
+                type="number"
+                min={1}
+                max={1440}
+                value={engineAvailabilityCacheMinutes}
+                onChange={(event) => {
+                  setEngineAvailabilityCacheMinutes(event.target.value);
+                  if (tokenError) setTokenError(null);
+                }}
+                disabled={tokenLoading || tokenSaving}
+                className="max-w-[160px]"
+              />
+              <span className="text-sm text-muted-foreground">分钟</span>
+            </div>
           </div>
         </section>
 
@@ -781,7 +859,6 @@ export default function SystemSettingsContent() {
               <p className="mt-1 text-sm text-muted-foreground">系统级环境变量会作为运行时回退配置参与解析。</p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={addRow} disabled={envSaving || envLoading}>添加</Button>
               <Button size="sm" onClick={saveEnvVars} disabled={envSaving || envLoading}>
                 {envSaving ? '保存中...' : '保存'}
               </Button>
@@ -795,62 +872,19 @@ export default function SystemSettingsContent() {
           {envLoading ? (
             <div className="py-6 text-center text-sm text-muted-foreground">环境变量加载中...</div>
           ) : (
-            <div className="space-y-3">
-              <div className="grid grid-cols-[1fr_1fr_56px_40px] gap-2 px-1 text-xs font-medium text-muted-foreground">
-                <span>Key</span>
-                <span>Value</span>
-                <span className="text-center">启用</span>
-                <span></span>
-              </div>
-              {displayVars.map((item, index) => {
-                const isManagedHomeField = managedHomeActive && item.key.trim() === 'CANGJIE_HOME';
-                return (
-                  <div key={index} className="space-y-1">
-                    <div className="grid grid-cols-[1fr_1fr_56px_40px] gap-2 items-center">
-                      <Input
-                        value={item.key}
-                        onChange={(event) => updateVar(index, { key: event.target.value })}
-                        placeholder="KEY"
-                        className={`h-9 font-mono text-xs ${varErrors[index]?.key ? 'border-destructive focus-visible:ring-destructive' : ''}`}
-                        disabled={envSaving}
-                      />
-                      <Input
-                        value={item.value}
-                        onChange={(event) => updateVar(index, { value: event.target.value })}
-                        placeholder="value"
-                        className="h-9 font-mono text-xs"
-                        disabled={envSaving || isManagedHomeField}
-                      />
-                      <div className="flex justify-center">
-                        <Switch
-                          checked={item.enabled}
-                          onCheckedChange={(checked) => updateVar(index, { enabled: checked })}
-                          disabled={envSaving}
-                          className="scale-75"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeVar(index)}
-                        disabled={envSaving}
-                        className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
-                      >
-                        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
-                      </button>
-                    </div>
-                    {varErrors[index]?.key ? (
-                      <div className="px-1 text-xs text-destructive">{varErrors[index].key}</div>
-                    ) : null}
-                    {isManagedHomeField ? (
-                      <div className="px-1 text-xs text-muted-foreground">当前已启用托管 SDK，此处仅展示回退值对应的有效路径，原始环境变量值不会被覆盖。</div>
-                    ) : null}
-                  </div>
-                );
+            <EnvironmentVariables
+              items={environmentVariableItems}
+              disabled={envSaving}
+              onAdd={addRow}
+              onRemove={removeVar}
+              onChange={(index, patch) => updateVar(index, {
+                ...(patch.key !== undefined ? { key: patch.key } : {}),
+                ...(patch.value !== undefined ? { value: patch.value } : {}),
+                ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
               })}
-              {displayVars.length === 0 ? (
-                <div className="py-4 text-center text-sm text-muted-foreground">暂无环境变量</div>
-              ) : null}
-            </div>
+              onCopy={copyEnvVar}
+              emptyMessage="暂无环境变量"
+            />
           )}
         </section>
       </div>

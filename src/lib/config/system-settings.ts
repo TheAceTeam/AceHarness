@@ -11,6 +11,7 @@ export interface SystemSettings {
   port?: number;
   lanAccess?: boolean;
   locale?: 'zh' | 'en';
+  engineAvailabilityCacheMinutes?: number;
   emailNotifications?: {
     enabled?: boolean;
     smtpHost?: string;

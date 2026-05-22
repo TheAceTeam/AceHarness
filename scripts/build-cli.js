@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..');
 let distDir = path.join(root, 'dist');
 const srcDir = path.join(root, 'src');
 
-const files = [
+const entryFiles = [
   path.join(srcDir, 'cli.ts'),
   path.join(srcDir, 'lib', 'core', 'app-paths.ts'),
   path.join(srcDir, 'lib', 'core', 'command-exists.ts'),
@@ -71,6 +71,62 @@ function cleanDir(dirPath) {
   }
 }
 
+function resolveLocalModule(fromPath, specifier) {
+  const candidates = [];
+
+  if (specifier.startsWith('@/')) {
+    const aliased = path.join(srcDir, specifier.slice(2));
+    candidates.push(aliased);
+  } else if (specifier.startsWith('.')) {
+    candidates.push(path.resolve(path.dirname(fromPath), specifier));
+  } else {
+    return null;
+  }
+
+  for (const basePath of candidates) {
+    const possiblePaths = [
+      basePath,
+      `${basePath}.ts`,
+      `${basePath}.tsx`,
+      `${basePath}.js`,
+      `${basePath}.mjs`,
+      path.join(basePath, 'index.ts'),
+      path.join(basePath, 'index.tsx'),
+      path.join(basePath, 'index.js'),
+      path.join(basePath, 'index.mjs'),
+    ];
+    const hit = possiblePaths.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    if (hit) {
+      return hit;
+    }
+  }
+
+  return null;
+}
+
+function collectFiles() {
+  const seen = new Set();
+  const queue = [...entryFiles];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current) || !fs.existsSync(current)) continue;
+    seen.add(current);
+
+    const source = fs.readFileSync(current, 'utf8');
+    const info = ts.preProcessFile(source, true, true);
+
+    for (const imported of info.importedFiles) {
+      const resolved = resolveLocalModule(current, imported.fileName);
+      if (resolved && !seen.has(resolved)) {
+        queue.push(resolved);
+      }
+    }
+  }
+
+  return Array.from(seen);
+}
+
 function transpileFile(inputPath) {
   const source = fs.readFileSync(inputPath, 'utf8');
   const relative = path.relative(srcDir, inputPath);
@@ -118,4 +174,4 @@ function transpileFile(inputPath) {
 
 cleanDir(distDir);
 ensureDir(distDir);
-files.forEach(transpileFile);
+collectFiles().forEach(transpileFile);

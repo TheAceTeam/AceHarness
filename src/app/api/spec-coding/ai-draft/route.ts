@@ -8,6 +8,7 @@ import {
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
 import { loadChatSettings } from '@/lib/chat/settings';
 import { createEngine, getConfiguredEngine, type EngineType } from '@/lib/engines/engine-factory';
+import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import {
   extractJsonObject,
@@ -177,7 +178,7 @@ export async function POST(request: NextRequest) {
       '- 如果信息不足，也要先给出当前最佳草案，并把缺口写入 clarification。',
     ].filter(Boolean).join('\n');
 
-    const result = await engine.execute({
+    const result = await executeEngineWithContextRecovery(engine, {
       agent: 'spec-coding',
       step: 'draft-spec-coding',
       prompt,

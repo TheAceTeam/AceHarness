@@ -11,7 +11,14 @@ import { ACPEngine, logAcpTiming } from './acp-engine';
 import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
-import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
+import { htmlCodeBlock, formatTextContent } from '@/lib/core/markdown-utils';
+import {
+  formatAceReasoning,
+  formatAceToolCall,
+  formatAceToolResult,
+  getAceToolTitle,
+  resolveAceToolName,
+} from '@/lib/chat/ace-process-formatters';
 
 function numberOrZero(value: unknown): number {
   const numeric = Number(value);
@@ -51,6 +58,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected streaming = false;
   protected collectedOutput = '';
   protected currentModelId: string | null = null;
+  protected diagnosticLoggingEnabled = false;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
@@ -60,13 +68,30 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     const timingLabel = this.getName();
     const tExecute = Date.now();
     try {
+      this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
       this.seenToolIds.clear();
       this.lastBlockWasTool = false;
       this.collectedOutput = '';
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper execute start',
+        detail: `sessionId=${options.sessionId || '<new>'}, model=${options.model || '<default>'}`,
+        metadata: {
+          step: options.step,
+          agent: options.agent,
+          workingDirectory: options.workingDirectory,
+          timeoutMs: options.timeoutMs,
+        },
+        verbose: true,
+      });
 
       // Reuse existing engine if resuming a session, otherwise create new
       const canReuse = options.sessionId && this.engine && this.currentSessionId === options.sessionId;
       if (!canReuse) {
+        this.emitDiagnosticLog({
+          message: 'ACP wrapper preparing fresh engine/session',
+          detail: options.sessionId ? `resume ${options.sessionId}` : 'create new session',
+          verbose: true,
+        });
         const tStop = Date.now();
         // Stop previous engine if any
         if (this.engine) {
@@ -93,11 +118,22 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         }
         this.currentModelId = null;
         if (this.currentSessionId) {
+          this.emitDiagnosticLog({
+            message: 'ACP session ready',
+            detail: this.currentSessionId,
+            verbose: true,
+          });
           this.emit('stream', {
             type: 'session',
             content: this.currentSessionId,
           } as EngineStreamEvent);
         }
+      } else {
+        this.emitDiagnosticLog({
+          message: 'ACP wrapper reusing in-memory session',
+          detail: options.sessionId || this.currentSessionId || '',
+          verbose: true,
+        });
       }
 
       const engine = this.engine;
@@ -105,14 +141,27 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
         throw new Error(`[${this.getName()}] engine not initialized`);
       }
 
-if (options.model && this.currentModelId !== options.model) {
+      if (options.model && this.currentModelId !== options.model) {
         const tModel = Date.now();
         try {
+          this.emitDiagnosticLog({
+            message: 'ACP set model',
+            detail: options.model,
+            verbose: true,
+          });
           // magic-cli doesn't support runtime model switching via ACP, so skip this step for it.
           await engine.setModel(options.model);
           this.currentModelId = options.model;
           logAcpTiming(timingLabel, 'wrap.W3_setModel', tModel);
         } catch (modelErr: any) {
+          this.emitDiagnosticLog({
+            level: 'error',
+            message: 'ACP set model failed',
+            detail: modelErr.message,
+            metadata: {
+              model: options.model,
+            },
+          });
           // Emit the error to the stream so the user sees available models in the UI
           this.emit('stream', {
             type: 'text',
@@ -139,6 +188,11 @@ if (options.model && this.currentModelId !== options.model) {
         }
       }
       console.log(`[${this.getName()}] calling sendPrompt...`);
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper sendPrompt start',
+        detail: `promptLength=${fullPrompt.length}`,
+        verbose: true,
+      });
       const tPrompt = Date.now();
       const promptResult = await engine.sendPrompt(fullPrompt);
       logAcpTiming(timingLabel, 'wrap.W4_sendPrompt_includes_agent', tPrompt);
@@ -146,6 +200,17 @@ if (options.model && this.currentModelId !== options.model) {
       const stopReason = promptResult.stopReason;
       console.log(`[${this.getName()}] sendPrompt returned: stopReason=${stopReason}`);
       this.streaming = false;
+      this.emitDiagnosticLog({
+        message: 'ACP wrapper sendPrompt done',
+        detail: `stopReason=${stopReason || 'n/a'}`,
+        metadata: {
+          sessionId: this.currentSessionId,
+          stopReason,
+          usage: promptResult.usage,
+          outputLength: this.collectedOutput.length,
+        },
+        verbose: true,
+      });
 
       // Treat end_turn and undefined/null (normal completion) as success
       const isSuccess = !stopReason || stopReason === 'end_turn';
@@ -168,6 +233,12 @@ if (options.model && this.currentModelId !== options.model) {
       // Some ACP engines may close the connection right after streaming final output.
       // In this case, treat the run as successful if we already captured non-empty content.
       if (isConnectionClosed && hasUsableOutput) {
+        this.emitDiagnosticLog({
+          level: 'warning',
+          message: 'ACP connection closed after streaming output',
+          detail: `outputLength=${normalizedOutput.length}`,
+          verbose: true,
+        });
         return {
           success: true,
           output: normalizedOutput,
@@ -177,6 +248,16 @@ if (options.model && this.currentModelId !== options.model) {
         };
       }
 
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'ACP wrapper execute failed',
+        detail: errorMessage,
+        metadata: {
+          outputLength: normalizedOutput.length,
+          hasUsableOutput,
+          isConnectionClosed,
+        },
+      });
       return {
         success: false,
         output: '',
@@ -196,7 +277,10 @@ if (options.model && this.currentModelId !== options.model) {
   }
 
   protected async startNewEngine(options: EngineOptions): Promise<void> {
-    const config = this.getACPConfig(options);
+    const config = {
+      ...this.getACPConfig(options),
+      diagnosticLogging: this.diagnosticLoggingEnabled,
+    };
     this.engine = new ACPEngine(config);
     this.setupEngineEvents();
     await this.engine.start();
@@ -233,24 +317,29 @@ if (options.model && this.currentModelId !== options.model) {
     this.emit('stream', { type: 'text', content: normalized, metadata } as EngineStreamEvent);
   }
 
+  protected emitDiagnosticLog(input: {
+    message: string;
+    detail?: string;
+    level?: 'info' | 'warning' | 'error';
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.diagnosticLoggingEnabled) return;
+    const { message, detail, level, metadata, verbose } = input;
+    this.emit('stream', {
+      type: 'log',
+      content: message,
+      metadata: {
+        ...(detail ? { detail } : {}),
+        ...(level ? { level } : {}),
+        ...(metadata !== undefined ? { payload: metadata } : {}),
+        ...(verbose !== undefined ? { verbose } : {}),
+      },
+    } as EngineStreamEvent);
+  }
+
   protected getToolTitle(toolName: string): string {
-    const titleMap: Record<string, string> = {
-      bash: '💻 执行命令',
-      write: '📝 写入文件',
-      edit: '✏️ 编辑文件',
-      multiedit: '✏️ 编辑文件',
-      patch: '✏️ 编辑文件',
-      read: '📖 读取文件',
-      glob: '🔍 搜索文件',
-      grep: '🔍 搜索内容',
-      ls: '📂 列出目录',
-      task: '🤖 子任务',
-      todo: '📋 任务列表',
-      todowrite: '📋 任务列表',
-      webfetch: '🌐 获取网页',
-      websearch: '🔎 搜索网页',
-    };
-    return titleMap[toolName] || `🔧 ${toolName}`;
+    return getAceToolTitle(toolName);
   }
 
   // ---------------------------------------------------------------------------
@@ -277,7 +366,10 @@ if (options.model && this.currentModelId !== options.model) {
       if (!this.streaming) return;
       const text = this.extractText(content);
       if (text) {
-        this.emit('stream', { type: 'thought', content: text } as EngineStreamEvent);
+        this.emit('stream', {
+          type: 'thought',
+          content: formatAceReasoning(text),
+        } as EngineStreamEvent);
       }
     });
 
@@ -308,26 +400,86 @@ if (options.model && this.currentModelId !== options.model) {
       }
 
       if (toolUpdate.status === 'completed' || toolUpdate.status === 'failed') {
-        let resultText = '';
+        let resultPayload: unknown = undefined;
         if (toolUpdate.rawOutput) {
-          resultText = this.extractToolOutput(toolUpdate.rawOutput);
+          resultPayload = toolUpdate.rawOutput;
         } else if (Array.isArray(toolUpdate.content)) {
-          const raw = toolUpdate.content
-            .filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
-          resultText = this.extractToolOutput(raw);
+          const textParts = toolUpdate.content
+            .filter((c: any) => c.type === 'text' && typeof c.text === 'string')
+            .map((c: any) => c.text);
+          resultPayload = textParts.length > 0 ? textParts.join('\n') : toolUpdate.content;
         } else if (typeof toolUpdate.content === 'string') {
-          resultText = this.extractToolOutput(toolUpdate.content);
+          resultPayload = toolUpdate.content;
         }
-        const formatted = this.formatToolResult(resultText, toolUpdate);
+        const formatted = this.formatToolResult(resultPayload, toolUpdate);
         if (formatted) {
           this.emitText(formatted, toolUpdate);
         }
       }
     });
 
-    this.engine.on('log', () => { /* skip */ });
+    this.engine.on('subtask', (params: any) => {
+      if (!this.streaming) return;
+      const name = params?.title || params?.name || params?.description || 'Subagent task';
+      this.lastBlockWasTool = true;
+      this.emitText(
+        formatAceToolCall({
+          toolName: 'task',
+          rawInput: {
+            description: params?.description || name,
+            agent: params?.agent || params?.subagent || '',
+            prompt: params?.prompt || '',
+            sessionId: params?.sessionId || params?.session_id || params?.id || params?.taskId || params?.task_id || '',
+          },
+          title: name,
+          toolId: String(params?.id || params?.taskId || params?.task_id || ''),
+        }),
+        params,
+      );
+    });
+
+    this.engine.on('log', (payload) => {
+      if (!this.streaming) return;
+      if (typeof payload === 'string') {
+        this.emitDiagnosticLog({
+          message: 'ACP engine log',
+          detail: payload.trim(),
+          verbose: true,
+        });
+        return;
+      }
+      if (payload && typeof payload === 'object' && 'message' in payload) {
+        const entry = payload as Record<string, unknown>;
+        this.emitDiagnosticLog({
+          message: String(entry.message || 'ACP engine log'),
+          detail: typeof entry.detail === 'string' ? entry.detail : undefined,
+          level: entry.level === 'info' || entry.level === 'warning' || entry.level === 'error'
+            ? entry.level
+            : undefined,
+          metadata: entry,
+          verbose: entry.verbose === undefined ? true : Boolean(entry.verbose),
+        });
+      }
+    });
+
+    this.engine.on('exit', (info) => {
+      if (!this.streaming) return;
+      this.emitDiagnosticLog({
+        level: info?.code === 0 && !info?.signal ? 'info' : 'error',
+        message: 'ACP engine exit event',
+        detail: `code=${info?.code ?? 'null'}, signal=${info?.signal ?? 'null'}`,
+        metadata: info,
+        verbose: true,
+      });
+    });
 
     this.engine.on('error', (error) => {
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'ACP engine error event',
+        detail: error instanceof Error ? error.message : String(error),
+        verbose: true,
+      });
       this.emit('stream', {
         type: 'text',
         content: `\n\n❌ 错误: ${error instanceof Error ? error.message : String(error)}\n`
@@ -349,171 +501,34 @@ if (options.model && this.currentModelId !== options.model) {
     return '';
   }
 
-  /**
-   * Extract human-readable text from rawOutput.
-   * Handles structured objects like { output, exit, error, description, truncated }
-   * instead of dumping raw JSON.
-   */
-  protected extractToolOutput(raw: any): string {
-    if (typeof raw === 'string') return raw;
-    if (!raw || typeof raw !== 'object') return '';
-    // Structured command result: { output, exit, error, description, ... }
-    if ('output' in raw && typeof raw.output === 'string') {
-      let text = raw.output;
-      if (raw.exit !== undefined && raw.exit !== 0) {
-        text += text ? `\n(exit code: ${raw.exit})` : `exit code: ${raw.exit}`;
-      }
-      return text;
-    }
-    if ('error' in raw && raw.error) return String(raw.error);
-    if ('content' in raw && typeof raw.content === 'string') return raw.content;
-    // Search results
-    if ('totalMatches' in raw) return `找到 ${raw.totalMatches} 个匹配${raw.truncated ? ' (已截断)' : ''}`;
-    if ('totalFiles' in raw) return `找到 ${raw.totalFiles} 个文件${raw.truncated ? ' (已截断)' : ''}`;
-    // Fallback: compact JSON
-    return JSON.stringify(raw);
+  protected extractToolOutput(raw: any): unknown {
+    return raw;
   }
 
   protected resolveToolName(toolCall: any): string {
-    const title = (toolCall.title || '').toLowerCase();
-    const rawInput = toolCall.rawInput || {};
-    const knownTools = ['bash', 'write', 'edit', 'read', 'glob', 'grep', 'task',
-      'todowrite', 'todo', 'webfetch', 'websearch', 'ls', 'multiedit', 'patch'];
-    if (knownTools.includes(title)) return title;
-    if ('command' in rawInput) return 'bash';
-    if ('content' in rawInput && 'filePath' in rawInput && !('oldString' in rawInput)) return 'write';
-    if ('oldString' in rawInput || 'newString' in rawInput) return 'edit';
-    if ('todos' in rawInput) return 'todowrite';
-    if ('pattern' in rawInput && 'include' in rawInput) return 'grep';
-    if ('pattern' in rawInput) return 'glob';
-    if ('description' in rawInput && 'prompt' in rawInput) return 'task';
-    if ('url' in rawInput) return 'webfetch';
-    if ('query' in rawInput) return 'websearch';
-    if ('filePath' in rawInput) return 'read';
-    return title || 'tool';
+    return resolveAceToolName(toolCall.title || '', toolCall.rawInput || {});
   }
 /* PLACEHOLDER_FORMAT */
 
   protected formatToolCall(toolCall: any): string {
     const toolName = this.resolveToolName(toolCall);
     const rawInput = toolCall.rawInput || {};
-    let header = `\n\n**${this.getToolTitle(toolName)}**\n`;
-
-    switch (toolName) {
-      case 'bash': {
-        const cmd = rawInput.command || '';
-        if (cmd) {
-          const cmdLines = cmd.split('\n');
-          if (cmdLines.length <= 1 && cmd.length <= 120) {
-            header += `\n💻 执行命令: \`${cmd}\`\n`;
-          } else {
-            header += `\n💻 执行命令 (${cmdLines.length} 行)\n`;
-            header += `\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
-          }
-        }
-        break;
-      }
-      case 'write': {
-        const wPath = rawInput.filePath || '';
-        const wContent = rawInput.content || '';
-        const wLines = wContent ? wContent.split('\n').length : 0;
-        header += `\n📝 写入文件: \`${wPath}\` (${wLines} 行)\n`;
-        if (wContent) {
-          const ext = wPath.split('.').pop() || '';
-          header += formatLargeContent(wContent, { filePath: wPath, lang: ext, summaryLabel: '查看内容' });
-        }
-        break;
-      }
-      case 'edit':
-      case 'multiedit':
-      case 'patch': {
-        const filePath = rawInput.filePath || '';
-        const oldStr = rawInput.oldString || '';
-        const newStr = rawInput.newString || '';
-        const oldLines = oldStr ? oldStr.split('\n').length : 0;
-        const newLines = newStr ? newStr.split('\n').length : 0;
-        const added = Math.max(0, newLines - oldLines);
-        const removed = Math.max(0, oldLines - newLines);
-        let stats = `${Math.min(oldLines, newLines)} 行修改`;
-        if (added > 0) stats += `, +${added} 行`;
-        if (removed > 0) stats += `, -${removed} 行`;
-        header += `\n✏️ 编辑文件: \`${filePath}\` (${stats})\n`;
-        if (oldStr || newStr) {
-          const diff = (oldStr ? oldStr.split('\n').map((l: string) => '- ' + l).join('\n') + '\n' : '')
-            + (newStr ? newStr.split('\n').map((l: string) => '+ ' + l).join('\n') + '\n' : '');
-          header += formatLargeContent(diff.trimEnd(), { filePath, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
-        }
-        break;
-      }
-      case 'read':
-        header += `\n📖 读取文件: \`${rawInput.filePath || ''}\`\n`;
-        break;
-      case 'glob':
-        header += `\n🔍 搜索文件: \`${rawInput.pattern || ''}\`\n`;
-        break;
-      case 'grep':
-        header += `\n🔍 搜索内容: \`${rawInput.pattern || ''}\`\n`;
-        break;
-      case 'ls':
-        header += `\n📂 列出目录: \`${rawInput.path || '.'}\`\n`;
-        break;
-      case 'task':
-        header += `\n🤖 启动子任务: ${rawInput.description || ''}\n`;
-        break;
-      case 'todowrite':
-      case 'todo': {
-        const todos = rawInput.todos || rawInput.items || [];
-        if (Array.isArray(todos) && todos.length > 0) {
-          const done = todos.filter((t: any) => t.status === 'completed' || t.status === 'done').length;
-          const inProg = todos.filter((t: any) => t.status === 'in_progress' || t.status === 'in-progress').length;
-          const todoHeader = `📋 任务列表 (${done}/${todos.length} 完成${inProg ? `, ${inProg} 进行中` : ''})`;
-          header = `\n<!-- todo-list-marker -->\n<div class="ace-todo-list">\n<div class="ace-todo-header">${todoHeader}</div>\n`;
-          header += `<div class="ace-todo-progress"><div class="ace-todo-progress-bar" style="width:${Math.round(((done + inProg * 0.5) / todos.length) * 100)}%"></div></div>\n`;
-          for (const t of todos) {
-            const st = t.status || 'pending';
-            const icon = st === 'completed' || st === 'done' ? '✅' : st === 'in_progress' || st === 'in-progress' ? '🔄' : '⬜';
-            const cls = st === 'completed' || st === 'done' ? 'ace-todo-done' : st === 'in_progress' || st === 'in-progress' ? 'ace-todo-active' : 'ace-todo-pending';
-            header += `<div class="ace-todo-item ${cls}">${icon} ${t.content || ''}</div>\n`;
-          }
-          header += `</div>\n`;
-        } else {
-          header = `\n<!-- todo-list-marker -->\n📋 任务列表更新中...\n`;
-        }
-        break;
-      }
-      case 'webfetch':
-        header += `\n🌐 获取网页: \`${rawInput.url || ''}\`\n`;
-        break;
-      case 'websearch':
-        header += `\n🔎 搜索: \`${rawInput.query || ''}\`\n`;
-        break;
-    }
-    return header;
+    return formatAceToolCall({
+      toolName,
+      rawInput,
+      title: getAceToolTitle(toolName),
+      toolId: toolCall.id,
+    });
   }
 
-  protected formatToolResult(output: string, _metadata: any): string {
-    if (!output) return '';
-    const parsed = this.parseToolXmlOutput(output);
-    if (parsed) return parsed;
-    return formatTextContent(output, { summaryLabel: '查看输出' });
-  }
-
-  private parseToolXmlOutput(output: string): string | null {
-    const taskMatch = output.match(/<task_result>([\s\S]*?)<\/task_result>/);
-    if (taskMatch) {
-      const inner = taskMatch[1].trim();
-      return formatTextContent(inner, { summaryLabel: '🤖 子任务结果' });
-    }
-    const pathRegex = /<path>(.*?)<\/path>\s*(?:<type>.*?<\/type>\s*)?<content>([\s\S]*?)<\/content>/g;
-    let match;
-    const blocks: string[] = [];
-    while ((match = pathRegex.exec(output)) !== null) {
-      const fp = match[1].trim();
-      const ct = match[2].trim();
-      const ext = fp.split('.').pop() || '';
-      blocks.push(formatLargeContent(ct, { filePath: fp, lang: ext, summaryLabel: `📄 ${fp}` }));
-    }
-    if (blocks.length > 0) return blocks.join('');
-    return null;
+  protected formatToolResult(rawOutput: unknown, metadata: any): string {
+    if (rawOutput == null || rawOutput === '') return '';
+    const toolName = this.resolveToolName(metadata || {});
+    return formatAceToolResult({
+      toolName,
+      rawOutput,
+      title: getAceToolTitle(toolName),
+      toolId: String(metadata?.id || ''),
+    }).trimEnd();
   }
 }

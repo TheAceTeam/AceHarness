@@ -7,6 +7,7 @@ import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
 import type { RoleConfig } from '@/lib/core/schemas';
 import type { Engine } from '@/lib/engines/engine-interface';
+import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import {
   appendSpecCodingRevision,
 } from '@/lib/spec/coding-store';
@@ -28,6 +29,7 @@ import {
 } from '@/lib/spec/coding-revision-protocol';
 import { getRuntimeSkillPath } from '@/lib/run/runtime-skills';
 import { extractStructuredResult as extractResultChannelStructuredResult } from '@/lib/ai/result-channel';
+import { ensureEngineRuntimeSkillsAvailable } from '@/lib/chat/request-options';
 
 export interface AgentChatUserContext {
   id: string;
@@ -88,8 +90,11 @@ function isTemporaryWerewolfChat(input: {
   workflowContext?: Record<string, any> | null;
 }): boolean {
   return input.workflowContext?.temporaryLab === 'werewolf'
-    || input.roleConfig?.category === 'temporary-lab'
-    || Boolean(input.roleConfig?.tags?.includes('werewolf-lab'));
+    || input.roleConfig?.category === 'werewolf-lab'
+    || (
+      input.workflowContext?.temporaryLab !== 'agora'
+      && Boolean(input.roleConfig?.tags?.includes('werewolf-lab'))
+    );
 }
 
 function stripHtmlTags(text: string): string {
@@ -106,6 +111,7 @@ function stripHtmlTags(text: string): string {
 
 function stripToolNarrationBlocks(text: string): string {
   return String(text || '')
+    .replace(/\n?\s*<ace-process>[\s\S]*?<\/ace-process>\s*\n?/g, '\n')
     .replace(/\n{0,2}\*\*(?:📖 读取文件|💻 执行命令|🔍 搜索内容|🔍 搜索文件|📂 列出目录|🤖 子任务|🌐 获取网页|🔎 搜索网页|✏️ 编辑文件|📝 写入文件|📋 任务列表)[\s\S]*?(?=\n{2}\*\*|$)/g, '\n')
     .replace(/(?:^|\n)技能文件不在这个相对位置[^\n]*/g, '\n')
     .replace(/(?:^|\n)我先(?:看一下|缩小范围找|把)[^\n]*/g, '\n')
@@ -137,22 +143,22 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
   prompt: string;
 }): Promise<{
   success: boolean;
-  output?: string;
-  error?: string | null;
-  sessionId?: string | null;
+  output: string;
+  error?: string;
+  sessionId?: string;
 }> {
   const maxAttempts = 3;
   let latestSessionId = input.prepared.resumeSessionId || undefined;
   let lastResult: {
     success: boolean;
-    output?: string;
-    error?: string | null;
-    sessionId?: string | null;
+    output: string;
+    error?: string;
+    sessionId?: string;
   } | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const isRetry = attempt > 0;
-    const result = await input.prepared.engine.execute({
+    const result = await executeEngineWithContextRecovery(input.prepared.engine, {
       agent: input.prepared.roleConfig.name,
       step: isRetry ? `${input.prepared.mode}-result-retry-${attempt}` : input.prepared.mode,
       prompt: isRetry
@@ -170,13 +176,17 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
       sessionId: latestSessionId,
       appendSystemPrompt: false,
       mcpServers: input.prepared.roleConfig.mcpServers,
+    }, {
+      onContextReset: () => {
+        latestSessionId = undefined;
+      },
     });
     lastResult = result;
-    latestSessionId = result.sessionId || latestSessionId;
+    latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
     if (hasWerewolfResult(result.output || '')) return result;
   }
 
-  return lastResult || { success: false, output: '', error: 'missing werewolf result', sessionId: latestSessionId || null };
+  return lastResult || { success: false, output: '', error: 'missing werewolf result', sessionId: latestSessionId };
 }
 
 export async function finalizeAgentChatExecution(input: {
@@ -188,7 +198,9 @@ export async function finalizeAgentChatExecution(input: {
   sessionId?: string | null;
 }): Promise<ExecuteAgentChatResult> {
   const { prepared } = input;
-  const finalSessionId = input.sessionId || prepared.resumeSessionId || null;
+  const finalSessionId = input.sessionId !== undefined
+    ? input.sessionId
+    : (prepared.resumeSessionId || null);
   const specCodingRevisionCommand = prepared.roleConfig.roleType === 'supervisor' && prepared.mode === 'workflow-chat'
     ? extractSpecCodingRevisionCommand(input.rawOutput || '')
     : null;
@@ -436,7 +448,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
         prepared,
         prompt: prepared.prompt,
       })
-    : await prepared.engine.execute({
+    : await executeEngineWithContextRecovery(prepared.engine, {
         agent: prepared.roleConfig.name,
         step: prepared.mode,
         prompt: prepared.prompt,
@@ -456,7 +468,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
       rawOutput: '',
       success: false,
       error: result.error || 'Agent 对话失败',
-      sessionId: result.sessionId || prepared.resumeSessionId || null,
+      sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
     });
   }
   return finalizeAgentChatExecution({
@@ -465,7 +477,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
     rawOutput: result.output || '',
     success: result.success,
     error: result.error || null,
-    sessionId: result.sessionId || prepared.resumeSessionId || null,
+    sessionId: resolveRecoveredSessionId(result, prepared.resumeSessionId),
   });
 }
 
@@ -519,6 +531,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   if (!effectiveModel) {
     throw new Error('Agent 未配置可用模型');
   }
+  await ensureEngineRuntimeSkillsAvailable(effectiveEngine, workingDirectory);
 
   const sessionReuseKey = `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`;
   const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey);

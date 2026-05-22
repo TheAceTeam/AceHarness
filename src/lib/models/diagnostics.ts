@@ -44,6 +44,7 @@ interface PromptSpec {
 
 interface DiagnosticsRunOptions {
   onLog?: (entry: DiagnosticLogEntry) => void;
+  signal?: AbortSignal;
 }
 
 type DiagnosticLogger = (input: {
@@ -53,6 +54,20 @@ type DiagnosticLogger = (input: {
   fullDetail?: string;
   verbose?: boolean;
 }) => void;
+
+function abortError(): Error {
+  const error = new Error('诊断任务已停止');
+  error.name = 'AbortError';
+  return error;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.message === '诊断任务已停止');
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
 
 function createLogCollector(startedAtMs: number, onLog?: (entry: DiagnosticLogEntry) => void) {
   const logs: DiagnosticLogEntry[] = [];
@@ -80,6 +95,13 @@ function logLevelFromStatus(status: DiagnosticRunStatus): DiagnosticLogLevel {
   if (status === 'passed') return 'success';
   if (status === 'warning' || status === 'skipped') return 'warning';
   return 'error';
+}
+
+function normalizeDiagnosticLogLevel(value: unknown): DiagnosticLogLevel {
+  if (value === 'success' || value === 'warning' || value === 'error' || value === 'info') {
+    return value;
+  }
+  return 'info';
 }
 
 function runLogDetail(run: DiagnosticPromptRun): string {
@@ -228,7 +250,9 @@ async function runPrompt(
   engine: Engine,
   options: EngineOptions & { label: string; category: string; id: string },
   log?: DiagnosticLogger,
+  signal?: AbortSignal,
 ): Promise<DiagnosticPromptRun> {
+  throwIfAborted(signal);
   const startedAt = Date.now();
   let firstEventMs: number | null = null;
   let firstTextMs: number | null = null;
@@ -241,6 +265,8 @@ async function runPrompt(
     const atMs = Date.now() - startedAt;
     const content = String(event.content || '');
     const metadata = event.metadata && typeof event.metadata === 'object' ? event.metadata : null;
+    const metadataRecord = metadata as Record<string, unknown> | null;
+    const isWrapperLog = event.type === 'log';
     if (firstEventMs === null) {
       firstEventMs = atMs;
       log?.({
@@ -273,6 +299,24 @@ async function runPrompt(
         fullDetail: content,
       });
     }
+    if (isWrapperLog) {
+      const detailText = typeof metadataRecord?.detail === 'string'
+        ? metadataRecord.detail
+        : previewText(metadataRecord?.detail, 500);
+      const fullDetail = typeof metadataRecord?.fullDetail === 'string'
+        ? metadataRecord.fullDetail
+        : safeJson({
+            content,
+            metadata,
+          });
+      log?.({
+        level: normalizeDiagnosticLogLevel(metadataRecord?.level),
+        message: content || String(metadataRecord?.message || `${options.label} wrapper log`),
+        detail: detailText,
+        fullDetail,
+        verbose: metadataRecord?.verbose !== false,
+      });
+    }
     if (eventSamples.length < EVENT_SAMPLE_LIMIT) {
       eventSamples.push({
         type: event.type,
@@ -284,7 +328,7 @@ async function runPrompt(
         metadata,
       });
     }
-    if (verboseEventLogs < EVENT_VERBOSE_LOG_LIMIT) {
+    if (!isWrapperLog && verboseEventLogs < EVENT_VERBOSE_LOG_LIMIT) {
       verboseEventLogs += 1;
       log?.({
         message: `${options.label} stream event #${verboseEventLogs}`,
@@ -308,7 +352,7 @@ async function runPrompt(
         }),
         verbose: true,
       });
-    } else if (!verboseEventLimitLogged) {
+    } else if (!isWrapperLog && !verboseEventLimitLogged) {
       verboseEventLimitLogged = true;
       log?.({
         level: 'warning',
@@ -320,12 +364,24 @@ async function runPrompt(
   };
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const onAbort = () => {
+    try { engine.cancel(); } catch {}
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   engine.on('stream', onStream);
   try {
     const executePromise = engine.execute(options);
     executePromise.catch(() => undefined);
     const result = await Promise.race([
       executePromise,
+      new Promise<EngineResult>((_, reject) => {
+        if (!signal) return;
+        if (signal.aborted) {
+          reject(abortError());
+          return;
+        }
+        signal.addEventListener('abort', () => reject(abortError()), { once: true });
+      }),
       new Promise<EngineResult>((_, reject) => {
         timer = setTimeout(() => {
           try { engine.cancel(); } catch {}
@@ -361,6 +417,10 @@ async function runPrompt(
     };
   } catch (error) {
     const durationMs = Date.now() - startedAt;
+    if (isAbortError(error)) {
+      try { engine.cancel(); } catch {}
+      throw error;
+    }
     return {
       id: options.id,
       label: options.label,
@@ -379,6 +439,7 @@ async function runPrompt(
     };
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
     engine.off('stream', onStream);
   }
 }
@@ -409,6 +470,7 @@ function basePromptOptions(input: {
     sessionId: input.sessionId,
     allowedTools: [],
     appendSystemPrompt: true,
+    diagnosticLogging: true,
   };
 }
 
@@ -421,7 +483,9 @@ async function runEngineDebug(input: {
   timeoutMs: number;
   availabilityStage: DiagnosticStage;
   log?: DiagnosticLogger;
+  signal?: AbortSignal;
 }): Promise<EngineDiagnosticSummary> {
+  throwIfAborted(input.signal);
   const stages: DiagnosticStage[] = [input.availabilityStage];
   const runs: DiagnosticPromptRun[] = [];
 
@@ -436,7 +500,8 @@ async function runEngineDebug(input: {
     step: 'single-turn',
     prompt: `请记住验证码 ${MULTI_TURN_MEMORY_TOKEN}，后续我会询问。现在请只回复 ACE_OK，不要解释，不要调用工具。`,
     systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
-  }, input.log);
+  }, input.log, input.signal);
+  throwIfAborted(input.signal);
   input.log?.({
     level: logLevelFromStatus(single.status),
     message: '单轮对话 probe 完成',
@@ -485,7 +550,8 @@ async function runEngineDebug(input: {
       step: 'multi-turn',
       prompt: '这是第二轮。请回忆我上一轮让你记住的验证码。只回复 MEMORY=验证码，不要解释。',
       systemPrompt: '你是 ACEHarness 引擎诊断助手。严格按用户要求回复。',
-    }, input.log);
+    }, input.log, input.signal);
+    throwIfAborted(input.signal);
     const remembered = String(multi.outputPreview || '').includes(MULTI_TURN_MEMORY_TOKEN);
     const multiStatus: DiagnosticRunStatus = multi.status === 'failed'
       ? 'failed'
@@ -553,31 +619,32 @@ function scoreJsonOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
     score += 20;
     evidence.push(parsed.wholeJson ? '返回内容可直接作为 JSON 解析' : '从返回内容中提取到了可解析 JSON');
     if (parsed.wholeJson) score += 10;
-    if (data?.profile?.name === 'probe' && data.profile.value === 42) {
+    if (data?.profile?.name === 'relay-check' && data.profile.mode === 'strict' && data.profile.sampleCount === 4) {
       score += 15;
       evidence.push('profile 对象字段精确命中');
     }
-    if (Array.isArray(data?.items)
-      && data.items.length === 3
-      && data.items.some((item: any) => item.id === 'alpha' && item.score === 3)
-      && data.items.some((item: any) => item.id === 'beta' && item.score === 5)
-      && data.items.some((item: any) => item.id === 'gamma' && item.score === 8)) {
+    if (Array.isArray(data?.checks)
+      && data.checks.length === 4
+      && data.checks.some((item: any) => item.id === 'prompt_injection' && item.severity === 'high' && item.passed === false)
+      && data.checks.some((item: any) => item.id === 'context_truncation' && item.severity === 'medium' && item.passed === true)
+      && data.checks.some((item: any) => item.id === 'tool_substitution' && item.severity === 'high' && item.passed === false)
+      && data.checks.some((item: any) => item.id === 'sse_integrity' && item.severity === 'medium' && item.passed === true)) {
       score += 20;
       evidence.push('items 数组对象结构和数值正确');
     }
-    if (data?.flags?.strict === true && data.flags?.stream === false) {
+    if (data?.flags?.leakDetected === true && data.flags?.streamStable === true) {
       score += 15;
       evidence.push('布尔 flags 保持原生类型');
     }
-    if (data?.totals?.score === 16 && data.totals?.enabledCount === 2) {
+    if (data?.summary?.risk === 'HIGH' && data.summary.failed === 2 && data.summary.passed === 2) {
       score += 10;
       evidence.push('totals 聚合字段正确');
     }
-    if (Array.isArray(data?.matrix) && data.matrix.length === 2 && data.matrix[1]?.[1] === 4) {
+    if (Array.isArray(data?.trace) && data.trace.join('>') === 'sys-guard>user-probe>relay-hop') {
       score += 5;
       evidence.push('matrix 嵌套数组结构正确');
     }
-    if (data?.checksum === 'alpha:3|beta:5|gamma:8') {
+    if (data?.checksum === 'prompt_injection:false|tool_substitution:false|risk:HIGH') {
       score += 10;
       evidence.push('checksum 精确命中');
     }
@@ -594,9 +661,9 @@ function scoreJsonOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
     metrics: {
       validJson: Boolean(parsed),
       wholeJson: parsed?.wholeJson || false,
-      hasProfile: data?.profile?.name === 'probe' && data.profile.value === 42,
-      hasItems: Array.isArray(data?.items) && data.items.length === 3,
-      totalsScore: typeof data?.totals?.score === 'number' ? data.totals.score : null,
+      hasProfile: data?.profile?.name === 'relay-check' && data.profile.mode === 'strict',
+      hasItems: Array.isArray(data?.checks) && data.checks.length === 4,
+      totalsScore: typeof data?.summary?.failed === 'number' ? data.summary.failed : null,
       checksum: typeof data?.checksum === 'string' ? data.checksum : null,
       durationMs: run.durationMs,
     },
@@ -608,17 +675,17 @@ function scoreCodeGeneration(run: DiagnosticPromptRun): ModelCapabilityScore {
   let score = run.status === 'passed' ? 10 : 0;
   const evidence: string[] = [];
   const checks = [
-    { ok: /summarizetickets/.test(output), points: 15, text: '包含指定函数名 summarizeTickets' },
-    { ok: /type\s+ticket|interface\s+ticket/.test(output), points: 10, text: '定义 Ticket 类型或接口' },
-    { ok: /type\s+ticketsummary|interface\s+ticketsummary/.test(output), points: 10, text: '定义 TicketSummary 输出结构' },
-    { ok: /status\s*:\s*['"]open['"]\s*\|\s*['"]closed['"]|['"]open['"]\s*\|\s*['"]closed['"]/.test(output), points: 10, text: '包含 open/closed 字面量状态类型' },
+    { ok: /auditrelayevents/.test(output), points: 15, text: '包含指定函数名 auditRelayEvents' },
+    { ok: /type\s+relaye?vent|interface\s+relaye?vent/.test(output), points: 10, text: '定义 RelayEvent 类型或接口' },
+    { ok: /type\s+auditfinding|interface\s+auditfinding/.test(output), points: 10, text: '定义 AuditFinding 输出结构' },
+    { ok: /system|user|assistant|tool/.test(output), points: 10, text: '包含角色或事件类型字面量' },
     { ok: /map\s*</.test(output) || /new\s+map/.test(output) || /seen|dedupe|duplicate/.test(output), points: 12, text: '包含去重或 Map 处理' },
-    { ok: /totalopen|totalclosed/.test(output), points: 10, text: '统计 open/closed 数量' },
-    { ok: /overdueopenids|overdue/.test(output), points: 10, text: '输出逾期 open 工单' },
-    { ok: /highpriorityids/.test(output), points: 10, text: '输出 highPriorityIds' },
-    { ok: /averageresolutionhours|resolution/.test(output), points: 10, text: '计算 closed 工单平均解决小时数' },
-    { ok: /byowner|record\s*</.test(output), points: 8, text: '按 owner 聚合' },
-    { ok: /sort\s*\(|localecompare|priority/.test(output), points: 8, text: '包含排序或优先级处理' },
+    { ok: /promptinjection|prompt_injection|leak/.test(output), points: 10, text: '识别 prompt 泄漏或注入风险' },
+    { ok: /toolsubstitution|tool_substitution|tool/.test(output), points: 10, text: '识别工具调用改写风险' },
+    { ok: /missingdelta|missing_delta|delta/.test(output), points: 10, text: '识别流式 delta 完整性风险' },
+    { ok: /risk|severity/.test(output), points: 10, text: '输出风险等级或严重性' },
+    { ok: /byprovider|byendpoint|record\s*</.test(output), points: 8, text: '按 provider/endpoint 聚合' },
+    { ok: /sort\s*\(|localecompare|severity|risk/.test(output), points: 8, text: '包含排序或风险优先级处理' },
     { ok: /reduce|for\s*\(|for\s+/.test(output), points: 7, text: '包含迭代聚合逻辑' },
     { ok: /return/.test(output), points: 5, text: '包含返回值' },
   ];
@@ -637,11 +704,11 @@ function scoreCodeGeneration(run: DiagnosticPromptRun): ModelCapabilityScore {
     summary: score >= 80 ? '代码结构和关键逻辑完整' : '代码可用性需要人工复核',
     evidence,
     metrics: {
-      hasFunctionName: /summarizetickets/.test(output),
-      hasType: /type\s+ticket|interface\s+ticket/.test(output),
-      hasPriorityOutput: /highpriorityids/.test(output),
-      hasOverdueOutput: /overdueopenids|overdue/.test(output),
-      hasAverageResolution: /averageresolutionhours|resolution/.test(output),
+      hasFunctionName: /auditrelayevents/.test(output),
+      hasType: /type\s+relaye?vent|interface\s+relaye?vent/.test(output),
+      hasPriorityOutput: /risk|severity/.test(output),
+      hasOverdueOutput: /missingdelta|missing_delta|delta/.test(output),
+      hasAverageResolution: /latency|duration/.test(output),
       durationMs: run.durationMs,
     },
   };
@@ -654,15 +721,15 @@ function scorePelicanDrawing(run: DiagnosticPromptRun): ModelCapabilityScore {
   const hasSvg = /<svg[\s>]/i.test(output);
   const hasClosingSvg = /<\/svg\s*>/i.test(output);
   const hasCanvasSize = /\b(viewBox|width|height)\s*=/i.test(output);
-  const hasTitle = /<title[\s>]/i.test(output) || /pelican|鹈鹕/.test(output);
-  const hasBeak = /long[_-]?beak|beak|bill|嘴|喙/.test(normalized);
-  const hasPouch = /throat[_-]?pouch|gular|pouch|喉囊|囊/.test(normalized);
-  const hasBody = /body|torso|身体|躯干/.test(normalized);
-  const hasWing = /wing|feather|翅|羽/.test(normalized);
-  const hasLegs = /leg|foot|feet|脚|腿/.test(normalized);
-  const hasBicycle = /bicycle|bike|cycle|wheel|pedal|handlebar|frame|自行车|单车|车轮|踏板|车把/.test(normalized);
-  const hasWheel = /wheel|tire|轮/.test(normalized) || (output.match(/<circle\b/gi)?.length || 0) >= 2;
-  const hasPedal = /pedal|crank|踏板|脚踏/.test(normalized);
+  const hasTitle = /<title[\s>]/i.test(output) || /relay|audit|gateway|审计|网关/.test(output);
+  const hasBeak = /client|caller|frontend|user|客户端|用户/.test(normalized);
+  const hasPouch = /relay|proxy|gateway|adapter|转发|网关|代理/.test(normalized);
+  const hasBody = /model|provider|upstream|llm|backend|上游|模型/.test(normalized);
+  const hasWing = /guard|policy|filter|sanitizer|auth|redact|策略|过滤|鉴权|脱敏/.test(normalized);
+  const hasLegs = /log|trace|event|sse|stream|日志|事件|流/.test(normalized);
+  const hasBicycle = /attack|prompt|injection|leak|tool|risk|风险|泄漏|注入/.test(normalized);
+  const hasWheel = /edge|arrow|line|path|连接|链路/.test(normalized) || (output.match(/<line\b|<path\b/gi)?.length || 0) >= 2;
+  const hasPedal = /alert|finding|severity|fail|告警|发现|严重/.test(normalized);
   let score = run.status === 'passed' ? 10 : 0;
   const evidence: string[] = [];
 
@@ -750,26 +817,26 @@ function scoreReasoning(run: DiagnosticPromptRun): ModelCapabilityScore {
     evidence.push('返回了可解析的推理评测 JSON');
   }
   const ordering = String(data?.ordering || '').replace(/\s+/g, '').toUpperCase();
-  if (ordering === 'E-D-B-A-C' || ordering === 'EDBAC') {
+  if (ordering === 'B-C-D-A-E' || ordering === 'BCDAE') {
     score += 20;
-    evidence.push('约束排序题命中 E-D-B-A-C');
+    evidence.push('约束排序题命中 B-C-D-A-E');
   }
-  if (String(data?.culprit || '').toUpperCase() === 'C') {
+  if (String(data?.culprit || data?.leakSource || '').toUpperCase() === 'B') {
     score += 20;
-    evidence.push('真假话约束题命中 culprit=C');
+    evidence.push('真假话约束题命中 culprit=B');
   }
-  const grid = data?.logicGrid || data?.grid;
-  if (String(grid?.Ada?.language || grid?.ada?.language || '').toLowerCase() === 'rust'
-    && String(grid?.Ada?.dataset || grid?.ada?.dataset || '').toUpperCase() === 'M'
-    && String(grid?.Bo?.language || grid?.bo?.language || '').toLowerCase() === 'go'
-    && String(grid?.Cy?.language || grid?.cy?.language || '').toLowerCase() === 'python') {
+  const grid = data?.logicGrid || data?.grid || data?.assignment;
+  if (String(grid?.Alpha?.provider || grid?.alpha?.provider || '').toLowerCase() === 'openai'
+    && String(grid?.Alpha?.region || grid?.alpha?.region || '').toUpperCase() === 'US'
+    && String(grid?.Beta?.provider || grid?.beta?.provider || '').toLowerCase() === 'anthropic'
+    && String(grid?.Gamma?.provider || grid?.gamma?.provider || '').toLowerCase() === 'local') {
     score += 20;
     evidence.push('逻辑网格题角色/语言/数据集匹配');
   }
   const proposition = data?.proposition || data?.props;
-  if (proposition?.P === true && proposition?.Q === true && proposition?.R === false) {
+  if (proposition?.P === true && proposition?.Q === false && proposition?.R === true) {
     score += 15;
-    evidence.push('命题约束满足题命中 P=true,Q=true,R=false');
+    evidence.push('命题约束满足题命中 P=true,Q=false,R=true');
   }
   if (Array.isArray(data?.steps) && data.steps.length >= 6) {
     score += 15;
@@ -783,7 +850,7 @@ function scoreReasoning(run: DiagnosticPromptRun): ModelCapabilityScore {
     summary: score >= 80 ? '多题推理答案和过程稳定' : '推理答案或过程不够稳定',
     evidence,
     metrics: {
-      culprit: typeof data?.culprit === 'string' ? data.culprit : null,
+      culprit: typeof data?.culprit === 'string' ? data.culprit : typeof data?.leakSource === 'string' ? data.leakSource : null,
       ordering: typeof data?.ordering === 'string' ? data.ordering : null,
       propositionP: typeof proposition?.P === 'boolean' ? proposition.P : null,
       propositionQ: typeof proposition?.Q === 'boolean' ? proposition.Q : null,
@@ -814,18 +881,18 @@ function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
   const parsed = parseJsonCandidate(run.outputPreview || '');
   const data = parsed?.parsed;
   const checks = [
-    { key: 'determinant', expected: -155, label: '3x3 行列式=-155' },
-    { key: 'linearX', expected: 3.4, tolerance: 0.001, label: '线性方程组 x=3.4' },
-    { key: 'linearY', expected: 22 / 15, tolerance: 0.001, label: '线性方程组 y=22/15' },
-    { key: 'linearZ', expected: 8 / 3, tolerance: 0.001, label: '线性方程组 z=8/3' },
-    { key: 'integral', expected: 6, label: '定积分结果=6' },
-    { key: 'largestEigenvalue', expected: 5, label: '最大特征值=5' },
-    { key: 'bayesPosterior', expected: 0.161016949, tolerance: 0.002, label: '贝叶斯后验约 0.1610' },
-    { key: 'recurrenceA6', expected: 191, label: '递推 a6=191' },
-    { key: 'optX', expected: 4.5, tolerance: 0.001, label: '约束优化 x=4.5' },
-    { key: 'optY', expected: -0.5, tolerance: 0.001, label: '约束优化 y=-0.5' },
-    { key: 'coefficient', expected: -14, label: '多项式系数=-14' },
-    { key: 'markovB2', expected: 0.45, tolerance: 0.001, label: '两步马尔可夫概率=0.45' },
+    { key: 'totalRequests', expected: 1024, label: '请求总数=1024' },
+    { key: 'streamedRequests', expected: 832, label: '流式请求数=832' },
+    { key: 'successRate', expected: 0.974609375, tolerance: 0.0005, label: '成功率约 0.9746' },
+    { key: 'leakRate', expected: 0.021484375, tolerance: 0.0005, label: '泄漏率约 0.0215' },
+    { key: 'weightedRisk', expected: 78, tolerance: 0.001, label: '加权风险=78' },
+    { key: 'meanLatencyMs', expected: 452.5, tolerance: 0.001, label: '平均延迟=452.5ms' },
+    { key: 'p95LatencyMs', expected: 1210, tolerance: 0.001, label: 'P95 延迟=1210ms' },
+    { key: 'missingDeltaCount', expected: 7, label: '缺失 delta 数=7' },
+    { key: 'fallbackRatio', expected: 0.1875, tolerance: 0.0005, label: '回退比例=0.1875' },
+    { key: 'estimatedTokenCost', expected: 18.96, tolerance: 0.01, label: '估算成本=18.96' },
+    { key: 'retryAmplification', expected: 1.125, tolerance: 0.0005, label: '重试放大=1.125' },
+    { key: 'blockedAttackPercent', expected: 65.625, tolerance: 0.001, label: '阻断率=65.625%' },
   ];
   let score = run.status === 'passed' ? 10 : 0;
   const evidence: string[] = [];
@@ -869,18 +936,18 @@ function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
       validJson: Boolean(parsed),
       correctCount,
       expectedCount: checks.length,
-      observedDeterminant: observed.determinant,
-      observedLinearX: observed.linearX,
-      observedLinearY: observed.linearY,
-      observedLinearZ: observed.linearZ,
-      observedIntegral: observed.integral,
-      observedLargestEigenvalue: observed.largestEigenvalue,
-      observedBayesPosterior: observed.bayesPosterior,
-      observedRecurrenceA6: observed.recurrenceA6,
-      observedOptX: observed.optX,
-      observedOptY: observed.optY,
-      observedCoefficient: observed.coefficient,
-      observedMarkovB2: observed.markovB2,
+      observedTotalRequests: observed.totalRequests,
+      observedStreamedRequests: observed.streamedRequests,
+      observedSuccessRate: observed.successRate,
+      observedLeakRate: observed.leakRate,
+      observedWeightedRisk: observed.weightedRisk,
+      observedMeanLatencyMs: observed.meanLatencyMs,
+      observedP95LatencyMs: observed.p95LatencyMs,
+      observedMissingDeltaCount: observed.missingDeltaCount,
+      observedFallbackRatio: observed.fallbackRatio,
+      observedEstimatedTokenCost: observed.estimatedTokenCost,
+      observedRetryAmplification: observed.retryAmplification,
+      observedBlockedAttackPercent: observed.blockedAttackPercent,
       durationMs: run.durationMs,
     },
   };
@@ -895,35 +962,35 @@ function scoreStructuredOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
     score += 15;
     evidence.push('结构化输出可解析');
   }
-  if (data?.title === 'release_readiness' && data?.version === 3) {
+  if (data?.title === 'relay_audit' && data?.version === 4) {
     score += 15;
     evidence.push('title/version 字段符合约定');
   }
   if (Array.isArray(data?.risks)
-    && data.risks.length >= 4
-    && data.risks.every((item: any) => item.id && item.level && item.owner && item.mitigation && typeof item.probability === 'number' && typeof item.impact === 'number' && Array.isArray(item.signals))) {
+    && data.risks.length >= 5
+    && data.risks.every((item: any) => item.id && item.category && item.level && item.owner && item.mitigation && typeof item.probability === 'number' && typeof item.impact === 'number' && Array.isArray(item.evidence))) {
     score += 25;
     evidence.push('risks 数组结构完整，包含 probability/impact/signals');
   }
-  if (Array.isArray(data?.actions) && data.actions.length >= 4 && data.actions.every((item: any) => item.id && item.owner && item.task && item.due && Array.isArray(item.dependsOn) && item.successMetric)) {
+  if (Array.isArray(data?.controls) && data.controls.length >= 5 && data.controls.every((item: any) => item.id && item.owner && item.action && item.gate && Array.isArray(item.covers) && item.successMetric)) {
     score += 20;
     evidence.push('actions 数组结构完整，包含 dependsOn/successMetric');
   }
-  if (data?.summary?.ready === false && Array.isArray(data?.summary?.blockers) && data.summary.blockers.length >= 2 && typeof data.summary.confidence === 'number') {
+  if (data?.summary?.safeToProxy === false && Array.isArray(data?.summary?.blockers) && data.summary.blockers.length >= 2 && typeof data.summary.confidence === 'number') {
     score += 15;
     evidence.push('summary 嵌套对象完整');
   }
-  if (Array.isArray(data?.matrix) && data.matrix.length >= 3 && data.matrix.every((row: any) => row.component && row.status && Array.isArray(row.riskIds) && Array.isArray(row.actionIds) && row.notes)) {
+  if (Array.isArray(data?.matrix) && data.matrix.length >= 4 && data.matrix.every((row: any) => row.surface && row.status && Array.isArray(row.riskIds) && Array.isArray(row.controlIds) && row.notes)) {
     score += 15;
     evidence.push('matrix 交叉引用结构完整');
   }
-  if (data?.rollout?.strategy === 'canary' && Array.isArray(data.rollout?.stages) && data.rollout.stages.length >= 3) {
+  if (data?.verification?.strategy === 'shadow' && Array.isArray(data.verification?.stages) && data.verification.stages.length >= 3) {
     score += 10;
     evidence.push('rollout canary 阶段结构完整');
   }
   const riskIds = new Set((Array.isArray(data?.risks) ? data.risks : []).map((item: any) => item.id));
-  const referencesRisk = Array.isArray(data?.actions)
-    && data.actions.some((action: any) => Array.isArray(action.dependsOn) && action.dependsOn.some((id: string) => riskIds.has(id)));
+  const referencesRisk = Array.isArray(data?.controls)
+    && data.controls.some((control: any) => Array.isArray(control.covers) && control.covers.some((id: string) => riskIds.has(id)));
   if (referencesRisk) {
     score += 5;
     evidence.push('actions 正确引用 risks id');
@@ -939,9 +1006,9 @@ function scoreStructuredOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
     metrics: {
       validJson: Boolean(parsed),
       riskCount: Array.isArray(data?.risks) ? data.risks.length : 0,
-      actionCount: Array.isArray(data?.actions) ? data.actions.length : 0,
+      actionCount: Array.isArray(data?.controls) ? data.controls.length : 0,
       matrixCount: Array.isArray(data?.matrix) ? data.matrix.length : 0,
-      rolloutStageCount: Array.isArray(data?.rollout?.stages) ? data.rollout.stages.length : 0,
+      rolloutStageCount: Array.isArray(data?.verification?.stages) ? data.verification.stages.length : 0,
       hasCrossReferences: Boolean(referencesRisk),
       durationMs: run.durationMs,
     },
@@ -950,10 +1017,10 @@ function scoreStructuredOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
 
 function normalizeConsistencyOutput(output?: string): string {
   const text = String(output || '').toUpperCase();
-  const match = text.match(/NEXT\s*=\s*([0-9]+)/);
-  if (match) return `NEXT=${match[1]}`;
+  const match = text.match(/NEXT[_\s-]*RISK\s*=\s*([A-Z0-9_-]+)/);
+  if (match) return `NEXT_RISK=${match[1]}`;
   const number = text.match(/\b([0-9]{1,4})\b/);
-  return number ? `NEXT=${number[1]}` : text.replace(/\s+/g, ' ').trim();
+  return number ? `NEXT_RISK=${number[1]}` : text.replace(/\s+/g, ' ').trim();
 }
 
 function scoreConsistency(first: DiagnosticPromptRun, second: DiagnosticPromptRun): ModelCapabilityScore {
@@ -963,13 +1030,13 @@ function scoreConsistency(first: DiagnosticPromptRun, second: DiagnosticPromptRu
   const evidence: string[] = [];
   if (first.status === 'passed') score += 15;
   if (second.status === 'passed') score += 15;
-  if (a === 'NEXT=127') {
+  if (a === 'NEXT_RISK=104') {
     score += 25;
-    evidence.push('第一次命中 NEXT=127');
+    evidence.push('第一次命中 NEXT_RISK=104');
   }
-  if (b === 'NEXT=127') {
+  if (b === 'NEXT_RISK=104') {
     score += 25;
-    evidence.push('第二次命中 NEXT=127');
+    evidence.push('第二次命中 NEXT_RISK=104');
   }
   if (a && a === b) {
     score += 20;
@@ -1049,7 +1116,7 @@ const JSON_PROMPT: PromptSpec = {
   category: 'model-score',
   capabilityId: 'json_output',
   systemPrompt: '你是模型能力评测探针。严格输出用户要求的内容，不要解释。',
-  prompt: '只输出一个 JSON 对象，不要 Markdown，不要额外文字。对象必须精确包含：{"profile":{"name":"probe","value":42,"tags":["json","strict"]},"items":[{"id":"alpha","score":3,"enabled":true},{"id":"beta","score":5,"enabled":false},{"id":"gamma","score":8,"enabled":true}],"totals":{"score":16,"enabledCount":2},"flags":{"strict":true,"stream":false},"matrix":[[1,2],[3,4]],"checksum":"alpha:3|beta:5|gamma:8"}。',
+  prompt: '只输出一个 JSON 对象，不要 Markdown，不要额外文字。对象必须精确包含：{"profile":{"name":"relay-check","mode":"strict","sampleCount":4,"tags":["proxy","audit","stream"]},"checks":[{"id":"prompt_injection","severity":"high","passed":false},{"id":"context_truncation","severity":"medium","passed":true},{"id":"tool_substitution","severity":"high","passed":false},{"id":"sse_integrity","severity":"medium","passed":true}],"summary":{"risk":"HIGH","failed":2,"passed":2},"flags":{"leakDetected":true,"streamStable":true},"trace":["sys-guard","user-probe","relay-hop"],"checksum":"prompt_injection:false|tool_substitution:false|risk:HIGH"}。',
 };
 
 const CODE_PROMPT: PromptSpec = {
@@ -1059,7 +1126,7 @@ const CODE_PROMPT: PromptSpec = {
   capabilityId: 'code_generation',
   timeoutMultiplier: 1.5,
   systemPrompt: '你是代码生成评测探针。输出应简洁、可读、可复制。',
-  prompt: '用 TypeScript 写一个可复制的函数 summarizeTickets(tickets: Ticket[], now: Date): TicketSummary。Ticket 包含 id:string、status:"open"|"closed"、priority:1|2|3、owner:string、createdAt:string、updatedAt:string、dueAt?:string、resolvedAt?:string。要求：按 id 去重且保留 updatedAt 最新的一条；返回 totalOpen、totalClosed、overdueOpenIds、highPriorityIds、averageResolutionHours、byOwner；overdueOpenIds 是 status=open 且 dueAt 早于 now 的 id，按字典序；highPriorityIds 是 priority=3 的 id，按 priority 降序再 id 升序；averageResolutionHours 只统计 closed 且有 createdAt/resolvedAt 的工单。请同时定义 Ticket 和 TicketSummary 类型。只输出代码块或代码本身。',
+  prompt: '用 TypeScript 写一个可复制的函数 auditRelayEvents(events: RelayEvent[], now: Date): AuditFinding[]。RelayEvent 包含 id:string、provider:string、endpoint:string、role:"system"|"user"|"assistant"|"tool"、type:"request"|"delta"|"result"|"tool_call"、content:string、createdAt:string、latencyMs?:number、parentId?:string、meta?:Record<string,unknown>。要求：按 id 去重且保留 createdAt 最新的一条；识别 promptInjection、toolSubstitution、missingDelta 三类风险；每条 finding 包含 id、risk、severity:"low"|"medium"|"high"、provider、endpoint、evidence、createdAt；按 severity 降序再 createdAt 升序排序；额外计算 byProvider 计数字段或等价聚合。请同时定义 RelayEvent 和 AuditFinding 类型。只输出代码块或代码本身。',
 };
 
 const DRAWING_PROMPT: PromptSpec = {
@@ -1068,7 +1135,7 @@ const DRAWING_PROMPT: PromptSpec = {
   category: 'model-score',
   capabilityId: 'drawing_pelican',
   systemPrompt: '你是 SVG 绘图能力评测探针。严格输出用户要求的内容，不要解释。',
-  prompt: '只输出一个完整、可直接渲染的紧凑 SVG，不要 Markdown。画一只鹈鹕骑自行车，画布 320x240，必须包含 title，并用 id 或 class 标出 body、wing、long_beak、throat_pouch、leg、bicycle、wheel、pedal；用 path、ellipse、circle、line 等 SVG 图形元素完成。',
+  prompt: '只输出一个完整、可直接渲染的紧凑 SVG，不要 Markdown。画布 360x240，画一个 API 请求经过 relay gateway 到模型 provider 的审计拓扑，必须包含 title，并用 id 或 class 标出 client、relay、provider、guard、sse_stream、attack_probe、finding；用 rect、path、circle、line、text 等 SVG 图形元素完成。',
 };
 
 const MATH_PROMPT: PromptSpec = {
@@ -1078,7 +1145,7 @@ const MATH_PROMPT: PromptSpec = {
   capabilityId: 'math',
   timeoutMultiplier: 2,
   systemPrompt: '你是数学能力评测探针。严格输出 JSON，不要解释，不要 Markdown。',
-  prompt: '只输出 JSON，不要 Markdown，不要额外解释。字段必须是数字：{"determinant":矩阵 [[2,-1,3],[0,4,5],[7,2,-2]] 的行列式,"linearX":方程组 2x-y+z=8, -3x+4y+2z=1, x+2y-5z=-7 的 x,"linearY":同一方程组的 y,"linearZ":同一方程组的 z,"integral":定积分 ∫_0^2 (3x^2-2x+1) dx,"largestEigenvalue":矩阵 [[4,1],[2,3]] 的最大特征值,"bayesPosterior":先验 P(D)=0.01, P(+|D)=0.95, P(+|非D)=0.05 时 P(D|+) 的 0 到 1 小数,"recurrenceA6":a0=2,a1=5,a_n=3a_{n-1}-2a_{n-2} 的 a6,"optX":最小化 (x-3)^2+(y+2)^2 且 x+y=4 的 x,"optY":同一优化问题的 y,"coefficient":(1+x)^7(1-x)^3 中 x^4 的系数,"markovB2":两状态链从 A 出发，两步后在 B 的概率，转移矩阵 A->[A:0.7,B:0.3], B->[A:0.2,B:0.8],"steps":["..."]}。steps 至少 8 条。',
+  prompt: '只输出 JSON，不要 Markdown，不要额外解释。字段必须是数字：{"totalRequests":1024,"streamedRequests":832,"successRate":998/1024,"leakRate":22/1024,"weightedRisk":9*6+4*3+2*2+8,"meanLatencyMs":(420+515+350+525)/4,"p95LatencyMs":1210,"missingDeltaCount":7,"fallbackRatio":192/1024,"estimatedTokenCost":63200*0.0003,"retryAmplification":1152/1024,"blockedAttackPercent":21/32*100,"steps":["..."]}。steps 至少 8 条。',
 };
 
 const REASONING_PROMPT: PromptSpec = {
@@ -1088,7 +1155,7 @@ const REASONING_PROMPT: PromptSpec = {
   capabilityId: 'reasoning',
   timeoutMultiplier: 1.75,
   systemPrompt: '你是推理能力评测探针。用 JSON 返回答案和步骤。',
-  prompt: '只输出 JSON，不要 Markdown：{"ordering":"E-D-B-A-C","culprit":"A|B|C|D","logicGrid":{"Ada":{"language":"...","dataset":"..."},"Bo":{"language":"...","dataset":"..."},"Cy":{"language":"...","dataset":"..."}},"proposition":{"P":true,"Q":true,"R":false},"steps":["..."]}。题1 约束排序：任务 A/B/C/D/E 各占一个位置；E 必须第一；D 紧接 E；B 紧接 D；A 在 B 之后且 C 之前。题2 真假话：A/B/C/D 中一人作案，且下面四句话恰好只有一句真话：A 说“A 做的”；B 说“B 做的”；C 说“C 做的”；D 说“A 或 B 做的”。culprit 填作案者。题3 逻辑网格：Ada/Bo/Cy 各使用一种语言 Rust/Go/Python 和一个数据集 M/N/O；Ada 不用 Python 且不用 O；Rust 使用者用 M；Bo 用 N；Cy 不用 Go。给出三人的 language/dataset。题4 命题约束：P,Q,R 中恰好两个为真，且 P=>Q、R=>not Q、Q=>not R 均为真。给出 proposition。steps 至少 6 条。',
+  prompt: '只输出 JSON，不要 Markdown：{"ordering":"B-C-D-A-E","culprit":"A|B|C|D","logicGrid":{"Alpha":{"provider":"...","region":"..."},"Beta":{"provider":"...","region":"..."},"Gamma":{"provider":"...","region":"..."}},"proposition":{"P":true,"Q":false,"R":true},"steps":["..."]}。题1 事件排序：A/B/C/D/E 各占一个位置；B 必须第一；C 紧接 B；D 紧接 C；A 在 D 之后且 E 之前。题2 泄漏源：A/B/C/D 四个 relay 节点中一处泄漏，且下面四句话恰好只有一句真话：A 说“泄漏在 A”；B 说“泄漏在 B”；C 说“泄漏不在 B”；D 说“泄漏在 A 或 C”。culprit 填泄漏节点。题3 逻辑网格：Alpha/Beta/Gamma 各使用 provider OpenAI/Anthropic/Local 和 region US/EU/Lab；Alpha 不用 Anthropic 且不在 EU；OpenAI 在 US；Beta 在 EU；Gamma 不用 Anthropic。给出三者 provider/region。题4 命题约束：P,Q,R 中恰好两个为真，且 P=>R、Q=>not R、R=>not Q 均为真。给出 proposition。steps 至少 6 条。',
 };
 
 const STRUCTURED_PROMPT: PromptSpec = {
@@ -1098,7 +1165,7 @@ const STRUCTURED_PROMPT: PromptSpec = {
   capabilityId: 'structured_output',
   timeoutMultiplier: 1.75,
   systemPrompt: '你是结构化输出评测探针。严格遵守 schema。',
-  prompt: '只输出 JSON，不要解释。schema: {"title":"release_readiness","version":3,"summary":{"ready":false,"decision":"hold|ship","blockers":["R1","R2"],"confidence":0到1数字},"risks":[{"id":"R1","level":"high|medium|low","owner":"...","probability":0到1数字,"impact":1到5数字,"signals":["..."],"mitigation":"..."}],"actions":[{"id":"A1","owner":"...","task":"...","due":"YYYY-MM-DD","dependsOn":["R1"],"successMetric":"..."}],"matrix":[{"component":"api|ui|engine","status":"pass|warn|fail","riskIds":["R1"],"actionIds":["A1"],"notes":"..."}],"rollout":{"strategy":"canary","stages":[{"percent":5,"gate":"..."},{"percent":25,"gate":"..."},{"percent":100,"gate":"..."}]}}。请给出 4 个 risks、4 个 actions、3 个 matrix 项；summary.ready 必须为 false，blockers 至少 2 条，actions/matrix 必须引用已有 risk/action id。',
+  prompt: '只输出 JSON，不要解释。schema: {"title":"relay_audit","version":4,"summary":{"safeToProxy":false,"decision":"block|monitor|allow","blockers":["R1","R2"],"confidence":0到1数字},"risks":[{"id":"R1","category":"prompt|tool|stream|auth|routing","level":"high|medium|low","owner":"...","probability":0到1数字,"impact":1到5数字,"evidence":["..."],"mitigation":"..."}],"controls":[{"id":"C1","owner":"...","action":"...","gate":"...","covers":["R1"],"successMetric":"..."}],"matrix":[{"surface":"chat|tool|stream|config","status":"pass|warn|fail","riskIds":["R1"],"controlIds":["C1"],"notes":"..."}],"verification":{"strategy":"shadow","stages":[{"sample":32,"gate":"..."},{"sample":128,"gate":"..."},{"sample":512,"gate":"..."}]}}。请给出 5 个 risks、5 个 controls、4 个 matrix 项；summary.safeToProxy 必须为 false，blockers 至少 2 条，controls/matrix 必须引用已有 risk/control id。',
 };
 
 const CONSISTENCY_PROMPT: PromptSpec = {
@@ -1107,11 +1174,19 @@ const CONSISTENCY_PROMPT: PromptSpec = {
   category: 'model-score',
   capabilityId: 'consistency',
   systemPrompt: '你是一致性评测探针。严格按格式回复。',
-  prompt: '序列 3, 7, 15, 31, 63 的下一个数是多少？只回复 NEXT=数字。',
+  prompt: '风险序列 14, 20, 32, 56 的下一个数是多少？规则是相邻增量依次翻倍。只回复 NEXT_RISK=数字。',
 };
 
-async function runCapabilityPrompt(engine: Engine, spec: PromptSpec, model: string, timeoutMs: number, log?: DiagnosticLogger): Promise<DiagnosticPromptRun> {
+async function runCapabilityPrompt(
+  engine: Engine,
+  spec: PromptSpec,
+  model: string,
+  timeoutMs: number,
+  log?: DiagnosticLogger,
+  signal?: AbortSignal,
+): Promise<DiagnosticPromptRun> {
   const effectiveTimeoutMs = promptTimeoutMs(timeoutMs, spec);
+  throwIfAborted(signal);
   return runPrompt(engine, {
     ...basePromptOptions({ model, timeoutMs: effectiveTimeoutMs }),
     id: spec.id,
@@ -1121,7 +1196,7 @@ async function runCapabilityPrompt(engine: Engine, spec: PromptSpec, model: stri
     step: spec.id,
     prompt: spec.prompt,
     systemPrompt: spec.systemPrompt,
-  }, log);
+  }, log, signal);
 }
 
 async function runModelEvaluation(
@@ -1130,7 +1205,9 @@ async function runModelEvaluation(
   timeoutMs: number,
   selectedCapabilityIds: Set<string>,
   log?: DiagnosticLogger,
+  signal?: AbortSignal,
 ): Promise<ModelEvaluationSummary> {
+  throwIfAborted(signal);
   const runs: DiagnosticPromptRun[] = [];
   const capabilities: ModelCapabilityScore[] = [];
 
@@ -1147,12 +1224,14 @@ async function runModelEvaluation(
       log?.({ level: 'warning', message: `${spec.label} probe 已跳过`, detail: '本次未选择该能力' });
       return;
     }
+    throwIfAborted(signal);
     const effectiveTimeoutMs = promptTimeoutMs(timeoutMs, spec);
     log?.({
       message: `开始${spec.label} probe`,
       detail: `capability=${spec.capabilityId}, timeout=${effectiveTimeoutMs}ms`,
     });
-    const run = await runCapabilityPrompt(engine, spec, model, timeoutMs, log);
+    const run = await runCapabilityPrompt(engine, spec, model, timeoutMs, log, signal);
+    throwIfAborted(signal);
     runs.push(run);
     capabilities.push(scorer(run));
     log?.({
@@ -1171,12 +1250,15 @@ async function runModelEvaluation(
   await runSingleCapability(STRUCTURED_PROMPT, scoreStructuredOutput);
 
   if (capabilityEnabled(selectedCapabilityIds, CONSISTENCY_PROMPT.capabilityId)) {
+    throwIfAborted(signal);
     const consistencyTimeoutMs = promptTimeoutMs(timeoutMs, CONSISTENCY_PROMPT);
     log?.({ message: '开始一致性首轮 probe', detail: `capability=consistency, timeout=${consistencyTimeoutMs}ms` });
-    const consistencyRunA = await runCapabilityPrompt(engine, CONSISTENCY_PROMPT, model, timeoutMs, log);
+    const consistencyRunA = await runCapabilityPrompt(engine, CONSISTENCY_PROMPT, model, timeoutMs, log, signal);
+    throwIfAborted(signal);
     log?.({ level: logLevelFromStatus(consistencyRunA.status), message: '一致性首轮 probe 完成', detail: runLogDetail(consistencyRunA), fullDetail: runLogFullDetail(consistencyRunA) });
     log?.({ message: '开始一致性复测 probe', detail: `capability=consistency, timeout=${consistencyTimeoutMs}ms` });
-    const consistencyRunB = await runCapabilityPrompt(engine, { ...CONSISTENCY_PROMPT, id: 'cap-consistency-repeat', label: '一致性复测' }, model, timeoutMs, log);
+    const consistencyRunB = await runCapabilityPrompt(engine, { ...CONSISTENCY_PROMPT, id: 'cap-consistency-repeat', label: '一致性复测' }, model, timeoutMs, log, signal);
+    throwIfAborted(signal);
     runs.push(consistencyRunA, consistencyRunB);
     capabilities.push(scoreConsistency(consistencyRunA, consistencyRunB));
     log?.({ level: logLevelFromStatus(consistencyRunB.status), message: '一致性复测 probe 完成', detail: runLogDetail(consistencyRunB), fullDetail: runLogFullDetail(consistencyRunB) });
@@ -1207,6 +1289,7 @@ async function runModelEvaluation(
 export async function runModelDiagnostics(input: ModelDiagnosticsRequest, options: DiagnosticsRunOptions = {}): Promise<ModelDiagnosticsResponse> {
   const startedAtMs = Date.now();
   const { logs, log } = createLogCollector(startedAtMs, options.onLog);
+  const signal = options.signal;
   const engineId = String(input.engine || 'claude-code').trim();
   const model = String(input.model || '').trim();
   const driver = normalizeDriver(input.driver);
@@ -1219,6 +1302,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     message: '诊断任务已创建',
     detail: `engine=${engineId}, driver=${driver}, model=${model || '默认模型'}, timeout=${timeoutMs}ms, capabilities=${capabilitySelectionLabel(selectedCapabilityIds)}`,
   });
+  throwIfAborted(signal);
 
   let engine: Engine | null = null;
   let effectiveEngine: string | undefined;
@@ -1227,7 +1311,47 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
 
   const availabilityStartedAt = Date.now();
   log({ message: '开始检查环境可用性', detail: driver === 'auto' ? engineId : `${engineId}/${driver}` });
-  const availability = await getEngineAvailabilityReport(engineId);
+  throwIfAborted(signal);
+  let availability;
+  try {
+    availability = await getEngineAvailabilityReport(engineId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failedAvailabilityStage = makeStage({
+      id: 'availability',
+      label: '环境可用性',
+      startedAtMs: availabilityStartedAt,
+      status: 'failed',
+      detail: message,
+    });
+    log({
+      level: 'error',
+      message: '环境可用性检查失败',
+      detail: message,
+      fullDetail: error instanceof Error && error.stack ? error.stack : safeJson(error),
+    });
+    const finishedAtMs = Date.now();
+    return {
+      ok: false,
+      engine: engineId,
+      driver,
+      model,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      totalDurationMs: finishedAtMs - startedAtMs,
+      engineDebug: {
+        engine: engineId,
+        driver,
+        available: false,
+        streamSupported: false,
+        observedEventTypes: [],
+        stages: [failedAvailabilityStage],
+        runs: [],
+      },
+      logs,
+      error: message,
+    };
+  }
   const driverAvailability = driver === 'sdk' || driver === 'stdio' ? availability.drivers?.[driver] : undefined;
   const availabilityOk = driverAvailability ?? availability.available;
   const availabilityStage = makeStage({
@@ -1247,21 +1371,62 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
 
   const createStartedAt = Date.now();
   log({ message: '开始初始化引擎 wrapper', detail: driver === 'auto' ? '使用当前默认 driver' : `指定 ${driver}` });
-  const created = await instantiateDiagnosticEngine(engineId, driver);
-  engine = created.engine;
-  effectiveEngine = created.effectiveEngine;
-  const createStage = makeStage({
-    id: 'create-engine',
-    label: 'Wrapper 初始化',
-    startedAtMs: createStartedAt,
-    status: engine ? 'passed' : 'failed',
-    detail: engine ? `effective=${effectiveEngine || engine.getName()}` : 'createEngine 返回 null',
-  });
-  log({
-    level: logLevelFromStatus(createStage.status),
-    message: '引擎 wrapper 初始化完成',
-    detail: createStage.detail,
-  });
+  throwIfAborted(signal);
+  let createStage: DiagnosticStage;
+  try {
+    const created = await instantiateDiagnosticEngine(engineId, driver);
+    engine = created.engine;
+    effectiveEngine = created.effectiveEngine;
+    createStage = makeStage({
+      id: 'create-engine',
+      label: 'Wrapper 初始化',
+      startedAtMs: createStartedAt,
+      status: engine ? 'passed' : 'failed',
+      detail: engine ? `effective=${effectiveEngine || engine.getName()}` : 'createEngine 返回 null',
+    });
+    log({
+      level: logLevelFromStatus(createStage.status),
+      message: '引擎 wrapper 初始化完成',
+      detail: createStage.detail,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    createStage = makeStage({
+      id: 'create-engine',
+      label: 'Wrapper 初始化',
+      startedAtMs: createStartedAt,
+      status: 'failed',
+      detail: message,
+    });
+    log({
+      level: 'error',
+      message: '引擎 wrapper 初始化失败',
+      detail: message,
+      fullDetail: error instanceof Error && error.stack ? error.stack : safeJson(error),
+    });
+    const finishedAtMs = Date.now();
+    return {
+      ok: false,
+      engine: engineId,
+      driver,
+      model,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      totalDurationMs: finishedAtMs - startedAtMs,
+      engineDebug: {
+        engine: engineId,
+        driver,
+        effectiveEngine,
+        available: false,
+        streamSupported: false,
+        observedEventTypes: [],
+        stages: [availabilityStage, createStage],
+        runs: [],
+      },
+      logs,
+      error: message,
+    };
+  }
 
   if (!engine) {
     const finishedAtMs = Date.now();
@@ -1291,6 +1456,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
 
   try {
     if (includeEngineDebug) {
+      throwIfAborted(signal);
       engineDebug = await runEngineDebug({
         engine,
         engineId,
@@ -1303,6 +1469,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
           detail: availabilityStage.detail || 'availability checked',
         },
         log,
+        signal,
       });
       engineDebug.stages.splice(1, 0, createStage);
     } else {
@@ -1320,8 +1487,10 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     }
 
     if (includeModelScore) {
+      throwIfAborted(signal);
       const scoreStartedAt = Date.now();
-      modelEvaluation = await runModelEvaluation(engine, model, timeoutMs, selectedCapabilityIds, log);
+      modelEvaluation = await runModelEvaluation(engine, model, timeoutMs, selectedCapabilityIds, log, signal);
+      throwIfAborted(signal);
       engineDebug.stages.push(makeStage({
         id: 'model-score',
         label: '模型能力评测',

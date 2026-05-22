@@ -1,39 +1,66 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
-import Markdown from '@/components/Markdown';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { useCurrentEngine } from '@/components/EngineSelect';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import ChatMessage, { RobotLogo } from '@/components/chat/ChatMessage';
+import { Persona } from '@/components/ai-elements/persona';
 import { Shimmer } from '@/components/ai-elements/shimmer';
-import { Message as AIMessage, MessageContent as AIMessageContent } from '@/components/ai-elements/message';
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation';
 import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input';
+import { normalizeAssistantDisplay } from '@/lib/chat/actions';
+
+function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyKey): boolean {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function normalizeSessionId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
 
 interface Message {
+  id: string;
   role: 'user' | 'assistant' | 'error';
   content: string;
+  rawContent?: string;
   costUsd?: number;
   durationMs?: number;
   usage?: { input_tokens: number; output_tokens: number };
+  engine?: string;
+  model?: string;
+  timestamp: number;
 }
 
 export default function ChatModal() {
-  const { isOpen, toggleChat, closeChat } = useChat();
+  const { isOpen, toggleChat, closeChat, model: ctxModel, effectiveEngine: ctxEffectiveEngine } = useChat();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [model, setModel] = useState('claude-sonnet-4-6');
+  const [model, setModel] = useState('');
   const [engine, setEngine] = useState('');
   const effectiveEngine = useCurrentEngine(engine);
+
+  useEffect(() => {
+    if (!model && ctxModel) setModel(ctxModel);
+  }, [ctxModel, model]);
+
+  useEffect(() => {
+    if (!engine && ctxEffectiveEngine) setEngine(ctxEffectiveEngine);
+  }, [ctxEffectiveEngine, engine]);
+  const makeMessageId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const send = async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
-    setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
+    setMessages(prev => [...prev, {
+      id: makeMessageId(),
+      role: 'user',
+      content: trimmed,
+      timestamp: Date.now(),
+    }]);
     setLoading(true);
     try {
       const res = await fetch('/api/chat', {
@@ -43,16 +70,32 @@ export default function ChatModal() {
       });
       const data = await res.json();
       if (!res.ok || data.error) {
-        setMessages(prev => [...prev, { role: 'error', content: data.error || `HTTP ${res.status}` }]);
-      } else {
-        if (data.sessionId) setSessionId(data.sessionId);
         setMessages(prev => [...prev, {
-          role: 'assistant', content: data.result,
+          id: makeMessageId(),
+          role: 'error',
+          content: data.error || `HTTP ${res.status}`,
+          timestamp: Date.now(),
+        }]);
+      } else {
+        if (hasOwnKey(data, 'sessionId')) setSessionId(normalizeSessionId(data.sessionId));
+        setMessages(prev => [...prev, {
+          id: makeMessageId(),
+          role: 'assistant',
+          content: data.result,
+          rawContent: data.result,
           costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
+          engine: effectiveEngine,
+          model,
+          timestamp: Date.now(),
         }]);
       }
     } catch (err: any) {
-      setMessages(prev => [...prev, { role: 'error', content: err.message || '请求失败' }]);
+      setMessages(prev => [...prev, {
+        id: makeMessageId(),
+        role: 'error',
+        content: err.message || '请求失败',
+        timestamp: Date.now(),
+      }]);
     }
     setLoading(false);
   };
@@ -63,16 +106,54 @@ export default function ChatModal() {
 
   const clearChat = () => { setMessages([]); setSessionId(null); };
 
+  const renderedMessages = useMemo(() => (
+    messages.map((msg) => {
+      let displayMessage = msg;
+      if (msg.role === 'assistant') {
+        const raw = msg.rawContent || msg.content || '';
+        const normalized = normalizeAssistantDisplay(raw, false);
+        if (normalized.hasMachineResult) {
+          displayMessage = { ...msg, content: normalized.visibleText };
+        }
+      }
+      return (
+        <div key={msg.id} className="pb-4">
+          <ChatMessage
+            message={displayMessage}
+            isStreaming={false}
+            onConfirmAction={() => {}}
+            onRejectAction={() => {}}
+            onUndoAction={() => {}}
+            onRetryAction={() => {}}
+          />
+        </div>
+      );
+    })
+  ), [messages]);
+
   return (
     <>
       {!isOpen && (
-        <Button
-          className="fixed bottom-6 right-6 w-14 h-14 rounded-full shadow-lg z-50"
-          onClick={toggleChat}
-          title="ACEHarness 在线"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: '28px' }}>chat</span>
-        </Button>
+        <div className="fixed bottom-6 right-0 z-50 translate-x-[calc(100%-22px)] transition-transform duration-200 hover:translate-x-0 focus-within:translate-x-0">
+          <div className="relative flex items-center pl-4">
+            <div className="pointer-events-none absolute left-0 top-1/2 flex h-10 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-r-0 border-border/70 bg-background/94 text-muted-foreground shadow-sm backdrop-blur">
+              <span className="material-symbols-outlined text-[14px]">bolt</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-14 w-14 rounded-full p-0 shadow-lg hover:bg-transparent"
+              onClick={toggleChat}
+              title="ACEHarness 在线"
+            >
+              <Persona
+                state="idle"
+                variant="obsidian"
+                className="h-14 w-14 rounded-full"
+              />
+            </Button>
+          </div>
+        </div>
       )}
 
       {isOpen && (
@@ -106,30 +187,7 @@ export default function ChatModal() {
                   <span className="text-sm">输入消息开始对话</span>
                 </div>
               )}
-              {messages.map((msg, i) => (
-                msg.role === 'error' ? (
-                  <div key={i} className="text-sm rounded-lg px-3 py-2 max-w-[85%] bg-destructive/10 text-destructive whitespace-pre-wrap">
-                    {msg.content}
-                  </div>
-                ) : (
-                  <AIMessage key={i} from={msg.role as 'user' | 'assistant'}>
-                    <AIMessageContent className={msg.role === 'user' ? 'rounded-lg bg-primary text-primary-foreground px-3 py-2 whitespace-pre-wrap' : 'bg-muted rounded-lg px-3 py-2'}>
-                      {msg.role === 'assistant' ? (
-                        <div className="prose-sm prose-neutral dark:prose-invert max-w-none [&_pre]:bg-background [&_pre]:border [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5">
-                          <Markdown>{msg.content}</Markdown>
-                        </div>
-                      ) : msg.content}
-                      {msg.role === 'assistant' && (msg.usage || msg.costUsd !== undefined) && (
-                        <div className="text-xs text-muted-foreground mt-1 opacity-70">
-                          {msg.usage && `${msg.usage.input_tokens}↓ ${msg.usage.output_tokens}↑`}
-                          {msg.costUsd !== undefined && ` · $${msg.costUsd.toFixed(4)}`}
-                          {msg.durationMs !== undefined && ` · ${(msg.durationMs / 1000).toFixed(1)}s`}
-                        </div>
-                      )}
-                    </AIMessageContent>
-                  </AIMessage>
-                )
-              ))}
+              {renderedMessages}
               {loading && (
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <RobotLogo size={24} />
@@ -140,10 +198,14 @@ export default function ChatModal() {
             <ConversationScrollButton />
           </Conversation>
 
-          <div className="border-t flex-shrink-0">
-            <PromptInput onSubmit={handleSubmit} disabled={loading}>
+          <div className="flex-shrink-0 px-4 pb-4 pt-3">
+            <PromptInput
+              onSubmit={handleSubmit}
+              disabled={loading}
+              className="rounded-xl border-border/70 bg-background shadow-sm"
+            >
               <PromptInputTextarea placeholder="输入消息... (Enter 发送)" />
-              <PromptInputFooter>
+              <PromptInputFooter className="justify-end">
                 <PromptInputSubmit />
               </PromptInputFooter>
             </PromptInput>

@@ -28,8 +28,8 @@ describe('sidebar plugin system', () => {
   describe('registry', () => {
     test('getAllPlugins returns enabled built-in plugins', () => {
       const plugins = getAllPlugins();
-      expect(plugins.length).toBeGreaterThanOrEqual(4);
-      expect(plugins.find((p) => p.id === 'werewolf-lab')).toBeTruthy();
+      expect(plugins.length).toBeGreaterThanOrEqual(3);
+      expect(plugins.find((p) => p.id === 'werewolf-lab')).toBeFalsy();
       expect(plugins.find((p) => p.id === 'create-workflow')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'create-agent')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'supervisor')).toBeTruthy();
@@ -50,7 +50,7 @@ describe('sidebar plugin system', () => {
     test('getActions returns all actions sorted by order', () => {
       const actions = getActions();
       expect(actions.length).toBeGreaterThanOrEqual(8);
-      expect(actions.find((a) => a.id === 'werewolf-lab')).toBeTruthy();
+      expect(actions.find((a) => a.id === 'werewolf-lab')).toBeFalsy();
       expect(actions.find((a) => a.id === 'create-workflow')).toBeTruthy();
       expect(actions.find((a) => a.id === 'create-agent')).toBeTruthy();
     });
@@ -65,7 +65,7 @@ describe('sidebar plugin system', () => {
     test('getCollapsibleActions excludes pinned', () => {
       const collapsible = getCollapsibleActions();
       expect(collapsible.every((a) => !a.pinned)).toBe(true);
-      expect(collapsible.find((a) => a.id === 'werewolf-lab')).toBeTruthy();
+      expect(collapsible.find((a) => a.id === 'werewolf-lab')).toBeFalsy();
     });
 
     test('getActionsGrouped groups by category', () => {
@@ -83,9 +83,9 @@ describe('sidebar plugin system', () => {
       expect(intent!.targetTab).toBe('workflow');
       expect(intent!.opensModal).toBe(true);
 
-      const werewolfIntent = getIntent('supervisor-chat');
-      expect(werewolfIntent).toBeTruthy();
-      expect(werewolfIntent!.targetTab).toBe('commander');
+      const supervisorIntent = getIntent('supervisor-chat');
+      expect(supervisorIntent).toBeTruthy();
+      expect(supervisorIntent!.targetTab).toBe('commander');
     });
 
     test('registerPlugin adds a new plugin', () => {
@@ -175,24 +175,21 @@ describe('sidebar plugin system', () => {
       const onAction = vi.fn();
       render(<QuickActions onAction={onAction} />);
 
-      // Categories from plugins
+      // Categories from built-in actions/plugins
       expect(screen.getByText('创建')).toBeInTheDocument();
       expect(screen.getByText('查看')).toBeInTheDocument();
-      expect(screen.getByText('多Agent能力实验室')).toBeInTheDocument();
 
       // Actions
       expect(screen.getByText('创建工作流')).toBeInTheDocument();
       expect(screen.getByText('创建 Agent')).toBeInTheDocument();
-      expect(screen.getByText('AI 狼人杀')).toBeInTheDocument();
+      expect(screen.queryByText('创建狼人杀')).toBeNull();
     });
 
-    test('clicking werewolf action triggers correct prompt', async () => {
-      const user = userEvent.setup();
+    test('werewolf is not exposed as a home quick action', async () => {
       const onAction = vi.fn();
       render(<QuickActions onAction={onAction} />);
 
-      await user.click(screen.getByRole('button', { name: /AI 狼人杀/ }));
-      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:werewolf_lab');
+      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
     });
 
     test('QuickActionsBar shows pinned actions and expandable section', async () => {
@@ -204,16 +201,12 @@ describe('sidebar plugin system', () => {
       expect(screen.getByRole('button', { name: /创建工作流/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /创建 Agent/ })).toBeInTheDocument();
 
-      // Werewolf not visible until expanded
-      expect(screen.queryByRole('button', { name: /AI 狼人杀/ })).toBeNull();
+      // Werewolf is an agora extension, not a home quick action
+      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
 
       // Expand
       await user.click(screen.getByRole('button', { name: /快捷操作/ }));
-      expect(screen.getByRole('button', { name: /AI 狼人杀/ })).toBeInTheDocument();
-
-      // Click it
-      await user.click(screen.getByRole('button', { name: /AI 狼人杀/ }));
-      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:werewolf_lab');
+      expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
     });
   });
 });

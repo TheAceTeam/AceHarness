@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { ModelOption } from '@/lib/core/models';
-import { SingleCombobox, type ComboboxGroupDef } from '@/components/ui/combobox';
+import { AiModelSelectorField, type AiModelSelectorGroup } from '@/components/AiModelSelectorField';
 import { useToast } from '@/components/ui/toast';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
@@ -16,9 +16,59 @@ interface Props {
   className?: string;
 }
 
+let sharedAvailabilityCache: { value: Record<string, boolean>; expiresAt: number } | null = null;
+let sharedAvailabilityPromise: Promise<Record<string, boolean>> | null = null;
+
+async function loadSharedEngineAvailability(forceRefresh = false): Promise<Record<string, boolean>> {
+  if (!forceRefresh && sharedAvailabilityCache && sharedAvailabilityCache.expiresAt > Date.now()) {
+    return sharedAvailabilityCache.value;
+  }
+  if (!forceRefresh && sharedAvailabilityPromise) {
+    return sharedAvailabilityPromise;
+  }
+
+  const promise = Promise.all(getConcreteEngines().map(async (eng) => {
+    try {
+      const response = await fetch(`/api/engine/availability?engine=${encodeURIComponent(eng.id)}`);
+      const data = await response.json();
+      return {
+        engineId: eng.id,
+        available: Boolean(data.available),
+        cacheTtlMs: Number.isFinite(Number(data.cacheTtlMs)) ? Number(data.cacheTtlMs) : undefined,
+      };
+    } catch {
+      return {
+        engineId: eng.id,
+        available: false,
+        cacheTtlMs: undefined,
+      };
+    }
+  }))
+    .then((entries) => {
+      const value = Object.fromEntries(entries.map((entry) => [entry.engineId, entry.available]));
+      const ttlMs = entries.reduce((min, entry) => (
+        typeof entry.cacheTtlMs === 'number' && entry.cacheTtlMs > 0
+          ? Math.min(min, entry.cacheTtlMs)
+          : min
+      ), Number.POSITIVE_INFINITY);
+      sharedAvailabilityCache = {
+        value,
+        expiresAt: Date.now() + (Number.isFinite(ttlMs) ? ttlMs : 30 * 60 * 1000),
+      };
+      return value;
+    })
+    .finally(() => {
+      sharedAvailabilityPromise = null;
+    });
+
+  sharedAvailabilityPromise = promise;
+  return promise;
+}
+
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [globalEngine, setGlobalEngine] = useState('claude-code');
+  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
   const { toast } = useToast();
 
@@ -39,27 +89,29 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
         if (!cancelled) setModels(d.models || []);
       }).catch(() => {});
       fetch('/api/engine').then(r => r.json()).then(d => {
-        if (!cancelled && d.engine) setGlobalEngine(d.engine);
+        if (!cancelled) {
+          if (d.engine) setGlobalEngine(d.engine);
+          setGlobalDefaultModel(typeof d.defaultModel === 'string' ? d.defaultModel : '');
+        }
       }).catch(() => {});
 
-      const availability: Record<string, boolean> = {};
-      await Promise.all(getConcreteEngines().map(async (eng) => {
-        try {
-          const response = await fetch(`/api/engine/availability?engine=${encodeURIComponent(eng.id)}`);
-          const data = await response.json();
-          availability[eng.id] = Boolean(data.available);
-        } catch {
-          availability[eng.id] = false;
-        }
-      }));
-      if (!cancelled) {
-        setEngineAvailability(availability);
-      }
+      const availability = await loadSharedEngineAvailability();
+      if (!cancelled) setEngineAvailability(availability);
     };
     refresh();
-    const onEngineUpdated = () => refresh();
+    const onEngineUpdated = () => {
+      void loadSharedEngineAvailability(true).then((availability) => {
+        if (!cancelled) setEngineAvailability(availability);
+      });
+      void refresh();
+    };
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'engine-config-updated-at') refresh();
+      if (e.key === 'engine-config-updated-at') {
+        void loadSharedEngineAvailability(true).then((availability) => {
+          if (!cancelled) setEngineAvailability(availability);
+        });
+        void refresh();
+      }
     };
     window.addEventListener('engine:updated', onEngineUpdated as EventListener);
     window.addEventListener('storage', onStorage);
@@ -85,8 +137,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   // Composite value: "engineId::modelValue" — empty engineId = follow system
   const compositeValue = `${engine}::${model}`;
 
-  const groups: ComboboxGroupDef[] = useMemo(() => {
-    const result: ComboboxGroupDef[] = [];
+  const groups: AiModelSelectorGroup[] = useMemo(() => {
+    const result: AiModelSelectorGroup[] = [];
 
     // "跟随系统" group — uses the global engine's compatible models
     const sysModels = isEngineSelectable(globalEngine)
@@ -100,6 +152,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
           value: `::${m.value}`,
           label: m.label,
           icon: <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />,
+          description: m.value,
+          keywords: [m.value, globalLabel],
         })),
       });
     }
@@ -116,6 +170,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
             value: `${eng.id}::${m.value}`,
             label: m.label,
             icon: <EngineIcon engineId={eng.id} className="h-4 w-4" />,
+            description: m.value,
+            keywords: [m.value, eng.id, eng.name],
           })),
         });
       }
@@ -127,18 +183,19 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
             value: `${engine || ''}::${m.value}`,
             label: m.label,
             icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
+            description: m.value,
           }))
         : (model
             ? [{
                 value: `${engine || ''}::${model}`,
                 label: model,
                 icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
+                description: effectiveEngine,
               }]
             : []);
       if (fallbackItems.length > 0) {
         result.push({
           label: '模型',
-          icon: <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />,
           items: fallbackItems,
         });
       }
@@ -147,8 +204,9 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     return result;
   }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
 
-  const modelLabel = models.find(m => m.value === model)?.label || model || '选择模型';
-  const triggerLabel = modelLabel;
+  const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
+  const modelLabel = models.find(m => m.value === model)?.label || model;
+  const triggerLabel = modelLabel || defaultModelLabel || '选择模型';
   const triggerIcon = <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />;
 
   const handleValueChange = (val: string) => {
@@ -165,13 +223,15 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   };
 
   return (
-    <SingleCombobox
+    <AiModelSelectorField
       value={compositeValue}
       onValueChange={handleValueChange}
       groups={groups}
       triggerLabel={triggerLabel}
       triggerIcon={triggerIcon}
-      triggerClassName={`h-8 text-xs ${className}`}
+      placeholder="选择模型"
+      searchPlaceholder="搜索模型或引擎..."
+      className={`h-8 text-xs ${className}`}
     />
   );
 }

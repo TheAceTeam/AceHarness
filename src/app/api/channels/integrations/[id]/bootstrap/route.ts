@@ -40,9 +40,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         replies: ['default-supervisor: 当前状态正常'],
         replyMessages: [
           {
-            kind: 'roundtable-message',
-            speakerType: 'supervisor',
-            speakerName: 'default-supervisor',
+            kind: 'text',
             text: '当前状态正常',
           },
         ],
@@ -55,9 +53,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           conversationId: 'wechat-room-001',
           messages: [
             {
-              kind: 'roundtable-message',
-              speakerType: 'agent',
-              speakerName: 'architect',
+              kind: 'text',
               text: '建议先收敛接口范围。',
             },
           ],

@@ -49,7 +49,6 @@ export interface PluginContext {
   hasWorkflow: boolean;
   hasCollaboration: boolean;
   hasCreation: boolean;
-  werewolfMode: boolean;
   activeIntent?: string;
   activePhase?: string;
 }
@@ -94,29 +93,6 @@ export interface BreakpointData {
   failedActor?: string;
   failedAt?: number;
   error?: string;
-}
-
-// ─── Roundtable ───
-
-export interface RoundtableCapability {
-  setSeats(seats: RoundtableSeat[]): void;
-  setSpeaker(seatId: string | null): void;
-  eliminate(seatIds: string[]): void;
-  showBanner(text: string, durationMs?: number): void;
-  getSelected(): string | null;
-  onSelect(cb: (seatId: string) => void): () => void;
-}
-
-export interface RoundtableSeat {
-  id: string;
-  name: string;
-  subtitle?: string;
-  meta?: string;
-  statusLabel?: string;
-  accentClass?: string;
-  active?: boolean;
-  speaking?: boolean;
-  eliminated?: boolean;
 }
 
 // ─── Persistence ───
@@ -176,7 +152,6 @@ export interface ResolvedCapabilities {
   agentCalling?: AgentCallingCapability;
   resultExtraction?: ResultExtractionCapability;
   breakpointResume?: BreakpointResumeCapability;
-  roundtable?: RoundtableCapability;
   persistence?: PersistenceCapability;
   streamingDisplay?: StreamingDisplayCapability;
   theme?: ThemeCapability;

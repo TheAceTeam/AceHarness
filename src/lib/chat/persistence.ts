@@ -25,12 +25,16 @@ export interface PersistedMessage {
   id: string;
   role: 'user' | 'assistant' | 'error';
   content: string;
+  rawContent?: string;
   source?: {
     type: 'wechat';
     label?: string;
     direction?: 'inbound' | 'outbound';
   };
   actions?: PersistedAction[];
+  cards?: any[];
+  engine?: string;
+  model?: string;
   costUsd?: number;
   durationMs?: number;
   usage?: {
@@ -185,7 +189,7 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.messages?.length || 0,
-        lastMessage: lastMsg?.content?.slice(0, 100),
+        lastMessage: lastMsg?.content?.replace(/<ace-process>[\s\S]*?<\/ace-process>/g, '').trim().slice(0, 100) || undefined,
         creationSession: session.creationSession,
         workflowBinding: session.workflowBinding,
         agentBinding: session.agentBinding,

@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     const binding = await saveChannelBinding({
       id: typeof body?.id === 'string' ? body.id : `binding-${randomUUID()}`,
       integrationId,
-      bindingType: body?.bindingType === 'roundtable' || body?.bindingType === 'agent-chat' ? body.bindingType : 'workflow-run',
+      bindingType: body?.bindingType === 'agent-chat' ? 'agent-chat' : 'workflow-run',
       createdBy: user.id,
       createdAt: Date.now(),
       externalConversationId: String(body.externalConversationId),
@@ -43,11 +43,6 @@ export async function POST(request: NextRequest) {
       agentName: typeof body?.agentName === 'string' ? body.agentName : undefined,
       agentSessionId: typeof body?.agentSessionId === 'string' ? body.agentSessionId : undefined,
       workflowMode: body?.workflowMode === 'feedback-only' ? 'feedback-only' : 'full-control',
-      roundtableId: typeof body?.roundtableId === 'string' ? body.roundtableId : undefined,
-      roundtableParticipants: Array.isArray(body?.roundtableParticipants)
-        ? body.roundtableParticipants.filter((item: unknown): item is string => typeof item === 'string')
-        : undefined,
-      roundtableSummarizer: typeof body?.roundtableSummarizer === 'string' ? body.roundtableSummarizer : undefined,
       metadata: body?.metadata && typeof body.metadata === 'object' ? body.metadata : undefined,
     });
     return NextResponse.json({ binding });

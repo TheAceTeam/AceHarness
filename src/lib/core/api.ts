@@ -252,6 +252,10 @@ interface WorkflowStatusResponse {
       tasks?: string;
     };
   };
+  creationSpecCodingSummary?: WorkflowStatusResponse['specCodingSummary'] | null;
+  creationSpecCodingDetails?: WorkflowStatusResponse['specCodingDetails'] | null;
+  runSpecCodingSummary?: WorkflowStatusResponse['specCodingSummary'] | null;
+  runSpecCodingDetails?: WorkflowStatusResponse['specCodingDetails'] | null;
   sourceOfTruth?: {
     mode: 'phase-based' | 'state-machine' | 'unknown';
     yamlSourceOfTruth: string[];
@@ -519,13 +523,11 @@ export interface ChannelIntegrationRecord {
   capabilities: string[];
   bindingStrategy: 'manual' | 'per-conversation-auto';
   defaultBinding?: {
-    bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+    bindingType: 'workflow-run' | 'agent-chat';
     configFile?: string;
     runId?: string;
     agentName?: string;
     workflowMode?: 'feedback-only' | 'full-control';
-    roundtableParticipants?: string[];
-    roundtableSummarizer?: string;
   } | null;
   providerConfig?: Record<string, any>;
 }
@@ -533,7 +535,7 @@ export interface ChannelIntegrationRecord {
 export interface ChannelBindingRecord {
   id: string;
   integrationId: string;
-  bindingType: 'workflow-run' | 'roundtable' | 'agent-chat';
+  bindingType: 'workflow-run' | 'agent-chat';
   createdBy: string;
   createdAt: number;
   updatedAt: number;
@@ -546,14 +548,11 @@ export interface ChannelBindingRecord {
   agentName?: string;
   agentSessionId?: string;
   workflowMode?: 'feedback-only' | 'full-control';
-  roundtableId?: string;
-  roundtableParticipants?: string[];
-  roundtableSummarizer?: string;
   metadata?: Record<string, any>;
 }
 
 export interface ChannelReplyMessage {
-  kind: 'text' | 'roundtable-message' | 'roundtable-summary' | 'system';
+  kind: 'text' | 'system';
   speakerType?: 'human' | 'agent' | 'supervisor' | 'system';
   speakerName?: string;
   text: string;
@@ -669,11 +668,15 @@ export const configApi = {
     return data;
   },
 
-  async saveConfig(filename: string, config: any): Promise<ApiResponse> {
+  async saveConfig(filename: string, config: any, options?: { creationSessionId?: string; specCoding?: any }): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/configs/${encodeURIComponent(filename)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({
+        config,
+        creationSessionId: options?.creationSessionId,
+        specCoding: options?.specCoding,
+      }),
     });
     if (!response.ok) {
       const data = await response.json().catch(() => null);
@@ -981,6 +984,26 @@ export const agentApi = {
     };
   },
 
+  async stopChatStream(name: string, input: {
+    streamId?: string | null;
+    frontendSessionId?: string | null;
+  }): Promise<{ killed: boolean; count?: number }> {
+    const params = new URLSearchParams();
+    const streamId = typeof input.streamId === 'string' ? input.streamId.trim() : '';
+    const frontendSessionId = typeof input.frontendSessionId === 'string' ? input.frontendSessionId.trim() : '';
+    if (streamId) params.set('id', streamId);
+    if (frontendSessionId) params.set('frontendSessionId', frontendSessionId);
+    const query = params.toString();
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream${query ? `?${query}` : ''}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.error || '停止 Agent 流式对话失败');
+    }
+    return data;
+  },
+
   async chat(name: string, input: {
       message: string;
       mode?: 'standalone-chat' | 'workflow-chat';
@@ -1016,6 +1039,89 @@ export const agentApi = {
     if (!response.ok) {
       throw new Error(data?.error || 'Agent 对话失败');
     }
+    return data;
+  },
+};
+
+export interface AgoraGuestPreset {
+  id: string;
+  displayName: string;
+  templateAgent?: string;
+  description: string;
+  personaPrompt: string;
+  engine?: string;
+  model?: string;
+  status?: 'available' | 'unavailable';
+  statusReason?: string;
+}
+
+export interface AgoraGuestConfig {
+  id: string;
+  displayName: string;
+  runtimeAgentName: string;
+  sourceType: 'preset' | 'custom';
+  sourceAgent?: string;
+  presetId?: string;
+  personaPrompt: string;
+  systemPrompt: string;
+  engine?: string;
+  model?: string;
+  status: 'available' | 'unavailable';
+  statusReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const agoraApi = {
+  async listGuests(): Promise<{ guests: AgoraGuestConfig[]; presets: AgoraGuestPreset[] }> {
+    const response = await authFetch(`${API_BASE}/agora/guests`);
+    if (!response.ok) throw new Error('获取议场嘉宾失败');
+    return response.json();
+  },
+
+  async saveGuest(input: {
+    id?: string;
+    displayName: string;
+    sourceType: 'preset' | 'custom';
+    sourceAgent?: string;
+    presetId?: string;
+    personaPrompt?: string;
+    engine?: string;
+    model?: string;
+  }): Promise<{ success: boolean; guest: AgoraGuestConfig }> {
+    const response = await authFetch(input.id
+      ? `${API_BASE}/agora/guests/${encodeURIComponent(input.id)}`
+      : `${API_BASE}/agora/guests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || '保存议场嘉宾失败');
+    return data;
+  },
+
+  async deleteGuest(id: string): Promise<{ success: boolean }> {
+    const response = await authFetch(`${API_BASE}/agora/guests/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || '删除议场嘉宾失败');
+    return data;
+  },
+
+  async ensureWorkspace(input: {
+    sessionId: string;
+    sourceWorkspace?: string;
+    title?: string;
+  }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
+    const response = await authFetch(`${API_BASE}/agora/workspace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || '准备议场工作区失败');
     return data;
   },
 };
@@ -1231,7 +1337,7 @@ export const workflowApi = {
         errorText?: string | null;
       }>;
     }>;
-  }): Promise<ApiResponse & { runId?: string | null; frontendSessionId?: string | null }> {
+  }): Promise<ApiResponse & { runId?: string | null; frontendSessionId?: string | null; sessionWorkbenchState?: any }> {
     const response = await authFetch(`${API_BASE}/workflow/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1654,6 +1760,7 @@ export const systemSettingsApi = {
   async get(): Promise<{
     gitcodeTokenConfigured: boolean;
     locale?: 'zh' | 'en';
+    engineAvailabilityCacheMinutes?: number;
     emailNotifications?: {
       enabled: boolean;
       smtpHost: string;
@@ -1675,6 +1782,7 @@ export const systemSettingsApi = {
 
   async save(data: {
     gitcodeToken?: string;
+    engineAvailabilityCacheMinutes?: number;
     emailNotifications?: {
       enabled?: boolean;
       smtpHost?: string;
@@ -1761,7 +1869,7 @@ export const channelApi = {
     return data;
   },
 
-  async saveBinding(input: Partial<ChannelBindingRecord> & { integrationId: string; externalConversationId: string; bindingType: 'workflow-run' | 'roundtable' | 'agent-chat' }): Promise<{ binding: ChannelBindingRecord }> {
+  async saveBinding(input: Partial<ChannelBindingRecord> & { integrationId: string; externalConversationId: string; bindingType: 'workflow-run' | 'agent-chat' }): Promise<{ binding: ChannelBindingRecord }> {
     const response = await authFetch(`${API_BASE}/channels/bindings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1974,6 +2082,203 @@ export interface WorkspaceTreeResponse {
   workspaceRoot?: string;
   targetPath?: string;
   availableRoots?: string[];
+}
+
+export type GitDiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+
+export interface GitDiffSummaryFile {
+  path: string;
+  repoPath: string;
+  previousPath?: string;
+  previousRepoPath?: string;
+  status: GitDiffFileStatus;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitDiffSummaryResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  clean: boolean;
+  reason?: string;
+  head?: {
+    hash: string;
+    shortHash: string;
+    message: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: string;
+  } | null;
+  files: GitDiffSummaryFile[];
+  totals: {
+    files: number;
+    additions: number;
+    deletions: number;
+  };
+}
+
+export interface GitDiffFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  file: GitDiffSummaryFile & {
+    patch: string;
+    originalContent: string;
+    currentContent: string;
+    originalTooLarge: boolean;
+    currentTooLarge: boolean;
+    originalSize: number;
+    currentSize: number;
+  };
+}
+
+export type GitBrowserScope = 'unstaged' | 'staged' | 'untracked';
+
+export interface GitBrowserCommitSummary {
+  hash: string;
+  shortHash: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  additions: number;
+  deletions: number;
+  fileCount: number;
+}
+
+export interface GitBrowserFileDetail extends GitDiffSummaryFile {
+  patch: string;
+  originalContent: string;
+  currentContent: string;
+  originalTooLarge: boolean;
+  currentTooLarge: boolean;
+  originalSize: number;
+  currentSize: number;
+  baseLabel: string;
+  targetLabel: string;
+}
+
+export interface GitBrowserSummaryResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  reason?: string;
+  head?: {
+    hash: string;
+    shortHash: string;
+    message: string;
+    authorName: string;
+    authorEmail: string;
+    authoredAt: string;
+  } | null;
+  workingTree: {
+    unstaged: GitDiffSummaryFile[];
+    staged: GitDiffSummaryFile[];
+    untracked: GitDiffSummaryFile[];
+  };
+  commits: GitBrowserCommitSummary[];
+  commitOffset: number;
+  commitLimit: number;
+  hasMoreCommits: boolean;
+}
+
+export interface GitBrowserFileListResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  scope: GitBrowserScope;
+  files: GitDiffSummaryFile[];
+}
+
+export interface GitBrowserScopeFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  scope: GitBrowserScope;
+  file: GitBrowserFileDetail;
+}
+
+export interface GitBrowserCommitDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  commit: GitBrowserCommitSummary;
+  patch: string;
+  files: GitDiffSummaryFile[];
+}
+
+export interface GitBrowserCommitFileDetailResponse {
+  available: boolean;
+  workspaceRoot: string;
+  repoRoot?: string;
+  branch?: string;
+  commit: GitBrowserCommitSummary;
+  file: GitBrowserFileDetail;
+}
+
+export type WorkflowGitSnapshotKind = 'run-baseline' | 'step-before' | 'step-after' | 'run-final';
+
+export interface WorkflowGitSnapshot {
+  id: string;
+  ref: string;
+  commit: string;
+  shortCommit: string;
+  tree: string;
+  kind: WorkflowGitSnapshotKind;
+  label: string;
+  stepName?: string;
+  phaseName?: string;
+  stateName?: string;
+  agent?: string;
+  createdAt: string;
+  reusedFromId?: string;
+}
+
+export interface WorkflowGitStepDiff {
+  id: string;
+  stepLogId: string;
+  stepName: string;
+  phaseName?: string;
+  stateName?: string;
+  agent: string;
+  status: 'running' | 'completed' | 'failed';
+  beforeSnapshotId: string;
+  afterSnapshotId?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkflowGitDiffResponse {
+  available: boolean;
+  reason?: string;
+  workspaceRoot?: string;
+  repoRoot?: string;
+  baselineSnapshotId?: string;
+  snapshots: WorkflowGitSnapshot[];
+  stepDiffs: WorkflowGitStepDiff[];
+  selectedStepDiffId?: string | null;
+  range?: string;
+  baseSnapshot?: WorkflowGitSnapshot;
+  targetSnapshot?: WorkflowGitSnapshot;
+  files?: GitDiffSummaryFile[];
+  totals?: {
+    files: number;
+    additions: number;
+    deletions: number;
+  };
+  patch?: string;
+}
+
+export interface WorkflowGitDiffFileResponse {
+  available: boolean;
+  file: GitBrowserFileDetail;
 }
 
 export type WorkspaceMode = 'default' | 'notebook';
@@ -2215,6 +2520,105 @@ export const workspaceApi = {
       throw new Error(data.message || data.error || '获取文件失败');
     }
     return res.blob();
+  },
+  async getGitDiff(workspace: string): Promise<GitDiffSummaryResponse> {
+    const res = await authFetch(`${API_BASE}/workspace/git-diff?workspace=${encodeURIComponent(workspace)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git Diff 失败');
+    }
+    return res.json();
+  },
+  async getGitDiffFile(workspace: string, file: string): Promise<GitDiffFileDetailResponse> {
+    const res = await authFetch(`${API_BASE}/workspace/git-diff?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git Diff 文件详情失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserSummary(workspace: string, options?: { commitOffset?: number; commitLimit?: number }): Promise<GitBrowserSummaryResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    if (options?.commitOffset != null) params.set('commitOffset', String(options.commitOffset));
+    if (options?.commitLimit != null) params.set('commitLimit', String(options.commitLimit));
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 浏览摘要失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserScopeFiles(workspace: string, scope: GitBrowserScope): Promise<GitBrowserFileListResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('scope', scope);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 分组文件失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserScopeFileDetail(workspace: string, scope: GitBrowserScope, file: string): Promise<GitBrowserScopeFileDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('scope', scope);
+    params.set('file', file);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 文件差异失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserCommitDetail(workspace: string, commit: string): Promise<GitBrowserCommitDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('commit', commit);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 提交详情失败');
+    }
+    return res.json();
+  },
+  async getGitBrowserCommitFileDetail(workspace: string, commit: string, file: string): Promise<GitBrowserCommitFileDetailResponse> {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('commit', commit);
+    params.set('file', file);
+    const res = await authFetch(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取 Git 提交文件差异失败');
+    }
+    return res.json();
+  },
+  async getWorkflowGitDiff(runId: string, options?: { stepDiffId?: string; range?: 'step' | 'baseline' }): Promise<WorkflowGitDiffResponse> {
+    const params = new URLSearchParams();
+    params.set('runId', runId);
+    if (options?.stepDiffId) params.set('stepDiffId', options.stepDiffId);
+    if (options?.range) params.set('range', options.range);
+    const res = await authFetch(`${API_BASE}/workflow/git-diff?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取工作流步骤变更失败');
+    }
+    return res.json();
+  },
+  async getWorkflowGitDiffFile(runId: string, file: string, options?: { stepDiffId?: string; range?: 'step' | 'baseline' }): Promise<WorkflowGitDiffFileResponse> {
+    const params = new URLSearchParams();
+    params.set('runId', runId);
+    params.set('file', file);
+    if (options?.stepDiffId) params.set('stepDiffId', options.stepDiffId);
+    if (options?.range) params.set('range', options.range);
+    const res = await authFetch(`${API_BASE}/workflow/git-diff?${params.toString()}`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '获取工作流步骤文件变更失败');
+    }
+    return res.json();
   },
   async upload(workspace: string, targetPath: string, files: File[], options?: { conflict?: 'rename' | 'error'; relativePaths?: string[] }): Promise<{ success: boolean; count: number; files: Array<{ name: string; path: string; size: number }> }> {
     const formData = new FormData();

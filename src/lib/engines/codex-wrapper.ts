@@ -6,13 +6,18 @@
  */
 
 import { EventEmitter } from 'events';
-import { existsSync, statSync } from 'fs';
 import { createRequire } from 'module';
-import { extname } from 'path';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
+import {
+  formatAceFileChangesResult,
+  formatAceReasoning,
+  formatAceToolCall,
+  formatAceToolResult,
+  getAceToolTitle,
+  inferCommandToolName,
+} from '@/lib/chat/ace-process-formatters';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
@@ -91,8 +96,6 @@ function isSpawnableCodexOverride(candidate: string | null | undefined): candida
 }
 
 export class CodexEngineWrapper extends EventEmitter implements Engine {
-  private static readonly MAX_INLINE_FILE_BYTES = 64 * 1024;
-  private static readonly MAX_INLINE_FILE_LINES = 400;
   private currentThread: any = null;
   private codexInstance: any = null;
   private _abortController: AbortController | null = null;
@@ -143,20 +146,23 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
-    const cmdLines = cmd.split('\n');
-    const summary = cmdLines.length <= 1
-      ? '查看命令'
-      : `查看命令 (${cmdLines.length} 行)`;
-    return `\n\n**💻 执行命令**\n\n<details><summary>${summary}</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
+    const toolName = inferCommandToolName(cmd);
+    return formatAceToolCall({
+      toolName,
+      rawInput: { command: cmd },
+      title: getAceToolTitle(toolName),
+    });
   }
 
-  private formatCommandResult(output: string, exitCode?: number): string {
-    let resultText = repairWindowsMojibake((output || '').trim());
-    if (exitCode !== 0 && exitCode != null) {
-      resultText += resultText ? `\n(exit code: ${exitCode})` : `(exit code: ${exitCode})`;
-    }
-    if (!resultText) return '';
-    return formatTextContent(resultText, { summaryLabel: '查看输出' });
+  private formatCommandResult(output: string, exitCode?: number, command?: string): string {
+    const resultText = repairWindowsMojibake((output || '').trim());
+    if (!resultText && exitCode == null) return '';
+    const toolName = inferCommandToolName(command || '');
+    return formatAceToolResult({
+      toolName,
+      rawOutput: { output: resultText, exitCode: exitCode ?? 0 },
+      title: getAceToolTitle(toolName),
+    });
   }
 
   private getStringField(source: any, keys: string[]): string {
@@ -168,105 +174,23 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return '';
   }
 
-  private buildUnifiedDiff(oldText: string, newText: string): string {
-    const removed = oldText
-      ? oldText.split('\n').map((line) => `- ${line}`).join('\n') + '\n'
-      : '';
-    const added = newText
-      ? newText.split('\n').map((line) => `+ ${line}`).join('\n') + '\n'
-      : '';
-    return `${removed}${added}`.trimEnd();
-  }
-
-  private inferFenceLanguage(path: string): string {
-    const ext = extname(path).toLowerCase();
-    const map: Record<string, string> = {
-      '.ts': 'ts',
-      '.tsx': 'tsx',
-      '.js': 'js',
-      '.jsx': 'jsx',
-      '.json': 'json',
-      '.md': 'md',
-      '.yaml': 'yaml',
-      '.yml': 'yaml',
-      '.css': 'css',
-      '.html': 'html',
-      '.sh': 'bash',
-      '.bash': 'bash',
-      '.zsh': 'bash',
-      '.cj': 'text',
-      '.c': 'c',
-      '.cc': 'cpp',
-      '.cpp': 'cpp',
-      '.h': 'c',
-      '.hpp': 'cpp',
-      '.py': 'python',
-      '.toml': 'toml',
-      '.xml': 'xml',
-    };
-    return map[ext] || 'text';
-  }
-
-  private readAddedFilePreview(path: string): string {
-    try {
-      if (!existsSync(path)) return '';
-      const stats = statSync(path);
-      if (!stats.isFile()) return '';
-      if (stats.size > CodexEngineWrapper.MAX_INLINE_FILE_BYTES) {
-        return `\n📎 文件较大，点击打开查看: [${path}](${path})\n`;
-      }
-      const content = readTextFileBestEffort(path);
-      if (content.includes('\u0000')) {
-        return '\n<details><summary>查看文件内容</summary>\n\n疑似二进制文件，已跳过内联预览。\n\n</details>\n';
-      }
-      return formatTextContent(content, { filePath: path, lang: this.inferFenceLanguage(path), summaryLabel: '查看文件内容' });
-    } catch {
-      return '';
-    }
-  }
-
-  private formatSingleFileChange(change: any): string {
-    const path = this.getStringField(change, ['path', 'filePath', 'file_path']) || '(未知路径)';
-    const kind = this.getStringField(change, ['kind', 'type', 'action']) || 'update';
-    const oldText = this.getStringField(change, ['oldText', 'old_text', 'oldString', 'old_string', 'before']);
-    const newText = this.getStringField(change, ['newText', 'new_text', 'newString', 'new_string', 'after']);
-
-    if (newText && !oldText) {
-      const lines = newText.split('\n').length;
-      let out = `\n📝 写入文件: \`${path}\` (${lines} 行)\n`;
-      out += formatLargeContent(this.buildUnifiedDiff('', newText), { filePath: path, lang: 'diff', summaryLabel: '查看变更' });
-      return out;
-    }
-
-    if (oldText || newText) {
-      const oldLines = oldText ? oldText.split('\n').length : 0;
-      const newLines = newText ? newText.split('\n').length : 0;
-      const added = Math.max(0, newLines - oldLines);
-      const removed = Math.max(0, oldLines - newLines);
-      let stats = `${Math.min(oldLines, newLines)} 行修改`;
-      if (added > 0) stats += `, +${added} 行`;
-      if (removed > 0) stats += `, -${removed} 行`;
-      let out = `\n✏️ 编辑文件: \`${path}\` (${stats})\n`;
-      out += formatLargeContent(this.buildUnifiedDiff(oldText, newText), { filePath: path, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
-      return out;
-    }
-
-    if (kind === 'add') {
-      let out = `\n📝 文件变更: \`${path}\` (${kind})\n`;
-      out += this.readAddedFilePreview(path);
-      return out;
-    }
-
-    return `\n📝 文件变更: \`${path}\` (${kind})\n`;
-  }
-
   private formatFileChanges(changes: any[]): string {
     if (!Array.isArray(changes) || changes.length === 0) return '';
-    const parts = changes
-      .map((change) => this.formatSingleFileChange(change))
-      .filter(Boolean);
-    if (parts.length === 0) return '';
-    return `\n\n**📝 文件变更**\n${parts.join('')}`;
+    const hydrated = changes.map((change) => {
+      const path = this.getStringField(change, ['path', 'filePath', 'file_path']);
+      const kind = this.getStringField(change, ['kind', 'type', 'action']);
+      const oldText = this.getStringField(change, ['oldText', 'old_text', 'oldString', 'old_string', 'before']);
+      const newText = this.getStringField(change, ['newText', 'new_text', 'newString', 'new_string', 'after']);
+      if (kind === 'add' && path && !newText && !oldText) {
+        return { ...change, content: readTextFileBestEffort(path) };
+      }
+      return change;
+    });
+    return formatAceFileChangesResult({
+      changes: hydrated,
+      fallbackToolName: 'edit',
+      fallbackTitle: getAceToolTitle('edit'),
+    });
   }
 
   private async createCodexClient(Codex: any, codexPathOverride?: string | null): Promise<any> {
@@ -292,6 +216,9 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     }
 
     // Create or reuse thread
+    if (options.forceNewSession && !options.sessionId) {
+      this.currentThread = null;
+    }
     if (options.sessionId) {
       this.currentThread = this.codexInstance.resumeThread(
         options.sessionId,
@@ -358,7 +285,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
           } else if (item.type === 'reasoning') {
             this.emit('stream', {
               type: 'thought',
-              content: (item as any).text || '',
+              content: formatAceReasoning((item as any).text || ''),
             } as EngineStreamEvent);
           }
           break;
@@ -384,29 +311,25 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
           } else if (item.type === 'reasoning') {
             this.emit('stream', {
               type: 'thought',
-              content: (item as any).text || '',
+              content: formatAceReasoning((item as any).text || ''),
             } as EngineStreamEvent);
           } else if (item.type === 'command_execution') {
-            const formatted = this.formatCommandResult((item as any).aggregated_output || '', (item as any).exit_code);
+            const formatted = this.formatCommandResult((item as any).aggregated_output || '', (item as any).exit_code, (item as any).command || '');
             if (formatted) this.emitText(formatted);
           } else if (item.type === 'file_change') {
             const formatted = this.formatFileChanges((item as any).changes || []);
             if (formatted) this.emitText(formatted);
           } else if (item.type === 'todo_list') {
             const items = (item as any).items || [];
-            if (items.length > 0) {
-              const done = items.filter((t: any) => t.completed).length;
-              const todoHeader = `📋 任务列表 (${done}/${items.length} 完成)`;
-              let content = `\n<!-- todo-list-marker -->\n<div class="ace-todo-list">\n<div class="ace-todo-header">${todoHeader}</div>\n`;
-              content += `<div class="ace-todo-progress"><div class="ace-todo-progress-bar" style="width:${Math.round((done / items.length) * 100)}%"></div></div>\n`;
-              for (const t of items) {
-                const icon = t.completed ? '✅' : '⬜';
-                const cls = t.completed ? 'ace-todo-done' : 'ace-todo-pending';
-                content += `<div class="ace-todo-item ${cls}">${icon} ${t.text}</div>\n`;
-              }
-              content += `</div>\n`;
-              this.emitText(content);
-            }
+            this.emitText(formatAceToolCall({
+              toolName: 'todo',
+              rawInput: {
+                todos: Array.isArray(items)
+                  ? items.map((t: any) => ({ content: t.text || '', status: t.completed ? 'completed' : 'pending' }))
+                  : [],
+              },
+              title: getAceToolTitle('todo'),
+            }));
           }
           break;
         }

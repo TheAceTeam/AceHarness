@@ -543,7 +543,7 @@ function mergeTasksSection(master: string, delta: string): string {
   const newIds = deltaTasks.map((t) => t.id).filter((id) => !ordered.includes(id));
 
   // 保留 header（非任务行）
-  const headerLines = master.split('\n').filter((line) => !line.match(/^\s*-\s*\[[ xX-]\]/));
+  const headerLines = master.split('\n').filter((line) => !line.match(/^\s*-\s*\[[ xX!-]\]/));
   const parts: string[] = headerLines.length > 0 ? [headerLines.join('\n').trim()] : [];
 
   for (const id of [...ordered, ...newIds]) {
@@ -593,7 +593,7 @@ function splitTopLevelTasks(markdown: string): TaskBlock[] {
   let currentLines: string[] = [];
 
   for (const line of lines) {
-    const taskMatch = line.match(/^-\s*\[[ xX-]\]\s+(\d+)\./);
+    const taskMatch = line.match(/^-\s*\[[ xX!-]\]\s+(\d+)\./);
     if (taskMatch) {
       if (currentLines.length > 0) {
         tasks.push({ id: currentId, content: currentLines.join('\n').trim() });

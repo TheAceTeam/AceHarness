@@ -137,7 +137,6 @@ Tab `availableWhen` supports these built-in conditions:
 - `hasWorkflow` - A workflow binding exists in the current session
 - `hasCollaboration` - A collaboration room is active
 - `hasCreation` - A creation session is in progress
-- `werewolfMode` - Werewolf lab is active
 
 ## Runtime API
 
@@ -170,7 +169,8 @@ unregisterPlugin('user-plugin');
 | `core-views` | 查看功能 | 工作流列表, Agent列表, 模型列表, Skill列表, 运行状态, 运行历史 | - |
 | `core-create` | 创建功能 | 创建工作流, 创建Agent, 启动运行 | workflow, agent |
 | `core-optimize` | 优化功能 | 优化提示词, 分析运行 | - |
-| `werewolf-lab` | 多Agent能力实验室 | AI 狼人杀 | commander |
+
+议场是内置功能，狼人杀通过议场扩展动作创建，不作为首页侧边栏插件注册。
 
 ## Adding a Custom Plugin
 

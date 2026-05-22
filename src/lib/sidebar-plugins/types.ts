@@ -27,8 +27,6 @@ export type {
   ResultExtractionCapability,
   BreakpointResumeCapability,
   BreakpointData,
-  RoundtableCapability,
-  RoundtableSeat,
   PersistenceCapability,
   StreamingDisplayCapability,
   ChatDisplayMessage,
@@ -43,7 +41,6 @@ export type CapabilityId =
   | 'agent-calling'
   | 'result-extraction'
   | 'breakpoint-resume'
-  | 'roundtable'
   | 'persistence'
   | 'streaming-display'
   | 'theme'
@@ -150,7 +147,6 @@ export interface HomePluginContext {
   hasWorkflow?: boolean;
   hasCollaboration?: boolean;
   hasCreation?: boolean;
-  werewolfMode?: boolean;
   sidebarMode?: 'hidden' | 'peek' | 'active';
   [key: string]: unknown;
 }

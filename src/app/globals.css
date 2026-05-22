@@ -848,16 +848,6 @@ button[data-resize-btn][data-resize-btn]:hover {
     background: hsl(var(--muted) / 0.72);
   }
 
-  .home-chat-thinking-pill {
-    border: 1px solid hsl(var(--border) / 0.72);
-    background: hsl(var(--background) / 0.8);
-    backdrop-filter: blur(12px);
-  }
-
-  .dark .home-chat-thinking-pill {
-    background: hsl(var(--muted) / 0.74);
-  }
-
   .home-chat-session-row {
     transition:
       background-color 160ms ease,
@@ -884,5 +874,16 @@ button[data-resize-btn][data-resize-btn]:hover {
 
   .dark .home-chat-input-tray {
     background: hsl(var(--background) / 0.82);
+  }
+
+  .home-chat-composer .ProseMirror p.is-editor-empty:first-child::before {
+    color: rgb(100 116 139);
+    content: attr(data-placeholder);
+    display: block;
+    float: left;
+    font-size: 15px;
+    height: 0;
+    line-height: 1.55;
+    pointer-events: none;
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { parseActions, normalizeAssistantDisplay, getStreamingResultDisplay, isSafeAction, RISK_MAP } from '@/lib/chat/actions';
 import type { ActionBlock } from '@/lib/chat/actions';
+import { wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 
 describe('parseActions', () => {
   test('extracts action blocks from markdown and removes them from visible text', () => {
@@ -389,6 +390,56 @@ describe('parseActions', () => {
     expect(result.actions).toHaveLength(1);
     expect(result.actions[0].params).toEqual({});
   });
+
+  test('extracts action-like json fences and removes them from visible text', () => {
+    const markdown = [
+      '前置说明。',
+      '```json',
+      '{"type":"config.list","params":{},"description":"列出当前可用的工作流配置，便于后续按名称、模式和用途整理"}',
+      '```',
+      '后置说明。',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0]).toEqual({
+      type: 'config.list',
+      params: {},
+      description: '列出当前可用的工作流配置，便于后续按名称、模式和用途整理',
+    });
+    expect(result.text).toBe('前置说明。\n后置说明。');
+    expect(result.text).not.toContain('config.list');
+  });
+
+  test('ignores result and card examples inside ace-process tool payloads', () => {
+    const markdown = [
+      '先读取技能文档。',
+      wrapAceProcessBlock(
+        'tool-result',
+        {
+          toolName: 'read',
+          title: '📖 读取文件',
+          output: [
+            '```text',
+            '<result>',
+            '{"kind":"card","payload":{"header":{"title":"示例"},"blocks":[{"type":"text","content":"详情"}]}}',
+            '</result>',
+            '```',
+          ].join('\n'),
+        },
+        '',
+      ),
+      '继续说明。',
+    ].join('\n');
+
+    const result = parseActions(markdown);
+
+    expect(result.cards).toHaveLength(0);
+    expect(result.sidebarHints).toHaveLength(0);
+    expect(result.text).toContain('先读取技能文档。');
+    expect(result.text).toContain('继续说明。');
+  });
 });
 
 describe('normalizeAssistantDisplay', () => {
@@ -506,6 +557,16 @@ describe('normalizeAssistantDisplay', () => {
 
     expect(normalizeAssistantDisplay(raw, true)).toEqual({
       visibleText: '先说明。',
+      hasMachineResult: false,
+      hasSidebarHint: false,
+    });
+  });
+
+  test('keeps prose after a literal <result> mention when it is not a machine result block', () => {
+    const raw = '卡片结构已经整理完，我在补上时间格式和汇总指标后做最终校验。接下来会输出符合系统协议的 `<result>` 卡片，而不是直接用代码块包裹 JSON。';
+
+    expect(normalizeAssistantDisplay(raw, true)).toEqual({
+      visibleText: raw,
       hasMachineResult: false,
       hasSidebarHint: false,
     });

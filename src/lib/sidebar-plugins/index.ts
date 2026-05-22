@@ -24,8 +24,6 @@ export type {
   ResultExtractionCapability,
   BreakpointResumeCapability,
   BreakpointData,
-  RoundtableCapability,
-  RoundtableSeat,
   PersistenceCapability,
   StreamingDisplayCapability,
   ChatDisplayMessage,

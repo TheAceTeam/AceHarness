@@ -81,6 +81,7 @@ function parseTaskComment(line: string): { id?: string; status?: SpecCodingProgr
 function getTaskStatusFromCheckbox(marker: string): SpecCodingProgressStatus {
   if (marker.toLowerCase() === 'x') return 'completed';
   if (marker === '-') return 'in-progress';
+  if (marker === '!') return 'blocked';
   return 'pending';
 }
 
@@ -118,7 +119,7 @@ function parseSpecCodingTasksFromMarkdown(
 
   // 解析单行 checkbox：返回缩进层级、状态、标题、ID
   function parseCheckboxLine(line: string) {
-    const match = line.match(/^(\s*)-\s+\[([ xX-])\](\*?)\s+(.+?)\s*$/);
+    const match = line.match(/^(\s*)-\s+\[([ xX!-])\](\*?)\s+(.+?)\s*$/);
     if (!match) return null;
     const indent = match[1].length;
     const level = Math.floor(indent / 2); // 0=顶层, 1=子任务, 2=子子任务
@@ -126,7 +127,7 @@ function parseSpecCodingTasksFromMarkdown(
     const rawTitle = stripSpecCodingTaskComment(match[4]);
     const numbered = rawTitle.match(TASK_NUMBER_PATTERN);
     const id = numbered?.[1] || null;
-    const title = (numbered?.[2] || rawTitle).trim();
+    const title = (numbered?.[3] || rawTitle).trim();
     return { level, marker, id, title, indent };
   }
 
@@ -148,7 +149,7 @@ function parseSpecCodingTasksFromMarkdown(
     for (let i = startIndex; i < lines.length; i++) {
       const line = lines[i];
       if (/^##\s+/.test(line)) break;
-      if (/^\s*-\s+\[([ xX-])\]/.test(line)) break;
+      if (/^\s*-\s+\[([ xX!-])\]/.test(line)) break;
       // 空行或缩进大于当前 checkbox 的行都算详情
       if (line.trim() === '' || (line.match(/^(\s*)/)?.[1].length || 0) >= minIndent) {
         details.push(line);
@@ -276,7 +277,7 @@ export function validateTasksMarkdownFormat(markdown: string): TasksMarkdownForm
   };
 
   lines.forEach((line, index) => {
-    const match = line.match(/^(\s*)-\s+\[([ xX-])\](\*?)\s+(.+?)\s*$/);
+    const match = line.match(/^(\s*)-\s+\[([ xX!-])\](\*?)\s+(.+?)\s*$/);
     if (!match) return;
 
     taskCount += 1;
@@ -300,13 +301,13 @@ export function validateTasksMarkdownFormat(markdown: string): TasksMarkdownForm
         code: 'invalid_indent',
         lineNumber: index + 1,
         lineContent: line,
-        taskId: numbered[2]?.trim() || undefined,
+        taskId: numbered[1]?.trim() || undefined,
         message: `第 ${index + 1} 行任务缩进不合法；请使用 2 个空格的层级缩进。`,
         suggestion: '把这一行前导空格调整为 0、2、4、6 这类 2 的倍数。',
       });
     }
 
-    const taskId = numbered[2]?.trim();
+    const taskId = numbered[1]?.trim();
     if (!taskId) {
       pushIssue({
         code: 'empty_task_id',
@@ -463,7 +464,7 @@ function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): s
   const lines = markdown.split(/\r?\n/);
 
   return lines.map((line, lineIndex) => {
-    const taskLine = line.match(/^(\s*-\s+\[)([ xX-])(\]\s+)(.+?)\s*$/);
+    const taskLine = line.match(/^(\s*-\s+\[)([ xX!-])(\]\s+)(.+?)\s*$/);
     if (!taskLine) return line;
 
     const commentMeta = parseTaskComment(line);
@@ -476,7 +477,7 @@ function updateTasksMarkdownStatus(markdown: string, tasks: SpecCodingTask[]): s
     const task = byId.get(id);
     if (!task) return line;
 
-    const checked = task.status === 'completed' ? 'x' : task.status === 'in-progress' ? '-' : ' ';
+    const checked = task.status === 'completed' ? 'x' : task.status === 'in-progress' ? '-' : task.status === 'blocked' ? '!' : ' ';
     const phaseMeta = task.phaseId ? ` phase:${task.phaseId}` : '';
     return `${taskLine[1]}${checked}${taskLine[3]}${body} <!-- spec-coding-task:${task.id} status:${task.status}${phaseMeta} -->`;
   }).join('\n');
@@ -793,19 +794,19 @@ function buildSpecCodingArtifacts(input: {
     ? input.phases.map((phase, index) => {
       const ownerText = phase.ownerAgents.length ? `（负责人：${phase.ownerAgents.join('、')}）` : '';
       return [
-        `- [ ] ${index + 1}. ${phase.title}${ownerText}`,
-        `  - [ ] ${index + 1}.1 明确 ${phase.title} 的验收标准`,
-        `    - _需求：${index + 1}_`,
-        `  - [ ] ${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
-        `    - _需求：${index + 1}_`,
+        `- [ ] T${index + 1} ${phase.title}${ownerText}`,
+        `  - [ ] T${index + 1}.1 明确 ${phase.title} 的验收标准`,
+        `    - _需求：T${index + 1}_`,
+        `  - [ ] T${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
+        `    - _需求：T${index + 1}_`,
       ].join('\n');
     }).join('\n\n')
     : [
-      '- [ ] 1. 需求澄清',
-      '  - [ ] 1.1 补齐目标、约束与验收标准',
-      '    - _需求：1_',
-      '  - [ ] 1.2 明确后续执行阶段与角色分工',
-      '    - _需求：1_',
+      '- [ ] T1 需求澄清',
+      '  - [ ] T1.1 补齐目标、约束与验收标准',
+      '    - _需求：T1_',
+      '  - [ ] T1.2 明确后续执行阶段与角色分工',
+      '    - _需求：T1_',
     ].join('\n');
   const tasks = [
     `# 实现计划：${input.workflowName}`,

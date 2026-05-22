@@ -51,12 +51,12 @@ export interface ACPEngineConfig {
   promptField?: string;
   /** Environment variables */
   env?: Record<string, string>;
+  /** Enable detailed lifecycle logs for diagnostics. */
+  diagnosticLogging?: boolean;
 }
 
 // Re-export StopReason so wrappers can use it
 export type ACPStopReason = StopReason;
-
-const ACP_STREAM_DEBUG = true; // Always log ACP stream events for diagnostics
 
 /** `ACE_TIMING_DEBUG` / `ACE_ACP_TIMING_DEBUG`：1|true|on|yes 开；0|false|off|no 关；未设置时开发环境默认开。 */
 function parseTimingDebugEnv(value: string | undefined): boolean | null {
@@ -192,6 +192,31 @@ function spawnAcpCli(
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 }
+
+function closeAcpChildTree(child: ChildProcess): void {
+  try {
+    if (child.killed || child.exitCode !== null) return;
+    if (isWindows() && child.pid) {
+      spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      return;
+    }
+    child.kill('SIGTERM');
+    setTimeout(() => {
+      try {
+        if (!child.killed && child.exitCode === null) {
+          child.kill('SIGKILL');
+        }
+      } catch {
+        // ignore shutdown failures
+      }
+    }, 3000);
+  } catch {
+    // ignore shutdown failures
+  }
+}
 // ============================================================================
 // Unified ACP Engine
 // ============================================================================
@@ -207,6 +232,27 @@ export class ACPEngine extends EventEmitter {
 
   constructor(private config: ACPEngineConfig) {
     super();
+  }
+
+  private isDiagnosticLoggingEnabled(): boolean {
+    return Boolean(this.config.diagnosticLogging);
+  }
+
+  private shouldDebugStreamEvents(): boolean {
+    const env = parseTimingDebugEnv(process.env.ACE_ACP_STREAM_DEBUG);
+    if (env !== null) return env;
+    return this.isDiagnosticLoggingEnabled();
+  }
+
+  private emitDiagnosticLog(input: {
+    level?: 'info' | 'warning' | 'error';
+    message: string;
+    detail?: string;
+    metadata?: unknown;
+    verbose?: boolean;
+  }): void {
+    if (!this.isDiagnosticLoggingEnabled()) return;
+    this.emit('log', input);
   }
 
   /**
@@ -232,6 +278,16 @@ export class ACPEngine extends EventEmitter {
     };
 
     console.log(`[${this.config.engineType}] spawning: ${resolvedCommand} ${args.join(' ')}`);
+    this.emitDiagnosticLog({
+      message: 'ACP spawn start',
+      detail: `${resolvedCommand} ${args.join(' ')}`.trim(),
+      metadata: {
+        cwd: this.config.workingDirectory,
+        command: resolvedCommand,
+        args,
+      },
+      verbose: true,
+    });
 
     const tSpawn = Date.now();
     this.process = spawnAcpCli(this.config.engineType, resolvedCommand, args, {
@@ -248,11 +304,28 @@ export class ACPEngine extends EventEmitter {
       const msg = data.toString();
       this.lastStderrChunk = msg.trim();
       console.error(`[${this.config.engineType} stderr] ${msg.trim()}`);
-      this.emit('log', msg);
+      this.emitDiagnosticLog({
+        level: /error|failed|exception/i.test(msg) ? 'error' : 'warning',
+        message: 'ACP stderr',
+        detail: msg.trim(),
+        metadata: { chunkLength: msg.length },
+        verbose: true,
+      });
     });
 
     this.process.on('exit', (code, signal) => {
       this.lastExitInfo = `code=${code}, signal=${signal}`;
+      this.emitDiagnosticLog({
+        level: code === 0 && !signal ? 'info' : 'error',
+        message: 'ACP child exited',
+        detail: this.lastExitInfo,
+        metadata: {
+          code,
+          signal,
+          stderrTail: this.lastStderrChunk?.slice(-1000) || '',
+        },
+        verbose: true,
+      });
       if (code !== 0 || signal) {
         console.warn(
           `[${this.config.engineType}] child exited early code=${code} signal=${signal}; stderr tail: ${this.lastStderrChunk?.slice(0, 500) || '<empty>'}`
@@ -263,6 +336,15 @@ export class ACPEngine extends EventEmitter {
     });
 
     this.process.on('error', (error) => {
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'ACP child process error',
+        detail: error.message,
+        metadata: {
+          name: error.name,
+          stack: error.stack,
+        },
+      });
       this.emit('error', error);
       this.cleanup(`${this.config.engineType} process error: ${error.message}`);
     });
@@ -333,11 +415,21 @@ export class ACPEngine extends EventEmitter {
     logAcpTiming(this.config.engineType, 'acp.2_ndjson_stream_ready', tStreams);
 
     console.log(`[${this.config.engineType}] initializing ACP client...`);
+    this.emitDiagnosticLog({
+      message: 'ACP connection initializing',
+      detail: `protocol=${PROTOCOL_VERSION}`,
+      verbose: true,
+    });
     const tInit = Date.now();
     await this.initialize();
     logAcpTiming(this.config.engineType, 'acp.3_initialize_including_rpc', tInit);
     logAcpTiming(this.config.engineType, 'acp.0_start_process_to_initialized', tStartTotal);
     console.log(`[${this.config.engineType}] ACP client initialized`);
+    this.emitDiagnosticLog({
+      message: 'ACP connection initialized',
+      detail: `sessionReady=${Boolean(this.sessionId)}`,
+      verbose: true,
+    });
   }
 
   /**
@@ -392,6 +484,11 @@ export class ACPEngine extends EventEmitter {
   private async initialize(): Promise<void> {
     if (!this.connection) throw new Error('No connection');
     console.log(`[${this.config.engineType}] connection.initialize() start`);
+    this.emitDiagnosticLog({
+      message: 'connection.initialize start',
+      detail: `engineType=${this.config.engineType}`,
+      verbose: true,
+    });
     const initPromise = this.connection.initialize({
       protocolVersion: PROTOCOL_VERSION,
       clientInfo: { name: 'aceharness', version: '1.0.0' },
@@ -425,6 +522,11 @@ export class ACPEngine extends EventEmitter {
     logAcpTiming(this.config.engineType, 'acp.3a_connection.initialize_rpc', tInitRpc);
     this.initialized = true;
     console.log(`[${this.config.engineType}] connection.initialize() done`);
+    this.emitDiagnosticLog({
+      message: 'connection.initialize done',
+      detail: `engineType=${this.config.engineType}`,
+      verbose: true,
+    });
 
     // Cursor ACP requires authenticate after initialize
     if (this.config.engineType === 'cursor') {
@@ -433,6 +535,12 @@ export class ACPEngine extends EventEmitter {
         await this.connection.authenticate({ methodId: 'cursor_login' });
       } catch (e) {
         console.log(`[${this.config.engineType}] authenticate: ${e instanceof Error ? e.message : e}`);
+        this.emitDiagnosticLog({
+          level: 'warning',
+          message: 'cursor authenticate warning',
+          detail: e instanceof Error ? e.message : String(e),
+          verbose: true,
+        });
       }
       logAcpTiming(this.config.engineType, 'acp.3b_cursor_authenticate', tAuth);
     }
@@ -446,6 +554,11 @@ export class ACPEngine extends EventEmitter {
   async createSession(): Promise<string> {
     if (!this.initialized || !this.connection) throw new Error(`${this.config.engineType} not initialized`);
     console.log(`[${this.config.engineType}] createSession() start`);
+    this.emitDiagnosticLog({
+      message: 'newSession start',
+      detail: this.config.workingDirectory,
+      verbose: true,
+    });
     const newSessionPromise = this.connection.newSession({
       cwd: this.config.workingDirectory,
       mcpServers: [],
@@ -486,6 +599,14 @@ export class ACPEngine extends EventEmitter {
       modes: result.modes,
       models: result.models,
     });
+    this.emitDiagnosticLog({
+      message: 'newSession done',
+      detail: this.sessionId || '',
+      metadata: {
+        availableModelCount: this.availableModels.length,
+      },
+      verbose: true,
+    });
     return this.sessionId!;
   }
 
@@ -494,6 +615,11 @@ export class ACPEngine extends EventEmitter {
    */
   async resumeSession(sessionId: string): Promise<string> {
     if (!this.initialized || !this.connection) throw new Error(`${this.config.engineType} not initialized`);
+    this.emitDiagnosticLog({
+      message: 'session/load start',
+      detail: sessionId,
+      verbose: true,
+    });
     const loadPromise = this.connection.loadSession({
       sessionId,
       cwd: this.config.workingDirectory,
@@ -529,6 +655,14 @@ export class ACPEngine extends EventEmitter {
       modes: result.modes,
       models: result.models,
     });
+    this.emitDiagnosticLog({
+      message: 'session/load done',
+      detail: sessionId,
+      metadata: {
+        availableModelCount: this.availableModels.length,
+      },
+      verbose: true,
+    });
     return this.sessionId;
   }
   /**
@@ -538,6 +672,15 @@ export class ACPEngine extends EventEmitter {
     if (!this.sessionId || !this.connection) throw new Error('No active session');
 
     console.log(`[${this.config.engineType}] sendPrompt: sessionId=${this.sessionId}, promptLength=${prompt.length}`);
+    this.emitDiagnosticLog({
+      message: 'session.prompt start',
+      detail: `sessionId=${this.sessionId}, promptLength=${prompt.length}`,
+      metadata: {
+        sessionId: this.sessionId,
+        promptLength: prompt.length,
+      },
+      verbose: true,
+    });
 
     try {
       const tPrompt = Date.now();
@@ -552,12 +695,30 @@ export class ACPEngine extends EventEmitter {
         `stopReason=${result.stopReason ?? 'n/a'} len=${prompt.length}`
       );
       console.log(`[${this.config.engineType}] sendPrompt completed: stopReason=${result.stopReason}`);
+      this.emitDiagnosticLog({
+        message: 'session.prompt done',
+        detail: `stopReason=${result.stopReason ?? 'n/a'}`,
+        metadata: {
+          sessionId: this.sessionId,
+          stopReason: result.stopReason,
+          usage: result.usage,
+        },
+        verbose: true,
+      });
       return {
         stopReason: result.stopReason,
         usage: result.usage,
       };
     } catch (err) {
       console.error(`[${this.config.engineType}] sendPrompt error:`, err);
+      this.emitDiagnosticLog({
+        level: 'error',
+        message: 'session.prompt failed',
+        detail: err instanceof Error ? err.message : String(err),
+        metadata: {
+          sessionId: this.sessionId,
+        },
+      });
       throw err;
     }
   }
@@ -577,10 +738,20 @@ export class ACPEngine extends EventEmitter {
       throw err;
     }
     console.log(`[${this.config.engineType}] setModel: "${modelId}" -> resolved: "${resolved}"`);
+    this.emitDiagnosticLog({
+      message: 'setSessionModel start',
+      detail: `${modelId} -> ${resolved}`,
+      verbose: true,
+    });
     const tSet = Date.now();
     try {
       await this.connection.unstable_setSessionModel({ sessionId: this.sessionId, modelId: resolved });
       logAcpTiming(this.config.engineType, 'acp.5_setSessionModel_rpc', tSet, resolved);
+      this.emitDiagnosticLog({
+        message: 'setSessionModel done',
+        detail: resolved,
+        verbose: true,
+      });
     } catch (err) {
       const modelList = this.availableModels.map(m => `  ${m.modelId} (${m.name})`).join('\n');
       const wrapped = new Error(
@@ -652,18 +823,25 @@ export class ACPEngine extends EventEmitter {
    * Stop the engine
    */
   stop(): void {
-    if (this.process) {
-      this.process.kill();
-      this.cleanup();
+    const child = this.process;
+    if (child) {
+      closeAcpChildTree(child);
+      this.cleanup(`${this.config.engineType} process stop requested`);
     }
   }
   /**
    * Handle session update notifications from the SDK
    */
   private handleSessionUpdate(update: SessionUpdate): void {
-    if (ACP_STREAM_DEBUG) {
+    if (this.shouldDebugStreamEvents()) {
       console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
     }
+    this.emitDiagnosticLog({
+      message: 'ACP session update',
+      detail: update.sessionUpdate,
+      metadata: update,
+      verbose: true,
+    });
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         this.emit('user-message', (update as any).content);
@@ -714,6 +892,13 @@ export class ACPEngine extends EventEmitter {
    * Clean up resources
    */
   private cleanup(reason?: string): void {
+    if (reason) {
+      this.emitDiagnosticLog({
+        message: 'ACP cleanup',
+        detail: reason,
+        verbose: true,
+      });
+    }
     this.process = null;
     this.connection = null;
     this.sessionId = null;

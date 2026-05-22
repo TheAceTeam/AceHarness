@@ -6,9 +6,10 @@ interface ResultRendererProps {
   type: string;
   result: any;
   onAction?: (prompt: string) => void;
+  onReloadResult?: () => void;
 }
 
-export default function ResultRenderer({ type, result, onAction }: ResultRendererProps) {
+export default function ResultRenderer({ type, result, onAction, onReloadResult }: ResultRendererProps) {
   if (!result) return null;
 
   // Truncated results from persistence
@@ -17,7 +18,11 @@ export default function ResultRenderer({ type, result, onAction }: ResultRendere
       <div className="mt-2 p-2 rounded border bg-muted/50 text-xs text-muted-foreground flex items-center gap-2">
         <span className="material-symbols-outlined text-sm">history</span>
         <span>结果已截断</span>
-        {onAction && (
+        {onReloadResult ? (
+          <button className="text-primary hover:underline ml-1" onClick={onReloadResult}>
+            点击重新加载
+          </button>
+        ) : onAction && (
           <button className="text-primary hover:underline ml-1" onClick={() => onAction('重新查询')}>
             点击重新加载
           </button>
@@ -52,6 +57,20 @@ export default function ResultRenderer({ type, result, onAction }: ResultRendere
   );
 }
 
+function toLineList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
+  return String(value || '')
+    .split(/[\n,，、;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function truncateText(value: unknown, max = 320): string {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max).trimEnd()}...` : text;
+}
+
 // --- Result to CardSchema converters ---
 
 function resultToCard(type: string, result: any): CardSchema | null {
@@ -60,22 +79,58 @@ function resultToCard(type: string, result: any): CardSchema | null {
     return {
       header: { icon: 'description', title: '工作流配置列表', gradient: 'from-blue-500 to-cyan-500', badges: [{ text: `${result.configs.length} 个`, color: 'blue' }] },
       blocks: result.configs.length > 0
-        ? result.configs.map((c: any) => ({
-            type: 'collapse' as const,
-            title: c.name || c.filename,
-            subtitle: c.filename,
-            blocks: [
-              ...(c.description ? [{ type: 'text' as const, content: c.description, maxLines: 2 }] : []),
-              { type: 'badges' as const, items: [
-                ...(c.stepCount !== undefined ? [{ text: `${c.stepCount} 步骤`, color: 'blue' }] : []),
-                ...(c.agentCount !== undefined ? [{ text: `${c.agentCount} Agent`, color: 'purple' }] : []),
-              ]},
-              { type: 'actions' as const, items: [
-                { label: '打开', prompt: `查看工作流配置 ${c.filename} 的详细内容`, icon: 'open_in_new' },
-                { label: '启动', prompt: `启动工作流 ${c.filename}`, icon: 'play_arrow' },
-              ]},
+        ? [{
+            type: 'table' as const,
+            maxHeight: 360,
+            columns: [
+              { key: 'name', label: '名称', width: 'minmax(220px,1.8fr)' },
+              { key: 'mode', label: '模式', width: '120px' },
+              { key: 'steps', label: '步骤', width: '88px', align: 'right' as const },
+              { key: 'agents', label: 'Agent', width: '88px', align: 'right' as const },
             ],
-          }))
+            rows: result.configs.map((c: any) => ({
+              id: String(c.filename || c.name || Math.random()),
+              cells: {
+                name: c.name || c.filename || '未命名配置',
+                mode: c.mode || 'phase-based',
+                steps: c.stepCount !== undefined ? String(c.stepCount) : '—',
+                agents: c.agentCount !== undefined ? String(c.agentCount) : '—',
+              },
+              badges: [
+                ...(c.mode ? [{ text: c.mode, color: 'blue' }] : []),
+                ...(c.filename ? [{ text: c.filename, color: 'gray' }] : []),
+              ],
+              detailTitle: c.name || c.filename || '工作流配置详情',
+              detailBlocks: [
+                ...(c.description ? [{ type: 'text' as const, content: c.description }] : []),
+                {
+                  type: 'info' as const,
+                  rows: [
+                    ...(c.filename ? [{ label: '文件', value: c.filename, icon: 'description' }] : []),
+                    ...(c.mode ? [{ label: '模式', value: c.mode, icon: 'account_tree' }] : []),
+                    ...(c.stepCount !== undefined ? [{ label: '步骤数', value: String(c.stepCount), icon: 'checklist' }] : []),
+                    ...(c.agentCount !== undefined ? [{ label: 'Agent 数', value: String(c.agentCount), icon: 'smart_toy' }] : []),
+                  ],
+                },
+                { type: 'actions' as const, items: [
+                  {
+                    label: '打开',
+                    prompt: c.filename
+                      ? `__HOME_ACTION__:workflow_open:${encodeURIComponent(String(c.filename))}`
+                      : `查看工作流配置 ${c.name || ''} 的详细内容`,
+                    icon: 'open_in_new',
+                  },
+                  {
+                    label: '启动',
+                    prompt: c.filename
+                      ? `__HOME_ACTION__:workflow_start:${encodeURIComponent(String(c.filename))}`
+                      : `启动工作流 ${c.name || ''}`,
+                    icon: 'play_arrow',
+                  },
+                ]},
+              ],
+            })),
+          }]
         : [{ type: 'text' as const, content: '暂无配置' }],
       actions: [
         { label: '创建新工作流', prompt: '帮我创建一个新的工作流', icon: 'add' },
@@ -86,26 +141,69 @@ function resultToCard(type: string, result: any): CardSchema | null {
 
   // agent.list
   if (type === 'agent.list' && result.agents) {
-    const teamColor = (t: string) => t === 'blue' ? 'blue' : t === 'red' ? 'red' : t === 'judge' ? 'yellow' : 'gray';
+    const teamColor = (t: string) => t === 'blue' ? 'blue' : t === 'red' ? 'red' : t === 'judge' ? 'yellow' : t === 'black-gold' ? 'orange' : 'gray';
+    const teamLabel = (t: string) => t === 'blue' ? '蓝队' : t === 'red' ? '红队' : t === 'judge' ? '裁判' : t === 'black-gold' ? '常驻' : '其他';
     return {
       header: { icon: 'smart_toy', title: 'Agent 列表', gradient: 'from-purple-500 to-pink-500', badges: [{ text: `${result.agents.length} 个`, color: 'purple' }] },
       blocks: result.agents.length > 0
-        ? result.agents.map((a: any) => ({
-            type: 'collapse' as const,
-            title: a.name,
-            subtitle: a.model || 'default',
-            blocks: [
-              ...(a.role ? [{ type: 'text' as const, content: a.role, maxLines: 2 }] : []),
-              { type: 'badges' as const, items: [
-                ...(a.team ? [{ text: a.team, color: teamColor(a.team) }] : []),
-                { text: a.model || 'default', color: 'purple' },
-              ]},
-              { type: 'actions' as const, items: [
-                { label: '详情', prompt: `查看 Agent ${a.name} 的详细配置`, icon: 'info' },
-                { label: '优化提示词', prompt: `帮我优化 Agent ${a.name} 的提示词`, icon: 'auto_fix_high' },
-              ]},
+        ? [{
+            type: 'table' as const,
+            maxHeight: 360,
+            columns: [
+              { key: 'name', label: '名称', width: 'minmax(220px,1.8fr)' },
+              { key: 'team', label: '阵营', width: '96px' },
+              { key: 'model', label: '模型', width: '160px' },
+              { key: 'capabilities', label: '能力', width: '88px', align: 'right' as const },
             ],
-          }))
+            rows: result.agents
+              .slice()
+              .sort((a: any, b: any) => String(a?.name || '').localeCompare(String(b?.name || '')))
+              .map((a: any) => {
+                const capabilities = toLineList(a.capabilities || a.specialties);
+                const promptPreview = truncateText(a.systemPrompt);
+                return {
+                  id: String(a._file || a.name || Math.random()),
+                  cells: {
+                    name: a.name || '未命名 Agent',
+                    team: teamLabel(a.team || 'other'),
+                    model: a.model || 'default',
+                    capabilities: String(capabilities.length || 0),
+                  },
+                  badges: [
+                    ...(a.team ? [{ text: teamLabel(a.team), color: teamColor(a.team) }] : []),
+                    { text: a.model || 'default', color: 'purple' },
+                    ...(a.roleType ? [{ text: a.roleType, color: 'gray' }] : []),
+                  ],
+                  detailTitle: a.name || 'Agent 详情',
+                  detailBlocks: [
+                    ...(a.description || a.role || a.mission
+                      ? [{ type: 'text' as const, content: String(a.description || a.role || a.mission || '').trim() }]
+                      : []),
+                    {
+                      type: 'info' as const,
+                      rows: [
+                        ...(a._file ? [{ label: '文件', value: a._file, icon: 'description' }] : []),
+                        ...(a.team ? [{ label: '阵营', value: teamLabel(a.team), icon: 'groups' }] : []),
+                        ...(a.model ? [{ label: '模型', value: a.model, icon: 'model_training' }] : []),
+                        ...(a.workingDirectory ? [{ label: '工作目录', value: a.workingDirectory, icon: 'folder' }] : []),
+                      ],
+                    },
+                    ...(capabilities.length > 0
+                      ? [{
+                          type: 'list' as const,
+                          items: capabilities.slice(0, 8).map((item) => ({ icon: 'bolt', text: item })),
+                        }]
+                      : []),
+                    ...(promptPreview
+                      ? [{ type: 'code' as const, code: promptPreview, lang: 'text', copyable: true }]
+                      : []),
+                    { type: 'actions' as const, items: [
+                      { label: '优化提示词', prompt: `帮我优化 Agent ${a.name} 的提示词`, icon: 'auto_fix_high' },
+                    ]},
+                  ],
+                };
+              }),
+          }]
         : [{ type: 'text' as const, content: '暂无 Agent' }],
       actions: [
         { label: '创建新 Agent', prompt: '帮我创建一个新的 Agent', icon: 'add' },
@@ -118,14 +216,34 @@ function resultToCard(type: string, result: any): CardSchema | null {
   if (type === 'model.list' && result.models) {
     return {
       header: { icon: 'model_training', title: '可用模型', gradient: 'from-cyan-500 to-teal-500' },
-      blocks: result.models.map((m: any) => ({
-        type: 'info' as const,
-        rows: [
-          { label: '名称', value: m.label, icon: 'model_training' },
-          { label: 'ID', value: m.value },
-          ...(m.costMultiplier !== undefined ? [{ label: '成本', value: `${m.costMultiplier}x` }] : []),
-        ],
-      })),
+      blocks: result.models.length > 0
+        ? [{
+            type: 'table' as const,
+            maxHeight: 320,
+            columns: [
+              { key: 'label', label: '名称', width: 'minmax(220px,1.5fr)' },
+              { key: 'value', label: 'ID', width: 'minmax(240px,2fr)' },
+              { key: 'cost', label: '成本', width: '88px', align: 'right' as const },
+            ],
+            rows: result.models.map((m: any) => ({
+              id: String(m.value || m.label || Math.random()),
+              cells: {
+                label: m.label || '未命名模型',
+                value: m.value || '—',
+                cost: m.costMultiplier !== undefined ? `${m.costMultiplier}x` : '—',
+              },
+              detailTitle: m.label || '模型详情',
+              detailBlocks: [{
+                type: 'info' as const,
+                rows: [
+                  { label: '名称', value: m.label || '—', icon: 'model_training' },
+                  { label: 'ID', value: m.value || '—' },
+                  ...(m.costMultiplier !== undefined ? [{ label: '成本', value: `${m.costMultiplier}x` }] : []),
+                ],
+              }],
+            })),
+          }]
+        : [{ type: 'text' as const, content: '暂无模型' }],
     };
   }
 
@@ -135,21 +253,45 @@ function resultToCard(type: string, result: any): CardSchema | null {
     return {
       header: { icon: 'history', title: '运行记录', gradient: 'from-green-500 to-emerald-500', badges: [{ text: `${result.runs.length} 条`, color: 'green' }] },
       blocks: result.runs.length > 0
-        ? result.runs.map((r: any) => ({
-            type: 'collapse' as const,
-            title: r.configName || r.configFile || r.id,
-            subtitle: r.status,
-            blocks: [
-              { type: 'status' as const, state: r.status, color: statusColor(r.status), animated: r.status === 'running', rows: [
-                ...(r.currentPhase ? [{ label: '阶段', value: r.currentPhase }] : []),
-                { label: '时间', value: new Date(r.startTime).toLocaleString() },
-              ]},
-              ...(r.totalSteps ? [{ type: 'progress' as const, value: r.completedSteps || 0, max: r.totalSteps, label: `${r.completedSteps || 0}/${r.totalSteps} 步骤` }] : []),
-              { type: 'actions' as const, items: [
-                { label: '查看详情', prompt: `查看运行 ${r.id} 的详细信息`, icon: 'info' },
-              ]},
+        ? [{
+            type: 'table' as const,
+            maxHeight: 360,
+            columns: [
+              { key: 'name', label: '工作流', width: 'minmax(220px,1.8fr)' },
+              { key: 'status', label: '状态', width: '110px' },
+              { key: 'phase', label: '阶段', width: '140px' },
+              { key: 'time', label: '开始时间', width: '180px' },
             ],
-          }))
+            rows: result.runs.map((r: any) => ({
+              id: String(r.id || Math.random()),
+              cells: {
+                name: r.configName || r.configFile || r.id || '未命名运行',
+                status: r.status || 'unknown',
+                phase: r.currentPhase || '—',
+                time: r.startTime ? new Date(r.startTime).toLocaleString() : '—',
+              },
+              badges: [{ text: r.status || 'unknown', color: statusColor(r.status || '') }],
+              detailTitle: r.configName || r.configFile || r.id || '运行详情',
+              detailBlocks: [
+                {
+                  type: 'status' as const,
+                  state: r.status,
+                  color: statusColor(r.status),
+                  animated: r.status === 'running',
+                  rows: [
+                    ...(r.id ? [{ label: '运行 ID', value: r.id }] : []),
+                    ...(r.currentPhase ? [{ label: '阶段', value: r.currentPhase }] : []),
+                    ...(r.currentStep ? [{ label: '步骤', value: r.currentStep }] : []),
+                    ...(r.startTime ? [{ label: '时间', value: new Date(r.startTime).toLocaleString() }] : []),
+                  ],
+                },
+                ...(r.totalSteps ? [{ type: 'progress' as const, value: r.completedSteps || 0, max: r.totalSteps, label: `${r.completedSteps || 0}/${r.totalSteps} 步骤` }] : []),
+                { type: 'actions' as const, items: [
+                  { label: '查看详情', prompt: `查看运行 ${r.id} 的详细信息`, icon: 'info' },
+                ]},
+              ],
+            })),
+          }]
         : [{ type: 'text' as const, content: '暂无运行记录' }],
       actions: [
         { label: '启动新运行', prompt: '帮我启动一个工作流', icon: 'play_arrow' },

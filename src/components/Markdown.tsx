@@ -205,7 +205,7 @@ function renderMarkdownFragment(content: string) {
 }
 
 function normalizeLanguage(language: string) {
-  if (language === 'cangjie' || language === 'cj') return 'text';
+  if (language === 'cangjie' || language === 'cj') return 'cangjie';
   return language || 'text';
 }
 
@@ -669,7 +669,7 @@ function renderTaskStatusLines(content: string): string {
         continue;
       }
 
-      const taskLine = line.match(/^(\s*)-\s+\[([ xX-])\]\s+(.+)$/);
+      const taskLine = line.match(/^(\s*)-\s+\[([ xX!-])\]\s+(.+)$/);
       if (!taskLine) {
         rendered.push(line);
         continue;
@@ -684,7 +684,7 @@ function renderTaskStatusLines(content: string): string {
       while (i + 1 < lines.length) {
         const nextLine = lines[i + 1];
         if (!nextLine.trim()) break;
-        if (/^\s*-\s+\[([ xX-])\]\s+/.test(nextLine)) break;
+        if (/^\s*-\s+\[([ xX!-])\]\s+/.test(nextLine)) break;
         if (/^(#{1,6})\s+/.test(nextLine)) break;
         if (/^(`{3,}|~{3,})/.test(nextLine)) break;
         detailLines.push(nextLine.trim());
@@ -701,6 +701,10 @@ function renderTaskStatusLines(content: string): string {
       }
       if (marker === '-') {
         rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--active"><span class="ace-task-badge ace-task-badge--active"><span class="ace-task-dot"></span>[-] 进行中</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
+        continue;
+      }
+      if (marker === '!') {
+        rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--blocked"><span class="ace-task-badge ace-task-badge--blocked">[!] 阻塞</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);
         continue;
       }
       rendered.push(`${taskLine[1]}- <span class="ace-task-line ace-task-line--pending"><span class="ace-task-badge ace-task-badge--pending">[ ] 待处理</span><span class="ace-task-text">${escapedBody}</span></span>${detailBlock}`);

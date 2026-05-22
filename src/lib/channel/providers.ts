@@ -10,7 +10,7 @@ export interface ChannelProviderPreset {
   category: 'official' | 'bridge' | 'generic';
   transport: 'webhook';
   description: string;
-  capabilities: Array<'workflow-runtime' | 'roundtable' | 'agent-chat' | 'attachments'>;
+  capabilities: Array<'workflow-runtime' | 'agent-chat' | 'attachments'>;
   fields: Array<{
     key: string;
     label: string;
@@ -28,8 +28,8 @@ export const CHANNEL_PROVIDER_PRESETS: ChannelProviderPreset[] = [
     name: 'Feishu / Lark Bot',
     category: 'official',
     transport: 'webhook',
-    description: '通过飞书事件订阅 webhook 接入工作流运行时和圆桌协作。',
-    capabilities: ['workflow-runtime', 'roundtable', 'agent-chat', 'attachments'],
+    description: '通过飞书事件订阅 webhook 接入工作流运行时和对话。',
+    capabilities: ['workflow-runtime', 'agent-chat', 'attachments'],
     fields: [
       { key: 'appId', label: 'App ID', type: 'text', required: true },
       { key: 'appSecret', label: 'App Secret', type: 'password', required: true },
@@ -48,7 +48,7 @@ export const CHANNEL_PROVIDER_PRESETS: ChannelProviderPreset[] = [
     category: 'official',
     transport: 'webhook',
     description: '通过钉钉机器人回调和发送接口接入运行时对话。',
-    capabilities: ['workflow-runtime', 'roundtable', 'agent-chat'],
+    capabilities: ['workflow-runtime', 'agent-chat'],
     fields: [
       { key: 'clientId', label: 'Client ID', type: 'text', required: true },
       { key: 'clientSecret', label: 'Client Secret', type: 'password', required: true },
@@ -66,7 +66,7 @@ export const CHANNEL_PROVIDER_PRESETS: ChannelProviderPreset[] = [
     category: 'bridge',
     transport: 'webhook',
     description: '通过中间桥接器把微信消息归一化后送入 ACEHarness。',
-    capabilities: ['workflow-runtime', 'roundtable', 'agent-chat', 'attachments'],
+    capabilities: ['workflow-runtime', 'agent-chat', 'attachments'],
     fields: [
       { key: 'bridgeName', label: 'Bridge Name', type: 'text', placeholder: 'hermes / wechaty / custom bridge' },
       { key: 'bridgeCallbackUrl', label: 'Bridge Callback URL', type: 'url', placeholder: 'https://bridge.example.com/callback' },
@@ -83,7 +83,7 @@ export const CHANNEL_PROVIDER_PRESETS: ChannelProviderPreset[] = [
     category: 'generic',
     transport: 'webhook',
     description: '适用于自研 IM、企业内网消息总线或任意 webhook 源。',
-    capabilities: ['workflow-runtime', 'roundtable', 'agent-chat'],
+    capabilities: ['workflow-runtime', 'agent-chat'],
     fields: [
       { key: 'notes', label: 'Notes', type: 'textarea', placeholder: '可选：记录上游系统说明' },
     ],

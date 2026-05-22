@@ -42,8 +42,8 @@ export const WEREWOLF_ROLE_PROMPTS: Record<CollaborationWerewolfPlayer['role'], 
 };
 
 export const TEMP_WEREWOLF_SUPERVISOR = {
-  name: 'AI 上帝',
-  persona: '中立主持，负责维护回合、复述规则和结算票流。',
+  name: '系统事件',
+  persona: '中立流程推进，负责维护回合、复述规则和结算票流。',
 };
 
 export const WEREWOLF_LAB_BOARDS: WerewolfLabBoard[] = [

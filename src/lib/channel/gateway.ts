@@ -3,9 +3,8 @@ import { getUserById } from '@/lib/core/user-store';
 import { workflowRegistry, isStateMachineManagerLike } from '@/lib/workflow/registry';
 import { findRunningRuns, loadRunState } from '@/lib/run/state-persistence';
 import { createBindingFromDefault, findChannelBinding, getChannelIntegration, saveChannelBinding, type ChannelIntegration, type ChannelSessionBinding } from '@/lib/channel/store';
-import { continueRoundtable, startRoundtable } from '@/lib/roundtable/manager';
-import { loadRoundtable } from '@/lib/roundtable/store';
 import { appendChatSessionMessage } from '@/lib/chat/persistence';
+import { appendWorkflowAgoraMessage } from '@/lib/agora/workflow-topic';
 
 export interface NormalizedChannelMessage {
   integrationId: string;
@@ -24,7 +23,7 @@ export interface ChannelGatewayReply {
   binding?: ChannelSessionBinding | null;
   replies: string[];
   replyMessages?: Array<{
-    kind: 'text' | 'roundtable-message' | 'roundtable-summary' | 'system';
+    kind: 'text' | 'system';
     speakerType?: 'human' | 'agent' | 'supervisor' | 'system';
     speakerName?: string;
     text: string;
@@ -281,6 +280,30 @@ function buildWorkflowContext(binding: ChannelSessionBinding, status: any) {
   };
 }
 
+async function resolveWorkflowAgoraSessionId(binding: ChannelSessionBinding, status: any): Promise<string | null> {
+  const direct = binding.frontendSessionId || status?.workflowFrontendSessionId;
+  if (direct) return direct;
+  const runId = binding.runId || status?.runId;
+  if (!runId) return null;
+  const persistedRun = await loadRunState(runId).catch(() => null);
+  return persistedRun?.workflowFrontendSessionId || null;
+}
+
+async function attachWorkflowAgoraSessionToBinding(
+  binding: ChannelSessionBinding,
+  workflowAgoraSessionId: string | null,
+): Promise<ChannelSessionBinding> {
+  if (!workflowAgoraSessionId || binding.frontendSessionId === workflowAgoraSessionId) return binding;
+  return saveChannelBinding({
+    ...binding,
+    frontendSessionId: workflowAgoraSessionId,
+  });
+}
+
+function getChannelSpeakerName(message: NormalizedChannelMessage): string {
+  return message.externalUserName?.trim() || '渠道用户';
+}
+
 async function handleWorkflowMessage(binding: ChannelSessionBinding, integration: ChannelIntegration, message: NormalizedChannelMessage): Promise<ChannelGatewayReply> {
   const text = message.text.trim();
   const guardedText = applyWechatReplyGuardrail(integration, text);
@@ -339,135 +362,29 @@ async function handleWorkflowMessage(binding: ChannelSessionBinding, integration
     return { ok: true, binding, replies: [`已回答问题 ${questionId}。`], replyMessages: textReplies([`已回答问题 ${questionId}。`]) };
   }
 
-  if (lower.startsWith('/roundtable start')) {
-    const topic = text.replace(/^\/roundtable start/i, '').trim() || `运行时圆桌 - ${binding.configFile || binding.runId || 'workflow'}`;
-    const user = await getUserById(integration.createdBy);
-    if (!user) return { ok: false, binding, replies: ['渠道所有者不存在，无法启动圆桌。'] };
-    const participants = binding.roundtableParticipants?.length
-      ? binding.roundtableParticipants
-      : Array.from(new Set([
-        status?.supervisorAgent || 'default-supervisor',
-        ...Object.keys(status?.attachedAgentSessions || {}),
-      ])).filter(Boolean).slice(0, 4);
-    if (participants.length === 0) return { ok: false, binding, replies: ['当前运行没有可用的 Agent 参与圆桌。'] };
-    const roundtable = await startRoundtable({
-      createdBy: {
-        id: user.id,
-        username: user.username,
-        personalDir: user.personalDir,
-      },
-      topic,
-      participants,
-      runBinding: {
-        configFile: binding.configFile || status?.currentConfigFile || '',
-        runId: binding.runId || status?.runId || '',
-        supervisorAgent: status?.supervisorAgent || 'default-supervisor',
-        supervisorSessionId: status?.supervisorSessionId || null,
-        attachedAgentSessions: status?.attachedAgentSessions || {},
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      workflowContext: buildWorkflowContext(binding, status),
-      hostMessage: guardedText,
-      summarizer: binding.roundtableSummarizer,
-      workingDirectory: user.personalDir,
-    });
-    const updatedBinding = await saveChannelBinding({
-      ...binding,
-      bindingType: 'roundtable',
-      roundtableId: roundtable.id,
-      roundtableParticipants: participants,
-    });
-    const replyMessages = roundtable.messages
-      .slice(-Math.min(6, roundtable.messages.length))
-      .map((item, index, arr) => ({
-        kind: index === arr.length - 1 ? 'roundtable-summary' as const : 'roundtable-message' as const,
-        speakerType: item.speakerType,
-        speakerName: item.speakerName,
-        text: item.content,
-      }));
-    return {
-      ok: true,
-      binding: updatedBinding,
-      replies: replyMessages.map((item) => item.speakerName ? `${item.speakerName}: ${item.text}` : item.text),
-      replyMessages,
-      metadata: { roundtableId: roundtable.id },
-    };
-  }
-
   if (!manager) {
     return { ok: false, binding, replies: ['当前 workflow 未在运行，无法处理实时消息。'] };
   }
   if (binding.workflowMode === 'feedback-only' || !lower.startsWith('/')) {
+    const workflowAgoraSessionId = await resolveWorkflowAgoraSessionId(binding, status);
+    if (workflowAgoraSessionId) {
+      binding = await attachWorkflowAgoraSessionToBinding(binding, workflowAgoraSessionId);
+      await appendWorkflowAgoraMessage({
+        sessionId: workflowAgoraSessionId,
+        type: 'channel-feedback',
+        title: '渠道反馈',
+        body: text,
+        speakerName: getChannelSpeakerName(message),
+        speakerType: 'human',
+        dedupeKey: message.externalMessageId
+          ? `channel-feedback-${message.externalMessageId}`
+          : `channel-feedback-${binding.id}-${Date.now()}`,
+      }).catch(() => {});
+    }
     manager.injectLiveFeedback(guardedText);
     return { ok: true, binding, replies: ['反馈已注入当前运行。'], replyMessages: textReplies(['反馈已注入当前运行。']) };
   }
-  return { ok: false, binding, replies: ['无法识别的 workflow 命令。可用命令：/status /approve /iterate /questions /answer /roundtable start'] };
-}
-
-async function handleRoundtableMessage(binding: ChannelSessionBinding, integration: ChannelIntegration, message: NormalizedChannelMessage): Promise<ChannelGatewayReply> {
-  if (!binding.roundtableId) {
-    return { ok: false, binding, replies: ['当前会话未绑定圆桌。'] };
-  }
-  const roundtable = await loadRoundtable(binding.roundtableId);
-  if (!roundtable) {
-    return { ok: false, binding, replies: ['找不到绑定的圆桌记录。'] };
-  }
-  if (message.text.trim().toLowerCase() === '/status') {
-    const replies = [
-      `主题：${roundtable.topic}`,
-      `状态：${roundtable.status}`,
-      `参与者：${roundtable.participants.join('、')}`,
-      `消息数：${roundtable.messages.length}`,
-    ];
-    return {
-      ok: true,
-      binding,
-      replies,
-      replyMessages: textReplies(replies, 'system'),
-    };
-  }
-  const user = await getUserById(integration.createdBy);
-  if (!user) return { ok: false, binding, replies: ['渠道所有者不存在，无法继续圆桌。'] };
-  const status = binding.configFile || binding.runId ? await loadWorkflowStatus(binding) : null;
-  const nextRoundtable = await continueRoundtable({
-    createdBy: {
-      id: user.id,
-      username: user.username,
-      personalDir: user.personalDir,
-    },
-    roundtableId: roundtable.id,
-    hostMessage: applyWechatReplyGuardrail(integration, message.text),
-    runBinding: status ? {
-      configFile: binding.configFile || status.currentConfigFile || '',
-      runId: binding.runId || status.runId || '',
-      supervisorAgent: status.supervisorAgent || roundtable.supervisorAgent || 'default-supervisor',
-      supervisorSessionId: status.supervisorSessionId || null,
-      attachedAgentSessions: status.attachedAgentSessions || {},
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    } : null,
-    workflowContext: status ? buildWorkflowContext(binding, status) : null,
-    summarizer: binding.roundtableSummarizer,
-    workingDirectory: user.personalDir,
-  });
-  const latestMessages = nextRoundtable.messages.slice(-Math.min(6, nextRoundtable.messages.length));
-  const latestRoundId = nextRoundtable.rounds[nextRoundtable.rounds.length - 1]?.id;
-  const replyMessages = latestMessages
-    .filter((item) => !latestRoundId || item.roundId === latestRoundId)
-    .map((item, index, arr) => ({
-      kind: index === arr.length - 1 && item.speakerType !== 'system' ? 'roundtable-summary' as const : 'roundtable-message' as const,
-      speakerType: item.speakerType,
-      speakerName: item.speakerName,
-      text: item.content,
-    }));
-  return {
-    ok: true,
-    binding,
-    replies: replyMessages.map((item) => item.speakerName ? `${item.speakerName}: ${item.text}` : item.text),
-    replyMessages,
-    metadata: { roundtableId: nextRoundtable.id },
-  };
+  return { ok: false, binding, replies: ['无法识别的 workflow 命令。可用命令：/status /approve /iterate /questions /answer'] };
 }
 
 async function handleAgentChatMessage(binding: ChannelSessionBinding, integration: ChannelIntegration, message: NormalizedChannelMessage): Promise<ChannelGatewayReply> {
@@ -488,8 +405,9 @@ async function handleAgentChatMessage(binding: ChannelSessionBinding, integratio
       personalDir: user.personalDir,
     },
   });
-  const updatedBinding = result.sessionId
-    ? await saveChannelBinding({ ...binding, agentSessionId: result.sessionId || undefined })
+  const nextAgentSessionId = result.sessionId || undefined;
+  const updatedBinding = (binding.agentSessionId || undefined) !== nextAgentSessionId
+    ? await saveChannelBinding({ ...binding, agentSessionId: nextAgentSessionId })
     : binding;
   return {
     ok: true,
@@ -557,11 +475,6 @@ export async function handleChannelInbound(integrationId: string, body: any, hea
 
   if (binding.bindingType === 'workflow-run') {
     const reply = await handleWorkflowMessage(binding, integration, normalized);
-    await syncRepliesToFrontendSession(reply.binding || binding, reply);
-    return reply;
-  }
-  if (binding.bindingType === 'roundtable') {
-    const reply = await handleRoundtableMessage(binding, integration, normalized);
     await syncRepliesToFrontendSession(reply.binding || binding, reply);
     return reply;
   }

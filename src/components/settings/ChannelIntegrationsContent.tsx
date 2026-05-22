@@ -156,7 +156,7 @@ export default function ChannelIntegrationsContent() {
           <h2 className="text-2xl font-semibold">微信接入</h2>
           <p className="text-sm text-muted-foreground">
             参考 OpenClaw 和 Hermes WeChat Adapter 的操作方式，这里把接入收成 3 步：生成地址、接桥接器、在线测试。
-            不需要先填默认 Workflow、圆桌参与者这类内部参数。
+            不需要先填默认 Workflow 或运行时绑定这类内部参数。
           </p>
         </div>
         <div className="grid gap-3 md:grid-cols-3">
@@ -286,18 +286,16 @@ export default function ChannelIntegrationsContent() {
           <Button onClick={runInboundSimulation} disabled={inboundTesting || !selectedIntegration}>{inboundTesting ? '测试中...' : '发送在线测试消息'}</Button>
           <Button variant="outline" onClick={() => setInboundMessage('/status')}>填入 /status</Button>
           <Button variant="outline" onClick={() => setInboundMessage('/questions')}>填入 /questions</Button>
-          <Button variant="outline" onClick={() => setInboundMessage('/roundtable start 讨论当前运行风险')}>填入圆桌示例</Button>
         </div>
 
         <div className="rounded-lg border bg-muted/20 p-4">
           <div className="text-sm font-medium">运行时怎么用</div>
           <div className="mt-3 space-y-2 text-sm text-muted-foreground">
-            <div>绑定规则：一个微信会话会固定绑定到一个 workflow 或一场圆桌，后续消息沿用同一上下文。</div>
+            <div>绑定规则：一个微信会话会固定绑定到一个 workflow，后续消息沿用同一上下文。</div>
             <div>普通文本：默认作为实时反馈注入当前 workflow。</div>
             <div><code>/status</code>：查看当前运行状态。</div>
             <div><code>/questions</code>：查看待回答的人类问题。</div>
             <div><code>/answer &lt;questionId&gt; &lt;内容&gt;</code>：回答 workflow 的人工问题。</div>
-            <div><code>/roundtable start &lt;议题&gt;</code>：拉起工作流运行时圆桌会议。</div>
           </div>
         </div>
 

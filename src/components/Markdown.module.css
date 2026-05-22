@@ -302,6 +302,16 @@
   color: rgb(253, 186, 116);
 }
 
+:global(.ace-task-line--blocked) {
+  border-color: rgba(239, 68, 68, 0.32);
+  background: rgba(239, 68, 68, 0.1);
+  color: rgb(185, 28, 28);
+}
+
+:global(.dark .ace-task-line--blocked) {
+  color: rgb(252, 165, 165);
+}
+
 :global(.ace-task-badge) {
   display: inline-flex;
   align-items: center;
@@ -324,6 +334,10 @@
 
 :global(.ace-task-badge--pending) {
   background: rgba(245, 158, 11, 0.14);
+}
+
+:global(.ace-task-badge--blocked) {
+  background: rgba(239, 68, 68, 0.14);
 }
 
 :global(.ace-task-text) {

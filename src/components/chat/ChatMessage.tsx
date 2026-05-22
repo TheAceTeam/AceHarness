@@ -1,10 +1,10 @@
 'use client';
 
-import { ActionState, getStreamingResultDisplay } from '@/lib/chat/actions';
+import { ActionState, getStreamingResultDisplay, parseActions, stripMachineResultBlocks } from '@/lib/chat/actions';
 import Markdown from '@/components/Markdown';
 import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
@@ -12,13 +12,27 @@ import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { Message, MessageContent, MessageActions, MessageAction } from '@/components/ai-elements/message';
-import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent } from '@/components/ai-elements/chain-of-thought';
+import { Tool, ToolHeader, ToolContent } from '@/components/ai-elements/tool';
+import { Reasoning, ReasoningTrigger, ReasoningContent } from '@/components/ai-elements/reasoning';
+import { Task, TaskTrigger, TaskContent, TaskItem } from '@/components/ai-elements/task';
+import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, QueueItemIndicator } from '@/components/ai-elements/queue';
+import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
+import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
+import { CodeBlock } from '@/components/ai-elements/code-block';
+import { ChevronDownIcon, WrenchIcon } from 'lucide-react';
+import {
+  extractAceProcessBlocks,
+  type AceProcessBlock,
+  type AceSubtaskResultPayload,
+  type AceSubtaskStartPayload,
+  type AceToolCallPayload,
+  type AceToolResultPayload,
+} from '@/lib/chat/ai-process-blocks';
+import { workspaceApi } from '@/lib/core/api';
+import type { BundledLanguage } from 'shiki';
 
 let modelLabelCache: Map<string, string> | null = null;
 let modelLabelPromise: Promise<Map<string, string>> | null = null;
-const ACTION_TAG_PATTERN = /^(创建工作流|创建 Agent)\s·\s/;
-const WORKFLOW_EVENT_PATTERN = /^<workflow-event\s+([^>]*)>\s*([\s\S]*?)\s*<\/workflow-event>$/;
-const RESULT_BLOCK_PATTERN = /<result>[\s\S]*?(?:<\/result>|$)/gi;
 const WEREWOLF_CHAT_COLORS = [
   { avatar: 'border-rose-500/30 bg-rose-500/15 text-rose-700 dark:text-rose-300', name: 'text-rose-700 dark:text-rose-300', bubble: 'border-rose-500/30 bg-rose-50 text-rose-950 dark:bg-rose-950/75 dark:text-rose-100' },
   { avatar: 'border-sky-500/30 bg-sky-500/15 text-sky-700 dark:text-sky-300', name: 'text-sky-700 dark:text-sky-300', bubble: 'border-sky-500/30 bg-sky-50 text-sky-950 dark:bg-sky-950/75 dark:text-sky-100' },
@@ -29,35 +43,1477 @@ const WEREWOLF_CHAT_COLORS = [
   { avatar: 'border-lime-500/30 bg-lime-500/15 text-lime-700 dark:text-lime-300', name: 'text-lime-700 dark:text-lime-300', bubble: 'border-lime-500/30 bg-lime-50 text-lime-950 dark:bg-lime-950/75 dark:text-lime-100' },
   { avatar: 'border-fuchsia-500/30 bg-fuchsia-500/15 text-fuchsia-700 dark:text-fuchsia-300', name: 'text-fuchsia-700 dark:text-fuchsia-300', bubble: 'border-fuchsia-500/30 bg-fuchsia-50 text-fuchsia-950 dark:bg-fuchsia-950/75 dark:text-fuchsia-100' },
 ] as const;
+const CHUNK_BOUNDARY_PATTERN = /<!--\s*chunk-boundary\s*-->/gi;
+const VISIBLE_SESSION_TAG_SEPARATOR = ' · ';
+const VISIBLE_SESSION_TAGS = {
+  '创建工作流': {
+    kind: 'workflow',
+    icon: 'account_tree',
+    className: 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300',
+  },
+  '创建 Agent': {
+    kind: 'agent',
+    icon: 'smart_toy',
+    className: 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300',
+  },
+  '上下文压缩': {
+    kind: 'compact',
+    icon: 'compress',
+    className: 'border-sky-500/25 bg-sky-500/8 text-sky-700 dark:text-sky-300',
+  },
+} as const;
 
-function parseWorkflowEvent(content: string) {
-  const match = content.trim().match(WORKFLOW_EVENT_PATTERN);
-  if (!match) return null;
-
-  const attrs = new Map<string, string>();
-  match[1].replace(/([a-zA-Z0-9_-]+)="([^"]*)"/g, (_, key: string, value: string) => {
-    attrs.set(key, value);
-    return '';
-  });
-
-  const bodyLines = match[2].split('\n').map((line) => line.trim()).filter(Boolean);
-  const title = bodyLines[0] || 'Workflow 事件';
-  const body = bodyLines.slice(1).join('\n');
+function parseVisibleSessionTag(content: string): null | {
+  type: keyof typeof VISIBLE_SESSION_TAGS;
+  label: string;
+  icon: string;
+  className: string;
+} {
+  const text = String(content || '').trim();
+  const separatorIndex = text.indexOf(VISIBLE_SESSION_TAG_SEPARATOR);
+  if (separatorIndex <= 0) return null;
+  const type = text.slice(0, separatorIndex).trim() as keyof typeof VISIBLE_SESSION_TAGS;
+  const label = text.slice(separatorIndex + VISIBLE_SESSION_TAG_SEPARATOR.length).trim();
+  const config = VISIBLE_SESSION_TAGS[type];
+  if (!config || !label) return null;
   return {
-    type: attrs.get('type') || 'event',
-    tags: (attrs.get('tags') || '').split(',').map((tag) => tag.trim()).filter(Boolean),
-    title,
-    body,
+    type,
+    label,
+    icon: config.icon,
+    className: config.className,
   };
 }
 
-function getWorkflowEventIcon(type: string) {
-  if (type.includes('human') || type.includes('approval')) return 'person_alert';
-  if (type.includes('failed')) return 'error';
-  if (type.includes('complete')) return 'task_alt';
-  if (type.includes('step')) return 'footprint';
-  if (type.includes('review')) return 'rate_review';
-  return 'account_tree';
+type SubtaskProcessEntry = {
+  kind: 'subtask';
+  title: string;
+  description: string;
+  internalText: string;
+  agent: string;
+  prompt: string;
+  toolId: string;
+  sessionId: string;
+  sessionFingerprint: string;
+  result: string;
+  startBlockEnd: number;
+  resultBlockStart: number | null;
+  state: 'input-available' | 'output-available';
+  anchorStart: number;
+  anchorEnd: number;
+  blockStarts: number[];
+};
+
+type ToolProcessEntry = {
+  kind: 'tool';
+  title: string;
+  toolName: string;
+  toolId: string;
+  toolFingerprint: string;
+  request: string;
+  result: string;
+  requestMeta: AceToolCallPayload | null;
+  resultMeta: AceToolResultPayload | null;
+  state: 'input-available' | 'output-available';
+  anchorStart: number;
+  anchorEnd: number;
+  blockStarts: number[];
+};
+
+type ProcessEntryState = ToolProcessEntry['state'];
+type TimelineItem =
+  | { kind: 'text'; key: string; start: number; end: number; text: string }
+  | { kind: 'reasoning'; key: string; start: number; end: number; text: string }
+  | { kind: 'tool-entry'; key: string; start: number; end: number; entry: ToolProcessEntry }
+  | { kind: 'subtask-entry'; key: string; start: number; end: number; entry: SubtaskProcessEntry };
+type RenderItem =
+  | TimelineItem
+  | { kind: 'tool-group'; key: string; start: number; end: number; entries: Array<{ key: string; entry: ToolProcessEntry }> };
+type ProcessTimelineState = {
+  timelineItems: TimelineItem[];
+  hasPendingActivity: boolean;
+};
+
+const ASSISTANT_MARKDOWN_CLASS = 'text-sm prose-sm prose-neutral dark:prose-invert max-w-none [&_pre]:bg-background [&_pre]:border-0 [&_pre]:shadow-none [&_pre]:rounded [&_pre]:p-0 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain';
+const STANDARD_CHAT_BUBBLE_WIDTH_CLASS = 'max-w-[52rem] min-w-0';
+
+function normalizeProcessBody(body: string): string {
+  return String(body || '')
+    .replace(/^\*\*[^*]+\*\*\s*/u, '')
+    .trim();
+}
+
+function mergeProcessText(base: string, fragment: string): string {
+  const left = String(base || '');
+  const right = String(fragment || '');
+  if (!left) return right.trim();
+  if (!right) return left.trim();
+  if (/^\s/.test(right) || /\s$/.test(left)) return `${left}${right}`.trim();
+  if (/^[,.;:!?)}\]]/.test(right)) return `${left}${right}`.trim();
+  if (/\n/.test(left) || /\n/.test(right)) return `${left}\n${right}`.trim();
+  return `${left} ${right}`.trim();
+}
+
+function preferMoreCompleteText(current: string, next: string): string {
+  const left = String(current || '').trim();
+  const right = String(next || '').trim();
+  if (!left) return right;
+  if (!right) return left;
+  return right.length >= left.length ? right : left;
+}
+
+function looksLikeEscapedProtocolDump(text: string): boolean {
+  const sample = String(text || '');
+  if (sample.length < 180) return false;
+  const protocolHits = [
+    sample.includes('{"kind":"card"'),
+    sample.includes('{"kind":"home_sidebar"'),
+    sample.includes('{"kind":"clarification_form"'),
+    sample.includes('{"type":"config.'),
+    sample.includes('<result>'),
+    sample.includes('validate-card.mjs'),
+    sample.includes('Card Schema'),
+    sample.includes('payload 本体必须先通过校验脚本'),
+  ].filter(Boolean).length;
+  return protocolHits >= 2;
+}
+
+function sanitizeTimelineText(text: string, isStreaming: boolean): string {
+  const cleaned = parseActions(text).text.replace(/\n{3,}/g, '\n\n').trim();
+  if (!cleaned) return '';
+  if (isStreaming && looksLikeEscapedProtocolDump(cleaned)) return '';
+  return cleaned;
+}
+
+function mergeAdjacentReasoningItems(items: TimelineItem[]): TimelineItem[] {
+  const merged: TimelineItem[] = [];
+
+  for (const item of items) {
+    const previous = merged[merged.length - 1];
+    if (item.kind === 'reasoning' && previous?.kind === 'reasoning') {
+      merged[merged.length - 1] = {
+        ...previous,
+        end: item.end,
+        text: `${previous.text}${item.text}`,
+      };
+      continue;
+    }
+    merged.push(item);
+  }
+
+  return merged;
+}
+
+function normalizeToolIdentityValue(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function formatSubtaskTitle(title: string): string {
+  const normalized = String(title || '').trim() || '子任务';
+  return normalized.startsWith('🤖') ? normalized : `🤖 ${normalized}`;
+}
+
+function extractReadPath(meta: Partial<AceToolCallPayload | AceToolResultPayload> | null | undefined, fallbackText = ''): string {
+  if (!meta) return '';
+  return asString((meta as any).filePath)
+    || asString((meta as any).path)
+    || extractTaggedValue(asString((meta as any).content), 'path')
+    || extractTaggedValue(asString((meta as any).output), 'path')
+    || extractTaggedValue(fallbackText, 'path')
+    || '';
+}
+
+function extractReadPayloadContent(meta: Partial<AceToolResultPayload> | null | undefined, fallbackText = ''): string {
+  if (!meta) return '';
+  return extractTaggedValue(asString(meta.content), 'content')
+    || extractTaggedValue(asString(meta.output), 'content')
+    || asString(meta.content)
+    || asString(meta.output)
+    || fallbackText
+    || '';
+}
+
+function buildToolFingerprint(
+  toolName: string,
+  meta: AceToolCallPayload | AceToolResultPayload | null | undefined,
+  fallbackText = '',
+): string {
+  if (!meta) return '';
+  const normalizedTool = normalizeToolIdentityValue(toolName);
+  const get = (key: string) => normalizeToolIdentityValue((meta as any)?.[key]);
+
+  switch (normalizedTool) {
+    case 'read': {
+      const filePath = normalizeToolIdentityValue(extractReadPath(meta, fallbackText));
+      const bodyPath = !filePath ? normalizeToolIdentityValue(fallbackText) : '';
+      return filePath
+        ? `${normalizedTool}|${filePath}`
+        : bodyPath
+          ? `${normalizedTool}|${bodyPath}`
+          : '';
+    }
+    case 'glob':
+    case 'grep': {
+      const pattern = get('pattern');
+      const include = get('include');
+      const path = get('path') || get('filePath');
+      return pattern || include || path
+        ? `${normalizedTool}|${pattern}|${include}|${path}`
+        : '';
+    }
+    case 'ls': {
+      const path = get('path') || get('filePath');
+      const command = get('command');
+      return path || command ? `${normalizedTool}|${path || command}` : '';
+    }
+    case 'bash':
+    case 'cmd':
+    case 'powershell': {
+      const command = get('command');
+      return command ? `${normalizedTool}|${command}` : '';
+    }
+    case 'webfetch': {
+      const url = get('url');
+      return url ? `${normalizedTool}|${url}` : '';
+    }
+    case 'websearch': {
+      const query = get('query');
+      return query ? `${normalizedTool}|${query}` : '';
+    }
+    default:
+      return '';
+  }
+}
+
+function findUniquePendingToolIndex(entries: ToolProcessEntry[], toolName: string): number {
+  const matches = entries
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => entry.toolName === toolName && entry.state !== 'output-available');
+  return matches.length === 1 ? matches[0].index : -1;
+}
+
+function findFirstPendingToolIndex(entries: ToolProcessEntry[], toolName: string): number {
+  return entries.findIndex((entry) => entry.toolName === toolName && entry.state !== 'output-available');
+}
+
+function buildSubtaskEntries(blocks: AceProcessBlock[]): SubtaskProcessEntry[] {
+  const entries: SubtaskProcessEntry[] = [];
+  const entryIndexesByToolId = new Map<string, number>();
+  const entryIndexesBySessionId = new Map<string, number>();
+  const entryIndexesByFingerprint = new Map<string, number>();
+
+  const buildSubtaskFingerprint = (value: {
+    title?: string;
+    description?: string;
+    agent?: string;
+    prompt?: string;
+  }) => [
+    normalizeToolIdentityValue(value.title),
+    normalizeToolIdentityValue(value.description),
+    normalizeToolIdentityValue(value.agent),
+    normalizeToolIdentityValue(value.prompt),
+  ].filter(Boolean).join('|');
+
+  const bindSubtaskIdentity = (
+    index: number,
+    toolId: string,
+    sessionId: string,
+    sessionFingerprint: string,
+    state: SubtaskProcessEntry['state'],
+  ) => {
+    if (toolId) entryIndexesByToolId.set(toolId, index);
+    if (sessionId) entryIndexesBySessionId.set(sessionId, index);
+    if (sessionFingerprint && state !== 'output-available') entryIndexesByFingerprint.set(sessionFingerprint, index);
+  };
+
+  for (const block of blocks) {
+    if (block.kind === 'subtask-start') {
+      const meta = block.meta as AceSubtaskStartPayload;
+      const toolId = String(meta.toolId || '').trim();
+      const sessionId = String(meta.sessionId || '').trim();
+      const title = formatSubtaskTitle(String(meta.title || '').trim() || '子任务');
+      const description = String(meta.description || '').trim() || normalizeProcessBody(block.body);
+      const agent = String(meta.agent || '').trim();
+      const prompt = String(meta.prompt || '').trim();
+      const sessionFingerprint = buildSubtaskFingerprint({ title, description, agent, prompt });
+      const duplicatePendingIndex = !toolId && !sessionId && sessionFingerprint && entryIndexesByFingerprint.has(sessionFingerprint)
+        ? entryIndexesByFingerprint.get(sessionFingerprint)!
+        : -1;
+      if (duplicatePendingIndex >= 0) {
+        const existing = entries[duplicatePendingIndex];
+        existing.anchorEnd = Math.max(existing.anchorEnd, block.end);
+        existing.blockStarts.push(block.start);
+        bindSubtaskIdentity(duplicatePendingIndex, existing.toolId, existing.sessionId, existing.sessionFingerprint, existing.state);
+        continue;
+      }
+      const nextIndex = entries.length;
+      entries.push({
+        kind: 'subtask',
+        title,
+        description,
+        internalText: '',
+        agent,
+        prompt,
+        toolId,
+        sessionId,
+        sessionFingerprint,
+        result: '',
+        startBlockEnd: block.end,
+        resultBlockStart: null,
+        state: 'input-available',
+        anchorStart: block.start,
+        anchorEnd: block.end,
+        blockStarts: [block.start],
+      });
+      bindSubtaskIdentity(nextIndex, toolId, sessionId, sessionFingerprint, 'input-available');
+      continue;
+    }
+
+    if (block.kind !== 'subtask-result') continue;
+
+    const meta = block.meta as AceSubtaskResultPayload;
+    const resultBody = String(meta.resultText || '').trim() || normalizeProcessBody(block.body);
+    const sessionId = String(meta.sessionId || '').trim();
+    const toolId = String(meta.toolId || '').trim();
+    const uniquePendingIndex = entries.filter((entry) => entry.state !== 'output-available').length === 1
+      ? entries.findIndex((entry) => entry.state !== 'output-available')
+      : -1;
+    const targetIndex = sessionId && entryIndexesBySessionId.has(sessionId)
+      ? entryIndexesBySessionId.get(sessionId)!
+      : toolId && entryIndexesByToolId.has(toolId)
+        ? entryIndexesByToolId.get(toolId)!
+        : uniquePendingIndex;
+
+    const target = targetIndex >= 0 ? entries[targetIndex] : null;
+    if (target) {
+      target.result = mergeProcessText(target.result, resultBody);
+      target.toolId = target.toolId || toolId;
+      target.sessionId = target.sessionId || sessionId;
+      target.state = 'output-available';
+      target.resultBlockStart = block.start;
+      target.anchorEnd = Math.max(target.anchorEnd, block.end);
+      target.blockStarts.push(block.start);
+      bindSubtaskIdentity(targetIndex, target.toolId, target.sessionId, target.sessionFingerprint, target.state);
+    } else {
+      const nextIndex = entries.length;
+      entries.push({
+        kind: 'subtask',
+        title: formatSubtaskTitle('子任务结果'),
+        description: '',
+        internalText: '',
+        agent: '',
+        prompt: '',
+        toolId,
+        sessionId,
+        sessionFingerprint: '',
+        result: resultBody,
+        startBlockEnd: block.start,
+        resultBlockStart: block.start,
+        state: 'output-available',
+        anchorStart: block.start,
+        anchorEnd: block.end,
+        blockStarts: [block.start],
+      });
+      bindSubtaskIdentity(nextIndex, toolId, sessionId, '', 'output-available');
+    }
+  }
+
+  return entries;
+}
+
+function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
+  const entries: ToolProcessEntry[] = [];
+  const entryIndexesByToolId = new Map<string, number>();
+  const pendingEntryIndexesByFingerprint = new Map<string, number>();
+
+  const bindPendingToolIdentity = (index: number, entry: ToolProcessEntry) => {
+    if (entry.state === 'output-available') return;
+    if (entry.toolId) entryIndexesByToolId.set(entry.toolId, index);
+    if (entry.toolFingerprint) pendingEntryIndexesByFingerprint.set(entry.toolFingerprint, index);
+  };
+
+  const clearPendingToolIdentity = (index: number, entry: ToolProcessEntry) => {
+    if (entry.toolId && entryIndexesByToolId.get(entry.toolId) === index) {
+      entryIndexesByToolId.delete(entry.toolId);
+    }
+    if (entry.toolFingerprint && pendingEntryIndexesByFingerprint.get(entry.toolFingerprint) === index) {
+      pendingEntryIndexesByFingerprint.delete(entry.toolFingerprint);
+    }
+  };
+
+  for (const block of blocks) {
+    if (block.kind === 'tool-call') {
+      const meta = block.meta as AceToolCallPayload;
+      const toolId = String(meta.toolId || '').trim();
+      const toolName = String(meta.toolName || '').trim() || 'tool';
+      const request = normalizeProcessBody(block.body);
+      const toolFingerprint = buildToolFingerprint(toolName, meta, request);
+      const duplicateToolIdIndex = toolId && entryIndexesByToolId.has(toolId)
+        ? entryIndexesByToolId.get(toolId)!
+        : -1;
+      const duplicatePendingIndex = !toolId && toolFingerprint && pendingEntryIndexesByFingerprint.has(toolFingerprint)
+        ? pendingEntryIndexesByFingerprint.get(toolFingerprint)!
+        : -1;
+
+      if (duplicateToolIdIndex >= 0 || duplicatePendingIndex >= 0) {
+        const targetIndex = duplicateToolIdIndex >= 0 ? duplicateToolIdIndex : duplicatePendingIndex;
+        const existing = entries[targetIndex];
+        const previousRequestLength = String(existing.request || '').trim().length;
+        const nextRequestLength = request.length;
+        existing.title = preferMoreCompleteText(existing.title, String(meta.title || '').trim()) || existing.title;
+        existing.toolName = existing.toolName || toolName;
+        existing.toolId = existing.toolId || toolId;
+        existing.toolFingerprint = existing.toolFingerprint || toolFingerprint;
+        existing.request = preferMoreCompleteText(existing.request, request);
+        existing.requestMeta = nextRequestLength >= previousRequestLength ? meta : (existing.requestMeta || meta);
+        existing.anchorEnd = Math.max(existing.anchorEnd, block.end);
+        existing.blockStarts.push(block.start);
+        bindPendingToolIdentity(targetIndex, existing);
+        continue;
+      }
+
+      const nextIndex = entries.length;
+      const nextEntry: ToolProcessEntry = {
+        kind: 'tool',
+        title: String(meta.title || '').trim() || '工具调用',
+        toolName,
+        toolId,
+        toolFingerprint,
+        request,
+        result: '',
+        requestMeta: meta,
+        resultMeta: null,
+        state: 'input-available',
+        anchorStart: block.start,
+        anchorEnd: block.end,
+        blockStarts: [block.start],
+      };
+      entries.push(nextEntry);
+      bindPendingToolIdentity(nextIndex, nextEntry);
+      continue;
+    }
+
+    if (block.kind !== 'tool-result') continue;
+
+    const meta = block.meta as AceToolResultPayload;
+    const toolName = String(meta.toolName || '').trim() || 'tool';
+    const toolId = String(meta.toolId || '').trim();
+    const resultBody = normalizeProcessBody(block.body);
+    const toolFingerprint = buildToolFingerprint(toolName, meta, resultBody);
+    const targetIndex = toolId && entryIndexesByToolId.has(toolId)
+      ? entryIndexesByToolId.get(toolId)!
+      : toolFingerprint && pendingEntryIndexesByFingerprint.has(toolFingerprint)
+        ? pendingEntryIndexesByFingerprint.get(toolFingerprint)!
+        : (() => {
+            const uniquePending = findUniquePendingToolIndex(entries, toolName);
+            return uniquePending >= 0 ? uniquePending : findFirstPendingToolIndex(entries, toolName);
+          })();
+
+    if (targetIndex >= 0) {
+      const target = entries[targetIndex];
+      clearPendingToolIdentity(targetIndex, target);
+      target.result = mergeProcessText(target.result, resultBody);
+      target.toolId = target.toolId || toolId;
+      target.toolFingerprint = target.toolFingerprint || toolFingerprint;
+      target.resultMeta = meta;
+      target.state = 'output-available';
+      target.anchorEnd = Math.max(target.anchorEnd, block.end);
+      target.blockStarts.push(block.start);
+    } else {
+      entries.push({
+        kind: 'tool',
+        title: String(meta.title || '').trim() || '工具结果',
+        toolName,
+        toolId,
+        toolFingerprint,
+        request: '',
+        result: resultBody,
+        requestMeta: null,
+        resultMeta: meta,
+        state: 'output-available',
+        anchorStart: block.start,
+        anchorEnd: block.end,
+        blockStarts: [block.start],
+      });
+    }
+  }
+
+  return entries;
+}
+
+function isProcessEntryRunning(state: ProcessEntryState, isStreaming: boolean): boolean {
+  return isStreaming && state !== 'output-available';
+}
+
+function isCollapsedByDefaultTool(entry: ToolProcessEntry): boolean {
+  return ['bash', 'cmd', 'powershell', 'read', 'glob', 'grep', 'ls'].includes(entry.toolName);
+}
+
+function shouldOpenProcessCard({
+  isStreaming,
+  state,
+  hasRequest,
+  hasResult,
+  defaultCollapsed = false,
+}: {
+  isStreaming: boolean;
+  state: ProcessEntryState;
+  hasRequest: boolean;
+  hasResult: boolean;
+  defaultCollapsed?: boolean;
+}): boolean {
+  if (defaultCollapsed) return false;
+  if (isProcessEntryRunning(state, isStreaming)) return true;
+  return hasRequest || hasResult;
+}
+
+function toSingleLinePreview(text: string): string {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function getSubtaskPreview(entry: SubtaskProcessEntry): string {
+  return toSingleLinePreview(entry.description || entry.prompt || entry.result);
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function countLines(text: string): number {
+  return text ? text.split('\n').length : 0;
+}
+
+function inferCodeLanguage(filePath: string): string | undefined {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  if (!ext || ext === filePath.toLowerCase()) return undefined;
+  const map: Record<string, string> = {
+    ts: 'ts',
+    tsx: 'tsx',
+    js: 'js',
+    jsx: 'jsx',
+    json: 'json',
+    md: 'md',
+    yaml: 'yaml',
+    yml: 'yaml',
+    css: 'css',
+    html: 'html',
+    sh: 'bash',
+    bash: 'bash',
+    zsh: 'bash',
+    py: 'python',
+    xml: 'xml',
+    toml: 'toml',
+  };
+  return map[ext] || ext;
+}
+
+function buildUnifiedDiff(oldText: string, newText: string): string {
+  const removed = oldText
+    ? oldText.split('\n').map((line) => `- ${line}`).join('\n') + '\n'
+    : '';
+  const added = newText
+    ? newText.split('\n').map((line) => `+ ${line}`).join('\n') + '\n'
+    : '';
+  return `${removed}${added}`.trimEnd();
+}
+
+function describeLineChange(oldText: string, newText: string): string {
+  const oldLines = countLines(oldText);
+  const newLines = countLines(newText);
+  const added = Math.max(0, newLines - oldLines);
+  const removed = Math.max(0, oldLines - newLines);
+  let stats = `${Math.min(oldLines, newLines)} 行修改`;
+  if (added > 0) stats += `, +${added} 行`;
+  if (removed > 0) stats += `, -${removed} 行`;
+  return stats;
+}
+
+function renderJsonCode(value: unknown, language?: string) {
+  if (value == null) return null;
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return <Markdown>{`\`\`\`${language || 'json'}\n${text}\n\`\`\``}</Markdown>;
+}
+
+function extractTaggedValue(text: string, tag: string): string {
+  if (!text) return '';
+  const match = text.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return String(match?.[1] || '').trim();
+}
+
+function getReadFilePath(entry: ToolProcessEntry): string {
+  return extractReadPath(entry.requestMeta, entry.request)
+    || extractReadPath(entry.resultMeta, entry.result)
+    || '';
+}
+
+function getReadResultContent(entry: ToolProcessEntry): string {
+  return extractReadPayloadContent(entry.resultMeta, entry.result)
+    || entry.result
+    || '';
+}
+
+function getToolPreview(entry: ToolProcessEntry): string {
+  switch (entry.toolName) {
+    case 'bash':
+    case 'cmd':
+    case 'powershell':
+      return toSingleLinePreview(asString(entry.requestMeta?.command) || entry.request);
+    case 'read':
+      return getReadFilePath(entry);
+    case 'glob':
+    case 'grep': {
+      const pattern = asString(entry.requestMeta?.pattern);
+      const path = asString((entry.requestMeta as any)?.path) || asString((entry.requestMeta as any)?.filePath);
+      return [pattern, path].filter(Boolean).join(' · ');
+    }
+    case 'ls':
+      return asString((entry.requestMeta as any)?.path) || '.';
+    case 'webfetch':
+      return asString((entry.requestMeta as any)?.url);
+    case 'websearch':
+      return asString((entry.requestMeta as any)?.query);
+    default:
+      return '';
+  }
+}
+
+function renderPathPreview(pathText: string) {
+  const value = String(pathText || '').trim();
+  if (!value) return null;
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">path</span>
+      <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-[12px] text-foreground">{value}</code>
+    </div>
+  );
+}
+
+function buildProcessTimelineState(content: string, isStreaming: boolean): ProcessTimelineState {
+  const source = stripResultBlocks(content);
+  const { blocks } = extractAceProcessBlocks(source);
+  const toolEntries = buildToolEntries(blocks).map((entry) => (!isStreaming && entry.state !== 'output-available'
+    ? { ...entry, state: 'output-available' as const }
+    : entry));
+  const subtaskEntries = buildSubtaskEntries(blocks).map((entry) => (!isStreaming && entry.state !== 'output-available'
+    ? { ...entry, state: 'output-available' as const }
+    : entry));
+
+  const items: TimelineItem[] = [];
+  const renderedKeys = new Set<string>();
+  const toolEntriesByBlockStart = new Map<number, { key: string; entry: ToolProcessEntry }>();
+  const subtaskEntriesByBlockStart = new Map<number, { key: string; entry: SubtaskProcessEntry }>();
+  const subtaskTextRanges = subtaskEntries
+    .map((entry) => ({
+      entry,
+      start: entry.startBlockEnd,
+      end: entry.resultBlockStart ?? ((entry.toolId || entry.sessionId) ? source.length : entry.startBlockEnd),
+    }))
+    .filter(({ start, end }) => end > start)
+    .sort((a, b) => a.start - b.start);
+
+  toolEntries.forEach((entry, index) => {
+    const key = entry.toolId || `${entry.toolName}-${entry.anchorStart}-${index}`;
+    entry.blockStarts.forEach((start) => toolEntriesByBlockStart.set(start, { key, entry }));
+  });
+  subtaskEntries.forEach((entry, index) => {
+    const key = entry.toolId || entry.sessionId || `subtask-${entry.anchorStart}-${index}`;
+    entry.blockStarts.forEach((start) => subtaskEntriesByBlockStart.set(start, { key, entry }));
+  });
+
+  for (const range of subtaskTextRanges) {
+    range.entry.internalText = sanitizeTimelineText(source.slice(range.start, range.end), isStreaming);
+  }
+
+  let cursor = 0;
+  for (const [index, block] of blocks.entries()) {
+    const enclosingSubtaskRange = subtaskTextRanges.find((range) => block.start >= range.start && block.end <= range.end);
+    if (enclosingSubtaskRange) {
+      cursor = Math.max(cursor, block.end);
+      continue;
+    }
+
+    if (block.start > cursor) {
+      const nextTextStart = block.start;
+      for (const range of subtaskTextRanges) {
+        if (range.end <= cursor || range.start >= nextTextStart) continue;
+        const textBeforeSubtask = sanitizeTimelineText(source.slice(cursor, range.start), isStreaming);
+        if (textBeforeSubtask) {
+          items.push({
+            kind: 'text',
+            key: `text-${cursor}-${range.start}`,
+            start: cursor,
+            end: range.start,
+            text: textBeforeSubtask,
+          });
+        }
+        cursor = Math.max(cursor, range.end);
+      }
+      const text = cursor < nextTextStart
+        ? sanitizeTimelineText(source.slice(cursor, nextTextStart), isStreaming)
+        : '';
+      if (text) {
+        items.push({
+          kind: 'text',
+          key: `text-${cursor}-${block.start}`,
+          start: cursor,
+          end: block.start,
+          text,
+        });
+      }
+    }
+
+    if (block.kind === 'reasoning') {
+      const text = String(block.body || '');
+      if (text.trim()) {
+        items.push({
+          kind: 'reasoning',
+          key: `reasoning-${block.start}-${index}`,
+          start: block.start,
+          end: block.end,
+          text,
+        });
+      }
+    } else if (block.kind === 'tool-call' || block.kind === 'tool-result') {
+      const mapped = toolEntriesByBlockStart.get(block.start);
+      if (mapped && !renderedKeys.has(mapped.key)) {
+        renderedKeys.add(mapped.key);
+        items.push({
+          kind: 'tool-entry',
+          key: mapped.key,
+          start: block.start,
+          end: block.end,
+          entry: mapped.entry,
+        });
+      }
+    } else if (block.kind === 'subtask-start' || block.kind === 'subtask-result') {
+      const mapped = subtaskEntriesByBlockStart.get(block.start);
+      if (mapped && !renderedKeys.has(mapped.key)) {
+        renderedKeys.add(mapped.key);
+        items.push({
+          kind: 'subtask-entry',
+          key: mapped.key,
+          start: block.start,
+          end: block.end,
+          entry: mapped.entry,
+        });
+      }
+    }
+
+    cursor = Math.max(cursor, block.end);
+  }
+
+  if (cursor < source.length) {
+    let trailingCursor = cursor;
+    for (const range of subtaskTextRanges) {
+      if (range.end <= trailingCursor) continue;
+      const textBeforeSubtask = sanitizeTimelineText(source.slice(trailingCursor, range.start), isStreaming);
+      if (textBeforeSubtask) {
+        items.push({
+          kind: 'text',
+          key: `text-${trailingCursor}-${range.start}`,
+          start: trailingCursor,
+          end: range.start,
+          text: textBeforeSubtask,
+        });
+      }
+      trailingCursor = Math.max(trailingCursor, range.end);
+    }
+    if (trailingCursor < source.length) {
+      const text = sanitizeTimelineText(source.slice(trailingCursor), isStreaming);
+      if (text) {
+        items.push({
+          kind: 'text',
+          key: `text-${trailingCursor}-${source.length}`,
+          start: trailingCursor,
+          end: source.length,
+          text,
+        });
+      }
+    }
+  }
+
+  const hasPendingTool = toolEntries.some((entry) => entry.state !== 'output-available');
+  const hasPendingSubtask = subtaskEntries.some((entry) => entry.state !== 'output-available');
+  const lastBlock = blocks[blocks.length - 1];
+  const hasTrailingReasoning = isStreaming && lastBlock?.kind === 'reasoning';
+  const mergedItems = mergeAdjacentReasoningItems(items);
+
+  return {
+    timelineItems: mergedItems,
+    hasPendingActivity: Boolean(isStreaming && (hasPendingTool || hasPendingSubtask || hasTrailingReasoning)),
+  };
+}
+
+function ProcessCodeBlock({
+  text,
+  language,
+  singleLine = false,
+}: {
+  text: string;
+  language?: string;
+  singleLine?: boolean;
+}) {
+  const { toast } = useToast();
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<{ stdout?: string; stderr?: string; exitCode?: number } | null>(null);
+
+  if (!text) return null;
+
+  const handleLegacyCopy = async () => {
+    const ok = await copyText(text);
+    toast(ok ? 'success' : 'error', ok ? '已复制代码' : '复制失败');
+  };
+
+  const handleArtifactCopied = () => {
+    toast('success', '已复制代码');
+  };
+
+  const normalizedLanguage = (() => {
+    const raw = String(language || '').trim().toLowerCase();
+    if (!raw) return 'text';
+    if (raw === 'cj') return 'cangjie';
+    if (raw === 'md') return 'markdown';
+    if (raw === 'yml') return 'yaml';
+    if (raw === 'js') return 'javascript';
+    if (raw === 'ts') return 'typescript';
+    if (raw === 'py') return 'python';
+    if (raw === 'sh') return 'bash';
+    return raw;
+  })();
+  const canRunCangjie = normalizedLanguage === 'cangjie';
+
+  const handleRun = async () => {
+    if (!canRunCangjie || running) return;
+    setRunning(true);
+    try {
+      const result = await workspaceApi.runCangjie(text, 'snippet.cj', 'markdown');
+      setRunResult({
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode ?? undefined,
+      });
+    } catch (error: any) {
+      toast('error', error?.message || '运行失败');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    singleLine ? (
+      <div className="relative overflow-hidden rounded-md border bg-background/80">
+        <button
+          type="button"
+          onClick={() => { void handleLegacyCopy(); }}
+          className="absolute right-2 top-2 z-10 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title="复制代码"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+        </button>
+        <div className="overflow-x-auto px-3 py-2 pr-10">
+          <code className="block whitespace-pre font-mono text-[12px] text-foreground">{text}</code>
+        </div>
+      </div>
+      ) : (
+        <Artifact value={text} className="bg-background/80">
+          <ArtifactHeader>
+            <ArtifactTitle>{normalizedLanguage}</ArtifactTitle>
+            <ArtifactActions>
+              {canRunCangjie ? (
+                <button
+                  type="button"
+                  onClick={() => { void handleRun(); }}
+                  disabled={running}
+                  className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                  title="运行仓颉代码"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                    {running ? 'progress_activity' : 'play_arrow'}
+                  </span>
+                  <span>{running ? '运行中' : '运行'}</span>
+                </button>
+              ) : null}
+              <ArtifactCopyButton
+                onCopy={handleArtifactCopied}
+                title="复制代码"
+              />
+            </ArtifactActions>
+          </ArtifactHeader>
+          <ArtifactContent>
+            <div className="max-h-80 overflow-auto">
+              <CodeBlock
+                code={text}
+                language={normalizedLanguage as BundledLanguage}
+                className="rounded-none border-0 bg-transparent"
+              />
+            </div>
+          </ArtifactContent>
+          {canRunCangjie && (running || runResult) ? (
+            <div className="border-t px-3 py-3 text-sm">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="font-medium text-foreground">运行结果</span>
+                {runResult?.exitCode != null ? <span className="text-xs text-muted-foreground">exit code: {runResult.exitCode}</span> : null}
+              </div>
+              {running ? (
+                <div className="text-muted-foreground">运行中...</div>
+              ) : (
+                <div className="space-y-2">
+                  {runResult?.stdout ? (
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">stdout</div>
+                      <ProcessTerminalBlock text={runResult.stdout} />
+                    </div>
+                  ) : null}
+                  {runResult?.stderr ? (
+                    <div>
+                      <div className="mb-1 text-xs text-muted-foreground">stderr</div>
+                      <ProcessTerminalBlock text={runResult.stderr} />
+                    </div>
+                  ) : null}
+                  {!runResult?.stdout && !runResult?.stderr ? <div className="text-muted-foreground">无输出</div> : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </Artifact>
+      )
+  );
+}
+
+function formatStreamingResultBody(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  const fenceMatch = trimmed.match(/^(```|~~~)(?:json|card)?\s*([\s\S]*?)(?:\1)?$/i);
+  const body = (fenceMatch ? fenceMatch[2] : trimmed).trim();
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return body;
+  }
+}
+
+function StreamingResultPanel({ result }: { result: { text: string; complete: boolean } }) {
+  const body = formatStreamingResultBody(result.text);
+  if (!body) return null;
+  const state = result.complete ? 'output-available' : 'input-available';
+  return (
+    <Tool
+      defaultOpen
+      className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
+      data-testid="ace-result-generation-panel"
+    >
+      <ToolHeader
+        type="dynamic-tool"
+        toolName="result"
+        title={result.complete ? '结构化结果已生成' : '结构化结果生成中'}
+        state={state}
+        hideDefaultIcon
+        className="bg-muted/30"
+      />
+      <ToolContent className="space-y-3">
+        <div className="text-xs leading-5 text-muted-foreground">
+          系统正在接收机器可读结果；完成后会自动渲染为卡片或执行对应的结构化处理。
+        </div>
+        <ProcessCodeBlock text={body} language="json" />
+      </ToolContent>
+    </Tool>
+  );
+}
+
+function ProcessTerminalBlock({
+  text,
+  isStreaming = false,
+}: {
+  text: string;
+  isStreaming?: boolean;
+}) {
+  const { toast } = useToast();
+
+  if (!text) return null;
+
+  const handleCopy = async () => {
+    const ok = await copyText(text);
+    toast(ok ? 'success' : 'error', ok ? '已复制终端输出' : '复制失败');
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-md border bg-zinc-950 text-zinc-100" data-testid="ace-terminal-block">
+      <button
+        type="button"
+        onClick={() => { void handleCopy(); }}
+        className="absolute right-2 top-2 z-10 rounded p-1 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+        title="复制终端输出"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
+      </button>
+      <Terminal output={text} isStreaming={isStreaming} className="rounded-md border-0 bg-transparent shadow-none">
+        <TerminalContent data-testid="ace-terminal-content" className="max-h-80 overflow-auto px-3 py-2 pr-10 font-mono text-[12px] leading-5 text-zinc-100" />
+      </Terminal>
+    </div>
+  );
+}
+
+function containsAnsiEscape(text: string): boolean {
+  if (!text) return false;
+  return /\u001b\[[0-9;?]*[ -/]*[@-~]/.test(text);
+}
+
+function ProcessTodoQueue({ todos }: { todos: any[] }) {
+  if (!todos.length) return <div className="text-sm text-muted-foreground">任务列表更新中...</div>;
+
+  return (
+    <Queue className="rounded-lg border-border/70 bg-background/60 px-2 py-2 shadow-none" data-testid="ace-todo-queue">
+      <QueueList className="mt-0">
+        {todos.map((todo, index) => {
+          const status = String(todo?.status || 'pending');
+          const completed = status === 'completed' || status === 'done';
+          const description = String(todo?.description || todo?.details || '').trim();
+          return (
+            <QueueItem key={`todo-${index}`} className="gap-0.5 px-2 py-1.5 hover:bg-muted/40">
+              <div className="flex items-start gap-2">
+                <QueueItemIndicator completed={completed} />
+                <QueueItemContent completed={completed}>{String(todo?.content || todo?.title || '')}</QueueItemContent>
+              </div>
+              {description ? (
+                <QueueItemDescription completed={completed}>{description}</QueueItemDescription>
+              ) : null}
+            </QueueItem>
+          );
+        })}
+      </QueueList>
+    </Queue>
+  );
+}
+
+function renderStructuredToolRequest(entry: ToolProcessEntry) {
+  const meta = entry.requestMeta;
+  if (!meta) return entry.request ? <Markdown>{entry.request}</Markdown> : null;
+
+  switch (entry.toolName) {
+    case 'bash': {
+      const command = asString(meta.command);
+      if (!command) return null;
+      return <ProcessCodeBlock text={command} language="bash" singleLine />;
+    }
+    case 'cmd':
+    case 'powershell': {
+      const command = asString(meta.command);
+      if (!command) return null;
+      return <ProcessCodeBlock text={command} language={entry.toolName} singleLine />;
+    }
+    case 'write': {
+      const filePath = asString(meta.filePath);
+      const content = asString(meta.content);
+      const language = inferCodeLanguage(filePath);
+      return (
+        <div className="space-y-2">
+          {filePath ? <div className="text-xs text-muted-foreground">{`${filePath}${content ? ` · ${countLines(content)} 行` : ''}`}</div> : null}
+          {content ? <Markdown>{`\`\`\`${language || ''}\n${content}\n\`\`\``}</Markdown> : null}
+        </div>
+      );
+    }
+    case 'edit':
+    case 'multiedit':
+    case 'patch': {
+      const filePath = asString(meta.filePath);
+      const oldText = asString(meta.oldString);
+      const newText = asString(meta.newString);
+      const diff = buildUnifiedDiff(oldText, newText);
+      const stats = describeLineChange(oldText, newText);
+      return (
+        <div className="space-y-2">
+          {(filePath || stats) ? <div className="text-xs text-muted-foreground">{[filePath, stats].filter(Boolean).join(' · ')}</div> : null}
+          {diff ? <Markdown>{`\`\`\`diff\n${diff}\n\`\`\``}</Markdown> : null}
+        </div>
+      );
+    }
+    case 'read':
+      if (asString(meta.command)) return <ProcessCodeBlock text={asString(meta.command)} singleLine />;
+      return getReadFilePath(entry) ? renderPathPreview(getReadFilePath(entry)) : null;
+    case 'glob':
+    case 'grep':
+      if (asString(meta.command)) return <ProcessCodeBlock text={asString(meta.command)} singleLine />;
+      return (
+        <div className="space-y-1 text-sm">
+          {asString(meta.pattern) ? <div>pattern: {asString(meta.pattern)}</div> : null}
+          {asString((meta as any).include) ? <div>include: {asString((meta as any).include)}</div> : null}
+          {asString((meta as any).path) || asString((meta as any).filePath) ? renderPathPreview(asString((meta as any).path) || asString((meta as any).filePath) || '') : null}
+        </div>
+      );
+    case 'ls':
+      if (asString(meta.command)) return <ProcessCodeBlock text={asString(meta.command)} singleLine />;
+      return renderPathPreview(asString(meta.path) || '.');
+    case 'webfetch':
+      return asString(meta.url) ? <div className="text-sm break-all">{asString(meta.url)}</div> : null;
+    case 'websearch':
+      return asString(meta.query) ? <div className="text-sm">{asString(meta.query)}</div> : null;
+    case 'todo':
+    case 'todowrite': {
+      const todos = asArray(meta.todos);
+      return <ProcessTodoQueue todos={todos} />;
+    }
+    default:
+      if (meta.input != null) return renderJsonCode(meta.input);
+      return entry.request ? <Markdown>{entry.request}</Markdown> : null;
+  }
+}
+
+function renderStructuredToolResult(entry: ToolProcessEntry) {
+  const meta = entry.resultMeta;
+  if (!meta) return entry.result ? <Markdown>{entry.result}</Markdown> : null;
+  const error = Boolean(meta.error);
+  const isTerminalTool = entry.toolName === 'bash' || entry.toolName === 'cmd' || entry.toolName === 'powershell' || entry.toolName === 'ls';
+
+  switch (entry.toolName) {
+    case 'bash': {
+      const output = asString(meta.output);
+      const exitCode = meta.exitCode;
+      if (!output && (exitCode == null || exitCode === 0)) return entry.result ? <Markdown>{entry.result}</Markdown> : null;
+      return (
+        <div className="space-y-2">
+          {output ? <ProcessTerminalBlock text={output} /> : null}
+          {exitCode != null ? <div className={`text-xs ${Number(exitCode) === 0 ? 'text-muted-foreground' : 'text-destructive'}`}>exit code: {String(exitCode)}</div> : null}
+        </div>
+      );
+    }
+    case 'cmd':
+    case 'powershell': {
+      const output = asString(meta.output);
+      const exitCode = meta.exitCode;
+      if (!output && (exitCode == null || exitCode === 0)) return entry.result ? <Markdown>{entry.result}</Markdown> : null;
+      return (
+        <div className="space-y-2">
+          {output ? <ProcessTerminalBlock text={output} /> : null}
+          {exitCode != null ? <div className={`text-xs ${Number(exitCode) === 0 ? 'text-muted-foreground' : 'text-destructive'}`}>exit code: {String(exitCode)}</div> : null}
+        </div>
+      );
+    }
+    case 'read': {
+      const text = getReadResultContent(entry);
+      const language = inferCodeLanguage(getReadFilePath(entry));
+      return text ? <ProcessCodeBlock text={text} language={language} /> : (entry.result ? <Markdown>{entry.result}</Markdown> : null);
+    }
+    case 'edit':
+    case 'multiedit':
+    case 'patch':
+    case 'write': {
+      const changes = asArray(meta.changes);
+      if (changes.length > 0) {
+        return (
+          <div className="space-y-3">
+            {changes.map((change, index) => {
+              const filePath = String(change?.filePath || '');
+              const oldText = String(change?.oldString || '');
+              const newText = String(change?.newString || '');
+              const stats = oldText || newText ? describeLineChange(oldText, newText) : '';
+              const diff = String(change?.diff || '') || buildUnifiedDiff(oldText, newText);
+              const content = String(change?.content || '');
+              const language = diff ? 'diff' : inferCodeLanguage(filePath);
+              return (
+                <div key={`change-${index}`} className="space-y-2">
+                  {(filePath || stats) ? <div className="text-xs text-muted-foreground">{[filePath, stats].filter(Boolean).join(' · ')}</div> : null}
+                  {diff ? <ProcessCodeBlock text={diff} language={language || 'diff'} /> : null}
+                  {!diff && content ? <ProcessCodeBlock text={content} language={language || undefined} /> : null}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+      const output = asString(meta.output);
+      const oldText = asString((meta as any).oldString);
+      const newText = asString((meta as any).newString);
+      const diff = (oldText || newText) ? buildUnifiedDiff(oldText, newText) : '';
+      const language = diff ? 'diff' : inferCodeLanguage(asString((meta as any).filePath));
+      if (diff) return <ProcessCodeBlock text={diff} language={language || ''} />;
+      if (output) return <ProcessCodeBlock text={output} />;
+      return entry.result ? <Markdown>{entry.result}</Markdown> : null;
+    }
+    case 'glob':
+    case 'grep':
+    case 'ls':
+    case 'webfetch':
+    case 'websearch':
+    case 'todo':
+    case 'todowrite': {
+      const todos = asArray(meta.todos);
+      if (todos.length > 0) return <ProcessTodoQueue todos={todos} />;
+      const output = asString(meta.output);
+      return output
+        ? ((isTerminalTool || containsAnsiEscape(output)) ? <ProcessTerminalBlock text={output} /> : <ProcessCodeBlock text={output} />)
+        : (entry.result ? <Markdown>{entry.result}</Markdown> : null);
+    }
+    default: {
+      const output = asString(meta.output) || asString(meta.content) || asString(meta.message);
+      if (output) return containsAnsiEscape(output) ? <ProcessTerminalBlock text={output} /> : <ProcessCodeBlock text={output} />;
+      if (error) {
+        const errorText = asString(meta.errorText) || asString(meta.errorMessage) || asString(meta.error);
+        if (errorText) return containsAnsiEscape(errorText) ? <ProcessTerminalBlock text={errorText} /> : <ProcessCodeBlock text={errorText} />;
+      }
+      return entry.result ? <Markdown>{entry.result}</Markdown> : null;
+    }
+  }
+}
+
+function groupTimelineItems(items: TimelineItem[]): RenderItem[] {
+  const grouped: RenderItem[] = [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.kind !== 'tool-entry') {
+      grouped.push(item);
+      continue;
+    }
+
+    const entries: Array<{ key: string; entry: ToolProcessEntry }> = [{ key: item.key, entry: item.entry }];
+    let end = item.end;
+    let cursor = index + 1;
+    while (cursor < items.length && items[cursor].kind === 'tool-entry') {
+      const nextItem = items[cursor] as Extract<TimelineItem, { kind: 'tool-entry' }>;
+      entries.push({ key: nextItem.key, entry: nextItem.entry });
+      end = nextItem.end;
+      cursor += 1;
+    }
+
+    if (entries.length >= 2) {
+      grouped.push({
+        kind: 'tool-group',
+        key: `tool-group-${item.start}-${end}`,
+        start: item.start,
+        end,
+        entries,
+      });
+    } else {
+      grouped.push(item);
+    }
+
+    index = cursor - 1;
+  }
+
+  return grouped;
+}
+
+function renderToolEntryCard(
+  entry: ToolProcessEntry,
+  key: string,
+  isStreaming: boolean,
+) {
+  const preview = entry.toolName === 'read' ? '' : getToolPreview(entry);
+  const suppressRequestDetails = Boolean(preview) && ['bash', 'cmd', 'powershell'].includes(entry.toolName);
+  const requestContent = suppressRequestDetails
+    ? null
+    : (renderStructuredToolRequest(entry) || (entry.request ? <Markdown>{entry.request}</Markdown> : null));
+  const resultContent = entry.state === 'output-available'
+    ? (renderStructuredToolResult(entry) || (entry.result ? <Markdown>{entry.result}</Markdown> : null))
+    : null;
+  const shouldOpen = shouldOpenProcessCard({
+    isStreaming,
+    state: entry.state,
+    hasRequest: Boolean(requestContent),
+    hasResult: Boolean(resultContent),
+    defaultCollapsed: isCollapsedByDefaultTool(entry),
+  });
+
+  return (
+    <Tool
+      key={key}
+      className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
+      defaultOpen={shouldOpen}
+      data-testid="ace-tool-card"
+      data-tool-name={entry.toolName || 'tool'}
+      data-tool-id={entry.toolId || ''}
+      data-tool-state={entry.state}
+    >
+      <ToolHeader
+        type="dynamic-tool"
+        toolName={entry.toolName || 'tool'}
+        title={entry.title}
+        state={entry.state}
+        hideDefaultIcon
+        className="bg-muted/30"
+      />
+      {preview ? (
+        <div className="border-t border-border/50 px-4 py-2 text-sm text-muted-foreground">
+          <div className="overflow-x-auto whitespace-nowrap">{preview}</div>
+        </div>
+      ) : null}
+      <ToolContent className="space-y-3">
+        {requestContent ? (
+          <div className="max-w-none text-sm">
+            {requestContent}
+          </div>
+        ) : null}
+        {resultContent ? (
+          <div className="max-w-none text-sm">
+            {resultContent}
+          </div>
+        ) : null}
+      </ToolContent>
+    </Tool>
+  );
+}
+
+export function WrapperProcessBlocks({ content, isStreaming = false }: { content: string; isStreaming?: boolean }) {
+  const { timelineItems } = useMemo(() => buildProcessTimelineState(content, isStreaming), [content, isStreaming]);
+  const renderItems = useMemo(() => groupTimelineItems(timelineItems), [timelineItems]);
+
+  if (!renderItems.length) return null;
+
+  return (
+    <div className="space-y-2">
+      {renderItems.map((item, index) => {
+        if (item.kind === 'text') {
+          return (
+            <div key={item.key} className={ASSISTANT_MARKDOWN_CLASS} data-testid="ace-timeline-text">
+              <Markdown>{item.text}</Markdown>
+            </div>
+          );
+        }
+
+        if (item.kind === 'reasoning') {
+          return (
+            <Reasoning
+              key={item.key}
+              defaultOpen={false}
+              isStreaming={isStreaming && index === renderItems.length - 1}
+              className="rounded-xl border border-border/70 bg-background/60 px-3 py-2"
+              data-testid="ace-reasoning"
+            >
+              <ReasoningTrigger />
+              <ReasoningContent>{item.text}</ReasoningContent>
+            </Reasoning>
+          );
+        }
+
+        if (item.kind === 'tool-entry') {
+          return renderToolEntryCard(item.entry, item.key, isStreaming);
+        }
+
+        if (item.kind === 'tool-group') {
+          const pendingCount = item.entries.filter(({ entry }) => entry.state !== 'output-available').length;
+          const groupTitle = pendingCount > 0 && isStreaming ? '工具调用中' : '工具调用已完成';
+          const groupSummary = `${item.entries.length} 个步骤${pendingCount > 0 && isStreaming ? ` · 进行中 ${pendingCount}` : ''}`;
+          return (
+            <Task
+              key={`${item.key}-${pendingCount > 0 && isStreaming ? 'pending' : 'done'}`}
+              defaultOpen={pendingCount > 0}
+              className="rounded-xl border border-border/70 bg-background/60 px-3 py-3 shadow-sm"
+              data-testid="ace-tool-group"
+            >
+              <TaskTrigger title={groupTitle}>
+                <div className="group flex w-full cursor-pointer items-start gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
+                  <WrenchIcon className="mt-0.5 size-4 shrink-0 text-blue-500" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm">{groupTitle}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{groupSummary}</div>
+                  </div>
+                  <ChevronDownIcon className="mt-0.5 size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+                </div>
+              </TaskTrigger>
+              <TaskContent className="mt-3 data-[state=closed]:hidden data-[state=open]:block" forceMount>
+                <div className="space-y-2 border-l-0 pl-0">
+                  {item.entries.map(({ key, entry }) => (
+                    <TaskItem key={key} className="text-sm">
+                      {renderToolEntryCard(entry, key, isStreaming)}
+                    </TaskItem>
+                  ))}
+                </div>
+              </TaskContent>
+            </Task>
+          );
+        }
+
+        const entry = item.entry;
+        const title = entry.title || '子任务';
+        const preview = getSubtaskPreview(entry);
+        const shouldOpen = shouldOpenProcessCard({
+          isStreaming,
+          state: entry.state,
+          hasRequest: Boolean(entry.description || entry.internalText || entry.prompt || entry.agent || entry.sessionId),
+          hasResult: Boolean(entry.result),
+          defaultCollapsed: true,
+        });
+        return (
+          <Tool
+            key={item.key}
+            className="overflow-hidden rounded-xl border-border/70 bg-background/70 shadow-sm"
+            defaultOpen={shouldOpen}
+            data-testid="ace-subtask-card"
+            data-tool-id={entry.toolId || ''}
+            data-session-id={entry.sessionId || ''}
+            data-subtask-state={entry.state}
+          >
+            <ToolHeader
+              type="dynamic-tool"
+              toolName="subtask"
+              title={title}
+              state={entry.state}
+              hideDefaultIcon
+              className="bg-muted/30"
+            />
+            {preview ? (
+              <div className="border-t border-border/50 px-4 py-2 text-sm text-muted-foreground">
+                <div className="whitespace-pre-wrap break-words">{preview}</div>
+              </div>
+            ) : null}
+            <ToolContent className="space-y-3">
+              {entry.description ? (
+                <div className="space-y-1">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">请求</div>
+                  <div className="prose-sm max-w-none text-sm dark:prose-invert [&_p]:my-1">
+                    <Markdown>{entry.description}</Markdown>
+                  </div>
+                </div>
+              ) : null}
+              {entry.internalText ? (
+                <div className="space-y-1">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">过程</div>
+                  <WrapperProcessBlocks content={entry.internalText} isStreaming={isStreaming && entry.state !== 'output-available'} />
+                </div>
+              ) : null}
+              {(entry.agent || entry.sessionId) ? (
+                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  {entry.agent ? (
+                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                      Agent: {entry.agent}
+                    </span>
+                  ) : null}
+                  {entry.sessionId ? (
+                    <span className="inline-flex items-center rounded-full border px-2 py-0.5">
+                      会话: {entry.sessionId}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+              {entry.prompt ? (
+                <details className="rounded-md border bg-muted/20">
+                  <summary className="cursor-pointer px-3 py-2 text-xs text-muted-foreground">查看提示词</summary>
+                  <div className="px-3 pb-3 text-sm">
+                    <Markdown>{`\`\`\`\n${entry.prompt}\n\`\`\``}</Markdown>
+                  </div>
+                </details>
+              ) : null}
+              {entry.result ? (
+                <div className="space-y-1">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">结果</div>
+                  <div className="prose-sm max-w-none text-sm dark:prose-invert [&_p]:my-1">
+                    <Markdown>{entry.result}</Markdown>
+                  </div>
+                </div>
+              ) : null}
+            </ToolContent>
+          </Tool>
+        );
+      })}
+    </div>
+  );
 }
 
 async function loadModelLabels(): Promise<Map<string, string>> {
@@ -114,6 +1570,7 @@ interface ChatMessageProps {
   onRejectAction: (actionId: string) => void;
   onUndoAction: (actionId: string) => void;
   onRetryAction: (actionId: string) => void;
+  onReloadActionResult?: (actionId: string) => void;
   onAction?: (prompt: string) => void;
   onDelete?: (messageId: string) => void;
   onRetryFromMessage?: (messageId: string) => void;
@@ -134,7 +1591,7 @@ interface ChatMessageProps {
 
 export function ThinkingBot() {
   return (
-    <div className="home-chat-thinking-pill inline-flex items-center gap-1.5 rounded-full px-3 py-2">
+    <div className="inline-flex items-center gap-2 px-1 py-1 text-muted-foreground">
       <svg className="shrink-0 animate-[botBounce_1.2s_ease-in-out_infinite]" width="28" height="28" viewBox="0 0 800 800" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <linearGradient id="cbBody" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -321,23 +1778,7 @@ function formatHiddenWerewolfContent(card: any): string {
 
 function stripResultBlocks(content: string): string {
   const input = String(content || '');
-  return input.replace(RESULT_BLOCK_PATTERN, '').trim();
-}
-
-function StreamingResultBlock({ rawContent }: { rawContent?: string }) {
-  const result = getStreamingResultDisplay(rawContent || '');
-  if (!result) return null;
-  return (
-    <details className="home-chat-surface mt-1 rounded-xl text-xs">
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-muted-foreground">
-        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>data_object</span>
-        <span>结构化结果发言中</span>
-      </summary>
-      <pre className="mx-3 mb-3 max-h-72 overflow-auto rounded-md border bg-muted/60 p-3 text-[11px] leading-5 text-foreground">
-        <code className="block whitespace-pre-wrap break-words font-mono">{result.text}</code>
-      </pre>
-    </details>
-  );
+  return stripMachineResultBlocks(input).replace(CHUNK_BOUNDARY_PATTERN, '').trim();
 }
 
 function formatMessageTime(timestamp?: number): string {
@@ -446,7 +1887,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
   const displayName = visible ? (card.speakerName || 'Agent') : '隐藏行动';
   const displayActionLabel = visible ? card.actionLabel : '黑夜记录';
   const isPending = isStreaming || message.content?.includes('正在推进') || message.content?.includes('处理中');
-  const visibleContent = visible ? (message.content || '') : formatHiddenWerewolfContent(card);
+  const visibleContent = visible ? (message.rawContent || message.content || '') : formatHiddenWerewolfContent(card);
   const hasVisibleContent = Boolean(visibleContent.trim());
   const roleBadgeText = visible
     ? (card.roleLabel || (isSupervisor ? '法官' : isSystem ? '系统' : '玩家'))
@@ -484,7 +1925,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
           {visible ? (isSystem ? '系' : getWerewolfInitial(card.speakerName || 'A')) : '隐'}
         </div>
       )}
-      <div className="max-w-[85%] space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         <div className={`relative overflow-hidden rounded-[28px] rounded-tl-[16px] border px-4 py-3 text-sm ${bubbleShellClass}`}>
           <span className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="pointer-events-none absolute -left-1 top-8 h-4 w-4 rotate-45 border-b border-l border-current/10 bg-inherit" />
@@ -517,7 +1958,7 @@ function WerewolfChatBubble({ card, message, view, isStreaming = false }: { card
             </div>
           ) : (
             <div className="prose-sm prose-neutral max-w-none leading-6 text-current/95 dark:prose-invert [&_p]:my-1">
-              <Markdown>{visibleContent}</Markdown>
+              <WrapperProcessBlocks content={visibleContent} isStreaming={isStreaming} />
               {isStreaming ? (
                 <div className="mt-3 inline-flex rounded-full border border-current/15 bg-background/30 px-2 py-1 opacity-85">
                   <WerewolfSpeakingIndicator compact />
@@ -557,12 +1998,13 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
       ? 'text-muted-foreground'
       : 'text-violet-700 dark:text-violet-300';
   const initial = String(card?.speakerName || 'A').replace(/\s+/g, '').slice(0, 1) || 'A';
+  const content = message.rawContent || message.content || '';
   return (
     <div className="group flex items-start gap-3">
       <div className={`mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${avatarClass}`}>
         {isSystem ? '系' : initial}
       </div>
-      <div className="max-w-[85%] space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         <div className={`rounded-[24px] rounded-tl-[14px] border px-4 py-3 ${bubbleClass}`}>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <span className={`font-semibold ${nameClass}`}>{card?.speakerName || 'Agent'}</span>
@@ -573,7 +2015,7 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
             ) : null}
           </div>
           <div className="prose-sm prose-neutral max-w-none leading-6 text-current dark:prose-invert [&_p]:my-1">
-            <Markdown>{message.content || ''}</Markdown>
+            <WrapperProcessBlocks content={content} isStreaming={isStreaming} />
           </div>
           {isStreaming ? <div className="mt-2 text-[11px] opacity-70">发言中...</div> : null}
         </div>
@@ -585,19 +2027,16 @@ function CollaborationChatBubble({ card, message, isStreaming = false }: { card:
   );
 }
 
-export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, werewolfView, currentUser }: ChatMessageProps) {
+export default memo(function ChatMessage({ message, isStreaming, onConfirmAction, onRejectAction, onUndoAction, onRetryAction, onReloadActionResult, onAction, onDelete, onRetryFromMessage, onEditMessage, onContinue, onSaveAsNotebook, onQuoteMessage, werewolfView, currentUser }: ChatMessageProps) {
   const { toast } = useToast();
+  const rawMessageContent = message.rawContent || message.content || '';
+  const processSource = stripResultBlocks(rawMessageContent);
+  const streamingResult = isStreaming ? getStreamingResultDisplay(rawMessageContent) : null;
   const [modelLabel, setModelLabel] = useState(message.model || '');
-  const isActionTagMessage = message.role === 'user' && ACTION_TAG_PATTERN.test((message.content || '').trim());
-  const workflowEvent = message.role === 'assistant' ? parseWorkflowEvent(message.content || '') : null;
-  const werewolfCard = message.role === 'assistant' ? getWerewolfCard(message) : null;
-  const collaborationCard = message.role === 'assistant' ? getCollaborationCard(message) : null;
+  const visibleSessionTag = message.role === 'user' ? parseVisibleSessionTag(message.content || '') : null;
+  const werewolfCard = getWerewolfCard(message);
+  const collaborationCard = getCollaborationCard(message);
   const sourceLabel = message.source?.label?.trim() || (message.source?.type === 'wechat' ? '微信' : '');
-  const isWorkflowActionTag = isActionTagMessage && (message.content || '').trim().startsWith('创建工作流 ·');
-  const actionTagClassName = isWorkflowActionTag
-    ? 'border-orange-500/25 bg-orange-500/8 text-orange-700 dark:text-orange-300'
-    : 'border-violet-500/25 bg-violet-500/8 text-violet-700 dark:text-violet-300';
-  const actionTagIcon = isWorkflowActionTag ? 'account_tree' : 'smart_toy';
 
   useEffect(() => {
     let cancelled = false;
@@ -620,8 +2059,10 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     };
   }, [message.model]);
 
-  const sanitizedRawContent = message.rawContent ? stripResultBlocks(message.rawContent) : '';
-  const trimmedContent = (message.content || '').trim();
+  const processTimelineState = useMemo(
+    () => buildProcessTimelineState(processSource, isStreaming ?? false),
+    [processSource, isStreaming],
+  );
   const sentAt = formatMessageTime(message.timestamp);
   const copyMessageContent = async () => {
     const text = (message.rawContent || message.content || '').trim();
@@ -637,12 +2078,60 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   const destructiveActionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
 
   if (message.role === 'user') {
-    if (isActionTagMessage) {
+    if (collaborationCard) {
+      const extraCards = getCollaborationExtraCards(message);
+      return (
+        <div className="group">
+          <CollaborationChatBubble card={collaborationCard} message={message} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="回复">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {onEditMessage && (
+                <button onClick={() => onEditMessage(message.id)} className={actionButtonClass} title="编辑">
+                  <span className="material-symbols-outlined text-sm">edit</span>
+                </button>
+              )}
+              {onRetryFromMessage && (
+                <button onClick={() => onRetryFromMessage(message.id)} className={actionButtonClass} title="重试">
+                  <span className="material-symbols-outlined text-sm">refresh</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {extraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {extraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (visibleSessionTag) {
       return (
         <div className="group flex justify-center">
           <div className="flex flex-col items-center gap-1">
-            <div className={`home-chat-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${actionTagClassName}`}>
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{actionTagIcon}</span>
+            <div className={`home-chat-surface flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${visibleSessionTag.className}`}>
+              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>{visibleSessionTag.icon}</span>
               <span className="whitespace-normal break-all">{message.content}</span>
             </div>
             {sentAt ? <div className="text-[11px] text-muted-foreground opacity-70">{sentAt}</div> : null}
@@ -667,7 +2156,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     }
     return (
       <Message from="user" className="items-start gap-2">
-        <MessageContent className="max-w-[78%] space-y-1">
+        <MessageContent className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
           {sourceLabel ? (
             <div className="flex justify-end">
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 backdrop-blur-sm dark:text-emerald-300">
@@ -716,62 +2205,95 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
     );
   }
 
-  if (workflowEvent) {
-    return (
-      <div className="group flex justify-center">
-        <div className="max-w-[86%] space-y-1">
-          <ChainOfThought defaultOpen={false} className="home-chat-surface rounded-2xl border-amber-500/25 bg-amber-500/8 px-4 py-3 text-xs text-amber-900 dark:text-amber-100">
-            <ChainOfThoughtHeader className="text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100">
-              <span className="material-symbols-outlined text-amber-500 mr-1" style={{ fontSize: '17px' }}>
-                {getWorkflowEventIcon(workflowEvent.type)}
-              </span>
-              <span className="font-medium flex-1">{workflowEvent.title}</span>
-              <span className="rounded-full border border-amber-500/25 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-300 mr-1">
-                {workflowEvent.type}
-              </span>
-            </ChainOfThoughtHeader>
-            <ChainOfThoughtContent>
-              {workflowEvent.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {workflowEvent.tags.slice(0, 4).map((tag, index) => (
-                    <span key={`${message.id}-workflow-tag-${tag}-${index}`} className="rounded-full bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {workflowEvent.body ? (
-                <div className="whitespace-pre-line leading-5 text-muted-foreground">
-                  {workflowEvent.body}
-                </div>
-              ) : null}
-              {sentAt ? (
-                <div className="text-[11px] text-muted-foreground opacity-70">
-                  {sentAt}
-                </div>
-              ) : null}
-            </ChainOfThoughtContent>
-          </ChainOfThought>
-          <div className={`${actionBarClass} justify-start px-1`}>
-            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
-            </button>
-            {onDelete && (
-              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
-                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (message.role === 'error') {
     const isTimeout = message.content.includes('超时') || message.content.includes('timeout');
+    if (werewolfCard) {
+      const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
+      return (
+        <div className="group">
+          <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {isTimeout && onContinue && (
+                <button onClick={() => onContinue(message.id)} className={actionButtonClass} title="继续">
+                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {visibleExtraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {visibleExtraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    if (collaborationCard) {
+      const extraCards = getCollaborationExtraCards(message);
+      return (
+        <div className="group">
+          <CollaborationChatBubble card={collaborationCard} message={message} isStreaming={isStreaming} />
+          {!isStreaming ? (
+            <div className={`ml-10 ${actionBarClass}`}>
+              <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+                <span className="material-symbols-outlined text-sm">content_copy</span>
+              </button>
+              {onQuoteMessage && (
+                <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="回复">
+                  <span className="material-symbols-outlined text-sm">format_quote</span>
+                </button>
+              )}
+              {isTimeout && onContinue && (
+                <button onClick={() => onContinue(message.id)} className={actionButtonClass} title="继续">
+                  <span className="material-symbols-outlined text-sm">play_arrow</span>
+                </button>
+              )}
+              {onSaveAsNotebook && (
+                <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                  <span className="material-symbols-outlined text-sm">note_add</span>
+                </button>
+              )}
+              {onDelete && (
+                <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                  <span className="material-symbols-outlined text-sm">delete</span>
+                </button>
+              )}
+            </div>
+          ) : null}
+          {extraCards.length ? (
+            <div className="ml-10 max-w-[85%] space-y-2">
+              {extraCards.map((card, index) => (
+                <UniversalCard key={index} card={card} onAction={onAction} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
     return (
       <div className="group flex items-start gap-2">
-        <div className="max-w-[80%] space-y-1">
+        <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
           <div className="home-chat-bubble home-chat-bubble-error rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-destructive">
             <span className="material-symbols-outlined text-sm mr-1 align-middle">{isTimeout ? 'schedule' : 'error'}</span>
             {message.content}
@@ -817,8 +2339,30 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   if (werewolfCard) {
     const visibleExtraCards = getWerewolfExtraCards(message).filter((card) => canSeeWerewolfCard(card, werewolfView));
     return (
-      <div>
+      <div className="group">
         <WerewolfChatBubble card={werewolfCard} message={message} view={werewolfView} isStreaming={isStreaming} />
+        {!isStreaming ? (
+          <div className={`ml-10 ${actionBarClass}`}>
+            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+              <span className="material-symbols-outlined text-sm">content_copy</span>
+            </button>
+            {onQuoteMessage && (
+              <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
+                <span className="material-symbols-outlined text-sm">format_quote</span>
+              </button>
+            )}
+            {onSaveAsNotebook && (
+              <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                <span className="material-symbols-outlined text-sm">note_add</span>
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                <span className="material-symbols-outlined text-sm">delete</span>
+              </button>
+            )}
+          </div>
+        ) : null}
         {visibleExtraCards.length ? (
           <div className="ml-10 max-w-[85%] space-y-2">
             {visibleExtraCards.map((card, index) => (
@@ -867,10 +2411,16 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   }
 
   // Assistant message
+  const hasAssistantBubbleContent = Boolean(
+    processTimelineState.timelineItems.length
+    || streamingResult
+    || isStreaming
+  );
+
   return (
       <div className="group flex items-start gap-2">
         <AssistantAvatar />
-      <div className="max-w-[85%] min-w-0 space-y-1">
+      <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         {sourceLabel ? (
           <div>
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-700 backdrop-blur-sm dark:text-emerald-300">
@@ -878,24 +2428,22 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             </span>
           </div>
         ) : null}
-        {isStreaming && !message.content && <ThinkingBot />}
-        {message.content && (
-          <div className="home-chat-bubble home-chat-bubble-assistant rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm prose-sm prose-neutral dark:prose-invert max-w-none [&_pre]:bg-background [&_pre]:border [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
-            <Markdown>{message.content}</Markdown>
-            {isStreaming && <ThinkingBot />}
-          </div>
-        )}
-        {isStreaming && <StreamingResultBlock rawContent={message.rawContent || message.content} />}
-        {message.rawContent && sanitizedRawContent && sanitizedRawContent !== trimmedContent && (
-          <details className="home-chat-surface mt-1 rounded-xl bg-muted/50 text-xs">
-            <summary className="cursor-pointer px-3 py-1.5 text-muted-foreground select-none flex items-center gap-1">
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>unfold_more</span>
-              查看完整内容
-            </summary>
-            <div className="px-3 py-2 prose-sm prose-neutral dark:prose-invert max-w-none [&_p]:my-1 [&_pre]:bg-background [&_pre]:border [&_pre]:rounded [&_pre]:p-2 [&_pre]:text-xs [&_pre]:overflow-x-auto [&_code]:bg-background/50 [&_code]:text-foreground [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_img]:my-2 [&_img]:max-h-64 [&_img]:max-w-[360px] [&_img]:rounded-md [&_img]:border [&_img]:border-border [&_img]:object-contain">
-              <Markdown>{sanitizedRawContent}</Markdown>
+        {hasAssistantBubbleContent && (
+          <div className="home-chat-bubble home-chat-bubble-assistant rounded-2xl rounded-tl-sm px-4 py-2.5">
+            <div className="space-y-3">
+              {processTimelineState.timelineItems.length ? (
+                <WrapperProcessBlocks content={processSource} isStreaming={isStreaming} />
+              ) : null}
+              {streamingResult ? (
+                <StreamingResultPanel result={streamingResult} />
+              ) : null}
+              {isStreaming && !streamingResult && (
+                <div className="pt-1">
+                  <ThinkingBot />
+                </div>
+              )}
             </div>
-          </details>
+          </div>
         )}
         {message.actions?.map(action => (
           <ActionCard
@@ -905,6 +2453,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
             onReject={() => onRejectAction(action.id)}
             onUndo={() => onUndoAction(action.id)}
             onRetry={() => onRetryAction(action.id)}
+            onReloadResult={onReloadActionResult ? () => onReloadActionResult(action.id) : undefined}
             onAction={onAction}
           />
         ))}

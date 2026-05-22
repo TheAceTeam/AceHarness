@@ -11,7 +11,7 @@ English | [中文](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/README.m
 
 ***Built by the Cangjie Team***
 
-***An enterprise-grade AI multi-agent collaboration system powered by state machines / Supervisor routing / adversarial iteration / conversational creation***
+***An enterprise-grade AI multi-agent collaboration system for Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory***
 
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
@@ -20,12 +20,12 @@ English | [中文](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/README.m
 
 Your team of AIs, collaborating to get work done.
 
-ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines conversational creation, state-machine workflows, adversarial review, Supervisor routing, run history, and cost tracking so complex development work can be decomposed, executed, resumed, reviewed, and replayed.
+ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
 
 ![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
 
 <p><strong>Core Capability Highlights</strong></p>
-<p>From the product overview into daily work, these six modules form the ACEHarness engineering task loop.</p>
+<p>From the product overview into daily work, ACEHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels.</p>
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
@@ -44,6 +44,7 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 - [Functional Modules](#functional-modules)
 - [Workflow Cases](#workflow-cases)
 - [Configuration and Engines](#configuration-and-engines)
+- [Channel Integrations](#channel-integrations)
 - [Documentation](#documentation)
 - [Developer Reference](#developer-reference)
 - [Contributing](#contributing)
@@ -106,10 +107,62 @@ Open `http://127.0.0.1:3000` after startup. After entering the console, use Onbo
 
 ACEHarness is not just a chain of agents. It organizes engineering work into a loop that can be planned, rolled back, reviewed, resumed, observed, and reused:
 
-- **Creation and planning**: create workflows from home chat or manual forms; Spec Coding turns the request into `requirements.md`, `design.md`, and `tasks.md`, then binds workflow steps to tasks before execution.
-- **Execution and collaboration**: the state machine decides whether to continue, roll back, or pause at a human checkpoint; Supervisor routes missing context when agents need help.
-- **Review and recovery**: Defender, Attacker, and Judge form an adversarial review loop; failed, restarted, or interrupted runs can resume from persisted records.
-- **Observability and memory**: the workbench shows streams, state graphs, logs, cost, and prompt analysis; outputs can flow into Workspace, Notebook, Skills, or persistent Spec.
+### Requirements and Plan Modeling
+
+**Spec Driven Development mode**  
+Start from requirement clarification, generate `requirements / design / tasks`, and bind them to workflow configuration and task execution so complex engineering work begins with a reviewable, traceable, and iterable plan.
+
+### Workflow Orchestration and Execution Control
+
+**Advanced state-machine transition strategies**  
+Model engineering decisions with states, steps, conditions, and priorities, supporting rollback, retry, review, branching, and conditional transitions beyond a linear process.
+
+**Concurrent state-machine steps**  
+Run multiple steps or agent tasks in parallel within the same state for implementation, review, testing, and information gathering, then aggregate results in later states to decide the next transition.
+
+**Supervisor routing**  
+When agents need missing context or human input, the Supervisor identifies the request, routes it to the right agent or user, and brings the answer back into the current workflow.
+
+**Adversarial iteration**  
+Defender, Attacker, and Judge roles can form a red/blue review loop so plans, code, tests, and evidence are challenged and adjudicated before the workflow advances.
+
+**Workflow Preflight checks**  
+Run configured or automatically inferred quality checks before a workflow starts, catching environment, build, test, and dependency issues before the run proceeds.
+
+**Human checkpoints with WeChat and email notification**  
+Approvals, follow-up questions, risk confirmations, and key decisions can reach users through the page, WeChat, and email so long-running workflows pause and resume at the right moments.
+
+**Git baseline and step-level change checkpoints**  
+Create a Git-backed run baseline and record code-change snapshots per step, making AI edits observable, comparable, traceable, and rollback-ready.
+
+### Multi-Agent Collaboration Spaces
+
+**Workflow Agent Agora**  
+Workflow runs can enter a multi-agent chat space where planning, disagreements, missing context, execution discussion, and retrospectives stay attached to the same topic.
+
+**Topic-mode Agora**  
+Standalone multi-agent topic rooms let teams use AI guests to discuss, compare approaches, make decisions, and collaborate outside a workflow run.
+
+### Knowledge and Long-Term Context
+
+**Layered persistent memory**  
+Persist experience across role, project, workflow, and chat scopes, then recall relevant context in later runs to reduce repeated explanations and repeated mistakes.
+
+**Cangjie Notebook collaborative documents**  
+Use personal and team Notebook spaces to manage documents, notes, run outputs, and retrospectives with collaborative editing, snapshots, and sharing.
+
+### Capability Extension and Model Governance
+
+**Skill Marketplace integration**  
+Install Skill packages from the marketplace, or import, export, and sync Skills so agents can use domain knowledge and specialized operating procedures in chat and workflows.
+
+**Model and engine diagnostics workbench**  
+Diagnose model, engine, SDK, ACP, and HTTP-driver behavior across connectivity, streaming events, structured output, coding, math, and reasoning to choose and troubleshoot execution backends.
+
+### External Channel Access
+
+**Chat mode binding for WeChat ClawBot sessions**  
+Home chat can bind to an external WeChat session, bringing external messages into the same ACEHarness conversation context.
 
 ---
 
@@ -125,6 +178,15 @@ Notes:
 
 ![Interface overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.en.svg)
 
+The ACEHarness interface is organized around daily engineering work:
+
+- **Home chat**: regular AI conversations, workflow creation, Agora entry points, and WeChat ClawBot session binding.
+- **Agora**: topic-based or workflow-bound multi-agent chat for design discussion, disagreement resolution, and retrospectives.
+- **Workflow workbench**: state-machine execution, streamed step output, human checkpoints, Preflight results, Git step changes, and run recovery.
+- **Workspace and Changes**: embedded file editing, directory browsing, Git diff, step-level change review, and baseline comparison.
+- **Cangjie Notebook**: personal and team spaces for documents, notes, run outputs, and retrospectives with collaborative editing, snapshots, and sharing.
+- **Model and engine diagnostics**: standard probes for model and execution-backend evaluation, including SDK, ACP, HTTP drivers, and streaming-event troubleshooting.
+
 ## Workflow Cases
 
 ![Workflow cases overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/workflow-cases-overview.en.svg)
@@ -133,36 +195,80 @@ Read the root-cause paths, execution data, and delivery results for all four cas
 
 ## Configuration and Engines
 
-### Environment Variables (`.env.local`)
+## Channel Integrations
 
-Copy `.env.example` to `.env.local` and fill in real values. The table below lists variables that already exist in the example file.
+ACEHarness can bridge workflow runtime conversations, human checkpoints, and multi-agent Agora rooms to external chat platforms. Built-in provider templates include `Feishu`, `DingTalk`, `WeChat Bridge`, and `Generic Webhook`; `POST /api/channels/setup` can generate the webhook and shared secret, and external platforms or bridge services can deliver messages to `/api/channels/inbound/:integrationId`.
 
-| Variable | Description | Required |
-|------|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API key | Yes |
-| `ANTHROPIC_BASE_URL` | Custom API endpoint (proxy or self-hosted gateway) | No |
-| `ANTHROPIC_TIMEOUT` | Claude CLI request timeout in milliseconds | No |
-| `OPENAI_API_KEY` | OpenAI API key | No |
-| `OPENAI_BASE_URL` | OpenAI-compatible API endpoint | No |
-| `NEXT_PUBLIC_API_BASE` | Backend address when frontend and backend are separated | No |
+See [Channel Integrations](./docs/channel-integrations.md) for details.
 
-`server.js` also supports these runtime variables from the shell, process manager, or startup script:
+### ACE Service
 
-| Variable | Description | Default |
-|------|-------------|---------|
+`server.js` loads `.env`, `.env.local`, and the mode-specific `.env.development*` / `.env.production*` files on startup. Values already present in the shell, process manager, or startup script take precedence and are not overwritten by env files.
+
+Core startup and runtime-directory variables:
+
+| Variable | Description | Default / precedence |
+|------|-------------|----------------------|
 | `ACE_HOST` | Server bind address | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness service port | `3000` |
-| `PORT` | Generic service port, with higher priority than `ACE_PORT` | unset |
+| `PORT` | Generic service port | Higher priority than `ACE_PORT` |
+| `ACE_HOME` | ACE runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
+| `APPDATA` | Windows fallback root for `ACE_HOME` | `<APPDATA>/ACEHarness` |
+| `XDG_DATA_HOME` | Linux / macOS fallback root for `ACE_HOME` | `<XDG_DATA_HOME>/aceharness` |
+| `ACE_INSTALL_ROOT` | Install root used to locate `server.js`, `configs/`, `dist/`, and other packaged files | Auto-filled to the current install directory when unset |
+| `ACE_LOCALE` | Default locale for the ACE CLI and service | Higher priority than `LANG` / `LC_ALL` |
+| `LANG` | Locale fallback variable | Used when `ACE_LOCALE` is unset |
+| `LC_ALL` | Locale fallback variable | Used when `ACE_LOCALE` and `LANG` are unset |
+| `NODE_ENV` | Runtime mode; also affects `.env*` loading and some debug defaults | `production` for managed child services |
 
-### Execution Engine (`.engine.json`)
+Public-origin and channel-recovery variables:
 
-```json
-{ "engine": "claude-code" }
+| Variable | Description | Default / precedence |
+|------|-------------|----------------------|
+| `ACE_PUBLIC_ORIGIN` | Absolute public origin used for webhook URLs, callbacks, and the official WeChat bridge | Highest priority |
+| `NEXT_PUBLIC_ACE_ORIGIN` | Public-origin fallback | Lower priority than `ACE_PUBLIC_ORIGIN` |
+| `NEXT_PUBLIC_APP_ORIGIN` | Public-origin fallback | Lower priority than `NEXT_PUBLIC_ACE_ORIGIN` |
+| `ACE_WECHAT_AUTO_RESTORE` | Auto-restore official WeChat bridges after the service starts | Enabled by default; disable with `0` / `false` |
+| `ACE_WECHAT_RESTORE_DELAY_MS` | Delay before official WeChat bridge restore (ms) | `3000` |
+
+Diagnostics and ACP / streaming variables:
+
+| Variable | Description | Default / precedence |
+|------|-------------|----------------------|
+| `ACE_TIMING_DEBUG` | Print service and ACP timing logs | On by default in local development, off in production / test |
+| `ACE_ACP_TIMING_DEBUG` | Additional switch for ACP timing logs | Can be combined with `ACE_TIMING_DEBUG` |
+| `ACE_ACP_STREAM_DEBUG` | Print ACP stream-event debug output | Follows engine diagnostic logging when unset |
+| `ACE_ACP_INIT_TIMEOUT_MS` | ACP `connection.initialize` timeout in ms | `30000` |
+| `ACE_ACP_NEW_SESSION_TIMEOUT_MS` | ACP `newSession` timeout in ms | `60000` |
+| `ACE_ACP_LOAD_SESSION_TIMEOUT_MS` | ACP `session/load` timeout in ms | `30000` |
+| `ACE_ACP_MODEL_DISCOVERY_TIMEOUT_MS` | Total timeout for model discovery in ms | `init + newSession + 15000` |
+| `ACE_CHAT_STREAM_DEBUG` | Claude Code SDK streaming debug | Off by default |
+| `ACE_CLAUDE_CODE_EXECUTABLE` | Explicit path to the Claude Code executable | Falls back to `CLAUDE_CODE_EXECUTABLE` or auto-discovery |
+| `ACE_CLAUDE_API_RETRY_ATTEMPTS` | Max Claude Code SDK API retry attempts | `12` |
+| `ACE_CLAUDE_API_RETRY_MIN_DELAY_MS` | Minimum Claude Code SDK API retry delay in ms | `10000` |
+
+Engine-specific ACE variables:
+
+| Variable | Description | Default / precedence |
+|------|-------------|----------------------|
+| `ACE_CODEGENIE_BIN` | Path to the CodeGenie executable | Auto-detected from PATH / SDK settings when unset |
+| `ACE_CODEGENIE_SDK_BASE_URL` | CodeGenie SDK service URL | Uses the built-in default when unset |
+| `ACE_CODEGENIE_SDK_COMMAND` | CodeGenie SDK launch command | Auto-detected from PATH / SDK settings when unset |
+| `ACE_CODEGENIE_SDK_TIMEOUT_MS` | CodeGenie SDK request timeout in ms | Uses the built-in default when unset |
+| `ACE_NGA_BIN` | Path to the NGA executable | Auto-detected from PATH / SDK settings when unset |
+| `ACE_NGA_SDK_BASE_URL` | NGA SDK service URL | Uses the built-in default when unset |
+| `ACE_NGA_SDK_COMMAND` | NGA SDK launch command | Auto-detected from PATH / SDK settings when unset |
+| `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK request timeout in ms | Uses the built-in default when unset |
+
+Global ACE Service CLI:
+
+```bash
+ace              # Start ACE Service
+ace start        # Explicitly start ACE Service
+ace service      # Inspect and stop managed ACE instances
 ```
 
-Supported execution engines include `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor` (Cursor CLI), `codex`, `trae-cli`, and `magic-cli`.
-
-Child processes inherit `process.env`, so no extra setup is required. To switch engines, simply change the active CLI tool on the engine page.
+The startup wizard can enable background mode directly. If daemon supervision is also enabled, ACE will keep the background service under a daemon and automatically restart it after unexpected exits.
 
 ---
 
@@ -211,6 +317,7 @@ CLI commands come from `src/cli.ts`.
 ```bash
 ace                # Start ACEHarness
 ace start          # Start ACEHarness
+ace service        # Inspect and stop ACE services
 ace reset --force  # Reset local ACE configuration
 ace --help         # Show help
 ```
@@ -235,17 +342,17 @@ npm run lint
 | Workflow and configuration | Zod 4, YAML, node-cron, tar-stream, unzipper, yazl |
 | Visualization | ReactFlow 11, Recharts 3, Mermaid 11 |
 | Forms and drag-and-drop | React Hook Form 7, @dnd-kit |
-| Markdown and docs | react-markdown, remark-gfm, rehype-raw, react-syntax-highlighter, KaTeX |
+| Markdown and docs | react-markdown, remark-gfm, rehype-raw, KaTeX |
 | AI SDKs and execution backends | Anthropic Claude Agent SDK, OpenAI Codex SDK, `claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `magic-cli` |
 | Testing | Vitest 4, Testing Library, jsdom |
-| Internationalization and themes | next-intl 4, next-themes |
+| Themes | next-themes |
 
 ### Documentation Maintenance
 
 Update this README when any of the following changes:
 
 - `package.json` scripts, `bin`, `files`, or publishing flow
-- environment variables in `.env.example`
+- documented environment variable changes
 - `src/app/` page entries, API categories, or major user flows
 - workflow, Spec Coding, engine, auth, Notebook, or other core mechanisms in `src/lib/`
 - built-in agents, configs, or Skills

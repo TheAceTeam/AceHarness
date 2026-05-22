@@ -11,6 +11,15 @@ import { accessSync, constants, existsSync } from 'fs';
 import { createRequire } from 'module';
 import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
 import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
+import {
+  appendToolIdToAceBlock,
+  extractTextFromUnknown,
+  formatAceReasoning,
+  formatAceToolCall,
+  formatAceToolResult,
+  getAceToolTitle,
+  resolveAceToolName,
+} from '@/lib/chat/ace-process-formatters';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
@@ -102,265 +111,47 @@ function parseToolJson(inputJson: string): Record<string, unknown> | null {
   }
   return null;
 }
-function resolveToolName(raw: string): string {
-  return String(raw || '').trim().toLowerCase();
-}
 function toolPath(rawInput: Record<string, unknown>): string {
   const path = rawInput.file_path ?? rawInput.filePath ?? rawInput.filepath ?? rawInput.file ?? rawInput.path;
   return typeof path === 'string' ? path : '';
 }
-function toolLanguageFromPath(filePath: string): string {
-  const ext = filePath.split('.').pop() || '';
-  if (!ext || ext === filePath) return '';
-  if (ext === 'cj') return 'cangjie';
-  return ext;
-}
-function toolText(rawInput: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = rawInput[key];
-    if (typeof value === 'string' && value) return value;
-  }
-  return '';
-}
-function readToolFileContent(filePath: string): string {
-  if (!filePath || !existsSync(filePath)) return '';
-  try {
-    return readTextFileBestEffort(filePath);
-  } catch {
-    return '';
-  }
-}
-function formatCommandOutput(output: string, exitCode?: number | null): string {
-  const trimmed = repairWindowsMojibake(output.trim());
-  if (!trimmed) {
-    return exitCode != null && exitCode !== 0 ? `\n(exit code: ${exitCode})\n` : '';
-  }
-  let rendered = formatTextContent(trimmed, { summaryLabel: '查看输出' });
-  if (exitCode != null && exitCode !== 0) rendered += `(exit code: ${exitCode})\n`;
-  return rendered;
-}
+
 function formatClaudeToolExecutionResult(toolNameRaw: string, result: unknown): string {
-  const toolName = resolveToolName(toolNameRaw);
+  const toolName = resolveAceToolName(toolNameRaw);
   if (!result || typeof result !== 'object') {
     const text = extractTextFromUnknown(result).trim();
-    return text ? `\n${fenced(text)}\n` : '';
+    return text
+      ? formatAceToolResult({
+          toolName,
+          rawOutput: { output: text },
+          title: getAceToolTitle(toolName),
+        })
+      : '';
   }
 
-  const raw = result as Record<string, unknown>;
-
-  if (toolName === 'bash') {
-    const stdout = typeof raw.stdout === 'string' ? raw.stdout : '';
-    const stderr = typeof raw.stderr === 'string' ? raw.stderr : '';
-    const output = typeof raw.output === 'string'
-      ? raw.output
-      : [stdout, stderr].filter(Boolean).join(stdout && stderr ? '\n' : '');
-    const exitCode = typeof raw.exit_code === 'number'
-      ? raw.exit_code
-      : (typeof raw.exitCode === 'number' ? raw.exitCode : null);
-    return formatCommandOutput(output, exitCode);
-  }
-
-  if (toolName === 'read') {
-    const text = extractTextFromUnknown(raw.content ?? raw.result ?? raw.text).trim();
-    if (!text) return '';
-    return formatTextContent(text, { summaryLabel: '查看内容' });
-  }
-
-  const text = extractTextFromUnknown(raw.output ?? raw.content ?? raw.result ?? raw.message ?? result).trim();
-  if (!text) return '';
-  return formatTextContent(text, { summaryLabel: '查看输出' });
+  return formatAceToolResult({
+    toolName,
+    rawOutput: result,
+    title: getAceToolTitle(toolName),
+  });
 }
 function formatClaudeToolResult(toolNameRaw: string, inputJson: string): string {
-  const toolName = resolveToolName(toolNameRaw);
-  const isTaskTool = toolName === 'task' || toolName.endsWith('/task') || toolName.includes('task');
   const rawInput = parseToolJson(inputJson) || {};
+  const toolName = resolveAceToolName(toolNameRaw, rawInput);
   const p = toolPath(rawInput);
-  const lang = toolLanguageFromPath(p);
-
-  if (toolName === 'write') {
-    const content = toolText(rawInput, ['content', 'text', 'new_string', 'newString']);
-    const lines = content ? content.split('\n').length : 0;
-    let out = `\n📝 写入文件: \`${p || '(未知路径)'}\`${lines ? ` (${lines} 行)` : ''}\n`;
-    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
-    return out;
+  const normalizedInput = {
+    ...rawInput,
+    filePath: p || rawInput.filePath || rawInput.path || '',
+  } as Record<string, unknown>;
+  if (!inputJson.trim() && Object.keys(normalizedInput).length === 0) {
+    return formatAceToolCall({ toolName, rawInput: {}, title: getAceToolTitle(toolName) });
   }
-  if (toolName === 'bash') {
-    const cmd = typeof rawInput.command === 'string' ? rawInput.command : '';
-    if (!cmd) return '\n💻 执行命令\n';
-    const cmdLines = cmd.split('\n');
-    if (cmdLines.length <= 1 && cmd.length <= 120) return `\n💻 执行命令: \`${cmd}\`\n`;
-    return `\n💻 执行命令 (${cmdLines.length} 行)\n\n<details><summary>查看命令</summary>\n\n${htmlCodeBlock(cmd, 'bash')}\n\n</details>\n`;
-  }
-  if (toolName === 'read') {
-    const content = toolText(rawInput, ['content', 'result', 'text']) || readToolFileContent(p);
-    const lines = content ? content.split('\n').length : 0;
-    let out = `\n📖 读取文件: \`${p || '(未知路径)'}\`\n`;
-    if (content) out += formatLargeContent(content, { filePath: p, lang, summaryLabel: '查看内容' });
-    return out;
-  }
-  if (toolName === 'edit' || toolName === 'multiedit' || toolName === 'patch') {
-    const oldStr = typeof rawInput.old_string === 'string' ? rawInput.old_string : (typeof rawInput.oldString === 'string' ? rawInput.oldString : '');
-    const newStr = typeof rawInput.new_string === 'string' ? rawInput.new_string : (typeof rawInput.newString === 'string' ? rawInput.newString : '');
-    const oldLines = oldStr ? oldStr.split('\n').length : 0;
-    const newLines = newStr ? newStr.split('\n').length : 0;
-    const added = Math.max(0, newLines - oldLines);
-    const removed = Math.max(0, oldLines - newLines);
-    let stats = `${Math.min(oldLines, newLines)} 行修改`;
-    if (added > 0) stats += `, +${added} 行`;
-    if (removed > 0) stats += `, -${removed} 行`;
-    let out = `\n✏️ 编辑文件: \`${p || '(未知路径)'}\` (${stats})\n`;
-    if (oldStr || newStr) {
-      const diff = (oldStr ? oldStr.split('\n').map((l) => `- ${l}`).join('\n') + '\n' : '')
-        + (newStr ? newStr.split('\n').map((l) => `+ ${l}`).join('\n') + '\n' : '');
-      out += formatLargeContent(diff.trimEnd(), { filePath: p, lang: 'diff', summaryLabel: `查看变更 (${stats})` });
-    }
-    return out;
-  }
-  if (toolName === 'glob') {
-    const pattern = typeof rawInput.pattern === 'string' ? rawInput.pattern : '';
-    return `\n🔍 搜索文件: \`${pattern || '(空模式)'}\`\n`;
-  }
-  if (toolName === 'grep') {
-    const pattern = typeof rawInput.pattern === 'string' ? rawInput.pattern : '';
-    return `\n🔍 搜索内容: \`${pattern || '(空模式)'}\`\n`;
-  }
-  if (toolName === 'ls') {
-    return `\n📂 列出目录: \`${p || '.'}\`\n`;
-  }
-  if (isTaskTool) {
-    const desc = typeof rawInput.description === 'string' ? rawInput.description : '';
-    const prompt = typeof rawInput.prompt === 'string' ? rawInput.prompt : '';
-    const subagentType = typeof rawInput.subagent_type === 'string'
-      ? rawInput.subagent_type
-      : (typeof rawInput.subagentType === 'string' ? rawInput.subagentType : '');
-    let out = `\n🤖 启动子任务: ${desc || '(无描述)'}\n`;
-    if (subagentType) out += `\n类型: \`${subagentType}\`\n`;
-    if (prompt) {
-      const lines = prompt.split('\n').length;
-      out += `\n<details><summary>查看提示词 (${lines} 行)</summary>\n\n${htmlCodeBlock(prompt)}\n\n</details>\n`;
-    }
-    return out;
-  }
-  if (toolName === 'todowrite' || toolName === 'todo') {
-    const todosRaw = (rawInput.todos ?? rawInput.items) as unknown;
-    if (!Array.isArray(todosRaw) || todosRaw.length === 0) return '\n📋 任务列表更新中...\n';
-    const done = todosRaw.filter((t: any) => t?.status === 'completed' || t?.status === 'done').length;
-    const inProg = todosRaw.filter((t: any) => t?.status === 'in_progress' || t?.status === 'in-progress').length;
-    let content = `\n<!-- todo-list-marker -->\n<div class="ace-todo-list">\n`;
-    content += `<div class="ace-todo-header">📋 任务列表 (${done}/${todosRaw.length} 完成${inProg ? `, ${inProg} 进行中` : ''})</div>\n`;
-    content += `<div class="ace-todo-progress"><div class="ace-todo-progress-bar" style="width:${Math.round((done / todosRaw.length) * 100)}%"></div></div>\n`;
-    for (const t of todosRaw) {
-      const status = t?.status;
-      const icon = status === 'completed' || status === 'done'
-        ? '✅'
-        : status === 'in_progress' || status === 'in-progress'
-          ? '⏳'
-          : '⬜';
-      const cls = status === 'completed' || status === 'done'
-        ? 'ace-todo-done'
-        : status === 'in_progress' || status === 'in-progress'
-          ? 'ace-todo-doing'
-          : 'ace-todo-pending';
-      const text = typeof t?.content === 'string'
-        ? t.content
-        : typeof t?.text === 'string'
-          ? t.text
-          : typeof t?.task === 'string'
-            ? t.task
-            : typeof t?.title === 'string'
-              ? t.title
-              : '(无内容)';
-      content += `<div class="ace-todo-item ${cls}">${icon} ${text}</div>\n`;
-    }
-    content += `</div>\n`;
-    return content;
-  }
-  if (toolName === 'webfetch') {
-    const url = typeof rawInput.url === 'string' ? rawInput.url : '';
-    return `\n🌐 获取网页: \`${url || '(未知URL)'}\`\n`;
-  }
-  if (toolName === 'websearch') {
-    const q = typeof rawInput.query === 'string' ? rawInput.query : '';
-    return `\n🔎 搜索: \`${q || '(空查询)'}\`\n`;
-  }
-  if (inputJson.trim()) {
-    const lines = inputJson.split('\n').length;
-    return `\n<details><summary>查看输入 (${lines} 行)</summary>\n\n${htmlCodeBlock(inputJson, 'json')}\n\n</details>\n`;
-  }
-  return '';
+  return formatAceToolCall({ toolName, rawInput: normalizedInput, title: getAceToolTitle(toolName) });
 }
 
 function formatClaudeToolBlock(toolNameRaw: string, inputJson: string, toolId?: string): string {
-  const toolName = resolveToolName(toolNameRaw) || 'tool';
-  const isTaskTool = toolName === 'task' || toolName.endsWith('/task') || toolName.includes('task');
-  const titleMap: Record<string, string> = {
-    read: '📖 读取文件',
-    write: '📝 写入文件',
-    bash: '💻 执行命令',
-    edit: '✏️ 编辑文件',
-    multiedit: '✏️ 编辑文件',
-    patch: '✏️ 编辑文件',
-    grep: '🔍 搜索内容',
-    glob: '🔍 搜索文件',
-    ls: '📂 列出目录',
-    task: '🤖 子任务',
-    todo: '📋 任务列表',
-    todowrite: '📋 任务列表',
-    webfetch: '🌐 获取网页',
-    websearch: '🔎 搜索网页',
-  };
-  const title = isTaskTool ? '🤖 子任务' : (titleMap[toolName] || `🔧 ${toolName}`);
-  const detail = formatClaudeToolResult(toolName, inputJson);
-  return `\n\n**${title}**\n${detail || '\n'}`;
-}
-
-function extractTextFromUnknown(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value == null) return '';
-
-  if (Array.isArray(value)) {
-    const pieces = value
-      .map((item) => extractTextFromUnknown(item))
-      .filter((item) => item.length > 0);
-    if (pieces.length <= 1) return pieces[0] || '';
-    return pieces.reduce((acc, piece) => {
-      if (!acc) return piece;
-      const prevEndsWithWhitespace = /\s$/.test(acc);
-      const nextStartsWithWhitespace = /^\s/.test(piece);
-      return prevEndsWithWhitespace || nextStartsWithWhitespace
-        ? `${acc}${piece}`
-        : `${acc}\n${piece}`;
-    }, '');
-  }
-
-  if (typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-
-    // Common shapes from different providers/SDK adapters:
-    // - { type: "text", text: "..." }
-    // - { text: { value: "..." } }
-    // - { content: ... } / { message: { content: ... } }
-    // - OpenAI-ish: { type: "output_text", text: "..." }
-    const directText = obj.text;
-    if (typeof directText === 'string') return directText;
-    if (directText && typeof directText === 'object') {
-      const nestedValue = (directText as Record<string, unknown>).value;
-      if (typeof nestedValue === 'string') return nestedValue;
-    }
-
-    if (typeof obj.content === 'string') return obj.content;
-    if (obj.content != null) {
-      const nested = extractTextFromUnknown(obj.content);
-      if (nested) return nested;
-    }
-
-    if (obj.message != null) {
-      const nested = extractTextFromUnknown(obj.message);
-      if (nested) return nested;
-    }
-  }
-
-  return '';
+  const toolName = resolveAceToolName(toolNameRaw, parseToolJson(inputJson) || {}) || 'tool';
+  return appendToolIdToAceBlock(formatClaudeToolResult(toolName, inputJson), toolId) || '\n';
 }
 
 function extractAssistantText(msg: unknown): string {
@@ -696,9 +487,12 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
             }
           }
           const thinkingPiece = extractThinkingFromStreamEvent(ev);
-          if (thinkingPiece) {
-            this.emit('stream', { type: 'thought', content: thinkingPiece } as EngineStreamEvent);
-          }
+            if (thinkingPiece) {
+              this.emit('stream', {
+                type: 'thought',
+                content: formatAceReasoning(thinkingPiece),
+              } as EngineStreamEvent);
+            }
           const piece = extractTextFromStreamEvent(ev);
           if (piece) {
             const now = Date.now();

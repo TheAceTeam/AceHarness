@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ClaudeCodeEngineWrapper } from '@/lib/engines/claude-code-wrapper';
+import { executeEngineWithContextRecovery } from '@/lib/engines/context-recovery';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
     for (const model of models) {
       const startedAt = Date.now();
       try {
-        const result = await engine.execute({
+        const result = await executeEngineWithContextRecovery(engine, {
           agent: 'engine-model-smoke-test',
           step: 'model-smoke-test',
           prompt: 'Reply with exactly OK.',
