@@ -1021,6 +1021,60 @@ function isServiceRunning(state: AceServiceState): boolean {
   return isPidRunning(state.daemonPid) || isPidRunning(state.serverPid);
 }
 
+function getServiceTargetPids(state: AceServiceState): number[] {
+  const seen = new Set<number>();
+  const pids = [state.daemonPid, state.serverPid]
+    .filter((pid): pid is number => typeof pid === 'number' && pid > 0)
+    .filter((pid) => {
+      if (seen.has(pid)) return false;
+      seen.add(pid);
+      return true;
+    });
+  return pids;
+}
+
+async function terminatePidTree(pid: number, signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM'): Promise<void> {
+  if (!pid || pid <= 0) return;
+
+  if (isWindows()) {
+    await new Promise<void>((resolve) => {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      killer.once('error', () => {
+        try { process.kill(pid, signal); } catch {}
+        resolve();
+      });
+      killer.once('exit', () => resolve());
+    });
+    return;
+  }
+
+  try {
+    process.kill(pid, signal);
+  } catch {}
+}
+
+async function stopServiceProcesses(state: AceServiceState): Promise<void> {
+  const pids = getServiceTargetPids(state);
+  if (pids.length === 0) return;
+
+  for (const pid of pids) {
+    await terminatePidTree(pid, 'SIGTERM');
+  }
+
+  if (isWindows()) return;
+
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  for (const pid of pids) {
+    if (isPidRunning(pid)) {
+      await terminatePidTree(pid, 'SIGKILL');
+    }
+  }
+}
+
 async function waitForServiceStop(state: AceServiceState, timeoutMs = 4000): Promise<boolean> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -1212,12 +1266,9 @@ async function serviceCommand(locale: Locale): Promise<void> {
 
     try {
       await requestServiceStop(state.serviceId);
-      const targetPid = state.daemonPid && isPidRunning(state.daemonPid) ? state.daemonPid : state.serverPid;
       console.log(messages.serviceStopping);
-      if (targetPid) {
-        process.kill(targetPid, 'SIGTERM');
-      }
-      const stopped = await waitForServiceStop(state);
+      await stopServiceProcesses(state);
+      const stopped = await waitForServiceStop(state, isWindows() ? 7000 : 5000);
       if (stopped) {
         await clearServiceState(state.serviceId);
         console.log(messages.serviceStopped);
