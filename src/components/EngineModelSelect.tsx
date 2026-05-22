@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 import type { ModelOption } from '@/lib/core/models';
 import { AiModelSelectorField, type AiModelSelectorGroup } from '@/components/AiModelSelectorField';
 import { useToast } from '@/components/ui/toast';
+import { Button } from '@/components/ui/button';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
+import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 
 interface Props {
   engine: string;
@@ -67,9 +69,12 @@ async function loadSharedEngineAvailability(forceRefresh = false): Promise<Recor
 
 export function EngineModelSelect({ engine, model, onEngineChange, onModelChange, className = '' }: Props) {
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [globalEngine, setGlobalEngine] = useState('claude-code');
+  const [globalEngine, setGlobalEngine] = useState('');
+  const [globalDriver, setGlobalDriver] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [engineAvailability, setEngineAvailability] = useState<Record<string, boolean>>({});
+  const [hasLoadedModels, setHasLoadedModels] = useState(false);
+  const [hasLoadedConfig, setHasLoadedConfig] = useState(false);
   const { toast } = useToast();
 
   const isModelCompatible = useMemo(() => {
@@ -85,15 +90,45 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
-      fetch('/api/models').then(r => r.json()).then(d => {
-        if (!cancelled) setModels(d.models || []);
-      }).catch(() => {});
-      fetch('/api/engine').then(r => r.json()).then(d => {
-        if (!cancelled) {
-          if (d.engine) setGlobalEngine(d.engine);
-          setGlobalDefaultModel(typeof d.defaultModel === 'string' ? d.defaultModel : '');
-        }
-      }).catch(() => {});
+      void fetch('/api/models')
+        .then((r) => r.json())
+        .then((d) => {
+          if (!cancelled) {
+            setModels(Array.isArray(d.models) ? d.models : []);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setModels([]);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setHasLoadedModels(true);
+          }
+        });
+
+      void fetch('/api/engine')
+        .then((r) => r.json())
+        .then((d) => {
+          if (!cancelled) {
+            setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
+            setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
+            setGlobalDefaultModel(typeof d.defaultModel === 'string' ? d.defaultModel : '');
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setGlobalEngine('');
+            setGlobalDriver('');
+            setGlobalDefaultModel('');
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setHasLoadedConfig(true);
+          }
+        });
 
       const availability = await loadSharedEngineAvailability();
       if (!cancelled) setEngineAvailability(availability);
@@ -122,9 +157,11 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     };
   }, []);
 
-  const effectiveEngine = engine || globalEngine;
-  const globalEngineInfo = getEngineMeta(globalEngine);
-  const globalLabel = globalEngineInfo?.name || globalEngine;
+  const isInitialLoading = !hasLoadedModels || !hasLoadedConfig;
+  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  const effectiveEngine = engine || effectiveGlobalEngine;
+  const globalEngineInfo = getEngineMeta(effectiveGlobalEngine) || getEngineMeta(globalEngine);
+  const globalLabel = globalEngineInfo?.name || globalEngine || '系统默认';
   const hasAnyAvailableEngine = useMemo(
     () => Object.values(engineAvailability).some((available) => available),
     [engineAvailability]
@@ -141,8 +178,8 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     const result: AiModelSelectorGroup[] = [];
 
     // "跟随系统" group — uses the global engine's compatible models
-    const sysModels = isEngineSelectable(globalEngine)
-      ? models.filter((m) => isModelCompatible(m, globalEngine))
+    const sysModels = isEngineSelectable(effectiveGlobalEngine)
+      ? models.filter((m) => isModelCompatible(m, effectiveGlobalEngine))
       : [];
     if (sysModels.length > 0) {
       result.push({
@@ -202,12 +239,12 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     }
 
     return result;
-  }, [models, globalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
+  }, [models, effectiveGlobalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
 
   const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
   const modelLabel = models.find(m => m.value === model)?.label || model;
   const triggerLabel = modelLabel || defaultModelLabel || '选择模型';
-  const triggerIcon = <EngineIcon engineId={effectiveEngine} className="h-4 w-4" />;
+  const triggerIcon = effectiveEngine ? <EngineIcon engineId={effectiveEngine} className="h-4 w-4" /> : null;
 
   const handleValueChange = (val: string) => {
     if (!val) return;
@@ -221,6 +258,20 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     const modLabel = models.find(m => m.value === modelVal)?.label || modelVal;
     toast('info', `已切换: ${engName} / ${modLabel}`);
   };
+
+  if (isInitialLoading) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        disabled
+        className={`w-full justify-start gap-2 px-3 text-left font-normal text-muted-foreground ${className}`}
+      >
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+        <span className="truncate">加载模型配置中...</span>
+      </Button>
+    );
+  }
 
   return (
     <AiModelSelectorField

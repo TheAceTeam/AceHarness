@@ -15,6 +15,7 @@ import type { EngineOptions } from './engine-interface';
 import type { EngineStreamEvent } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import {
   formatAceFileChangesResult,
   formatAceReasoning,
@@ -55,7 +56,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('agent', getCommonCliSearchPaths());
+    return commandExists('agent', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
   /**

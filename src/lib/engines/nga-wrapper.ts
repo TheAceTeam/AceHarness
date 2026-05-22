@@ -7,6 +7,10 @@
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import {
+  getConfiguredCliSearchPaths,
+  getConfiguredEnvValueSync,
+} from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
@@ -23,7 +27,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
   private static cachedResolution: NgaCommandResolution | null = null;
 
   private resolveCommand(): NgaCommandResolution {
-    const searchPaths = getCommonCliSearchPaths();
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
     const ngagent = findCommand('ngagent', searchPaths);
     if (ngagent) return { command: ngagent, source: 'primary' };
 
@@ -143,18 +147,18 @@ export class NgaEngineWrapper extends ACPWrapperBase {
   }
 
   private shouldPreferCodeagent(): boolean {
-    return /^(1|true|yes)$/i.test(process.env.ACEH_NGA_USE_CODEAGENT || '');
+    return /^(1|true|yes)$/i.test(getConfiguredEnvValueSync('ACEH_NGA_USE_CODEAGENT') || '');
   }
 
   private findConfiguredCodeagent(): string | null {
-    const explicitPath = process.env.ACEH_NGA_CODEAGENT_PATH;
+    const explicitPath = getConfiguredEnvValueSync('ACEH_NGA_CODEAGENT_PATH');
     if (explicitPath) {
       const resolved = findCommand(explicitPath);
       if (resolved) return resolved;
     }
 
-    const ochome = process.env.OCHOME;
-    const home = process.env.HOME || process.env.USERPROFILE;
+    const ochome = getConfiguredEnvValueSync('OCHOME');
+    const home = getConfiguredEnvValueSync('HOME') || getConfiguredEnvValueSync('USERPROFILE');
     const candidates = [
       ochome ? join(ochome, 'bin', 'codeagent') : '',
       home ? join(home, 'OCHOME', 'bin', 'codeagent') : '',
@@ -189,7 +193,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
     const muslLibDir = join(installRoot, 'bun-musl-dir', 'musl-lib');
     if (!existsSync(muslLibDir)) return undefined;
 
-    const inherited = process.env.LD_LIBRARY_PATH || '';
+    const inherited = getConfiguredEnvValueSync('LD_LIBRARY_PATH') || '';
     return {
       LD_LIBRARY_PATH: [muslLibDir, inherited].filter(Boolean).join(':'),
     };
@@ -218,6 +222,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('ngagent') || commandExists('nga') || this.findConfiguredCodeagent() !== null;
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    return commandExists('ngagent', searchPaths) || commandExists('nga', searchPaths) || this.findConfiguredCodeagent() !== null;
   }
 }

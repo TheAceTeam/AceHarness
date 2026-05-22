@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, Re
 import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
+import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 
 // --- Types ---
 
@@ -146,6 +147,7 @@ interface DashboardChatContextType {
   setModel: (m: string) => void;
   engine: string;
   effectiveEngine: string;
+  isModelSelectionReady: boolean;
   setEngine: (e: string) => void;
   confirmAction: (messageId: string, actionId: string) => Promise<void>;
   rejectAction: (messageId: string, actionId: string) => void;
@@ -183,7 +185,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   loading: false, activeStreamingSessionIds: [], recentlyCompletedSessionIds: [], sessionLoadingId: null, streamingMessageId: null, setStreamingMessageId: () => {},
   markSessionStreaming: () => {}, unmarkSessionStreaming: () => {},
   model: '', setModel: () => {},
-  engine: '', effectiveEngine: '', setEngine: () => {},
+  engine: '', effectiveEngine: '', isModelSelectionReady: false, setEngine: () => {},
   confirmAction: async () => {}, rejectAction: () => {},
   undoActionById: async () => {}, retryAction: async () => {}, reloadActionResult: async () => {},
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
@@ -390,11 +392,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   });
   // Resolved global engine for when per-chat engine is empty
   const [globalEngine, setGlobalEngine] = useState('');
-  const effectiveEngine = engine || globalEngine;
+  const [globalDriver, setGlobalDriver] = useState('');
+  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  const effectiveEngine = engine || effectiveGlobalEngine;
+  const isModelSelectionReady = Boolean(model && effectiveEngine);
 
   const refreshGlobalEngineConfig = useCallback(() => {
     fetch('/api/engine').then(r => r.json()).then(data => {
-      if (data.engine) setGlobalEngine(data.engine);
+      setGlobalEngine(typeof data.engine === 'string' ? data.engine : '');
+      setGlobalDriver(typeof data.driver === 'string' ? data.driver : '');
       const savedModel = typeof window !== 'undefined' ? localStorage.getItem('chat-model') : null;
       if (!savedModel && data.defaultModel) setModel(data.defaultModel);
     }).catch(() => {});
@@ -491,13 +497,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const skillSettingsRef = useRef(skillSettings);
   const modelRef = useRef(model);
   const engineRef = useRef(engine);
-  const globalEngineRef = useRef(globalEngine);
+  const globalEngineRef = useRef(effectiveGlobalEngine);
   const sendMessageRef = useRef<((text: string, options?: { displayText?: string }) => Promise<void>) | null>(null);
   activeSessionRef.current = activeSession;
   skillSettingsRef.current = skillSettings;
   modelRef.current = model;
   engineRef.current = engine;
-  globalEngineRef.current = globalEngine;
+  globalEngineRef.current = effectiveGlobalEngine;
 
   // Load session list on mount
   useEffect(() => {
@@ -1660,6 +1666,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // --- Send message (streaming) ---
   const sendMessage = useCallback(async (text: string, options?: { displayText?: string }) => {
+    const currentModel = modelRef.current || '';
+    const currentEngineOverride = engineRef.current || '';
+    const resolvedEngine = currentEngineOverride || globalEngineRef.current || '';
+    if (!currentModel || !resolvedEngine) {
+      return;
+    }
+
     if (activeEventSourceRef.current || activeChatIdRef.current) {
       interruptCurrentStream();
     }
@@ -1676,9 +1689,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }));
 
     const assistantMsgId = genId();
-    const currentModel = modelRef.current || '';
-    const currentEngineOverride = engineRef.current || '';
-    const resolvedEngine = currentEngineOverride || globalEngineRef.current || '';
     const previousSession = activeSessionRef.current;
     const agentBinding = previousSession?.agentBinding;
     const previousEffectiveEngine = previousSession?.engine || globalEngineRef.current || '';
@@ -2272,7 +2282,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sendMessage, compactActiveSession, stopStreaming, deleteMessage, retryFromMessage, continueFromMessage,
       loading, activeStreamingSessionIds, recentlyCompletedSessionIds, sessionLoadingId, streamingMessageId, setStreamingMessageId,
       markSessionStreaming, unmarkSessionStreaming, model, setModel: handleSetModel,
-      engine, effectiveEngine, setEngine: handleSetEngine,
+      engine, effectiveEngine, isModelSelectionReady, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
       workingDirectory, setWorkingDirectory,

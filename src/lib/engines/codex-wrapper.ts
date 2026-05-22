@@ -20,7 +20,7 @@ import {
 } from '@/lib/chat/ace-process-formatters';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
-import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 
 const requireFromHere = createRequire(__filename);
@@ -125,7 +125,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   }
 
   private findCodexFallbackPath(): string | null {
-    const resolved = findCommand('codex', getCommonCliSearchPaths());
+    const resolved = findCommand('codex', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
     if (isSpawnableCodexOverride(resolved)) return resolved;
     return null;
   }
@@ -194,15 +194,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   }
 
   private async createCodexClient(Codex: any, codexPathOverride?: string | null): Promise<any> {
-    // Load user-configured environment variables
-    const clientEnv = { ...process.env };
-    try {
-      const userEnvVars = await loadEnvVars();
-      const userEnv = buildEnvObject(userEnvVars);
-      Object.assign(clientEnv, userEnv);
-    } catch {
-      // Ignore env loading errors
-    }
+    const clientEnv = buildConfiguredProcessEnvSync();
 
     return codexPathOverride
       ? new Codex({ codexPathOverride, env: clientEnv })

@@ -28,6 +28,10 @@ interface EnvVar {
   enabled: boolean;
 }
 
+interface EnvVarRow extends EnvVar {
+  id: string;
+}
+
 interface EnvVarError {
   key?: string;
 }
@@ -58,9 +62,30 @@ function getChannelLabel(channel: SdkChannel) {
   return 'LTS';
 }
 
+function makeEnvVarRowId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createEnvVarRow(input?: Partial<EnvVar>): EnvVarRow {
+  return {
+    id: makeEnvVarRowId(),
+    key: input?.key || '',
+    value: input?.value || '',
+    enabled: input?.enabled ?? true,
+  };
+}
+
+function stripEnvVarRow(item: EnvVarRow): EnvVar {
+  return {
+    key: item.key,
+    value: item.value,
+    enabled: item.enabled,
+  };
+}
+
 function validateEnvVars(vars: EnvVar[]) {
   const errors: EnvVarError[] = vars.map(() => ({}));
-  const keyPattern = /^[A-Z_][A-Z0-9_]*$/;
+  const keyPattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
   const keyMap = new Map<string, number[]>();
 
   vars.forEach((item, index) => {
@@ -75,7 +100,7 @@ function validateEnvVars(vars: EnvVar[]) {
     }
 
     if (!keyPattern.test(trimmedKey)) {
-      errors[index].key = '仅支持大写字母、数字和下划线，且不能以数字开头';
+      errors[index].key = '仅支持字母、数字和下划线，且不能以数字开头';
       return;
     }
 
@@ -102,7 +127,7 @@ export default function SystemSettingsContent() {
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
 
-  const [vars, setVars] = useState<EnvVar[]>([]);
+  const [vars, setVars] = useState<EnvVarRow[]>([]);
   const [varErrors, setVarErrors] = useState<EnvVarError[]>([]);
   const [envLoading, setEnvLoading] = useState(true);
   const [envSaving, setEnvSaving] = useState(false);
@@ -149,6 +174,7 @@ export default function SystemSettingsContent() {
   }, [managedHomeActive, sdkOverview?.effective.cangjieHome, vars]);
 
   const environmentVariableItems = useMemo(() => displayVars.map((item, index) => ({
+    id: item.id,
     key: item.key,
     value: item.value,
     enabled: item.enabled,
@@ -156,7 +182,7 @@ export default function SystemSettingsContent() {
     description: item.key.trim() === 'CANGJIE_HOME'
       ? '仓颉 SDK 根目录，Markdown/编辑器运行仓颉代码时会读取此变量。'
       : undefined,
-    maskValue: /TOKEN|SECRET|PASSWORD|KEY/u.test(item.key.trim()),
+    maskValue: /(TOKEN|SECRET|PASSWORD|KEY)/iu.test(item.key.trim()),
     disableValueEdit: managedHomeActive && item.key.trim() === 'CANGJIE_HOME',
     keyError: varErrors[index]?.key,
     valueHint: managedHomeActive && item.key.trim() === 'CANGJIE_HOME'
@@ -186,7 +212,7 @@ export default function SystemSettingsContent() {
     );
   };
 
-  const syncVarErrors = (nextVars: EnvVar[]) => {
+  const syncVarErrors = (nextVars: EnvVarRow[]) => {
     setVarErrors((prev) => nextVars.map((_, index) => prev[index] || {}));
   };
 
@@ -195,8 +221,9 @@ export default function SystemSettingsContent() {
     setEnvError(null);
     try {
       const data = await envApi.get('system');
-      setVars(data.vars || []);
-      setVarErrors((data.vars || []).map(() => ({})));
+      const nextVars = (data.vars || []).map((item) => createEnvVarRow(item));
+      setVars(nextVars);
+      setVarErrors(nextVars.map(() => ({})));
     } catch (error: any) {
       const message = error?.message || '加载环境变量失败';
       setEnvError(message);
@@ -271,7 +298,7 @@ export default function SystemSettingsContent() {
 
   const addRow = () => {
     setVars((prev) => {
-      const next = [...prev, { key: '', value: '', enabled: true }];
+      const next = [...prev, createEnvVarRow()];
       syncVarErrors(next);
       return next;
     });
@@ -299,7 +326,7 @@ export default function SystemSettingsContent() {
     setEnvSaving(true);
     setEnvError(null);
     try {
-      await envApi.save('system', normalizedVars.filter((item) => item.key));
+      await envApi.save('system', normalizedVars.filter((item) => item.key).map(stripEnvVarRow));
       setVars(normalizedVars);
       toast('success', '环境变量保存成功');
     } catch (error: any) {

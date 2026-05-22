@@ -69,6 +69,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -958,6 +959,8 @@ export type PromptInputTextareaProps = ComponentProps<
   typeof InputGroupTextarea
 >;
 
+const PROMPT_INPUT_TEXTAREA_MAX_HEIGHT = 192;
+
 export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
@@ -968,6 +971,29 @@ export const PromptInputTextarea = ({
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const textareaValue = controller ? controller.textInput.value : props.value;
+
+  const syncTextareaHeight = useCallback(
+    (node?: HTMLTextAreaElement | null) => {
+      const textarea = node ?? textareaRef.current;
+      if (!textarea) {
+        return;
+      }
+
+      textarea.style.height = "auto";
+      const nextHeight = Math.min(
+        textarea.scrollHeight,
+        PROMPT_INPUT_TEXTAREA_MAX_HEIGHT
+      );
+      textarea.style.height = `${nextHeight}px`;
+      textarea.style.overflowY =
+        textarea.scrollHeight > PROMPT_INPUT_TEXTAREA_MAX_HEIGHT
+          ? "auto"
+          : "hidden";
+    },
+    []
+  );
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
@@ -1046,29 +1072,34 @@ export const PromptInputTextarea = ({
   const handleCompositionEnd = useCallback(() => setIsComposing(false), []);
   const handleCompositionStart = useCallback(() => setIsComposing(true), []);
 
-  const controlledProps = controller
-    ? {
-        onChange: (e: ChangeEvent<HTMLTextAreaElement>) => {
-          controller.textInput.setInput(e.currentTarget.value);
-          onChange?.(e);
-        },
-        value: controller.textInput.value,
+  const handleChange = useCallback(
+    (e: ChangeEvent<HTMLTextAreaElement>) => {
+      if (controller) {
+        controller.textInput.setInput(e.currentTarget.value);
       }
-    : {
-        onChange,
-      };
+      onChange?.(e);
+      syncTextareaHeight(e.currentTarget);
+    },
+    [controller, onChange, syncTextareaHeight]
+  );
+
+  useLayoutEffect(() => {
+    syncTextareaHeight();
+  }, [syncTextareaHeight, textareaValue]);
 
   return (
     <InputGroupTextarea
-      className={cn("field-sizing-content max-h-48 min-h-16", className)}
+      ref={textareaRef}
+      className={cn("max-h-48 min-h-16 overflow-y-auto", className)}
       name="message"
+      onChange={handleChange}
       onCompositionEnd={handleCompositionEnd}
       onCompositionStart={handleCompositionStart}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       placeholder={placeholder}
       {...props}
-      {...controlledProps}
+      value={textareaValue}
     />
   );
 };

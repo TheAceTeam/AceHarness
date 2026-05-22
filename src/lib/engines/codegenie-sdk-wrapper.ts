@@ -13,7 +13,11 @@ import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import {
+  buildConfiguredProcessEnvSync,
+  getConfiguredCliSearchPaths,
+  getConfiguredEnvValueSync,
+} from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
   buildFullPrompt,
@@ -47,17 +51,21 @@ async function runtimeImport<T = any>(moduleName: string): Promise<T> {
 }
 
 function getBaseUrl(): string {
-  return String(process.env.ACE_CODEGENIE_SDK_BASE_URL || '').trim().replace(/\/+$/, '');
+  return String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_BASE_URL') || '').trim().replace(/\/+$/, '');
 }
 
 function getCodegenieCommand(): string {
-  const configured = String(process.env.ACE_CODEGENIE_SDK_COMMAND || process.env.ACE_CODEGENIE_BIN || '').trim();
+  const configured = String(
+    getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_COMMAND')
+    || getConfiguredEnvValueSync('ACE_CODEGENIE_BIN')
+    || ''
+  ).trim();
   if (configured) return configured;
-  return findCommand('codegenie', getCommonCliSearchPaths()) || 'codegenie';
+  return findCommand('codegenie', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'codegenie';
 }
 
 function getTimeoutMs(): number {
-  const raw = Number.parseInt(String(process.env.ACE_CODEGENIE_SDK_TIMEOUT_MS || '').trim(), 10);
+  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_TIMEOUT_MS') || '').trim(), 10);
   if (!Number.isFinite(raw)) return 10_000;
   return Math.min(120_000, Math.max(1_000, raw));
 }
@@ -116,15 +124,7 @@ async function startManagedServer(): Promise<ManagedServer> {
 
   console.log(`[codegenie-sdk] starting managed CodeGenie server: ${command} ${args.join(' ')}`);
 
-  // Load user-configured environment variables
-  const spawnEnv = { ...process.env };
-  try {
-    const userEnvVars = await loadEnvVars();
-    const userEnv = buildEnvObject(userEnvVars);
-    Object.assign(spawnEnv, userEnv);
-  } catch {
-    // Ignore env loading errors
-  }
+  const spawnEnv = buildConfiguredProcessEnvSync();
 
   return await new Promise<ManagedServer>((resolve, reject) => {
     let settled = false;
@@ -280,7 +280,7 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         return false;
       }
     }
-    return !!managedServer || !!serverStarting || !!findCommand('codegenie', getCommonCliSearchPaths());
+    return !!managedServer || !!serverStarting || !!findCommand('codegenie', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {

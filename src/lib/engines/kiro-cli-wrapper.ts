@@ -10,6 +10,7 @@ import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import {
   formatAceFileChangesResult,
   formatAceToolResult,
@@ -144,6 +145,6 @@ export class KiroCliEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('kiro-cli', getCommonCliSearchPaths());
+    return commandExists('kiro-cli', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 }

@@ -71,6 +71,7 @@ export function AiAssistantSheet({
     model,
     setModel,
     engine,
+    isModelSelectionReady,
     setEngine,
     deleteMessage,
     retryFromMessage,
@@ -177,7 +178,7 @@ export function AiAssistantSheet({
   }, [contextLabel, contextText, hasContext]);
 
   const sendWithPrompt = useCallback(async (prompt: string, displayText: string) => {
-    if (isLoadingCurrentSession) return;
+    if (isLoadingCurrentSession || !isModelSelectionReady) return;
     const sid = ensureSheetSession();
     if (!sid) return;
     if (!isSheetSessionActive || activeSessionId !== sid) {
@@ -187,7 +188,7 @@ export function AiAssistantSheet({
     }
     lastRequestRef.current = { prompt, displayText };
     await sendMessage(prompt, { displayText });
-  }, [activeSessionId, ensureSheetSession, isLoadingCurrentSession, isSheetSessionActive, sendMessage]);
+  }, [activeSessionId, ensureSheetSession, isLoadingCurrentSession, isModelSelectionReady, isSheetSessionActive, sendMessage]);
 
   const send = useCallback(async (rawText?: string) => {
     const userText = rawText?.trim();
@@ -576,9 +577,9 @@ export function AiAssistantSheet({
             <div className="mx-4 my-4">
               <PromptInput
                 onSubmit={(message) => { void send(message.text); }}
-                disabled={isLoadingCurrentSession}
+                disabled={isLoadingCurrentSession || !isModelSelectionReady}
               >
-                <PromptInputTextarea placeholder={inputPlaceholder} />
+                <PromptInputTextarea placeholder={isModelSelectionReady ? inputPlaceholder : '加载模型配置中...'} />
                 <PromptInputFooter>
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={clearSessionMessages} disabled={isLoadingCurrentSession || sessionMessages.length === 0}>
@@ -592,7 +593,7 @@ export function AiAssistantSheet({
                       </Button>
                     )}
                   </div>
-                  <PromptInputSubmit />
+                  <PromptInputSubmit disabled={!isModelSelectionReady} />
                 </PromptInputFooter>
               </PromptInput>
             </div>

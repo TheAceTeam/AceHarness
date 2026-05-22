@@ -227,16 +227,79 @@ export function getResultSections(markdown: string): ResultSection[] {
   return sections;
 }
 
+function findBalancedJsonObjectBounds(text: string): { start: number; end: number } | null {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return { start, end: index + 1 };
+      }
+    }
+  }
+
+  return null;
+}
+
 function extractJsonFromCandidate(candidate: string): string | null {
   const trimmed = candidate.trim();
   if (!trimmed) return null;
 
   const fencedMatch = trimmed.match(/^```(?:json|card)\s*([\s\S]*?)```$/i);
   const body = fencedMatch ? fencedMatch[1].trim() : trimmed;
-  const start = body.indexOf('{');
-  const end = body.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  return body.slice(start, end + 1);
+  const bounds = findBalancedJsonObjectBounds(body);
+  if (!bounds) return null;
+  return body.slice(bounds.start, bounds.end);
+}
+
+export function normalizeStructuredResultBlocks(markdown: string): string {
+  const source = String(markdown || '');
+  const sections = getResultSections(source);
+  if (sections.length === 0) return source;
+
+  let normalized = source;
+  for (const section of [...sections].reverse()) {
+    const bounds = findBalancedJsonObjectBounds(section.content);
+    if (!bounds) continue;
+
+    const prefix = section.content.slice(0, bounds.start);
+    const suffix = section.content.slice(bounds.end);
+    if (prefix.trim()) continue;
+    if (!suffix.trim()) continue;
+
+    const json = section.content.slice(bounds.start, bounds.end);
+    const trailingNewline = /\r?\n/.test(prefix) || /\r?\n/.test(suffix) ? '\n' : '';
+    const normalizedSection = `<result>${prefix}${json}${trailingNewline}</result>`;
+    normalized = normalized.slice(0, section.start) + normalizedSection + normalized.slice(section.end);
+  }
+
+  return normalized;
 }
 
 function getAiJsonRepairLoads(): AiJsonRepairLoads | null {

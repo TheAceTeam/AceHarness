@@ -9,7 +9,11 @@
 import { EventEmitter } from 'events';
 import { accessSync, constants, existsSync } from 'fs';
 import { createRequire } from 'module';
-import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import {
+  buildConfiguredProcessEnvSync,
+  getConfiguredCliSearchPaths,
+  getConfiguredEnvValueSync,
+} from '@/lib/core/configured-env';
 import { fenced, htmlCodeBlock, formatLargeContent, formatTextContent } from '@/lib/core/markdown-utils';
 import {
   appendToolIdToAceBlock,
@@ -180,7 +184,7 @@ function extractThinkingFromStreamEvent(ev: unknown): string {
 }
 
 function buildCleanEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = { ...process.env };
+  const env: Record<string, string | undefined> = buildConfiguredProcessEnvSync();
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   delete env.CLAUDE_CODE_SESSION;
@@ -204,7 +208,8 @@ function hasRuntimeGlibc(): boolean {
 }
 
 function resolveClaudeNativeBinary(): string | undefined {
-  const envPath = process.env.ACE_CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE;
+  const envPath = getConfiguredEnvValueSync('ACE_CLAUDE_CODE_EXECUTABLE')
+    || getConfiguredEnvValueSync('CLAUDE_CODE_EXECUTABLE');
   if (envPath && isExecutable(envPath)) return envPath;
 
   const suffix = isWindows() ? '.exe' : '';
@@ -232,7 +237,7 @@ function resolveClaudeNativeBinary(): string | undefined {
     }
   }
 
-  return findCommand('claude', getCommonCliSearchPaths()) || undefined;
+  return findCommand('claude', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || undefined;
 }
 function formatElapsedSec(usageMs?: number, wallMs?: number): { text: string; sec: number } {
   const ms = usageMs ?? wallMs;
@@ -357,11 +362,6 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
 
       // Build env
       const spawnEnv = buildCleanEnv();
-      try {
-        const userEnvVars = await loadEnvVars();
-        const userEnv = buildEnvObject(userEnvVars);
-        Object.assign(spawnEnv, userEnv);
-      } catch {}
       if (!spawnEnv.CLAUDE_CODE_MAX_RETRIES) {
         spawnEnv.CLAUDE_CODE_MAX_RETRIES = String(MAX_API_RETRY_ATTEMPTS);
       }

@@ -7,6 +7,7 @@ import ChatMessage from '@/components/chat/ChatMessage';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import { extractAceProcessBlocks, mergeAceSubtaskChunks, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { sendPromptWithOpenCodeHttp } from '@/lib/engines/opencode-http-adapter';
+import { normalizeEngineOutput } from '@/lib/engines/engine-output';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
 import { createStreamingDisplayCapability } from '@/lib/sidebar-plugins/capabilities/streaming-display';
 import { extractSpecCodingRevisionCommand } from '@/lib/spec/coding-revision-protocol';
@@ -1391,7 +1392,7 @@ describe('Wrapper stream markdown rendering', () => {
     expect(textEvents.includes('"resultText":"Structured task result"')).toBe(true);
   });
 
-  test.skip('opencode http adapter ignores resumed-session replay events before prompt acceptance', async () => {
+  test('opencode http adapter ignores resumed-session replay events before prompt acceptance', async () => {
     const emitted: EngineStreamEvent[] = [];
     const stream = {
       async *[Symbol.asyncIterator]() {
@@ -2560,7 +2561,7 @@ describe('Wrapper stream markdown rendering', () => {
     expectNoProtocolLeak(view.container);
   });
 
-  test.skip('real opencode split thinking transcript stays grouped into one reasoning block', async () => {
+  test('real opencode split thinking transcript stays grouped into one reasoning block', async () => {
     const rawContent = REAL_OPENCODE_SPLIT_THINKING_TRANSCRIPT
       .map((event) => event.content)
       .join('');
@@ -2583,19 +2584,23 @@ describe('Wrapper stream markdown rendering', () => {
     await openAllDetails(view.container);
     expect(view.container.textContent || '').toContain('There are a lot of agents.');
     const reasoning = view.container.querySelector('[data-testid="ace-reasoning"]');
-    expect(reasoning?.textContent || '').toContain('Let me group them by category to make it more readable');
+    expect((reasoning?.querySelector('[data-testid="ace-reasoning-content"]')?.textContent) || '').toContain('Let me group them by category to make it more readable');
     expectNoProtocolLeak(view.container);
   });
 
-  test.skip('real opencode done result keeps the structured card payload extractable without result-tail junk', () => {
+  test('real opencode done result keeps the structured card payload extractable without result-tail junk', () => {
     const leakedTail = REAL_OPENCODE_RESULT_TAIL_DELTAS.map((event) => event.content).join('');
-    const parsed = extractStructuredResult(REAL_OPENCODE_DONE_RESULT, (value): value is { kind: string; payload?: any } => {
+    const duplicatedInnerTail = leakedTail.replace(/\r?\n?<\/result>$/u, '');
+    const corruptedResult = REAL_OPENCODE_DONE_RESULT.replace('</result>', `${duplicatedInnerTail}</result>`);
+    const normalizedResult = normalizeEngineOutput(corruptedResult);
+    const parsed = extractStructuredResult(normalizedResult, (value): value is { kind: string; payload?: any } => {
       return !!value && typeof value === 'object' && value.kind === 'card';
     });
 
     expect(parsed?.kind).toBe('card');
     expect(parsed?.payload?.header?.title).toBe('Agent 配置列表');
-    expect(REAL_OPENCODE_DONE_RESULT).not.toContain(leakedTail);
+    expect(corruptedResult).not.toBe(normalizedResult);
+    expect(normalizedResult).toBe(REAL_OPENCODE_DONE_RESULT);
   });
 
   test('literal <result> mention in prose stays visible in chat message', () => {

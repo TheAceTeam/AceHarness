@@ -464,7 +464,7 @@ function ChatPageContent() {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, compactActiveSession, stopStreaming,
     deleteMessage, retryFromMessage, continueFromMessage,
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
-    model, setModel, engine, effectiveEngine, setEngine,
+    model, setModel, engine, effectiveEngine, isModelSelectionReady, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
     skillSettings, setSessionWorkbenchState,
     appendSessionMessage,
@@ -1184,6 +1184,10 @@ function ChatPageContent() {
       }
       return;
     }
+    if (!isModelSelectionReady) {
+      toast('warning', '模型配置加载中，请稍候再发送');
+      return;
+    }
     if (editingMessageId) {
       deleteMessage(editingMessageId);
       setEditingMessageId(null);
@@ -1831,7 +1835,7 @@ function ChatPageContent() {
                       footerClassName="justify-end gap-4 border-border/60 px-6 pb-3 pt-3"
                       footerAfterCountContent={(
                         <div className="ml-5 flex items-center gap-3">
-                          <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown()}>
+                          <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown() || !isModelSelectionReady}>
                             <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
                           </Button>
                         </div>
@@ -2025,7 +2029,7 @@ function ChatPageContent() {
                                   <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>stop</span>
                                 </Button>
                               )}
-                              <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown()}>
+                              <Button className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 shadow-sm transition-colors duration-150 hover:bg-[#1a61de]" onClick={handleSend} disabled={!getInputMarkdown() || !isModelSelectionReady}>
                                 <span className="material-symbols-outlined text-white" style={{ fontSize: '18px' }}>subdirectory_arrow_left</span>
                               </Button>
                             </div>

@@ -5,6 +5,7 @@ import { Globe } from 'lucide-react';
 import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
+import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 
 interface EngineSelectProps {
   value: string;
@@ -16,12 +17,14 @@ interface EngineSelectProps {
 
 export function EngineSelect({ value, onChange, className = '', allowGlobal = false }: EngineSelectProps) {
   const [globalEngine, setGlobalEngine] = useState('');
+  const [globalDriver, setGlobalDriver] = useState('');
 
   useEffect(() => {
     if (!allowGlobal) return;
     const refresh = () => {
       fetch('/api/engine').then(r => r.json()).then(d => {
-        if (d.engine) setGlobalEngine(d.engine);
+        setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
+        setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
       }).catch(() => {});
     };
     refresh();
@@ -37,7 +40,8 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
     };
   }, [allowGlobal]);
 
-  const globalLabel = getEngineMeta(globalEngine)?.name || globalEngine;
+  const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
+  const globalLabel = getEngineMeta(effectiveGlobalEngine)?.name || getEngineMeta(globalEngine)?.name || globalEngine;
 
   const options: AiModelSelectorOption[] = useMemo(() => {
     const items: AiModelSelectorOption[] = [];
@@ -71,11 +75,13 @@ export function EngineSelect({ value, onChange, className = '', allowGlobal = fa
 /** Hook to get the effective engine (per-chat override or global) */
 export function useCurrentEngine(override?: string): string {
   const [globalEngine, setGlobalEngine] = useState('');
+  const [globalDriver, setGlobalDriver] = useState('');
 
   useEffect(() => {
     const refresh = () => {
       fetch('/api/engine').then(r => r.json()).then(d => {
-        if (d.engine) setGlobalEngine(d.engine);
+        setGlobalEngine(typeof d.engine === 'string' ? d.engine : '');
+        setGlobalDriver(typeof d.driver === 'string' ? d.driver : '');
       }).catch(() => {});
     };
     refresh();
@@ -91,5 +97,5 @@ export function useCurrentEngine(override?: string): string {
     };
   }, []);
 
-  return override || globalEngine;
+  return override || resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
 }

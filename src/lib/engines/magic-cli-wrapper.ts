@@ -1,5 +1,6 @@
 import { existsSync } from 'fs';
 import { delimiter, join } from 'path';
+import { buildConfiguredProcessEnvSync, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
@@ -10,7 +11,7 @@ const SEARCH_PATHS = [
 
 export function resolveBinary(): string | null {
   // 1. Check MAGIC_CLI_PATH env var first
-  const envPath = process.env.MAGIC_CLI_PATH;
+  const envPath = getConfiguredEnvValueSync('MAGIC_CLI_PATH');
   if (envPath) {
     if (existsSync(envPath)) return envPath;
   }
@@ -21,7 +22,8 @@ export function resolveBinary(): string | null {
   }
 
   // 3. Search PATH directories for magic-cli.sh
-  const pathDirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+  const env = buildConfiguredProcessEnvSync();
+  const pathDirs = (env.PATH || env.Path || '').split(delimiter).filter(Boolean);
   for (const dir of pathDirs) {
     const candidate = join(dir, 'magic-cli.sh');
     if (existsSync(candidate)) return candidate;

@@ -6,17 +6,18 @@
  */
 
 import { commandExists, findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { getConfiguredCliSearchPaths, getConfiguredEnvValueSync } from '@/lib/core/configured-env';
 import { ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 
 function resolveCodegenieCommand(): string {
-  const explicit = process.env.ACEH_CODEGENIE_COMMAND?.trim();
+  const explicit = getConfiguredEnvValueSync('ACEH_CODEGENIE_COMMAND')?.trim();
   if (explicit) {
-    const resolved = findCommand(explicit, getCommonCliSearchPaths());
+    const resolved = findCommand(explicit, getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
     if (resolved) return resolved;
   }
-  return findCommand('codegenie', getCommonCliSearchPaths()) || 'codegenie';
+  return findCommand('codegenie', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'codegenie';
 }
 
 export class CodegenieEngineWrapper extends ACPWrapperBase {
@@ -36,6 +37,6 @@ export class CodegenieEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists(resolveCodegenieCommand(), getCommonCliSearchPaths());
+    return commandExists(resolveCodegenieCommand(), getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 }

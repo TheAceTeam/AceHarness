@@ -10,6 +10,7 @@ import type { ComponentProps } from "react";
 import { useMemo, useState } from "react";
 
 export type EnvironmentVariableItem = {
+  id: string;
   key: string;
   value: string;
   enabled: boolean;
@@ -31,12 +32,6 @@ type EnvironmentVariablesProps = Omit<ComponentProps<"div">, "onChange" | "onCop
   emptyMessage?: string;
 };
 
-function maskValue(value: string) {
-  if (!value) return "";
-  if (value.length <= 8) return "•".repeat(Math.max(4, value.length));
-  return `${value.slice(0, 2)}${"•".repeat(Math.min(12, value.length - 4))}${value.slice(-2)}`;
-}
-
 export function EnvironmentVariables({
   className,
   items,
@@ -45,26 +40,37 @@ export function EnvironmentVariables({
   onRemove,
   onChange,
   onCopy,
-  emptyMessage = "No environment variables configured.",
+  emptyMessage = "暂无环境变量。",
   ...props
 }: EnvironmentVariablesProps) {
-  const [revealedIndexes, setRevealedIndexes] = useState<number[]>([]);
-  const [copiedIndexes, setCopiedIndexes] = useState<number[]>([]);
+  const [revealedIds, setRevealedIds] = useState<string[]>([]);
+  const [copiedIds, setCopiedIds] = useState<string[]>([]);
+  const [secretModeOverrides, setSecretModeOverrides] = useState<Record<string, boolean>>({});
 
-  const revealedSet = useMemo(() => new Set(revealedIndexes), [revealedIndexes]);
-  const copiedSet = useMemo(() => new Set(copiedIndexes), [copiedIndexes]);
+  const revealedSet = useMemo(() => new Set(revealedIds), [revealedIds]);
+  const copiedSet = useMemo(() => new Set(copiedIds), [copiedIds]);
 
-  const toggleReveal = (index: number) => {
-    setRevealedIndexes((prev) => (
-      prev.includes(index) ? prev.filter((item) => item !== index) : [...prev, index]
+  const toggleReveal = (itemId: string) => {
+    setRevealedIds((prev) => (
+      prev.includes(itemId) ? prev.filter((item) => item !== itemId) : [...prev, itemId]
     ));
+  };
+
+  const toggleSecretMode = (item: EnvironmentVariableItem) => {
+    const current = secretModeOverrides[item.id] ?? Boolean(item.maskValue);
+    setSecretModeOverrides((prev) => ({ ...prev, [item.id]: !current }));
+    if (current) {
+      setRevealedIds((prev) => prev.filter((entry) => entry !== item.id));
+    }
   };
 
   const handleCopy = async (index: number) => {
     await onCopy?.(index);
-    setCopiedIndexes((prev) => (prev.includes(index) ? prev : [...prev, index]));
+    const itemId = items[index]?.id;
+    if (!itemId) return;
+    setCopiedIds((prev) => (prev.includes(itemId) ? prev : [...prev, itemId]));
     window.setTimeout(() => {
-      setCopiedIndexes((prev) => prev.filter((item) => item !== index));
+      setCopiedIds((prev) => prev.filter((item) => item !== itemId));
     }, 1200);
   };
 
@@ -72,14 +78,14 @@ export function EnvironmentVariables({
     <div className={cn("space-y-4", className)} {...props}>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-base font-semibold">Environment Variables</h3>
+          <h3 className="text-base font-semibold">环境变量</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Variables are stored as runtime fallback values and can be toggled per entry.
+            这些变量会作为运行时回退值保存，并支持逐条启停。
           </p>
         </div>
         {onAdd ? (
           <Button variant="outline" size="sm" onClick={onAdd} disabled={disabled}>
-            Add Variable
+            新增变量
           </Button>
         ) : null}
       </div>
@@ -91,30 +97,30 @@ export function EnvironmentVariables({
       ) : (
         <div className="space-y-3">
           {items.map((item, index) => {
-            const revealed = revealedSet.has(index);
-            const copied = copiedSet.has(index);
-            const showMaskedValue = Boolean(item.maskValue && !revealed);
-            const valueText = showMaskedValue ? maskValue(item.value) : item.value;
+            const revealed = revealedSet.has(item.id);
+            const copied = copiedSet.has(item.id);
+            const secretMode = secretModeOverrides[item.id] ?? Boolean(item.maskValue);
+            const inputType = secretMode && !revealed ? "password" : "text";
 
             return (
               <div
-                key={`${item.key || "env"}-${index}`}
+                key={item.id}
                 className="rounded-lg border bg-card/60 p-4"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
-                        {item.key.trim() || "KEY"}
+                        {item.key.trim() || "变量名"}
                       </code>
                       {item.required ? (
                         <Badge variant="outline" className="rounded-full text-[11px]">
-                          Required
+                          必填
                         </Badge>
                       ) : null}
                       {!item.enabled ? (
                         <Badge variant="secondary" className="rounded-full text-[11px]">
-                          Disabled
+                          已停用
                         </Badge>
                       ) : null}
                     </div>
@@ -123,15 +129,26 @@ export function EnvironmentVariables({
                     ) : null}
                   </div>
                   <div className="flex items-center gap-1">
-                    {item.maskValue ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={secretMode ? "secondary" : "ghost"}
+                      className="h-8 px-2 text-xs"
+                      onClick={() => toggleSecretMode(item)}
+                      disabled={disabled || item.disableValueEdit}
+                      title={secretMode ? "关闭密码模式" : "开启密码模式"}
+                    >
+                      {secretMode ? "密码模式" : "普通模式"}
+                    </Button>
+                    {secretMode ? (
                       <Button
                         type="button"
                         size="icon"
                         variant="ghost"
                         className="h-8 w-8"
-                        onClick={() => toggleReveal(index)}
+                        onClick={() => toggleReveal(item.id)}
                         disabled={disabled}
-                        title={revealed ? "Hide value" : "Show value"}
+                        title={revealed ? "隐藏变量值" : "显示变量值"}
                       >
                         {revealed ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
                       </Button>
@@ -143,7 +160,7 @@ export function EnvironmentVariables({
                       className="h-8 w-8"
                       onClick={() => void handleCopy(index)}
                       disabled={disabled}
-                      title="Copy export command"
+                      title="复制导出命令"
                     >
                       {copied ? <CheckIcon className="h-4 w-4" /> : <CopyIcon className="h-4 w-4" />}
                     </Button>
@@ -155,7 +172,7 @@ export function EnvironmentVariables({
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
                         onClick={() => onRemove(index)}
                         disabled={disabled}
-                        title="Remove variable"
+                        title="删除变量"
                       >
                         <Trash2Icon className="h-4 w-4" />
                       </Button>
@@ -166,12 +183,12 @@ export function EnvironmentVariables({
                 <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_84px]">
                   <div className="space-y-1.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Key
+                      变量名
                     </div>
                     <Input
                       value={item.key}
                       onChange={(event) => onChange?.(index, { key: event.target.value })}
-                      placeholder="KEY"
+                      placeholder="例如：my_key"
                       className={cn(
                         "h-10 font-mono text-xs",
                         item.keyError ? "border-destructive focus-visible:ring-destructive" : ""
@@ -185,14 +202,15 @@ export function EnvironmentVariables({
 
                   <div className="space-y-1.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Value
+                      变量值
                     </div>
                     <Input
-                      value={valueText}
+                      type={inputType}
+                      value={item.value}
                       onChange={(event) => onChange?.(index, { value: event.target.value })}
-                      placeholder="value"
+                      placeholder="输入变量值"
                       className="h-10 font-mono text-xs"
-                      disabled={disabled || item.disableValueEdit || showMaskedValue}
+                      disabled={disabled || item.disableValueEdit}
                     />
                     {item.valueHint ? (
                       <div className="text-xs text-muted-foreground">{item.valueHint}</div>
@@ -201,7 +219,7 @@ export function EnvironmentVariables({
 
                   <div className="space-y-1.5">
                     <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Enabled
+                      启用
                     </div>
                     <div className="flex h-10 items-center justify-center rounded-md border bg-background">
                       <Switch

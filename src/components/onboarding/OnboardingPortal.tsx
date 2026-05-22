@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { StoryOnboarding } from '@/components/onboarding/StoryOnboarding';
 import { Button } from '@/components/ui/button';
-import { useChat } from '@/contexts/ChatContext';
 
 type Role = 'admin' | 'user';
 type ProgressPayload = {
@@ -31,7 +30,6 @@ type ProgressPayload = {
 
 export default function OnboardingPortal() {
   const pathname = usePathname();
-  const { isOpen: chatOpen } = useChat();
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<Role>('user');
   const [loadingProgress, setLoadingProgress] = useState(false);
@@ -107,11 +105,8 @@ export default function OnboardingPortal() {
   return (
     <>
       <div
-        className={`fixed bottom-24 z-[50] transition-[right,opacity,transform] duration-300 ${open ? 'pointer-events-none opacity-0' : 'opacity-100 translate-x-[calc(100%-22px)] hover:translate-x-0 focus-within:translate-x-0'}`}
-        style={{
-          right: chatOpen ? 420 : 0,
-          transition: 'right 300ms ease-in-out, opacity 300ms ease-in-out, transform 220ms ease-in-out',
-        }}
+        className={`fixed bottom-24 right-0 z-[50] transition-[right,opacity,transform] duration-300 ${open ? 'pointer-events-none opacity-0' : 'opacity-100 translate-x-[calc(100%-22px)] hover:translate-x-0 focus-within:translate-x-0'}`}
+        style={{ transition: 'opacity 300ms ease-in-out, transform 220ms ease-in-out' }}
       >
         <div className="relative flex items-center pl-4">
           <div className="pointer-events-none absolute left-0 top-1/2 flex h-10 w-5 -translate-y-1/2 items-center justify-center rounded-l-full border border-r-0 border-border/70 bg-background/94 text-muted-foreground shadow-sm backdrop-blur">

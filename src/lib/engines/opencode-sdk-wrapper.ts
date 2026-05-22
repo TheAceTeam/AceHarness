@@ -9,7 +9,7 @@ import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import {
   buildFullPrompt,
   getSessionId,
@@ -55,15 +55,7 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
     const { createOpencode } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
     console.log('[opencode-sdk] starting HTTP server...');
 
-    // Load user-configured environment variables
-    const serverEnv = { ...process.env };
-    try {
-      const userEnvVars = await loadEnvVars();
-      const userEnv = buildEnvObject(userEnvVars);
-      Object.assign(serverEnv, userEnv);
-    } catch {
-      // Ignore env loading errors
-    }
+    const serverEnv = buildConfiguredProcessEnvSync();
 
     const result = await createOpencode({
       port: 0,
@@ -127,7 +119,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('opencode', getCommonCliSearchPaths());
+    return commandExists('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {

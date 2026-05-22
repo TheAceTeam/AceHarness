@@ -203,6 +203,40 @@ function mergeAdjacentReasoningItems(items: TimelineItem[]): TimelineItem[] {
   return merged;
 }
 
+function mergeReasoningLeadInText(items: TimelineItem[]): TimelineItem[] {
+  const merged = [...items];
+
+  for (let index = 1; index < merged.length; index += 1) {
+    const item = merged[index];
+    const previous = merged[index - 1];
+    if (item?.kind !== 'reasoning' || previous?.kind !== 'text') continue;
+    if (!/^\s+\S/u.test(item.text)) continue;
+
+    const leadInMatch = previous.text.match(/^(.*?)([.!?。！？]\s*)([^\n.!?。！？]{1,32})$/su);
+    if (!leadInMatch) continue;
+
+    const tail = String(leadInMatch[3] || '').trim();
+    if (!tail) continue;
+    if (tail.split(/\s+/u).length > 4) continue;
+    if (!/^[\p{L}\p{N}"'`({\[]/u.test(tail)) continue;
+
+    const visibleText = `${leadInMatch[1]}${leadInMatch[2]}`.trimEnd();
+    if (!visibleText) continue;
+
+    merged[index - 1] = {
+      ...previous,
+      end: Math.max(previous.start, item.start),
+      text: visibleText,
+    };
+    merged[index] = {
+      ...item,
+      text: `${tail}${item.text}`,
+    };
+  }
+
+  return merged.filter((item) => item.kind !== 'text' || Boolean(item.text.trim()));
+}
+
 function normalizeToolIdentityValue(value: unknown): string {
   return String(value || '')
     .trim()
@@ -843,7 +877,7 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
   const hasPendingSubtask = subtaskEntries.some((entry) => entry.state !== 'output-available');
   const lastBlock = blocks[blocks.length - 1];
   const hasTrailingReasoning = isStreaming && lastBlock?.kind === 'reasoning';
-  const mergedItems = mergeAdjacentReasoningItems(items);
+  const mergedItems = mergeReasoningLeadInText(mergeAdjacentReasoningItems(items));
 
   return {
     timelineItems: mergedItems,
@@ -1387,7 +1421,7 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
               data-testid="ace-reasoning"
             >
               <ReasoningTrigger />
-              <ReasoningContent>{item.text}</ReasoningContent>
+              <ReasoningContent data-testid="ace-reasoning-content">{item.text}</ReasoningContent>
             </Reasoning>
           );
         }

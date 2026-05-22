@@ -152,6 +152,17 @@ export function formatError(error: unknown): string {
   }
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (!error) return false;
+  if ((error as any)?.name === 'AbortError') return true;
+  const message = typeof (error as any)?.message === 'string'
+    ? (error as any).message
+    : typeof error === 'string'
+      ? error
+      : '';
+  return /abort(ed)?/i.test(message);
+}
+
 function normalizeSsePayload(payload: unknown): OpenCodeStreamEventPayload | undefined {
   if (!payload || typeof payload !== 'object') return undefined;
   const event = payload as Record<string, unknown>;
@@ -529,10 +540,6 @@ async function sendPromptStreaming(options: {
       await sleep(50);
     }
 
-    if (streamEnded && !idle && !streamError) {
-      streamError = new Error(`[${options.engineName}] event stream ended before session idle`);
-    }
-    if (streamError) throw new Error(formatError(streamError));
     if (!idle && options.signal?.aborted) throw new Error(`[${options.engineName}] prompt cancelled`);
     if (!idle && !promptAccepted) throw new Error(`[${options.engineName}] prompt was not accepted`);
     await streamDone.done;
@@ -540,6 +547,10 @@ async function sendPromptStreaming(options: {
     await syncLatestAssistantParts();
     finalizeUnknownPartTypes();
     const hydratedOutput = await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query);
+    if (streamError) throw new Error(formatError(streamError));
+    if (streamEnded && !idle && !(hydratedOutput || output)) {
+      throw new Error(`[${options.engineName}] event stream ended before session idle`);
+    }
     if (hydratedOutput) {
       if (!output) {
         emitTextDelta(hydratedOutput);
@@ -864,10 +875,15 @@ function consumeSdkSseStream(options: {
     options.onConnected?.();
     const stream = subscription.stream;
     if (!stream) return;
-    for await (const payload of stream) {
-      options.onPayload(normalizeSsePayload(payload));
+    try {
+      for await (const payload of stream) {
+        options.onPayload(normalizeSsePayload(payload));
+      }
+      options.onEnded?.();
+    } catch (error) {
+      if (options.signal.aborted || isAbortLikeError(error)) return;
+      throw error;
     }
-    options.onEnded?.();
   });
 
   return { connected: connected.then(() => undefined), done };

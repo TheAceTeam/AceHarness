@@ -4,6 +4,7 @@
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
@@ -31,6 +32,16 @@ async function readVarsFromFile(filePath: string): Promise<EnvVar[]> {
   }
 }
 
+function readVarsFromFileSync(filePath: string): EnvVar[] {
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const parsed = parse(content);
+    return Array.isArray(parsed?.vars) ? parsed.vars : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function loadEnvVars(options?: { scope?: 'system' | 'user' | 'merged'; userId?: string }): Promise<EnvVar[]> {
   const scope = options?.scope || 'system';
   if (scope === 'system') return readVarsFromFile(ENV_VARS_PATH);
@@ -41,6 +52,28 @@ export async function loadEnvVars(options?: { scope?: 'system' | 'user' | 'merge
 
   const systemVars = await readVarsFromFile(ENV_VARS_PATH);
   const userVars = options?.userId ? await readVarsFromFile(getUserEnvPath(options.userId)) : [];
+  const merged = new Map<string, EnvVar>();
+  for (const item of systemVars) {
+    if (!item?.key) continue;
+    merged.set(item.key, item);
+  }
+  for (const item of userVars) {
+    if (!item?.key) continue;
+    merged.set(item.key, item);
+  }
+  return Array.from(merged.values());
+}
+
+export function loadEnvVarsSync(options?: { scope?: 'system' | 'user' | 'merged'; userId?: string }): EnvVar[] {
+  const scope = options?.scope || 'system';
+  if (scope === 'system') return readVarsFromFileSync(ENV_VARS_PATH);
+  if (scope === 'user') {
+    if (!options?.userId) return [];
+    return readVarsFromFileSync(getUserEnvPath(options.userId));
+  }
+
+  const systemVars = readVarsFromFileSync(ENV_VARS_PATH);
+  const userVars = options?.userId ? readVarsFromFileSync(getUserEnvPath(options.userId)) : [];
   const merged = new Map<string, EnvVar>();
   for (const item of systemVars) {
     if (!item?.key) continue;

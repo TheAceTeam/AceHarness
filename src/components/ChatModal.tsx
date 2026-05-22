@@ -12,6 +12,14 @@ import { Conversation, ConversationContent, ConversationScrollButton } from '@/c
 import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
 import type { PromptInputMessage } from '@/components/ai-elements/prompt-input';
 import { normalizeAssistantDisplay } from '@/lib/chat/actions';
+import { cn } from '@/lib/core/utils';
+
+interface AuthViewer {
+  username: string;
+  email?: string;
+  role?: 'admin' | 'user';
+  avatar?: string;
+}
 
 function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyKey): boolean {
   return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
@@ -19,6 +27,37 @@ function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyK
 
 function normalizeSessionId(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function makeMessageId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createWelcomeMessage(): Message {
+  return {
+    id: makeMessageId(),
+    role: 'assistant',
+    content: '你好，请问有什么能够帮忙的',
+    rawContent: '你好，请问有什么能够帮忙的',
+    timestamp: Date.now(),
+  };
+}
+
+function createInitialMessages(): Message[] {
+  return [createWelcomeMessage()];
+}
+
+function readStoredAuthUser(): AuthViewer | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const stored = localStorage.getItem('auth-user');
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    if (parsed?.username) {
+      return parsed as AuthViewer;
+    }
+  } catch {}
+  return null;
 }
 
 interface Message {
@@ -35,13 +74,17 @@ interface Message {
 }
 
 export default function ChatModal() {
-  const { isOpen, toggleChat, closeChat, model: ctxModel, effectiveEngine: ctxEffectiveEngine } = useChat();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const { isOpen, toggleChat, closeChat, model: ctxModel, effectiveEngine: ctxEffectiveEngine, isModelSelectionReady } = useChat();
+  const [messages, setMessages] = useState<Message[]>(createInitialMessages);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [model, setModel] = useState('');
-  const [engine, setEngine] = useState('');
+  const [model, setModel] = useState(() => ctxModel || '');
+  const [engine, setEngine] = useState(() => ctxEffectiveEngine || '');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [currentUser, setCurrentUser] = useState<AuthViewer | null>(() => readStoredAuthUser());
   const effectiveEngine = useCurrentEngine(engine);
+  const isComposerReady = isModelSelectionReady && Boolean(model && effectiveEngine);
 
   useEffect(() => {
     if (!model && ctxModel) setModel(ctxModel);
@@ -50,11 +93,27 @@ export default function ChatModal() {
   useEffect(() => {
     if (!engine && ctxEffectiveEngine) setEngine(ctxEffectiveEngine);
   }, [ctxEffectiveEngine, engine]);
-  const makeMessageId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setCurrentUser(readStoredAuthUser());
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncCurrentUser = () => setCurrentUser(readStoredAuthUser());
+    window.addEventListener('storage', syncCurrentUser);
+    window.addEventListener('focus', syncCurrentUser);
+    return () => {
+      window.removeEventListener('storage', syncCurrentUser);
+      window.removeEventListener('focus', syncCurrentUser);
+    };
+  }, []);
 
   const send = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
+    if (!trimmed || loading || !isComposerReady) return;
+    setDraft('');
     setMessages(prev => [...prev, {
       id: makeMessageId(),
       role: 'user',
@@ -104,7 +163,22 @@ export default function ChatModal() {
     send(message.text);
   };
 
-  const clearChat = () => { setMessages([]); setSessionId(null); };
+  const handleTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || !event.shiftKey) return;
+    event.preventDefault();
+    if (loading || !draft.trim()) return;
+    event.currentTarget.form?.requestSubmit();
+  };
+
+  const clearChat = () => {
+    setMessages(createInitialMessages());
+    setSessionId(null);
+    setDraft('');
+  };
+  const handleClose = () => {
+    setIsFullscreen(false);
+    closeChat();
+  };
 
   const renderedMessages = useMemo(() => (
     messages.map((msg) => {
@@ -125,11 +199,12 @@ export default function ChatModal() {
             onRejectAction={() => {}}
             onUndoAction={() => {}}
             onRetryAction={() => {}}
+            currentUser={currentUser ? { username: currentUser.username, avatar: currentUser.avatar } : null}
           />
         </div>
       );
     })
-  ), [messages]);
+  ), [currentUser, messages]);
 
   return (
     <>
@@ -144,7 +219,7 @@ export default function ChatModal() {
               size="icon"
               className="h-14 w-14 rounded-full p-0 shadow-lg hover:bg-transparent"
               onClick={toggleChat}
-              title="ACEHarness 在线"
+              title="轻聊"
             >
               <Persona
                 state="idle"
@@ -157,23 +232,32 @@ export default function ChatModal() {
       )}
 
       {isOpen && (
-        <div className="fixed bottom-6 right-6 w-96 h-[600px] bg-background border rounded-lg shadow-2xl z-50 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b bg-muted flex-shrink-0">
-            <span className="font-semibold text-sm">ACEHarness 在线</span>
+        <div
+          className={cn(
+            'fixed z-50 flex flex-col overflow-hidden border bg-background shadow-2xl transition-all duration-200',
+            isFullscreen
+              ? 'inset-4 rounded-2xl md:inset-6'
+              : 'bottom-6 right-6 h-[600px] w-96 rounded-lg'
+          )}
+        >
+          <div className="flex items-center justify-between border-b bg-muted px-4 py-3 flex-shrink-0">
+            <span className="font-semibold text-sm">轻聊</span>
             <div className="flex items-center gap-2">
-              <div className="w-44">
-                <EngineModelSelect
-                  engine={engine}
-                  model={model}
-                  onEngineChange={setEngine}
-                  onModelChange={setModel}
-                  className="h-7 text-xs"
-                />
-              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setIsFullscreen((prev) => !prev)}
+                title={isFullscreen ? '退出全屏' : '全屏'}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                  {isFullscreen ? 'close_fullscreen' : 'open_in_full'}
+                </span>
+              </Button>
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={clearChat} title="清空对话">
                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete_sweep</span>
               </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={closeChat} title="关闭">
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleClose} title="关闭">
                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>close</span>
               </Button>
             </div>
@@ -181,12 +265,6 @@ export default function ChatModal() {
 
           <Conversation className="flex-1">
             <ConversationContent className="gap-3 p-4">
-              {messages.length === 0 && !loading && (
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                  <RobotLogo size={48} className="mb-2 opacity-50" />
-                  <span className="text-sm">输入消息开始对话</span>
-                </div>
-              )}
               {renderedMessages}
               {loading && (
                 <div className="flex items-center gap-2 text-muted-foreground">
@@ -201,12 +279,40 @@ export default function ChatModal() {
           <div className="flex-shrink-0 px-4 pb-4 pt-3">
             <PromptInput
               onSubmit={handleSubmit}
-              disabled={loading}
-              className="rounded-xl border-border/70 bg-background shadow-sm"
+              disabled={loading || !isComposerReady}
+              className="rounded-[28px] border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]"
             >
-              <PromptInputTextarea placeholder="输入消息... (Enter 发送)" />
-              <PromptInputFooter className="justify-end">
-                <PromptInputSubmit />
+              <PromptInputTextarea
+                placeholder={isComposerReady ? '输入消息... (Enter 发送)' : '加载模型配置中...'}
+                value={draft}
+                onChange={(event) => setDraft(event.currentTarget.value)}
+                onKeyDown={handleTextareaKeyDown}
+                maxLength={10000}
+                rows={2}
+                className="min-h-[88px] max-h-[220px] border-0 bg-transparent px-6 pb-4 pt-5 text-[15px] leading-6 shadow-none focus-visible:ring-0 placeholder:text-[#64748b]"
+              />
+              <PromptInputFooter className="items-center justify-between gap-3 border-t border-border/60 px-6 pb-4 pt-4">
+                <div className={cn('min-w-0 flex-1', isFullscreen ? 'max-w-sm' : 'max-w-[13rem]')}>
+                  <EngineModelSelect
+                    engine={engine}
+                    model={model}
+                    onEngineChange={setEngine}
+                    onModelChange={setModel}
+                    className="h-12 rounded-xl border-border/70 bg-background px-3 text-sm shadow-none"
+                  />
+                </div>
+                <div className="flex shrink-0 items-center">
+                  <PromptInputSubmit
+                    className="h-11 w-11 rounded-2xl bg-[#1f6fff] px-0 text-white shadow-sm transition-colors duration-150 hover:bg-[#1a61de] disabled:bg-[#8eb1f7] disabled:text-white"
+                    disabled={loading || !draft.trim() || !isComposerReady}
+                  >
+                    {loading ? (
+                      <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                    ) : (
+                      <span className="material-symbols-outlined text-[18px]">subdirectory_arrow_left</span>
+                    )}
+                  </PromptInputSubmit>
+                </div>
               </PromptInputFooter>
             </PromptInput>
           </div>

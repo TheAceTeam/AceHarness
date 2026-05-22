@@ -11,6 +11,7 @@ import { delimiter as pathDelimiter, join } from 'path';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
   ClientSideConnection,
@@ -263,16 +264,15 @@ export class ACPEngine extends EventEmitter {
     const args = this.buildCommandArgs();
     const commonCliPaths = getCommonCliSearchPaths();
     const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
+    const baseEnv = buildConfiguredProcessEnvSync(this.config.env);
     const envPath = [
-      process.env.PATH || '',
+      baseEnv.PATH || baseEnv.Path || '',
       ...getWindowsSystemPaths(),
       ...commonCliPaths,
-      this.config.env?.PATH || this.config.env?.Path || '',
     ].filter(Boolean).join(pathDelimiter);
 
     const childEnv = {
-      ...process.env,
-      ...this.config.env,
+      ...baseEnv,
       PATH: envPath,
       Path: envPath,
     };

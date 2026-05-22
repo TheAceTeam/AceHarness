@@ -11,7 +11,11 @@ import { EventEmitter } from 'events';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
-import { loadEnvVars, buildEnvObject } from '@/lib/core/env-manager';
+import {
+  buildConfiguredProcessEnvSync,
+  getConfiguredCliSearchPaths,
+  getConfiguredEnvValueSync,
+} from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
   buildFullPrompt,
@@ -45,18 +49,22 @@ async function runtimeImport<T = any>(moduleName: string): Promise<T> {
 }
 
 function getBaseUrl(): string {
-  return String(process.env.ACE_NGA_SDK_BASE_URL || '').trim().replace(/\/+$/, '');
+  return String(getConfiguredEnvValueSync('ACE_NGA_SDK_BASE_URL') || '').trim().replace(/\/+$/, '');
 }
 
 function getNgaCommand(): string {
-  const configured = String(process.env.ACE_NGA_SDK_COMMAND || process.env.ACE_NGA_BIN || '').trim();
+  const configured = String(
+    getConfiguredEnvValueSync('ACE_NGA_SDK_COMMAND')
+    || getConfiguredEnvValueSync('ACE_NGA_BIN')
+    || ''
+  ).trim();
   if (configured) return configured;
-  const searchPaths = getCommonCliSearchPaths();
+  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
   return findCommand('ngagent', searchPaths) || findCommand('nga', searchPaths) || 'nga';
 }
 
 function getTimeoutMs(): number {
-  const raw = Number.parseInt(String(process.env.ACE_NGA_SDK_TIMEOUT_MS || '').trim(), 10);
+  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_NGA_SDK_TIMEOUT_MS') || '').trim(), 10);
   if (!Number.isFinite(raw)) return 10_000;
   return Math.min(120_000, Math.max(1_000, raw));
 }
@@ -115,13 +123,7 @@ async function startManagedServer(): Promise<ManagedServer> {
 
   console.log(`[nga-sdk] starting managed NGA server: ${command} ${args.join(' ')}`);
 
-  const spawnEnv = { ...process.env };
-  try {
-    const userEnvVars = await loadEnvVars();
-    Object.assign(spawnEnv, buildEnvObject(userEnvVars));
-  } catch {
-    // ignore env loading errors
-  }
+  const spawnEnv = buildConfiguredProcessEnvSync();
 
   return await new Promise<ManagedServer>((resolve, reject) => {
     let settled = false;
@@ -277,7 +279,8 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
         return false;
       }
     }
-    return !!managedServer || !!serverStarting || !!findCommand('ngagent', getCommonCliSearchPaths()) || !!findCommand('nga', getCommonCliSearchPaths());
+    const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+    return !!managedServer || !!serverStarting || !!findCommand('ngagent', searchPaths) || !!findCommand('nga', searchPaths);
   }
 
   async execute(options: EngineOptions): Promise<EngineResult> {
