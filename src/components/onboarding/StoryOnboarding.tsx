@@ -1185,7 +1185,7 @@ export function StoryOnboarding({
                   <h2 className="text-2xl font-bold">引导完成</h2>
                   <p className="text-muted-foreground">你已经完成全模块认知。下一步建议先执行一个小规模工作流实操，再逐步扩大复杂度。</p>
                   {!allDoneForRole && (
-                    <div className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                    <div className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/35 dark:text-amber-200">
                       必做项未全部勾选。请先完成团队成员必做项{role === 'admin' ? '和管理员必做项' : ''}。
                     </div>
                   )}

@@ -159,4 +159,53 @@ describe('OpenCodeSdkEngineWrapper', () => {
     expect(sdkMocks.createOpencodeServer).toHaveBeenCalledTimes(2);
     expect(closeFns[0]).toHaveBeenCalledTimes(1);
   });
+
+  test('returns the full streamed transcript, not only the final hydrated text', async () => {
+    const toolCall = '\n<ace-process>{"kind":"tool-call","toolName":"read","title":"📖 读取文件","filePath":"C:\\\\workspace\\\\bin","body":"","toolId":"tool-1"}</ace-process>\n';
+    const toolResult = '\n<ace-process>{"kind":"tool-result","toolName":"read","title":"📖 读取文件","output":"ace.js","body":"","toolId":"tool-1"}</ace-process>\n';
+    const finalJson = '{"files":["ace.js"]}';
+
+    adapterMocks.sendPromptWithOpenCodeHttp.mockImplementation(async ({ emit }: { emit: (event: { type: string; content: string }) => void }) => {
+      emit({ type: 'text', content: toolCall });
+      emit({ type: 'text', content: toolResult });
+      emit({ type: 'text', content: finalJson });
+      return finalJson;
+    });
+
+    sdkMocks.createOpencodeServer.mockResolvedValue({
+      url: 'http://127.0.0.1:4101',
+      close: vi.fn(),
+    });
+
+    const { OpenCodeSdkEngineWrapper } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const wrapper = new OpenCodeSdkEngineWrapper();
+    const result = await wrapper.execute(BASE_OPTIONS);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe(`${toolCall}${toolResult}${finalJson}`.trim());
+  });
+
+  test('ignores ignorable tail transport failures when streamed output is already complete', async () => {
+    const toolCall = '\n<ace-process>{"kind":"tool-call","toolName":"read","title":"read","filePath":"C:\\\\workspace\\\\bin","body":"","toolId":"tool-1"}</ace-process>\n';
+    const finalJson = '{"files":["ace.js"]}';
+
+    adapterMocks.sendPromptWithOpenCodeHttp.mockImplementation(async ({ emit }: { emit: (event: { type: string; content: string }) => void }) => {
+      emit({ type: 'text', content: toolCall });
+      emit({ type: 'text', content: finalJson });
+      throw new Error('[opencode-sdk] child exited early code=1 signal=null; stderr tail: <empty>');
+    });
+
+    sdkMocks.createOpencodeServer.mockResolvedValue({
+      url: 'http://127.0.0.1:4101',
+      close: vi.fn(),
+    });
+
+    const { OpenCodeSdkEngineWrapper } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const wrapper = new OpenCodeSdkEngineWrapper();
+    const result = await wrapper.execute(BASE_OPTIONS);
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe(`${toolCall}${finalJson}`.trim());
+    expect(result.error).toBeUndefined();
+  });
 });

@@ -12,6 +12,17 @@ import {
   stringifyStructured,
 } from '@/lib/chat/ace-process-formatters';
 
+const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
+  /ECONNRESET/i,
+  /child exited early code=1 signal=null; stderr tail:\s*<empty>/i,
+];
+
+function isIgnorableOpenCodeSdkTailError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message.trim()) return false;
+  return IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
 export type OpenCodeTextPart = {
   id?: string;
   type: 'text';
@@ -55,7 +66,14 @@ type OpenCodeSseResult = {
   stream?: AsyncIterable<unknown>;
 };
 
+type OpenCodePermissionResponse = 'once' | 'always' | 'reject';
+
 export type OpenCodeHttpClient = {
+  postSessionIdPermissionsPermissionId?: (options: {
+    path: { id: string; permissionID: string };
+    body?: { response: OpenCodePermissionResponse };
+    query?: { directory?: string };
+  }) => Promise<{ data?: unknown; error?: unknown }>;
   config?: {
     get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
   };
@@ -87,7 +105,7 @@ export type OpenCodeHttpClient = {
     messages?: (options: {
       path: { id: string };
       query?: { directory?: string; limit?: number };
-    }) => Promise<{ data?: Array<{ parts?: OpenCodePart[]; info?: { role?: string } }>; error?: unknown }>;
+    }) => Promise<{ data?: OpenCodeSessionMessage[]; error?: unknown }>;
   };
 };
 
@@ -95,6 +113,11 @@ export type OpenCodePromptBody = {
   model?: { providerID: string; modelID: string };
   variant?: string;
   parts: Array<{ type: 'text'; text: string }>;
+};
+
+type OpenCodeSessionMessage = {
+  parts?: OpenCodePart[];
+  info?: { role?: string };
 };
 
 export const ZERO_USAGE_METADATA: EngineResultMetadata = {
@@ -114,6 +137,8 @@ type OpenCodeAdapterLogFn = (entry: {
   metadata?: unknown;
   verbose?: boolean;
 }) => void;
+
+const STABLE_ASSISTANT_COMPLETION_WINDOW_MS = 2_500;
 
 function isDebugEnabled(): boolean {
   return process.env.ACE_TIMING_DEBUG === '1' || process.env.ACE_TIMING_DEBUG === 'true';
@@ -145,11 +170,21 @@ export function extractOutput(data: OpenCodeSessionPromptResponse | undefined): 
 
 export function formatError(error: unknown): string {
   if (typeof error === 'string') return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
+  if (error instanceof Error) {
+    const code = typeof (error as any)?.code === 'string' ? ` code=${(error as any).code}` : '';
+    return `${error.name || 'Error'}: ${error.message}${code}`.trim();
   }
+  if (error && typeof error === 'object' && typeof (error as any)?.message === 'string') {
+    const code = typeof (error as any)?.code === 'string' ? ` code=${(error as any).code}` : '';
+    return `${String((error as any).message)}${code}`.trim();
+  }
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized && serialized !== '{}') return serialized;
+  } catch {
+    // fall through
+  }
+  return String(error);
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -296,6 +331,7 @@ export async function sendPromptWithOpenCodeHttp(options: {
   emit: (event: EngineStreamEvent) => void;
   log?: OpenCodeAdapterLogFn;
   disableStreaming?: boolean;
+  permissionResponse?: OpenCodePermissionResponse;
 }): Promise<string> {
   const promptBody: OpenCodePromptBody = {
     ...options.promptBodyExtras,
@@ -389,11 +425,13 @@ async function sendPromptStreaming(options: {
   signal?: AbortSignal;
   emit: (event: EngineStreamEvent) => void;
   log?: OpenCodeAdapterLogFn;
+  permissionResponse?: OpenCodePermissionResponse;
 }): Promise<string> {
   const abortController = new AbortController();
   const onAbort = () => abortController.abort();
   options.signal?.addEventListener('abort', onAbort, { once: true });
   const existingAssistantPartIds = await loadAssistantPartIds(options.client, options.sessionId, options.query);
+  const startedAt = Date.now();
 
   let output = '';
   let idle = false;
@@ -410,6 +448,11 @@ async function sendPromptStreaming(options: {
   const emittedStructuredPartStarts = new Set<string>();
   const emittedStructuredPartFinishes = new Set<string>();
   const pendingUnknownPartBuffers = new Map<string, string>();
+  let latestAssistantTextSnapshot = '';
+  let latestAssistantPartsSignature = '';
+  let latestAssistantPartsTouchedAtMs = 0;
+  let latestAssistantHasPendingStructuredParts = false;
+  const repliedPermissionIds = new Set<string>();
 
   const timeoutMs = Math.max(1_000, options.timeoutMs || 120_000);
   options.log?.({
@@ -453,6 +496,9 @@ async function sendPromptStreaming(options: {
           });
         },
         onError: (error) => {
+          if (promptAccepted && isIgnorableOpenCodeSdkTailError(error)) {
+            return;
+          }
           options.log?.({
             level: 'error',
             message: 'Raw SSE error',
@@ -533,11 +579,17 @@ async function sendPromptStreaming(options: {
       signal: abortController.signal,
       shouldStop: () => idle || streamEnded || Boolean(streamError),
       onPart: handlePartUpdated,
+      onMessages: updateLatestAssistantTextSnapshot,
       ignorePartIds: existingAssistantPartIds,
     });
 
     while (!idle && !streamEnded && !streamError && !abortController.signal.aborted) {
       await sleep(50);
+      if (promptAccepted && shouldCompleteFromStableAssistantSnapshot()) {
+        idle = true;
+        abortController.abort();
+        break;
+      }
     }
 
     if (!idle && options.signal?.aborted) throw new Error(`[${options.engineName}] prompt cancelled`);
@@ -546,8 +598,8 @@ async function sendPromptStreaming(options: {
     await structuredPartPoller;
     await syncLatestAssistantParts();
     finalizeUnknownPartTypes();
-    const hydratedOutput = await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query);
-    if (streamError) throw new Error(formatError(streamError));
+    const hydratedOutput = (await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query))
+      || latestAssistantTextSnapshot;
     if (streamEnded && !idle && !(hydratedOutput || output)) {
       throw new Error(`[${options.engineName}] event stream ended before session idle`);
     }
@@ -557,6 +609,9 @@ async function sendPromptStreaming(options: {
       } else if (hydratedOutput.startsWith(output) && hydratedOutput.length > output.length) {
         emitTextDelta(hydratedOutput.slice(output.length));
       }
+    }
+    if (streamError && !hydratedOutput) {
+      throw new Error(formatError(streamError));
     }
     options.log?.({
       message: 'Streaming prompt done',
@@ -598,11 +653,36 @@ async function sendPromptStreaming(options: {
     const current = partBuffers.get(partID) || '';
     partBuffers.set(partID, current + pending);
     if (shouldSuppressPartReplay(partType)) return;
-    if (partType === 'text') {
-      emitTextDelta(pending);
-    } else if (partType === 'reasoning') {
+    if (partType === 'reasoning') {
       emitReasoningDelta(pending);
     }
+  }
+
+  function updateLatestAssistantTextSnapshot(messages: OpenCodeSessionMessage[] | undefined): void {
+    if (!Array.isArray(messages)) return;
+    const assistantMessages = messages.filter((message) => message?.info?.role === 'assistant');
+    const latestAssistant = assistantMessages[assistantMessages.length - 1];
+    const parts = Array.isArray(latestAssistant?.parts) ? latestAssistant.parts : [];
+    const snapshot = collectTextFromParts(parts).trim();
+    const signature = parts.map((part) => stableSerialize(part)).join('\n');
+    const hasPendingStructuredParts = parts.some((part) => isPendingStructuredPart(part));
+    if (
+      signature !== latestAssistantPartsSignature
+      || snapshot !== latestAssistantTextSnapshot
+      || hasPendingStructuredParts !== latestAssistantHasPendingStructuredParts
+    ) {
+      latestAssistantPartsTouchedAtMs = Date.now() - startedAt;
+      latestAssistantPartsSignature = signature;
+      latestAssistantTextSnapshot = snapshot;
+      latestAssistantHasPendingStructuredParts = hasPendingStructuredParts;
+    }
+  }
+
+  function shouldCompleteFromStableAssistantSnapshot(): boolean {
+    if (!latestAssistantTextSnapshot) return false;
+    if (latestAssistantHasPendingStructuredParts) return false;
+    if (!latestAssistantPartsTouchedAtMs) return false;
+    return (Date.now() - startedAt - latestAssistantPartsTouchedAtMs) >= STABLE_ASSISTANT_COMPLETION_WINDOW_MS;
   }
 
   function emitSessionNextEndedDelta(current: string, finalText: string, kind: 'text' | 'reasoning'): void {
@@ -626,6 +706,7 @@ async function sendPromptStreaming(options: {
         query: { ...(options.query || {}), limit: 10 },
       });
       if (result.error || !Array.isArray(result.data)) return;
+      updateLatestAssistantTextSnapshot(result.data);
       const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
       for (const message of assistantMessages) {
         const parts = Array.isArray(message?.parts) ? message.parts : [];
@@ -657,10 +738,8 @@ async function sendPromptStreaming(options: {
       if (text.length <= current.length) return;
       if (shouldSuppressPartReplay(part.type)) return;
       if (!text.startsWith(current)) return;
-      const delta = text.slice(current.length);
-      if (part.type === 'text') {
-        emitTextDelta(delta);
-      } else {
+      if (part.type !== 'text') {
+        const delta = text.slice(current.length);
         emitReasoningDelta(delta);
       }
       return;
@@ -707,9 +786,7 @@ async function sendPromptStreaming(options: {
 
     const current = partBuffers.get(partID) || '';
     partBuffers.set(partID, current + delta);
-    if (partType === 'text') {
-      emitTextDelta(delta);
-    } else {
+    if (partType !== 'text') {
       emitReasoningDelta(delta);
     }
   }
@@ -750,6 +827,58 @@ async function sendPromptStreaming(options: {
     sessionNextReasoningBuffers.set(reasoningID, text);
   }
 
+  async function respondToPermissionRequest(properties: OpenCodeStreamEventPayload['properties']): Promise<void> {
+    const response = options.permissionResponse;
+    if (!response) return;
+    const permissionID = typeof properties?.id === 'string' ? properties.id : '';
+    const sessionID = properties?.sessionID || properties?.sessionId || options.sessionId;
+    if (!permissionID || !sessionID) {
+      options.log?.({
+        level: 'warning',
+        message: 'OpenCode permission request missing id',
+        metadata: properties,
+      });
+      return;
+    }
+
+    const replyKey = `${sessionID}:${permissionID}`;
+    if (repliedPermissionIds.has(replyKey)) return;
+    repliedPermissionIds.add(replyKey);
+
+    if (typeof options.client.postSessionIdPermissionsPermissionId !== 'function') {
+      const error = new Error('OpenCode permission response API unavailable');
+      streamError = error;
+      options.log?.({
+        level: 'error',
+        message: 'OpenCode permission auto-approval unavailable',
+        detail: formatError(error),
+        metadata: properties,
+      });
+      abortController.abort();
+      return;
+    }
+
+    try {
+      const result = await options.client.postSessionIdPermissionsPermissionId({
+        path: { id: sessionID, permissionID },
+        body: { response },
+        query: options.query,
+      });
+      if (result?.error) {
+        throw new Error(formatError(result.error));
+      }
+    } catch (error) {
+      streamError = error;
+      options.log?.({
+        level: 'error',
+        message: 'OpenCode permission auto-approval failed',
+        detail: formatError(error),
+        metadata: properties,
+      });
+      abortController.abort();
+    }
+  }
+
   function handlePayload(payload: OpenCodeStreamEventPayload | undefined): void {
     if (!isCurrentSession(payload, options.sessionId)) return;
 
@@ -765,6 +894,10 @@ async function sendPromptStreaming(options: {
       metadata: payload,
       verbose: true,
     });
+    if (type === 'permission.asked') {
+      void respondToPermissionRequest(properties);
+      return;
+    }
     if (!promptAccepted) {
       if (type === 'session.error') {
         streamError = properties?.error || payload;
@@ -1011,6 +1144,22 @@ function collectTextDeep(value: unknown): string {
   return '';
 }
 
+function stableSerialize(value: unknown): string {
+  try {
+    return JSON.stringify(value) || '';
+  } catch {
+    return String(value);
+  }
+}
+
+function isPendingStructuredPart(part: OpenCodePart | undefined): boolean {
+  if (!part || typeof part !== 'object') return false;
+  if (part.type === 'text' || part.type === 'reasoning') return false;
+  const state = (part as any).state || {};
+  const status = String(state.status || (part as any).status || '').toLowerCase();
+  return status === 'pending' || status === 'running' || status === 'in_progress';
+}
+
 async function hydrateOutputFromSessionMessages(
   client: OpenCodeHttpClient,
   sessionId: string,
@@ -1033,6 +1182,7 @@ async function pollSessionMessagesWhileRunning(options: {
   query?: { directory?: string };
   signal: AbortSignal;
   shouldStop: () => boolean;
+  onMessages?: (messages: OpenCodeSessionMessage[]) => void;
   onPart: (part: OpenCodePart) => void;
   ignorePartIds?: Set<string>;
 }): Promise<void> {
@@ -1046,6 +1196,7 @@ async function pollSessionMessagesWhileRunning(options: {
         query: { ...(options.query || {}), limit: 10 },
       });
       if (!result.error && Array.isArray(result.data)) {
+        options.onMessages?.(result.data);
         const assistantMessages = result.data.filter((message) => message?.info?.role === 'assistant');
         for (const message of assistantMessages) {
           const parts = Array.isArray(message?.parts) ? message.parts : [];

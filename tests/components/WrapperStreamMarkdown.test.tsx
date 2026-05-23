@@ -2,10 +2,10 @@
 import React from 'react';
 import { EventEmitter } from 'node:events';
 import { describe, expect, test, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { extractAceProcessBlocks, mergeAceSubtaskChunks, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
+import { extractAceProcessBlocks, mergeAceSubtaskChunks, mergeFinalRawStreamContent, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { sendPromptWithOpenCodeHttp } from '@/lib/engines/opencode-http-adapter';
 import { normalizeEngineOutput } from '@/lib/engines/engine-output';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
@@ -314,15 +314,17 @@ async function buildAcpRenderedMessage(
       async createSession() { return 'session-1'; }
       async resumeSession(sessionId: string) { return sessionId; }
       async setModel() {}
+      async recoverLatestAssistantMessage() { return ''; }
       async sendPrompt() {
         await scenario(this);
-        return 'end_turn';
+        return { stopReason: 'end_turn', usage: null };
       }
       cancelSession() {}
     }
 
     return {
       ACPEngine: MockACPEngine,
+      buildAcpProcessReuseKey: vi.fn((config: unknown) => JSON.stringify(config ?? {})),
       logAcpTiming: vi.fn(),
     };
   });
@@ -889,6 +891,7 @@ describe('Wrapper stream markdown rendering', () => {
 
       return {
         ACPEngine: MockACPEngine,
+        buildAcpProcessReuseKey: vi.fn((config: unknown) => JSON.stringify(config ?? {})),
         logAcpTiming: vi.fn(),
       };
     });
@@ -1543,6 +1546,149 @@ describe('Wrapper stream markdown rendering', () => {
     expect(thoughtText).toContain('The user just wants to list workflow configs');
   });
 
+  test('opencode http adapter preserves text-part order so chat-context keeps the structured result', async () => {
+    const emitted: EngineStreamEvent[] = [];
+    const prefix = 'LONG_JSON_BEGIN\n<result>';
+    const body = '{"kind":"card","payload":{"header":{"title":"Long JSON Stream Probe","status":"ok"},"blocks":[{"type":"text","content":"Alpha block text for stream ordering."}]}}</result>';
+    const finalOutput = `${prefix}${body}`;
+    let messagePollCount = 0;
+    const messagesMock = vi.fn(async () => {
+      messagePollCount += 1;
+      if (messagePollCount <= 2) {
+        return { data: [] };
+      }
+      return {
+        data: [
+          {
+            info: { role: 'assistant' },
+            parts: [
+              { id: 'prefix-1', type: 'text', text: prefix },
+              { id: 'body-1', type: 'text', text: body },
+            ],
+          },
+        ],
+      };
+    });
+    const stream = {
+      async *[Symbol.asyncIterator]() {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        yield {
+          type: 'message.part.updated',
+          properties: {
+            sessionID: 'session-1',
+            part: {
+              id: 'body-1',
+              type: 'text',
+              text: body,
+            },
+          },
+        };
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield {
+          type: 'message.part.updated',
+          properties: {
+            sessionID: 'session-1',
+            part: {
+              id: 'prefix-1',
+              type: 'text',
+              text: prefix,
+            },
+          },
+        };
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield {
+          type: 'session.idle',
+          properties: {
+            sessionID: 'session-1',
+          },
+        };
+      },
+    };
+
+    const output = await sendPromptWithOpenCodeHttp({
+      engineName: 'opencode-http',
+      client: {
+        event: {
+          subscribe: vi.fn(async () => ({
+            stream,
+          })),
+        },
+        session: {
+          create: vi.fn(),
+          prompt: vi.fn(async () => ({ data: { parts: [] } })),
+          promptAsync: vi.fn(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return { data: {} };
+          }),
+          messages: messagesMock,
+        },
+      } as any,
+      sessionId: 'session-1',
+      fullPrompt: 'emit a long card result',
+      emit: (event) => emitted.push(event),
+    });
+
+    const accumulatedText = emitted
+      .filter((event) => event.type === 'text')
+      .map((event) => event.content)
+      .join('');
+
+    const appendStreamChunk = (previous: string, next: string): string => {
+      const base = String(previous || '');
+      const chunk = String(next || '');
+      if (!chunk) return base;
+      if (!base) return chunk;
+      if (chunk === base) return base;
+      if (chunk.startsWith(base)) return chunk;
+      return `${base}${chunk}`;
+    };
+
+    const buildFinalRawContent = (
+      accumulatedRawStream: string,
+      accumulatedVisibleContent: string,
+      doneResult: string,
+    ): string => {
+      const raw = String(accumulatedRawStream || '');
+      const visible = String(accumulatedVisibleContent || '');
+      const result = String(doneResult || '');
+
+      if (!raw) return result || visible;
+      if (!result) return raw;
+
+      const parsedRawText = String(parseActions(raw).text || '').trim();
+      const trimmedResult = result.trim();
+      const trimmedVisible = visible.trim();
+
+      if (!trimmedResult) return raw;
+      if (!parsedRawText) return appendStreamChunk(raw, result);
+
+      if (
+        trimmedResult === parsedRawText
+        || parsedRawText.endsWith(trimmedResult)
+        || trimmedResult.endsWith(parsedRawText)
+      ) {
+        return raw;
+      }
+
+      if (trimmedVisible && result.startsWith(visible)) {
+        return appendStreamChunk(raw, result.slice(visible.length));
+      }
+
+      return raw;
+    };
+
+    const replayedRawContent = buildFinalRawContent(accumulatedText, accumulatedText, output);
+    const parsedOutput = parseActions(output);
+    const parsedReplayed = parseActions(replayedRawContent);
+
+    expect(output).toBe(finalOutput);
+    expect(accumulatedText).toBe(output);
+    expect(parsedOutput.cards).toHaveLength(1);
+    expect(parsedOutput.text).toBe('LONG_JSON_BEGIN');
+    expect(parsedReplayed.cards).toHaveLength(1);
+    expect(parsedReplayed.text).toBe('LONG_JSON_BEGIN');
+  });
+
   test('ace-process stream renders reasoning, subtask, tool result, and code blocks through ai-elements', async () => {
     const view = renderWrapperStream([
       {
@@ -1601,6 +1747,55 @@ describe('Wrapper stream markdown rendering', () => {
     expect(screen.getAllByText(/执行命令/).length).toBeGreaterThan(0);
     expect(screen.getByText('const changedFiles = 3;')).toBeInTheDocument();
     expect(screen.getByText('Done.')).toBeInTheDocument();
+  });
+
+  test('skill tool renders as a formatted document instead of raw protocol text', async () => {
+    const view = renderWrapperStream([
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-call',
+          {
+            toolId: 'tool-skill-1',
+            toolName: 'skill',
+            title: '🔧 skill',
+            input: { name: 'cangjie-lang-features' },
+          },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-result',
+          {
+            toolId: 'tool-skill-1',
+            toolName: 'skill',
+            title: '🔧 skill',
+            output: [
+              '<skill_content name="cangjie-lang-features">',
+              '# Skill: cangjie-lang-features',
+              '# 仓颉编程语言特性目录',
+              '> 请按需查阅相关文档',
+              '- [基本概念](./basic_concepts/README.md): 语言核心概念',
+              '</skill_content>',
+            ].join('\n'),
+          },
+          '',
+        ),
+      },
+    ]);
+
+    await openAllDetails(view.container);
+
+    const text = view.container.textContent || '';
+    expect(screen.getAllByText('技能文档').length).toBeGreaterThan(0);
+    expect(text).toContain('cangjie-lang-features');
+    expect(text).toContain('仓颉编程语言特性目录');
+    expect(text).toContain('基本概念');
+    expect(text).not.toContain('<skill_content');
+    expect(text).not.toContain('# Skill: cangjie-lang-features');
+    expect(text).not.toContain('"name": "cangjie-lang-features"');
   });
 
   test('ace-process stream groups consecutive tool cards into a task container', async () => {
@@ -2431,7 +2626,7 @@ describe('Wrapper stream markdown rendering', () => {
     const reasoning = view.container.querySelector('[data-testid="ace-reasoning"]');
     expect(reasoning).toBeTruthy();
     const reasoningTrigger = reasoning?.querySelector('button[aria-expanded]') as HTMLButtonElement | null;
-    expect(reasoningTrigger?.getAttribute('aria-expanded')).toBe('false');
+    expect(reasoningTrigger?.getAttribute('aria-expanded')).toBe('true');
 
     const cards = getToolCards(view.container);
     expect(cards).toHaveLength(1);
@@ -2442,6 +2637,57 @@ describe('Wrapper stream markdown rendering', () => {
     expect(within(cards[0].node).getByText('name')).toBeInTheDocument();
     expect(within(cards[0].node).getByText('workflow-demo')).toBeInTheDocument();
     expectNoProtocolLeak(view.container);
+  });
+
+  test('streaming reasoning auto-opens and closes after streaming ends', async () => {
+    vi.useFakeTimers();
+    try {
+      const rawContent = wrapAceProcessBlock('reasoning', {}, '先确认一下现在的上下文。');
+      const view = render(
+        <ChatMessage
+          message={{
+            id: 'auto-close-reasoning',
+            role: 'assistant',
+            content: '',
+            rawContent,
+          }}
+          isStreaming
+          onConfirmAction={() => {}}
+          onRejectAction={() => {}}
+          onUndoAction={() => {}}
+          onRetryAction={() => {}}
+        />
+      );
+
+      const reasoning = view.container.querySelector('[data-testid="ace-reasoning"]');
+      expect(reasoning).toBeTruthy();
+      const reasoningTrigger = reasoning?.querySelector('button[aria-expanded]') as HTMLButtonElement | null;
+      expect(reasoningTrigger?.getAttribute('aria-expanded')).toBe('true');
+
+      view.rerender(
+        <ChatMessage
+          message={{
+            id: 'auto-close-reasoning',
+            role: 'assistant',
+            content: '',
+            rawContent,
+          }}
+          isStreaming={false}
+          onConfirmAction={() => {}}
+          onRejectAction={() => {}}
+          onUndoAction={() => {}}
+          onRetryAction={() => {}}
+        />
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+
+      expect(reasoningTrigger?.getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('realistic thinking-delta-done transcript keeps tool cards and final answer in the final chat DOM', async () => {
@@ -2845,6 +3091,25 @@ describe('Wrapper stream markdown rendering', () => {
     expect(parsed.cleanText).not.toContain('<think>');
   });
 
+  test('ace-process extraction survives literal closing tags inside tool output strings', () => {
+    const embeddedSource = `const sample = '<ace-process>{"kind":"tool-result","output":"<result>{\\"kind\\":\\"plan_draft\\",\\"payload\\":{\\"summary\\":\\"模板示例\\"}}</result>"}</ace-process>';`;
+    const raw = [
+      wrapAceProcessBlock('tool-result', { toolName: 'read', title: '📖 读取文件', output: embeddedSource }, ''),
+      'Visible text',
+    ].join('\n');
+
+    const parsed = extractAceProcessBlocks(raw);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-result');
+    if (parsed.blocks[0].meta.kind === 'tool-result') {
+      expect(parsed.blocks[0].meta.output).toContain(`</ace-process>'`);
+      expect(parsed.blocks[0].meta.output).toContain('<result>');
+    }
+    expect(parsed.cleanText).toContain('Visible text');
+    expect(parsed.cleanText).not.toContain('<ace-process>');
+  });
+
   test('shared ace tool formatter repairs Windows mojibake in tool results', () => {
     const raw = formatAceToolResult({
       toolName: 'read',
@@ -2862,5 +3127,19 @@ describe('Wrapper stream markdown rendering', () => {
       expect(block.meta.content).toContain('需求文档');
       expect(block.meta.content).not.toContain('瑙勮');
     }
+  });
+
+  test('mergeFinalRawStreamContent keeps streamed reasoning when final rawOutput omits it', () => {
+    const streamed = [
+      wrapAceProcessBlock('reasoning', {}, '先确认一下边界条件。'),
+      '<result>{"kind":"agora_result","payload":{"type":"speech","content":"最终发言","mentions":[]}}</result>',
+    ].join('\n\n');
+    const rawOutput = '<result>{"kind":"agora_result","payload":{"type":"speech","content":"最终发言","mentions":[]}}</result>';
+
+    const merged = mergeFinalRawStreamContent(streamed, rawOutput);
+    const parsed = extractAceProcessBlocks(merged);
+
+    expect(parsed.blocks.some((block) => block.kind === 'reasoning' && block.body.includes('先确认一下边界条件'))).toBe(true);
+    expect(merged).toContain('<result>{"kind":"agora_result"');
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { extractJsonObject, extractStructuredResult, getResultSections } from '@/lib/ai/result-channel';
+import { wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 
 describe('result-channel', () => {
   test('parses bare json payload', () => {
@@ -75,6 +76,21 @@ describe('result-channel', () => {
 
     expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
       '{"kind":"plan_draft","payload":{"summary":"正式草案","artifacts":{"requirements":"# req","design":"# design","tasks":"# tasks"}}}',
+    ]);
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'plan_draft');
+    expect(parsed?.payload?.summary).toBe('正式草案');
+  });
+
+  test('ignores result examples when ace-process tool output contains literal closing tags', () => {
+    const toolOutput = `const sample = '<ace-process>{"kind":"tool-result","output":"<result>{\\"kind\\":\\"plan_draft\\",\\"payload\\":{\\"summary\\":\\"模板示例\\"}}</result>"}</ace-process>';`;
+    const markdown = [
+      '基于工具结果继续整理。',
+      wrapAceProcessBlock('tool-result', { toolName: 'read', title: '读取', output: toolOutput }, ''),
+      '<result>{"kind":"plan_draft","payload":{"summary":"正式草案"}}</result>',
+    ].join('\n');
+
+    expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
+      '{"kind":"plan_draft","payload":{"summary":"正式草案"}}',
     ]);
     const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'plan_draft');
     expect(parsed?.payload?.summary).toBe('正式草案');

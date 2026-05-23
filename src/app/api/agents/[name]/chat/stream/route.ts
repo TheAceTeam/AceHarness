@@ -39,6 +39,37 @@ function hasWerewolfResult(rawOutput: string): boolean {
   ));
 }
 
+function hasAgoraResult(rawOutput: string, expectedType: 'speech' | 'summary' | 'vote'): boolean {
+  return Boolean(extractStructuredResult<{ kind: 'agora_result'; payload: Record<string, any> }>(
+    rawOutput,
+    (value: any): value is { kind: 'agora_result'; payload: Record<string, any> } => Boolean(
+      value
+      && typeof value === 'object'
+      && value.kind === 'agora_result'
+      && value.payload
+      && typeof value.payload === 'object'
+      && value.payload.type === expectedType
+      && typeof value.payload.content === 'string'
+      && value.payload.content.trim()
+    ),
+  ));
+}
+
+function buildAgoraResultRetryPrompt(expectedType: 'speech' | 'summary' | 'vote'): string {
+  const schema = expectedType === 'summary'
+    ? '{"kind":"agora_result","payload":{"type":"summary","title":"本轮总结","content":"共识：...\\n分歧：...\\n风险：...\\n下一步：..."}}'
+    : expectedType === 'vote'
+      ? '{"kind":"agora_result","payload":{"type":"vote","content":"你的选择\\n理由：一句话","choice":"精确选项文本或弃权","reason":"一句简短理由"}}'
+      : '{"kind":"agora_result","payload":{"type":"speech","content":"最终要发出的群聊内容","mentions":["被你@的人名，可为空数组"]}}';
+  return [
+    `你上一条回复不合规：缺少可解析的议场 <result> 结果块，或 payload.type 不是 "${expectedType}"。`,
+    '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
+    '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
+    `唯一允许输出的格式是：<result>${schema}</result>`,
+    '如果需要给人看的最终发言，只能放进 payload.content；输出 </result> 后不要再追加任何文字。',
+  ].join('\n');
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ name: string }> }
@@ -90,7 +121,7 @@ export async function POST(
     prepared.engine.on('stream', onEngineStream);
 
     const execPromise = (async () => {
-      if (!prepared.isTemporaryWerewolf) {
+      if (!prepared.isTemporaryWerewolf && !prepared.isTemporaryAgora) {
         return executeEngineWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
           step: prepared.mode,
@@ -110,20 +141,27 @@ export async function POST(
       }
 
       const maxAttempts = 3;
+      const expectedAgoraType = prepared.agoraExpectedResultType || 'speech';
       let latestSessionId = prepared.resumeSessionId || undefined;
       let lastResult: any = null;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         const isRetry = attempt > 0;
         const result = await executeEngineWithContextRecovery(prepared.engine, {
           agent: prepared.roleConfig.name,
-          step: isRetry ? `${prepared.mode}-result-retry-${attempt}` : prepared.mode,
+          step: isRetry
+            ? `${prepared.mode}-${prepared.isTemporaryWerewolf ? 'result' : 'agora-result'}-retry-${attempt}`
+            : prepared.mode,
           prompt: isRetry
-            ? [
-                '你上一条回复不合规：缺少 `<result>JSON</result>` 结果块。',
-                '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
-                '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
-                '如果需要给人看的内容，把它放进 `display` 字段；如果这是机器决策回合，也把 action / target / save / poisonTarget / reason 等字段一起放进同一个 JSON。',
-              ].join('\n')
+            ? (
+              prepared.isTemporaryWerewolf
+                ? [
+                    '你上一条回复不合规：缺少 `<result>JSON</result>` 结果块。',
+                    '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
+                    '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
+                    '如果需要给人看的内容，把它放进 `display` 字段；如果这是机器决策回合，也把 action / target / save / poisonTarget / reason 等字段一起放进同一个 JSON。',
+                  ].join('\n')
+                : buildAgoraResultRetryPrompt(expectedAgoraType)
+            )
             : prepared.prompt,
           systemPrompt: prepared.roleConfig.systemPrompt || `你是 ${prepared.roleConfig.name}。`,
           model: prepared.model,
@@ -140,7 +178,11 @@ export async function POST(
         });
         lastResult = result;
         latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
-        if (hasWerewolfResult(result.output || '')) return result;
+        if (prepared.isTemporaryWerewolf) {
+          if (hasWerewolfResult(result.output || '')) return result;
+          continue;
+        }
+        if (hasAgoraResult(result.output || '', expectedAgoraType)) return result;
       }
       return lastResult;
     })().then(async (result) => {

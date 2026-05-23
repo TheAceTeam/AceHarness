@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, test, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 
@@ -125,6 +125,39 @@ describe('ChatSidebar', () => {
     expect(mockCreateSession).toHaveBeenCalled();
   });
 
+  test('shows AI-pushed workflow sessions in the workflow directory', async () => {
+    const user = userEvent.setup();
+    mockSessions = [
+      {
+        id: 'workflow-hint-1',
+        title: 'Workflow Planning Chat',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 2,
+        sessionWorkbenchState: {
+          homeSidebar: {
+            type: 'home_sidebar',
+            activeTab: 'workflow',
+            intent: 'create-workflow',
+            stage: 'clarifying',
+            workflowDraft: {
+              name: 'Hinted Workflow',
+            },
+          },
+        },
+      },
+    ];
+
+    render(<ChatSidebar />);
+
+    expect(screen.queryByText('Workflow Planning Chat')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /工作流/ }));
+
+    expect(screen.getAllByText('Hinted Workflow').length).toBeGreaterThan(0);
+  });
+
   test('separates workflow sessions into creating, ready, and active buckets', async () => {
     const user = userEvent.setup();
     mockSessions = [
@@ -225,6 +258,9 @@ describe('ChatSidebar', () => {
     render(<ChatSidebar />);
 
     await user.click(screen.getByRole('button', { name: /工作流/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /workflow-run.yaml/ })).toBeTruthy();
+    });
     await user.click(screen.getByRole('button', { name: /workflow-run.yaml/ }));
 
     expect(screen.getAllByText('workflow-run.yaml').length).toBeGreaterThan(0);

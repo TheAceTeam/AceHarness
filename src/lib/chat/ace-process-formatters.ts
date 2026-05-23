@@ -28,6 +28,7 @@ const KNOWN_TOOLS = new Set([
   'webfetch',
   'websearch',
   'ls',
+  'skill',
   'multiedit',
   'patch',
 ]);
@@ -54,6 +55,7 @@ export function getAceToolTitle(toolName: string): string {
     todowrite: '📋 任务列表',
     webfetch: '🌐 获取网页',
     websearch: '🔎 搜索网页',
+    skill: '技能文档',
   };
   return titleMap[toolName] || `🔧 ${toolName}`;
 }
@@ -425,6 +427,14 @@ export function formatAceToolCall(params: {
       break;
     case 'websearch':
       block = wrapAceProcessBlock('tool-call', { toolName, title, query: String(rawInput.query || '') }, '');
+      break;
+    case 'skill':
+      block = wrapAceProcessBlock('tool-call', {
+        toolName,
+        title,
+        name: String(rawInput.name || rawInput.skill || rawInput.id || ''),
+        input: rawInput,
+      }, '');
       break;
     default:
       block = wrapAceProcessBlock('tool-call', { toolName, title, input: rawInput }, '');

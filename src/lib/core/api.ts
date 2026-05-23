@@ -1064,8 +1064,11 @@ export interface AgoraGuestConfig {
   presetId?: string;
   personaPrompt: string;
   systemPrompt: string;
+  runtimeStrategy?: 'system' | 'explicit';
   engine?: string;
   model?: string;
+  resolvedEngine?: string;
+  resolvedModel?: string;
   status: 'available' | 'unavailable';
   statusReason?: string;
   createdAt: number;

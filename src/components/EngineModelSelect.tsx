@@ -162,6 +162,11 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const effectiveEngine = engine || effectiveGlobalEngine;
   const globalEngineInfo = getEngineMeta(effectiveGlobalEngine) || getEngineMeta(globalEngine);
   const globalLabel = globalEngineInfo?.name || globalEngine || '系统默认';
+  const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
+  const followSystemDescription = [globalLabel, defaultModelLabel].filter(Boolean).join(' / ');
+  const followSystemLabel = followSystemDescription ? `跟随系统 (${followSystemDescription})` : '跟随系统';
+  const isUsingGlobalEngine = !engine;
+  const isUsingGlobalSelection = !engine && !model;
   const hasAnyAvailableEngine = useMemo(
     () => Object.values(engineAvailability).some((available) => available),
     [engineAvailability]
@@ -181,17 +186,26 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     const sysModels = isEngineSelectable(effectiveGlobalEngine)
       ? models.filter((m) => isModelCompatible(m, effectiveGlobalEngine))
       : [];
-    if (sysModels.length > 0) {
+    if (sysModels.length > 0 || isUsingGlobalSelection || Boolean(followSystemDescription)) {
       result.push({
         label: `跟随系统 (${globalLabel})`,
         icon: <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />,
-        items: sysModels.map(m => ({
-          value: `::${m.value}`,
-          label: m.label,
-          icon: <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />,
-          description: m.value,
-          keywords: [m.value, globalLabel],
-        })),
+        items: [
+          {
+            value: '::',
+            label: '系统默认',
+            icon: <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />,
+            description: followSystemDescription || '跟随全局默认引擎与模型',
+            keywords: [globalLabel, globalDefaultModel, '系统默认', '跟随系统'].filter(Boolean) as string[],
+          },
+          ...sysModels.map(m => ({
+            value: `::${m.value}`,
+            label: m.label,
+            icon: <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />,
+            description: m.value,
+            keywords: [m.value, globalLabel],
+          })),
+        ],
       });
     }
 
@@ -239,12 +253,27 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     }
 
     return result;
-  }, [models, effectiveGlobalEngine, globalLabel, isEngineSelectable, isModelCompatible, engine, effectiveEngine, model]);
+  }, [
+    models,
+    effectiveGlobalEngine,
+    globalLabel,
+    isEngineSelectable,
+    isModelCompatible,
+    engine,
+    effectiveEngine,
+    model,
+    isUsingGlobalSelection,
+    followSystemDescription,
+    globalDefaultModel,
+  ]);
 
-  const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
   const modelLabel = models.find(m => m.value === model)?.label || model;
-  const triggerLabel = modelLabel || defaultModelLabel || '选择模型';
-  const triggerIcon = effectiveEngine ? <EngineIcon engineId={effectiveEngine} className="h-4 w-4" /> : null;
+  const triggerLabel = isUsingGlobalSelection
+    ? followSystemLabel
+    : (modelLabel || model || (engine ? '选择模型' : followSystemLabel));
+  const triggerIcon = isUsingGlobalEngine
+    ? <RefreshCw className="h-4 w-4 shrink-0 text-muted-foreground" />
+    : (effectiveEngine ? <EngineIcon engineId={effectiveEngine} className="h-4 w-4" /> : null);
 
   const handleValueChange = (val: string) => {
     if (!val) return;
@@ -252,11 +281,15 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     const modelVal = rest.join('::');
     onEngineChange(engId);
     onModelChange(modelVal);
+    if (!engId && !modelVal) {
+      toast('info', `已切换: ${followSystemLabel}`);
+      return;
+    }
     const engName = engId
       ? (getEngineMeta(engId)?.name || engId)
       : `跟随系统 (${globalLabel})`;
     const modLabel = models.find(m => m.value === modelVal)?.label || modelVal;
-    toast('info', `已切换: ${engName} / ${modLabel}`);
+    toast('info', modLabel ? `已切换: ${engName} / ${modLabel}` : `已切换: ${engName}`);
   };
 
   if (isInitialLoading) {

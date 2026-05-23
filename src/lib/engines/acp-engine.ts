@@ -136,6 +136,65 @@ export interface ACPSendPromptResult {
   usage?: Usage | null;
 }
 
+interface ACPHistoryReplayCollector {
+  sessionId: string;
+  messageOrder: Array<{ key: string; role: 'user' | 'assistant' }>;
+  messageChunks: Map<string, string[]>;
+  anonymousMessageCount: number;
+  started: boolean;
+}
+
+export function buildAcpCommandArgs(config: ACPEngineConfig): string[] {
+  const args: string[] = [];
+  switch (config.engineType) {
+    case 'claude-code-acp':
+      break;
+    case 'opencode':
+      args.push('acp', '--cwd', config.workingDirectory);
+      break;
+    case 'codegenie':
+      args.push('acp', '--cwd', config.workingDirectory);
+      break;
+    case 'nga':
+      if (config.skipNgaDisableUpdate) {
+        args.push('acp', '--cwd', config.workingDirectory);
+      } else {
+        args.push('--disable-update', 'acp', '--cwd', config.workingDirectory);
+      }
+      break;
+    case 'kiro-cli':
+      args.push('acp');
+      if (config.agentName) args.push('--agent', config.agentName);
+      if (config.model) args.push('--model', config.model);
+      break;
+    case 'cursor':
+      args.push('acp');
+      break;
+    case 'trae-cli':
+      args.push('acp', 'serve');
+      break;
+    case 'magic-cli':
+      args.push('acp');
+      if (config.model) args.push('--model', config.model);
+      break;
+    default:
+      throw new Error(`Unknown engine type: ${config.engineType}`);
+  }
+  if (config.args) args.push(...config.args);
+  return args;
+}
+
+export function buildAcpProcessReuseKey(config: ACPEngineConfig): string {
+  return JSON.stringify({
+    engineType: config.engineType,
+    command: config.command,
+    workingDirectory: config.workingDirectory,
+    args: buildAcpCommandArgs(config),
+    env: config.env || {},
+    diagnosticLogging: Boolean(config.diagnosticLogging),
+  });
+}
+
 /** Quote one argv token for cmd.exe when paths contain spaces or quotes. */
 function escapeWinCmdToken(s: string): string {
   if (s === '') return '""';
@@ -230,6 +289,7 @@ export class ACPEngine extends EventEmitter {
   private availableModels: Array<{ modelId: string; name: string }> = [];
   private lastStderrChunk = '';
   private lastExitInfo = '';
+  private historyReplayCollector: ACPHistoryReplayCollector | null = null;
 
   constructor(private config: ACPEngineConfig) {
     super();
@@ -371,7 +431,7 @@ export class ACPEngine extends EventEmitter {
 
       async sessionUpdate(params: SessionNotification): Promise<void> {
         try {
-          engine.handleSessionUpdate(params.update);
+          engine.handleSessionUpdate(params);
         } catch (e) {
           console.error(`[${engine.config.engineType}] sessionUpdate error`, e);
         }
@@ -436,47 +496,7 @@ export class ACPEngine extends EventEmitter {
    * Build command arguments based on engine type
    */
   private buildCommandArgs(): string[] {
-    const args: string[] = [];
-    switch (this.config.engineType) {
-      case 'claude-code-acp':
-        // claude-agent-acp starts ACP stdio mode with no positional subcommand.
-        break;
-      case 'opencode':
-        args.push('acp', '--cwd', this.config.workingDirectory);
-        break;
-      case 'codegenie':
-        // OpenCode-kernel CLI: same ACP argv as opencode
-        args.push('acp', '--cwd', this.config.workingDirectory);
-        break;
-      case 'nga':
-        if (this.config.skipNgaDisableUpdate) {
-          // Some NGA-compatible binaries (for example codeagent) support OpenCode-style ACP args only.
-          args.push('acp', '--cwd', this.config.workingDirectory);
-        } else {
-          // ngagent 套壳 OpenCode：默认关闭更新检查，cwd 与 opencode 一致
-          args.push('--disable-update', 'acp', '--cwd', this.config.workingDirectory);
-        }
-        break;
-      case 'kiro-cli':
-        args.push('acp');
-        if (this.config.agentName) args.push('--agent', this.config.agentName);
-        if (this.config.model) args.push('--model', this.config.model);
-        break;
-      case 'cursor':
-        args.push('acp');
-        break;
-      case 'trae-cli':
-        args.push('acp', 'serve');
-        break;
-      case 'magic-cli':
-        args.push('acp');
-        if (this.config.model) args.push('--model', this.config.model);
-        break;
-      default:
-        throw new Error(`Unknown engine type: ${this.config.engineType}`);
-    }
-    if (this.config.args) args.push(...this.config.args);
-    return args;
+    return buildAcpCommandArgs(this.config);
   }
   /**
    * Initialize ACP connection
@@ -723,6 +743,85 @@ export class ACPEngine extends EventEmitter {
     }
   }
 
+  async recoverLatestAssistantMessage(sessionId = this.sessionId): Promise<string> {
+    if (!sessionId || !this.connection || !this.initialized) return '';
+
+    const collector: ACPHistoryReplayCollector = {
+      sessionId,
+      messageOrder: [],
+      messageChunks: new Map<string, string[]>(),
+      anonymousMessageCount: 0,
+      started: false,
+    };
+    this.historyReplayCollector = collector;
+    this.emitDiagnosticLog({
+      message: 'session/load replay start',
+      detail: sessionId,
+      verbose: true,
+    });
+
+    const loadPromise = this.connection.loadSession({
+      sessionId,
+      cwd: this.config.workingDirectory,
+      mcpServers: [],
+    });
+    const loadTimeoutMs = getAcpLoadSessionTimeoutMs();
+    const tReplay = Date.now();
+
+    try {
+      const result = await Promise.race([
+        loadPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `ACP session/load replay timeout after ${loadTimeoutMs}ms. sessionId=${sessionId}. engineType=${this.config.engineType}, command=${this.config.command}. lastStderr=${this.lastStderrChunk || '<empty>'}`
+                )
+              ),
+            loadTimeoutMs
+          )
+        ),
+      ]);
+      await this.flushHistoryReplayNotifications();
+      logAcpTiming(this.config.engineType, 'acp.7_session_replay_load_rpc', tReplay, `sessionId=${sessionId}`);
+      this.availableModels = (result.models?.availableModels as any[]) || this.availableModels;
+      const lastUserIndex = [...collector.messageOrder]
+        .map((entry) => entry.role)
+        .lastIndexOf('user');
+      const assistantEntries = (lastUserIndex >= 0
+        ? collector.messageOrder.slice(lastUserIndex + 1)
+        : collector.messageOrder)
+        .filter((entry) => entry.role === 'assistant');
+      const latestAssistantEntry = assistantEntries[assistantEntries.length - 1];
+      const latestAssistantMessage = latestAssistantEntry
+        ? (collector.messageChunks.get(latestAssistantEntry.key) || []).join('')
+        : '';
+      this.emitDiagnosticLog({
+        message: 'session/load replay done',
+        detail: `messageCount=${collector.messageOrder.length}, latestLength=${latestAssistantMessage.length}`,
+        metadata: {
+          sessionId,
+          latestMessageId: latestAssistantEntry?.key || '',
+          lastUserIndex,
+          replayStarted: collector.started,
+        },
+        verbose: true,
+      });
+      return latestAssistantMessage;
+    } catch (error) {
+      this.emitDiagnosticLog({
+        level: 'warning',
+        message: 'session/load replay failed',
+        detail: error instanceof Error ? error.message : String(error),
+        metadata: { sessionId },
+      });
+      return '';
+    } finally {
+      this.historyReplayCollector = null;
+    }
+  }
+
   /**
    * Set the model for the current session
    */
@@ -832,7 +931,11 @@ export class ACPEngine extends EventEmitter {
   /**
    * Handle session update notifications from the SDK
    */
-  private handleSessionUpdate(update: SessionUpdate): void {
+  private handleSessionUpdate(notification: SessionNotification): void {
+    const update = notification.update;
+    if (this.captureHistoryReplayUpdate(notification)) {
+      return;
+    }
     if (this.shouldDebugStreamEvents()) {
       console.log(`[${this.config.engineType}] sessionUpdate: ${update.sessionUpdate}`);
     }
@@ -847,7 +950,10 @@ export class ACPEngine extends EventEmitter {
         this.emit('user-message', (update as any).content);
         break;
       case 'agent_message_chunk':
-        this.emit('agent-message', (update as any).content);
+        this.emit('agent-message', {
+          messageId: typeof (update as any).messageId === 'string' ? (update as any).messageId : '',
+          content: (update as any).content,
+        });
         break;
       case 'agent_thought_chunk':
         this.emit('agent-thought', (update as any).content);
@@ -886,6 +992,63 @@ export class ACPEngine extends EventEmitter {
       default:
         this.emit('update', update);
     }
+  }
+
+  private captureHistoryReplayUpdate(notification: SessionNotification): boolean {
+    const collector = this.historyReplayCollector;
+    if (!collector) return false;
+    if (notification.sessionId !== collector.sessionId) return false;
+
+    const update = notification.update;
+    const role = update.sessionUpdate === 'agent_message_chunk'
+      ? 'assistant'
+      : update.sessionUpdate === 'user_message_chunk'
+        ? 'user'
+        : null;
+    if (!role) {
+      return true;
+    }
+
+    if (!collector.started) {
+      if (role !== 'user') {
+        return true;
+      }
+      collector.started = true;
+      collector.messageOrder.length = 0;
+      collector.messageChunks.clear();
+      collector.anonymousMessageCount = 0;
+    }
+
+    const messageIdRaw = typeof (update as any).messageId === 'string'
+      ? (update as any).messageId.trim()
+      : '';
+    const messageId = messageIdRaw || `__anonymous_${++collector.anonymousMessageCount}`;
+    const key = `${role}:${messageId}`;
+    if (!collector.messageChunks.has(key)) {
+      collector.messageChunks.set(key, []);
+      collector.messageOrder.push({ key, role });
+    }
+
+    const text = this.extractChunkText((update as any).content);
+    if (text) {
+      collector.messageChunks.get(key)!.push(text);
+    }
+    return true;
+  }
+
+  private async flushHistoryReplayNotifications(): Promise<void> {
+    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await Promise.resolve();
+  }
+
+  private extractChunkText(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (!content || typeof content !== 'object') return '';
+    const chunk = content as Record<string, unknown>;
+    if (typeof chunk.text === 'string') return chunk.text;
+    if (typeof chunk.content === 'string') return chunk.content;
+    return '';
   }
 
   /**

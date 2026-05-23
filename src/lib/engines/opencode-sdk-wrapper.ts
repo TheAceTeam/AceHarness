@@ -29,6 +29,17 @@ let serverEnvFingerprint: string | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
 let serverStartingFingerprint: string | null = null;
 let clientInstance: OpenCodeHttpClient | null = null;
+const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 20_000;
+const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
+  /ECONNRESET/i,
+  /child exited early code=1 signal=null; stderr tail:\s*<empty>/i,
+];
+
+function isIgnorableOpenCodeSdkTailError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message.trim()) return false;
+  return IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 async function runtimeImport<T = any>(moduleName: string): Promise<T> {
   try {
@@ -127,6 +138,7 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
       return await createOpencodeServer({
         port: 0,
         hostname: '127.0.0.1',
+        timeout: OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
       } as any);
     });
 
@@ -163,6 +175,7 @@ function parseProviderModel(modelId: string | undefined): { model: { providerID:
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
+  private streamedTranscript = '';
   private abortController: AbortController | null = null;
   private diagnosticLoggingEnabled = false;
 
@@ -198,6 +211,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
   async execute(options: EngineOptions): Promise<EngineResult> {
     const startTime = Date.now();
     this.collectedOutput = '';
+    this.streamedTranscript = '';
     this.abortController = new AbortController();
     this.diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
     this.emitDiagnosticLog({
@@ -286,10 +300,16 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         workingDirectory: options.workingDirectory,
         timeoutMs: options.timeoutMs,
         signal: this.abortController.signal,
-        emit: (event) => this.emit('stream', event),
+        permissionResponse: 'always',
+        emit: (event) => {
+          if (event.type === 'text' && typeof event.content === 'string') {
+            this.streamedTranscript += event.content;
+          }
+          this.emit('stream', event);
+        },
         ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
       });
-      this.collectedOutput = output;
+      this.collectedOutput = this.streamedTranscript || output;
 
       const durationMs = Date.now() - startTime;
       console.log(`[opencode-sdk] prompt completed: sessionId=${this.currentSessionId}, outputLength=${output.length}, duration=${durationMs}ms`);
@@ -303,7 +323,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       });
       return {
         success: true,
-        output: normalizeEngineOutput(output),
+        output: normalizeEngineOutput(this.collectedOutput || output),
         sessionId: this.currentSessionId,
         metadata: {
           ...ZERO_USAGE_METADATA,
@@ -312,6 +332,24 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       };
     } catch (error: any) {
       const errorMessage = error?.message || 'OpenCode SDK error';
+      const normalizedOutput = normalizeEngineOutput(this.collectedOutput || this.streamedTranscript || '');
+      if (normalizedOutput && isIgnorableOpenCodeSdkTailError(errorMessage)) {
+        this.emitDiagnosticLog({
+          level: 'warning',
+          message: 'OpenCode SDK ignored tail transport error after final output',
+          detail: errorMessage,
+          metadata: {
+            outputLength: normalizedOutput.length,
+            sessionId: this.currentSessionId,
+          },
+        });
+        return {
+          success: true,
+          output: normalizedOutput,
+          sessionId: this.currentSessionId || undefined,
+          metadata: ZERO_USAGE_METADATA,
+        };
+      }
       this.emitDiagnosticLog({
         level: 'error',
         message: 'OpenCode SDK execute failed',
@@ -320,7 +358,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
       this.emit('stream', { type: 'error', content: errorMessage } as EngineStreamEvent);
       return {
         success: false,
-        output: this.collectedOutput || '',
+        output: normalizedOutput,
         error: errorMessage,
         sessionId: this.currentSessionId || undefined,
         metadata: ZERO_USAGE_METADATA,

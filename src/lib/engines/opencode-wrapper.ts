@@ -16,6 +16,10 @@ export class OpenCodeEngineWrapper extends ACPWrapperBase {
     return 'opencode';
   }
 
+  protected shouldRecoverLatestAssistantMessage(): boolean {
+    return true;
+  }
+
   protected getACPConfig(options: EngineOptions): ACPEngineConfig {
     return {
       engineType: 'opencode',

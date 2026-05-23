@@ -1,4 +1,4 @@
-import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
+import { isWorkflowSidebarHint, type SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 
 export interface WorkflowRunBindingLike {
   configFile: string;
@@ -94,9 +94,13 @@ export function getWorkbenchSessionKind(
 }
 
 export function isWorkflowDirectorySession(
-  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession'>
+  session: Pick<ChatSessionSummaryLike, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'>
 ): boolean {
-  return Boolean(session.workflowBinding || session.creationSession);
+  return Boolean(
+    session.workflowBinding
+    || session.creationSession
+    || isWorkflowSidebarHint(session.sessionWorkbenchState?.homeSidebar)
+  );
 }
 
 export function getSessionDirectoryKind(

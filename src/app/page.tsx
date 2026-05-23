@@ -38,6 +38,7 @@ import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
   inferHomeSidebarTab,
+  isWorkflowSidebarHint,
   normalizeHomeSidebarTab,
   normalizeHomeSidebarTabs,
   type HomeSidebarHint,
@@ -231,10 +232,10 @@ function AgoraSprite({
 function AgoraForumBackdrop({ className }: { className?: string }) {
   return (
     <div className={cn('pointer-events-none absolute inset-0 overflow-hidden', className)} aria-hidden="true">
-      <div className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0.14),transparent)]" />
-      <div className="absolute inset-x-0 bottom-0 h-32 bg-[linear-gradient(180deg,transparent,rgba(248,246,241,0.72))]" />
-      <div className="absolute inset-y-0 left-0 w-20 bg-[linear-gradient(90deg,rgba(248,246,241,0.56),transparent)]" />
-      <div className="absolute inset-y-0 right-0 w-20 bg-[linear-gradient(270deg,rgba(248,246,241,0.56),transparent)]" />
+      <div className="absolute inset-x-0 top-0 h-28 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0.14),transparent)] dark:bg-[linear-gradient(180deg,rgba(12,16,24,0.9),rgba(12,16,24,0.3),transparent)]" />
+      <div className="absolute inset-x-0 bottom-0 h-32 bg-[linear-gradient(180deg,transparent,rgba(248,246,241,0.72))] dark:bg-[linear-gradient(180deg,transparent,rgba(8,11,17,0.86))]" />
+      <div className="absolute inset-y-0 left-0 w-20 bg-[linear-gradient(90deg,rgba(248,246,241,0.56),transparent)] dark:bg-[linear-gradient(90deg,rgba(8,11,17,0.72),transparent)]" />
+      <div className="absolute inset-y-0 right-0 w-20 bg-[linear-gradient(270deg,rgba(248,246,241,0.56),transparent)] dark:bg-[linear-gradient(270deg,rgba(8,11,17,0.72),transparent)]" />
 
       <AgoraSprite
         row={3}
@@ -431,30 +432,31 @@ function AgoraZenCover({
     <div className="relative flex h-full min-h-[520px] items-center justify-center overflow-hidden px-4 py-8 md:px-8 lg:px-16">
       <AgoraForumBackdrop className="inset-0" />
       <div className="relative z-10 w-full max-w-5xl overflow-visible">
-        <section className="relative overflow-hidden rounded-[40px] border border-stone-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,246,241,0.82))] px-8 py-12 shadow-[0_26px_80px_rgba(71,85,105,0.12)] backdrop-blur-[2px] sm:px-12 sm:py-16">
-          <div className="absolute inset-x-0 bottom-0 h-48 bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.08)_12px,rgba(148,163,184,0.08)_13px)] opacity-80" />
-          <div className="absolute inset-x-10 top-10 h-px bg-gradient-to-r from-transparent via-stone-300/70 to-transparent" />
-          <div className="absolute inset-x-16 top-16 h-px bg-gradient-to-r from-transparent via-stone-200/80 to-transparent" />
+        <section className="relative overflow-hidden rounded-[40px] border border-stone-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,246,241,0.82))] px-8 py-12 shadow-[0_26px_80px_rgba(71,85,105,0.12)] backdrop-blur-[2px] dark:border-white/10 dark:bg-[linear-gradient(180deg,rgba(22,26,34,0.94),rgba(12,15,22,0.9))] dark:shadow-[0_30px_90px_rgba(2,6,23,0.52)] sm:px-12 sm:py-16">
+          <div className="absolute inset-x-0 bottom-0 h-48 bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.08)_12px,rgba(148,163,184,0.08)_13px)] opacity-80 dark:bg-[repeating-linear-gradient(180deg,transparent_0,transparent_12px,rgba(148,163,184,0.06)_12px,rgba(148,163,184,0.06)_13px)] dark:opacity-70" />
+          <div className="absolute inset-x-10 top-10 h-px bg-gradient-to-r from-transparent via-stone-300/70 to-transparent dark:via-slate-500/45" />
+          <div className="absolute inset-x-16 top-16 h-px bg-gradient-to-r from-transparent via-stone-200/80 to-transparent dark:via-slate-600/35" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(168,85,247,0.08),transparent_34%)] opacity-90 dark:bg-[radial-gradient(circle_at_top,rgba(167,139,250,0.14),transparent_38%)]" />
 
           <div className="relative mx-auto flex max-w-3xl flex-col items-center text-center">
-            <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-full border border-violet-300/40 bg-violet-50/70 text-violet-500 shadow-[0_0_0_12px_rgba(139,92,246,0.06)]">
+            <div className="mb-8 flex h-24 w-24 items-center justify-center rounded-full border border-violet-300/40 bg-violet-50/70 text-violet-500 shadow-[0_0_0_12px_rgba(139,92,246,0.06)] dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-300 dark:shadow-[0_0_0_12px_rgba(139,92,246,0.12)]">
               <AgoraZenMark className="h-12 w-12" />
             </div>
 
-            <div className="text-[11px] uppercase tracking-[0.42em] text-stone-400">Agora</div>
-            <h2 className="mt-4 font-serif text-3xl font-semibold tracking-[0.08em] text-stone-800 sm:text-5xl">
+            <div className="text-[11px] uppercase tracking-[0.42em] text-stone-400 dark:text-slate-400">Agora</div>
+            <h2 className="mt-4 font-serif text-3xl font-semibold tracking-[0.08em] text-stone-800 dark:text-slate-100 sm:text-5xl">
               议论广场
             </h2>
-            <p className="mt-5 max-w-2xl text-base leading-8 text-stone-500 sm:text-lg">
+            <p className="mt-5 max-w-2xl text-base leading-8 text-stone-500 dark:text-slate-300 sm:text-lg">
               围绕具体议题展开协作讨论，让过程、观点与结论自然沉淀。
             </p>
-            <p className="mt-2 text-sm text-stone-400">
+            <p className="mt-2 text-sm text-stone-400 dark:text-slate-400">
               {hasExistingTopics ? '从左侧继续已有议题，或开启一场新的协作讨论。' : '从一个清晰议题开始，把讨论与结论留在同一处。'}
             </p>
 
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
               <Button
-                className="h-11 rounded-full bg-stone-900 px-6 text-sm text-stone-50 hover:bg-stone-800"
+                className="h-11 rounded-full bg-stone-900 px-6 text-sm text-stone-50 hover:bg-stone-800 dark:bg-violet-500 dark:text-white dark:hover:bg-violet-400"
                 onClick={onCreate}
               >
                 <span className="material-symbols-outlined mr-2 text-[18px]">add_circle</span>
@@ -462,7 +464,7 @@ function AgoraZenCover({
               </Button>
               <button
                 type="button"
-                className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm text-stone-500 shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+                className="rounded-full border border-stone-200 bg-white/80 px-4 py-2 text-sm text-stone-500 shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:border-violet-400/40 dark:hover:bg-violet-500/10 dark:hover:text-violet-200"
                 onClick={onCreateGuest}
               >
                 <span className="material-symbols-outlined mr-2 align-[-3px] text-[16px]">gesture</span>
@@ -576,6 +578,7 @@ function ChatPageContent() {
   const homeEntryResetHandledRef = useRef(false);
   const werewolfPreviousDarkClassRef = useRef<boolean | null>(null);
   const lastHomeSidebarSyncRef = useRef('');
+  const lastSessionDirectoryAutoSwitchRef = useRef('');
 
   const parsedSidebarHint = useMemo<HomeSidebarHint | null>(() => {
     // 已有持久化状态时跳过昂贵的 parseActions 解析
@@ -801,6 +804,59 @@ function ChatPageContent() {
     isMobile,
     latestSidebarHint?.activeTab,
     latestSidebarHint?.mode,
+  ]);
+
+  useEffect(() => {
+    if (!activeSession) {
+      lastSessionDirectoryAutoSwitchRef.current = '';
+      return;
+    }
+
+    const nextSessionDirectoryView = getSessionDirectoryKind({
+      workflowBinding: activeSession.workflowBinding,
+      creationSession: activeSession.creationSession,
+      sessionWorkbenchState: {
+        ...(activeSession.sessionWorkbenchState || {}),
+        homeSidebar: latestSidebarHint || activeSession.sessionWorkbenchState?.homeSidebar || null,
+      },
+    });
+    if (nextSessionDirectoryView === 'conversation') {
+      lastSessionDirectoryAutoSwitchRef.current = '';
+      return;
+    }
+
+    const nextSignature = JSON.stringify({
+      sessionId: activeSession.id,
+      sessionDirectoryView: nextSessionDirectoryView,
+      workflowBinding: activeSession.workflowBinding
+        ? {
+          configFile: activeSession.workflowBinding.configFile,
+          runId: activeSession.workflowBinding.runId,
+        }
+        : null,
+      creationSessionId: activeSession.creationSession?.creationSessionId || null,
+      hasCollaborationRoom: Boolean(activeSession.sessionWorkbenchState?.collaborationRoom),
+      workflowSidebarHint: isWorkflowSidebarHint(latestSidebarHint)
+        ? {
+          intent: latestSidebarHint?.intent || null,
+          activeTab: latestSidebarHint?.activeTab || null,
+          stage: latestSidebarHint?.stage || null,
+          workflowName: latestSidebarHint?.workflowDraft?.name || null,
+        }
+        : null,
+    });
+    if (lastSessionDirectoryAutoSwitchRef.current === nextSignature) return;
+    lastSessionDirectoryAutoSwitchRef.current = nextSignature;
+
+    setSessionDirectoryView((prev) => (prev === nextSessionDirectoryView ? prev : nextSessionDirectoryView));
+  }, [
+    activeSession?.creationSession?.creationSessionId,
+    activeSession?.id,
+    activeSession?.sessionWorkbenchState?.collaborationRoom,
+    activeSession?.sessionWorkbenchState?.homeSidebar,
+    activeSession?.workflowBinding?.configFile,
+    activeSession?.workflowBinding?.runId,
+    latestSidebarHint,
   ]);
 
   useEffect(() => {
@@ -1109,13 +1165,22 @@ function ChatPageContent() {
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
       ...(patch.shouldOpenModal !== undefined ? { shouldOpenModal: patch.shouldOpenModal } : {}),
     });
+    const shouldSwitchSessionDirectoryToWorkflow = patch.tab === 'workflow'
+      || patch.intent === 'create-workflow'
+      || patch.intent === 'workflow-run'
+      || patch.intent === 'workflow-review';
 
     if (patch.tab) setHomeSidebarTab((prev) => (prev === patch.tab ? prev : patch.tab!));
     if (patch.mode) setHomeSidebarMode((prev) => (prev === patch.mode ? prev : patch.mode!));
+    if (shouldSwitchSessionDirectoryToWorkflow) {
+      setSessionDirectoryView('workflow');
+    }
 
     if (!activeSessionId && !activeSession) {
       setSidebarOpen(true);
-      setSessionDirectoryView('conversation');
+      if (!shouldSwitchSessionDirectoryToWorkflow) {
+        setSessionDirectoryView('conversation');
+      }
       createSession({
         title: '新对话',
         sessionWorkbenchState: {

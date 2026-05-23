@@ -22,6 +22,7 @@ import {
 } from '@/lib/workflow/experience-store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
+import { stripAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
 import {
   extractSpecCodingRevisionCommand,
   stripSpecCodingRevisionCommand,
@@ -83,6 +84,8 @@ export interface PreparedAgentChat {
   prompt: string;
   sessionReuseKey: string;
   isTemporaryWerewolf: boolean;
+  isTemporaryAgora: boolean;
+  agoraExpectedResultType?: 'speech' | 'summary' | 'vote';
 }
 
 function isTemporaryWerewolfChat(input: {
@@ -95,6 +98,15 @@ function isTemporaryWerewolfChat(input: {
       input.workflowContext?.temporaryLab !== 'agora'
       && Boolean(input.roleConfig?.tags?.includes('werewolf-lab'))
     );
+}
+
+function isTemporaryAgoraChat(workflowContext?: Record<string, any> | null): boolean {
+  return workflowContext?.temporaryLab === 'agora';
+}
+
+function getAgoraExpectedResultType(workflowContext?: Record<string, any> | null): 'speech' | 'summary' | 'vote' {
+  const raw = String(workflowContext?.agoraExpectedResultType || '').trim();
+  return raw === 'summary' || raw === 'vote' ? raw : 'speech';
 }
 
 function stripHtmlTags(text: string): string {
@@ -110,8 +122,7 @@ function stripHtmlTags(text: string): string {
 }
 
 function stripToolNarrationBlocks(text: string): string {
-  return String(text || '')
-    .replace(/\n?\s*<ace-process>[\s\S]*?<\/ace-process>\s*\n?/g, '\n')
+  return stripAceProcessBlocks(String(text || ''), '\n')
     .replace(/\n{0,2}\*\*(?:📖 读取文件|💻 执行命令|🔍 搜索内容|🔍 搜索文件|📂 列出目录|🤖 子任务|🌐 获取网页|🔎 搜索网页|✏️ 编辑文件|📝 写入文件|📋 任务列表)[\s\S]*?(?=\n{2}\*\*|$)/g, '\n')
     .replace(/(?:^|\n)技能文件不在这个相对位置[^\n]*/g, '\n')
     .replace(/(?:^|\n)我先(?:看一下|缩小范围找|把)[^\n]*/g, '\n')
@@ -136,6 +147,50 @@ function buildVisibleWerewolfOutput(rawOutput: string): string {
     return stripHtmlTags(resultPayload.display);
   }
   return '';
+}
+
+function extractAnyAgoraResult(rawOutput: string): { kind: 'agora_result'; payload: Record<string, any> } | null {
+  return extractResultChannelStructuredResult<{ kind: 'agora_result'; payload: Record<string, any> }>(
+    rawOutput,
+    (value: any): value is { kind: 'agora_result'; payload: Record<string, any> } => Boolean(
+      value
+      && typeof value === 'object'
+      && value.kind === 'agora_result'
+      && value.payload
+      && typeof value.payload === 'object'
+      && !Array.isArray(value.payload)
+    ),
+  );
+}
+
+function hasAgoraResult(rawOutput: string, expectedType?: 'speech' | 'summary' | 'vote'): boolean {
+  const result = extractAnyAgoraResult(rawOutput);
+  if (!result) return false;
+  if (!expectedType) return true;
+  return result.payload?.type === expectedType && typeof result.payload?.content === 'string' && Boolean(result.payload.content.trim());
+}
+
+function buildVisibleAgoraOutput(rawOutput: string): string {
+  const payload = extractAnyAgoraResult(rawOutput)?.payload;
+  if (typeof payload?.content === 'string' && payload.content.trim()) {
+    return stripHtmlTags(payload.content);
+  }
+  return stripToolNarrationBlocks(rawOutput);
+}
+
+function buildAgoraResultRetryPrompt(expectedType: 'speech' | 'summary' | 'vote'): string {
+  const schema = expectedType === 'summary'
+    ? '{"kind":"agora_result","payload":{"type":"summary","title":"本轮总结","content":"共识：...\\n分歧：...\\n风险：...\\n下一步：..."}}'
+    : expectedType === 'vote'
+      ? '{"kind":"agora_result","payload":{"type":"vote","content":"你的选择\\n理由：一句话","choice":"精确选项文本或弃权","reason":"一句简短理由"}}'
+      : '{"kind":"agora_result","payload":{"type":"speech","content":"最终要发出的群聊内容","mentions":["被你@的人名，可为空数组"]}}';
+  return [
+    `你上一条回复不合规：缺少可解析的议场 <result> 结果块，或 payload.type 不是 "${expectedType}"。`,
+    '不要重复过程说明，不要展示任何工具、规则、草稿或解释。',
+    '现在仅基于同一回合补发一个合规的 `<result>JSON</result>`。',
+    `唯一允许输出的格式是：<result>${schema}</result>`,
+    '如果需要给人看的最终发言，只能放进 payload.content；输出 </result> 后不要再追加任何文字。',
+  ].join('\n');
 }
 
 async function executeWerewolfTurnWithResultEnforcement(input: {
@@ -189,6 +244,51 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
   return lastResult || { success: false, output: '', error: 'missing werewolf result', sessionId: latestSessionId };
 }
 
+async function executeAgoraTurnWithResultEnforcement(input: {
+  prepared: PreparedAgentChat;
+  prompt: string;
+}): Promise<{
+  success: boolean;
+  output: string;
+  error?: string;
+  sessionId?: string;
+}> {
+  const maxAttempts = 3;
+  const expectedType = input.prepared.agoraExpectedResultType || 'speech';
+  let latestSessionId = input.prepared.resumeSessionId || undefined;
+  let lastResult: {
+    success: boolean;
+    output: string;
+    error?: string;
+    sessionId?: string;
+  } | null = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const isRetry = attempt > 0;
+    const result = await executeEngineWithContextRecovery(input.prepared.engine, {
+      agent: input.prepared.roleConfig.name,
+      step: isRetry ? `${input.prepared.mode}-agora-result-retry-${attempt}` : input.prepared.mode,
+      prompt: isRetry ? buildAgoraResultRetryPrompt(expectedType) : input.prompt,
+      systemPrompt: input.prepared.roleConfig.systemPrompt || `你是 ${input.prepared.roleConfig.name}。`,
+      model: input.prepared.model,
+      workingDirectory: input.prepared.workingDirectory,
+      allowedTools: input.prepared.roleConfig.allowedTools,
+      sessionId: latestSessionId,
+      appendSystemPrompt: false,
+      mcpServers: input.prepared.roleConfig.mcpServers,
+    }, {
+      onContextReset: () => {
+        latestSessionId = undefined;
+      },
+    });
+    lastResult = result;
+    latestSessionId = resolveRecoveredSessionId(result, latestSessionId) || undefined;
+    if (hasAgoraResult(result.output || '', expectedType)) return result;
+  }
+
+  return lastResult || { success: false, output: '', error: 'missing agora result', sessionId: latestSessionId };
+}
+
 export async function finalizeAgentChatExecution(input: {
   prepared: PreparedAgentChat;
   userMessage: string;
@@ -216,7 +316,9 @@ export async function finalizeAgentChatExecution(input: {
     : (input.rawOutput || '');
   const visibleOutput = prepared.isTemporaryWerewolf
     ? buildVisibleWerewolfOutput(cleanedOutput)
-    : cleanedOutput;
+    : prepared.isTemporaryAgora
+      ? buildVisibleAgoraOutput(cleanedOutput)
+      : cleanedOutput;
 
   if (finalSessionId) {
     await appendMemoryEntries([
@@ -448,6 +550,11 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
         prepared,
         prompt: prepared.prompt,
       })
+    : prepared.isTemporaryAgora
+      ? await executeAgoraTurnWithResultEnforcement({
+          prepared,
+          prompt: prepared.prompt,
+        })
     : await executeEngineWithContextRecovery(prepared.engine, {
         agent: prepared.roleConfig.name,
         step: prepared.mode,
@@ -500,6 +607,8 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     throw new Error('Agent 配置无效');
   }
   const isTemporaryWerewolf = isTemporaryWerewolfChat({ roleConfig, workflowContext });
+  const isTemporaryAgora = isTemporaryAgoraChat(workflowContext);
+  const agoraExpectedResultType = isTemporaryAgora ? getAgoraExpectedResultType(workflowContext) : undefined;
   const workingDirectory = isTemporaryWerewolf
     ? getWorkspaceRoot()
     : (typeof input.workingDirectory === 'string' && input.workingDirectory.trim()
@@ -521,6 +630,17 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
             : '狼人杀规则已经在初始化阶段内化。当前回合直接按既定规则、术语和固定发言格式执行，不要再次读取任何 skill 文件，不要提到自己在查规则，也不要展示工具执行过程。若需要结构化输出，只使用一个 <result>JSON</result> 结果块；给人看的最终发言放进 JSON 的 display 字段，并且 display 只能写纯文本或 Markdown，不要输出任何 HTML 标签。如果当前回合还要求机器决策，就把 action/target/reason 等字段和 display 一起放进同一个 result JSON。',
         ].filter(Boolean).join('\n'),
       } as RoleConfig
+    : isTemporaryAgora
+      ? {
+          ...roleConfig,
+          systemPrompt: [
+            roleConfig.systemPrompt || '',
+            '你正在参加议场群聊。当前回合的最终提交必须严格遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
+            `本轮期望的 payload.type 是 "${agoraExpectedResultType || 'speech'}"。如果缺少 <result>、kind 不为 "agora_result"、payload.type 不匹配，或 payload.content 为空，本轮会被判失败并要求你重发。`,
+            '如需中间过程，可先输出普通正文；但最终展示给群里的那段话必须完整写进 payload.content。',
+            '输出 </result> 后不要再追加任何文字。',
+          ].filter(Boolean).join('\n'),
+        } as RoleConfig
     : roleConfig;
 
   const globalSelection = readGlobalEngineSelection();
@@ -597,5 +717,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     prompt,
     sessionReuseKey,
     isTemporaryWerewolf,
+    isTemporaryAgora,
+    agoraExpectedResultType,
   };
 }

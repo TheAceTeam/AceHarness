@@ -3,8 +3,11 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { ActionBlock, ActionState, ActionStatus, executeAction, undoAction, isSafeAction, parseActions, normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
+import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
+import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 
 // --- Types ---
 
@@ -92,6 +95,18 @@ interface SessionSummary {
   sessionWorkbenchState?: ChatSession['sessionWorkbenchState'];
 }
 
+interface StreamCheckResponse {
+  active: boolean;
+  found?: boolean;
+  chatId?: string;
+  streamContent?: string;
+  status?: 'running' | 'completed' | 'failed' | 'killed';
+  engine?: string;
+  model?: string;
+  backendSessionId?: string;
+  liveSession?: ChatSession | null;
+}
+
 function resolveNextActiveSessionIdAfterDelete(
   remainingSessions: SessionSummary[],
   deletedActiveSession?: Pick<SessionSummary, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'> | null,
@@ -102,9 +117,29 @@ function resolveNextActiveSessionIdAfterDelete(
 }
 
 function extractLastMessagePreview(messages: ChatMessage[]): string | undefined {
-  const raw = messages.filter(m => m.role !== 'error').slice(-1)[0]?.content;
-  if (!raw) return undefined;
-  return raw.replace(/<ace-process>[\s\S]*?<\/ace-process>/g, '').trim().slice(0, 100) || undefined;
+  return extractLastChatPreview(messages);
+}
+
+function removeSessionId(list: string[], sessionId: string): string[] {
+  return list.includes(sessionId) ? list.filter((item) => item !== sessionId) : list;
+}
+
+function removeSessionIds(list: string[], sessionIds: Set<string>): string[] {
+  let changed = false;
+  const next = list.filter((item) => {
+    const keep = !sessionIds.has(item);
+    if (!keep) changed = true;
+    return keep;
+  });
+  return changed ? next : list;
+}
+
+function isSessionAhead(
+  candidate: Pick<ChatSession, 'updatedAt' | 'messages'>,
+  baseline: Pick<ChatSession, 'updatedAt' | 'messages'> | null | undefined,
+): boolean {
+  if (!baseline) return true;
+  return candidate.updatedAt > baseline.updatedAt || candidate.messages.length > baseline.messages.length;
 }
 
 interface DashboardChatContextType {
@@ -129,7 +164,7 @@ interface DashboardChatContextType {
   deleteSessions: (ids: string[]) => void;
   renameSession: (id: string, title: string) => void;
   setActiveSessionId: (id: string | null) => void;
-  sendMessage: (text: string, options?: { displayText?: string }) => Promise<void>;
+  sendMessage: (text: string, options?: { displayText?: string; targetSessionId?: string }) => Promise<void>;
   compactActiveSession: () => Promise<void>;
   stopStreaming: () => void;
   deleteMessage: (messageId: string) => void;
@@ -199,60 +234,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
 
 const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const ACTIVE_SESSION_STORAGE_KEY = 'aceharness:chat:active-session-id';
-
-function appendStreamChunk(previous: string, next: string): string {
-  const base = String(previous || '');
-  const chunk = String(next || '');
-  if (!chunk) return base;
-  if (!base) return chunk;
-  if (chunk === base) return base;
-  if (chunk.startsWith(base)) return chunk;
-  return `${base}${chunk}`;
-}
-
-function buildFinalRawContent(
-  accumulatedRawStream: string,
-  accumulatedVisibleContent: string,
-  doneResult: string,
-): string {
-  const raw = String(accumulatedRawStream || '');
-  const visible = String(accumulatedVisibleContent || '');
-  const result = String(doneResult || '');
-
-  if (!raw) {
-    return result || visible;
-  }
-
-  if (!result) {
-    return raw;
-  }
-
-  const parsedRawText = String(parseActions(raw).text || '').trim();
-  const trimmedResult = result.trim();
-  const trimmedVisible = visible.trim();
-
-  if (!trimmedResult) {
-    return raw;
-  }
-
-  if (!parsedRawText) {
-    return appendStreamChunk(raw, result);
-  }
-
-  if (
-    trimmedResult === parsedRawText
-    || parsedRawText.endsWith(trimmedResult)
-    || trimmedResult.endsWith(parsedRawText)
-  ) {
-    return raw;
-  }
-
-  if (trimmedVisible && result.startsWith(visible)) {
-    return appendStreamChunk(raw, result.slice(visible.length));
-  }
-
-  return raw;
-}
+export { appendStreamChunk, buildFinalRawContent };
 
 function writeStoredActiveSessionId(sessionId: string | null): void {
   if (typeof window === 'undefined') return;
@@ -313,6 +295,17 @@ async function apiLoadSession(id: string): Promise<ChatSession | null> {
   if (!res.ok) return null;
   const data = await res.json();
   return data.session || null;
+}
+
+async function apiCheckStreamState(id: string): Promise<StreamCheckResponse | null> {
+  try {
+    const res = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(id)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data as StreamCheckResponse;
+  } catch {
+    return null;
+  }
 }
 
 async function apiSaveSession(session: ChatSession): Promise<void> {
@@ -406,6 +399,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
   const isModelSelectionReady = Boolean(model && effectiveEngine);
+  const { chatStreamsBySessionId, chatSessionSignalsById } = useWorkflowLiveState();
 
   const refreshGlobalEngineConfig = useCallback(() => {
     fetch('/api/engine').then(r => r.json()).then(data => {
@@ -496,7 +490,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [getWorkingDirStorageKey]);
 
   // Debounced save ref
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const activeSessionRef = useRef<ChatSession | null>(null);
   const activeEventSourceRef = useRef<EventSource | null>(null);
   const activeChatIdRef = useRef<string | null>(null);
@@ -506,15 +500,32 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sessionLoadTokenRef = useRef(0);
   const hasHydratedStoredSessionRef = useRef(false);
   const skillSettingsRef = useRef(skillSettings);
+  const backendSessionStatusRef = useRef<Record<string, StreamCheckResponse['status'] | null>>({});
+  const handledChatSessionSignalsRef = useRef<Record<string, number>>({});
   const modelRef = useRef(model);
   const engineRef = useRef(engine);
   const globalEngineRef = useRef(effectiveGlobalEngine);
-  const sendMessageRef = useRef<((text: string, options?: { displayText?: string }) => Promise<void>) | null>(null);
+  const sendMessageRef = useRef<((text: string, options?: { displayText?: string; targetSessionId?: string }) => Promise<void>) | null>(null);
+  const pendingSessionsRef = useRef<Record<string, ChatSession>>({});
+  const sessionCacheRef = useRef<Record<string, ChatSession>>({});
   activeSessionRef.current = activeSession;
   skillSettingsRef.current = skillSettings;
   modelRef.current = model;
   engineRef.current = engine;
   globalEngineRef.current = effectiveGlobalEngine;
+
+  useEffect(() => {
+    if (!activeSession || sessionLoadingId === activeSession.id) return;
+    const existing = sessionCacheRef.current[activeSession.id];
+    if (
+      existing
+      && existing.messages.length > activeSession.messages.length
+      && existing.updatedAt >= activeSession.updatedAt
+    ) {
+      return;
+    }
+    sessionCacheRef.current[activeSession.id] = activeSession;
+  }, [activeSession, sessionLoadingId]);
 
   // Load session list on mount
   useEffect(() => {
@@ -588,10 +599,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const prepareLoadedSession = useCallback((session: ChatSession | null | undefined): ChatSession | null => {
+    if (!session) return null;
+    const cleaned = {
+      ...session,
+      messages: session.messages.filter((message) => !(
+        message.role === 'assistant'
+        && !message.content
+        && !message.actions?.length
+        && !message.cards?.length
+      )),
+    };
+    return reparseSession(cleaned);
+  }, [reparseSession]);
+
   const markSessionStreaming = useCallback((sessionId: string | null | undefined) => {
     if (!sessionId) return;
     setActiveStreamingSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
-    setRecentlyCompletedSessionIds((prev) => prev.filter((item) => item !== sessionId));
+    setRecentlyCompletedSessionIds((prev) => removeSessionId(prev, sessionId));
     const existingTimer = recentCompletionTimersRef.current[sessionId];
     if (existingTimer) {
       clearTimeout(existingTimer);
@@ -601,7 +626,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const unmarkSessionStreaming = useCallback((sessionId: string | null | undefined) => {
     if (!sessionId) return;
-    setActiveStreamingSessionIds((prev) => prev.filter((item) => item !== sessionId));
+    setActiveStreamingSessionIds((prev) => removeSessionId(prev, sessionId));
   }, []);
 
   const markSessionRecentlyCompleted = useCallback((sessionId: string | null | undefined) => {
@@ -612,7 +637,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       clearTimeout(existingTimer);
     }
     recentCompletionTimersRef.current[sessionId] = setTimeout(() => {
-      setRecentlyCompletedSessionIds((prev) => prev.filter((item) => item !== sessionId));
+      setRecentlyCompletedSessionIds((prev) => removeSessionId(prev, sessionId));
       delete recentCompletionTimersRef.current[sessionId];
     }, 120000);
   }, []);
@@ -629,37 +654,53 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (activeStreamingSessionIds.length === 0) return;
-    let cancelled = false;
-    const targetIds = activeStreamingSessionIds.filter((sessionId) => sessionId !== attachedStreamingSessionIdRef.current);
-    if (targetIds.length === 0) return;
+    const trackedSessionIds = new Set([
+      ...Object.keys(backendSessionStatusRef.current),
+      ...Object.keys(chatStreamsBySessionId),
+    ]);
 
-    const checkDetachedStreams = async () => {
-      await Promise.all(targetIds.map(async (sessionId) => {
-        const res = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(sessionId)}`).catch(() => null);
-        const data = await res?.json().catch(() => null);
-        if (cancelled || !data || data.active) return;
+    if (trackedSessionIds.size === 0) {
+      backendSessionStatusRef.current = {};
+      return;
+    }
+
+    trackedSessionIds.forEach((sessionId) => {
+      const streamState = chatStreamsBySessionId[sessionId];
+      const previousStatus = backendSessionStatusRef.current[sessionId] || null;
+      const nextStatus = streamState?.status || null;
+
+      if (!nextStatus) {
+        delete backendSessionStatusRef.current[sessionId];
         unmarkSessionStreaming(sessionId);
-        if (data.status === 'completed') {
-          markSessionRecentlyCompleted(sessionId);
-        }
-      }));
-    };
+        return;
+      }
 
-    void checkDetachedStreams();
-    const timer = window.setInterval(() => {
-      void checkDetachedStreams();
-    }, 4000);
+      backendSessionStatusRef.current[sessionId] = nextStatus;
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [activeStreamingSessionIds, markSessionRecentlyCompleted, unmarkSessionStreaming]);
+      if (nextStatus === 'running') {
+        markSessionStreaming(sessionId);
+        return;
+      }
+
+      unmarkSessionStreaming(sessionId);
+
+      if (
+        nextStatus === 'completed'
+        && !recentlyCompletedSessionIds.includes(sessionId)
+        && previousStatus !== 'completed'
+        && (previousStatus !== null || Date.now() - streamState.updatedAt < 120000)
+      ) {
+        markSessionRecentlyCompleted(sessionId);
+      }
+    });
+  }, [chatStreamsBySessionId, markSessionRecentlyCompleted, markSessionStreaming, recentlyCompletedSessionIds, unmarkSessionStreaming]);
 
   useEffect(() => () => {
     Object.values(recentCompletionTimersRef.current).forEach((timer) => clearTimeout(timer));
     recentCompletionTimersRef.current = {};
+    Object.values(saveTimersRef.current).forEach((timer) => clearTimeout(timer));
+    saveTimersRef.current = {};
+    pendingSessionsRef.current = {};
   }, []);
 
   // Load full session when activeSessionId changes
@@ -677,300 +718,406 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const nextToken = sessionLoadTokenRef.current + 1;
     sessionLoadTokenRef.current = nextToken;
     const summary = sessions.find((item) => item.id === activeSessionId);
-    if (summary && activeSession?.id !== activeSessionId) {
-      setActiveSession({
-        id: summary.id,
-        title: summary.title,
-        backendSessionId: undefined,
-        creationSession: summary.creationSession,
-        workflowBinding: summary.workflowBinding,
-        agentBinding: summary.agentBinding,
-        sessionWorkbenchState: summary.sessionWorkbenchState,
-        model: summary.model,
-        engine: undefined,
-        messages: [],
-        createdAt: summary.createdAt,
-        updatedAt: summary.updatedAt,
-      });
+    const cached = sessionCacheRef.current[activeSessionId];
+
+    if (activeSession?.id !== activeSessionId) {
+      if (cached) {
+        setActiveSession(cached);
+      } else if (summary) {
+        setActiveSession({
+          id: summary.id,
+          title: summary.title,
+          backendSessionId: undefined,
+          creationSession: summary.creationSession,
+          workflowBinding: summary.workflowBinding,
+          agentBinding: summary.agentBinding,
+          sessionWorkbenchState: summary.sessionWorkbenchState,
+          model: summary.model,
+          engine: undefined,
+          messages: [],
+          createdAt: summary.createdAt,
+          updatedAt: summary.updatedAt,
+        });
+      }
     }
-    apiLoadSession(activeSessionId).then(async s => {
+    Promise.all([
+      apiLoadSession(activeSessionId),
+      apiCheckStreamState(activeSessionId),
+    ]).then(([loadedSession, streamState]) => {
       if (sessionLoadTokenRef.current !== nextToken) return;
-      if (!s) {
+
+      const liveSession = prepareLoadedSession(streamState?.liveSession || null);
+      const persistedSession = prepareLoadedSession(loadedSession);
+      const latestCached = sessionCacheRef.current[activeSessionId];
+      const nextSession = liveSession
+        || (latestCached
+          && persistedSession
+          && (
+            latestCached.updatedAt > persistedSession.updatedAt
+            || latestCached.messages.length > persistedSession.messages.length
+          )
+          ? latestCached
+          : persistedSession)
+        || latestCached
+        || null;
+
+      if (!nextSession) {
         setActiveSession(null);
         setSessionLoadingId((current) => current === activeSessionId ? null : current);
         return;
       }
-      // Clean up empty assistant messages left by interrupted streams
-      const cleaned = {
-        ...s,
-        messages: s.messages.filter(m => !(m.role === 'assistant' && !m.content && !m.actions?.length && !m.cards?.length)),
-      };
-      const reparsedSession = reparseSession(cleaned);
-      setActiveSession(reparsedSession);
+
+      setActiveSession(nextSession);
       setSessionLoadingId((current) => current === activeSessionId ? null : current);
-      setSessions((list) => {
-        const summary: SessionSummary = {
-          id: reparsedSession.id,
-          title: reparsedSession.title,
-          model: reparsedSession.model,
-          createdAt: reparsedSession.createdAt,
-          updatedAt: reparsedSession.updatedAt,
-          messageCount: reparsedSession.messages.length,
-          lastMessage: extractLastMessagePreview(reparsedSession.messages),
-          creationSession: reparsedSession.creationSession,
-          workflowBinding: reparsedSession.workflowBinding,
-          agentBinding: reparsedSession.agentBinding,
-          sessionWorkbenchState: reparsedSession.sessionWorkbenchState,
-        };
-        const exists = list.some((item) => item.id === reparsedSession.id);
-        return exists
-          ? list.map((item) => item.id === reparsedSession.id ? { ...item, ...summary } : item)
-          : [summary, ...list];
-      });
-      // Restore per-session engine & model selections
-      if (cleaned.engine) {
-        setEngineState(cleaned.engine);
+      upsertSessionSummary(nextSession);
+      if (nextSession.engine) {
+        setEngineState(nextSession.engine);
       }
-      if (cleaned.model) {
-        setModel(cleaned.model);
+      if (nextSession.model) {
+        setModel(nextSession.model);
       }
 
-      // Check if there's an active stream for this session and reconnect
-      try {
-        const checkRes = await fetch(`/api/chat/stream?checkActive=${encodeURIComponent(activeSessionId)}`);
-        const checkData = await checkRes.json();
-        if (sessionLoadTokenRef.current !== nextToken) return;
-        // Skip reconnect if engine has changed since the stream was started
-        const streamEngine = checkData.engine || '';
-        const streamModel = checkData.model || '';
-        const currentEngine = cleaned.engine || globalEngineRef.current || '';
-        const currentModel = cleaned.model || '';
-        if (checkData.active && checkData.chatId && streamEngine === currentEngine && streamModel === currentModel) {
-          const initialStreamContent = checkData.streamContent || '';
-          const { text: initialCleanText } = parseActions(initialStreamContent);
-          const lastAssistantMessage = [...cleaned.messages].reverse().find((message) => message.role === 'assistant');
-          const lastAssistantContent = (lastAssistantMessage?.content || '').trim();
-          const lastAssistantRawContent = (lastAssistantMessage?.rawContent || '').trim();
-          const canReuseLastAssistant = Boolean(
-            lastAssistantMessage && (
-              !lastAssistantContent
-              || (initialCleanText && initialCleanText.startsWith(lastAssistantContent))
-              || (lastAssistantRawContent && initialStreamContent.startsWith(lastAssistantRawContent))
-            )
-          );
-          const recoveryMsg = canReuseLastAssistant && lastAssistantMessage
-            ? lastAssistantMessage
-            : { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
-          const recoveredSession = canReuseLastAssistant
-            ? cleaned
-            : { ...cleaned, messages: [...cleaned.messages, recoveryMsg] };
-          setActiveSession(reparseSession(recoveredSession));
-
-            setLoading(true);
-            markSessionStreaming(activeSessionId);
-            setStreamingMessageId(recoveryMsg.id);
-            activeChatIdRef.current = checkData.chatId;
-            attachedStreamingSessionIdRef.current = activeSessionId;
-
-            // Pre-fill with accumulated content
-            if (initialStreamContent) {
-              const { text: cleanText } = parseActions(initialStreamContent);
-              setActiveSession(prev => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: initialStreamContent } : m),
-                };
-              });
-            }
-
-            // Connect SSE to continue receiving deltas
-            const es = new EventSource(`/api/chat/stream?id=${checkData.chatId}`);
-            activeEventSourceRef.current = es;
-            let accumulated = initialStreamContent;
-            let accumulatedRawStream = initialStreamContent;
-            let initialSnapshotReplayPending = Boolean(initialStreamContent);
-            let hasConnected = false;
-
-            es.addEventListener('connected', () => {
-              hasConnected = true;
-            });
-
-            es.addEventListener('delta', (e) => {
-              if (!hasConnected) return;
-              const { content } = JSON.parse(e.data);
-              if (initialSnapshotReplayPending && content === initialStreamContent) {
-                initialSnapshotReplayPending = false;
-                return;
+      if (
+        streamState?.active
+        && streamState.chatId
+      ) {
+        const streamEngine = streamState.engine || '';
+        const streamModel = streamState.model || '';
+        const currentEngine = nextSession.engine || globalEngineRef.current || '';
+        const currentModel = nextSession.model || '';
+        if (streamEngine === currentEngine && streamModel === currentModel) {
+          const lastAssistantMessage = [...nextSession.messages].reverse().find((message) => message.role === 'assistant');
+          const recoveryMsg = lastAssistantMessage || { id: genId(), role: 'assistant' as const, content: '', timestamp: Date.now() };
+          const recoveredSession = lastAssistantMessage
+            ? nextSession
+            : { ...nextSession, messages: [...nextSession.messages, recoveryMsg] };
+          const initialStreamContent = String(recoveryMsg.rawContent || streamState.streamContent || '');
+          const initialCleanText = recoveryMsg.content || normalizeAssistantDisplay(initialStreamContent, true).visibleText || parseActions(initialStreamContent).text;
+          const hydratedSession = initialStreamContent
+            ? {
+                ...recoveredSession,
+                messages: recoveredSession.messages.map((message) => (
+                  message.id === recoveryMsg.id
+                    ? { ...message, content: initialCleanText, rawContent: initialStreamContent }
+                    : message
+                )),
               }
+            : recoveredSession;
+          setActiveSession(reparseSession(hydratedSession));
+
+          setLoading(true);
+          markSessionStreaming(activeSessionId);
+          setStreamingMessageId(recoveryMsg.id);
+          activeChatIdRef.current = streamState.chatId;
+          attachedStreamingSessionIdRef.current = activeSessionId;
+
+          const es = new EventSource(`/api/chat/stream?id=${streamState.chatId}`);
+          activeEventSourceRef.current = es;
+          let accumulated = initialStreamContent;
+          let accumulatedRawStream = initialStreamContent;
+          let initialSnapshotReplayPending = Boolean(initialStreamContent);
+          let hasConnected = false;
+
+          es.addEventListener('connected', () => {
+            hasConnected = true;
+          });
+
+          es.addEventListener('delta', (e) => {
+            if (!hasConnected) return;
+            const { content } = JSON.parse(e.data);
+            if (initialSnapshotReplayPending && content === initialStreamContent) {
               initialSnapshotReplayPending = false;
-              accumulated += content;
-              accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
-              const { text: parsedText } = parseActions(accumulated);
-              const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-              setActiveSession(prev => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
-                };
-              });
-            });
-
-            es.addEventListener('session', (e) => {
-              const data = JSON.parse(e.data || '{}');
-              if (!data?.sessionId) return;
-              setActiveSession(prev => prev ? {
+              return;
+            }
+            initialSnapshotReplayPending = false;
+            accumulated += content;
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            const { text: parsedText } = parseActions(accumulated);
+            const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
+            setActiveSession(prev => {
+              if (!prev) return prev;
+              return {
                 ...prev,
-                backendSessionId: data.sessionId,
-              } : prev);
+                messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
+              };
             });
+          });
 
-            es.addEventListener('thinking', (e) => {
-              if (!hasConnected) return;
-              const { content } = JSON.parse(e.data);
-              accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
-              setActiveSession(prev => {
-                if (!prev) return prev;
-                return {
-                  ...prev,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, rawContent: accumulatedRawStream } : m),
-                };
-              });
-            });
+          es.addEventListener('session', (e) => {
+            const data = JSON.parse(e.data || '{}');
+            if (!data?.sessionId) return;
+            setActiveSession(prev => prev ? {
+              ...prev,
+              backendSessionId: data.sessionId,
+            } : prev);
+          });
 
-            es.addEventListener('done', (e) => {
-              const data = JSON.parse(e.data);
-              es.close();
-              activeEventSourceRef.current = null;
-              activeChatIdRef.current = null;
-              attachedStreamingSessionIdRef.current = null;
-              if (hasOwnKey(data, 'sessionId')) {
-                const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-                setActiveSession(prev => prev ? { ...prev, backendSessionId: nextBackendSessionId } : prev);
-              }
-              const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
-              const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
-              const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-              setActiveSession(prev => {
-                if (!prev) return prev;
-                return {
-                  ...prev, updatedAt: Date.now(),
-                  sessionWorkbenchState: latestSidebarHint ? {
-                    ...(prev.sessionWorkbenchState || {}),
-                    homeSidebar: latestSidebarHint,
-                  } : prev.sessionWorkbenchState,
-                  messages: prev.messages.map(m => m.id === recoveryMsg.id ? {
-                    ...m, content: cleanText,
-                    rawContent: fullRawContent !== cleanText ? fullRawContent : m.rawContent,
-                    cards: cards.length > 0 ? cards : m.cards,
-                    costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
-                  } : m),
-                };
-              });
-              setLoading(false);
-              unmarkSessionStreaming(activeSessionId);
-              setSessionLoadingId((current) => current === activeSessionId ? null : current);
-              setStreamingMessageId(null);
+          es.addEventListener('thinking', (e) => {
+            if (!hasConnected) return;
+            const { content } = JSON.parse(e.data);
+            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+            setActiveSession(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                messages: prev.messages.map(m => m.id === recoveryMsg.id ? { ...m, rawContent: accumulatedRawStream } : m),
+              };
             });
+          });
 
-            es.addEventListener('error', () => {
-              es.close();
-              activeEventSourceRef.current = null;
-              activeChatIdRef.current = null;
-              attachedStreamingSessionIdRef.current = null;
-              setLoading(false);
-              unmarkSessionStreaming(activeSessionId);
-              setSessionLoadingId((current) => current === activeSessionId ? null : current);
-              setStreamingMessageId(null);
+          es.addEventListener('done', (e) => {
+            const data = JSON.parse(e.data);
+            es.close();
+            activeEventSourceRef.current = null;
+            activeChatIdRef.current = null;
+            attachedStreamingSessionIdRef.current = null;
+            if (hasOwnKey(data, 'sessionId')) {
+              const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
+              setActiveSession(prev => prev ? { ...prev, backendSessionId: nextBackendSessionId } : prev);
+            }
+            const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+            const { text: cleanText, cards, sidebarHints } = parseActions(fullRawContent);
+            const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
+            setActiveSession(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev, updatedAt: Date.now(),
+                sessionWorkbenchState: latestSidebarHint ? {
+                  ...(prev.sessionWorkbenchState || {}),
+                  homeSidebar: latestSidebarHint,
+                } : prev.sessionWorkbenchState,
+                messages: prev.messages.map(m => m.id === recoveryMsg.id ? {
+                  ...m, content: cleanText,
+                  rawContent: fullRawContent !== cleanText ? fullRawContent : m.rawContent,
+                  cards: cards.length > 0 ? cards : m.cards,
+                  costUsd: data.costUsd, durationMs: data.durationMs, usage: data.usage,
+                } : m),
+              };
             });
+            setLoading(false);
+            markSessionRecentlyCompleted(activeSessionId);
+            unmarkSessionStreaming(activeSessionId);
+            setSessionLoadingId((current) => current === activeSessionId ? null : current);
+            setStreamingMessageId(null);
+          });
+
+          es.addEventListener('error', () => {
+            es.close();
+            activeEventSourceRef.current = null;
+            activeChatIdRef.current = null;
+            attachedStreamingSessionIdRef.current = null;
+            setLoading(false);
+            markSessionRecentlyCompleted(activeSessionId);
+            unmarkSessionStreaming(activeSessionId);
+            setSessionLoadingId((current) => current === activeSessionId ? null : current);
+            setStreamingMessageId(null);
+          });
+          return;
         }
-      } catch { /* recovery is best-effort */ }
+      }
+
+      setLoading(false);
+      setStreamingMessageId(null);
+      if (streamState?.status === 'completed') {
+        markSessionRecentlyCompleted(activeSessionId);
+      }
     }).catch(() => {
       if (sessionLoadTokenRef.current !== nextToken) return;
-      setActiveSession(null);
+      if (cached) {
+        setActiveSession(cached);
+        upsertSessionSummary(cached);
+      } else {
+        setActiveSession(null);
+      }
       setSessionLoadingId((current) => current === activeSessionId ? null : current);
     });
-  }, [activeSession?.id, activeSessionId, detachCurrentStream, markSessionStreaming, reparseSession, sessionLoadingId, sessions, unmarkSessionStreaming]);
+  }, [activeSession?.id, activeSessionId, detachCurrentStream, markSessionRecentlyCompleted, markSessionStreaming, prepareLoadedSession, sessionLoadingId, sessions, unmarkSessionStreaming]);
+
+  const cacheSessionSnapshot = useCallback((session: ChatSession | null | undefined) => {
+    if (!session?.id) return;
+    const existing = sessionCacheRef.current[session.id];
+    if (
+      existing
+      && existing.id === session.id
+      && existing.messages.length > session.messages.length
+      && existing.updatedAt >= session.updatedAt
+    ) {
+      return;
+    }
+    sessionCacheRef.current[session.id] = session;
+  }, []);
+
+  const clearSessionTracking = useCallback((sessionId: string | null | undefined) => {
+    if (!sessionId) return;
+    delete sessionCacheRef.current[sessionId];
+    delete pendingSessionsRef.current[sessionId];
+    delete handledChatSessionSignalsRef.current[sessionId];
+    delete backendSessionStatusRef.current[sessionId];
+    const timer = saveTimersRef.current[sessionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete saveTimersRef.current[sessionId];
+    }
+  }, []);
+
+  const upsertSessionSummary = useCallback((updated: ChatSession) => {
+    cacheSessionSnapshot(updated);
+    setSessions((list) => {
+      const summary: SessionSummary = {
+        id: updated.id,
+        title: updated.title,
+        model: updated.model,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+        messageCount: updated.messages.length,
+        lastMessage: extractLastMessagePreview(updated.messages),
+        agentBinding: updated.agentBinding,
+        workflowBinding: updated.workflowBinding,
+        creationSession: updated.creationSession,
+        sessionWorkbenchState: updated.sessionWorkbenchState,
+      };
+      const exists = list.some((item) => item.id === updated.id);
+      if (!exists) {
+        return [summary, ...list];
+      }
+      let changed = false;
+      const next = list.map((item) => {
+        if (item.id !== updated.id) return item;
+        const merged = { ...item, ...summary };
+        if (JSON.stringify(merged) === JSON.stringify(item)) return item;
+        changed = true;
+        return merged;
+      });
+      return changed ? next : list;
+    });
+  }, [cacheSessionSnapshot]);
 
   useEffect(() => {
-    const shouldRefreshFromPersistence = Boolean(
-      activeSessionId
-      && (
-        activeSession?.workflowBinding
-        || activeSession?.sessionWorkbenchState?.wechatBinding
-      )
-    );
-    if (!shouldRefreshFromPersistence || !activeSessionId) return;
+    const signalEntries = Object.entries(chatSessionSignalsById);
+    if (signalEntries.length === 0) return;
 
     let cancelled = false;
-    const refreshWorkflowSession = async () => {
-      if (activeEventSourceRef.current || activeChatIdRef.current) return;
-      const latest = await apiLoadSession(activeSessionId).catch(() => null);
-      if (cancelled || !latest) return;
+    const syncSessionsFromSignals = async () => {
+      for (const [sessionId, signal] of signalEntries) {
+        const updatedAt = typeof signal?.updatedAt === 'number' && Number.isFinite(signal.updatedAt)
+          ? signal.updatedAt
+          : 0;
+        if (!sessionId || updatedAt <= (handledChatSessionSignalsRef.current[sessionId] || 0)) {
+          continue;
+        }
 
-      const current = activeSessionRef.current;
-      if (
-        current?.id === latest.id
-        && latest.updatedAt <= current.updatedAt
-        && (latest.messages?.length || 0) <= current.messages.length
-      ) {
-        return;
+        if (signal?.removed) {
+          handledChatSessionSignalsRef.current[sessionId] = updatedAt;
+          setActiveStreamingSessionIds((prev) => removeSessionId(prev, sessionId));
+          setRecentlyCompletedSessionIds((prev) => removeSessionId(prev, sessionId));
+          if (activeSessionRef.current?.id === sessionId || activeSessionId === sessionId) {
+            detachCurrentStream();
+            setActiveSession((current) => current?.id === sessionId ? null : current);
+          }
+          setSessions((list) => {
+            const deletingSession = activeSessionId === sessionId
+              ? list.find((session) => session.id === sessionId)
+              : null;
+            const next = list.filter((session) => session.id !== sessionId);
+            if (activeSessionId === sessionId) {
+              const nextId = resolveNextActiveSessionIdAfterDelete(next, deletingSession);
+              setActiveSessionId(nextId);
+              if (!nextId) setActiveSession(null);
+            }
+            return next.length === list.length ? list : next;
+          });
+          clearSessionTracking(sessionId);
+          continue;
+        }
+
+        if (sessionId !== activeSessionId) {
+          handledChatSessionSignalsRef.current[sessionId] = updatedAt;
+          continue;
+        }
+
+        const activeTargetSession = activeSessionRef.current?.id === sessionId
+          ? activeSessionRef.current
+          : null;
+        const shouldRefreshFromSignal = Boolean(
+          activeTargetSession?.workflowBinding
+          || activeTargetSession?.sessionWorkbenchState?.wechatBinding
+        );
+        if (!shouldRefreshFromSignal) {
+          handledChatSessionSignalsRef.current[sessionId] = updatedAt;
+          continue;
+        }
+
+        if (
+          sessionLoadingId === sessionId
+          || (
+            (activeEventSourceRef.current || activeChatIdRef.current)
+            && attachedStreamingSessionIdRef.current === sessionId
+          )
+        ) {
+          continue;
+        }
+
+        const latest = await apiLoadSession(sessionId).catch(() => null);
+        if (cancelled) return;
+        handledChatSessionSignalsRef.current[sessionId] = updatedAt;
+        const prepared = prepareLoadedSession(latest);
+        if (!prepared) continue;
+
+        const current = activeTargetSession;
+        const cached = sessionCacheRef.current[sessionId] || null;
+        if (!isSessionAhead(prepared, current) && !isSessionAhead(prepared, cached)) {
+          continue;
+        }
+
+        upsertSessionSummary(prepared);
+        if (activeSessionRef.current?.id === sessionId) {
+          setActiveSession((currentSession) => {
+            if (!currentSession || currentSession.id !== sessionId) return currentSession;
+            return isSessionAhead(prepared, currentSession) ? prepared : currentSession;
+          });
+        }
       }
-
-      const cleaned = {
-        ...latest,
-        messages: latest.messages.filter(m => !(m.role === 'assistant' && !m.content && !m.actions?.length && !m.cards?.length)),
-      };
-      const reparsed = reparseSession(cleaned);
-      setActiveSession(reparsed);
-      setSessions((list) => {
-        const summary: SessionSummary = {
-          id: reparsed.id,
-          title: reparsed.title,
-          model: reparsed.model,
-          createdAt: reparsed.createdAt,
-          updatedAt: reparsed.updatedAt,
-          messageCount: reparsed.messages.length,
-          lastMessage: extractLastMessagePreview(reparsed.messages),
-          creationSession: reparsed.creationSession,
-          workflowBinding: reparsed.workflowBinding,
-          agentBinding: reparsed.agentBinding,
-          sessionWorkbenchState: reparsed.sessionWorkbenchState,
-        };
-        const exists = list.some((item) => item.id === reparsed.id);
-        return exists
-          ? list.map((item) => item.id === reparsed.id ? { ...item, ...summary } : item)
-          : [summary, ...list];
-      });
     };
 
-    refreshWorkflowSession();
-    const timer = window.setInterval(refreshWorkflowSession, activeSession?.sessionWorkbenchState?.wechatBinding ? 3000 : 5000);
+    void syncSessionsFromSignals();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [activeSession, activeSessionId, reparseSession]);
+  }, [
+    activeSessionId,
+    chatSessionSignalsById,
+    clearSessionTracking,
+    detachCurrentStream,
+    prepareLoadedSession,
+    sessionLoadingId,
+    streamingMessageId,
+    upsertSessionSummary,
+  ]);
 
   // Debounced persist to server
-  const pendingSessionRef = useRef<ChatSession | null>(null);
   const scheduleSave = useCallback((session: ChatSession) => {
-    pendingSessionRef.current = session;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      pendingSessionRef.current = null;
-      apiSaveSession(session).catch(console.error);
+    pendingSessionsRef.current[session.id] = session;
+    const existingTimer = saveTimersRef.current[session.id];
+    if (existingTimer) clearTimeout(existingTimer);
+    saveTimersRef.current[session.id] = setTimeout(() => {
+      const pending = pendingSessionsRef.current[session.id];
+      delete pendingSessionsRef.current[session.id];
+      delete saveTimersRef.current[session.id];
+      if (!pending) return;
+      apiSaveSession(pending).catch(console.error);
     }, 300);
   }, []);
 
   // Flush pending save on page unload to prevent data loss
   useEffect(() => {
     const handleBeforeUnload = () => {
-      const pending = pendingSessionRef.current;
-      if (pending) {
-        pendingSessionRef.current = null;
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      const pendingSessions = Object.values(pendingSessionsRef.current);
+      pendingSessionsRef.current = {};
+      Object.entries(saveTimersRef.current).forEach(([sessionId, timer]) => {
+        clearTimeout(timer);
+        delete saveTimersRef.current[sessionId];
+      });
+      for (const pending of pendingSessions) {
         // Use synchronous XHR for reliable save during unload
         try {
           const xhr = new XMLHttpRequest();
@@ -993,31 +1140,64 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const updated = updater(prev);
       if (updated === prev) return prev;
       scheduleSave(updated);
-      // Also update summary in sessions list
-      setSessions(list => {
-        let changed = false;
-        const next = list.map(s => {
-          if (s.id !== updated.id) return s;
-          const summary = {
-            ...s,
-            title: updated.title,
-            updatedAt: updated.updatedAt,
-            messageCount: updated.messages.length,
-            lastMessage: extractLastMessagePreview(updated.messages),
-            agentBinding: updated.agentBinding,
-            workflowBinding: updated.workflowBinding,
-            creationSession: updated.creationSession,
-            sessionWorkbenchState: updated.sessionWorkbenchState,
-          };
-          if (JSON.stringify(summary) === JSON.stringify(s)) return s;
-          changed = true;
-          return summary;
-        });
-        return changed ? next : list;
-      });
+      upsertSessionSummary(updated);
       return updated;
     });
-  }, [scheduleSave]);
+  }, [scheduleSave, upsertSessionSummary]);
+
+  const getCachedSessionSnapshot = useCallback((sessionId: string | null | undefined): ChatSession | null => {
+    if (!sessionId) return null;
+    const activeSnapshot = activeSessionRef.current?.id === sessionId && sessionLoadingId !== sessionId
+      ? activeSessionRef.current
+      : null;
+    const cachedSnapshot = sessionCacheRef.current[sessionId] || null;
+    if (activeSnapshot && cachedSnapshot) {
+      if (
+        cachedSnapshot.updatedAt > activeSnapshot.updatedAt
+        || cachedSnapshot.messages.length > activeSnapshot.messages.length
+      ) {
+        return cachedSnapshot;
+      }
+      return activeSnapshot;
+    }
+    return activeSnapshot || cachedSnapshot;
+  }, [sessionLoadingId]);
+
+  const loadSessionSnapshot = useCallback(async (sessionId: string | null | undefined): Promise<ChatSession | null> => {
+    const cached = getCachedSessionSnapshot(sessionId);
+    if (cached) return cached;
+    if (!sessionId) return null;
+    const loaded = await apiLoadSession(sessionId);
+    if (loaded) {
+      cacheSessionSnapshot(loaded);
+      return loaded;
+    }
+    if (activeSessionRef.current?.id === sessionId) {
+      return activeSessionRef.current;
+    }
+    return null;
+  }, [cacheSessionSnapshot, getCachedSessionSnapshot]);
+
+  const updateSessionById = useCallback(async (
+    sessionId: string | null | undefined,
+    updater: (session: ChatSession) => ChatSession,
+  ): Promise<ChatSession | null> => {
+    if (!sessionId) return null;
+    const base = await loadSessionSnapshot(sessionId);
+    if (!base) return null;
+    const updated = updater(base);
+    if (updated === base) return updated;
+    cacheSessionSnapshot(updated);
+    scheduleSave(updated);
+    upsertSessionSummary(updated);
+    if (activeSessionRef.current?.id === sessionId) {
+      setActiveSession((current) => {
+        if (!current || current.id !== sessionId) return current;
+        return updated;
+      });
+    }
+    return updated;
+  }, [cacheSessionSnapshot, loadSessionSnapshot, scheduleSave, upsertSessionSummary]);
 
   const handleSetEngine = useCallback((e: string) => {
     setEngineState(e);
@@ -1260,6 +1440,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       sessionWorkbenchState: session.sessionWorkbenchState,
     };
     setSessions(prev => [summary, ...prev]);
+    sessionCacheRef.current[id] = session;
     setActiveSession(session);
     setActiveSessionId(id);
     apiCreateSession(session).catch(console.error);
@@ -1286,12 +1467,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
+    clearSessionTracking(id);
     void apiTerminateSessionProcesses(id)
       .catch(console.error)
       .finally(() => {
         apiDeleteSession(id).catch(console.error);
       });
-  }, [activeSessionId]);
+  }, [activeSessionId, clearSessionTracking]);
 
   const deleteSessions = useCallback((ids: string[]) => {
     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
@@ -1307,8 +1489,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       setStreamingMessageId(null);
     }
-    setActiveStreamingSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
-    setRecentlyCompletedSessionIds((prev) => prev.filter((id) => !deleting.has(id)));
+    setActiveStreamingSessionIds((prev) => removeSessionIds(prev, deleting));
+    setRecentlyCompletedSessionIds((prev) => removeSessionIds(prev, deleting));
     setSessions(prev => {
       const deletingSession = deletingActive
         ? prev.find((session) => session.id === activeSessionId)
@@ -1321,6 +1503,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
+    uniqueIds.forEach((id) => clearSessionTracking(id));
     void apiTerminateSessionsProcesses(uniqueIds)
       .catch(console.error)
       .finally(() => {
@@ -1329,7 +1512,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           await Promise.allSettled(uniqueIds.map((id) => apiDeleteSession(id)));
         });
       });
-  }, [activeSessionId]);
+  }, [activeSessionId, clearSessionTracking]);
 
   const renameSession = useCallback((id: string, title: string) => {
     if (activeSession?.id === id) {
@@ -1378,19 +1561,37 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
   }, [updateAction, enrichAction]);
 
-  const autoExecuteSafeActions = useCallback(async (messageId: string, actions: ActionState[], _retryCount?: number) => {
+  const autoExecuteSafeActions = useCallback(async (
+    messageId: string,
+    actions: ActionState[],
+    targetSessionIdArg?: string,
+    _retryCount?: number,
+  ) => {
     const retryCount = _retryCount || 0;
+    const targetSessionId = targetSessionIdArg || activeSessionRef.current?.id || activeSessionId || null;
+    if (!targetSessionId) return;
+    const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
+    const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
+    const updateTargetAction = (actionId: string, patch: Partial<ActionState>) => applyToTargetSession((session) => ({
+      ...session,
+      updatedAt: Date.now(),
+      messages: session.messages.map((message) => (
+        message.id === messageId
+          ? { ...message, actions: message.actions?.map((action) => action.id === actionId ? { ...action, ...patch } : action) }
+          : message
+      )),
+    }));
     const results: { type: string; data: any }[] = [];
     for (const a of actions) {
       if (isSafeAction(a.action)) {
-        updateAction(messageId, a.id, { status: 'auto_executing' });
+        await updateTargetAction(a.id, { status: 'auto_executing' });
         try {
           const enriched = enrichAction(a.action);
           const { result } = await executeAction(enriched);
-          updateAction(messageId, a.id, { status: 'success', result });
+          await updateTargetAction(a.id, { status: 'success', result });
           results.push({ type: a.action.type, data: result });
         } catch (err: any) {
-          updateAction(messageId, a.id, { status: 'error', error: err.message });
+          await updateTargetAction(a.id, { status: 'error', error: err.message });
         }
       }
     }
@@ -1408,21 +1609,33 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const followUpMsg: ChatMessage = {
         id: followUpMsgId, role: 'assistant', content: '', rawContent: '', engine: followUpEngine, model: model || undefined, timestamp: Date.now(),
       };
-      updateActiveSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, followUpMsg] }));
+      await applyToTargetSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, followUpMsg] }));
       setLoading(true);
       setStreamingMessageId(followUpMsgId);
 
       try {
-        const backendSid = activeSessionRef.current?.backendSessionId;
-        const frontendSid = activeSessionRef.current?.id;
+        const backendSid = getTargetSessionSnapshot()?.backendSessionId;
+        const frontendSid = targetSessionId;
         const startRes = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-          body: JSON.stringify({ message: followUpPrompt, model, engine: followUpEngine || undefined, sessionId: backendSid || undefined, frontendSessionId: frontendSid || undefined, mode: 'dashboard', workingDirectory: workingDirectory || undefined }),
+          body: JSON.stringify({
+            message: followUpPrompt,
+            model,
+            engine: followUpEngine || undefined,
+            sessionId: backendSid || undefined,
+            frontendSessionId: frontendSid || undefined,
+            assistantMessageId: followUpMsgId,
+            skipUserMessage: true,
+            mode: 'dashboard',
+            workingDirectory: workingDirectory || undefined,
+          }),
         });
         const { chatId } = await startRes.json();
         if (!chatId) throw new Error('Failed to start stream');
         activeChatIdRef.current = chatId;
+        attachedStreamingSessionIdRef.current = targetSessionId;
+        markSessionStreaming(targetSessionId);
 
         await new Promise<void>((resolve, reject) => {
           let accumulated = '';
@@ -1441,12 +1654,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
           es.addEventListener('delta', (e) => {
             if (!hasConnected) return;
-            const { content } = JSON.parse(e.data);
-            accumulated += content;
-            accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
+              const { content } = JSON.parse(e.data);
+              accumulated += content;
+              accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
               const { text: parsedText } = parseActions(accumulated);
               const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-              updateActiveSession(s => ({
+              void applyToTargetSession(s => ({
                 ...s,
                 messages: s.messages.map(m => m.id === followUpMsgId ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
               }));
@@ -1457,9 +1670,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               es.close();
               activeEventSourceRef.current = null;
               activeChatIdRef.current = null;
+              attachedStreamingSessionIdRef.current = null;
               if (hasOwnKey(data, 'sessionId')) {
                 const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-                updateActiveSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
+                void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
               }
               const fullRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
               const { text: cleanText, actions: newActions, cards: newCards, sidebarHints } = parseActions(fullRawContent);
@@ -1467,7 +1681,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const newActionStates: ActionState[] = newActions.map(a => ({
                 id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
               }));
-              updateActiveSession(s => ({
+              void applyToTargetSession(s => ({
                 ...s, updatedAt: Date.now(),
                 sessionWorkbenchState: latestSidebarHint ? {
                   ...(s.sessionWorkbenchState || {}),
@@ -1484,18 +1698,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // Handle loading state and recursive actions
               const finishLoading = () => {
                 setLoading(false);
+                markSessionRecentlyCompleted(targetSessionId);
+                unmarkSessionStreaming(targetSessionId);
                 setStreamingMessageId(null);
               };
 
               if (newActionStates.length > 0) {
-                autoExecuteSafeActions(followUpMsgId, newActionStates).finally(finishLoading);
+                autoExecuteSafeActions(followUpMsgId, newActionStates, targetSessionId, retryCount).finally(finishLoading);
                 resolve();
               } else {
                 finishLoading();
                 // If no cards and content is substantial, trigger a card-format retry
                 if (newCards.length === 0 && cleanText.length > 200 && retryCount < 1) {
                   const retryPrompt = `你刚才的回复没有使用 \`\`\`card 代码块来展示结构化内容。请将上面的分析结果重新用 \`\`\`card 代码块格式输出为可视化卡片（不要用 \`\`\`json）。card 格式示例：{"header":{"icon":"图标","title":"标题","gradient":"from-blue-500 to-cyan-500"},"blocks":[...],"actions":[{"label":"按钮","prompt":"消息"}]}`;
-                  sendMessageRef.current?.(retryPrompt);
+                  void sendMessageRef.current?.(retryPrompt, { displayText: retryPrompt, targetSessionId });
                 }
                 resolve();
               }
@@ -1509,7 +1725,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 setTimeout(connectSSE, 1000 * reconnectAttempts);
               } else {
                 // Try recovery via backendSessionId
-                const backendSid = activeSessionRef.current?.backendSessionId;
+                const backendSid = getTargetSessionSnapshot()?.backendSessionId;
                 if (backendSid) {
                   fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
                     .then(r => r.json())
@@ -1517,7 +1733,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                       if (recData.content) {
                         const { text: cleanText, cards: newCards, sidebarHints } = parseActions(recData.content);
                         const latestSidebarHint = sidebarHints[sidebarHints.length - 1];
-                        updateActiveSession(s => ({
+                        void applyToTargetSession(s => ({
                           ...s,
                           sessionWorkbenchState: latestSidebarHint ? {
                             ...(s.sessionWorkbenchState || {}),
@@ -1535,6 +1751,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                     .catch(() => {});
                 }
                 activeChatIdRef.current = null;
+                attachedStreamingSessionIdRef.current = null;
                 reject(new Error('Stream error'));
               }
             });
@@ -1544,9 +1761,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         });
       } catch { /* follow-up failed silently */ }
       setLoading(false);
+      unmarkSessionStreaming(targetSessionId);
       setStreamingMessageId(null);
     }
-  }, [effectiveEngine, enrichAction, model, updateAction, updateActiveSession, workingDirectory]);
+  }, [activeSessionId, effectiveEngine, enrichAction, getCachedSessionSnapshot, markSessionRecentlyCompleted, markSessionStreaming, model, updateAction, updateSessionById, workingDirectory]);
 
   const interruptCurrentStream = useCallback(() => {
     const activeChatId = activeChatIdRef.current;
@@ -1693,7 +1911,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [interruptCurrentStream, markSessionStreaming, unmarkSessionStreaming, updateActiveSession, workingDirectory]);
 
   // --- Send message (streaming) ---
-  const sendMessage = useCallback(async (text: string, options?: { displayText?: string }) => {
+  const sendMessage = useCallback(async (text: string, options?: { displayText?: string; targetSessionId?: string }) => {
     const currentModel = modelRef.current || '';
     const currentEngineOverride = engineRef.current || '';
     const resolvedEngine = currentEngineOverride || globalEngineRef.current || '';
@@ -1705,11 +1923,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       interruptCurrentStream();
     }
 
-    let sid = activeSessionId;
+    let sid = options?.targetSessionId || activeSessionId;
     if (!sid) { sid = createSession(); }
+    const targetSessionId = sid;
+    const previousSession = await loadSessionSnapshot(targetSessionId);
+    if (!previousSession) {
+      return;
+    }
+    const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
+    const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
 
     const userMsg: ChatMessage = { id: genId(), role: 'user', content: options?.displayText ?? text, timestamp: Date.now() };
-    updateActiveSession(s => ({
+    await applyToTargetSession(s => ({
       ...s,
       updatedAt: Date.now(),
       title: s.messages.length === 0 ? userMsg.content.slice(0, 30) : s.title,
@@ -1717,21 +1942,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }));
 
     const assistantMsgId = genId();
-    const previousSession = activeSessionRef.current;
     const agentBinding = previousSession?.agentBinding;
     const previousEffectiveEngine = previousSession?.engine || globalEngineRef.current || '';
     const shouldStartFresh = !!previousSession?.backendSessionId
       && resolvedEngine !== previousEffectiveEngine;
     const assistantMsg: ChatMessage = { id: assistantMsgId, role: 'assistant', content: '', rawContent: '', engine: resolvedEngine, model: currentModel || undefined, timestamp: Date.now() };
-    updateActiveSession(s => ({
+    await applyToTargetSession(s => ({
       ...s,
       engine: resolvedEngine || undefined,
       model: currentModel,
       backendSessionId: shouldStartFresh ? undefined : s.backendSessionId,
     }));
-    updateActiveSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, assistantMsg] }));
+    await applyToTargetSession(s => ({ ...s, updatedAt: Date.now(), messages: [...s.messages, assistantMsg] }));
     setLoading(true);
-    markSessionStreaming(sid);
+    markSessionStreaming(targetSessionId);
     setStreamingMessageId(assistantMsgId);
 
     try {
@@ -1742,7 +1966,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({
             message: text,
             mode: 'standalone-chat',
-            sessionId: shouldStartFresh ? undefined : (activeSessionRef.current?.backendSessionId || undefined),
+            sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || undefined),
             workingDirectory: workingDirectory || undefined,
           }),
         }).then(async (response) => {
@@ -1760,7 +1984,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           };
         });
 
-        updateActiveSession((s) => ({
+        await applyToTargetSession((s) => ({
           ...s,
           backendSessionId: result.sessionId ?? undefined,
           updatedAt: Date.now(),
@@ -1775,6 +1999,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             : m),
         }));
         setLoading(false);
+        markSessionRecentlyCompleted(targetSessionId);
+        unmarkSessionStreaming(targetSessionId);
         setStreamingMessageId(null);
         return;
       }
@@ -1787,7 +2013,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           body: JSON.stringify({
             message: text,
             mode: 'workflow-chat',
-            sessionId: shouldStartFresh ? undefined : (activeSessionRef.current?.backendSessionId || workflowBinding.supervisorSessionId || undefined),
+            sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || workflowBinding.supervisorSessionId || undefined),
             workingDirectory: workingDirectory || undefined,
             workflowContext: {
               configFile: workflowBinding.configFile,
@@ -1821,7 +2047,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const parsed = result.isError ? { text: responseContent, cards: [] as any[], sidebarHints: [] as HomeSidebarHint[] } : parseActions(responseContent);
         const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
 
-        updateActiveSession((s) => ({
+        await applyToTargetSession((s) => ({
           ...s,
           backendSessionId: result.sessionId ?? undefined,
           workflowBinding: s.workflowBinding ? {
@@ -1847,31 +2073,45 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             : m),
         }));
         setLoading(false);
+        markSessionRecentlyCompleted(targetSessionId);
+        unmarkSessionStreaming(targetSessionId);
         setStreamingMessageId(null);
         return;
       }
 
-      const backendSid = shouldStartFresh ? undefined : activeSessionRef.current?.backendSessionId;
-      const frontendSid = activeSessionRef.current?.id;
+      const backendSid = shouldStartFresh ? undefined : previousSession.backendSessionId;
+      const frontendSid = targetSessionId;
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ message: text, model: currentModel, engine: resolvedEngine || undefined, sessionId: backendSid || undefined, frontendSessionId: frontendSid || undefined, mode: 'dashboard', workingDirectory: workingDirectory || undefined }),
+        body: JSON.stringify({
+          message: text,
+          displayMessage: options?.displayText ?? text,
+          model: currentModel,
+          engine: resolvedEngine || undefined,
+          sessionId: backendSid || undefined,
+          frontendSessionId: frontendSid || undefined,
+          userMessageId: userMsg.id,
+          assistantMessageId: assistantMsgId,
+          mode: 'dashboard',
+          workingDirectory: workingDirectory || undefined,
+        }),
       });
       const startData = await startRes.json();
       if (!startRes.ok || startData.error) {
-        updateActiveSession(s => ({
+        await applyToTargetSession(s => ({
           ...s, updatedAt: Date.now(),
           messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, role: 'error' as const, content: startData.error || `HTTP ${startRes.status}` } : m),
         }));
         setLoading(false);
+        unmarkSessionStreaming(targetSessionId);
         setStreamingMessageId(null);
         return;
       }
 
       const { chatId } = startData;
       activeChatIdRef.current = chatId;
-      attachedStreamingSessionIdRef.current = sid;
+      attachedStreamingSessionIdRef.current = targetSessionId;
       await new Promise<void>((resolve, reject) => {
         let accumulated = '';
         let reconnectAttempts = 0;
@@ -1910,7 +2150,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const { content } = JSON.parse(e.data);
             accumulatedRawContent = appendStreamChunk(accumulatedRawContent, content);
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s, messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, rawContent: accumulatedRawStream } : m),
             }));
           });
@@ -1919,7 +2159,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             resetInactivityTimer();
             const data = JSON.parse(e.data || '{}');
             if (!data?.sessionId) return;
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s,
               backendSessionId: data.sessionId,
               engine: resolvedEngine || s.engine,
@@ -1935,7 +2175,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             accumulatedRawStream = appendStreamChunk(accumulatedRawStream, content);
             const { text: parsedText } = parseActions(accumulated);
             const cleanText = normalizeAssistantDisplay(accumulated, true).visibleText || parsedText;
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s,
               messages: s.messages.map(m => m.id === assistantMsgId ? { ...m, content: cleanText, rawContent: accumulatedRawStream } : m),
             }));
@@ -1950,7 +2190,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             attachedStreamingSessionIdRef.current = null;
             if (hasOwnKey(data, 'sessionId')) {
               const nextBackendSessionId = normalizeBackendSessionId(data.sessionId);
-              updateActiveSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
+              void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
             }
             if (data.isError) {
               const partial = String(data.result || accumulated || '').trim();
@@ -1958,7 +2198,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               const content = partial
                 ? `请求失败：${message}\n\n已返回部分内容：\n${partial}`
                 : `请求失败：${message}`;
-              updateActiveSession(s => ({
+              void applyToTargetSession(s => ({
                 ...s,
                 updatedAt: Date.now(),
                 messages: s.messages.map(m => m.id === assistantMsgId
@@ -1966,7 +2206,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   : m),
               }));
               setLoading(false);
-              unmarkSessionStreaming(sid);
+              markSessionRecentlyCompleted(targetSessionId);
+              unmarkSessionStreaming(targetSessionId);
               setStreamingMessageId(null);
               resolve();
               return;
@@ -1977,7 +2218,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             const actionStates: ActionState[] = actions.map(a => ({
               id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
             }));
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s, updatedAt: Date.now(),
               sessionWorkbenchState: latestSidebarHint ? {
                 ...(s.sessionWorkbenchState || {}),
@@ -1993,11 +2234,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }));
             if (actionStates.length > 0) {
               // autoExecuteSafeActions will handle its own loading state
-              autoExecuteSafeActions(assistantMsgId, actionStates);
+              autoExecuteSafeActions(assistantMsgId, actionStates, targetSessionId);
               resolve();
             } else {
               setLoading(false);
-              unmarkSessionStreaming(sid);
+              markSessionRecentlyCompleted(targetSessionId);
+              unmarkSessionStreaming(targetSessionId);
               setStreamingMessageId(null);
               resolve();
             }
@@ -2007,7 +2249,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             const data = JSON.parse(e.data || '{}');
             const message = String(data?.message || '执行失败，请稍后重试');
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
@@ -2019,7 +2261,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             activeChatIdRef.current = null;
             attachedStreamingSessionIdRef.current = null;
             setLoading(false);
-            unmarkSessionStreaming(sid);
+            markSessionRecentlyCompleted(targetSessionId);
+            unmarkSessionStreaming(targetSessionId);
             setStreamingMessageId(null);
             resolve();
           });
@@ -2028,7 +2271,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             const data = JSON.parse(e.data || '{}');
             const message = String(data?.message || '执行失败，请稍后重试');
-            updateActiveSession(s => ({
+            void applyToTargetSession(s => ({
               ...s,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
@@ -2040,7 +2283,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             activeChatIdRef.current = null;
             attachedStreamingSessionIdRef.current = null;
             setLoading(false);
-            unmarkSessionStreaming(sid);
+            markSessionRecentlyCompleted(targetSessionId);
+            unmarkSessionStreaming(targetSessionId);
             setStreamingMessageId(null);
             resolve();
           });
@@ -2054,7 +2298,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setTimeout(connectSSE, 1000 * reconnectAttempts);
             } else {
               // All reconnects failed — try to recover full content from backend
-              const backendSid = activeSessionRef.current?.backendSessionId;
+              const backendSid = getTargetSessionSnapshot()?.backendSessionId;
               if (backendSid) {
                 fetch(`/api/chat/stream/recover?sessionId=${encodeURIComponent(backendSid)}`)
                   .then(r => r.json())
@@ -2065,7 +2309,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                       const newActionStates: ActionState[] = newActions.map(a => ({
                         id: genId(), action: a, status: isSafeAction(a) ? 'auto_executing' as ActionStatus : 'pending' as ActionStatus, timestamp: Date.now(),
                       }));
-                      updateActiveSession(s => ({
+                      void applyToTargetSession(s => ({
                         ...s, updatedAt: Date.now(),
                         sessionWorkbenchState: latestSidebarHint ? {
                           ...(s.sessionWorkbenchState || {}),
@@ -2079,40 +2323,44 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                         } : m),
                       }));
                       if (newActionStates.length > 0) {
-                        autoExecuteSafeActions(assistantMsgId, newActionStates);
+                        autoExecuteSafeActions(assistantMsgId, newActionStates, targetSessionId);
                         resolve();
                       } else {
                         setLoading(false);
-                        unmarkSessionStreaming(sid);
+                        markSessionRecentlyCompleted(targetSessionId);
+                        unmarkSessionStreaming(targetSessionId);
                         setStreamingMessageId(null);
                         resolve();
                       }
                     } else {
-                      updateActiveSession(s => ({
+                      void applyToTargetSession(s => ({
                         ...s, messages: s.messages.map(m => m.id === assistantMsgId && !m.content
                           ? { ...m, role: 'error' as const, content: '流式连接中断' }
                           : m),
                       }));
                       setLoading(false);
-                      unmarkSessionStreaming(sid);
+                      markSessionRecentlyCompleted(targetSessionId);
+                      unmarkSessionStreaming(targetSessionId);
                       setStreamingMessageId(null);
                       resolve();
                     }
                   })
                   .catch(() => {
-                    updateActiveSession(s => ({
+                    void applyToTargetSession(s => ({
                       ...s, messages: s.messages.map(m => m.id === assistantMsgId && !m.content
                         ? { ...m, role: 'error' as const, content: '流式连接中断' }
                         : m),
                     }));
                     setLoading(false);
-                    unmarkSessionStreaming(sid);
+                    markSessionRecentlyCompleted(targetSessionId);
+                    unmarkSessionStreaming(targetSessionId);
                     setStreamingMessageId(null);
                     resolve();
                   });
               } else {
                 setLoading(false);
-                unmarkSessionStreaming(sid);
+                markSessionRecentlyCompleted(targetSessionId);
+                unmarkSessionStreaming(targetSessionId);
                 setStreamingMessageId(null);
                 resolve();
               }
@@ -2124,19 +2372,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
     } catch (err: any) {
       // If the assistant message is still empty, convert to error
-      updateActiveSession(s => ({
+      await applyToTargetSession(s => ({
         ...s, updatedAt: Date.now(),
         messages: s.messages.map(m => m.id === assistantMsgId && !m.content
           ? { ...m, role: 'error' as const, content: err.message || '请求失败' }
           : m),
       }));
       setLoading(false);
-      unmarkSessionStreaming(sid);
+      markSessionRecentlyCompleted(targetSessionId);
+      unmarkSessionStreaming(targetSessionId);
       setStreamingMessageId(null);
     }
     // Note: setLoading(false) is called inside the Promise's done/error handlers
     // to properly handle autoExecuteSafeActions
-  }, [activeSessionId, createSession, updateActiveSession, autoExecuteSafeActions, workingDirectory, interruptCurrentStream, markSessionStreaming, unmarkSessionStreaming]);
+  }, [activeSessionId, createSession, loadSessionSnapshot, updateSessionById, getCachedSessionSnapshot, autoExecuteSafeActions, workingDirectory, interruptCurrentStream, markSessionRecentlyCompleted, markSessionStreaming, unmarkSessionStreaming]);
   sendMessageRef.current = sendMessage;
   const confirmAction = useCallback(async (messageId: string, actionId: string) => {
     const msg = activeSession?.messages.find(m => m.id === messageId);

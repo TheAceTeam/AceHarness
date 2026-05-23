@@ -207,7 +207,20 @@ export async function resolveRequestedEngineType(requestedEngine?: string | null
   throw new Error('默认引擎未配置，请先完成初始化设置');
 }
 
-// Engine pool: reuse engine instances across messages in the same chat session
+const ACP_SHARED_PROCESS_ENGINE_TYPES = new Set<EngineType>([
+  'claude-code-acp',
+  'codegenie',
+  'cursor',
+  'kiro-cli',
+  'magic-cli',
+  'nga',
+  'opencode',
+  'trae-cli',
+]);
+
+// Engine pool: reuse engine instances across messages in the same chat session.
+// ACP wrappers intentionally opt out because they now share the underlying ACP
+// process via ACPWrapperBase while keeping request-scoped wrapper instances.
 const enginePool = new Map<string, { engine: Engine; engineType: EngineType; lastUsed: number }>();
 const ENGINE_POOL_TTL = 10 * 60 * 1000; // 10 minutes idle timeout
 
@@ -234,8 +247,9 @@ export async function getOrCreateEngine(type?: EngineType, sessionKey?: string):
     ? type
     : await resolveRequestedEngineType(requestedType);
   const logicalEngineType = getLogicalEngineId(engineType) || engineType;
-  const pooledSessionKey = sessionKey ? `${logicalEngineType}:${sessionKey}` : undefined;
-  if (sessionKey) {
+  const shouldPoolWrapper = Boolean(sessionKey) && !ACP_SHARED_PROCESS_ENGINE_TYPES.has(engineType);
+  const pooledSessionKey = shouldPoolWrapper ? `${logicalEngineType}:${sessionKey}` : undefined;
+  if (shouldPoolWrapper) {
     const cached = enginePool.get(pooledSessionKey!);
     if (cached) {
       // Engine type changed — discard the old cached engine
@@ -251,7 +265,7 @@ export async function getOrCreateEngine(type?: EngineType, sessionKey?: string):
     }
   }
   const engine = await createEngine(engineType);
-  if (engine && sessionKey) {
+  if (engine && shouldPoolWrapper) {
     enginePool.set(pooledSessionKey!, { engine, engineType, lastUsed: Date.now() });
   }
   return engine;

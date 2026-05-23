@@ -1,4 +1,5 @@
 import { jsonrepair } from 'jsonrepair';
+import { getAceProcessRanges as getStructuredAceProcessRanges } from '@/lib/chat/ai-process-blocks';
 
 export interface ResultSection {
   start: number;
@@ -195,13 +196,7 @@ function getFencedCodeBlockRanges(markdown: string): Array<[number, number]> {
 }
 
 function getAceProcessRanges(markdown: string): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  const aceProcessRegex = /<ace-process>[\s\S]*?<\/ace-process>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = aceProcessRegex.exec(markdown)) !== null) {
-    ranges.push([match.index, match.index + match[0].length]);
-  }
-  return ranges;
+  return getStructuredAceProcessRanges(markdown);
 }
 
 function isInsideRanges(index: number, ranges: Array<[number, number]>): boolean {

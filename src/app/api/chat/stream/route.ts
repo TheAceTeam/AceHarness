@@ -8,6 +8,8 @@ import {
   appendEngineStreamContent,
   setEngineStreamSessionId,
   setEngineStreamStatus,
+  setEngineStreamLiveSession,
+  updateEngineStreamLiveSession,
   getEngineStream,
   getEngineStreamByFrontendSessionId,
   getBackendSessionIdByFrontendSessionId,
@@ -18,8 +20,12 @@ import { requireAuth } from '@/lib/auth/middleware';
 import { EventEmitter } from 'events';
 import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
+import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
+import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
 
 export const dynamic = 'force-dynamic';
+const COMPLETED_STREAM_RETENTION_MS = 2 * 60 * 1000;
 
 function numberOrUndefined(value: unknown): number | undefined {
   const numeric = Number(value);
@@ -60,6 +66,84 @@ function resolveStreamRecoveryKey(frontendSessionId?: string, streamScope?: stri
   return normalizedScope ? `${frontendSessionId}:${normalizedScope}` : frontendSessionId;
 }
 
+function genId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function canUsePersistedSession(session: PersistedChatSession | null, userId: string): session is PersistedChatSession {
+  if (!session) return false;
+  return !session.createdBy || session.createdBy === userId;
+}
+
+function updateMessageById(
+  messages: PersistedMessage[],
+  messageId: string,
+  updater: (message: PersistedMessage) => PersistedMessage,
+): PersistedMessage[] {
+  return messages.map((message) => (message.id === messageId ? updater(message) : message));
+}
+
+function getMessageById(messages: PersistedMessage[], messageId: string): PersistedMessage | undefined {
+  return messages.find((message) => message.id === messageId);
+}
+
+function buildInitialLiveSessionSnapshot(input: {
+  frontendSessionId: string;
+  message: string;
+  displayMessage?: string;
+  engine?: string;
+  model: string;
+  backendSessionId?: string;
+  existingSession?: PersistedChatSession | null;
+  userId: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
+  skipUserMessage?: boolean;
+}): PersistedChatSession {
+  const now = Date.now();
+  const visibleUserMessage = String(input.displayMessage || input.message || '').trim();
+  const existing = input.existingSession;
+  const userMessage: PersistedMessage = {
+    id: input.userMessageId || genId(),
+    role: 'user',
+    content: visibleUserMessage,
+    timestamp: now,
+  };
+  const assistantMessage: PersistedMessage = {
+    id: input.assistantMessageId || genId(),
+    role: 'assistant',
+    content: '',
+    rawContent: '',
+    engine: input.engine || existing?.engine,
+    model: input.model || existing?.model,
+    timestamp: now + 1,
+  };
+  const nextMessages = [...(existing?.messages || [])];
+  if (!input.skipUserMessage && !nextMessages.some((message) => message.id === userMessage.id)) {
+    nextMessages.push(userMessage);
+  }
+  if (!nextMessages.some((message) => message.id === assistantMessage.id)) {
+    nextMessages.push(assistantMessage);
+  }
+
+  return {
+    id: input.frontendSessionId,
+    title: existing?.messages?.length ? existing.title : (visibleUserMessage.slice(0, 30) || existing?.title || '新对话'),
+    model: input.model || existing?.model || '',
+    engine: input.engine || existing?.engine,
+    backendSessionId: input.backendSessionId || existing?.backendSessionId,
+    workflowBinding: existing?.workflowBinding,
+    creationSession: existing?.creationSession,
+    agentBinding: existing?.agentBinding,
+    sessionWorkbenchState: existing?.sessionWorkbenchState,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    messages: nextMessages,
+    createdBy: existing?.createdBy || input.userId,
+    visibility: existing?.visibility || 'public',
+  };
+}
+
 // Track active chat streams
 const activeChats = new Map<string, {
   promise: Promise<any>;
@@ -77,10 +161,14 @@ export async function POST(request: NextRequest) {
   try {
     const {
       message,
+      displayMessage,
       model,
       engine: perChatEngine,
       sessionId,
       frontendSessionId,
+      skipUserMessage,
+      userMessageId,
+      assistantMessageId,
       streamScope,
       mode,
       workingDirectory,
@@ -120,6 +208,28 @@ export async function POST(request: NextRequest) {
       validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
     }
     const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId);
+    const shouldTrackLiveSession = Boolean(frontendSessionId && !streamScope);
+    const existingSession = shouldTrackLiveSession
+      ? await loadChatSession(frontendSessionId).catch(() => null)
+      : null;
+    const baseLiveSession = shouldTrackLiveSession
+      ? buildInitialLiveSessionSnapshot({
+          frontendSessionId,
+          message,
+          displayMessage: typeof displayMessage === 'string' ? displayMessage : undefined,
+          engine: configuredEngine,
+          model: useModel,
+          backendSessionId: validResumeSid,
+          existingSession: canUsePersistedSession(existingSession, auth.id) ? existingSession : null,
+          userId: auth.id,
+          userMessageId: typeof userMessageId === 'string' ? userMessageId : undefined,
+          assistantMessageId: typeof assistantMessageId === 'string' ? assistantMessageId : undefined,
+          skipUserMessage: Boolean(skipUserMessage),
+        })
+      : null;
+    const liveAssistantMessageId = typeof assistantMessageId === 'string' && assistantMessageId.trim()
+      ? assistantMessageId.trim()
+      : baseLiveSession?.messages.at(-1)?.id;
 
     if (isAceTimingDebug()) {
       console.log(
@@ -141,6 +251,10 @@ export async function POST(request: NextRequest) {
     // Non-Claude engines: stream through Engine wrapper events
     if (engine) {
       registerEngineStream(chatId, streamRecoveryKey, configuredEngine, useModel);
+      if (baseLiveSession) {
+        setEngineStreamLiveSession(chatId, baseLiveSession);
+        void saveChatSession(baseLiveSession).catch(() => {});
+      }
 
       // Register in processManager so recovery endpoint can find it
       const proc = processManager.registerExternalProcess(chatId, 'chat', 'chat');
@@ -153,12 +267,63 @@ export async function POST(request: NextRequest) {
         if ((evt?.type === 'text' || evt?.type === 'tool') && evt.content) {
           appendEngineStreamContent(chatId, evt.content);
           processManager.appendStreamContent(chatId, evt.content);
+          if (baseLiveSession && liveAssistantMessageId) {
+            updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+              if (!currentAssistant) return session;
+              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), String(evt.content || ''));
+              const visibleText = normalizeAssistantDisplay(nextRawContent, true).visibleText || parseActions(nextRawContent).text;
+              return {
+                ...session,
+                backendSessionId: getEngineStream(chatId)?.backendSessionId || session.backendSessionId,
+                updatedAt: Date.now(),
+                engine: configuredEngine || session.engine,
+                model: useModel || session.model,
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  content: visibleText,
+                  rawContent: nextRawContent,
+                  engine: configuredEngine || message.engine,
+                  model: useModel || message.model,
+                })),
+              };
+            });
+          }
           engineStreamEvents.emit(chatId, { type: 'delta', content: evt.content });
         } else if (evt?.type === 'session' && evt.content) {
           setEngineStreamSessionId(chatId, evt.content);
           if (proc) proc.sessionId = evt.content;
+          if (baseLiveSession) {
+            updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              return {
+                ...session,
+                backendSessionId: String(evt.content),
+                updatedAt: Date.now(),
+              };
+            });
+          }
           engineStreamEvents.emit(chatId, { type: 'session', sessionId: evt.content });
         } else if (evt?.type === 'thought' && evt.content) {
+          if (baseLiveSession && liveAssistantMessageId) {
+            updateEngineStreamLiveSession(chatId, (session) => {
+              if (!session) return session;
+              const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+              if (!currentAssistant) return session;
+              const nextRawContent = appendStreamChunk(String(currentAssistant.rawContent || ''), String(evt.content || ''));
+              return {
+                ...session,
+                updatedAt: Date.now(),
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  rawContent: nextRawContent,
+                  engine: configuredEngine || message.engine,
+                  model: useModel || message.model,
+                })),
+              };
+            });
+          }
           engineStreamEvents.emit(chatId, { type: 'thinking', content: evt.content });
         } else if (evt?.type === 'error' && evt.content) {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: evt.content });
@@ -205,7 +370,7 @@ export async function POST(request: NextRequest) {
         }
 
         const metadata = result.metadata;
-        return {
+        const responsePayload = {
           result: output,
           session_id: resolvedSessionId ?? null,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd') ?? 0,
@@ -214,6 +379,107 @@ export async function POST(request: NextRequest) {
           is_error: !result.success,
           error: result.error || undefined,
         };
+        if (baseLiveSession && liveAssistantMessageId) {
+          const finalSession = updateEngineStreamLiveSession(chatId, (session) => {
+            if (!session) return session;
+            const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+            if (!currentAssistant) return session;
+            const currentRawContent = String(currentAssistant.rawContent || '');
+            const currentVisibleContent = String(currentAssistant.content || '');
+            const fullRawContent = buildFinalRawContent(currentRawContent, currentVisibleContent, output);
+            const now = Date.now();
+            if (!result.success) {
+              const partial = String(output || currentVisibleContent || '').trim();
+              const failureMessage = String(result.error || '请求失败，请稍后重试');
+              const errorContent = partial
+                ? `请求失败：${failureMessage}\n\n已返回部分内容：\n${partial}`
+                : `请求失败：${failureMessage}`;
+              return {
+                ...session,
+                backendSessionId: resolvedSessionId || session.backendSessionId,
+                updatedAt: now,
+                engine: configuredEngine || session.engine,
+                model: useModel || session.model,
+                messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                  ...message,
+                  role: 'error',
+                  content: errorContent,
+                  rawContent: fullRawContent || message.rawContent,
+                  engine: configuredEngine || message.engine,
+                  model: useModel || message.model,
+                  costUsd: responsePayload.cost_usd,
+                  durationMs: responsePayload.duration_ms,
+                  usage: responsePayload.usage,
+                })),
+              };
+            }
+
+            const parsed = parseActions(fullRawContent);
+            const latestSidebarHint = parsed.sidebarHints[parsed.sidebarHints.length - 1];
+            const actionStates = parsed.actions.map((action) => ({
+              id: genId(),
+              action,
+              status: isSafeAction(action) ? 'auto_executing' : 'pending',
+              timestamp: now,
+            }));
+            return {
+              ...session,
+              backendSessionId: resolvedSessionId || session.backendSessionId,
+              updatedAt: now,
+              engine: configuredEngine || session.engine,
+              model: useModel || session.model,
+              sessionWorkbenchState: latestSidebarHint ? {
+                ...(session.sessionWorkbenchState || {}),
+                homeSidebar: latestSidebarHint,
+              } : session.sessionWorkbenchState,
+              messages: updateMessageById(session.messages, liveAssistantMessageId, (message) => ({
+                ...message,
+                role: 'assistant',
+                content: parsed.text,
+                rawContent: fullRawContent !== parsed.text ? fullRawContent : undefined,
+                actions: actionStates.length > 0 ? actionStates : undefined,
+                cards: parsed.cards.length > 0 ? parsed.cards : undefined,
+                engine: configuredEngine || message.engine,
+                model: useModel || message.model,
+                costUsd: responsePayload.cost_usd,
+                durationMs: responsePayload.duration_ms,
+                usage: responsePayload.usage,
+              })),
+            };
+          });
+          if (finalSession) {
+            void saveChatSession(finalSession).catch(() => {});
+          }
+        }
+        return responsePayload;
+      }).catch((error: any) => {
+        if (baseLiveSession && liveAssistantMessageId) {
+          const failedSession = updateEngineStreamLiveSession(chatId, (session) => {
+            if (!session) return session;
+            const currentAssistant = getMessageById(session.messages, liveAssistantMessageId);
+            if (!currentAssistant) return session;
+            const message = String(error?.message || '请求失败');
+            const partial = String(currentAssistant.content || '').trim();
+            const errorContent = partial
+              ? `请求失败：${message}\n\n已返回部分内容：\n${partial}`
+              : `请求失败：${message}`;
+            return {
+              ...session,
+              updatedAt: Date.now(),
+              messages: updateMessageById(session.messages, liveAssistantMessageId, (item) => ({
+                ...item,
+                role: 'error',
+                content: errorContent,
+                engine: configuredEngine || item.engine,
+                model: useModel || item.model,
+              })),
+            };
+          });
+          if (failedSession) {
+            void saveChatSession(failedSession).catch(() => {});
+          }
+        }
+        throw error;
       }).finally(() => {
         engine.off('stream', onEngineStream);
       });
@@ -239,7 +505,7 @@ export async function POST(request: NextRequest) {
             activeChats.delete(chatId);
             removeEngineStream(chatId);
             if (streamRecoveryKey) processManager.removeActiveStream(streamRecoveryKey);
-          }, 30000);
+          }, COMPLETED_STREAM_RETENTION_MS);
         });
 
       return NextResponse.json({ chatId });
@@ -271,6 +537,7 @@ export async function GET(request: NextRequest) {
         engine: engineState.engine || '',
         model: engineState.model || '',
         backendSessionId: engineState.backendSessionId || '',
+        liveSession: engineState.liveSession || null,
       });
     }
 
@@ -350,6 +617,7 @@ export async function GET(request: NextRequest) {
             durationMs: result.duration_ms,
             usage: result.usage,
             isError: result.is_error,
+            error: result.error ?? null,
           });
         })
         .catch((err: any) => {
@@ -398,6 +666,12 @@ export async function DELETE(request: NextRequest) {
       removeEngineStream(activeChatId);
     } else if (engineState) {
       setEngineStreamStatus(activeChatId, 'killed');
+      if (engineState.liveSession) {
+        void saveChatSession({
+          ...engineState.liveSession,
+          updatedAt: Date.now(),
+        }).catch(() => {});
+      }
     }
     processManager.killProcess(activeChatId);
     return NextResponse.json({ killed: true, count: 1, chatId: activeChatId, preserved: preserveSession });
@@ -421,6 +695,12 @@ export async function DELETE(request: NextRequest) {
     removeEngineStream(chatId);
   } else if (state) {
     setEngineStreamStatus(chatId, 'killed');
+    if (state.liveSession) {
+      void saveChatSession({
+        ...state.liveSession,
+        updatedAt: Date.now(),
+      }).catch(() => {});
+    }
   }
   processManager.killProcess(chatId);
   return NextResponse.json({ killed: true, preserved: preserveSession });

@@ -19,7 +19,7 @@ import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, Qu
 import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
 import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
 import { CodeBlock } from '@/components/ai-elements/code-block';
-import { ChevronDownIcon, WrenchIcon } from 'lucide-react';
+import { BookOpenIcon, ChevronDownIcon, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
   type AceProcessBlock,
@@ -608,6 +608,44 @@ function toSingleLinePreview(text: string): string {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizePreviewPath(value: string): string {
+  const trimmed = String(value || '').trim();
+  if (!trimmed || trimmed === '.') return '';
+  return trimmed;
+}
+
+function stripQuotedShellToken(value: string): string {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith('\'') && trimmed.endsWith('\''))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function extractPathFromCommand(command: string, toolName: 'ls' | 'read'): string {
+  const text = String(command || '').trim().replace(/\\"/g, '"');
+  if (!text) return '';
+
+  const normalizedFromParam = text.match(/(?:-LiteralPath|-Path)\s+("[^"]+"|'[^']+'|[^\s]+)/i);
+  if (normalizedFromParam?.[1]) {
+    return normalizePreviewPath(stripQuotedShellToken(normalizedFromParam[1]));
+  }
+
+  const commandPattern = toolName === 'read'
+    ? /\b(?:Get-Content|cat|type|head|tail|less)\b\s+((?:"[^"]+"|'[^']+'|[^\s-][^\s]*))/i
+    : /\b(?:Get-ChildItem|ls|dir|tree|find)\b\s+((?:"[^"]+"|'[^']+'|[^\s-][^\s]*))/i;
+  const commandMatch = text.match(commandPattern);
+  if (commandMatch?.[1]) {
+    return normalizePreviewPath(stripQuotedShellToken(commandMatch[1]));
+  }
+
+  return '';
+}
+
 function getSubtaskPreview(entry: SubtaskProcessEntry): string {
   return toSingleLinePreview(entry.description || entry.prompt || entry.result);
 }
@@ -681,9 +719,51 @@ function extractTaggedValue(text: string, tag: string): string {
   return String(match?.[1] || '').trim();
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractSkillName(entry: ToolProcessEntry): string {
+  const requestMeta = entry.requestMeta as Record<string, unknown> | null;
+  const resultMeta = entry.resultMeta as Record<string, unknown> | null;
+  const requestInput = requestMeta?.input && typeof requestMeta.input === 'object'
+    ? requestMeta.input as Record<string, unknown>
+    : null;
+  const rawSkillContent = asString(resultMeta?.output) || asString(resultMeta?.content) || entry.result;
+  const taggedName = rawSkillContent.match(/<skill_content\b[^>]*\bname=(["'])(.*?)\1[^>]*>/i)?.[2] || '';
+
+  return asString(requestMeta?.name)
+    || asString(requestInput?.name)
+    || asString(requestInput?.skill)
+    || asString(requestInput?.id)
+    || asString(resultMeta?.name)
+    || taggedName;
+}
+
+function extractSkillDocument(entry: ToolProcessEntry): null | { name: string; body: string } {
+  const meta = entry.resultMeta as Record<string, unknown> | null;
+  const source = asString(meta?.output) || asString(meta?.content) || entry.result;
+  if (!source) return null;
+
+  const match = source.match(/<skill_content\b[^>]*>([\s\S]*?)<\/skill_content>/i);
+  const name = extractSkillName(entry);
+  let body = (match?.[1] || source).replace(/^\uFEFF/, '').trimStart();
+
+  if (name) {
+    body = body.replace(new RegExp(`^#\\s*Skill:\\s*${escapeRegExp(name)}\\s*(?:\\r?\\n)+`, 'i'), '');
+  } else {
+    body = body.replace(/^#\s*Skill:\s*[^\n]+\s*(?:\r?\n)+/i, '');
+  }
+
+  body = body.trim();
+  if (!body) return null;
+  return { name, body };
+}
+
 function getReadFilePath(entry: ToolProcessEntry): string {
-  return extractReadPath(entry.requestMeta, entry.request)
+  return normalizePreviewPath(extractReadPath(entry.requestMeta, entry.request))
     || extractReadPath(entry.resultMeta, entry.result)
+    || extractPathFromCommand(asString(entry.requestMeta?.command), 'read')
     || '';
 }
 
@@ -700,7 +780,9 @@ function getToolPreview(entry: ToolProcessEntry): string {
     case 'powershell':
       return toSingleLinePreview(asString(entry.requestMeta?.command) || entry.request);
     case 'read':
-      return getReadFilePath(entry);
+      return getReadFilePath(entry)
+        || extractPathFromCommand(asString(entry.requestMeta?.command), 'read')
+        || toSingleLinePreview(asString(entry.requestMeta?.command) || entry.request);
     case 'glob':
     case 'grep': {
       const pattern = asString(entry.requestMeta?.pattern);
@@ -708,11 +790,15 @@ function getToolPreview(entry: ToolProcessEntry): string {
       return [pattern, path].filter(Boolean).join(' · ');
     }
     case 'ls':
-      return asString((entry.requestMeta as any)?.path) || '.';
+      return normalizePreviewPath(asString((entry.requestMeta as any)?.path) || asString((entry.requestMeta as any)?.filePath))
+        || extractPathFromCommand(asString((entry.requestMeta as any)?.command), 'ls')
+        || toSingleLinePreview(asString((entry.requestMeta as any)?.command) || entry.request);
     case 'webfetch':
       return asString((entry.requestMeta as any)?.url);
     case 'websearch':
       return asString((entry.requestMeta as any)?.query);
+    case 'skill':
+      return extractSkillName(entry);
     default:
       return '';
   }
@@ -722,9 +808,11 @@ function renderPathPreview(pathText: string) {
   const value = String(pathText || '').trim();
   if (!value) return null;
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-2">
       <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">path</span>
-      <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-[12px] text-foreground">{value}</code>
+      <div className="tool-path-scroll min-w-0 overflow-x-auto">
+        <code className="block whitespace-nowrap rounded bg-background/70 px-1.5 py-0.5 font-mono text-[12px] text-foreground">{value}</code>
+      </div>
     </div>
   );
 }
@@ -951,7 +1039,7 @@ function ProcessCodeBlock({
         >
           <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
         </button>
-        <div className="overflow-x-auto px-3 py-2 pr-10">
+        <div className="tool-path-scroll overflow-x-auto px-3 py-2 pr-10">
           <code className="block whitespace-pre font-mono text-[12px] text-foreground">{text}</code>
         </div>
       </div>
@@ -1183,11 +1271,24 @@ function renderStructuredToolRequest(entry: ToolProcessEntry) {
       );
     case 'ls':
       if (asString(meta.command)) return <ProcessCodeBlock text={asString(meta.command)} singleLine />;
-      return renderPathPreview(asString(meta.path) || '.');
+      return renderPathPreview(
+        normalizePreviewPath(asString(meta.path) || asString((meta as any).filePath))
+        || extractPathFromCommand(asString(meta.command), 'ls')
+      );
     case 'webfetch':
       return asString(meta.url) ? <div className="text-sm break-all">{asString(meta.url)}</div> : null;
     case 'websearch':
       return asString(meta.query) ? <div className="text-sm">{asString(meta.query)}</div> : null;
+    case 'skill': {
+      const skillName = extractSkillName(entry);
+      if (!skillName) return null;
+      return (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300">技能</span>
+          <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-[12px] text-foreground">{skillName}</code>
+        </div>
+      );
+    }
     case 'todo':
     case 'todowrite': {
       const todos = asArray(meta.todos);
@@ -1275,8 +1376,28 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
     case 'ls':
     case 'webfetch':
     case 'websearch':
+    case 'skill':
     case 'todo':
     case 'todowrite': {
+      if (entry.toolName === 'skill') {
+        const skillDoc = extractSkillDocument(entry);
+        if (skillDoc) {
+          return (
+            <div className="space-y-3">
+              {skillDoc.name ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <BookOpenIcon className="size-3.5 text-violet-600" />
+                  <span>技能文档</span>
+                  <code className="rounded bg-background/70 px-1.5 py-0.5 font-mono text-[11px] text-foreground">{skillDoc.name}</code>
+                </div>
+              ) : null}
+              <div className="prose-sm max-w-none text-sm dark:prose-invert [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_blockquote]:my-2">
+                <Markdown>{skillDoc.body}</Markdown>
+              </div>
+            </div>
+          );
+        }
+      }
       const todos = asArray(meta.todos);
       if (todos.length > 0) return <ProcessTodoQueue todos={todos} />;
       const output = asString(meta.output);
@@ -1339,14 +1460,16 @@ function renderToolEntryCard(
   key: string,
   isStreaming: boolean,
 ) {
-  const preview = entry.toolName === 'read' ? '' : getToolPreview(entry);
-  const suppressRequestDetails = Boolean(preview) && ['bash', 'cmd', 'powershell'].includes(entry.toolName);
+  const preview = getToolPreview(entry);
+  const suppressRequestDetails = Boolean(preview) && ['bash', 'cmd', 'powershell', 'skill'].includes(entry.toolName);
   const requestContent = suppressRequestDetails
     ? null
     : (renderStructuredToolRequest(entry) || (entry.request ? <Markdown>{entry.request}</Markdown> : null));
   const resultContent = entry.state === 'output-available'
     ? (renderStructuredToolResult(entry) || (entry.result ? <Markdown>{entry.result}</Markdown> : null))
     : null;
+  const headerTitle = entry.toolName === 'skill' ? '技能文档' : entry.title;
+  const headerIcon = entry.toolName === 'skill' ? <BookOpenIcon className="size-4 text-violet-600" /> : undefined;
   const shouldOpen = shouldOpenProcessCard({
     isStreaming,
     state: entry.state,
@@ -1368,14 +1491,22 @@ function renderToolEntryCard(
       <ToolHeader
         type="dynamic-tool"
         toolName={entry.toolName || 'tool'}
-        title={entry.title}
+        title={headerTitle}
         state={entry.state}
         hideDefaultIcon
+        icon={headerIcon}
         className="bg-muted/30"
       />
       {preview ? (
         <div className="border-t border-border/50 px-4 py-2 text-sm text-muted-foreground">
-          <div className="overflow-x-auto whitespace-nowrap">{preview}</div>
+          {entry.toolName === 'skill' ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:text-violet-300">技能</span>
+              <span className="min-w-0 truncate text-sm font-medium text-foreground">{preview}</span>
+            </div>
+          ) : (
+            <div className="tool-path-scroll overflow-x-auto whitespace-nowrap font-mono text-[12px]">{preview}</div>
+          )}
         </div>
       ) : null}
       <ToolContent className="space-y-3">
@@ -1397,6 +1528,10 @@ function renderToolEntryCard(
 export function WrapperProcessBlocks({ content, isStreaming = false }: { content: string; isStreaming?: boolean }) {
   const { timelineItems } = useMemo(() => buildProcessTimelineState(content, isStreaming), [content, isStreaming]);
   const renderItems = useMemo(() => groupTimelineItems(timelineItems), [timelineItems]);
+  const lastReasoningIndex = useMemo(
+    () => renderItems.reduce((lastIndex, item, index) => (item.kind === 'reasoning' ? index : lastIndex), -1),
+    [renderItems],
+  );
 
   if (!renderItems.length) return null;
 
@@ -1415,8 +1550,7 @@ export function WrapperProcessBlocks({ content, isStreaming = false }: { content
           return (
             <Reasoning
               key={item.key}
-              defaultOpen={false}
-              isStreaming={isStreaming && index === renderItems.length - 1}
+              isStreaming={isStreaming && index === lastReasoningIndex}
               className="rounded-xl border border-border/70 bg-background/60 px-3 py-2"
               data-testid="ace-reasoning"
             >

@@ -185,6 +185,13 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   const lastCompositionEndAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [uploadingImages, setUploadingImages] = useState(0);
+  const mentionItemsSignature = useMemo(() => (
+    mentionItems
+      .map((item) => (typeof item === 'string'
+        ? `s:${item}`
+        : `o:${item.id || ''}|${item.label || ''}|${item.description || ''}`))
+      .join('\u0001')
+  ), [mentionItems]);
   const normalizedMentionItems = useMemo<MentionItem[]>(() => {
     const seen = new Set<string>();
     return mentionItems
@@ -195,7 +202,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         seen.add(key);
         return true;
       });
-  }, [mentionItems]);
+  }, [mentionItemsSignature]);
 
   const getMarkdownWithImageLocalPaths = useCallback(() => {
     if (!editorRuntimeRef.current) return '';
@@ -533,7 +540,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       const text = editor.getText();
       onChange?.(markdown, text);
     },
-  }, [normalizedMentionItems]);
+  }, [mentionItemsSignature]);
 
   useEffect(() => {
     editorRuntimeRef.current = editor || null;

@@ -3,13 +3,33 @@
  * 将聊天记录存储为 JSON 文件：data/chat-sessions/{sessionId}.json
  */
 
+import { EventEmitter } from 'events';
 import { mkdir, writeFile, readFile, readdir, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import type { SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 
 const CHAT_DIR = getWorkspaceDataFile('chat-sessions');
+const globalForChatSessionEvents = globalThis as unknown as {
+  __chatSessionEvents?: EventEmitter;
+};
+
+export type ChatSessionEvent =
+  | {
+      type: 'updated';
+      sessionId: string;
+      updatedAt: number;
+    }
+  | {
+      type: 'removed';
+      sessionId: string;
+      updatedAt: number;
+    };
+
+export const chatSessionEvents = globalForChatSessionEvents.__chatSessionEvents ??= new EventEmitter();
+chatSessionEvents.setMaxListeners(200);
 
 export interface PersistedAction {
   id: string;
@@ -159,6 +179,13 @@ export async function saveChatSession(session: PersistedChatSession): Promise<vo
     messages: truncateResults(session.messages),
   };
   await writeFile(sessionPath(session.id), JSON.stringify(data, null, 2), 'utf-8');
+  chatSessionEvents.emit('change', {
+    type: 'updated',
+    sessionId: session.id,
+    updatedAt: typeof session.updatedAt === 'number' && Number.isFinite(session.updatedAt)
+      ? session.updatedAt
+      : Date.now(),
+  } satisfies ChatSessionEvent);
 }
 
 export async function loadChatSession(id: string): Promise<PersistedChatSession | null> {
@@ -180,7 +207,6 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
     try {
       const content = await readFile(resolve(CHAT_DIR, file), 'utf-8');
       const session = JSON.parse(content) as PersistedChatSession;
-      const lastMsg = session.messages?.filter(m => m.role !== 'error').slice(-1)[0];
       summaries.push({
         id: session.id,
         title: session.title,
@@ -189,7 +215,7 @@ export async function listChatSessions(): Promise<ChatSessionSummary[]> {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.messages?.length || 0,
-        lastMessage: lastMsg?.content?.replace(/<ace-process>[\s\S]*?<\/ace-process>/g, '').trim().slice(0, 100) || undefined,
+        lastMessage: extractLastChatPreview(session.messages || []),
         creationSession: session.creationSession,
         workflowBinding: session.workflowBinding,
         agentBinding: session.agentBinding,
@@ -208,6 +234,11 @@ export async function deleteChatSession(id: string): Promise<boolean> {
   const path = sessionPath(id);
   if (existsSync(path)) {
     await unlink(path);
+    chatSessionEvents.emit('change', {
+      type: 'removed',
+      sessionId: id,
+      updatedAt: Date.now(),
+    } satisfies ChatSessionEvent);
     return true;
   }
   return false;

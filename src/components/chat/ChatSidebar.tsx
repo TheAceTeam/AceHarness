@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useChat } from '@/contexts/ChatContext';
-import { agoraApi, runsApi, workflowApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
+import { agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,8 +50,12 @@ import {
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getAgoraTopicExtensionActions } from '@/lib/agora/extensions';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
-import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
+import {
+  isWorkflowSidebarHint,
+  type CollaborationChatroomParticipant,
+} from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
+import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 import { RobotLogo } from './ChatMessage';
 
 type SkillItem = {
@@ -132,12 +136,24 @@ type TopicTemporaryGuestDraft = {
 type PresetGuestCreateDraft = {
   id: string;
   presetId: string;
+  personaPrompt: string;
   engine: string;
   model: string;
 };
 
 type CustomGuestDraft = {
   displayName: string;
+  personaPrompt: string;
+  engine: string;
+  model: string;
+};
+
+type AgoraGuestEditDraft = {
+  id: string;
+  displayName: string;
+  sourceType: 'preset' | 'custom';
+  sourceAgent?: string;
+  presetId?: string;
   personaPrompt: string;
   engine: string;
   model: string;
@@ -159,11 +175,23 @@ function isActiveRunStatus(status?: string): boolean {
 }
 
 function getWorkflowSessionConfigFile(session: SidebarSession, relatedBinding = session.workflowBinding): string {
-  return relatedBinding?.configFile || session.creationSession?.filename || '未命名工作流';
+  return (
+    relatedBinding?.configFile
+    || session.creationSession?.filename
+    || session.sessionWorkbenchState?.homeSidebar?.workflowDraft?.name
+    || session.title
+    || '未命名工作流'
+  );
 }
 
 function getWorkflowSessionName(session: SidebarSession, relatedBinding = session.workflowBinding): string {
-  return session.creationSession?.workflowName || relatedBinding?.configFile || session.title || getWorkflowSessionConfigFile(session, relatedBinding);
+  return (
+    session.creationSession?.workflowName
+    || relatedBinding?.configFile
+    || session.sessionWorkbenchState?.homeSidebar?.workflowDraft?.name
+    || session.title
+    || getWorkflowSessionConfigFile(session, relatedBinding)
+  );
 }
 
 function createWorkflowAgentGroup(input: {
@@ -295,6 +323,12 @@ function getWorkflowSessionBucket(input: {
 
   const creationStatus = session.creationSession?.status;
   if (creationStatus === 'draft' || creationStatus === 'confirmed') return 'creating';
+  if (
+    session.sessionWorkbenchState?.homeSidebar?.intent === 'create-workflow'
+    || Boolean(session.sessionWorkbenchState?.homeSidebar?.workflowDraft)
+  ) {
+    return 'creating';
+  }
   return 'ready';
 }
 
@@ -319,10 +353,29 @@ function isAgoraGuestAvailable(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 
 }
 
 function getAgoraGuestRuntimeLabel(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'engine' | 'model'>) {
-  const engine = String(guest.engine || '').trim();
-  const model = String(guest.model || '').trim();
+  const resolvedGuest = guest as AgoraGuestConfig;
+  const engine = String(resolvedGuest.resolvedEngine || guest.engine || '').trim();
+  const model = String(resolvedGuest.resolvedModel || guest.model || '').trim();
   if (!engine && !model) return '跟随默认模型';
   return [engine || '默认引擎', model || '默认模型'].join(' / ');
+}
+
+function mapAgoraGuestRuntimeOverride(guest: Pick<AgoraGuestConfig, 'runtimeStrategy' | 'engine' | 'model'>) {
+  const engine = String(guest.engine || '').trim();
+  const model = String(guest.model || '').trim();
+  const followsSystem = guest.runtimeStrategy !== 'explicit';
+  if (followsSystem && !model) {
+    return {
+      useDefaultModel: true,
+      engine: '',
+      model: '',
+    };
+  }
+  return {
+    useDefaultModel: false,
+    engine: followsSystem ? '' : engine,
+    model,
+  };
 }
 
 function formatAgoraUnavailableGuests(guests: Array<Pick<AgoraGuestConfig | AgoraGuestPreset, 'displayName' | 'statusReason'>>) {
@@ -330,6 +383,7 @@ function formatAgoraUnavailableGuests(guests: Array<Pick<AgoraGuestConfig | Agor
 }
 
 function mapAgoraGuestToParticipant(guest: AgoraGuestConfig): CollaborationChatroomParticipant {
+  const runtime = mapAgoraGuestRuntimeOverride(guest);
   return {
     id: `participant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     name: guest.displayName,
@@ -340,9 +394,9 @@ function mapAgoraGuestToParticipant(guest: AgoraGuestConfig): CollaborationChatr
     runtimeAgentName: guest.runtimeAgentName,
     personaPrompt: guest.personaPrompt,
     systemPrompt: guest.systemPrompt,
-    useDefaultModel: false,
-    engine: guest.engine || '',
-    model: guest.model || '',
+    useDefaultModel: runtime.useDefaultModel,
+    engine: runtime.engine,
+    model: runtime.model,
     createdAt: Date.now(),
   };
 }
@@ -512,8 +566,7 @@ export default function ChatSidebar({
     workflow: '',
   });
   const [sessionDirectoryOrder, setSessionDirectoryOrder] = useState<SessionDirectoryView[]>(readStoredSessionDirectoryOrder);
-  const [pendingHumanQuestions, setPendingHumanQuestions] = useState<HumanQuestion[]>([]);
-  const [runStatusById, setRunStatusById] = useState<Record<string, string>>({});
+  const { pendingHumanQuestions, runStatusById } = useWorkflowLiveState();
   const [agoraTopicDialogOpen, setAgoraTopicDialogOpen] = useState(false);
   const [agoraGuestDialogOpen, setAgoraGuestDialogOpen] = useState(false);
   const [agoraGuestsLoading, setAgoraGuestsLoading] = useState(false);
@@ -540,6 +593,9 @@ export default function ChatSidebar({
     model: '',
   });
   const [agoraCustomGuestSaving, setAgoraCustomGuestSaving] = useState(false);
+  const [agoraGuestEditOpen, setAgoraGuestEditOpen] = useState(false);
+  const [agoraGuestEditSaving, setAgoraGuestEditSaving] = useState(false);
+  const [agoraGuestEditDraft, setAgoraGuestEditDraft] = useState<AgoraGuestEditDraft | null>(null);
   const { confirm, dialogProps } = useConfirmDialog();
   const { toast } = useToast();
 
@@ -692,7 +748,13 @@ export default function ChatSidebar({
 
     for (const session of visibleSessions as SidebarSession[]) {
       const relatedBinding = session.workflowBinding || workflowBindingByRelatedSessionId.get(session.id);
-      if (!relatedBinding && !session.creationSession) continue;
+      if (
+        !relatedBinding
+        && !session.creationSession
+        && !isWorkflowSidebarHint(session.sessionWorkbenchState?.homeSidebar)
+      ) {
+        continue;
+      }
       const pendingCount = pendingQuestionsBySessionId.get(session.id)?.length || 0;
       const bucket = getWorkflowSessionBucket({
         session,
@@ -746,29 +808,6 @@ export default function ChatSidebar({
   }, [pendingQuestionsBySessionId, runStatusById, visibleSessions, workflowBindingByRelatedSessionId]);
   const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
   const selectedVisibleState = getSelectionState(visibleSessionIds, selectedSessionIds);
-
-  useEffect(() => {
-    let cancelled = false;
-    const refreshWorkflowSidebarSignals = async () => {
-      try {
-        const [questionsResult, runsResult] = await Promise.all([
-          workflowApi.listHumanQuestions({ status: 'unanswered', limit: 100 }),
-          runsApi.listAll().catch(() => ({ runs: [] })),
-        ]);
-        if (cancelled) return;
-        setPendingHumanQuestions(questionsResult.questions || []);
-        setRunStatusById(Object.fromEntries((runsResult.runs || []).map((run) => [run.id, run.status])));
-      } catch {
-        if (!cancelled) setPendingHumanQuestions([]);
-      }
-    };
-    refreshWorkflowSidebarSignals();
-    const timer = window.setInterval(refreshWorkflowSidebarSignals, 15000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
 
   useEffect(() => {
     const visibleIds = new Set(baseVisibleSessions.map((session) => session.id));
@@ -946,6 +985,11 @@ export default function ChatSidebar({
       toast('warning', '请选择要创建的预设嘉宾');
       return;
     }
+    const missingPrompt = selectedPresets.find(({ draft }) => !draft.personaPrompt.trim());
+    if (missingPrompt) {
+      toast('warning', `请填写「${missingPrompt.preset.displayName}」的提示词`);
+      return;
+    }
     setAgoraPresetSaving(true);
     try {
       const created = await Promise.all(selectedPresets.map(async ({ draft, preset }) => {
@@ -954,6 +998,7 @@ export default function ChatSidebar({
           sourceType: 'preset',
           presetId: preset.id,
           sourceAgent: preset.templateAgent,
+          personaPrompt: draft.personaPrompt.trim(),
           engine: draft.engine,
           model: draft.model,
         });
@@ -984,8 +1029,9 @@ export default function ChatSidebar({
       {
         id: `preset-draft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         presetId: preset.id,
-        engine: preset.engine || '',
-        model: preset.model || '',
+        personaPrompt: preset.personaPrompt || '',
+        engine: '',
+        model: '',
       },
     ]);
   };
@@ -994,10 +1040,66 @@ export default function ChatSidebar({
     setAgoraPresetCreateDrafts((prev) => prev.filter((draft) => draft.id !== draftId));
   };
 
-  const updatePresetCreateDraft = (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'engine' | 'model'>>) => {
+  const updatePresetCreateDraft = (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'personaPrompt' | 'engine' | 'model'>>) => {
     setAgoraPresetCreateDrafts((prev) => prev.map((draft) => (
       draft.id === draftId ? { ...draft, ...patch } : draft
     )));
+  };
+
+  const openAgoraGuestEditDialog = useCallback((guest: AgoraGuestConfig) => {
+    setAgoraGuestEditDraft({
+      id: guest.id,
+      displayName: guest.displayName,
+      sourceType: guest.sourceType,
+      sourceAgent: guest.sourceAgent,
+      presetId: guest.presetId,
+      personaPrompt: guest.personaPrompt || '',
+      engine: guest.engine || '',
+      model: guest.model || '',
+    });
+    setAgoraGuestEditOpen(true);
+  }, []);
+
+  const saveAgoraGuestEdit = async () => {
+    if (!agoraGuestEditDraft) return;
+    const displayName = agoraGuestEditDraft.displayName.trim();
+    const personaPrompt = agoraGuestEditDraft.personaPrompt.trim();
+    if (!displayName) {
+      toast('warning', '请填写嘉宾名称');
+      return;
+    }
+    if (!personaPrompt) {
+      toast('warning', '请填写嘉宾提示词');
+      return;
+    }
+    setAgoraGuestEditSaving(true);
+    try {
+      const result = await agoraApi.saveGuest({
+        id: agoraGuestEditDraft.id,
+        displayName,
+        sourceType: agoraGuestEditDraft.sourceType,
+        sourceAgent: agoraGuestEditDraft.sourceAgent,
+        presetId: agoraGuestEditDraft.presetId,
+        personaPrompt,
+        engine: agoraGuestEditDraft.engine,
+        model: agoraGuestEditDraft.model,
+      });
+      setAgoraSavedGuests((prev) => (
+        prev
+          .map((guest) => (guest.id === result.guest.id ? result.guest : guest))
+          .sort((a, b) => a.createdAt - b.createdAt)
+      ));
+      setAgoraGuestEditOpen(false);
+      setAgoraGuestEditDraft(null);
+      window.dispatchEvent(new CustomEvent('agora:guests-updated'));
+      toast(isAgoraGuestAvailable(result.guest) ? 'success' : 'warning', isAgoraGuestAvailable(result.guest)
+        ? `已更新常驻嘉宾「${result.guest.displayName}」`
+        : `嘉宾「${result.guest.displayName}」不可用：${result.guest.statusReason || '模型或引擎未配置'}`);
+    } catch (error: any) {
+      toast('error', error?.message || '保存常驻嘉宾失败');
+    } finally {
+      setAgoraGuestEditSaving(false);
+    }
   };
 
   const createCustomAgoraGuest = async () => {
@@ -1515,6 +1617,7 @@ export default function ChatSidebar({
             onToggleGuestSelect={toggleAgoraManagedGuestSelected}
             onToggleAllGuestsSelected={toggleAllAgoraManagedGuestsSelected}
             onDeleteSelectedGuests={() => { void deleteSelectedAgoraGuests(); }}
+            onEditGuest={openAgoraGuestEditDialog}
             onSearchChange={(value) => setSessionSearchByView((prev) => ({ ...prev, agora: value }))}
             onSessionClick={(sessionId) => {
               const session = (visibleSessions as SidebarSession[]).find((item) => item.id === sessionId);
@@ -1626,6 +1729,20 @@ export default function ChatSidebar({
         onCreateSelectedPresets={() => { void createSelectedPresetGuests(); }}
         onCustomDraftChange={setAgoraCustomGuestDraft}
         onCreateCustom={() => { void createCustomAgoraGuest(); }}
+      />
+      <AgoraGuestEditDialog
+        open={agoraGuestEditOpen}
+        draft={agoraGuestEditDraft}
+        saving={agoraGuestEditSaving}
+        onOpenChange={(open) => {
+          if (agoraGuestEditSaving) return;
+          setAgoraGuestEditOpen(open);
+          if (!open) setAgoraGuestEditDraft(null);
+        }}
+        onDraftChange={(patch) => {
+          setAgoraGuestEditDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+        }}
+        onSave={() => { void saveAgoraGuestEdit(); }}
       />
       {dialogProps ? <ConfirmDialog {...dialogProps} /> : null}
     </div>
@@ -2030,7 +2147,7 @@ function AgoraGuestManagerDialog({
   onOpenChange: (open: boolean) => void;
   onAddPresetDraft: (preset: AgoraGuestPreset) => void;
   onRemovePresetDraft: (draftId: string) => void;
-  onPresetDraftChange: (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'engine' | 'model'>>) => void;
+  onPresetDraftChange: (draftId: string, patch: Partial<Pick<PresetGuestCreateDraft, 'personaPrompt' | 'engine' | 'model'>>) => void;
   onCreateSelectedPresets: () => void;
   onCustomDraftChange: (draft: CustomGuestDraft) => void;
   onCreateCustom: () => void;
@@ -2112,6 +2229,12 @@ function AgoraGuestManagerDialog({
                           onEngineChange={(engine) => onPresetDraftChange(draft.id, { engine })}
                           onModelChange={(model) => onPresetDraftChange(draft.id, { model })}
                         />
+                        <Textarea
+                          value={draft.personaPrompt}
+                          onChange={(event) => onPresetDraftChange(draft.id, { personaPrompt: event.target.value })}
+                          rows={3}
+                          placeholder="输入这个预设嘉宾的补充提示词"
+                        />
                       </div>
                       <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onRemovePresetDraft(draft.id)}>
                         <span className="material-symbols-outlined text-[15px]">close</span>
@@ -2165,6 +2288,58 @@ function AgoraGuestManagerDialog({
   );
 }
 
+function AgoraGuestEditDialog({
+  open,
+  draft,
+  saving,
+  onOpenChange,
+  onDraftChange,
+  onSave,
+}: {
+  open: boolean;
+  draft: AgoraGuestEditDraft | null;
+  saving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDraftChange: (patch: Partial<AgoraGuestEditDraft>) => void;
+  onSave: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[620px]">
+        <DialogHeader>
+          <DialogTitle>编辑常驻嘉宾</DialogTitle>
+        </DialogHeader>
+        {draft ? (
+          <div className="grid gap-3 py-1 md:grid-cols-2">
+            <Input
+              value={draft.displayName}
+              onChange={(event) => onDraftChange({ displayName: event.target.value })}
+              placeholder="嘉宾名称"
+            />
+            <EngineModelSelect
+              engine={draft.engine}
+              model={draft.model}
+              onEngineChange={(engine) => onDraftChange({ engine })}
+              onModelChange={(model) => onDraftChange({ model })}
+            />
+            <Textarea
+              value={draft.personaPrompt}
+              onChange={(event) => onDraftChange({ personaPrompt: event.target.value })}
+              rows={6}
+              className="md:col-span-2"
+              placeholder="输入这个嘉宾的性格、立场和发言方式"
+            />
+          </div>
+        ) : null}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>取消</Button>
+          <Button onClick={onSave} disabled={!draft || saving}>{saving ? '保存中...' : '保存'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function AgoraDirectory({
   sessions,
   searchValue,
@@ -2188,6 +2363,7 @@ function AgoraDirectory({
   onToggleGuestSelect,
   onToggleAllGuestsSelected,
   onDeleteSelectedGuests,
+  onEditGuest,
   onSearchChange,
   onSessionClick,
   onSelectChange,
@@ -2217,6 +2393,7 @@ function AgoraDirectory({
   onToggleGuestSelect: (guestId: string, checked: boolean) => void;
   onToggleAllGuestsSelected: (checked: boolean) => void;
   onDeleteSelectedGuests: () => void;
+  onEditGuest: (guest: AgoraGuestConfig) => void;
   onSearchChange: (value: string) => void;
   onSessionClick: (sessionId: string) => void;
   onSelectChange: (sessionId: string, checked: boolean) => void;
@@ -2227,6 +2404,7 @@ function AgoraDirectory({
   const savedGuestIds = useMemo(() => savedGuests.map((guest) => guest.id), [savedGuests]);
   const savedGuestSelectionState = getSelectionState(savedGuestIds, selectedSavedGuestIds);
   const selectedSavedGuestCount = savedGuests.filter((guest) => selectedSavedGuestIds.has(guest.id)).length;
+  const selectedManagedGuests = savedGuests.filter((guest) => selectedSavedGuestIds.has(guest.id));
   const [guideDismissed, setGuideDismissed] = useState(false);
   const shouldShowStarterGuide = !guestsLoading
     && sessions.length === 0
@@ -2272,16 +2450,16 @@ function AgoraDirectory({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.985 }}
             transition={{ duration: 0.24, ease: 'easeOut' }}
-            className="mb-4 overflow-hidden rounded-2xl border border-violet-200/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,244,255,0.96))] shadow-[0_16px_42px_rgba(88,28,135,0.08)]"
+            className="mb-4 overflow-hidden rounded-2xl border border-violet-200/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,244,255,0.96))] shadow-[0_16px_42px_rgba(88,28,135,0.08)] dark:border-violet-400/20 dark:bg-[linear-gradient(180deg,rgba(28,24,40,0.98),rgba(17,18,28,0.96))] dark:shadow-[0_18px_48px_rgba(2,6,23,0.36)]"
           >
-            <div className="border-b border-violet-100/80 px-3 py-2.5">
+            <div className="border-b border-violet-100/80 px-3 py-2.5 dark:border-violet-400/15">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <Badge variant="outline" className="border-violet-200/80 bg-white/80 text-[10px] text-violet-700">
+                  <Badge variant="outline" className="border-violet-200/80 bg-white/80 text-[10px] text-violet-700 dark:border-violet-400/30 dark:bg-violet-500/10 dark:text-violet-200">
                     议场引导
                   </Badge>
-                  <div className="mt-2 text-sm font-semibold text-slate-900">先创建嘉宾，再打开第一场讨论</div>
-                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                  <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">先创建嘉宾，再打开第一场讨论</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
                     常驻嘉宾是可复用角色；议题用于承载一次具体讨论。
                   </div>
                 </div>
@@ -2289,7 +2467,7 @@ function AgoraDirectory({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 shrink-0 rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-700"
+                  className="h-7 w-7 shrink-0 rounded-full text-slate-400 hover:bg-white/70 hover:text-slate-700 dark:text-slate-500 dark:hover:bg-white/10 dark:hover:text-slate-200"
                   onClick={() => setGuideDismissed(true)}
                   title="关闭引导"
                   aria-label="关闭引导"
@@ -2316,23 +2494,23 @@ function AgoraDirectory({
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.05 + index * 0.07, duration: 0.2, ease: 'easeOut' }}
-                  className="flex items-start gap-3 rounded-xl border border-violet-100/80 bg-white/80 px-3 py-2.5"
+                  className="flex items-start gap-3 rounded-xl border border-violet-100/80 bg-white/80 px-3 py-2.5 dark:border-violet-400/15 dark:bg-white/5"
                 >
-                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700">
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200">
                     <span className="material-symbols-outlined text-[15px]">{step.icon}</span>
                   </div>
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-slate-900">{index + 1}. {step.title}</div>
-                    <div className="mt-0.5 text-[11px] leading-5 text-slate-500">{step.detail}</div>
+                    <div className="text-xs font-medium text-slate-900 dark:text-slate-100">{index + 1}. {step.title}</div>
+                    <div className="mt-0.5 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{step.detail}</div>
                   </div>
                 </motion.div>
               ))}
             </div>
-            <div className="flex items-center gap-2 border-t border-violet-100/80 bg-white/60 px-3 py-3">
+            <div className="flex items-center gap-2 border-t border-violet-100/80 bg-white/60 px-3 py-3 dark:border-violet-400/15 dark:bg-white/5">
               <Button
                 type="button"
                 size="sm"
-                className="h-8 rounded-full bg-slate-900 px-3 text-xs text-white hover:bg-slate-800"
+                className="h-8 rounded-full bg-slate-900 px-3 text-xs text-white hover:bg-slate-800 dark:bg-violet-500 dark:hover:bg-violet-400"
                 onClick={() => {
                   setGuideDismissed(true);
                   onCreateGuest();
@@ -2456,6 +2634,45 @@ function AgoraDirectory({
             >
               <span className="material-symbols-outlined text-[15px]">person_add</span>
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title="常驻嘉宾更多操作"
+                  aria-label="常驻嘉宾更多操作"
+                  disabled={guestDeleting}
+                >
+                  <span className="material-symbols-outlined text-[15px]">more_horiz</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onSelect={() => onCreateGuest()}>
+                  <span className="material-symbols-outlined mr-2 text-sm">person_add</span>
+                  创建嘉宾
+                </DropdownMenuItem>
+                {savedGuests.length ? (
+                  <DropdownMenuItem onSelect={() => onToggleGuestManageMode()}>
+                    <span className="material-symbols-outlined mr-2 text-sm">{guestManageMode ? 'done' : 'checklist'}</span>
+                    {guestManageMode ? '完成管理' : '批量管理'}
+                  </DropdownMenuItem>
+                ) : null}
+                {guestManageMode && selectedManagedGuests.length === 1 ? (
+                  <DropdownMenuItem onSelect={() => onEditGuest(selectedManagedGuests[0]!)}>
+                    <span className="material-symbols-outlined mr-2 text-sm">edit</span>
+                    编辑已选
+                  </DropdownMenuItem>
+                ) : null}
+                {guestManageMode && selectedManagedGuests.length > 0 ? (
+                  <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onDeleteSelectedGuests()}>
+                    <span className="material-symbols-outlined mr-2 text-sm">delete</span>
+                    删除已选
+                  </DropdownMenuItem>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
         {guestManageMode && savedGuests.length > 0 ? (
@@ -2543,20 +2760,36 @@ function AgoraDirectory({
                 className={`h-1.5 w-1.5 shrink-0 rounded-full opacity-70 ${isAgoraGuestAvailable(guest) ? 'bg-emerald-500/70' : 'bg-destructive/70'}`}
                 aria-hidden="true"
               />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className={`h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive ${
-                  guestManageMode ? 'opacity-30' : 'opacity-0 group-hover:opacity-100'
-                }`}
-                onClick={() => onDeleteGuest(guest)}
-                title="删除常驻嘉宾"
-                aria-label={`删除 ${guest.displayName}`}
-                disabled={guestDeleting || guestManageMode}
-              >
-                <span className="material-symbols-outlined text-[13px]">delete</span>
-              </Button>
+              {!guestManageMode ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-6 w-6 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100"
+                      onClick={(event) => event.stopPropagation()}
+                      title="嘉宾操作"
+                      aria-label={`嘉宾 ${guest.displayName} 的操作`}
+                      disabled={guestDeleting}
+                    >
+                      <span className="material-symbols-outlined text-[13px]">more_horiz</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-36">
+                    <DropdownMenuItem onSelect={() => onEditGuest(guest)}>
+                      <span className="material-symbols-outlined mr-2 text-sm">edit</span>
+                      编辑
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => onDeleteGuest(guest)}>
+                      <span className="material-symbols-outlined mr-2 text-sm">delete</span>
+                      删除
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <span className="h-6 w-6 shrink-0" aria-hidden="true" />
+              )}
             </div>
           );})}
           {savedGuests.length === 0 ? (

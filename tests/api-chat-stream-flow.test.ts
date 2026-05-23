@@ -32,6 +32,8 @@ vi.mock('@/lib/chat/stream-state', () => ({
   appendEngineStreamContent: vi.fn(),
   setEngineStreamSessionId: vi.fn(),
   setEngineStreamStatus: vi.fn(),
+  setEngineStreamLiveSession: vi.fn(),
+  updateEngineStreamLiveSession: vi.fn(),
   getEngineStream: vi.fn().mockReturnValue(null),
   getEngineStreamByFrontendSessionId: vi.fn().mockReturnValue(null),
   getBackendSessionIdByFrontendSessionId: vi.fn().mockReturnValue(undefined),
@@ -79,6 +81,7 @@ vi.mock('@/lib/engines/engine-config', () => ({
 
 vi.mock('@/lib/chat/persistence', () => ({
   loadChatSession: vi.fn().mockResolvedValue(null),
+  saveChatSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/spec/coding-store', () => ({
@@ -184,6 +187,47 @@ describe('chat stream flow', () => {
       chatId: 'chat-scoped',
       streamContent: 'planning output',
     });
+  });
+
+  test('GET returns backend live session snapshot when available', async () => {
+    const { getEngineStreamByFrontendSessionId } = await import('@/lib/chat/stream-state');
+    (getEngineStreamByFrontendSessionId as any).mockReturnValueOnce({
+      chatId: 'chat-live',
+      frontendSessionId: 'front-2',
+      status: 'completed',
+      streamContent: 'partial output',
+      engine: 'mock-engine',
+      model: 'claude-sonnet-4-20250514',
+      liveSession: {
+        id: 'front-2',
+        title: 'Recovered Session',
+        model: 'claude-sonnet-4-20250514',
+        engine: 'mock-engine',
+        createdAt: 1,
+        updatedAt: 2,
+        messages: [
+          { id: 'm1', role: 'user', content: 'hello', timestamp: 1 },
+          { id: 'm2', role: 'assistant', content: 'world', timestamp: 2 },
+        ],
+      },
+    });
+
+    const { GET } = await import('@/app/api/chat/stream/route');
+    const response = await GET(makeRequest('/api/chat/stream?checkActive=front-2'));
+
+    expect(response.status).toBe(200);
+    const json = await responseJson(response);
+    expect(json).toMatchObject({
+      active: false,
+      found: true,
+      chatId: 'chat-live',
+      status: 'completed',
+      liveSession: {
+        id: 'front-2',
+        title: 'Recovered Session',
+      },
+    });
+    expect(json.liveSession.messages[1].content).toBe('world');
   });
 
   test('GET does not replay buffered delta content before connected', async () => {

@@ -10,9 +10,8 @@
  * - We emit a simple tool header on tool_call, and filter JSON noise from agent-message
  */
 
-import { ACPWrapperBase } from './acp-wrapper-base';
+import { ACPExecutionContext, ACPWrapperBase } from './acp-wrapper-base';
 import type { EngineOptions } from './engine-interface';
-import type { EngineStreamEvent } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
@@ -59,147 +58,100 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     return commandExists('agent', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
-  /**
-   * Override event setup for Cursor-specific ACP behavior:
-   * - tool_call has empty rawInput, so we buffer tool headers
-   * - On tool_call_update (completed), emit header + result together
-   * - This keeps results directly under their tool header in the stream
-   */
-  protected setupEngineEvents(): void {
-    if (!this.engine) return;
+  protected beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {
     this.activeToolIds.clear();
     this.pendingTools.clear();
     this.lastEmittedText = '';
+  }
 
-    this.engine.on('agent-message', (content) => {
-      if (!this.streaming) return;
-      const text = this.extractText(content);
-      if (!text) return;
-      if (!text.trim()) return;
-      if (text.trim() === this.lastEmittedText.trim()) return;
-      this.lastEmittedText = text;
+  protected handleAgentMessage(context: ACPExecutionContext, content: any): void {
+    const text = this.extractText(content);
+    if (!text || !text.trim()) return;
+    if (text.trim() === this.lastEmittedText.trim()) return;
+    this.lastEmittedText = text;
 
-      let prefix = '';
-      if (this.lastBlockWasTool) {
-        prefix = '\n\n<!-- chunk-boundary -->\n\n';
-        this.lastBlockWasTool = false;
-      }
-      this.emitText(prefix + text);
+    let prefix = '';
+    if (context.lastBlockWasTool) {
+      prefix = '\n\n<!-- chunk-boundary -->\n\n';
+      context.lastBlockWasTool = false;
+    }
+    this.emitText(context, prefix + text);
+  }
+
+  protected handleAgentThought(context: ACPExecutionContext, content: any): void {
+    const text = this.extractText(content);
+    if (!text) return;
+    context.emitStream({
+      type: 'thought',
+      content: formatAceReasoning(text),
     });
+  }
 
-    this.engine.on('agent-thought', (content) => {
-      if (!this.streaming) return;
-      const text = this.extractText(content);
-      if (text) {
-        this.emit('stream', {
-          type: 'thought',
-          content: formatAceReasoning(text),
-        } as EngineStreamEvent);
-      }
+  protected handleToolCall(context: ACPExecutionContext, toolCall: any): void {
+    const toolId = toolCall.id || '';
+    if (!toolId || context.seenToolIds.has(toolId)) return;
+    context.seenToolIds.add(toolId);
+    this.activeToolIds.add(toolId);
+
+    const title = toolCall.title || toolCall.kind || 'Tool';
+    const kind = toolCall.kind || '';
+    this.pendingTools.set(toolId, {
+      title,
+      kind,
+      metadata: toolCall,
     });
+  }
 
-    // Buffer tool_call — don't emit yet, wait for completion
-    this.engine.on('tool-call', (toolCall) => {
-      if (!this.streaming) return;
-      const toolId = toolCall.id || '';
-      if (!toolId || this.seenToolIds.has(toolId)) return;
-      this.seenToolIds.add(toolId);
+  protected handleToolCallUpdate(context: ACPExecutionContext, toolUpdate: any): void {
+    const toolId = toolUpdate.id || '';
+
+    if (toolId && !context.seenToolIds.has(toolId)) {
+      context.seenToolIds.add(toolId);
       this.activeToolIds.add(toolId);
-
-      const title = toolCall.title || toolCall.kind || 'Tool';
-      const kind = toolCall.kind || '';
+      const title = toolUpdate.title || toolUpdate.kind || 'Tool';
+      const kind = toolUpdate.kind || '';
       this.pendingTools.set(toolId, {
         title,
         kind,
+        metadata: toolUpdate,
+      });
+    }
+
+    if (toolUpdate.status === 'completed' || toolUpdate.status === 'failed') {
+      this.activeToolIds.delete(toolId);
+      this.flushToolResult(context, toolId, toolUpdate);
+    }
+  }
+
+  protected handleEngineLog(_context: ACPExecutionContext, _payload: any): void {}
+
+  protected handlePermissionRequest(context: ACPExecutionContext, params: any): void {
+    const toolCall = params?.toolCall;
+    if (!toolCall) return;
+    const toolId = toolCall.toolCallId || '';
+    const title = toolCall.title || '';
+    const kind = toolCall.kind || '';
+    if (!title || !toolId) return;
+
+    const pending = this.pendingTools.get(toolId);
+    if (pending) {
+      pending.permissionTitle = title;
+    } else if (!context.seenToolIds.has(toolId)) {
+      context.seenToolIds.add(toolId);
+      this.activeToolIds.add(toolId);
+      this.pendingTools.set(toolId, {
+        title,
+        kind,
+        permissionTitle: title,
         metadata: toolCall,
       });
-    });
-
-    this.engine.on('tool-call-update', (toolUpdate) => {
-      if (!this.streaming) return;
-      const toolId = toolUpdate.id || '';
-
-      // If we haven't seen this tool yet, buffer it
-      if (toolId && !this.seenToolIds.has(toolId)) {
-        this.seenToolIds.add(toolId);
-        this.activeToolIds.add(toolId);
-        const title = toolUpdate.title || toolUpdate.kind || 'Tool';
-        const kind = toolUpdate.kind || '';
-        this.pendingTools.set(toolId, {
-          title,
-          kind,
-          metadata: toolUpdate,
-        });
-      }
-
-      if (toolUpdate.status === 'completed' || toolUpdate.status === 'failed') {
-        this.activeToolIds.delete(toolId);
-        // Flush: emit header + result together
-        this.flushToolResult(toolId, toolUpdate);
-      }
-    });
-
-    this.engine.on('log', () => { /* skip */ });
-
-    // Permission requests carry the actual command in title — update buffered entry
-    this.engine.on('permission', (params: any) => {
-      if (!this.streaming) return;
-      const toolCall = params?.toolCall;
-      if (!toolCall) return;
-      const toolId = toolCall.toolCallId || '';
-      const title = toolCall.title || '';
-      const kind = toolCall.kind || '';
-      if (!title || !toolId) return;
-
-      const pending = this.pendingTools.get(toolId);
-      if (pending) {
-        // Enrich buffered tool with permission title (has actual command)
-        pending.permissionTitle = title;
-      } else if (!this.seenToolIds.has(toolId)) {
-        // New tool from permission — buffer it
-        this.seenToolIds.add(toolId);
-        this.activeToolIds.add(toolId);
-        this.pendingTools.set(toolId, {
-          title,
-          kind,
-          permissionTitle: title,
-          metadata: toolCall,
-        });
-      }
-    });
-
-    // Subtask events from cursor/task
-    this.engine.on('subtask', (params: any) => {
-      if (!this.streaming) return;
-      const name = params?.title || params?.name || params?.description || 'Subagent task';
-      this.lastBlockWasTool = true;
-      this.emitText(
-        formatAceToolCall({
-          toolName: 'task',
-          rawInput: {
-            description: params?.description || name,
-            agent: params?.agent || params?.subagent || '',
-            prompt: params?.prompt || '',
-            sessionId: params?.sessionId || params?.session_id || params?.id || params?.taskId || params?.task_id || '',
-          },
-          title: name,
-          toolId: String(params?.id || params?.taskId || params?.task_id || ''),
-        }),
-      );
-    });
-
-    this.engine.on('error', (error) => {
-      this.emit('stream', {
-        type: 'text',
-        content: `\n\n❌ 错误: ${error instanceof Error ? error.message : String(error)}\n`
-      } as EngineStreamEvent);
-    });
+    }
   }
 
   /**
    * Flush a buffered tool: emit header + result as one block
    */
-  private flushToolResult(toolId: string, toolUpdate: any): void {
+  private flushToolResult(context: ACPExecutionContext, toolId: string, toolUpdate: any): void {
     const pending = this.pendingTools.get(toolId);
     this.pendingTools.delete(toolId);
 
@@ -213,9 +165,9 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     const requestBlock = this.buildCursorToolCallBlock(resolvedToolName, title, kind, rawInput);
     const result = this.formatCursorToolResult(toolUpdate, resolvedToolName);
 
-    this.lastBlockWasTool = true;
-    if (requestBlock) this.emitText(requestBlock, metadata);
-    if (result) this.emitText(result, metadata);
+    context.lastBlockWasTool = true;
+    if (requestBlock) this.emitText(context, requestBlock, metadata);
+    if (result) this.emitText(context, result, metadata);
   }
 
   private buildCursorToolCallBlock(toolName: string, title: string, kind: string, rawInput: any): string {

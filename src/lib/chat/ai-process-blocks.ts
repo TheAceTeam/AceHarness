@@ -93,7 +93,8 @@ export interface AceProcessBlock<T extends AceProcessPayload = AceProcessPayload
   end: number;
 }
 
-const ACE_PROCESS_BLOCK_RE = /<ace-process>\s*([\s\S]*?)\s*<\/ace-process>/g;
+const ACE_PROCESS_OPEN_TAG = '<ace-process>';
+const ACE_PROCESS_CLOSE_TAG = '</ace-process>';
 export const ACE_CHUNK_BOUNDARY = '\n\n<!-- chunk-boundary -->\n\n';
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -218,6 +219,115 @@ export function wrapAceProcessBlock<T extends AceProcessPayload>(kind: T['kind']
   return `\n<ace-process>${JSON.stringify({ kind, ...payload, body })}</ace-process>\n`;
 }
 
+type AceProcessRawSpan = {
+  raw: string;
+  payloadJson: string;
+  start: number;
+  end: number;
+};
+
+function findAceProcessRawSpans(content: string): AceProcessRawSpan[] {
+  const source = String(content || '');
+  const spans: AceProcessRawSpan[] = [];
+  let cursor = 0;
+
+  while (cursor < source.length) {
+    const start = source.indexOf(ACE_PROCESS_OPEN_TAG, cursor);
+    if (start < 0) break;
+
+    let payloadStart = start + ACE_PROCESS_OPEN_TAG.length;
+    while (payloadStart < source.length && /\s/.test(source[payloadStart] || '')) {
+      payloadStart += 1;
+    }
+
+    if (source[payloadStart] !== '{') {
+      cursor = start + ACE_PROCESS_OPEN_TAG.length;
+      continue;
+    }
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let payloadEnd = -1;
+
+    for (let index = payloadStart; index < source.length; index += 1) {
+      const char = source[index];
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\' && inString) {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (char === '{') {
+        depth += 1;
+        continue;
+      }
+      if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          payloadEnd = index + 1;
+          break;
+        }
+      }
+    }
+
+    if (payloadEnd < 0) {
+      cursor = start + ACE_PROCESS_OPEN_TAG.length;
+      continue;
+    }
+
+    let closeStart = payloadEnd;
+    while (closeStart < source.length && /\s/.test(source[closeStart] || '')) {
+      closeStart += 1;
+    }
+
+    if (!source.startsWith(ACE_PROCESS_CLOSE_TAG, closeStart)) {
+      cursor = start + ACE_PROCESS_OPEN_TAG.length;
+      continue;
+    }
+
+    const end = closeStart + ACE_PROCESS_CLOSE_TAG.length;
+    spans.push({
+      raw: source.slice(start, end),
+      payloadJson: source.slice(payloadStart, payloadEnd),
+      start,
+      end,
+    });
+    cursor = end;
+  }
+
+  return spans;
+}
+
+export function getAceProcessRanges(content: string): Array<[number, number]> {
+  return findAceProcessRawSpans(content).map((span) => [span.start, span.end]);
+}
+
+export function stripAceProcessBlocks(content: string, replacement = ''): string {
+  const source = String(content || '');
+  const spans = findAceProcessRawSpans(source);
+  if (!spans.length) return source;
+
+  let cursor = 0;
+  let result = '';
+  for (const span of spans) {
+    result += source.slice(cursor, span.start);
+    result += replacement;
+    cursor = span.end;
+  }
+  result += source.slice(cursor);
+  return result;
+}
+
 export function extractAceProcessBlocks(content: string): {
   cleanText: string;
   blocks: AceProcessBlock[];
@@ -225,10 +335,11 @@ export function extractAceProcessBlocks(content: string): {
   const source = String(content || '');
   const blocks: AceProcessBlock[] = [];
 
-  const withoutAceBlocks = source.replace(ACE_PROCESS_BLOCK_RE, (raw, payloadJson, offset) => {
+  const spans = findAceProcessRawSpans(source);
+  for (const span of spans) {
     let payload: AceProcessPayload | null = null;
     try {
-      payload = normalizePayload(JSON.parse(payloadJson));
+      payload = normalizePayload(JSON.parse(span.payloadJson));
     } catch {
       payload = null;
     }
@@ -240,17 +351,15 @@ export function extractAceProcessBlocks(content: string): {
           ? String(payload.body || '')
           : String(payload.body || '').trim(),
         meta: payload,
-        raw: String(raw),
-        start: Number(offset) || 0,
-        end: (Number(offset) || 0) + String(raw).length,
+        raw: span.raw,
+        start: span.start,
+        end: span.end,
       });
     }
-
-    return '\n';
-  });
+  }
 
   return {
-    cleanText: withoutAceBlocks.replace(/\n{3,}/g, '\n\n').trim(),
+    cleanText: stripAceProcessBlocks(source, '\n').replace(/\n{3,}/g, '\n\n').trim(),
     blocks,
   };
 }
@@ -311,4 +420,24 @@ export function mergeAceSubtaskChunkItems<T extends { content: string }>(
 export function mergeAceSubtaskChunks(chunks: string[], joiner = ACE_CHUNK_BOUNDARY): string[] {
   return mergeAceSubtaskChunkItems(chunks.map((content) => ({ content: String(content || '') })), joiner)
     .map((item) => item.content);
+}
+
+export function mergeFinalRawStreamContent(streamedContent: string, rawOutput: string): string {
+  const streamed = String(streamedContent || '').trim();
+  const finalOutput = String(rawOutput || '').trim();
+
+  if (!streamed) return finalOutput;
+  if (!finalOutput) return streamed;
+  if (finalOutput.includes(streamed)) return finalOutput;
+  if (streamed.includes(finalOutput)) return streamed;
+
+  const streamedBlocks = extractAceProcessBlocks(streamed).blocks;
+  const finalBlocks = extractAceProcessBlocks(finalOutput).blocks;
+  const existingBlocks = new Set(finalBlocks.map((block) => block.raw));
+  const missingBlocks = streamedBlocks.filter((block) => !existingBlocks.has(block.raw));
+  if (!missingBlocks.length) return finalOutput;
+
+  const prefix = missingBlocks.map((block) => block.raw.trim()).filter(Boolean).join('\n\n').trim();
+  if (!prefix) return finalOutput;
+  return `${prefix}\n\n${finalOutput}`.trim();
 }

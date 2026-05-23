@@ -36,6 +36,7 @@ export type ToolHeaderProps = {
   title?: string;
   className?: string;
   hideDefaultIcon?: boolean;
+  icon?: ReactNode;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
   | {
@@ -75,6 +76,7 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
 export const ToolHeader = ({
   className,
   hideDefaultIcon = false,
+  icon,
   title,
   type,
   state,
@@ -93,7 +95,7 @@ export const ToolHeader = ({
       {...props}
     >
       <div className="flex items-center gap-2">
-        {!hideDefaultIcon ? <WrenchIcon className="size-4 text-blue-500" /> : null}
+        {icon ?? (!hideDefaultIcon ? <WrenchIcon className="size-4 text-blue-500" /> : null)}
         <span className="font-medium text-sm">{title ?? derivedName}</span>
         {getStatusBadge(state)}
       </div>
