@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import Ansi from 'ansi-to-react';
+import { cjk } from '@streamdown/cjk';
+import { code } from '@streamdown/code';
+import { math as streamdownMath } from '@streamdown/math';
+import { mermaid as streamdownMermaid } from '@streamdown/mermaid';
 import {
   Activity,
   ArrowDown,
@@ -14,6 +18,7 @@ import {
   ClipboardCheck,
   Clock3,
   Code2,
+  Copy,
   Download,
   FileJson2,
   Gauge,
@@ -29,6 +34,7 @@ import {
   TimerReset,
   XCircle,
 } from 'lucide-react';
+import { Streamdown } from 'streamdown';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -36,7 +42,6 @@ import {
   Terminal,
   TerminalActions,
   TerminalContent,
-  TerminalCopyButton,
   TerminalHeader,
   TerminalStatus,
   TerminalTitle,
@@ -46,7 +51,6 @@ import {
   TestDuration,
   TestError,
   TestErrorMessage,
-  TestErrorStack,
   TestName,
   TestResults,
   TestResultsContent,
@@ -127,14 +131,15 @@ const CAPABILITY_ICONS: Record<string, typeof Gauge> = {
 const LOCAL_RESULT_STORAGE_KEY = 'ace-model-diagnostics:last-result';
 const LOCAL_ACTIVE_RUN_STORAGE_KEY = 'ace-model-diagnostics:active-run';
 const DEFAULT_TIMEOUT_MS = 180_000;
+const streamdownPlugins = { cjk, code, math: streamdownMath, mermaid: streamdownMermaid };
 const MODEL_CAPABILITY_OPTIONS = [
   { id: 'json_output', label: 'JSON', description: '嵌套 JSON / 类型 / checksum' },
-  { id: 'code_generation', label: '代码', description: 'TypeScript 生成与聚合逻辑' },
-  { id: 'drawing_pelican', label: '鹈鹕', description: 'SVG 可渲染绘图' },
-  { id: 'math', label: '数学', description: '线代、积分、贝叶斯、优化' },
-  { id: 'reasoning', label: '推理', description: '约束、真假话、逻辑网格' },
-  { id: 'structured_output', label: '结构化', description: '复杂 schema 与交叉引用' },
-  { id: 'consistency', label: '一致性', description: '重复 probe 稳定性' },
+  { id: 'code_generation', label: '代码', description: 'TypeScript relay 审计函数' },
+  { id: 'drawing_pelican', label: '鹈鹕', description: 'SVG 骑车鹈鹕' },
+  { id: 'math', label: '数学', description: 'AMC 难题 / 组合 / 几何 / 数论' },
+  { id: 'reasoning', label: '推理', description: 'AMC 推理 / 枚举 / 变换' },
+  { id: 'structured_output', label: '结构化', description: '复杂 schema / 交叉引用 / rollout' },
+  { id: 'consistency', label: '一致性', description: '同题复测稳定性' },
 ];
 const DEFAULT_MODEL_CAPABILITY_IDS = MODEL_CAPABILITY_OPTIONS.map((item) => item.id);
 
@@ -172,6 +177,7 @@ type DiagnosticStreamPayload =
       };
     }
   | { type: 'log'; runId?: string; log: DiagnosticLogEntry }
+  | { type: 'progress'; runId?: string; result: ModelDiagnosticsResponse }
   | { type: 'result'; runId?: string; result: ModelDiagnosticsResponse }
   | { type: 'error'; runId?: string; error: string };
 
@@ -193,38 +199,38 @@ const RUN_EVIDENCE_META: Record<string, { title: string; goal: string; checks: s
   },
   'cap-code': {
     title: '代码生成',
-    goal: '要求生成较完整的 TypeScript 工单统计函数，检测类型、去重、逾期、高优先级、均值和 owner 聚合。',
-    checks: ['函数名 summarizeTickets', 'Ticket/TicketSummary 类型', '去重与排序', '逾期与均值统计'],
+    goal: '要求生成 TypeScript relay 事件审计函数，检测去重、三类风险识别、排序和 provider 聚合。',
+    checks: ['函数名 auditRelayEvents', 'RelayEvent/AuditFinding 类型', '识别 3 类风险', 'severity 排序与 provider 聚合'],
   },
   'cap-drawing-pelican': {
     title: '骑车鹈鹕绘图',
-    goal: '要求输出一张可直接渲染的 SVG，画面主体是骑自行车的鹈鹕。',
-    checks: ['SVG 根节点和闭合', '长喙、喉囊、身体、翅膀', '自行车、车轮、踏板'],
+    goal: '要求只输出一张可直接渲染的 SVG，主体必须是正在骑自行车的鹈鹕。',
+    checks: ['SVG 闭合且 viewBox=0 0 360 240', 'title 同时提到 pelican 和 bicycle', '长喙、喉囊、身体、翅膀、腿有明确标记', '前后车轮、车架、把手、车座、踏板齐全'],
   },
   'cap-math': {
     title: '数学能力',
-    goal: '要求模型用 JSON 给出行列式、线性方程组、积分、特征值、贝叶斯、递推、约束优化、多项式系数和马尔可夫链的精确答案。',
-    checks: ['JSON 可解析', '12 个高阶数学字段精确命中', '包含至少 8 条计算步骤'],
+    goal: '7 道题均改写自 2022 AMC 10A，要求只用 JSON 返回精确数值和计算步骤。',
+    checks: ['JSON 可解析且无 Markdown', '7 个答案字段精确命中', 'steps 至少 8 条', '覆盖组合、几何、数论与极值'],
   },
   'cap-reasoning': {
     title: '推理能力',
-    goal: '用多道确定性推理题检测约束排序、真假话、逻辑网格和命题约束满足。',
-    checks: ['ordering=E-D-B-A-C', 'culprit=C', 'Ada=Rust/M', 'P=true,Q=true,R=false'],
+    goal: '5 道题均改写自 2022 AMC 10A，检测真假话、枚举、计数、几何比例和复合变换。',
+    checks: ['真假话 5 字段全部命中', 'repeatingIntegers 13 个整数完整', 'twoPassOrderings=8178', 'trapezoidRatio=1/3 且 returnStep=359'],
   },
   'cap-structured': {
     title: '结构化输出',
-    goal: '要求模型按复杂 schema 输出 release_readiness 风险、行动项、交叉引用矩阵、rollout 和 summary。',
-    checks: ['title/version 字段', '4 risks / 4 actions / 3 matrix', 'cross-reference 正确', 'summary.ready=false'],
+    goal: '要求按 relay_audit schema 输出 risks、controls、matrix、verification，并保持交叉引用自洽。',
+    checks: ['title=relay_audit, version=4', '至少 5 risks / 5 controls / 4 matrix', 'summary.safeToProxy=false 且 blockers>=2', 'controls/matrix 引用已有 risk/control id'],
   },
   'cap-consistency': {
     title: '一致性首轮',
-    goal: '第一次询问确定性序列题，作为一致性对照样本。',
-    checks: ['输出 NEXT=127', '格式稳定', '用于与复测结果比较'],
+    goal: '第一次求解同一道等腰梯形比例题，记录标准化答案作为对照。',
+    checks: ['输出 BC_OVER_AD=1/3', '首轮格式稳定', '用于和复测比对'],
   },
   'cap-consistency-repeat': {
     title: '一致性复测',
-    goal: '第二次询问同一确定性序列题，检测重复回答是否漂移。',
-    checks: ['输出 NEXT=127', '与首轮归一化后一致', '重复结果稳定'],
+    goal: '第二次重复求解同一道等腰梯形比例题，检查归一化结果是否漂移。',
+    checks: ['输出 BC_OVER_AD=1/3', '与首轮归一化后一致', '重复结果稳定'],
   },
 };
 
@@ -430,6 +436,48 @@ function compactOutput(value?: string, maxLength = 720): string {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   if (!text) return '无输出预览';
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
+function looksLikeJsonDocument(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || !/^[\[{]/.test(trimmed)) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function detectProbeContentLanguage(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^<svg[\s\S]*<\/svg>$/i.test(trimmed)) return 'svg';
+  if (/^(?:<\?xml|<[a-z][\w:-]*[\s>])/i.test(trimmed)) return 'xml';
+  if (looksLikeJsonDocument(trimmed)) return 'json';
+  if (/(^|\n)\s*(export\s+)?(async\s+)?function\s+\w+|(^|\n)\s*(type|interface)\s+\w+|(^|\n)\s*const\s+\w+\s*[:=]/.test(trimmed)) return 'ts';
+  if (/(^|\n)\s*(def\s+\w+\(|class\s+\w+|import\s+\w+)/.test(trimmed)) return 'python';
+  if (/(^|\n)\s*(SELECT|WITH|INSERT|UPDATE|DELETE)\b/i.test(trimmed)) return 'sql';
+  return null;
+}
+
+function toRenderableProbeMarkdown(value?: string): string {
+  const text = String(value || '').trim();
+  if (!text) return '无内容';
+  if (/```|~~~/.test(text)) return text;
+  const language = detectProbeContentLanguage(text);
+  if (language) return `\`\`\`${language}\n${text}\n\`\`\``;
+  return text;
+}
+
+function DiagnosticRichBlock({ content, className }: { content?: string; className?: string }) {
+  return (
+    <div className={cn('mt-2 w-full overflow-auto rounded-md border border-border/60 bg-background px-3 py-2 text-sm', className)}>
+      <Streamdown plugins={streamdownPlugins}>
+        {toRenderableProbeMarkdown(content)}
+      </Streamdown>
+    </div>
+  );
 }
 
 function localSavedLabel(value: string | null): string {
@@ -680,8 +728,124 @@ function buildDiagnosticTerminalOutput(
   return lines.join('\n');
 }
 
+const SUMMARY_TERMINAL_LOG_LIMIT = 220;
+
+type TerminalDisplayTone = 'default' | 'dim' | 'success' | 'warning' | 'error' | 'accent';
+
+interface TerminalDisplayLine {
+  key: string;
+  text: string;
+  tone: TerminalDisplayTone;
+}
+
+function terminalToneClass(tone: TerminalDisplayTone): string {
+  if (tone === 'success') return 'text-emerald-300';
+  if (tone === 'warning') return 'text-amber-300';
+  if (tone === 'error') return 'text-rose-300';
+  if (tone === 'accent') return 'text-cyan-300';
+  if (tone === 'dim') return 'text-zinc-500';
+  return 'text-zinc-100';
+}
+
+function terminalToneByLogLevel(level: DiagnosticLogEntry['level']): TerminalDisplayTone {
+  if (level === 'success') return 'success';
+  if (level === 'warning') return 'warning';
+  if (level === 'error') return 'error';
+  return 'accent';
+}
+
+function terminalToneByStatus(status: DiagnosticRunStatus): TerminalDisplayTone {
+  if (status === 'passed') return 'success';
+  if (status === 'warning' || status === 'skipped') return 'warning';
+  return 'error';
+}
+
+function buildSummaryTerminalLines(
+  logs: DiagnosticLogEntry[],
+  result: ModelDiagnosticsResponse | null,
+  running: boolean,
+): TerminalDisplayLine[] {
+  const visibleLogs = logs.filter((item) => !item.verbose);
+  const hiddenVerboseCount = logs.length - visibleLogs.length;
+  const hiddenOlderCount = Math.max(0, visibleLogs.length - SUMMARY_TERMINAL_LOG_LIMIT);
+  const tailLogs = hiddenOlderCount > 0 ? visibleLogs.slice(-SUMMARY_TERMINAL_LOG_LIMIT) : visibleLogs;
+  const lines: TerminalDisplayLine[] = [
+    { key: 'header-command', text: '$ ace diagnostics --summary', tone: 'accent' },
+    {
+      key: 'header-state',
+      text: `stream=${running ? 'open' : 'closed'} logs=${tailLogs.length}${hiddenVerboseCount > 0 ? ` hidden_verbose=${hiddenVerboseCount}` : ''} result=${result ? 'ready' : 'pending'}${hiddenOlderCount > 0 ? ` older_hidden=${hiddenOlderCount}` : ''}`,
+      tone: 'dim',
+    },
+    { key: 'header-gap', text: '', tone: 'default' },
+  ];
+
+  if (hiddenOlderCount > 0) {
+    lines.push({
+      key: 'older-hidden',
+      text: `... 已折叠 ${hiddenOlderCount} 条更早日志；下载日志可查看完整内容`,
+      tone: 'dim',
+    });
+  }
+
+  if (tailLogs.length === 0) {
+    lines.push({ key: 'waiting', text: 'waiting for diagnostic logs...', tone: 'dim' });
+  } else {
+    for (const item of tailLogs) {
+      lines.push({
+        key: `${item.id}-main`,
+        text: `+${formatMs(item.elapsedMs).padStart(7)} ${item.level.toUpperCase().padEnd(7)} ${item.message}`,
+        tone: terminalToneByLogLevel(item.level),
+      });
+      if (item.detail && item.level !== 'info') {
+        lines.push({
+          key: `${item.id}-detail`,
+          text: `          ${compactOutput(item.detail, 180)}`,
+          tone: 'dim',
+        });
+      }
+    }
+  }
+
+  if (result?.engineDebug?.stages?.length) {
+    lines.push(
+      { key: 'stages-gap', text: '', tone: 'default' },
+      { key: 'stages-header', text: '# stages', tone: 'accent' },
+    );
+    for (const stage of result.engineDebug.stages) {
+      lines.push({
+        key: `stage-${stage.id}`,
+        text: `${stage.status.padEnd(7)} ${stage.label.padEnd(16)} ${formatMs(stage.durationMs).padStart(8)}  ${stage.detail || ''}`.trimEnd(),
+        tone: terminalToneByStatus(stage.status),
+      });
+    }
+  }
+
+  if (result?.modelEvaluation?.capabilities?.length) {
+    lines.push(
+      { key: 'cap-gap', text: '', tone: 'default' },
+      { key: 'cap-header', text: '# capability scores', tone: 'accent' },
+    );
+    for (const capability of result.modelEvaluation.capabilities) {
+      lines.push({
+        key: `cap-${capability.id}`,
+        text: `${String(capability.score).padStart(3)}/100 ${capability.label} - ${capability.summary}`,
+        tone: terminalToneByStatus(capability.status),
+      });
+    }
+  }
+
+  if (running) {
+    lines.push(
+      { key: 'running-gap', text: '', tone: 'default' },
+      { key: 'running-next', text: 'listening for next diagnostic event...', tone: 'dim' },
+    );
+  }
+
+  return lines;
+}
+
 export default function ModelDiagnosticsWorkbench({ managedModels }: { managedModels: ManagedModelReference[] }) {
-  const { toast, updateToast } = useToast();
+  const { toast, updateToast, dismissToast } = useToast();
   const [engine, setEngine] = useState('claude-code');
   const [driver, setDriver] = useState<DiagnosticDriver>('auto');
   const [model, setModel] = useState('');
@@ -704,6 +868,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   const logScrollResetTimerRef = useRef<number | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
   const restoredRunRef = useRef(false);
+  const streamToastIdRef = useRef<number | null>(null);
 
   const engineOptions = useMemo(() => ENGINE_OPTIONS.map((id) => ({
     value: id,
@@ -828,6 +993,12 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     }
   }, []);
 
+  const clearStreamToast = useCallback(() => {
+    if (streamToastIdRef.current == null) return;
+    dismissToast(streamToastIdRef.current);
+    streamToastIdRef.current = null;
+  }, [dismissToast]);
+
   const releaseProgrammaticLogScroll = useCallback(() => {
     clearLogScrollResetTimer();
     logScrollResetTimerRef.current = window.setTimeout(() => {
@@ -889,7 +1060,9 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     setShowLogScrollBtn(false);
     if (options.initialLogs) setLogs(options.initialLogs);
 
+    clearStreamToast();
     const toastId = options.toastMessage ? toast('loading', options.toastMessage) : null;
+    streamToastIdRef.current = toastId;
     let streamRunId = options.runId || '';
     let finalResult: ModelDiagnosticsResponse | null = null;
 
@@ -940,6 +1113,9 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
               if (prev.some((item) => item.id === payload.log.id)) return prev;
               return [...prev, payload.log];
             });
+          } else if (payload.type === 'progress') {
+            setResult(payload.result);
+            if (payload.result.logs?.length) setLogs(payload.result.logs);
           } else if (payload.type === 'result') {
             finalResult = payload.result;
             setResult(payload.result);
@@ -970,9 +1146,13 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           finalResult.error?.includes('停止') ? 'warning' : finalResult.ok ? 'success' : 'warning',
           finalResult.error?.includes('停止') ? '诊断任务已停止' : finalResult.ok ? '诊断评测完成' : '诊断完成，但存在风险项',
         );
+        streamToastIdRef.current = null;
       }
     } catch (error) {
-      if (abortController.signal.aborted) return;
+      if (abortController.signal.aborted) {
+        clearStreamToast();
+        return;
+      }
       clearActiveDiagnosticRun(streamRunId || options.runId);
       setLastInterruptedRun({ runId: streamRunId || options.runId || `local-${Date.now()}`, requestBody, startedAt: new Date().toISOString() });
       setLogs((prev) => [
@@ -992,6 +1172,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           error instanceof Error && error.message.includes('停止') ? 'warning' : 'error',
           error instanceof Error ? error.message : '诊断评测失败',
         );
+        streamToastIdRef.current = null;
       } else if (options.restored) {
         toast('warning', error instanceof Error ? error.message : '诊断任务无法恢复');
       }
@@ -1002,7 +1183,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       setRunning(false);
       setActiveRunId(null);
     }
-  }, [applyRequestBodyToControls, clearLogScrollResetTimer, saveDiagnosticResult, toast, updateToast]);
+  }, [applyRequestBodyToControls, clearLogScrollResetTimer, clearStreamToast, saveDiagnosticResult, toast, updateToast]);
 
   useEffect(() => {
     if (restoredRunRef.current) return;
@@ -1023,8 +1204,9 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
   }, [consumeDiagnosticStream]);
 
   useEffect(() => () => {
+    clearStreamToast();
     streamAbortControllerRef.current?.abort();
-  }, []);
+  }, [clearStreamToast]);
 
   const runDiagnostics = async () => {
     if (!engine) {
@@ -1071,6 +1253,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     const runId = activeRunId || readActiveDiagnosticRun()?.runId;
     if (!runId) {
       streamAbortControllerRef.current?.abort();
+      clearStreamToast();
       setRunning(false);
       return;
     }
@@ -1107,14 +1290,14 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
           detail: `runId=${runId}`,
         },
       ]);
-      toast('warning', '已停止诊断任务');
+      clearStreamToast();
     } catch (error) {
       toast('error', error instanceof Error ? error.message : '停止诊断失败');
     } finally {
       setRunning(false);
       setActiveRunId(null);
     }
-  }, [activeRunId, driver, engine, includeEngineDebug, includeModelScore, model, selectedModelCapabilityIds, timeoutMs, toast]);
+  }, [activeRunId, clearStreamToast, driver, engine, includeEngineDebug, includeModelScore, model, selectedModelCapabilityIds, timeoutMs, toast]);
 
   const failedCapabilityIds = useMemo(() => failedCapabilityIdsFromResult(result), [result]);
 
@@ -1146,6 +1329,30 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
       ],
     });
   }, [consumeDiagnosticStream, driver, engine, failedCapabilityIds, model, result, selectedModelCapabilityIds, timeoutMs]);
+
+  const retrySingleCapability = useCallback(async (capabilityId: string) => {
+    if (!result || capabilityId === 'output_speed') return;
+    const capabilityMeta = MODEL_CAPABILITY_OPTIONS.find((item) => item.id === capabilityId);
+    setSelectedCapabilityId(capabilityId);
+    await consumeDiagnosticStream({
+      engine: result.engine || engine,
+      driver: result.driver || (supportsDriverSelection(engine) ? driver : 'auto'),
+      model: result.model || model,
+      timeoutMs: Number.parseInt(timeoutMs, 10) || DEFAULT_TIMEOUT_MS,
+      includeEngineDebug: false,
+      includeModelScore: true,
+      modelCapabilityIds: [capabilityId],
+    }, {
+      action: 'start',
+      toastMessage: `正在重试 ${capabilityMeta?.label || capabilityId}...`,
+      initialLogs: [
+        createClientLog(
+          '已提交单项重试',
+          `capability=${capabilityId}`,
+        ),
+      ],
+    });
+  }, [consumeDiagnosticStream, driver, engine, model, result, timeoutMs]);
 
   const continueInterruptedDiagnostics = useCallback(async () => {
     const interrupted = lastInterruptedRun;
@@ -1209,22 +1416,40 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     () => allRuns.reduce((sum, run) => sum + Object.values(run.eventCounts).reduce((inner, value) => inner + value, 0), 0),
     [allRuns],
   );
-  const terminalOutput = useMemo(
-    () => buildDiagnosticTerminalOutput(logs, result, running, detailedLogs),
+  const terminalLineItems = useMemo(
+    () => {
+      if (detailedLogs) {
+        return buildDiagnosticTerminalOutput(logs, result, running, true)
+          .split('\n')
+          .map((line, index) => ({
+            key: `diagnostic-line-detailed-${index}`,
+            node: (
+              <pre className="m-0 whitespace-pre-wrap break-words text-zinc-100">
+                <Ansi>{line || ' '}</Ansi>
+              </pre>
+            ),
+          }));
+      }
+      return buildSummaryTerminalLines(logs, result, running).map((line) => ({
+        key: line.key,
+        node: (
+          <pre className={cn('m-0 whitespace-pre-wrap break-words', terminalToneClass(line.tone))}>
+            {line.text || ' '}
+          </pre>
+        ),
+      }));
+    },
     [detailedLogs, logs, result, running],
   );
-  const terminalLines = useMemo(() => terminalOutput.split('\n'), [terminalOutput]);
-  const terminalLineItems = useMemo(
-    () => terminalLines.map((line, index) => ({
-      key: `diagnostic-line-${index}`,
-      node: (
-        <pre className="m-0 whitespace-pre-wrap break-words">
-          <Ansi>{line || ' '}</Ansi>
-        </pre>
-      ),
-    })),
-    [terminalLines],
-  );
+
+  useEffect(() => {
+    if (logScrollLocked) return;
+    const container = logScrollRef.current;
+    if (!container) return;
+    logProgrammaticScrollRef.current = true;
+    container.scrollTop = container.scrollHeight;
+    releaseProgrammaticLogScroll();
+  }, [detailedLogs, logScrollLocked, releaseProgrammaticLogScroll, terminalLineItems.length]);
 
   const downloadDiagnosticLogs = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -1237,6 +1462,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
         detailedLogs ? 'full' : 'summary',
         stamp,
       ].join('.') + '.log';
+      const terminalOutput = buildDiagnosticTerminalOutput(logs, result, running, detailedLogs);
       const blob = new Blob([terminalOutput], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
@@ -1248,7 +1474,20 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
     } catch (error) {
       toast('error', error instanceof Error ? error.message : '下载诊断日志失败');
     }
-  }, [detailedLogs, engine, model, terminalOutput, toast]);
+  }, [detailedLogs, engine, logs, model, result, running, toast]);
+
+  const copyDiagnosticLogs = useCallback(async () => {
+    if (typeof window === 'undefined' || !navigator?.clipboard?.writeText) {
+      toast('error', '当前环境不支持剪贴板复制');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(buildDiagnosticTerminalOutput(logs, result, running, detailedLogs));
+      toast('success', '诊断日志已复制');
+    } catch (error) {
+      toast('error', error instanceof Error ? error.message : '复制诊断日志失败');
+    }
+  }, [detailedLogs, logs, result, running, toast]);
 
   const overallScore = result?.modelEvaluation?.overallScore ?? null;
   const ringScore = overallScore ?? 0;
@@ -1581,9 +1820,9 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
 
             <div className="mt-4">
               <Terminal
-                output={terminalOutput}
+                output=""
                 isStreaming={running}
-                autoScroll={!logScrollLocked}
+                autoScroll={false}
                 className="border-border/70 shadow-sm"
               >
                 <TerminalHeader className="border-zinc-800/80 bg-zinc-950/95">
@@ -1591,7 +1830,17 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                   <div className="flex items-center gap-2">
                     <TerminalStatus>streaming</TerminalStatus>
                     <TerminalActions>
-                      <TerminalCopyButton />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="复制日志"
+                        title="复制日志"
+                        onClick={() => { void copyDiagnosticLogs(); }}
+                        className="size-7 shrink-0 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
                     </TerminalActions>
                   </div>
                 </TerminalHeader>
@@ -1633,7 +1882,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
             <h3 className="text-lg font-semibold">{running ? '诊断正在运行' : '还没有诊断结果'}</h3>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
               {running
-                ? '上方日志会持续刷新，完成后这里会展示完整阶段耗时、能力评分和证据链。'
+                ? '上方日志会持续刷新，已完成的阶段和能力项会实时出现在这里。'
                 : '运行后这里会展示引擎阶段耗时、流式事件、模型能力评分和每个评分的证据链。'}
             </p>
           </section>
@@ -1775,6 +2024,17 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                             <Badge variant="outline" className={cn('border rounded-md', statusClass(selectedCapability.status))}>
                               {statusLabel(selectedCapability.status)}
                             </Badge>
+                            {!running && selectedCapability.id !== 'output_speed' && (selectedCapability.status === 'failed' || selectedCapability.status === 'warning' || selectedCapability.score < 80) ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void retrySingleCapability(selectedCapability.id)}
+                              >
+                                <RotateCcw className="mr-2 h-3.5 w-3.5" />
+                                重试此项
+                              </Button>
+                            ) : null}
                           </div>
                           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                             {selectedCapability.summary}
@@ -1861,7 +2121,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                               key={`${selectedCapability.id}-${run.id}`}
                               name={meta?.title || run.label}
                               status={testStatus(run.status)}
-                              defaultOpen={false}
+                              defaultOpen={selectedCapabilityRuns.length === 1}
                             >
                               <TestSuiteName>
                                 <span className="min-w-0 flex-1 truncate font-medium text-sm">{meta?.title || run.label}</span>
@@ -1890,9 +2150,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                                 <Test name="题目" status={testStatus(run.status)}>
                                   <TestStatusIndicator />
                                   <TestName />
-                                  <TestErrorStack className="max-h-56 w-full text-muted-foreground dark:text-muted-foreground">
-                                    {formatPromptText(run.prompt)}
-                                  </TestErrorStack>
+                                  <DiagnosticRichBlock content={formatPromptText(run.prompt)} className="max-h-56" />
                                 </Test>
                                 <Test name="模型输出" status={testStatus(run.status)}>
                                   <TestStatusIndicator />
@@ -1902,9 +2160,10 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                                       <TestErrorMessage>{run.error}</TestErrorMessage>
                                     </TestError>
                                   ) : (
-                                    <TestErrorStack className="max-h-72 w-full text-muted-foreground dark:text-muted-foreground">
-                                      {detailedLogs ? (run.outputPreview || '无输出') : compactOutput(run.outputPreview, 2400)}
-                                    </TestErrorStack>
+                                    <DiagnosticRichBlock
+                                      content={detailedLogs ? (run.outputPreview || '无输出') : (run.outputPreview || '无输出')}
+                                      className="max-h-72"
+                                    />
                                   )}
                                 </Test>
                                 <Test name="事件与耗时" status={testStatus(run.status)}>

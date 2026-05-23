@@ -44,6 +44,7 @@ interface PromptSpec {
 
 interface DiagnosticsRunOptions {
   onLog?: (entry: DiagnosticLogEntry) => void;
+  onProgress?: (result: ModelDiagnosticsResponse) => void;
   signal?: AbortSignal;
 }
 
@@ -89,6 +90,12 @@ function createLogCollector(startedAtMs: number, onLog?: (entry: DiagnosticLogEn
   };
 
   return { logs, log };
+}
+
+function cloneSerializable<T>(value: T): T {
+  if (value == null) return value;
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function logLevelFromStatus(status: DiagnosticRunStatus): DiagnosticLogLevel {
@@ -482,12 +489,30 @@ async function runEngineDebug(input: {
   model: string;
   timeoutMs: number;
   availabilityStage: DiagnosticStage;
+  createStage: DiagnosticStage;
   log?: DiagnosticLogger;
+  onProgress?: (summary: EngineDiagnosticSummary) => void;
   signal?: AbortSignal;
 }): Promise<EngineDiagnosticSummary> {
   throwIfAborted(input.signal);
-  const stages: DiagnosticStage[] = [input.availabilityStage];
+  const stages: DiagnosticStage[] = [input.availabilityStage, input.createStage];
   const runs: DiagnosticPromptRun[] = [];
+  const eventTypes = new Set<string>();
+
+  const buildSummary = (): EngineDiagnosticSummary => ({
+    engine: input.engineId,
+    driver: input.driver,
+    effectiveEngine: input.effectiveEngine,
+    available: input.availabilityStage.status !== 'failed' && input.createStage.status !== 'failed',
+    streamSupported: runs.some((run) => (run.eventCounts.text || 0) > 0),
+    observedEventTypes: Array.from(eventTypes).sort(),
+    stages: cloneSerializable(stages),
+    runs: cloneSerializable(runs),
+  });
+
+  const emitProgress = () => {
+    input.onProgress?.(buildSummary());
+  };
 
   const singleStartedAt = Date.now();
   input.log?.({ message: '开始单轮对话 probe', detail: `注入记忆验证码 ${MULTI_TURN_MEMORY_TOKEN}，期望输出 ACE_OK` });
@@ -509,6 +534,7 @@ async function runEngineDebug(input: {
     fullDetail: runLogFullDetail(single),
   });
   runs.push(single);
+  Object.keys(single.eventCounts).forEach((type) => eventTypes.add(type));
   stages.push(makeStage({
     id: 'single-turn',
     label: '单轮对话',
@@ -516,9 +542,6 @@ async function runEngineDebug(input: {
     status: single.status,
     detail: single.error || `输出 ${single.outputChars} 字符，首个文本 ${single.firstTextMs ?? '--'}ms`,
   }));
-
-  const eventTypes = new Set<string>();
-  for (const run of runs) Object.keys(run.eventCounts).forEach((type) => eventTypes.add(type));
 
   const streamStartedAt = Date.now();
   const textEvents = single.eventCounts.text || 0;
@@ -537,6 +560,7 @@ async function runEngineDebug(input: {
     message: '流式输出与事件格式检查完成',
     detail: streamStage.detail,
   });
+  emitProgress();
 
   const multiStartedAt = Date.now();
   if (single.sessionId) {
@@ -582,6 +606,7 @@ async function runEngineDebug(input: {
       status: multiWithMemory.status,
       detail: multiWithMemory.error || `记忆命中 ${MULTI_TURN_MEMORY_TOKEN}，session=${single.sessionId.slice(0, 12)}...`,
     }));
+    emitProgress();
   } else {
     const skippedStage = makeStage({
       id: 'multi-turn',
@@ -596,18 +621,10 @@ async function runEngineDebug(input: {
       message: '多轮记忆 probe 跳过',
       detail: skippedStage.detail,
     });
+    emitProgress();
   }
 
-  return {
-    engine: input.engineId,
-    driver: input.driver,
-    effectiveEngine: input.effectiveEngine,
-    available: input.availabilityStage.status !== 'failed',
-    streamSupported: runs.some((run) => (run.eventCounts.text || 0) > 0),
-    observedEventTypes: Array.from(eventTypes).sort(),
-    stages,
-    runs,
-  };
+  return buildSummary();
 }
 
 function scoreJsonOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
@@ -714,94 +731,190 @@ function scoreCodeGeneration(run: DiagnosticPromptRun): ModelCapabilityScore {
   };
 }
 
+function hasSvgIdOrClass(output: string, pattern: string): boolean {
+  return new RegExp(String.raw`(?:id|class)\s*=\s*["'][^"']*${pattern}[^"']*["']`, 'i').test(output);
+}
+
 function scorePelicanDrawing(run: DiagnosticPromptRun): ModelCapabilityScore {
   const output = String(run.outputPreview || '');
   const normalized = output.toLowerCase();
   const shapeCount = output.match(/<(path|circle|ellipse|polygon|polyline|line|rect)\b/gi)?.length || 0;
+  const outputChars = output.trim().length;
   const hasSvg = /<svg[\s>]/i.test(output);
   const hasClosingSvg = /<\/svg\s*>/i.test(output);
-  const hasCanvasSize = /\b(viewBox|width|height)\s*=/i.test(output);
-  const hasTitle = /<title[\s>]/i.test(output) || /relay|audit|gateway|审计|网关/.test(output);
-  const hasBeak = /client|caller|frontend|user|客户端|用户/.test(normalized);
-  const hasPouch = /relay|proxy|gateway|adapter|转发|网关|代理/.test(normalized);
-  const hasBody = /model|provider|upstream|llm|backend|上游|模型/.test(normalized);
-  const hasWing = /guard|policy|filter|sanitizer|auth|redact|策略|过滤|鉴权|脱敏/.test(normalized);
-  const hasLegs = /log|trace|event|sse|stream|日志|事件|流/.test(normalized);
-  const hasBicycle = /attack|prompt|injection|leak|tool|risk|风险|泄漏|注入/.test(normalized);
-  const hasWheel = /edge|arrow|line|path|连接|链路/.test(normalized) || (output.match(/<line\b|<path\b/gi)?.length || 0) >= 2;
-  const hasPedal = /alert|finding|severity|fail|告警|发现|严重/.test(normalized);
-  let score = run.status === 'passed' ? 10 : 0;
+  const hasViewBox = /\bviewBox\s*=\s*["'][^"']+["']/i.test(output);
+  const hasExactViewBox = /\bviewBox\s*=\s*["']0\s+0\s+360\s+240["']/i.test(output);
+  const titleText = output.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '';
+  const hasTitle = Boolean(titleText.trim());
+  const hasTitleKeywords = /pelican|鹈鹕/i.test(titleText) && /bicycle|bike|自行车/i.test(titleText);
+  const hasPelicanKeyword = /pelican|鹈鹕/.test(normalized);
+  const hasBikeKeyword = /bicycle|bike|自行车/.test(normalized);
+  const hasBeak = hasSvgIdOrClass(output, 'pelican[-_](?:beak|bill)') || /pelican[-_](?:beak|bill)/.test(normalized);
+  const hasPouch = hasSvgIdOrClass(output, 'pelican[-_](?:pouch|throat)') || /pelican[-_](?:pouch|throat)/.test(normalized);
+  const hasBody = hasSvgIdOrClass(output, 'pelican[-_](?:body|torso)') || /pelican[-_](?:body|torso)/.test(normalized);
+  const hasWing = hasSvgIdOrClass(output, 'pelican[-_](?:wing|wings)') || /pelican[-_](?:wing|wings)/.test(normalized);
+  const hasLegs = hasSvgIdOrClass(output, 'pelican[-_](?:leg|legs|foot|feet)') || /pelican[-_](?:leg|legs|foot|feet)/.test(normalized);
+  const hasFrontWheel = hasSvgIdOrClass(output, '(?:front|bike-front)[-_]wheel') || /front[-_]?wheel/.test(normalized);
+  const hasRearWheel = hasSvgIdOrClass(output, '(?:rear|back|bike-rear)[-_]wheel') || /rear[-_]?wheel/.test(normalized);
+  const wheelGeometryCount = output.match(/<(circle|ellipse)\b/gi)?.length || 0;
+  const hasFrame = hasSvgIdOrClass(output, 'bike[-_](?:frame|tube)') || /bike[-_](?:frame|tube)/.test(normalized);
+  const hasHandlebar = hasSvgIdOrClass(output, '(?:handlebar|bike[-_]handle)') || /handlebar|bike[-_]handle/.test(normalized);
+  const hasSeat = hasSvgIdOrClass(output, '(?:seat|saddle)') || /seat|saddle/.test(normalized);
+  const hasPedal = hasSvgIdOrClass(output, 'pedal') || /\bpedal\b/.test(normalized);
+  const looksLikeTopology = /relay|gateway|provider|attack_probe|sse_stream|finding|audit topology|拓扑/.test(normalized);
+  const pelicanPartCount = [hasBeak, hasPouch, hasBody, hasWing, hasLegs].filter(Boolean).length;
+  const bikePartCount = [hasFrontWheel, hasRearWheel, hasFrame, hasHandlebar, hasSeat, hasPedal].filter(Boolean).length;
+  const extraShapeCount = Math.max(0, shapeCount - (pelicanPartCount + bikePartCount));
+  let score = 0;
   const evidence: string[] = [];
 
   if (hasSvg) {
-    score += 20;
+    score += 12;
     evidence.push('包含 SVG 根节点');
   } else {
     evidence.push('未找到 SVG 根节点');
   }
   if (hasClosingSvg) {
-    score += 10;
+    score += 8;
     evidence.push('SVG 闭合完整');
   }
-  if (hasCanvasSize) {
-    score += 10;
-    evidence.push('声明了画布尺寸或 viewBox');
+  if (hasExactViewBox) {
+    score += 6;
+    evidence.push('viewBox 精确命中 0 0 360 240');
+  } else if (hasViewBox) {
+    score += 4;
+    evidence.push('声明了 viewBox');
+  } else {
+    evidence.push('缺少 viewBox');
   }
-  if (shapeCount >= 5) {
-    score += 15;
-    evidence.push(`包含 ${shapeCount} 个图形元素`);
-  } else if (shapeCount >= 3) {
+  if (shapeCount >= 20) {
     score += 10;
+    evidence.push(`图形层次很丰富：${shapeCount} 个图形元素`);
+  } else if (shapeCount >= 16) {
+    score += 8;
+    evidence.push(`图形细节较丰富：${shapeCount} 个图形元素`);
+  } else if (shapeCount >= 12) {
+    score += 5;
+    evidence.push(`图形元素达到可读细节量：${shapeCount}`);
+  } else if (shapeCount >= 10) {
+    score += 3;
     evidence.push(`图形元素数量偏少：${shapeCount}`);
   } else {
     evidence.push(`图形元素不足：${shapeCount}`);
   }
-  if (hasTitle) score += 5;
-  if (hasBeak) {
-    score += 10;
-    evidence.push('命中长喙特征');
+  if (hasTitle) {
+    score += 3;
+    evidence.push('包含 title');
+  } else {
+    evidence.push('缺少 title');
   }
-  if (hasPouch) {
-    score += 10;
-    evidence.push('命中喉囊特征');
+  if (hasTitleKeywords) {
+    score += 3;
+    evidence.push('title 明确写出 pelican 和 bicycle');
   }
-  if (hasBody && hasWing) {
-    score += 10;
-    evidence.push('包含身体和翅膀结构');
-  } else if (hasBody || hasWing) {
-    score += 5;
-    evidence.push('身体或翅膀结构不完整');
+  if (hasPelicanKeyword) {
+    score += 2;
+    evidence.push('输出中明确出现 pelican / 鹈鹕');
   }
-  if (hasLegs) score += 5;
-  if (hasBicycle) {
-    score += 8;
-    evidence.push('命中自行车特征');
+  if (hasBikeKeyword) {
+    score += 2;
+    evidence.push('输出中明确出现 bicycle / bike / 自行车');
   }
-  if (hasWheel) {
+  if (wheelGeometryCount >= 2) {
+    score += 4;
+    evidence.push('至少有两个圆形/椭圆形车轮');
+  }
+  if (hasFrontWheel && hasRearWheel) {
     score += 6;
-    evidence.push('包含车轮特征');
+    evidence.push('前后车轮标记齐全');
+  } else if (hasFrontWheel || hasRearWheel) {
+    score += 3;
+    evidence.push('只命中了一侧车轮标记');
   }
-  if (hasPedal) score += 3;
+  if (bikePartCount >= 5) {
+    score += 12;
+    evidence.push('自行车关键部件较完整');
+  } else if (bikePartCount >= 3) {
+    score += 7;
+    evidence.push('自行车部件部分命中');
+  } else {
+    evidence.push('自行车部件不足');
+  }
+  if (pelicanPartCount >= 5) {
+    score += 15;
+    evidence.push('鹈鹕长喙、喉囊、身体、翅膀、腿部齐全');
+  } else if (pelicanPartCount >= 3) {
+    score += 9;
+    evidence.push('鹈鹕主体特征部分命中');
+  } else {
+    evidence.push('鹈鹕主体特征不足');
+  }
+  if (extraShapeCount >= 8) {
+    score += 10;
+    evidence.push(`除必需部件外还有较多补充细节：${extraShapeCount}`);
+  } else if (extraShapeCount >= 6) {
+    score += 8;
+    evidence.push(`补充细节较丰富：${extraShapeCount}`);
+  } else if (extraShapeCount >= 4) {
+    score += 6;
+    evidence.push(`有额外细节而非只画最低限度部件：${extraShapeCount}`);
+  } else if (extraShapeCount >= 2) {
+    score += 3;
+    evidence.push(`有少量补充细节：${extraShapeCount}`);
+  } else {
+    evidence.push('额外细节偏少，接近最低限度作图');
+  }
+  if (outputChars >= 2200) {
+    score += 8;
+    evidence.push('SVG 内容密度高，细节表达充分');
+  } else if (outputChars >= 1600) {
+    score += 6;
+    evidence.push('SVG 细节密度较好');
+  } else if (outputChars >= 1300) {
+    score += 3;
+    evidence.push('SVG 内容密度中等');
+  } else {
+    evidence.push('SVG 内容较简略');
+  }
+  if (looksLikeTopology && !hasPelicanKeyword && pelicanPartCount < 3) {
+    score -= 20;
+    evidence.push('输出仍更像 relay 拓扑图，不像骑车鹈鹕');
+  }
 
   return {
     id: 'drawing_pelican',
     label: '骑车鹈鹕',
     score: scoreCap(score),
     status: statusFromScore(score),
-    summary: score >= 80 ? 'SVG 绘图结构和骑车鹈鹕特征较完整' : '绘图可渲染性或目标特征不足',
+    summary: score >= 80 ? 'SVG 可渲染性和鹈鹕/自行车部件较完整' : '绘图可渲染性或目标特征不足',
     evidence,
     metrics: {
       hasSvg,
       hasClosingSvg,
+      hasViewBox,
+      hasExactViewBox,
       shapeCount,
+      wheelGeometryCount,
+      hasTitle,
+      hasTitleKeywords,
+      hasPelicanKeyword,
+      hasBikeKeyword,
       hasBeak,
       hasPouch,
       hasBody,
       hasWing,
       hasLegs,
-      hasBicycle,
-      hasWheel,
+      hasFrontWheel,
+      hasRearWheel,
+      hasFrame,
+      hasHandlebar,
+      hasSeat,
       hasPedal,
+      pelicanPartCount,
+      bikePartCount,
+      extraShapeCount,
+      outputChars,
+      looksLikeTopology,
       durationMs: run.durationMs,
     },
   };
@@ -810,33 +923,41 @@ function scorePelicanDrawing(run: DiagnosticPromptRun): ModelCapabilityScore {
 function scoreReasoning(run: DiagnosticPromptRun): ModelCapabilityScore {
   const parsed = parseJsonCandidate(run.outputPreview || '');
   const data = parsed?.parsed;
+  const repeatingIntegers = readNumberArrayField(data, 'repeatingIntegers')
+    || readNumberArrayField(data, 'specialIntegers')
+    || readNumberArrayField(data, 'repeatingNumbers');
+  const trapezoidRatio = normalizeRatioField(data?.trapezoidRatio ?? data?.bcOverAd ?? data?.ratio);
   let score = run.status === 'passed' ? 10 : 0;
   const evidence: string[] = [];
   if (parsed) {
     score += 15;
     evidence.push('返回了可解析的推理评测 JSON');
   }
-  const ordering = String(data?.ordering || '').replace(/\s+/g, '').toUpperCase();
-  if (ordering === 'B-C-D-A-E' || ordering === 'BCDAE') {
+  if (parsed?.wholeJson) score += 5;
+  if (readNumericField(data, 'truthTellers') === 7
+    && readNumericField(data, 'liars') === 6
+    && readNumericField(data, 'alternatersOddTruth') === 9
+    && readNumericField(data, 'alternatersEvenTruth') === 9
+    && readNumericField(data, 'truthCandyTotal') === 7) {
     score += 20;
-    evidence.push('约束排序题命中 B-C-D-A-E');
+    evidence.push('真假话/交替作答题 5 个字段全部命中');
   }
-  if (String(data?.culprit || data?.leakSource || '').toUpperCase() === 'B') {
+  if (repeatingIntegers
+    && repeatingIntegers.join(',') === '111,222,333,444,481,518,555,592,629,666,777,888,999') {
     score += 20;
-    evidence.push('真假话约束题命中 culprit=B');
+    evidence.push('循环小数约束题的 13 个整数枚举正确');
   }
-  const grid = data?.logicGrid || data?.grid || data?.assignment;
-  if (String(grid?.Alpha?.provider || grid?.alpha?.provider || '').toLowerCase() === 'openai'
-    && String(grid?.Alpha?.region || grid?.alpha?.region || '').toUpperCase() === 'US'
-    && String(grid?.Beta?.provider || grid?.beta?.provider || '').toLowerCase() === 'anthropic'
-    && String(grid?.Gamma?.provider || grid?.gamma?.provider || '').toLowerCase() === 'local') {
-    score += 20;
-    evidence.push('逻辑网格题角色/语言/数据集匹配');
-  }
-  const proposition = data?.proposition || data?.props;
-  if (proposition?.P === true && proposition?.Q === false && proposition?.R === true) {
+  if (readNumericField(data, 'twoPassOrderings') === 8178) {
     score += 15;
-    evidence.push('命题约束满足题命中 P=true,Q=false,R=true');
+    evidence.push('双轮扫描排列题命中 8178');
+  }
+  if (trapezoidRatio === '1/3') {
+    score += 15;
+    evidence.push('等腰梯形比例题命中 1/3');
+  }
+  if (readNumericField(data, 'returnStep') === 359) {
+    score += 10;
+    evidence.push('复合变换回归题命中 359');
   }
   if (Array.isArray(data?.steps) && data.steps.length >= 6) {
     score += 15;
@@ -847,14 +968,19 @@ function scoreReasoning(run: DiagnosticPromptRun): ModelCapabilityScore {
     label: '推理能力',
     score: scoreCap(score),
     status: statusFromScore(score),
-    summary: score >= 80 ? '多题推理答案和过程稳定' : '推理答案或过程不够稳定',
+    summary: score >= 80 ? '离散推理、枚举和几何比例结果较稳定' : '推理答案或过程不够稳定',
     evidence,
     metrics: {
-      culprit: typeof data?.culprit === 'string' ? data.culprit : typeof data?.leakSource === 'string' ? data.leakSource : null,
-      ordering: typeof data?.ordering === 'string' ? data.ordering : null,
-      propositionP: typeof proposition?.P === 'boolean' ? proposition.P : null,
-      propositionQ: typeof proposition?.Q === 'boolean' ? proposition.Q : null,
-      propositionR: typeof proposition?.R === 'boolean' ? proposition.R : null,
+      validJson: Boolean(parsed),
+      truthTellers: readNumericField(data, 'truthTellers'),
+      liars: readNumericField(data, 'liars'),
+      alternatersOddTruth: readNumericField(data, 'alternatersOddTruth'),
+      alternatersEvenTruth: readNumericField(data, 'alternatersEvenTruth'),
+      truthCandyTotal: readNumericField(data, 'truthCandyTotal'),
+      repeatingIntegersCount: repeatingIntegers?.length || 0,
+      twoPassOrderings: readNumericField(data, 'twoPassOrderings'),
+      trapezoidRatio,
+      returnStep: readNumericField(data, 'returnStep'),
       durationMs: run.durationMs,
     },
   };
@@ -873,6 +999,39 @@ function readNumericField(data: any, key: string): number | null {
   return null;
 }
 
+function readNumberArrayField(data: any, key: string): number[] | null {
+  const value = data?.[key];
+  if (Array.isArray(value)) {
+    const parsed = value.map((item) => {
+      if (typeof item === 'number' && Number.isFinite(item)) return item;
+      if (typeof item === 'string' && /^-?\d+$/.test(item.trim())) return Number(item.trim());
+      return Number.NaN;
+    });
+    return parsed.every((item) => Number.isFinite(item)) ? parsed : null;
+  }
+  if (typeof value === 'string') {
+    const matches = value.match(/-?\d+/g);
+    if (!matches?.length) return null;
+    return matches.map((item) => Number(item));
+  }
+  return null;
+}
+
+function normalizeRatioField(value: unknown): string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.abs(value - 1 / 3) <= 1e-6 ? '1/3' : String(value);
+  }
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  if (/1\s*\/\s*3/.test(text)) return '1/3';
+  const decimal = text.match(/-?\d+(?:\.\d+)?/);
+  if (decimal) {
+    const parsed = Number(decimal[0]);
+    if (Number.isFinite(parsed) && Math.abs(parsed - 1 / 3) <= 1e-3) return '1/3';
+  }
+  return text.replace(/\s+/g, '');
+}
+
 function isCloseTo(value: number | null, expected: number, tolerance = 1e-9): boolean {
   return value != null && Math.abs(value - expected) <= tolerance;
 }
@@ -880,19 +1039,14 @@ function isCloseTo(value: number | null, expected: number, tolerance = 1e-9): bo
 function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
   const parsed = parseJsonCandidate(run.outputPreview || '');
   const data = parsed?.parsed;
-  const checks = [
-    { key: 'totalRequests', expected: 1024, label: '请求总数=1024' },
-    { key: 'streamedRequests', expected: 832, label: '流式请求数=832' },
-    { key: 'successRate', expected: 0.974609375, tolerance: 0.0005, label: '成功率约 0.9746' },
-    { key: 'leakRate', expected: 0.021484375, tolerance: 0.0005, label: '泄漏率约 0.0215' },
-    { key: 'weightedRisk', expected: 78, tolerance: 0.001, label: '加权风险=78' },
-    { key: 'meanLatencyMs', expected: 452.5, tolerance: 0.001, label: '平均延迟=452.5ms' },
-    { key: 'p95LatencyMs', expected: 1210, tolerance: 0.001, label: 'P95 延迟=1210ms' },
-    { key: 'missingDeltaCount', expected: 7, label: '缺失 delta 数=7' },
-    { key: 'fallbackRatio', expected: 0.1875, tolerance: 0.0005, label: '回退比例=0.1875' },
-    { key: 'estimatedTokenCost', expected: 18.96, tolerance: 0.01, label: '估算成本=18.96' },
-    { key: 'retryAmplification', expected: 1.125, tolerance: 0.0005, label: '重试放大=1.125' },
-    { key: 'blockedAttackPercent', expected: 65.625, tolerance: 0.001, label: '阻断率=65.625%' },
+  const checks: Array<{ key: string; expected: number; label: string; tolerance?: number }> = [
+    { key: 'pairPartitionCount', expected: 144, label: '配对约束题命中 144' },
+    { key: 'cyclicExteriorSignature', expected: 1565, label: '圆内外面积题命中 1565' },
+    { key: 'newBoxVolume', expected: 30, label: '长方体体积题命中 30' },
+    { key: 'harmonicRemainderMod17', expected: 5, label: '调和和余数题命中 5' },
+    { key: 'fourthCombinedTerm', expected: 206, label: '等差+等比数列题命中 206' },
+    { key: 'constrainedStringCount', expected: 1296, label: '受限字符串计数题命中 1296' },
+    { key: 'minEdgeSum', expected: 337, label: '格点正方形极值题命中 337' },
   ];
   let score = run.status === 'passed' ? 10 : 0;
   const evidence: string[] = [];
@@ -902,6 +1056,7 @@ function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
   if (parsed) {
     score += 20;
     evidence.push('返回了可解析的数学答案 JSON');
+    if (parsed.wholeJson) score += 5;
   } else {
     evidence.push('未能解析出数学答案 JSON');
   }
@@ -918,7 +1073,7 @@ function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
 
   if (Array.isArray(data?.steps) && data.steps.length >= 8) {
     score += 10;
-    evidence.push('包含计算步骤');
+    evidence.push('包含不少于 8 条计算步骤');
   }
 
   if (correctCount < checks.length) {
@@ -930,24 +1085,19 @@ function scoreMath(run: DiagnosticPromptRun): ModelCapabilityScore {
     label: '数学能力',
     score: scoreCap(score),
     status: statusFromScore(score),
-    summary: score >= 80 ? '基础算术与方程题精确命中' : '数学题存在错答或格式不稳定',
+    summary: score >= 80 ? '高难数学题精确命中较多' : '高难数学题存在错答或格式不稳定',
     evidence,
     metrics: {
       validJson: Boolean(parsed),
       correctCount,
       expectedCount: checks.length,
-      observedTotalRequests: observed.totalRequests,
-      observedStreamedRequests: observed.streamedRequests,
-      observedSuccessRate: observed.successRate,
-      observedLeakRate: observed.leakRate,
-      observedWeightedRisk: observed.weightedRisk,
-      observedMeanLatencyMs: observed.meanLatencyMs,
-      observedP95LatencyMs: observed.p95LatencyMs,
-      observedMissingDeltaCount: observed.missingDeltaCount,
-      observedFallbackRatio: observed.fallbackRatio,
-      observedEstimatedTokenCost: observed.estimatedTokenCost,
-      observedRetryAmplification: observed.retryAmplification,
-      observedBlockedAttackPercent: observed.blockedAttackPercent,
+      pairPartitionCount: observed.pairPartitionCount,
+      cyclicExteriorSignature: observed.cyclicExteriorSignature,
+      newBoxVolume: observed.newBoxVolume,
+      harmonicRemainderMod17: observed.harmonicRemainderMod17,
+      fourthCombinedTerm: observed.fourthCombinedTerm,
+      constrainedStringCount: observed.constrainedStringCount,
+      minEdgeSum: observed.minEdgeSum,
       durationMs: run.durationMs,
     },
   };
@@ -1017,10 +1167,15 @@ function scoreStructuredOutput(run: DiagnosticPromptRun): ModelCapabilityScore {
 
 function normalizeConsistencyOutput(output?: string): string {
   const text = String(output || '').toUpperCase();
-  const match = text.match(/NEXT[_\s-]*RISK\s*=\s*([A-Z0-9_-]+)/);
-  if (match) return `NEXT_RISK=${match[1]}`;
-  const number = text.match(/\b([0-9]{1,4})\b/);
-  return number ? `NEXT_RISK=${number[1]}` : text.replace(/\s+/g, ' ').trim();
+  const match = text.match(/BC[_\s-]*OVER[_\s-]*AD\s*=\s*([0-9]+(?:\s*\/\s*[0-9]+)?)/);
+  if (match) return `BC_OVER_AD=${match[1].replace(/\s+/g, '')}`;
+  if (/\b1\s*\/\s*3\b/.test(text)) return 'BC_OVER_AD=1/3';
+  const decimal = text.match(/-?\d+(?:\.\d+)?/);
+  if (decimal) {
+    const parsed = Number(decimal[0]);
+    if (Number.isFinite(parsed) && Math.abs(parsed - 1 / 3) <= 1e-3) return 'BC_OVER_AD=1/3';
+  }
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function scoreConsistency(first: DiagnosticPromptRun, second: DiagnosticPromptRun): ModelCapabilityScore {
@@ -1030,13 +1185,13 @@ function scoreConsistency(first: DiagnosticPromptRun, second: DiagnosticPromptRu
   const evidence: string[] = [];
   if (first.status === 'passed') score += 15;
   if (second.status === 'passed') score += 15;
-  if (a === 'NEXT_RISK=104') {
+  if (a === 'BC_OVER_AD=1/3') {
     score += 25;
-    evidence.push('第一次命中 NEXT_RISK=104');
+    evidence.push('第一次命中 BC_OVER_AD=1/3');
   }
-  if (b === 'NEXT_RISK=104') {
+  if (b === 'BC_OVER_AD=1/3') {
     score += 25;
-    evidence.push('第二次命中 NEXT_RISK=104');
+    evidence.push('第二次命中 BC_OVER_AD=1/3');
   }
   if (a && a === b) {
     score += 20;
@@ -1135,7 +1290,7 @@ const DRAWING_PROMPT: PromptSpec = {
   category: 'model-score',
   capabilityId: 'drawing_pelican',
   systemPrompt: '你是 SVG 绘图能力评测探针。严格输出用户要求的内容，不要解释。',
-  prompt: '只输出一个完整、可直接渲染的紧凑 SVG，不要 Markdown。画布 360x240，画一个 API 请求经过 relay gateway 到模型 provider 的审计拓扑，必须包含 title，并用 id 或 class 标出 client、relay、provider、guard、sse_stream、attack_probe、finding；用 rect、path、circle、line、text 等 SVG 图形元素完成。',
+  prompt: '只输出一个完整、可直接渲染的紧凑 SVG，不要 Markdown。画布必须是 360x240，viewBox 必须是 0 0 360 240。主体必须是一只正在骑自行车的鹈鹕，不是别的鸟，也不是拓扑图、流程图或示意框图。必须包含 <title>，且 title 同时出现 pelican 或 鹈鹕，以及 bicycle、bike 或 自行车。请用 id 或 class 明确标出 pelican-body、pelican-beak、pelican-pouch、pelican-wing、pelican-leg、bike-frame、front-wheel、rear-wheel、handlebar、seat、pedal。至少使用 10 个图形元素（path、circle、ellipse、polygon、polyline、line、rect 中任意组合），并保证两只车轮、车架、把手、车座、踏板、长喙、喉囊、翅膀和腿都可见。',
 };
 
 const MATH_PROMPT: PromptSpec = {
@@ -1143,9 +1298,9 @@ const MATH_PROMPT: PromptSpec = {
   label: '数学能力',
   category: 'model-score',
   capabilityId: 'math',
-  timeoutMultiplier: 2,
+  timeoutMultiplier: 2.5,
   systemPrompt: '你是数学能力评测探针。严格输出 JSON，不要解释，不要 Markdown。',
-  prompt: '只输出 JSON，不要 Markdown，不要额外解释。字段必须是数字：{"totalRequests":1024,"streamedRequests":832,"successRate":998/1024,"leakRate":22/1024,"weightedRisk":9*6+4*3+2*2+8,"meanLatencyMs":(420+515+350+525)/4,"p95LatencyMs":1210,"missingDeltaCount":7,"fallbackRatio":192/1024,"estimatedTokenCost":63200*0.0003,"retryAmplification":1152/1024,"blockedAttackPercent":21/32*100,"steps":["..."]}。steps 至少 8 条。',
+  prompt: '只输出 JSON，不要 Markdown，不要额外解释。下面 7 题均改写自 2022 AMC 10A 官方题面；除 steps 外其余字段都必须是数字。输出格式必须是 {"pairPartitionCount":0,"cyclicExteriorSignature":0,"newBoxVolume":0,"harmonicRemainderMod17":0,"fourthCombinedTerm":0,"constrainedStringCount":0,"minEdgeSum":0,"steps":["..."]}。题1：把整数 1 到 14 分成 7 对，且每对较大者至少是较小者的 2 倍，这样的分法有多少种？题2：圆内接四边形 ABCD 满足 AB=7, BC=24, CD=20, DA=15，圆内而四边形外的面积可写成 aπ-b/c，其中 a,c 互素，求 a+b+c。题3：多项式 10x^3-39x^2+29x-6 的三个根是长方体三条边；每条边都加长 2 后，新长方体体积是多少？题4：设 L17 是 1 到 17 的最小公倍数，且 1+1/2+...+1/17 = h/L17，求 h 除以 17 的余数。题5：一个四项正整数等差数列与一个四项正整数等比数列逐项相加，所得四项前 3 项是 57, 60, 91，第 4 项是多少？题6：用数字 0,1,2,3,4 组成长度 5 的字符串；对每个 j∈{1,2,3,4}，都至少有 j 个数字小于 j。这样的字符串有多少个？题7：格点正方形 R、S、T 的条件与 2022 AMC 10A 第 25 题一致：每个正方形底边都在 x 轴上，R 的左边在 y 轴上，S 的右边在 y 轴上，R 的格点数是 S 的 9/4 倍，T 的上方两个顶点在 R∪S 内，T 所含格点数是 R∪S 的 1/4，且 S 中落在 S∩T 的格点比例是 R 中落在 R∩T 的格点比例的 27 倍。求三者边长和的最小值。steps 至少 8 条，每条是简短字符串。',
 };
 
 const REASONING_PROMPT: PromptSpec = {
@@ -1153,9 +1308,9 @@ const REASONING_PROMPT: PromptSpec = {
   label: '推理能力',
   category: 'model-score',
   capabilityId: 'reasoning',
-  timeoutMultiplier: 1.75,
+  timeoutMultiplier: 2.25,
   systemPrompt: '你是推理能力评测探针。用 JSON 返回答案和步骤。',
-  prompt: '只输出 JSON，不要 Markdown：{"ordering":"B-C-D-A-E","culprit":"A|B|C|D","logicGrid":{"Alpha":{"provider":"...","region":"..."},"Beta":{"provider":"...","region":"..."},"Gamma":{"provider":"...","region":"..."}},"proposition":{"P":true,"Q":false,"R":true},"steps":["..."]}。题1 事件排序：A/B/C/D/E 各占一个位置；B 必须第一；C 紧接 B；D 紧接 C；A 在 D 之后且 E 之前。题2 泄漏源：A/B/C/D 四个 relay 节点中一处泄漏，且下面四句话恰好只有一句真话：A 说“泄漏在 A”；B 说“泄漏在 B”；C 说“泄漏不在 B”；D 说“泄漏在 A 或 C”。culprit 填泄漏节点。题3 逻辑网格：Alpha/Beta/Gamma 各使用 provider OpenAI/Anthropic/Local 和 region US/EU/Lab；Alpha 不用 Anthropic 且不在 EU；OpenAI 在 US；Beta 在 EU；Gamma 不用 Anthropic。给出三者 provider/region。题4 命题约束：P,Q,R 中恰好两个为真，且 P=>R、Q=>not R、R=>not Q 均为真。给出 proposition。steps 至少 6 条。',
+  prompt: '只输出 JSON，不要 Markdown。下面 5 题均改写自 2022 AMC 10A 官方题面。输出格式必须是 {"truthTellers":0,"liars":0,"alternatersOddTruth":0,"alternatersEvenTruth":0,"truthCandyTotal":0,"repeatingIntegers":[0],"twoPassOrderings":0,"trapezoidRatio":"p/q","returnStep":0,"steps":["..."]}。题1：31 个孩子分为永远说真话、永远说假话、以及真话/假话交替三类。校长依次问三次：你是 truth-teller 吗？你是 alternater 吗？你是 liar 吗？三次回答 yes 的人数分别为 22、15、9。求 truthTellers、liars、alternatersOddTruth（第 1 题答真）、alternatersEvenTruth（第 1 题答假）以及 truthCandyTotal。题2：找出所有三位正整数 abc，其中 a,b,c 都是非零数字，且 0.abc循环 = (0.a循环 + 0.b循环 + 0.c循环)/3；把所有满足条件的整数按升序放进 repeatingIntegers。题3：编号 1 到 13 的卡片排成一行，从左到右反复扫描，每次按递增顺序捡起能捡的牌。恰好两轮捡完的排列有多少种？题4：等腰梯形 ABCD 中 AD ∥ BC 且 BC < AD，存在点 P 使得 PA=1, PB=2, PC=3, PD=4。求 BC/AD 的最简分数，填入 trapezoidRatio。题5：变换 Tk 先把平面绕原点逆时针旋转 k 度，再关于 y 轴对称；从点 (1,0) 开始依次执行 T1,T2,...,Tn，最小正整数 n 是多少时点回到自身？steps 至少 6 条，每条是简短字符串。',
 };
 
 const STRUCTURED_PROMPT: PromptSpec = {
@@ -1173,8 +1328,9 @@ const CONSISTENCY_PROMPT: PromptSpec = {
   label: '一致性检查',
   category: 'model-score',
   capabilityId: 'consistency',
+  timeoutMultiplier: 1.5,
   systemPrompt: '你是一致性评测探针。严格按格式回复。',
-  prompt: '风险序列 14, 20, 32, 56 的下一个数是多少？规则是相邻增量依次翻倍。只回复 NEXT_RISK=数字。',
+  prompt: '题目改写自 2022 AMC 10A：等腰梯形 ABCD 中 AD ∥ BC 且 BC < AD，存在点 P 使得 PA=1, PB=2, PC=3, PD=4。求 BC/AD 的最简分数。只回复 BC_OVER_AD=最简分数，不要解释。',
 };
 
 async function runCapabilityPrompt(
@@ -1205,11 +1361,32 @@ async function runModelEvaluation(
   timeoutMs: number,
   selectedCapabilityIds: Set<string>,
   log?: DiagnosticLogger,
+  onProgress?: (summary: ModelEvaluationSummary) => void,
   signal?: AbortSignal,
 ): Promise<ModelEvaluationSummary> {
   throwIfAborted(signal);
   const runs: DiagnosticPromptRun[] = [];
   const capabilities: ModelCapabilityScore[] = [];
+
+  const buildSummary = (): ModelEvaluationSummary => {
+    const fullCapabilities = runs.length > 0
+      ? [scoreOutputSpeed(runs), ...capabilities]
+      : [...capabilities];
+    const overallScore = scoreCap(average(fullCapabilities.map((item) => item.score)) || 0);
+    const tier = tierFromScore(overallScore);
+    return {
+      overallScore,
+      tier,
+      tierLabel: tierLabel(tier),
+      capabilities: cloneSerializable(fullCapabilities),
+      runs: cloneSerializable(runs),
+    };
+  };
+
+  const emitProgress = () => {
+    if (runs.length === 0 && capabilities.length === 0) return;
+    onProgress?.(buildSummary());
+  };
 
   log?.({
     message: '开始模型能力评测',
@@ -1240,6 +1417,7 @@ async function runModelEvaluation(
       detail: runLogDetail(run),
       fullDetail: runLogFullDetail(run),
     });
+    emitProgress();
   };
 
   await runSingleCapability(JSON_PROMPT, scoreJsonOutput);
@@ -1262,28 +1440,18 @@ async function runModelEvaluation(
     runs.push(consistencyRunA, consistencyRunB);
     capabilities.push(scoreConsistency(consistencyRunA, consistencyRunB));
     log?.({ level: logLevelFromStatus(consistencyRunB.status), message: '一致性复测 probe 完成', detail: runLogDetail(consistencyRunB), fullDetail: runLogFullDetail(consistencyRunB) });
+    emitProgress();
   } else {
     log?.({ level: 'warning', message: '一致性检查 probe 已跳过', detail: '本次未选择该能力' });
   }
 
-  if (runs.length > 0) {
-    capabilities.unshift(scoreOutputSpeed(runs));
-  }
-
-  const overallScore = scoreCap(average(capabilities.map((item) => item.score)) || 0);
-  const tier = tierFromScore(overallScore);
+  const summary = buildSummary();
   log?.({
-    level: overallScore >= 50 ? 'success' : 'warning',
+    level: summary.overallScore >= 50 ? 'success' : 'warning',
     message: '模型能力评测完成',
-    detail: `quality=${overallScore}/100 (${tierLabel(tier)})`,
+    detail: `quality=${summary.overallScore}/100 (${summary.tierLabel})`,
   });
-  return {
-    overallScore,
-    tier,
-    tierLabel: tierLabel(tier),
-    capabilities,
-    runs,
-  };
+  return summary;
 }
 
 export async function runModelDiagnostics(input: ModelDiagnosticsRequest, options: DiagnosticsRunOptions = {}): Promise<ModelDiagnosticsResponse> {
@@ -1308,6 +1476,22 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
   let effectiveEngine: string | undefined;
   let engineDebug: EngineDiagnosticSummary | undefined;
   let modelEvaluation: ModelEvaluationSummary | undefined;
+
+  const emitProgress = (error?: string) => {
+    options.onProgress?.({
+      ok: Boolean(engineDebug?.available) && (!modelEvaluation || modelEvaluation.overallScore >= 50),
+      engine: engineId,
+      driver,
+      model,
+      startedAt: new Date(startedAtMs).toISOString(),
+      finishedAt: new Date().toISOString(),
+      totalDurationMs: Date.now() - startedAtMs,
+      engineDebug: cloneSerializable(engineDebug),
+      modelEvaluation: cloneSerializable(modelEvaluation),
+      logs: cloneSerializable(logs),
+      error,
+    });
+  };
 
   const availabilityStartedAt = Date.now();
   log({ message: '开始检查环境可用性', detail: driver === 'auto' ? engineId : `${engineId}/${driver}` });
@@ -1368,6 +1552,17 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
     message: '环境可用性检查完成',
     detail: availabilityStage.detail,
   });
+  engineDebug = {
+    engine: engineId,
+    driver,
+    effectiveEngine,
+    available: availabilityOk,
+    streamSupported: false,
+    observedEventTypes: [],
+    stages: [availabilityStage],
+    runs: [],
+  };
+  emitProgress();
 
   const createStartedAt = Date.now();
   log({ message: '开始初始化引擎 wrapper', detail: driver === 'auto' ? '使用当前默认 driver' : `指定 ${driver}` });
@@ -1389,6 +1584,17 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
       message: '引擎 wrapper 初始化完成',
       detail: createStage.detail,
     });
+    engineDebug = {
+      engine: engineId,
+      driver,
+      effectiveEngine,
+      available: availabilityOk && Boolean(engine),
+      streamSupported: false,
+      observedEventTypes: [],
+      stages: [availabilityStage, createStage],
+      runs: [],
+    };
+    emitProgress();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     createStage = makeStage({
@@ -1468,10 +1674,14 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
           ...availabilityStage,
           detail: availabilityStage.detail || 'availability checked',
         },
+        createStage,
         log,
+        onProgress: (summary) => {
+          engineDebug = summary;
+          emitProgress();
+        },
         signal,
       });
-      engineDebug.stages.splice(1, 0, createStage);
     } else {
       log({ level: 'warning', message: '引擎链路调试已跳过', detail: '只保留可用性与 wrapper 初始化结果' });
       engineDebug = {
@@ -1484,12 +1694,16 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
         stages: [availabilityStage, createStage],
         runs: [],
       };
+      emitProgress();
     }
 
     if (includeModelScore) {
       throwIfAborted(signal);
       const scoreStartedAt = Date.now();
-      modelEvaluation = await runModelEvaluation(engine, model, timeoutMs, selectedCapabilityIds, log, signal);
+      modelEvaluation = await runModelEvaluation(engine, model, timeoutMs, selectedCapabilityIds, log, (summary) => {
+        modelEvaluation = summary;
+        emitProgress();
+      }, signal);
       throwIfAborted(signal);
       engineDebug.stages.push(makeStage({
         id: 'model-score',
@@ -1498,6 +1712,7 @@ export async function runModelDiagnostics(input: ModelDiagnosticsRequest, option
         status: modelEvaluation.overallScore >= 55 ? 'passed' : 'warning',
         detail: `quality=${modelEvaluation.overallScore}/100 (${modelEvaluation.tierLabel})`,
       }));
+      emitProgress();
     } else {
       log({ level: 'warning', message: '模型能力评测已跳过' });
     }

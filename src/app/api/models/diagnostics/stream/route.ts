@@ -98,6 +98,9 @@ export async function POST(request: NextRequest) {
       for (const log of run.logs) {
         send({ type: 'log', runId: run.id, log });
       }
+      if (run.status === 'running' && run.result) {
+        send({ type: 'progress', runId: run.id, result: run.result });
+      }
 
       if ((run.status === 'completed' || run.status === 'cancelled') && run.result) {
         sendTerminal({ type: 'result', runId: run.id, result: run.result });

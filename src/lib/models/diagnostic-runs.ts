@@ -22,6 +22,7 @@ export interface ModelDiagnosticRunSnapshot {
 
 export type ModelDiagnosticRunStreamEvent =
   | { type: 'log'; runId: string; log: DiagnosticLogEntry }
+  | { type: 'progress'; runId: string; result: ModelDiagnosticsResponse }
   | { type: 'result'; runId: string; result: ModelDiagnosticsResponse }
   | { type: 'error'; runId: string; error: string };
 
@@ -116,6 +117,11 @@ async function executeDiagnosticRun(run: ModelDiagnosticRunRecord) {
         run.logs.push(log);
         run.updatedAt = nowIso();
         notify(run, { type: 'log', runId: run.id, log });
+      },
+      onProgress: (result) => {
+        run.result = result;
+        run.updatedAt = nowIso();
+        notify(run, { type: 'progress', runId: run.id, result });
       },
     });
     if (run.cancelRequested || run.abortController.signal.aborted) {
