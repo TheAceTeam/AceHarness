@@ -33,6 +33,8 @@ import type {
 } from '@/lib/core/home-sidebar-state';
 import { AgoraChatPanel } from '@/components/collaboration/agora/AgoraChatPanel';
 import { ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
+import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
+import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then((m) => m.WorkspaceEditor), {
   ssr: false,
@@ -142,76 +144,93 @@ function isGuestAvailable(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'stat
 }
 
 function getGuestRuntimeLabel(guest: Pick<AgoraGuestConfig | AgoraGuestPreset, 'engine' | 'model'>) {
-  const engine = String(guest.engine || '').trim();
-  const model = String(guest.model || '').trim();
+  const resolvedGuest = guest as AgoraGuestConfig;
+  const engine = String(resolvedGuest.resolvedEngine || guest.engine || '').trim();
+  const model = String(resolvedGuest.resolvedModel || guest.model || '').trim();
   if (!engine && !model) return '跟随默认模型';
   return [engine || '默认引擎', model || '默认模型'].join(' / ');
+}
+
+function mapGuestRuntimeOverride(guest: Pick<AgoraGuestConfig, 'runtimeStrategy' | 'engine' | 'model'>) {
+  const engine = String(guest.engine || '').trim();
+  const model = String(guest.model || '').trim();
+  const followsSystem = guest.runtimeStrategy !== 'explicit';
+  if (followsSystem && !model) {
+    return {
+      useDefaultModel: true,
+      engine: '',
+      model: '',
+    };
+  }
+  return {
+    useDefaultModel: false,
+    engine: followsSystem ? '' : engine,
+    model,
+  };
 }
 
 function formatUnavailableGuests(guests: Array<Pick<AgoraGuestConfig | AgoraGuestPreset, 'displayName' | 'statusReason'>>) {
   return guests.map((guest) => `${guest.displayName}：${guest.statusReason || '模型或引擎未配置'}`).join('；');
 }
 
-const ROLE_OPENING_LINE_TEMPLATES: Array<{ match: string[]; lines: string[] }> = [
-  {
-    match: ['工程师', '开发', '研发', 'engineer'],
-    lines: [
-      '大家好，工程师就位，随时跟进议题～',
-      '我是工程师，这边在线，准备同步技术相关内容',
-      '工程师报到，后续从实现角度参与讨论',
-      '在线待命，技术问题我这边可以随时跟进',
-      '工程师已就位，有技术相关议题直接 @我',
-    ],
-  },
-  {
-    match: ['架构师', '架构', 'architect'],
-    lines: [
-      '架构师在线，会从整体设计视角参与讨论',
-      '大家好，架构师就位，后续补充架构层面观点',
-      '我这边在线，负责整体架构与方案设计',
-      '架构视角已待命，可输出整体方案思路',
-    ],
-  },
-  {
-    match: ['测试', 'qa', 'quality'],
-    lines: [
-      '测试就位，后续从质量、风险角度跟进',
-      '大家好，测试在线，关注验证与风险点',
-      '测试已报到，负责覆盖、验收相关讨论',
-      '在线待命，测试侧问题可以随时沟通',
-    ],
-  },
-  {
-    match: ['产品经理', '产品', 'pm', 'product'],
-    lines: [
-      '产品经理在线，负责需求、优先级与取舍',
-      '大家好，产品就位，同步业务侧核心思路',
-      '产品报到，后续把控需求方向与落地节奏',
-      '在线待命，业务 & 需求问题我这边跟进',
-    ],
-  },
-  {
-    match: ['文案', 'copywriter', 'copy'],
-    lines: [
-      '文案就位，后续输出精简重点表述',
-      '大家好，文案在线，负责话术、表达梳理',
-      '文案已待命，可快速输出核心信息总结',
-    ],
-  },
-];
+const ROLE_OPENING_LINE_TEMPLATES: Record<OpeningRole, string[]> = {
+  engineer: [
+    '大家好～工程师前来报到，后续会从技术实现角度积极参与讨论，多多交流！',
+    '各位好呀，工程师已就位，专注落地实现，有技术落地问题随时沟通～',
+    '大家好，我是工程师，在线待命，全力配合技术实现相关探讨！',
+    '哈喽各位～工程师报到啦，后续聚焦落地细节，一起推进技术方案！',
+    '大家好呀，工程师在线，会从实操实现层面参与本次讨论，多多指教～',
+  ],
+  'code-reviewer': [
+    '大家好～代码评审已就位，很高兴加入讨论，后续会及时补充评审建议！',
+    '哈喽各位，我是代码评审，在线参与交流，后续输出代码质量相关观点～',
+    '大家好呀，代码评审前来报到，前期跟进讨论，后期完善专业评审意见！',
+    '各位好～代码评审视角已上线，积极参与探讨，助力代码规范与优化！',
+    '大家好，很高兴加入本次沟通，代码评审待命，后续同步相关看法与建议！',
+  ],
+  tester: [
+    '大家好～测试工程师在线，随时准备同步技术相关内容，全力配合！',
+    '哈喽各位，我是测试岗，已就位待命，及时同步技术与测试相关信息～',
+    '大家好呀，测试这边在线，准备同步技术要点，积极参与沟通！',
+    '各位好～测试工程师报到，在线同步技术相关内容，助力项目推进！',
+    '大家好，测试岗已上线，专注同步技术信息，随时交流探讨～',
+  ],
+  architect: [
+    '大家好～架构师就位啦，后续从架构层面输出专业观点，多多交流！',
+    '哈喽各位，架构师在线待命，聚焦整体架构，分享顶层设计思路～',
+    '大家好呀，架构师前来报到，后续补充架构维度的专业看法！',
+    '各位好～我是架构师，已就位，从架构全局参与本次讨论！',
+    '大家好，架构视角已上线，后续输出架构层面思路，全力配合～',
+  ],
+  'product-manager': [
+    '大家好～产品经理在线待命，架构 & 整体方案视角已就位，输出全局思路！',
+    '哈喽各位，产品经理报到，可提供整体方案思路，把控整体方向～',
+    '大家好呀，产品视角就位，兼顾架构与整体方案，随时沟通！',
+    '各位好～我是产品经理，已待命，输出整体规划与方案思路！',
+    '大家好，产品经理在线，统筹整体方案，助力项目落地推进～',
+  ],
+  copywriter: [
+    '大家好～文案岗在线待命，业务和需求相关问题，我全程跟进对接！',
+    '哈喽各位，文案前来报到，专注跟进业务需求，及时响应各类问题～',
+    '大家好呀，文案已就位，业务、需求类问题随时找我沟通处理！',
+    '各位好～我是文案，在线待命，全力跟进业务与需求相关事宜！',
+    '大家好，文案视角上线，聚焦业务需求，全程做好跟进配合～',
+  ],
+  generic: [
+    '我已就位，后续会围绕议题参与讨论',
+    '大家好，我在线，随时跟进这个议题',
+    '我这边已准备好，后续直接参与讨论',
+    '在线待命，有需要可以直接 @我',
+    '我先加入讨论，后续补充相关观点',
+  ],
+};
 
-const GENERIC_OPENING_LINE_TEMPLATES = [
-  '我已就位，后续会围绕议题参与讨论',
-  '大家好，我在线，随时跟进这个议题',
-  '我这边已准备好，后续直接参与讨论',
-  '在线待命，有需要可以直接 @我',
-  '我先加入讨论，后续补充相关观点',
-];
-
-const OPENING_LOCAL_DELAY_MIN_MS = 140;
-const OPENING_LOCAL_DELAY_JITTER_MS = 140;
-const OPENING_TYPEWRITER_DELAY_MIN_MS = 24;
-const OPENING_TYPEWRITER_DELAY_JITTER_MS = 18;
+const OPENING_LOCAL_DELAY_MIN_MS = 90;
+const OPENING_LOCAL_DELAY_JITTER_MS = 90;
+const OPENING_TYPEWRITER_DELAY_MIN_MS = 18;
+const OPENING_TYPEWRITER_DELAY_JITTER_MS = 12;
+const OPENING_CHUNK_MIN_CHARS = 3;
+const OPENING_CHUNK_MAX_CHARS = 5;
 
 function stableOpeningIndex(seed: string, modulo: number) {
   if (modulo <= 0) return 0;
@@ -232,20 +251,8 @@ function getUsedOpeningLines(messages: CollaborationRoomMessage[]) {
 }
 
 function buildOpeningLineCandidates(participant: CollaborationChatroomParticipant) {
-  const labels = [
-    participant.name,
-    participant.sourceAgent,
-    participant.runtimeAgentName,
-    participant.presetId,
-    participant.personaPrompt,
-  ].map((value) => String(value || '').toLowerCase());
-  const matched = ROLE_OPENING_LINE_TEMPLATES.find((group) => (
-    group.match.some((keyword) => {
-      const normalized = keyword.toLowerCase();
-      return labels.some((label) => label.includes(normalized));
-    })
-  ));
-  return matched ? matched.lines : GENERIC_OPENING_LINE_TEMPLATES;
+  const role = detectOpeningRole(participant);
+  return ROLE_OPENING_LINE_TEMPLATES[role] || ROLE_OPENING_LINE_TEMPLATES.generic;
 }
 
 function pickOpeningLine(participant: CollaborationChatroomParticipant, topic: string, usedLines: Set<string>) {
@@ -254,6 +261,19 @@ function pickOpeningLine(participant: CollaborationChatroomParticipant, topic: s
   const pool = available.length ? available : candidates;
   const seed = `${participant.id}:${participant.name}:${topic}:${usedLines.size}`;
   return pool[stableOpeningIndex(seed, pool.length)];
+}
+
+function splitOpeningLineIntoPartials(line: string) {
+  const chars = Array.from(line);
+  const partials: string[] = [];
+  let index = 0;
+  while (index < chars.length) {
+    const chunkSize = OPENING_CHUNK_MIN_CHARS
+      + Math.floor(Math.random() * (OPENING_CHUNK_MAX_CHARS - OPENING_CHUNK_MIN_CHARS + 1));
+    index = Math.min(chars.length, index + chunkSize);
+    partials.push(chars.slice(0, index).join(''));
+  }
+  return partials;
 }
 
 function replaceRoomMessageById(
@@ -634,21 +654,24 @@ export function AgoraShell({
       const roster = currentChatroom.participantRoster || [];
       const nextParticipants = uniqueGuests
         .filter((guest) => !roster.some((participant) => participant.guestConfigId === guest.id || participant.name === guest.displayName))
-        .map((guest): CollaborationChatroomParticipant => ({
-          id: `participant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          name: guest.displayName,
-          sourceType: guest.sourceType,
-          sourceAgent: guest.sourceAgent,
-          presetId: guest.presetId,
-          guestConfigId: guest.id,
-          runtimeAgentName: guest.runtimeAgentName,
-          personaPrompt: guest.personaPrompt,
-          systemPrompt: guest.systemPrompt,
-          useDefaultModel: false,
-          engine: guest.engine || '',
-          model: guest.model || '',
-          createdAt: Date.now(),
-        }));
+        .map((guest): CollaborationChatroomParticipant => {
+          const runtime = mapGuestRuntimeOverride(guest);
+          return {
+            id: `participant-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            name: guest.displayName,
+            sourceType: guest.sourceType,
+            sourceAgent: guest.sourceAgent,
+            presetId: guest.presetId,
+            guestConfigId: guest.id,
+            runtimeAgentName: guest.runtimeAgentName,
+            personaPrompt: guest.personaPrompt,
+            systemPrompt: guest.systemPrompt,
+            useDefaultModel: runtime.useDefaultModel,
+            engine: runtime.engine,
+            model: runtime.model,
+            createdAt: Date.now(),
+          };
+        });
       if (!nextParticipants.length) return base;
       const nextRoster = [...roster, ...nextParticipants];
       return {
@@ -670,6 +693,25 @@ export function AgoraShell({
   const addGuestToRoom = useCallback((guest: AgoraGuestConfig) => {
     addGuestsToRoom([guest]);
   }, [addGuestsToRoom]);
+
+  const resetGuestCreateState = useCallback(() => {
+    setSelectedSavedGuestIds([]);
+    setSelectedPresetIds([]);
+    setPresetRuntimeDraft({ engine: '', model: '' });
+    setGuestDraft({
+      displayName: '',
+      sourceType: 'custom',
+      presetId: guestPresets[0]?.id || 'engineer',
+      personaPrompt: '',
+      engine: '',
+      model: '',
+    });
+  }, [guestPresets]);
+
+  const openGuestCreateDialog = useCallback(() => {
+    resetGuestCreateState();
+    setGuestCreateOpen(true);
+  }, [resetGuestCreateState]);
 
   const removeGuest = useCallback((guestName: string) => {
     updateRoom((current) => {
@@ -713,19 +755,12 @@ export function AgoraShell({
       });
       window.dispatchEvent(new CustomEvent('agora:guests-updated'));
       if (isGuestAvailable(result.guest)) addGuestToRoom(result.guest);
-      setGuestDraft({
-        displayName: '',
-        sourceType: 'custom',
-        presetId: guestPresets[0]?.id || 'engineer',
-        personaPrompt: '',
-        engine: '',
-        model: '',
-      });
+      resetGuestCreateState();
       setGuestCreateOpen(false);
     } catch (error: any) {
       toast('error', error?.message || '创建嘉宾失败');
     }
-  }, [addGuestToRoom, guestDraft, guestPresets, toast]);
+  }, [addGuestToRoom, guestDraft, resetGuestCreateState, toast]);
 
   const inviteSelectedSavedGuests = useCallback(() => {
     const selectedAll = availableSavedGuests.filter((guest) => selectedSavedGuestIds.includes(guest.id));
@@ -740,9 +775,9 @@ export function AgoraShell({
       return;
     }
     addGuestsToRoom(selected);
-    setSelectedSavedGuestIds([]);
+    resetGuestCreateState();
     setGuestCreateOpen(false);
-  }, [addGuestsToRoom, availableSavedGuests, selectedSavedGuestIds, toast]);
+  }, [addGuestsToRoom, availableSavedGuests, resetGuestCreateState, selectedSavedGuestIds, toast]);
 
   const createAndInviteSelectedPresets = useCallback(async () => {
     const selectedAll = availableGuestPresets.filter((preset) => selectedPresetIds.includes(preset.id));
@@ -783,7 +818,7 @@ export function AgoraShell({
         return;
       }
       addGuestsToRoom(created, { silent: true });
-      setSelectedPresetIds([]);
+      resetGuestCreateState();
       setGuestCreateOpen(false);
       toast('success', `已加入 ${created.length} 位嘉宾`);
     } catch (error: any) {
@@ -791,14 +826,13 @@ export function AgoraShell({
     } finally {
       setGuestBatchSaving(false);
     }
-  }, [addGuestsToRoom, availableGuestPresets, presetRuntimeDraft.engine, presetRuntimeDraft.model, savedGuests, selectedPresetIds, toast]);
+  }, [addGuestsToRoom, availableGuestPresets, presetRuntimeDraft.engine, presetRuntimeDraft.model, resetGuestCreateState, savedGuests, selectedPresetIds, toast]);
 
   const handleGuestDialogOpenChange = useCallback((open: boolean) => {
     setGuestCreateOpen(open);
     if (open) return;
-    setSelectedSavedGuestIds([]);
-    setSelectedPresetIds([]);
-  }, []);
+    resetGuestCreateState();
+  }, [resetGuestCreateState]);
 
   const toggleSavedGuestSelected = useCallback((guestId: string, checked: boolean) => {
     setSelectedSavedGuestIds((prev) => (
@@ -828,7 +862,7 @@ export function AgoraShell({
     agentName: string,
     message: string,
     roundId?: string,
-    _messagePatch?: Pick<CollaborationRoomMessage, 'chatroom'>,
+    messagePatch?: Pick<CollaborationRoomMessage, 'chatroom'>,
     temporaryRoleConfig?: Record<string, any>,
     lifecycle?: {
       onStreamStart?: (stream: {
@@ -842,6 +876,11 @@ export function AgoraShell({
     const participant = guestRoster.find((item) => item.name === agentName);
     const runtimeName = participant?.runtimeAgentName || participant?.guestConfigId || agentName;
     const existingSession = normalizedRoom.agentSessions?.[runtimeName] || undefined;
+    const agoraExpectedResultType = messagePatch?.chatroom?.kind === 'summary'
+      ? 'summary'
+      : messagePatch?.chatroom?.kind === 'vote'
+        ? 'vote'
+        : 'speech';
     const stream = await agentApi.streamChat(runtimeName, {
       message,
       mode: 'standalone-chat',
@@ -854,6 +893,7 @@ export function AgoraShell({
         collaborationSpeaker: agentName,
         roundId,
         temporaryLab: 'agora',
+        agoraExpectedResultType,
       },
       temporaryRoleConfig,
     });
@@ -939,6 +979,13 @@ export function AgoraShell({
         lifecycle?.onDelta?.(content, partialContent);
       }) as EventListener);
 
+      stream.events.addEventListener('thinking', ((event: MessageEvent) => {
+        const data = JSON.parse(event.data || '{}');
+        const content = String(data?.content || '');
+        partialContent += content;
+        lifecycle?.onDelta?.(content, partialContent);
+      }) as EventListener);
+
       stream.events.addEventListener('done', ((event: MessageEvent) => {
         const data = JSON.parse(event.data || '{}');
         const hasSessionField = hasOwnKey(data, 'sessionId');
@@ -949,10 +996,14 @@ export function AgoraShell({
         const finalContent = data?.specCodingRevision?.applied
           ? `${data.output || partialContent || data.error || '无输出'}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
           : (data?.output || partialContent || data?.error || '无输出');
+        const finalRawContent = mergeFinalRawStreamContent(
+          partialContent,
+          String(data?.rawOutput || data?.output || data?.error || ''),
+        );
         if (data?.isError) {
           finishReject(Object.assign(new Error(data?.error || finalContent || '嘉宾发言失败'), {
             partialContent: finalContent,
-            rawContent: finalContent,
+            rawContent: finalRawContent,
             engine: data?.engine,
             model: data?.model,
           }));
@@ -961,7 +1012,7 @@ export function AgoraShell({
         finishResolve({
           status: 'done',
           content: finalContent,
-          rawContent: finalContent,
+          rawContent: finalRawContent,
           engine: data?.engine,
           model: data?.model,
         });
@@ -1080,19 +1131,21 @@ export function AgoraShell({
         const delayMs = OPENING_LOCAL_DELAY_MIN_MS + Math.floor(Math.random() * OPENING_LOCAL_DELAY_JITTER_MS);
         await new Promise((resolve) => window.setTimeout(resolve, delayMs));
         const openingLine = pickOpeningLine(openingParticipant, roomTitle, getUsedOpeningLines(openingMessagesRef.current || []));
-        const chars = Array.from(openingLine);
-        for (let index = 1; index <= chars.length; index += 1) {
-          const partial = chars.slice(0, index).join('');
+        const partials = splitOpeningLineIntoPartials(openingLine);
+        for (let index = 0; index < partials.length; index += 1) {
+          const partial = partials[index];
           updateRoom((current) => replaceRoomMessageById(current, targetMessageId, (message) => ({
             ...message,
             content: partial,
             rawContent: partial,
             status: 'pending',
           })));
-          await new Promise((resolve) => window.setTimeout(
-            resolve,
-            OPENING_TYPEWRITER_DELAY_MIN_MS + Math.floor(Math.random() * OPENING_TYPEWRITER_DELAY_JITTER_MS)
-          ));
+          if (index < partials.length - 1) {
+            await new Promise((resolve) => window.setTimeout(
+              resolve,
+              OPENING_TYPEWRITER_DELAY_MIN_MS + Math.floor(Math.random() * OPENING_TYPEWRITER_DELAY_JITTER_MS)
+            ));
+          }
         }
         const message: CollaborationRoomMessage = {
           ...pendingMessage,
@@ -1302,7 +1355,7 @@ export function AgoraShell({
                           size="icon"
                           variant="ghost"
                           className="h-7 w-7 rounded-md"
-                          onClick={() => setGuestCreateOpen(true)}
+                          onClick={openGuestCreateDialog}
                           title="加入嘉宾"
                           aria-label="加入嘉宾"
                         >
@@ -1645,7 +1698,7 @@ export function AgoraShell({
             </section>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setGuestCreateOpen(false)}>取消</Button>
+            <Button variant="outline" onClick={() => handleGuestDialogOpenChange(false)}>取消</Button>
             <Button onClick={() => void createAndInviteGuest()}>创建自定义并加入</Button>
           </DialogFooter>
         </DialogContent>

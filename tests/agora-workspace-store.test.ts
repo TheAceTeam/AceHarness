@@ -108,7 +108,7 @@ describe('agora workspace store', () => {
     });
   });
 
-  test('copies source workspace content while excluding git metadata and node_modules', async () => {
+  test('does not copy source workspace content into the agora workspace', async () => {
     await withStore(async ({ store }) => {
       await withTempDir('aceharness-agora-source-', async (source) => {
         await mkdir(path.join(source, '.git', 'objects'), { recursive: true });
@@ -125,15 +125,30 @@ describe('agora workspace store', () => {
           title: 'Source copy',
         });
 
-        expect(await readFile(path.join(result.workspacePath, 'src', 'app.ts'), 'utf-8')).toBe(
-          'export const value = 1;\n',
-        );
+        expect(existsSync(path.join(result.workspacePath, 'src', 'app.ts'))).toBe(false);
         expect(existsSync(path.join(result.workspacePath, 'node_modules'))).toBe(false);
         expect(existsSync(path.join(result.workspacePath, '.git', 'source-only'))).toBe(false);
+        expect(await readFile(path.join(result.workspacePath, 'README.md'), 'utf-8')).toContain('# Source copy');
         expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/skills');
         expect(await git(result.workspacePath, ['rev-parse', '--is-inside-work-tree'])).toBe('true');
         expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
       });
+    });
+  });
+
+  test('reuses in-flight initialization for the same session id', async () => {
+    await withStore(async ({ store }) => {
+      const results = await Promise.all([
+        store.ensureAgoraWorkspace({ sessionId: 'shared-session', title: '并发议题' }),
+        store.ensureAgoraWorkspace({ sessionId: 'shared-session', title: '并发议题' }),
+        store.ensureAgoraWorkspace({ sessionId: 'shared-session', title: '并发议题' }),
+      ]);
+
+      const workspacePath = results[0]?.workspacePath;
+      expect(results.every((result) => result.workspacePath === workspacePath)).toBe(true);
+      expect(results.some((result) => result.created)).toBe(true);
+      expect(await git(workspacePath, ['rev-parse', '--is-inside-work-tree'])).toBe('true');
+      expect(await git(workspacePath, ['status', '--porcelain'])).toBe('');
     });
   });
 });

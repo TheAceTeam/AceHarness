@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 import { loadChatSession, saveChatSession, type PersistedChatSession } from '@/lib/chat/persistence';
+import { detectOpeningRole } from '@/lib/agora/opening-copy';
 import type {
   CollaborationChatroomParticipant,
   CollaborationRoomMessage,
@@ -159,8 +160,8 @@ export function createWorkflowAgoraWorkbenchState(input: {
         temporaryAgents: [],
         settings: {
           responseMode: 'mention-driven',
-          maxTurnsPerRound: 6,
-          maxRepliesPerAgent: 2,
+          maxTurnsPerRound: 2,
+          maxRepliesPerAgent: 1,
           autoSummarize: true,
           defaultEngine: '',
           defaultModel: '',
@@ -354,22 +355,36 @@ function pickWorkflowSpeech(input: { type: string; title: string; body?: string;
 }
 
 function pickWorkflowOpeningLine(participant: CollaborationChatroomParticipant): string {
-  const labels = [
+  const coordinatorSignals = [
     participant.name,
     participant.sourceAgent,
     participant.runtimeAgentName,
     participant.presetId,
     participant.personaPrompt,
-  ].map((value) => String(value || '').toLowerCase());
-  const has = (keywords: string[]) => keywords.some((keyword) => labels.some((label) => label.includes(keyword.toLowerCase())));
-  if (has(['supervisor', '协调', 'default-supervisor'])) return '合作愉快，我来协调推进。';
-  if (has(['工程师', '开发', 'developer', 'engineer'])) return '合作愉快，我负责实现落地。';
-  if (has(['review', '评审', 'audit', '审查'])) return '合作愉快，我负责风险评审。';
-  if (has(['架构', 'architect'])) return '合作愉快，我负责架构取舍。';
-  if (has(['测试', 'tester', 'qa'])) return '合作愉快，我负责验证回归。';
-  if (has(['产品', 'product', 'pm'])) return '合作愉快，我负责目标验收。';
-  if (has(['文案', 'copy', 'writer', 'documentation'])) return '合作愉快，我负责表达收束。';
-  return '合作愉快，我会跟进讨论。';
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (['supervisor', '协调', 'default-supervisor'].some((keyword) => coordinatorSignals.includes(keyword))) {
+    return '合作愉快，我来协调推进。';
+  }
+
+  switch (detectOpeningRole(participant)) {
+    case 'engineer':
+      return '合作愉快，我负责实现落地。';
+    case 'code-reviewer':
+      return '合作愉快，我负责风险评审。';
+    case 'architect':
+      return '合作愉快，我负责架构取舍。';
+    case 'tester':
+      return '合作愉快，我负责验证回归。';
+    case 'product-manager':
+      return '合作愉快，我负责目标验收。';
+    case 'copywriter':
+      return '合作愉快，我负责表达收束。';
+    default:
+      return '合作愉快，我会跟进讨论。';
+  }
 }
 
 export async function appendWorkflowAgoraOpeningMessages(input: {

@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -8,17 +8,7 @@ import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 
 const execFileAsync = promisify(execFile);
-
-const SKIP_DIRS = new Set([
-  '.git',
-  '.next',
-  'node_modules',
-  'dist',
-  'build',
-  'coverage',
-  '.turbo',
-  '.cache',
-]);
+const inflightWorkspaceInitializations = new Map<string, Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }>>();
 
 function sanitizeSegment(input: string, fallback = 'agora') {
   const normalized = String(input || '')
@@ -49,28 +39,37 @@ async function isGitWorkspace(dir: string) {
     .catch(() => false);
 }
 
-async function copyDirectory(src: string, dst: string): Promise<void> {
-  await mkdir(dst, { recursive: true });
-  const entries = await readdir(src, { withFileTypes: true });
-  for (const entry of entries) {
-    if (SKIP_DIRS.has(entry.name)) continue;
-    const srcPath = path.join(src, entry.name);
-    const dstPath = path.join(dst, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectory(srcPath, dstPath);
-      continue;
-    }
-    if (entry.isFile()) {
-      await mkdir(path.dirname(dstPath), { recursive: true });
-      await cp(srcPath, dstPath, { force: true });
-    }
+function isGitConfigLockError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /could not lock config file/i.test(message);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForGitWorkspace(dir: string, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isGitWorkspace(dir)) return true;
+    await delay(50);
+  }
+  return isGitWorkspace(dir);
+}
+
+async function ensureGitRepositoryReady(dir: string) {
+  if (await isGitWorkspace(dir)) return;
+  try {
+    await runGit(dir, ['init']);
+  } catch (error) {
+    if (!isGitConfigLockError(error)) throw error;
+    const ready = await waitForGitWorkspace(dir);
+    if (!ready) throw error;
   }
 }
 
 async function ensureGitBaseline(dir: string) {
-  if (!(await isGitWorkspace(dir))) {
-    await runGit(dir, ['init']);
-  }
+  await ensureGitRepositoryReady(dir);
   await runGit(dir, ['config', 'user.name', 'ACEHarness Agora']).catch(() => {});
   await runGit(dir, ['config', 'user.email', 'agora@aceharness.local']).catch(() => {});
   const head = await runGit(dir, ['rev-parse', '--verify', 'HEAD']).catch(() => '');
@@ -123,51 +122,44 @@ export async function ensureAgoraWorkspace(input: {
   title?: string;
 }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
   const sessionId = sanitizeSegment(input.sessionId, `session-${Date.now().toString(36)}`);
-  const workspaceRoot = getAgoraWorkspacesDir();
-  const dir = path.join(workspaceRoot, sessionId);
-  if (existsSync(dir)) {
+  const existingInitialization = inflightWorkspaceInitializations.get(sessionId);
+  if (existingInitialization) return existingInitialization;
+
+  const initialization = (async () => {
+    const workspaceRoot = getAgoraWorkspacesDir();
+    const dir = path.join(workspaceRoot, sessionId);
+    if (existsSync(dir)) {
+      await ensureWorkspaceGitIgnore(dir).catch(() => {});
+      await ensureGitBaseline(dir);
+      await ensureWorkspaceSkillsLink(dir).catch(() => {});
+      return { workspacePath: dir, created: false, sourceWorkspace: input.sourceWorkspace };
+    }
+
+    await mkdir(workspaceRoot, { recursive: true });
+    await mkdir(dir, { recursive: true });
+
+    await writeFile(
+      path.join(dir, 'README.md'),
+      [
+        `# ${input.title?.trim() || '新议题'}`,
+        '',
+        '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
+        '',
+      ].join('\n'),
+      'utf-8',
+    ).catch(() => {});
     await ensureWorkspaceGitIgnore(dir).catch(() => {});
     await ensureGitBaseline(dir);
     await ensureWorkspaceSkillsLink(dir).catch(() => {});
-    return { workspacePath: dir, created: false, sourceWorkspace: input.sourceWorkspace };
-  }
-
-  await mkdir(workspaceRoot, { recursive: true });
-  await mkdir(dir, { recursive: true });
-
-  const source = String(input.sourceWorkspace || '').trim();
-  if (source) {
-    const resolvedSource = path.resolve(source);
-    try {
-      const sourceStat = await stat(resolvedSource);
-      if (sourceStat.isDirectory()) {
-        await copyDirectory(resolvedSource, dir);
-      }
-    } catch {
-      // Keep an empty workspace if the source path is unavailable.
+    return { workspacePath: dir, created: true, sourceWorkspace: input.sourceWorkspace };
+  })().finally(() => {
+    if (inflightWorkspaceInitializations.get(sessionId) === initialization) {
+      inflightWorkspaceInitializations.delete(sessionId);
     }
-  }
+  });
 
-  if (!existsSync(path.join(dir, '.git'))) {
-    await runGit(dir, ['init']).catch(() => {});
-  }
-  await runGit(dir, ['config', 'user.name', 'ACEHarness Agora']).catch(() => {});
-  await runGit(dir, ['config', 'user.email', 'agora@aceharness.local']).catch(() => {});
-
-  await writeFile(
-    path.join(dir, 'README.md'),
-    [
-      `# ${input.title?.trim() || '新议题'}`,
-      '',
-      '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
-      '',
-    ].join('\n'),
-    'utf-8',
-  ).catch(() => {});
-  await ensureWorkspaceGitIgnore(dir).catch(() => {});
-  await ensureGitBaseline(dir);
-  await ensureWorkspaceSkillsLink(dir).catch(() => {});
-  return { workspacePath: dir, created: true, sourceWorkspace: input.sourceWorkspace };
+  inflightWorkspaceInitializations.set(sessionId, initialization);
+  return initialization;
 }
 
 export async function removeAgoraWorkspace(sessionId: string): Promise<void> {

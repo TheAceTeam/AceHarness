@@ -26,6 +26,8 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { extractJsonObject, getResultSections } from '@/lib/ai/result-channel';
+import { normalizeAssistantDisplay } from '@/lib/chat/actions';
 import { cn } from '@/lib/core/utils';
 import type {
   CollaborationChatroomMode,
@@ -114,6 +116,32 @@ const MODE_LABELS: Record<CollaborationChatroomMode, string> = {
   facilitated: '群聊',
 };
 
+const USER_LED_AGENT_REPLY_LIMIT = 2;
+const USER_LED_AGENT_REPLY_PER_PARTICIPANT = 1;
+const AGENT_REPLY_DELAY_MIN_MS = 1000;
+const AGENT_REPLY_DELAY_JITTER_MS = 2000;
+const AGORA_RESULT_KIND = 'agora_result';
+
+type AgoraResultType = 'speech' | 'summary' | 'vote';
+
+type AgoraStructuredResult =
+  | {
+      type: 'speech';
+      content: string;
+      mentions: string[];
+    }
+  | {
+      type: 'summary';
+      content: string;
+      title?: string;
+    }
+  | {
+      type: 'vote';
+      content: string;
+      choice: string;
+      reason: string;
+    };
+
 const ANCIENT_STYLE_SURNAMES = ['子车', '司空', '上官', '公孙', '令狐', '诸葛', '东方', '尉迟', '慕容', '宇文', '谢', '沈', '顾', '苏', '楚', '陆', '秦', '柳', '白', '萧'];
 const ANCIENT_STYLE_GIVEN_PREFIXES = ['雪', '清', '知', '听', '疏', '明', '映', '流', '寒', '星', '若', '云', '青', '景', '书', '月'];
 const ANCIENT_STYLE_GIVEN_SUFFIXES = ['兰', '宁', '晏', '辞', '微', '舟', '岚', '音', '霁', '棠', '遥', '歌', '汐', '禾', '言', '玉'];
@@ -158,6 +186,54 @@ function getCurrentUserDisplayName(user?: AgoraChatPanelProps['currentUser']) {
   return String(user?.displayName || user?.nickname || user?.name || user?.username || user?.email || '你').trim() || '你';
 }
 
+function resolveCurrentUserAvatarSrc(avatar?: string | null) {
+  const value = String(avatar || '').trim();
+  if (!value) return '';
+  if (
+    value.startsWith('/') ||
+    value.startsWith('data:') ||
+    value.startsWith('blob:') ||
+    value.startsWith('http://') ||
+    value.startsWith('https://')
+  ) {
+    return value;
+  }
+  return `/avatar/${value}`;
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function getAgentReplyDelayMs() {
+  if (process.env.NODE_ENV === 'test') return 0;
+  return AGENT_REPLY_DELAY_MIN_MS + Math.floor(Math.random() * AGENT_REPLY_DELAY_JITTER_MS);
+}
+
+function takeParticipantsFromOffset(participants: string[], offset: number, count: number) {
+  if (!participants.length || count <= 0) return [];
+  const picked: string[] = [];
+  for (let index = 0; index < participants.length && picked.length < count; index += 1) {
+    const candidate = participants[(offset + index) % participants.length];
+    if (candidate && !picked.includes(candidate)) picked.push(candidate);
+  }
+  return picked;
+}
+
+function resolveRoundParticipants(input: {
+  participants: string[];
+  mentions: string[];
+  mode: CollaborationChatroomMode;
+  roundIndex: number;
+}) {
+  const cappedMentions = input.mentions.slice(0, USER_LED_AGENT_REPLY_LIMIT);
+  if (cappedMentions.length) return cappedMentions;
+  if (input.mode === 'broadcast') {
+    return takeParticipantsFromOffset(input.participants, input.roundIndex, USER_LED_AGENT_REPLY_LIMIT);
+  }
+  return takeParticipantsFromOffset(input.participants, input.roundIndex, 1);
+}
+
 function buildChatroomParticipantRoleConfig(
   participant: CollaborationChatroomParticipant,
   runtime: { engine?: string; model?: string },
@@ -174,6 +250,13 @@ function buildChatroomParticipantRoleConfig(
     : participant.sourceType === 'preset'
       ? `你的预设来源：${participant.presetId || participant.sourceAgent || participant.name}${sourceDescription ? `。参考描述：${sourceDescription}` : ''}`
       : `你的人格来源：${participant.sourceAgent || participant.name}${sourceDescription ? `。参考描述：${sourceDescription}` : ''}`;
+  const baseSystemPrompt = participant.systemPrompt || [
+    `你是议场嘉宾「${participant.name}」。你的持久身份 ID 是「${identityName}」。`,
+    sourceLabel,
+    '你的任务是在多人群聊中给出清晰、专业、自然的发言。',
+    '不要自称业务助手，不要编造自己有文件系统或工具执行结果。',
+    '如果用户在消息中 @你，优先直接回应；未被点名时，也只在本轮被安排发言时回答自己。',
+  ].filter(Boolean).join('\n');
   return {
     name: identityName,
     team: 'blue',
@@ -183,13 +266,13 @@ function buildChatroomParticipantRoleConfig(
     engineModels: selectedEngine && selectedModel ? { [selectedEngine]: selectedModel } : {},
     activeEngine: selectedEngine,
     capabilities: ['multi-agent-chat', 'agora'],
-    systemPrompt: participant.systemPrompt || [
-      `你是议场嘉宾「${participant.name}」。你的持久身份 ID 是「${identityName}」。`,
-      sourceLabel,
-      '你的任务是在多人群聊中给出清晰、专业、自然的发言。',
-      '不要自称业务助手，不要编造自己有文件系统或工具执行结果。',
-      '如果用户或其他嘉宾在消息中 @你，优先直接回应；如果你希望其他参与者补充，可以在末尾使用 @名字。',
-    ].filter(Boolean).join('\n'),
+    systemPrompt: [
+      baseSystemPrompt,
+      '发言保持紧凑，只代表你自己的观点。',
+      '如果确实需要其他嘉宾补充，可以在末尾 @ 一位合适的人；不需要就不要 @。',
+      '议场回合的最终提交必须遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
+      '如需中间过程可以先正常说话，但最终展示给群里的内容必须完整写进 result JSON 的 payload.content。',
+    ].filter(Boolean).join('\n\n'),
     constraints: ['不调用工具', '不修改文件', '仅用于议场讨论'],
     allowedTools: [],
     category: 'agora-guest',
@@ -317,6 +400,225 @@ function extractMentions(text: string, participants: string[]): string[] {
   return mentions;
 }
 
+function extractTrailingResultBody(raw: string) {
+  const source = String(raw || '');
+  const lower = source.toLowerCase();
+  const openIndex = lower.lastIndexOf('<result>');
+  if (openIndex < 0) return '';
+  const afterOpen = source.slice(openIndex + '<result>'.length);
+  const closeIndex = afterOpen.toLowerCase().indexOf('</result>');
+  return closeIndex >= 0 ? afterOpen.slice(0, closeIndex) : afterOpen;
+}
+
+function extractPartialJsonStringField(source: string, fieldName: string) {
+  const keyPattern = new RegExp(`"${fieldName}"\\s*:\\s*"`, 'i');
+  const match = keyPattern.exec(source);
+  if (!match) return '';
+  let index = match.index + match[0].length;
+  let value = '';
+  let escaped = false;
+  while (index < source.length) {
+    const char = source[index];
+    index += 1;
+    if (escaped) {
+      if (char === 'n') value += '\n';
+      else if (char === 'r') value += '';
+      else if (char === 't') value += '\t';
+      else value += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') break;
+    value += char;
+  }
+  return value.trim();
+}
+
+function extractAgoraPendingResultPreview(raw: string, expectedType?: AgoraResultType) {
+  const body = extractTrailingResultBody(raw);
+  if (!body.trim()) return '';
+  const parsed = extractJsonObject(body);
+  if (
+    parsed?.kind === AGORA_RESULT_KIND
+    && parsed?.payload
+    && typeof parsed.payload === 'object'
+    && (!expectedType || parsed.payload.type === expectedType)
+    && typeof parsed.payload.content === 'string'
+  ) {
+    return parsed.payload.content.trim();
+  }
+  const content = extractPartialJsonStringField(body, 'content');
+  if (content) return content;
+  return '';
+}
+
+function getAgoraVisibleText(raw: string, streaming: boolean, expectedType?: AgoraResultType) {
+  const visibleText = normalizeAssistantDisplay(String(raw || ''), streaming).visibleText.trim();
+  if (visibleText) return visibleText;
+  return extractAgoraPendingResultPreview(raw, expectedType);
+}
+
+function buildAgoraResultInstructions(type: AgoraResultType) {
+  const baseRules = [
+    '你可以先输出中间过程，但系统只会在你最后给出 <result>...</result> 后，才把这条消息替换成真正发言。',
+    '最终必须在回复末尾输出且只输出一个 <result> 块。',
+    'result 块内只能放裸 JSON，不要使用 ```json 代码块。',
+    '如果缺少 <result>、kind 不是 "agora_result"、payload.type 不匹配，或 payload.content 为空，本轮会直接判失败并要求你重发。',
+    '输出顺序固定：如需中间态，可先写普通正文；最后必须只剩一个 <result>JSON</result>，且 </result> 后不能再写任何字符。',
+  ];
+
+  if (type === 'speech') {
+    return [
+      ...baseRules,
+      '最终 JSON 格式固定为：{"kind":"agora_result","payload":{"type":"speech","content":"最终要发出的群聊内容","mentions":["被你@的人名，可为空数组"]}}。',
+      '系统只会采用 payload.content 作为最终发言内容；如果你在最终发言里 @ 了某位嘉宾，请把同名嘉宾写进 mentions 数组，没有就写空数组。',
+    ].join('\n');
+  }
+
+  if (type === 'summary') {
+    return [
+      ...baseRules,
+      '最终 JSON 格式固定为：{"kind":"agora_result","payload":{"type":"summary","title":"本轮总结","content":"共识：...\\n分歧：...\\n风险：...\\n下一步：..."}}。',
+      '系统只会采用 payload.content 作为最终总结正文，title 可省略但 content 不能为空。',
+    ].join('\n');
+  }
+
+  return [
+    ...baseRules,
+    '最终 JSON 格式固定为：{"kind":"agora_result","payload":{"type":"vote","content":"你的选择\\n理由：一句话","choice":"精确的选项文本或弃权","reason":"一句简短理由"}}。',
+    '系统会采用 payload.content 作为最终展示文本，并读取 choice 与 reason 作为投票结果。',
+  ].join('\n');
+}
+
+function extractAgoraStructuredResult(markdown: string, expectedType: AgoraResultType): {
+  data: AgoraStructuredResult | null;
+  error: string | null;
+} {
+  const sections = getResultSections(String(markdown || ''));
+  if (sections.length === 0) {
+    return {
+      data: null,
+      error: '回复缺少 <result>...</result>，议场最终发言必须通过结果块输出。',
+    };
+  }
+
+  let firstParsed: any = null;
+  let agoraEnvelope: any = null;
+
+  for (const section of sections) {
+    const parsed = extractJsonObject(section.content);
+    if (!parsed) continue;
+    if (!firstParsed) firstParsed = parsed;
+    if (parsed.kind === AGORA_RESULT_KIND) {
+      agoraEnvelope = parsed;
+      break;
+    }
+  }
+
+  if (!agoraEnvelope) {
+    const firstSection = sections[0]?.content.trim() || '';
+    if (!firstParsed) {
+      return {
+        data: null,
+        error: firstSection.startsWith('```')
+          ? '<result> 内不要包裹 ```json 代码块，请直接输出裸 JSON。'
+          : '<result> 内的 JSON 无法解析。',
+      };
+    }
+    return {
+      data: null,
+      error: `结果块 kind 必须为 "${AGORA_RESULT_KIND}"。`,
+    };
+  }
+
+  const payload = agoraEnvelope.payload;
+  if (!payload || typeof payload !== 'object') {
+    return {
+      data: null,
+      error: 'agora_result.payload 缺失或不是对象。',
+    };
+  }
+
+  if (payload.type !== expectedType) {
+    return {
+      data: null,
+      error: `agora_result.payload.type 必须为 "${expectedType}"。`,
+    };
+  }
+
+  const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+  if (!content) {
+    return {
+      data: null,
+      error: 'agora_result.payload.content 不能为空。',
+    };
+  }
+
+  if (expectedType === 'speech') {
+    return {
+      data: {
+        type: 'speech',
+        content,
+        mentions: Array.isArray(payload.mentions)
+          ? payload.mentions
+            .filter((item: unknown): item is string => typeof item === 'string' && item.trim())
+            .map((item: string) => item.trim())
+          : [],
+      },
+      error: null,
+    };
+  }
+
+  if (expectedType === 'summary') {
+    return {
+      data: {
+        type: 'summary',
+        content,
+        title: typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : undefined,
+      },
+      error: null,
+    };
+  }
+
+  const choice = typeof payload.choice === 'string' ? payload.choice.trim() : '';
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  if (!choice) {
+    return {
+      data: null,
+      error: 'agora_result.payload.choice 不能为空。',
+    };
+  }
+  if (!reason) {
+    return {
+      data: null,
+      error: 'agora_result.payload.reason 不能为空。',
+    };
+  }
+
+  return {
+    data: {
+      type: 'vote',
+      content,
+      choice,
+      reason,
+    },
+    error: null,
+  };
+}
+
+function normalizeVoteChoice(choice: string, content: string, options: string[], allowAbstain: boolean) {
+  const trimmedChoice = choice.trim();
+  return options.find((option) => (
+    trimmedChoice === option
+    || trimmedChoice.includes(option)
+    || content.includes(option)
+  )) || (allowAbstain && (trimmedChoice === '弃权' || content.includes('弃权')) ? '弃权' : options[0]);
+}
+
 function ensureRoom(room: CollaborationRoomState | null): CollaborationRoomState {
   return ensureChatroomRoomState(room || {
     topic: '',
@@ -334,6 +636,7 @@ function buildAgentPrompt(input: {
   hostMessage: string;
   agentName: string;
   participants: string[];
+  roundParticipants: string[];
   transcript: CollaborationRoomMessage[];
 }) {
   const transcript = input.transcript.slice(-14)
@@ -343,12 +646,14 @@ function buildAgentPrompt(input: {
     `你正在参加一个议场群聊，当前议题是「${input.topic}」。`,
     `你是 ${input.agentName}。参与者：${input.participants.join('、') || '未设置'}。`,
     `当前协作方式：${MODE_LABELS[input.mode]}。`,
+    `本轮被安排发言的嘉宾：${input.roundParticipants.join('、') || input.agentName}。`,
     `最近一条用户消息：${input.hostMessage}`,
     input.mode === 'broadcast'
-      ? '请直接给出你的观点、判断和建议。不要假装替别人发言。'
-      : '请代表你自己的角色发言。如果你希望某个参与者补充，请在末尾用 @姓名 点名；若不需要继续，就不要再 @。',
+      ? '请直接给出你的观点、判断和建议。只代表你自己，不要假装替别人发言。'
+      : '请代表你自己的角色发言。如果你希望某位嘉宾补充，可以在末尾用 @姓名 点名；若不需要继续，就不要再 @。',
     '回答保持紧凑但有信息量，优先给结论、依据、风险和建议。',
     transcript ? `最近记录：\n${transcript}` : '最近记录：暂无。',
+    buildAgoraResultInstructions('speech'),
   ].join('\n\n');
 }
 
@@ -365,6 +670,7 @@ function buildSummaryPrompt(input: {
     `参与者：${input.participants.join('、') || '未设置'}。`,
     '请输出四段：共识、分歧、风险、下一步。每段 1-3 条，简洁明确。',
     transcript ? `讨论记录：\n${transcript}` : '讨论记录：暂无。',
+    buildAgoraResultInstructions('summary'),
   ].join('\n\n');
 }
 
@@ -378,21 +684,25 @@ function buildVotePrompt(input: {
     `议场正在就议题「${input.topic}」进行投票。`,
     `投票问题：${input.question}`,
     `可选项：${input.options.join('、')}${input.allowAbstain ? '、弃权' : ''}`,
-    '请仅用两行回复。',
-    '第一行只写你的选择。',
-    '第二行以“理由：”开头，写一句简短理由。',
+    '最终 payload.content 只保留两行：第一行只写你的选择，第二行以“理由：”开头，写一句简短理由。',
+    buildAgoraResultInstructions('vote'),
   ].join('\n');
 }
 
-function extractVoteResult(output: string, options: string[], allowAbstain: boolean) {
-  const normalized = output.trim();
-  const chosen = options.find((option) => normalized.includes(option))
-    || (allowAbstain && normalized.includes('弃权') ? '弃权' : options[0]);
-  const reasonLine = normalized.split(/\r?\n/).find((line) => line.includes('理由'));
-  return {
-    choice: chosen,
-    reason: reasonLine?.replace(/^.*理由[:：]?\s*/, '').trim() || normalized,
-  };
+function getRoomMessageIndex(messages: CollaborationRoomMessage[], messageId: string) {
+  return messages.findIndex((message) => message.id === messageId);
+}
+
+function getRoundTranscriptBeforeMessage(
+  messages: CollaborationRoomMessage[],
+  roundId: string,
+  messageId: string
+) {
+  const messageIndex = getRoomMessageIndex(messages, messageId);
+  const upperBound = messageIndex >= 0 ? messageIndex : messages.length;
+  return messages
+    .slice(0, upperBound)
+    .filter((message) => message.roundId === roundId && message.status !== 'pending');
 }
 
 function summarizeVote(vote: CollaborationChatroomVote) {
@@ -473,6 +783,7 @@ export function AgoraChatPanel({
   const [topicDialogOpen, setTopicDialogOpen] = useState(false);
   const [voteDialogOpen, setVoteDialogOpen] = useState(false);
   const [temporaryParticipantDialogOpen, setTemporaryParticipantDialogOpen] = useState(false);
+  const [globalRuntime, setGlobalRuntime] = useState({ engine: '', model: '' });
   const [voteDraft, setVoteDraft] = useState<VoteDraft>({ question: '', options: '', allowAbstain: false });
   const [topicDraft, setTopicDraft] = useState(chatroom.topic || '');
   const [temporaryAgentDraft, setTemporaryAgentDraft] = useState<TemporaryAgentDraft>({
@@ -490,9 +801,110 @@ export function AgoraChatPanel({
   }, [chatroom.settings.responseMode]);
 
   useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      fetch('/api/engine')
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return;
+          setGlobalRuntime({
+            engine: typeof data?.engine === 'string' ? data.engine : '',
+            model: typeof data?.defaultModel === 'string' ? data.defaultModel : '',
+          });
+        })
+        .catch(() => {});
+    };
+    refresh();
+    const onEngineUpdated = () => refresh();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === 'engine-config-updated-at') refresh();
+    };
+    window.addEventListener('engine:updated', onEngineUpdated as EventListener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('engine:updated', onEngineUpdated as EventListener);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  useEffect(() => {
     setTopicInput(chatroom.topic || normalizedRoom.topic || '');
     setTopicDraft(chatroom.topic || normalizedRoom.topic || '');
   }, [chatroom.topic, normalizedRoom.topic]);
+
+  useEffect(() => {
+    if (!normalizedRoom.chatroom) return;
+    if (chatroom.status !== 'setup') return;
+    if (chatroom.settings.defaultRuntimeMode) return;
+    const hasLegacyDefaultRuntime = Boolean(chatroom.settings.defaultEngine || chatroom.settings.defaultModel);
+    if (!hasLegacyDefaultRuntime) return;
+    updateRoom((current) => {
+      const base = ensureRoom(current);
+      const currentChatroom = base.chatroom;
+      if (!currentChatroom || currentChatroom.status !== 'setup' || currentChatroom.settings.defaultRuntimeMode) {
+        return current;
+      }
+      return {
+        ...base,
+        topic: currentChatroom.topic,
+        selectedAgents: currentChatroom.participants,
+        chatroom: {
+          ...currentChatroom,
+          settings: {
+            ...currentChatroom.settings,
+            defaultEngine: '',
+            defaultModel: '',
+            defaultRuntimeMode: 'inherit',
+          },
+        },
+      };
+    });
+  }, [
+    chatroom.settings.defaultEngine,
+    chatroom.settings.defaultModel,
+    chatroom.settings.defaultRuntimeMode,
+    chatroom.status,
+    normalizedRoom.chatroom,
+    updateRoom,
+  ]);
+
+  useEffect(() => {
+    if (!normalizedRoom.chatroom) return;
+    if (chatroom.status !== 'setup') return;
+    if (chatroom.settings.defaultRuntimeMode === 'explicit') return;
+    if (chatroom.settings.defaultEngine || chatroom.settings.defaultModel) return;
+    if (!globalRuntime.engine && !globalRuntime.model) return;
+    updateRoom((current) => {
+      const base = ensureRoom(current);
+      const currentChatroom = base.chatroom;
+      if (!currentChatroom || currentChatroom.status !== 'setup') return current;
+      if (currentChatroom.settings.defaultRuntimeMode === 'explicit') return current;
+      if (currentChatroom.settings.defaultEngine || currentChatroom.settings.defaultModel) return current;
+      if (currentChatroom.settings.defaultRuntimeMode === 'inherit') return current;
+      return {
+        ...base,
+        topic: currentChatroom.topic,
+        selectedAgents: currentChatroom.participants,
+        chatroom: {
+          ...currentChatroom,
+          settings: {
+            ...currentChatroom.settings,
+            defaultRuntimeMode: 'inherit',
+          },
+        },
+      };
+    });
+  }, [
+    chatroom.settings.defaultEngine,
+    chatroom.settings.defaultModel,
+    chatroom.settings.defaultRuntimeMode,
+    chatroom.status,
+    globalRuntime.engine,
+    globalRuntime.model,
+    normalizedRoom.chatroom,
+    updateRoom,
+  ]);
 
   useEffect(() => {
     if (bottomRef.current && typeof bottomRef.current.scrollIntoView === 'function') {
@@ -538,15 +950,16 @@ export function AgoraChatPanel({
     [participantRoster]
   );
   const currentUserDisplayName = useMemo(() => getCurrentUserDisplayName(currentUser), [currentUser]);
+  const currentUserAvatarSrc = useMemo(() => resolveCurrentUserAvatarSrc(currentUser?.avatar), [currentUser?.avatar]);
   const resolveSpeakerAvatarSrc = useMemo(
     () => (name: string, kind: 'agent' | 'host' | 'system') => {
-      if (kind === 'host' && currentUser?.avatar && (name === currentUserDisplayName || name === '你' || name === '我')) {
-        return currentUser.avatar;
+      if (kind === 'host' && currentUserAvatarSrc && (name === currentUserDisplayName || name === '你' || name === '我')) {
+        return currentUserAvatarSrc;
       }
       const participant = kind === 'agent' ? participantMap.get(name) : undefined;
       return getSpeakerAvatarSrc(name, kind, participant?.runtimeAgentName || participant?.name || name);
     },
-    [currentUser?.avatar, currentUserDisplayName, participantMap]
+    [currentUserAvatarSrc, currentUserDisplayName, participantMap]
   );
 
   const resolveChatroomParticipantRuntimeConfig = (participantName: string) => {
@@ -558,6 +971,27 @@ export function AgoraChatPanel({
       effectiveEngine: String(useDefault ? (chatroom.settings.defaultEngine || '') : (participant?.engine || chatroom.settings.defaultEngine || '')).trim(),
       effectiveModel: String(useDefault ? (chatroom.settings.defaultModel || '') : (participant?.model || chatroom.settings.defaultModel || '')).trim(),
     };
+  };
+
+  const getParticipantSourceDescription = (participantName: string) => {
+    const participant = participantMap.get(participantName);
+    return (participant?.sourceType === 'agent' || participant?.sourceType === 'preset')
+      ? availableAgents.find((agent) => agent.name === participant.sourceAgent)?.description
+      : participant?.personaPrompt;
+  };
+
+  const buildParticipantTemporaryRoleConfig = (participantName: string) => {
+    const participant = participantMap.get(participantName);
+    if (!participant) return undefined;
+    const runtimeConfig = resolveChatroomParticipantRuntimeConfig(participantName);
+    return buildChatroomParticipantRoleConfig(
+      participant,
+      {
+        engine: runtimeConfig.effectiveEngine,
+        model: runtimeConfig.effectiveModel,
+      },
+      getParticipantSourceDescription(participantName)
+    );
   };
 
   const updateChatroom = (updater: (state: CollaborationChatroomState) => CollaborationChatroomState) => {
@@ -618,18 +1052,40 @@ export function AgoraChatPanel({
     roundId?: string;
     speakerName: string;
     prompt: string;
+    expectedResultType: AgoraResultType;
     messagePatch?: Pick<CollaborationRoomMessage, 'chatroom'>;
     temporaryRoleConfig?: Record<string, any>;
-  }): Promise<{ message: CollaborationRoomMessage; stopped: boolean }> => {
-    const pendingMessage = createRoomMessage({
-      roundId: input.roundId,
-      speakerType: 'agent',
-      speakerName: input.speakerName,
-      content: '发言中',
-      status: 'pending',
-      chatroom: input.messagePatch?.chatroom,
-    });
-    appendRoomMessages([pendingMessage], { appendToCentral: false });
+    existingMessage?: CollaborationRoomMessage;
+  }): Promise<{ message: CollaborationRoomMessage; stopped: boolean; structuredResult: AgoraStructuredResult | null }> => {
+    const pendingMessage: CollaborationRoomMessage = input.existingMessage
+      ? {
+          ...input.existingMessage,
+          roundId: input.roundId ?? input.existingMessage.roundId,
+          speakerType: 'agent',
+          speakerName: input.speakerName,
+          content: '发言中',
+          rawContent: '',
+          status: 'pending',
+          error: null,
+          engine: undefined,
+          model: undefined,
+          chatroom: input.messagePatch?.chatroom || input.existingMessage.chatroom,
+        }
+      : createRoomMessage({
+          roundId: input.roundId,
+          speakerType: 'agent',
+          speakerName: input.speakerName,
+          content: '发言中',
+          status: 'pending',
+          chatroom: input.messagePatch?.chatroom,
+        });
+    if (input.existingMessage) {
+      replaceRoomMessage(input.existingMessage.id, pendingMessage, { appendToCentral: false });
+    } else {
+      appendRoomMessages([pendingMessage], { appendToCentral: false });
+    }
+    let latestRawContent = '';
+    let latestVisibleContent = '';
 
     try {
       const result = await callAgent(
@@ -646,8 +1102,9 @@ export function AgoraChatPanel({
             };
           },
           onDelta: (_content, accumulated) => {
-            const partial = String(accumulated || '').trim();
-            if (!partial) return;
+            latestRawContent = String(accumulated || '');
+            const partial = getAgoraVisibleText(latestRawContent, true);
+            if (partial) latestVisibleContent = partial;
             updateRoom((current) => {
               const base = ensureRoom(current);
               return {
@@ -656,8 +1113,8 @@ export function AgoraChatPanel({
                   message.id === pendingMessage.id
                     ? {
                         ...message,
-                        content: partial,
-                        rawContent: partial,
+                        content: partial || message.content,
+                        rawContent: latestRawContent,
                         status: 'pending',
                       }
                     : message
@@ -667,27 +1124,75 @@ export function AgoraChatPanel({
           },
         }
       );
+      const finalRawContent = String(result.rawContent || result.content || latestRawContent || '');
+      const finalVisibleContent = getAgoraVisibleText(finalRawContent, false);
+      if (finalVisibleContent) latestVisibleContent = finalVisibleContent;
+
+      if (result.status === 'stopped') {
+        const stoppedMessage: CollaborationRoomMessage = {
+          ...pendingMessage,
+          content: latestVisibleContent || '已停止',
+          rawContent: finalRawContent,
+          status: 'error',
+          error: '已停止',
+          engine: result.engine,
+          model: result.model,
+        };
+        clearActiveMessageStream(pendingMessage.id);
+        replaceRoomMessage(pendingMessage.id, stoppedMessage);
+        return {
+          message: stoppedMessage,
+          stopped: true,
+          structuredResult: null,
+        };
+      }
+
+      const extraction = extractAgoraStructuredResult(finalRawContent, input.expectedResultType);
+      if (!extraction.data) {
+        const protocolError = extraction.error || '议场结果协议解析失败';
+        throw Object.assign(new Error(protocolError), {
+          rawContent: finalRawContent,
+          partialContent: latestVisibleContent,
+          engine: result.engine,
+          model: result.model,
+        });
+      }
+
+      const structuredResult = extraction.data;
       const finalMessage: CollaborationRoomMessage = {
         ...pendingMessage,
-        content: result.content || (result.status === 'stopped' ? '已停止' : '无输出'),
-        rawContent: result.rawContent || result.content || '',
-        status: result.status === 'stopped' ? 'error' : 'done',
-        error: result.status === 'stopped' ? '已停止' : null,
+        content: structuredResult.content,
+        rawContent: finalRawContent,
+        status: 'done',
+        error: null,
         engine: result.engine,
         model: result.model,
+        chatroom: {
+          ...pendingMessage.chatroom,
+          mentions: structuredResult.type === 'speech' ? structuredResult.mentions : pendingMessage.chatroom?.mentions,
+          summaryTitle: structuredResult.type === 'summary' ? structuredResult.title : pendingMessage.chatroom?.summaryTitle,
+        },
       };
       clearActiveMessageStream(pendingMessage.id);
       replaceRoomMessage(pendingMessage.id, finalMessage);
       return {
         message: finalMessage,
-        stopped: result.status === 'stopped',
+        stopped: false,
+        structuredResult,
       };
     } catch (error: any) {
       const errorText = error?.message || '嘉宾发言失败';
+      const fallbackRawContent = String(error?.rawContent || latestRawContent || errorText || '');
+      const fallbackVisibleContent = String(
+        error?.partialContent
+        || latestVisibleContent
+        || getAgoraVisibleText(fallbackRawContent, false)
+        || errorText
+      ).trim() || errorText;
       const finalMessage: CollaborationRoomMessage = {
         ...pendingMessage,
-        content: String(error?.partialContent || error?.rawContent || errorText || '').trim() || errorText,
-        rawContent: String(error?.rawContent || error?.partialContent || errorText || '').trim() || errorText,
+        content: fallbackVisibleContent,
+        rawContent: fallbackRawContent,
         status: 'error',
         error: errorText,
         engine: error?.engine,
@@ -699,9 +1204,15 @@ export function AgoraChatPanel({
         return {
           message: finalMessage,
           stopped: true,
+          structuredResult: null,
         };
       }
-      throw error;
+      const thrownError = error instanceof Error ? error : new Error(errorText);
+      if (error && typeof error === 'object' && error !== thrownError) {
+        Object.assign(thrownError, error);
+      }
+      Object.assign(thrownError, { roomMessage: finalMessage });
+      throw thrownError;
     }
   };
 
@@ -714,6 +1225,108 @@ export function AgoraChatPanel({
     try {
       await stream.stop();
     } catch {}
+  };
+
+  const canRetryRoomMessage = (message: CollaborationRoomMessage) => (
+    message.status === 'error'
+    && message.speakerType === 'agent'
+    && (message.chatroom?.kind === 'agent' || message.chatroom?.kind === 'summary')
+  );
+
+  const handleRetryRoomMessage = async (message: CollaborationRoomMessage) => {
+    if (!canRetryRoomMessage(message)) return;
+    if (activeMessageStreamsRef.current[message.id]) return;
+    if (!message.roundId) {
+      toast('warning', '缺少原始轮次，无法重试');
+      return;
+    }
+
+    const round = chatroom.rounds.find((item) => item.id === message.roundId);
+    if (!round) {
+      toast('warning', '原始轮次不存在，无法重试');
+      return;
+    }
+
+    const mode = message.chatroom?.mode || round.mode || composerMode;
+    const roundParticipants = round.participants?.length ? round.participants : (message.chatroom?.participants || []);
+    const roundTranscript = getRoundTranscriptBeforeMessage(messages, message.roundId, message.id);
+
+    try {
+      if (message.chatroom?.kind === 'summary') {
+        const summarizer = message.speakerName || roundParticipants[0] || participants[0];
+        if (!summarizer) {
+          toast('warning', '缺少总结嘉宾，无法重试');
+          return;
+        }
+        const summaryTurn = await executeAgentMessage({
+          roundId: message.roundId,
+          speakerName: summarizer,
+          prompt: buildSummaryPrompt({
+            topic: round.topic || chatroom.topic,
+            participants: roundParticipants.length ? roundParticipants : participants,
+            transcript: roundTranscript,
+          }),
+          expectedResultType: 'summary',
+          messagePatch: { chatroom: { kind: 'summary', mode } },
+          temporaryRoleConfig: buildParticipantTemporaryRoleConfig(summarizer),
+          existingMessage: message,
+        });
+        if (summaryTurn.stopped) return;
+        saveSummary(
+          message.roundId,
+          summaryTurn.message.content,
+          summarizer,
+          summaryTurn.structuredResult?.type === 'summary' ? summaryTurn.structuredResult.title : undefined,
+        );
+        markRound(message.roundId, {
+          status: 'completed',
+          completedAt: Date.now(),
+          summary: summaryTurn.message.content,
+        });
+        updateChatroom((current) => ({ ...current, status: 'running' }));
+        return;
+      }
+
+      const hostEntry = roundTranscript.find((item) => item.speakerType === 'human');
+      if (!hostEntry) {
+        toast('warning', '缺少原始提问，无法重试');
+        return;
+      }
+
+      const turnResult = await executeAgentMessage({
+        roundId: message.roundId,
+        speakerName: message.speakerName,
+        prompt: buildAgentPrompt({
+          topic: round.topic || chatroom.topic,
+          mode,
+          hostMessage: hostEntry.content,
+          agentName: message.speakerName,
+          participants: chatroom.participants.length ? chatroom.participants : participants,
+          roundParticipants: roundParticipants.length ? roundParticipants : [message.speakerName],
+          transcript: roundTranscript,
+        }),
+        expectedResultType: 'speech',
+        messagePatch: { chatroom: { kind: 'agent', mode } },
+        temporaryRoleConfig: buildParticipantTemporaryRoleConfig(message.speakerName),
+        existingMessage: message,
+      });
+      if (turnResult.stopped) return;
+
+      const hasRemainingRoundErrors = messages.some((item) => (
+        item.roundId === message.roundId
+        && item.id !== message.id
+        && item.status === 'error'
+        && (item.chatroom?.kind === 'agent' || item.chatroom?.kind === 'summary')
+      ));
+      if (!hasRemainingRoundErrors) {
+        markRound(message.roundId, {
+          status: 'completed',
+          completedAt: Date.now(),
+        });
+      }
+    } catch (error: any) {
+      toast('error', error?.message || '重试失败');
+    }
   };
 
   const handleSubmitParticipantDraft = () => {
@@ -805,14 +1418,19 @@ export function AgoraChatPanel({
   };
 
   const setChatroomDefaultRuntime = (patch: { engine?: string; model?: string }) => {
-    updateChatroom((current) => ({
-      ...current,
-      settings: {
-        ...current.settings,
-        defaultEngine: patch.engine ?? current.settings.defaultEngine ?? '',
-        defaultModel: patch.model ?? current.settings.defaultModel ?? '',
-      },
-    }));
+    updateChatroom((current) => {
+      const defaultEngine = patch.engine ?? current.settings.defaultEngine ?? '';
+      const defaultModel = patch.model ?? current.settings.defaultModel ?? '';
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          defaultEngine,
+          defaultModel,
+          defaultRuntimeMode: defaultEngine || defaultModel ? 'explicit' : 'inherit',
+        },
+      };
+    });
   };
 
   const markRound = (roundId: string, patch: Partial<CollaborationChatroomRound>) => {
@@ -823,11 +1441,11 @@ export function AgoraChatPanel({
     }));
   };
 
-  const saveSummary = (roundId: string, content: string, generatedBy: string) => {
+  const saveSummary = (roundId: string, content: string, generatedBy: string, title?: string) => {
     const summary: CollaborationChatroomSummary = {
       id: `summary-${Date.now()}`,
       roundId,
-      title: `第 ${chatroom.rounds.length} 轮总结`,
+      title: title?.trim() || `第 ${chatroom.rounds.length} 轮总结`,
       content,
       generatedBy,
       createdAt: Date.now(),
@@ -844,11 +1462,6 @@ export function AgoraChatPanel({
     if (!summarizer) return;
     updateChatroom((current) => ({ ...current, status: 'summarizing' }));
     try {
-      const summarizerConfig = participantMap.get(summarizer);
-      const summarizerRuntime = resolveChatroomParticipantRuntimeConfig(summarizer);
-      const sourceDescription = (summarizerConfig?.sourceType === 'agent' || summarizerConfig?.sourceType === 'preset')
-        ? availableAgents.find((agent) => agent.name === summarizerConfig.sourceAgent)?.description
-        : summarizerConfig?.personaPrompt;
       const summaryTurn = await executeAgentMessage({
         roundId,
         speakerName: summarizer,
@@ -857,30 +1470,35 @@ export function AgoraChatPanel({
           participants,
           transcript,
         }),
+        expectedResultType: 'summary',
         messagePatch: { chatroom: { kind: 'summary', mode: composerMode } },
-        temporaryRoleConfig: summarizerConfig ? buildChatroomParticipantRoleConfig(summarizerConfig, {
-          engine: summarizerRuntime.effectiveEngine,
-          model: summarizerRuntime.effectiveModel,
-        }, sourceDescription) : undefined,
+        temporaryRoleConfig: buildParticipantTemporaryRoleConfig(summarizer),
       });
       if (summaryTurn.stopped) {
         markRound(roundId, { status: 'failed', completedAt: Date.now(), summary: '已停止' });
         updateChatroom((current) => ({ ...current, status: 'running' }));
         return;
       }
-      saveSummary(roundId, summaryTurn.message.content, summarizer);
+      saveSummary(
+        roundId,
+        summaryTurn.message.content,
+        summarizer,
+        summaryTurn.structuredResult?.type === 'summary' ? summaryTurn.structuredResult.title : undefined,
+      );
       markRound(roundId, { status: 'completed', completedAt: Date.now(), summary: summaryTurn.message.content });
       updateChatroom((current) => ({ ...current, status: 'running' }));
     } catch (error: any) {
-      appendRoomMessages([createRoomMessage({
-        roundId,
-        speakerType: 'system',
-        speakerName: '系统',
-        content: `本轮总结失败：${error?.message || '未知错误'}`,
-        status: 'error',
-        error: error?.message || '未知错误',
-        chatroom: { kind: 'system', mode: composerMode },
-      })]);
+      if (!error?.roomMessage) {
+        appendRoomMessages([createRoomMessage({
+          roundId,
+          speakerType: 'system',
+          speakerName: '系统',
+          content: `本轮总结失败：${error?.message || '未知错误'}`,
+          status: 'error',
+          error: error?.message || '未知错误',
+          chatroom: { kind: 'system', mode: composerMode },
+        })]);
+      }
       markRound(roundId, { status: 'failed', completedAt: Date.now(), summary: error?.message || '总结失败' });
       updateChatroom((current) => ({ ...current, status: 'running' }));
     }
@@ -916,10 +1534,11 @@ export function AgoraChatPanel({
           ...createInitialChatroomState().settings,
           responseMode: composerMode,
           autoSummarize: base.chatroom?.settings.autoSummarize ?? true,
-          maxTurnsPerRound: base.chatroom?.settings.maxTurnsPerRound ?? 6,
-          maxRepliesPerAgent: base.chatroom?.settings.maxRepliesPerAgent ?? 2,
+          maxTurnsPerRound: base.chatroom?.settings.maxTurnsPerRound ?? 2,
+          maxRepliesPerAgent: base.chatroom?.settings.maxRepliesPerAgent ?? 1,
           defaultEngine: base.chatroom?.settings.defaultEngine || '',
           defaultModel: base.chatroom?.settings.defaultModel || '',
+          defaultRuntimeMode: base.chatroom?.settings.defaultRuntimeMode || 'inherit',
         },
       });
       return {
@@ -932,7 +1551,6 @@ export function AgoraChatPanel({
     });
     appendToCentralChat?.(setupMessage);
     toast('success', '议场已创建');
-    window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   const handleResetRoom = () => {
@@ -972,7 +1590,12 @@ export function AgoraChatPanel({
       return;
     }
     const mentions = extractMentions(hostMessage, participants);
-    const kickoffParticipants = mode === 'mention-driven' && mentions.length > 0 ? mentions : participants;
+    const kickoffParticipants = resolveRoundParticipants({
+      participants,
+      mentions,
+      mode,
+      roundIndex: chatroom.rounds.length,
+    });
     const roundId = `chatround-${Date.now()}`;
     const round: CollaborationChatroomRound = {
       id: roundId,
@@ -1001,13 +1624,13 @@ export function AgoraChatPanel({
     }));
 
     const transcript: CollaborationRoomMessage[] = [...messages, humanEntry];
-    const queue = [...kickoffParticipants];
+    const queue = [...kickoffParticipants].slice(0, USER_LED_AGENT_REPLY_LIMIT);
     const spokenCounts = new Map<string, number>();
-    let turns = 0;
     let failures = 0;
+    let successfulAgentReplies = 0;
     let roundStopped = false;
 
-    while (queue.length > 0 && turns < chatroom.settings.maxTurnsPerRound) {
+    while (queue.length > 0 && successfulAgentReplies + failures < USER_LED_AGENT_REPLY_LIMIT) {
       const agentName = queue.shift();
       if (!agentName) continue;
       if (stoppedRoundsRef.current.has(roundId)) {
@@ -1015,15 +1638,17 @@ export function AgoraChatPanel({
         break;
       }
       const count = (spokenCounts.get(agentName) || 0) + 1;
-      if (count > chatroom.settings.maxRepliesPerAgent) continue;
+      if (count > USER_LED_AGENT_REPLY_PER_PARTICIPANT) continue;
       spokenCounts.set(agentName, count);
-      turns += 1;
       try {
-        const participantConfig = participantMap.get(agentName);
-        const runtimeConfig = resolveChatroomParticipantRuntimeConfig(agentName);
-        const sourceDescription = (participantConfig?.sourceType === 'agent' || participantConfig?.sourceType === 'preset')
-          ? availableAgents.find((agent) => agent.name === participantConfig.sourceAgent)?.description
-          : participantConfig?.personaPrompt;
+        const delayMs = getAgentReplyDelayMs();
+        if (delayMs > 0) {
+          await delay(delayMs);
+        }
+        if (stoppedRoundsRef.current.has(roundId)) {
+          roundStopped = true;
+          break;
+        }
         const turnResult = await executeAgentMessage({
           roundId,
           speakerName: agentName,
@@ -1033,13 +1658,12 @@ export function AgoraChatPanel({
             hostMessage,
             agentName,
             participants,
+            roundParticipants: kickoffParticipants,
             transcript,
           }),
+          expectedResultType: 'speech',
           messagePatch: { chatroom: { kind: 'agent', mode } },
-          temporaryRoleConfig: participantConfig ? buildChatroomParticipantRoleConfig(participantConfig, {
-            engine: runtimeConfig.effectiveEngine,
-            model: runtimeConfig.effectiveModel,
-          }, sourceDescription) : undefined,
+          temporaryRoleConfig: buildParticipantTemporaryRoleConfig(agentName),
         });
         const transcriptMessage = turnResult.message;
         transcript.push(transcriptMessage);
@@ -1047,27 +1671,39 @@ export function AgoraChatPanel({
           roundStopped = true;
           break;
         }
+        successfulAgentReplies += 1;
         if (mode !== 'broadcast') {
-          const nextMentions = extractMentions(transcriptMessage.content, participants).filter((name) => name !== agentName);
+          const nextMentions = Array.from(new Set([
+            ...(transcriptMessage.chatroom?.mentions || []),
+            ...extractMentions(transcriptMessage.content, participants),
+          ])).filter((name) => name !== agentName);
           nextMentions.forEach((name) => {
-            if ((spokenCounts.get(name) || 0) < chatroom.settings.maxRepliesPerAgent && !queue.includes(name)) {
+            if (
+              (spokenCounts.get(name) || 0) < USER_LED_AGENT_REPLY_PER_PARTICIPANT
+              && !queue.includes(name)
+              && successfulAgentReplies + failures + queue.length < USER_LED_AGENT_REPLY_LIMIT
+            ) {
               queue.push(name);
             }
           });
         }
       } catch (error: any) {
         failures += 1;
-        const errorMessage = createRoomMessage({
-          roundId,
-          speakerType: 'system',
-          speakerName: '系统',
-          content: `${agentName} 回复失败：${error?.message || '未知错误'}`,
-          status: 'error',
-          error: error?.message || '未知错误',
-          chatroom: { kind: 'system', mode },
-        });
-        transcript.push(errorMessage);
-        appendRoomMessages([errorMessage]);
+        if (error?.roomMessage) {
+          transcript.push(error.roomMessage as CollaborationRoomMessage);
+        } else {
+          const errorMessage = createRoomMessage({
+            roundId,
+            speakerType: 'system',
+            speakerName: '系统',
+            content: `${agentName} 回复失败：${error?.message || '未知错误'}`,
+            status: 'error',
+            error: error?.message || '未知错误',
+            chatroom: { kind: 'system', mode },
+          });
+          transcript.push(errorMessage);
+          appendRoomMessages([errorMessage]);
+        }
       }
     }
 
@@ -1077,7 +1713,7 @@ export function AgoraChatPanel({
       return;
     }
 
-    if (chatroom.settings.autoSummarize && transcript.length > 2) {
+    if (chatroom.settings.autoSummarize && successfulAgentReplies > 1) {
       await runSummary(roundId, transcript);
     } else {
       markRound(roundId, {
@@ -1262,11 +1898,6 @@ export function AgoraChatPanel({
     };
     for (const participant of participants) {
       try {
-        const participantConfig = participantMap.get(participant);
-        const runtimeConfig = resolveChatroomParticipantRuntimeConfig(participant);
-        const sourceDescription = (participantConfig?.sourceType === 'agent' || participantConfig?.sourceType === 'preset')
-          ? availableAgents.find((agent) => agent.name === participantConfig.sourceAgent)?.description
-          : participantConfig?.personaPrompt;
         const voteTurn = await executeAgentMessage({
           roundId: voteId,
           speakerName: participant,
@@ -1276,26 +1907,32 @@ export function AgoraChatPanel({
             options,
             allowAbstain: voteDraft.allowAbstain,
           }),
+          expectedResultType: 'vote',
           messagePatch: { chatroom: { kind: 'vote', voteId, mode: composerMode } },
-          temporaryRoleConfig: participantConfig ? buildChatroomParticipantRoleConfig(participantConfig, {
-            engine: runtimeConfig.effectiveEngine,
-            model: runtimeConfig.effectiveModel,
-          }, sourceDescription) : undefined,
+          temporaryRoleConfig: buildParticipantTemporaryRoleConfig(participant),
         });
         if (voteTurn.stopped) {
           nextVote.votes[participant] = '未投';
           nextVote.reasons![participant] = '已停止';
           continue;
         }
-        const result = extractVoteResult(voteTurn.message.content, options, voteDraft.allowAbstain);
-        nextVote.votes[participant] = result.choice;
-        nextVote.reasons![participant] = result.reason;
+        if (voteTurn.structuredResult?.type !== 'vote') {
+          throw new Error('投票结果协议缺失');
+        }
+        const normalizedChoice = normalizeVoteChoice(
+          voteTurn.structuredResult.choice,
+          voteTurn.structuredResult.content,
+          options,
+          voteDraft.allowAbstain,
+        );
+        nextVote.votes[participant] = normalizedChoice;
+        nextVote.reasons![participant] = voteTurn.structuredResult.reason;
         updateChatroom((current) => ({
           ...current,
           activeVote: {
             ...(current.activeVote || vote),
-            votes: { ...(current.activeVote?.votes || {}), [participant]: result.choice },
-            reasons: { ...(current.activeVote?.reasons || {}), [participant]: result.reason },
+            votes: { ...(current.activeVote?.votes || {}), [participant]: normalizedChoice },
+            reasons: { ...(current.activeVote?.reasons || {}), [participant]: voteTurn.structuredResult.reason },
           },
         }));
       } catch (error: any) {
@@ -1610,6 +2247,8 @@ export function AgoraChatPanel({
             inlineContentSpeakerName={inlineContentSpeakerName}
             onDeleteMessage={handleDeleteRoomMessage}
             onQuoteMessage={(value) => handleQuoteRoomMessage(value)}
+            onRetryMessage={(message) => { void handleRetryRoomMessage(message); }}
+            canRetryMessage={canRetryRoomMessage}
             onStopMessage={(message) => { void handleStopRoomMessage(message); }}
             canStopMessage={(message) => Boolean(activeMessageStreamsRef.current[message.id])}
             quoteMentionMode={onInsertIntoMainInput && (useCentralTranscript || hideComposer) ? 'tag' : 'plain'}

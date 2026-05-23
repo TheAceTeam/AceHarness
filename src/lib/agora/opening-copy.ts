@@ -1,41 +1,57 @@
 import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
 
+export type OpeningRole =
+  | 'code-reviewer'
+  | 'engineer'
+  | 'architect'
+  | 'tester'
+  | 'product-manager'
+  | 'copywriter'
+  | 'generic';
+
 type OpeningToneProfile = {
+  role: OpeningRole;
   keywords: string[];
   examples: string[];
   fallback: string;
 };
 
 type OpeningToneParticipant = Pick<CollaborationChatroomParticipant, 'name'>
-  & Partial<Pick<CollaborationChatroomParticipant, 'id' | 'sourceType' | 'sourceAgent' | 'presetId' | 'personaPrompt' | 'createdAt'>>;
+  & Partial<Pick<CollaborationChatroomParticipant, 'id' | 'sourceType' | 'sourceAgent' | 'presetId' | 'runtimeAgentName' | 'personaPrompt' | 'createdAt'>>;
 
 const OPENING_TONE_PROFILES: OpeningToneProfile[] = [
   {
+    role: 'code-reviewer',
     keywords: ['code-reviewer', 'code-auditor', 'review', 'auditor', '代码评审', '评审', '审查'],
     examples: ['我先看风险和回归点。', '我先过一遍这次改动。'],
     fallback: '我先看风险和回归点。',
   },
   {
-    keywords: ['engineer', 'developer', '工程师', '开发', '实现'],
-    examples: ['我先看怎么落地。', '我先过一下实现。'],
-    fallback: '我先看怎么落地。',
-  },
-  {
-    keywords: ['architect', '架构师', '架构', '边界', '模块'],
-    examples: ['我先从边界和结构看。', '我先看下整体拆分。'],
-    fallback: '我先从边界和结构看。',
-  },
-  {
+    role: 'tester',
     keywords: ['tester', 'qa', '测试', '验收', '回归'],
     examples: ['我先补下测试和边界场景。', '我先看哪些地方容易漏。'],
     fallback: '我先补下测试和边界场景。',
   },
   {
+    role: 'product-manager',
     keywords: ['product-manager', '产品经理', '需求', '优先级', '范围', 'pm'],
     examples: ['我先对一下目标和范围。', '我先看用户侧影响。'],
     fallback: '我先对一下目标和范围。',
   },
   {
+    role: 'architect',
+    keywords: ['architect', '架构师', '架构', '边界', '模块'],
+    examples: ['我先从边界和结构看。', '我先看下整体拆分。'],
+    fallback: '我先从边界和结构看。',
+  },
+  {
+    role: 'engineer',
+    keywords: ['engineer', 'developer', '工程师', '开发', '实现'],
+    examples: ['我先看怎么落地。', '我先过一下实现。'],
+    fallback: '我先看怎么落地。',
+  },
+  {
+    role: 'copywriter',
     keywords: ['copywriter', 'writer', '文案', '写作者', '表达', '命名'],
     examples: ['我先顺一下这句话。', '我先看表达是不是清楚。'],
     fallback: '我先顺一下这句话。',
@@ -43,19 +59,32 @@ const OPENING_TONE_PROFILES: OpeningToneProfile[] = [
 ];
 
 const DEFAULT_OPENING_TONE_PROFILE: OpeningToneProfile = {
+  role: 'generic',
   keywords: [],
   examples: ['我先说下我的判断。', '我先听一下上下文。'],
   fallback: '我先说下我的判断。',
 };
 
-function getOpeningToneProfile(
+function matchOpeningToneProfile(haystack: string): OpeningToneProfile | undefined {
+  return OPENING_TONE_PROFILES.find((profile) => profile.keywords.some((keyword) => haystack.includes(keyword)));
+}
+
+export function detectOpeningRole(
   participant: OpeningToneParticipant,
   sourceDescription?: string,
-): OpeningToneProfile {
-  const haystack = [
+): OpeningRole {
+  const exactHaystack = [
     participant.name,
     participant.sourceAgent,
     participant.presetId,
+    participant.runtimeAgentName,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const extendedHaystack = [
+    exactHaystack,
     participant.personaPrompt,
     sourceDescription,
   ]
@@ -63,8 +92,17 @@ function getOpeningToneProfile(
     .join(' ')
     .toLowerCase();
 
-  return OPENING_TONE_PROFILES.find((profile) => profile.keywords.some((keyword) => haystack.includes(keyword)))
-    || DEFAULT_OPENING_TONE_PROFILE;
+  return matchOpeningToneProfile(exactHaystack)?.role
+    || matchOpeningToneProfile(extendedHaystack)?.role
+    || DEFAULT_OPENING_TONE_PROFILE.role;
+}
+
+function getOpeningToneProfile(
+  participant: OpeningToneParticipant,
+  sourceDescription?: string,
+): OpeningToneProfile {
+  const role = detectOpeningRole(participant, sourceDescription);
+  return OPENING_TONE_PROFILES.find((profile) => profile.role === role) || DEFAULT_OPENING_TONE_PROFILE;
 }
 
 function looksLikeSlogan(input: string): boolean {

@@ -1,28 +1,138 @@
 'use client';
 
-import { useCallback, useMemo, useState, type ChangeEvent, type KeyboardEventHandler, type ReactNode, type RefObject } from 'react';
-import { Copy, FilePlus2, MessageSquareQuote, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEventHandler, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { ArrowDown, ChevronDown, Copy, FilePlus2, MessageSquareQuote, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { ThinkingBot, WrapperProcessBlocks } from '@/components/chat/ChatMessage';
+import Markdown from '@/components/Markdown';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { useToast } from '@/components/ui/toast';
+import { getStreamingResultDisplay } from '@/lib/chat/actions';
 import { copyText } from '@/lib/core/clipboard';
 import { createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 import { cn } from '@/lib/core/utils';
 import type { CollaborationChatroomMode, CollaborationRoomMessage } from '@/lib/core/home-sidebar-state';
 
+function formatStreamingResultBody(text: string): string {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return '';
+  const fenceMatch = trimmed.match(/^(```|~~~)(?:json|card)?\s*([\s\S]*?)(?:\1)?$/i);
+  const body = (fenceMatch ? fenceMatch[2] : trimmed).trim();
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return body;
+  }
+}
+
+function PendingStreamingResultPanel({
+  rawContent,
+  speakerName,
+}: {
+  rawContent: string;
+  speakerName?: string;
+}) {
+  const result = getStreamingResultDisplay(rawContent);
+  const body = formatStreamingResultBody(result?.text || '');
+  const [expanded, setExpanded] = useState(false);
+  if (!result || !body) return null;
+  const title = `${speakerName || '嘉宾'}正在组织最后的发言…`;
+
+  return (
+    <div
+      className="overflow-hidden rounded-xl border border-border/70 bg-background/70 shadow-sm"
+      data-testid="agora-streaming-result-panel"
+    >
+      <div className="border-b border-border/60 bg-muted/30 px-3 py-2">
+        <div className="text-sm font-medium text-foreground">{title}</div>
+      </div>
+      <div className="space-y-3 px-3 py-3">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Spinner className="h-4 w-4" />
+          <span>正在整理结构化结果</span>
+        </div>
+        <Collapsible open={expanded} onOpenChange={setExpanded}>
+          <CollapsibleTrigger asChild>
+            <Button type="button" variant="ghost" className="h-8 gap-1.5 rounded-md px-2 text-xs">
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')} />
+              <span>{expanded ? '收起草稿' : '展开查看草稿'}</span>
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-1">
+            <pre className="overflow-x-auto rounded-lg border border-border/60 bg-muted/35 px-3 py-2 font-mono text-[12px] leading-5 text-foreground">
+              {body}
+            </pre>
+          </CollapsibleContent>
+        </Collapsible>
+      </div>
+    </div>
+  );
+}
+
+function CompletedStructuredResultContent({
+  content,
+}: {
+  content: string;
+}) {
+  const finalContent = String(content || '').trim();
+  if (!finalContent) return null;
+
+  return (
+    <div className="prose-sm max-w-none text-sm dark:prose-invert [&_p]:my-1" data-testid="agora-final-result-content">
+      <Markdown>{finalContent}</Markdown>
+    </div>
+  );
+}
+
+function CompletedStructuredProcessPanel({
+  rawContent,
+}: {
+  rawContent: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const content = String(rawContent || '').trim();
+  if (!content) return null;
+
+  return (
+    <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <CollapsibleTrigger asChild>
+        <Button type="button" variant="ghost" className="h-8 gap-1.5 rounded-md px-2 text-xs">
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', expanded && 'rotate-180')} />
+          <span>{expanded ? '收起完整内容' : '查看完整内容'}</span>
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-1">
+        <div data-testid="agora-complete-raw-panel">
+          <WrapperProcessBlocks content={content} isStreaming={false} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function renderRoomMessageContent(message: CollaborationRoomMessage) {
   const rawContent = String(message.rawContent || message.content || '').trim();
+  const finalContent = String(message.content || '').trim();
   if (message.status === 'pending') {
     if (rawContent && rawContent !== '发言中') {
-      return <WrapperProcessBlocks content={rawContent} isStreaming />;
+      return (
+        <div className="space-y-2">
+          <WrapperProcessBlocks content={rawContent} isStreaming />
+          <PendingStreamingResultPanel rawContent={rawContent} speakerName={message.speakerName} />
+          <div className="inline-flex items-center rounded-2xl border border-border/70 bg-muted/45 px-3 py-1.5 shadow-sm">
+            <ThinkingBot />
+          </div>
+        </div>
+      );
     }
     return (
       <div className="inline-flex items-center rounded-2xl border border-border/70 bg-muted/45 px-3 py-1.5 shadow-sm">
@@ -30,7 +140,16 @@ function renderRoomMessageContent(message: CollaborationRoomMessage) {
       </div>
     );
   }
-  const content = rawContent || '';
+  const shouldShowCompletedResult = rawContent.toLowerCase().includes('<result>');
+  if (shouldShowCompletedResult) {
+    return (
+      <div className="space-y-2">
+        <CompletedStructuredResultContent content={finalContent} />
+        <CompletedStructuredProcessPanel rawContent={rawContent} />
+      </div>
+    );
+  }
+  const content = rawContent || finalContent;
   if (!content) return null;
   return <WrapperProcessBlocks content={content} isStreaming={false} />;
 }
@@ -140,6 +259,7 @@ interface CollaborationRoomSurfaceProps {
   onInsertMention: (value: string) => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   bottomRef: RefObject<HTMLDivElement | null>;
+  onRegisterScrollToBottomHandler?: (handler: (() => void) | null) => void;
   emptyText?: string;
   helperText?: ReactNode;
   customControls?: ReactNode;
@@ -150,6 +270,8 @@ interface CollaborationRoomSurfaceProps {
   renderMessage?: (message: CollaborationRoomMessage) => ReactNode;
   onDeleteMessage?: (message: CollaborationRoomMessage) => void;
   onQuoteMessage?: (value: string, message: CollaborationRoomMessage) => void;
+  onRetryMessage?: (message: CollaborationRoomMessage) => void | Promise<void>;
+  canRetryMessage?: (message: CollaborationRoomMessage) => boolean;
   onStopMessage?: (message: CollaborationRoomMessage) => void;
   canStopMessage?: (message: CollaborationRoomMessage) => boolean;
   quoteMentionMode?: 'plain' | 'tag';
@@ -180,6 +302,7 @@ export function CollaborationRoomSurface({
   onInsertMention,
   inputRef,
   bottomRef,
+  onRegisterScrollToBottomHandler,
   emptyText = '',
   helperText,
   customControls,
@@ -190,6 +313,8 @@ export function CollaborationRoomSurface({
   renderMessage,
   onDeleteMessage,
   onQuoteMessage,
+  onRetryMessage,
+  canRetryMessage,
   onStopMessage,
   canStopMessage,
   quoteMentionMode = 'plain',
@@ -211,6 +336,10 @@ export function CollaborationRoomSurface({
   const [notebookMessageId, setNotebookMessageId] = useState<string | null>(null);
   const [mentionSearch, setMentionSearch] = useState<{ start: number; end: number; query: string } | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollLockedRef = useRef(false);
+  const isProgrammaticScrollRef = useRef(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const notebookMessage = useMemo(
     () => messages.find((message) => message.id === notebookMessageId) || null,
     [messages, notebookMessageId]
@@ -224,12 +353,80 @@ export function CollaborationRoomSurface({
     return filtered.slice(0, 8);
   }, [mentionSearch?.query, mentionTargets]);
   const showMentionMenu = Boolean(mentionSearch && mentionOptions.length);
+  const hasMessageLikeContent = messages.length > 0 || Boolean(inlineContent);
+  const latestMessageScrollKey = useMemo(() => {
+    const lastMessage = messages[messages.length - 1];
+    const lastBody = String(lastMessage?.rawContent || lastMessage?.content || '');
+    return [
+      messages.length,
+      lastMessage?.id || '',
+      lastMessage?.status || '',
+      lastBody.length,
+      inlineContent ? 'inline' : '',
+    ].join(':');
+  }, [inlineContent, messages]);
 
   const updateMentionSearchFromText = useCallback((text: string, cursor: number) => {
     const next = getMentionSearch(text, cursor);
     setMentionSearch(next);
     setActiveMentionIndex(0);
   }, []);
+
+  const updateAutoScrollLockState = useCallback(() => {
+    const scroller = scrollContainerRef.current;
+    if (!scroller) return;
+    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    autoScrollLockedRef.current = !nearBottom;
+    setShowScrollBtn(!nearBottom && hasMessageLikeContent);
+  }, [hasMessageLikeContent]);
+
+  const unlockAutoScroll = useCallback(() => {
+    autoScrollLockedRef.current = false;
+    setShowScrollBtn(false);
+  }, []);
+
+  const performProgrammaticScroll = useCallback(() => {
+    isProgrammaticScrollRef.current = true;
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    window.setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+      updateAutoScrollLockState();
+    }, 500);
+  }, [bottomRef, updateAutoScrollLockState]);
+
+  const scrollToBottom = useCallback(() => {
+    unlockAutoScroll();
+    performProgrammaticScroll();
+  }, [performProgrammaticScroll, unlockAutoScroll]);
+
+  useEffect(() => {
+    if (!onRegisterScrollToBottomHandler) return;
+    onRegisterScrollToBottomHandler(scrollToBottom);
+    return () => {
+      onRegisterScrollToBottomHandler(null);
+    };
+  }, [onRegisterScrollToBottomHandler, scrollToBottom]);
+
+  useEffect(() => {
+    const scroller = scrollContainerRef.current;
+    if (!scroller) return;
+    const handleScroll = () => {
+      if (isProgrammaticScrollRef.current) return;
+      updateAutoScrollLockState();
+    };
+    scroller.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => {
+      scroller.removeEventListener('scroll', handleScroll);
+    };
+  }, [updateAutoScrollLockState]);
+
+  useEffect(() => {
+    if (hideMessages || !hasMessageLikeContent) return;
+    if (!autoScrollLockedRef.current) {
+      performProgrammaticScroll();
+    }
+  }, [hasMessageLikeContent, hideMessages, latestMessageScrollKey, performProgrammaticScroll]);
 
   const insertMentionName = useCallback((name: string) => {
     if (!mentionSearch) {
@@ -247,6 +444,19 @@ export function CollaborationRoomSurface({
       node.setSelectionRange(cursor, cursor);
     });
   }, [draft, inputRef, mentionSearch, onDraftChange, onInsertMention]);
+
+  const handleMentionOptionPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>, name: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    insertMentionName(name);
+  }, [insertMentionName]);
+
+  const handleMentionOptionClick = useCallback((event: ReactMouseEvent<HTMLButtonElement>, name: string) => {
+    if (event.detail !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    insertMentionName(name);
+  }, [insertMentionName]);
 
   const handleDraftChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
     const nextValue = event.target.value;
@@ -287,11 +497,14 @@ export function CollaborationRoomSurface({
     const isPending = message.status === 'pending';
     const hasContent = Boolean(content);
     const canStop = Boolean(onStopMessage) && (canStopMessage ? canStopMessage(message) : (isPending && message.speakerType !== 'human'));
-    if (!hasContent && !canStop) return null;
-
     const canReply = hasContent && !isPending && message.speakerType !== 'system';
-    const canRetry = hasContent && !isPending && message.speakerType === 'human';
+    const canRetry = Boolean(onRetryMessage) && (
+      canRetryMessage
+        ? canRetryMessage(message)
+        : (hasContent && !isPending && message.status === 'error')
+    );
     const canDelete = !isPending && Boolean(onDeleteMessage);
+    if (!hasContent && !canStop && !canRetry) return null;
 
     const quotedText = canReply ? buildQuotedRoomMessage(message, quoteMentionMode) : '';
     const wrapperClassName = cn(
@@ -373,14 +586,14 @@ export function CollaborationRoomSurface({
         {canRetry ? (
           <Button
             type="button"
-            size="icon"
             variant="ghost"
-            className="h-7 w-7 rounded-md"
+            className="h-7 gap-1.5 rounded-md px-2 text-xs"
             title="重试"
             aria-label="重试"
-            onClick={() => { void onSubmit(content); }}
+            onClick={() => { void onRetryMessage?.(message); }}
           >
             <RotateCcw className="h-3.5 w-3.5" />
+            <span>重试</span>
           </Button>
         ) : null}
         {canDelete ? (
@@ -403,7 +616,11 @@ export function CollaborationRoomSurface({
   return (
     <section className={cn(isChannel ? 'flex min-h-0 min-w-0 flex-col bg-background' : 'min-w-0 rounded-xl border bg-background', containerClassName)}>
       {!hideMessages ? (
-        <div className={cn(isChannel ? 'min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5' : 'max-h-[640px] space-y-3 overflow-y-auto px-4 py-4', messagesClassName)}>
+        <div className={cn('relative', isChannel && 'flex min-h-0 flex-1 flex-col')}>
+          <div
+            ref={scrollContainerRef}
+            className={cn(isChannel ? 'min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5' : 'max-h-[640px] space-y-3 overflow-y-auto px-4 py-4', messagesClassName)}
+          >
           {messages.length === 0 ? (
             isChannel || !emptyText ? <div className="min-h-[160px]" /> : (
               <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -656,6 +873,19 @@ export function CollaborationRoomSurface({
             </div>
           ) : null}
           <div ref={(node) => { (bottomRef as any).current = node; }} />
+          </div>
+          {showScrollBtn ? (
+            <Button
+              type="button"
+              size="icon"
+              className="absolute bottom-4 right-4 z-20 h-10 w-10 rounded-full shadow-lg"
+              onClick={scrollToBottom}
+              title="滚动到底部"
+              aria-label="滚动到底部"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -761,10 +991,8 @@ export function CollaborationRoomSurface({
                       'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm',
                       index === activeMentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/70'
                     )}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      insertMentionName(name);
-                    }}
+                    onPointerDown={(event) => handleMentionOptionPointerDown(event, name)}
+                    onClick={(event) => handleMentionOptionClick(event, name)}
                   >
                     <Avatar className="h-6 w-6 ring-1 ring-border/60">
                       <AvatarImage src={getSpeakerAvatarSrc(name, name === '全员' ? 'system' : 'agent')} alt={name} className="object-cover" />

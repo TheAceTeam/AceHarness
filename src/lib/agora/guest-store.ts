@@ -10,6 +10,7 @@ import type { RoleConfig } from '@/lib/core/schemas';
 
 export type AgoraGuestSourceType = 'preset' | 'custom';
 export type AgoraGuestStatus = 'available' | 'unavailable';
+export type AgoraGuestRuntimeStrategy = 'system' | 'explicit';
 
 export interface AgoraGuestPreset {
   id: string;
@@ -32,8 +33,11 @@ export interface AgoraGuestConfig {
   presetId?: string;
   personaPrompt: string;
   systemPrompt: string;
+  runtimeStrategy?: AgoraGuestRuntimeStrategy;
   engine?: string;
   model?: string;
+  resolvedEngine?: string;
+  resolvedModel?: string;
   status: AgoraGuestStatus;
   statusReason?: string;
   createdAt: number;
@@ -150,21 +154,37 @@ function readGlobalEngineSelection(): { engine?: string; defaultModel?: string }
 
 async function resolveGuestRuntime(input: {
   template?: RoleConfig | null;
+  runtimeStrategy?: AgoraGuestRuntimeStrategy;
   engine?: string;
   model?: string;
 }): Promise<{ engine: string; model: string; status: AgoraGuestStatus; statusReason?: string }> {
   const explicitEngine = String(input.engine || '').trim();
   const explicitModel = String(input.model || '').trim();
+  const runtimeStrategy: AgoraGuestRuntimeStrategy = input.runtimeStrategy === 'explicit'
+    ? 'explicit'
+    : 'system';
   const globalSelection = readGlobalEngineSelection();
   const configuredEngine = await getConfiguredEngine().catch(() => globalSelection.engine || '');
   const templateSelection = resolveAgentSelection(input.template, globalSelection, undefined);
-  const engine = explicitEngine || templateSelection.effectiveEngine || configuredEngine || globalSelection.engine || '';
   const templateModels = input.template?.engineModels || {};
-  const model = explicitModel
-    || (engine ? templateModels[engine] : '')
-    || templateSelection.effectiveModel
-    || globalSelection.defaultModel
-    || '';
+  const engine = runtimeStrategy === 'system'
+    ? (explicitEngine || configuredEngine || globalSelection.engine || templateSelection.effectiveEngine || '')
+    : (explicitEngine || templateSelection.effectiveEngine || configuredEngine || globalSelection.engine || '');
+  const model = runtimeStrategy === 'system'
+    ? (
+      explicitModel
+      || globalSelection.defaultModel
+      || (engine ? templateModels[engine] : '')
+      || templateSelection.effectiveModel
+      || ''
+    )
+    : (
+      explicitModel
+      || (engine ? templateModels[engine] : '')
+      || templateSelection.effectiveModel
+      || globalSelection.defaultModel
+      || ''
+    );
 
   if (!engine) {
     return { engine, model, status: 'unavailable', statusReason: '未配置可用引擎' };
@@ -184,15 +204,20 @@ async function hydrateGuestConfig(config: AgoraGuestConfig): Promise<AgoraGuestC
       statusReason: `未找到模板 Agent：${config.sourceAgent}`,
     };
   }
+  const runtimeStrategy: AgoraGuestRuntimeStrategy = config.runtimeStrategy === 'explicit'
+    ? 'explicit'
+    : (String(config.engine || '').trim() ? 'explicit' : 'system');
   const runtime = await resolveGuestRuntime({
     template,
+    runtimeStrategy,
     engine: config.engine,
     model: config.model,
   });
   return {
     ...config,
-    engine: config.engine || runtime.engine,
-    model: config.model || runtime.model,
+    runtimeStrategy,
+    resolvedEngine: runtime.engine,
+    resolvedModel: runtime.model,
     status: runtime.status,
     statusReason: runtime.statusReason,
   };
@@ -208,7 +233,7 @@ export async function listAgoraGuestPresets(): Promise<AgoraGuestPreset[]> {
         statusReason: `未找到模板 Agent：${preset.templateAgent}`,
       };
     }
-    const runtime = await resolveGuestRuntime({ template });
+    const runtime = await resolveGuestRuntime({ template, runtimeStrategy: 'system' });
     return {
       ...preset,
       engine: runtime.engine,
@@ -265,6 +290,9 @@ export async function saveAgoraGuestConfig(input: {
   if (sourceAgent && !template) {
     throw new Error(`嘉宾「${displayName}」不可用：未找到模板 Agent：${sourceAgent}`);
   }
+  const rawEngine = String(input.engine || '').trim();
+  const rawModel = String(input.model || '').trim();
+  const runtimeStrategy: AgoraGuestRuntimeStrategy = rawEngine ? 'explicit' : 'system';
   const personaPrompt = String(input.personaPrompt || preset?.personaPrompt || template?.persona || template?.description || '').trim();
   const systemPrompt = template?.systemPrompt
     ? [
@@ -276,8 +304,9 @@ export async function saveAgoraGuestConfig(input: {
     : buildFallbackSystemPrompt(displayName, personaPrompt);
   const runtime = await resolveGuestRuntime({
     template,
-    engine: input.engine,
-    model: input.model,
+    runtimeStrategy,
+    engine: rawEngine,
+    model: rawModel,
   });
   if (runtime.status === 'unavailable') {
     throw new Error(`嘉宾「${displayName}」不可用：${runtime.statusReason || '模型或引擎未配置'}`);
@@ -294,8 +323,11 @@ export async function saveAgoraGuestConfig(input: {
     presetId: input.presetId || preset?.id,
     personaPrompt,
     systemPrompt,
-    engine: runtime.engine,
-    model: runtime.model,
+    runtimeStrategy,
+    engine: rawEngine || undefined,
+    model: rawModel || undefined,
+    resolvedEngine: runtime.engine,
+    resolvedModel: runtime.model,
     status: runtime.status,
     statusReason: runtime.statusReason,
     createdAt: existing?.createdAt || now,

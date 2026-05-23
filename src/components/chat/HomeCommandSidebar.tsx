@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { agentApi, configApi, specCodingApi, workflowApi } from '@/lib/core/api';
 import type {
@@ -113,7 +113,9 @@ import {
 } from '@/plugins/werewolf/runtime-core';
 import { WEREWOLF_ROLE_ASSETS, WEREWOLF_ROLEBOOK_ENTRIES, getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { mergeFinalRawStreamContent } from '@/lib/chat/ai-process-blocks';
 import { cn } from '@/lib/core/utils';
+import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 
 function hasOwnKey<T extends object>(value: T | null | undefined, key: PropertyKey): boolean {
   return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
@@ -1280,12 +1282,54 @@ export default function HomeCommandSidebar({
   const werewolfAutoTurnsRef = useRef(0);
   const collaborationTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraftState>(createInitialAgentDraft());
+  const { pendingHumanQuestions, workflowStatusByConfig } = useWorkflowLiveState();
 
   const binding = activeSession?.workflowBinding;
   const creationBinding = activeSession?.creationSession;
   const boundWorkflow = binding?.configFile || '';
   const boundCommander = binding?.supervisorAgent || 'default-supervisor';
   const effectiveWorkflowTarget = selectedWorkflow || boundWorkflow || '';
+  const syncWorkflowStatusFromSnapshot = useCallback((status: any) => {
+    setWorkflowStatus((prev: any) => ({
+      ...(prev || {}),
+      ...(status || {}),
+    }));
+
+    const signature = [
+      status?.status || '',
+      status?.currentPhase || '',
+      status?.currentStep || '',
+      status?.currentConfigFile || '',
+    ].join('|');
+
+    if (!signature || signature === lastStatusSignatureRef.current) {
+      return;
+    }
+
+    lastStatusSignatureRef.current = signature;
+
+    const matched = status?.currentConfigFile === boundWorkflow;
+    const title = matched
+      ? `指挥官汇报：${status?.currentPhase || '待命'}`
+      : '指挥官待命';
+    const content = matched
+      ? `当前状态：${status?.status || '未知'}；阶段：${status?.currentPhase || '未进入'}；步骤：${status?.currentStep || '等待中'}。`
+      : `已绑定工作流 ${boundWorkflow}，当前尚未启动或正在等待调度。`;
+    const tone: ProgressReport['tone'] =
+      status?.status === 'failed' ? 'warning' :
+        status?.status === 'completed' ? 'success' : 'info';
+
+    setReports((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: new Date().toISOString(),
+        title,
+        content,
+        tone,
+      },
+      ...prev,
+    ].slice(0, 8));
+  }, [boundWorkflow]);
   const boundHumanQuestions = useMemo(() => {
     if (!binding) return [];
     return unansweredHumanQuestions.filter((question) => (
@@ -1999,23 +2043,8 @@ export default function HomeCommandSidebar({
   }, [persistedPreflight, preflightChecks.length]);
 
   useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const result = await workflowApi.listHumanQuestions({ status: 'unanswered', limit: 20 });
-        if (!cancelled) setUnansweredHumanQuestions(result.questions || []);
-      } catch {
-        // Inbox is best-effort.
-      }
-    };
-
-    poll();
-    const timer = window.setInterval(poll, 15000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
+    setUnansweredHumanQuestions(pendingHumanQuestions);
+  }, [pendingHumanQuestions]);
 
   const navigateToHumanQuestion = useCallback((question: HumanQuestion) => {
     if (question.workflowFrontendSessionId) {
@@ -2049,57 +2078,35 @@ export default function HomeCommandSidebar({
       return;
     }
 
+    const liveStatus = workflowStatusByConfig[boundWorkflow];
+    if (liveStatus) {
+      syncWorkflowStatusFromSnapshot(liveStatus);
+      return;
+    }
+
     let cancelled = false;
-    const poll = async () => {
+    const loadStatus = async () => {
       try {
         const status = await workflowApi.getStatus(boundWorkflow);
         if (cancelled) return;
-        setWorkflowStatus(status);
-
-        const signature = [
-          status?.status || '',
-          status?.currentPhase || '',
-          status?.currentStep || '',
-          status?.currentConfigFile || '',
-        ].join('|');
-
-        if (signature && signature !== lastStatusSignatureRef.current) {
-          lastStatusSignatureRef.current = signature;
-
-          const matched = status?.currentConfigFile === boundWorkflow;
-          const title = matched
-            ? `指挥官汇报：${status?.currentPhase || '待命'}`
-            : '指挥官待命';
-          const content = matched
-            ? `当前状态：${status?.status || '未知'}；阶段：${status?.currentPhase || '未进入'}；步骤：${status?.currentStep || '等待中'}。`
-            : `已绑定工作流 ${boundWorkflow}，当前尚未启动或正在等待调度。`;
-          const tone: ProgressReport['tone'] =
-            status?.status === 'failed' ? 'warning' :
-              status?.status === 'completed' ? 'success' : 'info';
-
-          setReports((prev) => [
-            {
-              id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-              timestamp: new Date().toISOString(),
-              title,
-              content,
-              tone,
-            },
-            ...prev,
-          ].slice(0, 8));
-        }
+        syncWorkflowStatusFromSnapshot(status);
       } catch {
-        // Ignore polling errors here; sidebar is best-effort.
+        // Sidebar 状态拉取失败时保持当前展示，后续继续由实时事件驱动。
       }
     };
 
-    poll();
-    const timer = window.setInterval(poll, 15000);
+    void loadStatus();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
     };
-  }, [boundWorkflow]);
+  }, [boundWorkflow, syncWorkflowStatusFromSnapshot, workflowStatusByConfig]);
+
+  useEffect(() => {
+    if (!boundWorkflow) return;
+    const liveStatus = workflowStatusByConfig[boundWorkflow];
+    if (!liveStatus) return;
+    syncWorkflowStatusFromSnapshot(liveStatus);
+  }, [boundWorkflow, syncWorkflowStatusFromSnapshot, workflowStatusByConfig]);
 
   const handleStartWorkflow = useCallback(async () => {
     const targetWorkflow = selectedWorkflow || boundWorkflow;
@@ -2554,7 +2561,10 @@ export default function HomeCommandSidebar({
         if (hasSessionField) {
           collaborationAgentSessionsRef.current = replaceAgentSession(collaborationAgentSessionsRef.current, agentName, nextSessionId);
         }
-        const rawFinalContent = data?.rawOutput || content || data?.error || '';
+        const rawFinalContent = mergeFinalRawStreamContent(
+          content,
+          String(data?.rawOutput || data?.error || ''),
+        );
         const finalContent = data?.specCodingRevision?.applied
           ? `${rawFinalContent}\n\n---\n已刷新 Spec：${data.specCodingRevision.summary}`
           : rawFinalContent;
@@ -2854,6 +2864,19 @@ export default function HomeCommandSidebar({
       return next;
     });
   }, []);
+
+  const handleCollaborationMentionPointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>, mention: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+    insertCollaborationMention(mention);
+  }, [insertCollaborationMention]);
+
+  const handleCollaborationMentionClick = useCallback((event: ReactMouseEvent<HTMLButtonElement>, mention: string) => {
+    if (event.detail !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    insertCollaborationMention(mention);
+  }, [insertCollaborationMention]);
 
   const toggleCollaborationAgent = useCallback((agentName: string, checked: boolean) => {
     const next = new Set(selectedCollaborationAgents);
@@ -4602,8 +4625,8 @@ export default function HomeCommandSidebar({
               size="sm"
               variant={index === activeMentionIndex ? 'secondary' : 'ghost'}
               className="h-7 max-w-full px-2 text-xs"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => insertCollaborationMention(name)}
+              onPointerDown={(event) => handleCollaborationMentionPointerDown(event, name)}
+              onClick={(event) => handleCollaborationMentionClick(event, name)}
             >
               <span className="truncate">@{name}</span>
             </Button>

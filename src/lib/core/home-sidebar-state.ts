@@ -212,6 +212,7 @@ export interface CollaborationChatroomState {
     autoSummarize: boolean;
     defaultEngine?: string;
     defaultModel?: string;
+    defaultRuntimeMode?: 'inherit' | 'explicit';
     agentOverrides?: Record<string, CollaborationAgentExecutionOverride>;
     workspacePath?: string;
   };
@@ -422,6 +423,16 @@ export function inferHomeSidebarMode(
   if (hint?.intent || hint?.workflowDraft || hint?.agentDraft) return 'active';
   if (context?.hasWorkflowBinding || context?.hasCreationSession) return 'peek';
   return 'hidden';
+}
+
+export function isWorkflowSidebarHint(hint?: HomeSidebarHint | null): boolean {
+  if (!hint) return false;
+  if (hint.intent === 'create-workflow' || hint.intent === 'workflow-run' || hint.intent === 'workflow-review') {
+    return true;
+  }
+  if (hint.activeTab === 'workflow') return true;
+  if (normalizeHomeSidebarTabs(hint.tabs).includes('workflow')) return true;
+  return Boolean(hint.workflowDraft);
 }
 
 export function isCreationSidebarIntent(hint?: HomeSidebarHint | null): boolean {

@@ -4,16 +4,20 @@ import type {
   CollaborationRoomState,
 } from '@/lib/core/home-sidebar-state';
 
-export const DEFAULT_CHATROOM_MODE: CollaborationChatroomMode = 'facilitated';
+export const DEFAULT_CHATROOM_MODE: CollaborationChatroomMode = 'mention-driven';
 
 export function createInitialChatroomState(overrides?: Partial<CollaborationChatroomState>): CollaborationChatroomState {
+  const hasExplicitDefaultRuntime = Boolean(
+    overrides?.settings?.defaultEngine || overrides?.settings?.defaultModel
+  );
   const settings = {
     responseMode: overrides?.settings?.responseMode || DEFAULT_CHATROOM_MODE,
-    maxTurnsPerRound: overrides?.settings?.maxTurnsPerRound ?? 6,
-    maxRepliesPerAgent: overrides?.settings?.maxRepliesPerAgent ?? 2,
+    maxTurnsPerRound: overrides?.settings?.maxTurnsPerRound ?? 2,
+    maxRepliesPerAgent: overrides?.settings?.maxRepliesPerAgent ?? 1,
     autoSummarize: overrides?.settings?.autoSummarize ?? true,
     defaultEngine: overrides?.settings?.defaultEngine || '',
     defaultModel: overrides?.settings?.defaultModel || '',
+    defaultRuntimeMode: overrides?.settings?.defaultRuntimeMode || (hasExplicitDefaultRuntime ? 'explicit' : 'inherit'),
     agentOverrides: overrides?.settings?.agentOverrides || {},
     workspacePath: overrides?.settings?.workspacePath || '',
   };
