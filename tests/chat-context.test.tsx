@@ -16,7 +16,7 @@ const INITIAL_WORKFLOW_LIVE_STATE = {
   workflowStatusByConfig: {},
   chatStreamsBySessionId: {},
   chatSessionSignalsById: {},
-  lastEventAt: null,
+  lastEventAt: null as number | null,
 };
 let workflowLiveState = { ...INITIAL_WORKFLOW_LIVE_STATE };
 const workflowLiveListeners = new Set<() => void>();

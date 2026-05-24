@@ -112,11 +112,12 @@ function handleWorkflowEvent(event: any) {
     const nextRunStatusById = data.runStatusById && typeof data.runStatusById === 'object'
       ? data.runStatusById
       : snapshot.runStatusById;
+    const rawChatStreams: unknown[] = Array.isArray(data.chatStreams) ? data.chatStreams : [];
     const nextChatStreamsBySessionId = Object.fromEntries(
-      (Array.isArray(data.chatStreams) ? data.chatStreams : [])
-        .map((item) => normalizeChatStream(item))
-        .filter((item): item is WorkflowLiveChatStream => Boolean(item))
-        .map((item) => [item.frontendSessionId, item]),
+      rawChatStreams
+        .map((item: unknown) => normalizeChatStream(item))
+        .filter((item: WorkflowLiveChatStream | null): item is WorkflowLiveChatStream => Boolean(item))
+        .map((item: WorkflowLiveChatStream) => [item.frontendSessionId, item]),
     );
     updateSnapshot((current) => ({
       ...current,

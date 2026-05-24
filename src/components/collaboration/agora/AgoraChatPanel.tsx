@@ -39,6 +39,7 @@ import type {
   CollaborationRoomMessage,
   CollaborationRoomState,
 } from '@/lib/core/home-sidebar-state';
+import { detectOpeningRole, type OpeningRole } from '@/lib/agora/opening-copy';
 import { createInitialChatroomState, ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 
 export interface AgoraChatPanelProps {
@@ -118,6 +119,46 @@ const MODE_LABELS: Record<CollaborationChatroomMode, string> = {
 
 const USER_LED_AGENT_REPLY_LIMIT = 2;
 const USER_LED_AGENT_REPLY_PER_PARTICIPANT = 1;
+
+const AGORA_NATURAL_CONVERSATION_GUIDE = [
+  '说中文时用接近日常沟通的口语，别写成公文、周报或客服模板。',
+  '顺着上一条消息自然接话，像同事讨论一样补充、认同、追问或推进，不要把每次回答都写成独立报告。',
+  '句子长短可以有变化，多用短句，少用“首先、其次、最后、综上、基于以上”这类模板化收束。',
+  '同一个意思尽量换种说法，别反复套同一句话，也不要每次都重复自我介绍岗位。',
+  '普通交流控制在 2 到 5 句，问题复杂时再展开，但依然要利落。',
+  '有判断就直接说，按需要补依据、风险或下一步，不用每次都硬拆成固定四段。',
+  '默认不要为了流程硬性 @ 其他嘉宾；只有真的需要某个人接棒、用户明确要求，或不点名会产生歧义时再提及对方。',
+  '全程围绕用户当前关心的问题，不跑题，不替其他嘉宾代言。',
+];
+
+const AGORA_ROLE_STYLE_GUIDES: Record<OpeningRole, string> = {
+  engineer: '你是工程侧视角，说话务实一点，先聊能不能做、改哪里、成本多大、哪儿最容易翻车。',
+  architect: '你是架构侧视角，先看边界、依赖、演进路线和长期复杂度，语气稳一点，但别端着。',
+  'code-reviewer': '你是评审侧视角，习惯先盯风险、坏味道和回归隐患，表达可以直接，但别像在下判决书。',
+  tester: '你是测试侧视角，重点看边界条件、失败路径、验证方法和回归范围，细一点但别啰嗦。',
+  'product-manager': '你是产品侧视角，先对目标、用户影响、范围和优先级做判断，说法灵活，不要像在念 PRD。',
+  copywriter: '你是文案侧视角，关注表达顺不顺、信息清不清、用户会不会误解，语气自然温和一些。',
+  generic: '保持真实同事聊天的状态，有判断也留余地，别说成标准答案。',
+};
+
+function buildAgoraConversationStyleGuide(
+  participant: Pick<CollaborationChatroomParticipant, 'name'>
+    & Partial<Pick<CollaborationChatroomParticipant, 'id' | 'sourceType' | 'sourceAgent' | 'presetId' | 'runtimeAgentName' | 'personaPrompt' | 'createdAt'>>,
+  sourceDescription?: string
+) {
+  const role = detectOpeningRole(participant, sourceDescription);
+  return [
+    AGORA_NATURAL_CONVERSATION_GUIDE.join('\n'),
+    AGORA_ROLE_STYLE_GUIDES[role],
+  ].join('\n');
+}
+
+function buildAgoraSummaryStyleGuide() {
+  return [
+    '总结也用自然中文，像同事帮大家收一下讨论，不要写成正式汇报。',
+    '把共识、分歧、风险、下一步说清楚就行，能短就短，别重复前文套话。',
+  ].join('\n');
+}
 const AGENT_REPLY_DELAY_MIN_MS = 1000;
 const AGENT_REPLY_DELAY_JITTER_MS = 2000;
 const AGORA_RESULT_KIND = 'agora_result';
@@ -184,6 +225,29 @@ function getSpeakerAvatarSrc(name: string, kind: 'agent' | 'host' | 'system', av
 
 function getCurrentUserDisplayName(user?: AgoraChatPanelProps['currentUser']) {
   return String(user?.displayName || user?.nickname || user?.name || user?.username || user?.email || '你').trim() || '你';
+}
+
+function normalizeUserIdentity(value?: string | null) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function buildCurrentUserIdentitySet(user?: AgoraChatPanelProps['currentUser']) {
+  const email = String(user?.email || '').trim();
+  const emailLocalPart = email.includes('@') ? email.slice(0, email.indexOf('@')).trim() : '';
+  return new Set(
+    [
+      user?.displayName,
+      user?.nickname,
+      user?.name,
+      user?.username,
+      email,
+      emailLocalPart,
+      '你',
+      '我',
+    ]
+      .map((value) => normalizeUserIdentity(value))
+      .filter(Boolean)
+  );
 }
 
 function resolveCurrentUserAvatarSrc(avatar?: string | null) {
@@ -253,7 +317,7 @@ function buildChatroomParticipantRoleConfig(
   const baseSystemPrompt = participant.systemPrompt || [
     `你是议场嘉宾「${participant.name}」。你的持久身份 ID 是「${identityName}」。`,
     sourceLabel,
-    '你的任务是在多人群聊中给出清晰、专业、自然的发言。',
+    '你的任务是在多人群聊里像真人同事一样自然发言。',
     '不要自称业务助手，不要编造自己有文件系统或工具执行结果。',
     '如果用户在消息中 @你，优先直接回应；未被点名时，也只在本轮被安排发言时回答自己。',
   ].filter(Boolean).join('\n');
@@ -268,8 +332,8 @@ function buildChatroomParticipantRoleConfig(
     capabilities: ['multi-agent-chat', 'agora'],
     systemPrompt: [
       baseSystemPrompt,
-      '发言保持紧凑，只代表你自己的观点。',
-      '如果确实需要其他嘉宾补充，可以在末尾 @ 一位合适的人；不需要就不要 @。',
+      buildAgoraConversationStyleGuide(participant, sourceDescription),
+      '发言保持紧凑，只代表你自己的观点，不要冒充主持人、系统或全体共识。',
       '议场回合的最终提交必须遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
       '如需中间过程可以先正常说话，但最终展示给群里的内容必须完整写进 result JSON 的 payload.content。',
     ].filter(Boolean).join('\n\n'),
@@ -565,7 +629,7 @@ function extractAgoraStructuredResult(markdown: string, expectedType: AgoraResul
         content,
         mentions: Array.isArray(payload.mentions)
           ? payload.mentions
-            .filter((item: unknown): item is string => typeof item === 'string' && item.trim())
+            .filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
             .map((item: string) => item.trim())
           : [],
       },
@@ -635,6 +699,7 @@ function buildAgentPrompt(input: {
   mode: CollaborationChatroomMode;
   hostMessage: string;
   agentName: string;
+  participant?: CollaborationChatroomParticipant;
   participants: string[];
   roundParticipants: string[];
   transcript: CollaborationRoomMessage[];
@@ -648,10 +713,11 @@ function buildAgentPrompt(input: {
     `当前协作方式：${MODE_LABELS[input.mode]}。`,
     `本轮被安排发言的嘉宾：${input.roundParticipants.join('、') || input.agentName}。`,
     `最近一条用户消息：${input.hostMessage}`,
+    buildAgoraConversationStyleGuide(input.participant || { name: input.agentName }),
     input.mode === 'broadcast'
       ? '请直接给出你的观点、判断和建议。只代表你自己，不要假装替别人发言。'
-      : '请代表你自己的角色发言。如果你希望某位嘉宾补充，可以在末尾用 @姓名 点名；若不需要继续，就不要再 @。',
-    '回答保持紧凑但有信息量，优先给结论、依据、风险和建议。',
+      : '请代表你自己的角色发言，默认顺着上文自然接话，不用为了流程硬性点名别人。只有真的需要指定下一位继续，或用户明确要求点名时，再提到对方。',
+    '回答保持紧凑但有信息量。先把核心判断说清楚，再按需要补依据、风险或建议，不用排固定模板。',
     transcript ? `最近记录：\n${transcript}` : '最近记录：暂无。',
     buildAgoraResultInstructions('speech'),
   ].join('\n\n');
@@ -668,6 +734,7 @@ function buildSummaryPrompt(input: {
   return [
     `请为本轮议场输出收束总结。议题：${input.topic}。`,
     `参与者：${input.participants.join('、') || '未设置'}。`,
+    buildAgoraSummaryStyleGuide(),
     '请输出四段：共识、分歧、风险、下一步。每段 1-3 条，简洁明确。',
     transcript ? `讨论记录：\n${transcript}` : '讨论记录：暂无。',
     buildAgoraResultInstructions('summary'),
@@ -951,15 +1018,20 @@ export function AgoraChatPanel({
   );
   const currentUserDisplayName = useMemo(() => getCurrentUserDisplayName(currentUser), [currentUser]);
   const currentUserAvatarSrc = useMemo(() => resolveCurrentUserAvatarSrc(currentUser?.avatar), [currentUser?.avatar]);
+  const currentUserIdentitySet = useMemo(() => buildCurrentUserIdentitySet(currentUser), [currentUser]);
   const resolveSpeakerAvatarSrc = useMemo(
     () => (name: string, kind: 'agent' | 'host' | 'system') => {
-      if (kind === 'host' && currentUserAvatarSrc && (name === currentUserDisplayName || name === '你' || name === '我')) {
+      if (
+        kind === 'host'
+        && currentUserAvatarSrc
+        && currentUserIdentitySet.has(normalizeUserIdentity(name || currentUserDisplayName))
+      ) {
         return currentUserAvatarSrc;
       }
       const participant = kind === 'agent' ? participantMap.get(name) : undefined;
       return getSpeakerAvatarSrc(name, kind, participant?.runtimeAgentName || participant?.name || name);
     },
-    [currentUserAvatarSrc, currentUserDisplayName, participantMap]
+    [currentUserAvatarSrc, currentUserDisplayName, currentUserIdentitySet, participantMap]
   );
 
   const resolveChatroomParticipantRuntimeConfig = (participantName: string) => {
@@ -1301,6 +1373,7 @@ export function AgoraChatPanel({
           mode,
           hostMessage: hostEntry.content,
           agentName: message.speakerName,
+          participant: participantMap.get(message.speakerName),
           participants: chatroom.participants.length ? chatroom.participants : participants,
           roundParticipants: roundParticipants.length ? roundParticipants : [message.speakerName],
           transcript: roundTranscript,
@@ -1657,6 +1730,7 @@ export function AgoraChatPanel({
             mode,
             hostMessage,
             agentName,
+            participant: participantMap.get(agentName),
             participants,
             roundParticipants: kickoffParticipants,
             transcript,
@@ -1919,20 +1993,21 @@ export function AgoraChatPanel({
         if (voteTurn.structuredResult?.type !== 'vote') {
           throw new Error('投票结果协议缺失');
         }
+        const voteResult = voteTurn.structuredResult;
         const normalizedChoice = normalizeVoteChoice(
-          voteTurn.structuredResult.choice,
-          voteTurn.structuredResult.content,
+          voteResult.choice,
+          voteResult.content,
           options,
           voteDraft.allowAbstain,
         );
         nextVote.votes[participant] = normalizedChoice;
-        nextVote.reasons![participant] = voteTurn.structuredResult.reason;
+        nextVote.reasons![participant] = voteResult.reason;
         updateChatroom((current) => ({
           ...current,
           activeVote: {
             ...(current.activeVote || vote),
             votes: { ...(current.activeVote?.votes || {}), [participant]: normalizedChoice },
-            reasons: { ...(current.activeVote?.reasons || {}), [participant]: voteTurn.structuredResult.reason },
+            reasons: { ...(current.activeVote?.reasons || {}), [participant]: voteResult.reason },
           },
         }));
       } catch (error: any) {

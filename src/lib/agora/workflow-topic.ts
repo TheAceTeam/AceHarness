@@ -250,106 +250,106 @@ function pickWorkflowSpeech(input: { type: string; title: string; body?: string;
   const seed = `${input.type}|${input.title}|${input.speakerName}|${body}`;
   if (input.type === 'phase-start' && phaseMatch) {
     return pickStableTemplate(seed, [
-      `我接下来开始推进「${phaseMatch[1]}」阶段。`,
-      `我先接过「${phaseMatch[1]}」阶段，把这一段推进起来。`,
-      `「${phaseMatch[1]}」阶段开始，我会把进展同步到这里。`,
+      `我先把「${phaseMatch[1]}」这段接起来，进展会同步在这。`,
+      `接下来我推进「${phaseMatch[1]}」，边做边说。`,
+      `「${phaseMatch[1]}」这段我先开跑，有更新就直接补在这里。`,
     ]);
   }
   if (input.type === 'phase-complete' && phaseMatch) {
     return body
       ? pickStableTemplate(seed, [
-        `「${phaseMatch[1]}」阶段已结束。${body}`,
-        `我收束了「${phaseMatch[1]}」阶段：${body}`,
-        `「${phaseMatch[1]}」阶段到这里完成，结论是：${body}`,
+        `「${phaseMatch[1]}」这段先收一下，结论是：${body}`,
+        `我把「${phaseMatch[1]}」跑完了，先记个结果：${body}`,
+        `「${phaseMatch[1]}」到这里差不多了，当前结论：${body}`,
       ])
       : pickStableTemplate(seed, [
-        `「${phaseMatch[1]}」阶段已结束，等待下一环节。`,
-        `「${phaseMatch[1]}」阶段已收口，可以进入后续环节。`,
-        `我完成了「${phaseMatch[1]}」阶段的处理。`,
+        `「${phaseMatch[1]}」这段先收口，可以往后走了。`,
+        `我这边把「${phaseMatch[1]}」处理完了，后面可以接着推进。`,
+        `「${phaseMatch[1]}」已经完成，下一环节可以继续。`,
       ]);
   }
   if (input.type === 'phase-failed' && phaseMatch) {
     return body
-      ? `「${phaseMatch[1]}」阶段遇到阻塞：${body}`
-      : `「${phaseMatch[1]}」阶段遇到阻塞，需要先处理异常。`;
+      ? `「${phaseMatch[1]}」这段卡住了：${body}`
+      : `「${phaseMatch[1]}」这段卡住了，得先把异常处理掉。`;
   }
   if (input.type === 'state-start' && stateMatch) {
     return pickStableTemplate(seed, [
-      `我接下来开始推进「${stateMatch[1]}」状态。`,
-      `「${stateMatch[1]}」状态开始，我会先处理当前步骤。`,
-      `我进入「${stateMatch[1]}」状态，后续进展会继续同步。`,
+      `我先进入「${stateMatch[1]}」这段状态，进展继续同步。`,
+      `接下来处理「${stateMatch[1]}」，我先把当前步骤推进起来。`,
+      `「${stateMatch[1]}」开始了，我先往前走一段。`,
     ]);
   }
   if (input.type === 'state-complete' && stateMatch) {
     return body
       ? pickStableTemplate(seed, [
-        `「${stateMatch[1]}」状态已收束。${body}`,
-        `我完成了「${stateMatch[1]}」状态，当前结论是：${body}`,
-        `「${stateMatch[1]}」状态已完成，后续按这个结果继续：${body}`,
+        `「${stateMatch[1]}」这段先收住，结论是：${body}`,
+        `我把「${stateMatch[1]}」处理完了，当前判断：${body}`,
+        `「${stateMatch[1]}」已经走完，后面按这个结果继续：${body}`,
       ])
       : pickStableTemplate(seed, [
-        `「${stateMatch[1]}」状态已收束，准备进入后续判断。`,
-        `「${stateMatch[1]}」状态已完成，可以继续流转。`,
-        `我完成了「${stateMatch[1]}」状态的处理。`,
+        `「${stateMatch[1]}」这段先收住，后面可以继续流转。`,
+        `我这边把「${stateMatch[1]}」处理完了，可以接着往下走。`,
+        `「${stateMatch[1]}」已经完成，准备进入后续判断。`,
       ]);
   }
   if (input.type === 'state-failed' && stateMatch) {
-    return body ? `「${stateMatch[1]}」状态执行失败：${body}` : `「${stateMatch[1]}」状态执行失败，需要先处理异常。`;
+    return body ? `「${stateMatch[1]}」这段没跑通：${body}` : `「${stateMatch[1]}」这段没跑通，得先处理异常。`;
   }
   if (input.type === 'step-start' && stepMatch) {
     return pickStableTemplate(seed, [
-      `我开始处理「${stepMatch[2]}」，先对齐「${stepMatch[1]}」上下文。`,
-      `我接下来做「${stepMatch[2]}」，完成后把结论交给后续环节。`,
-      `「${stepMatch[2]}」交给我，我先把关键输入梳理清楚。`,
+      `我先处理「${stepMatch[2]}」，把「${stepMatch[1]}」这段上下文接上。`,
+      `接下来我来做「${stepMatch[2]}」，做完就把结果往后递。`,
+      `「${stepMatch[2]}」这步我先接住，先把关键输入捋清。`,
     ]);
   }
   if (input.type === 'step-complete' && stepMatch) {
     const conclusion = cleanWorkflowEventBody(body, ['结论']);
     return conclusion
       ? pickStableTemplate(seed, [
-        `「${stepMatch[2]}」已完成。${conclusion}`,
-        `我完成了「${stepMatch[2]}」：${conclusion}`,
-        `「${stepMatch[2]}」这一步收束了，结果是：${conclusion}`,
+        `「${stepMatch[2]}」这步做完了。${conclusion}`,
+        `我把「${stepMatch[2]}」收住了：${conclusion}`,
+        `「${stepMatch[2]}」已经有结果了，先记一下：${conclusion}`,
       ])
       : pickStableTemplate(seed, [
-        `「${stepMatch[2]}」已完成，我把结果交给下一环节。`,
-        `我完成了「${stepMatch[2]}」，可以继续往下走。`,
-        `「${stepMatch[2]}」处理完毕。`,
+        `「${stepMatch[2]}」已经做完，我把结果交给下一环节。`,
+        `我这边把「${stepMatch[2]}」处理完了，可以继续。`,
+        `「${stepMatch[2]}」这步先收住了。`,
       ]);
   }
   if (input.type === 'step-failed' && stepMatch) {
     const reason = cleanWorkflowEventBody(body, ['错误']);
-    return reason ? `「${stepMatch[2]}」执行失败：${reason}` : `「${stepMatch[2]}」执行失败，需要先处理异常。`;
+    return reason ? `「${stepMatch[2]}」这步出问题了：${reason}` : `「${stepMatch[2]}」这步出问题了，得先处理异常。`;
   }
   if (input.type === 'human-question') {
-    return body ? `这里需要你确认：${input.title.replace(/^等待人工回复：/, '')}\n${body}` : input.title.replace(/^等待人工回复：/, '');
+    return body ? `这边有个点得请你拍板：${input.title.replace(/^等待人工回复：/, '')}\n${body}` : input.title.replace(/^等待人工回复：/, '');
   }
   if (input.type === 'human-answer') {
-    return body ? `收到你的回复，我会按这个继续推进：\n${body}` : '收到你的回复，我继续推进。';
+    return body ? `收到，这个信息够了，我按这个继续：\n${body}` : '收到，我按这个继续往下走。';
   }
   if (input.type === 'channel-feedback') {
     return body || input.title;
   }
   if (input.type === 'run-created') {
-    return `协作议题已创建，我会把后续进展同步到这里。`;
+    return '议题先建起来了，后面的进展我都同步在这。';
   }
   if (input.type === 'run-starting') {
-    return `工作流开始启动，我先检查运行上下文和执行编队。`;
+    return '这边开始跑了，我先把上下文和执行编队过一遍。';
   }
   if (input.type === 'run-completed') {
-    return body ? `工作流已完成。${body}` : '工作流已完成，我把最终状态同步到这里。';
+    return body ? `这轮工作流已经跑完了。${body}` : '这轮工作流已经跑完，我把最终状态记在这里。';
   }
   if (input.type === 'run-failed') {
-    return body ? `工作流执行失败：${body}` : '工作流执行失败，需要先处理阻塞。';
+    return body ? `工作流这边没跑通：${body}` : '工作流这边没跑通，得先处理阻塞。';
   }
   if (input.type === 'run-stopped') {
-    return body ? `工作流已停止：${body}` : '工作流已停止。';
+    return body ? `工作流先停下来了：${body}` : '工作流先停下来了。';
   }
   if (input.type === 'checkpoint-advice') {
-    return body ? `我完成了检查点建议：\n${body}` : input.title;
+    return body ? `我把检查点建议补一下：\n${body}` : input.title;
   }
   if (input.type === 'state-review') {
-    return body ? `我完成了阶段审阅：\n${body}` : input.title;
+    return body ? `这轮我过了一遍，先记下这些：\n${body}` : input.title;
   }
   return [input.title, body].filter(Boolean).join('\n');
 }
@@ -366,24 +366,24 @@ function pickWorkflowOpeningLine(participant: CollaborationChatroomParticipant):
     .join(' ')
     .toLowerCase();
   if (['supervisor', '协调', 'default-supervisor'].some((keyword) => coordinatorSignals.includes(keyword))) {
-    return '合作愉快，我来协调推进。';
+    return '我先盯一下节奏，边走边同步。';
   }
 
   switch (detectOpeningRole(participant)) {
     case 'engineer':
-      return '合作愉快，我负责实现落地。';
+      return '我先看实现这块。';
     case 'code-reviewer':
-      return '合作愉快，我负责风险评审。';
+      return '我先盯下风险点。';
     case 'architect':
-      return '合作愉快，我负责架构取舍。';
+      return '我先从结构和边界看。';
     case 'tester':
-      return '合作愉快，我负责验证回归。';
+      return '我先补一下验证思路。';
     case 'product-manager':
-      return '合作愉快，我负责目标验收。';
+      return '我先对一下目标和范围。';
     case 'copywriter':
-      return '合作愉快，我负责表达收束。';
+      return '我先顺一顺表达。';
     default:
-      return '合作愉快，我会跟进讨论。';
+      return '我先接一下这题。';
   }
 }
 

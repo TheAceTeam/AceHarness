@@ -637,6 +637,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
             roleConfig.systemPrompt || '',
             '你正在参加议场群聊。当前回合的最终提交必须严格遵守用户消息里给出的 `<result>...</result>` JSON 协议。',
             `本轮期望的 payload.type 是 "${agoraExpectedResultType || 'speech'}"。如果缺少 <result>、kind 不为 "agora_result"、payload.type 不匹配，或 payload.content 为空，本轮会被判失败并要求你重发。`,
+            '这个协议只约束最终结果块，不要求你用汇报腔；正常像群聊一样说话就行。',
             '如需中间过程，可先输出普通正文；但最终展示给群里的那段话必须完整写进 payload.content。',
             '输出 </result> 后不要再追加任何文字。',
           ].filter(Boolean).join('\n'),

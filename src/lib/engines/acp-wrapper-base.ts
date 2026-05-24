@@ -545,13 +545,13 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     }
   }
 
-  protected beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {}
+  beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {}
 
   protected shouldRecoverLatestAssistantMessage(_options: EngineOptions): boolean {
     return false;
   }
 
-  protected buildPrompt(options: EngineOptions, sessionAction: SessionAction): string {
+  buildPrompt(options: EngineOptions, sessionAction: SessionAction): string {
     let fullPrompt = options.prompt;
     if (options.systemPrompt) {
       const shouldPrepend = sessionAction === 'created' || options.appendSystemPrompt;
@@ -597,7 +597,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     context.emitStream({ type: 'text', content: normalized, metadata });
   }
 
-  protected emitDiagnosticLog(context: ACPExecutionContext, input: DiagnosticLogInput): void {
+  emitDiagnosticLog(context: ACPExecutionContext, input: DiagnosticLogInput): void {
     if (!context.diagnosticLoggingEnabled) return;
     const { message, detail, level, metadata, verbose } = input;
     context.emitStream({
@@ -616,7 +616,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     return getAceToolTitle(toolName);
   }
 
-  protected handleAgentMessage(context: ACPExecutionContext, content: any): void {
+  handleAgentMessage(context: ACPExecutionContext, content: any): void {
     const text = this.extractText(content);
     if (!text) return;
     const messageId = this.extractMessageId(content);
@@ -642,7 +642,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     context.assistantText += text;
   }
 
-  protected handleAgentThought(context: ACPExecutionContext, content: any): void {
+  handleAgentThought(context: ACPExecutionContext, content: any): void {
     const text = this.extractText(content);
     if (!text) return;
     context.emitStream({
@@ -651,7 +651,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     });
   }
 
-  protected handleToolCall(context: ACPExecutionContext, toolCall: any): void {
+  handleToolCall(context: ACPExecutionContext, toolCall: any): void {
     const toolId = toolCall.id || '';
     const hasInput = toolCall.rawInput && Object.keys(toolCall.rawInput).length > 0;
     if (!toolId || context.seenToolIds.has(toolId) || !hasInput) return;
@@ -662,7 +662,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     this.emitText(context, formatted, toolCall);
   }
 
-  protected handleToolCallUpdate(context: ACPExecutionContext, toolUpdate: any): void {
+  handleToolCallUpdate(context: ACPExecutionContext, toolUpdate: any): void {
     const toolId = toolUpdate.id || '';
     if (toolId && !context.seenToolIds.has(toolId)) {
       const hasInput = toolUpdate.rawInput && Object.keys(toolUpdate.rawInput).length > 0;
@@ -693,9 +693,9 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     }
   }
 
-  protected handlePermissionRequest(_context: ACPExecutionContext, _params: any): void {}
+  handlePermissionRequest(_context: ACPExecutionContext, _params: any): void {}
 
-  protected handleSubtask(context: ACPExecutionContext, params: any): void {
+  handleSubtask(context: ACPExecutionContext, params: any): void {
     const name = params?.title || params?.name || params?.description || 'Subagent task';
     context.lastBlockWasTool = true;
     this.emitText(
@@ -715,7 +715,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     );
   }
 
-  protected handleEngineLog(context: ACPExecutionContext, payload: any): void {
+  handleEngineLog(context: ACPExecutionContext, payload: any): void {
     if (typeof payload === 'string') {
       this.emitDiagnosticLog(context, {
         message: 'ACP engine log',
@@ -739,7 +739,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     }
   }
 
-  protected handleEngineExit(context: ACPExecutionContext, info: any): void {
+  handleEngineExit(context: ACPExecutionContext, info: any): void {
     this.emitDiagnosticLog(context, {
       level: info?.code === 0 && !info?.signal ? 'info' : 'error',
       message: 'ACP engine exit event',
@@ -749,7 +749,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     });
   }
 
-  protected handleEngineError(context: ACPExecutionContext, error: unknown): void {
+  handleEngineError(context: ACPExecutionContext, error: unknown): void {
     const errorMessage = error instanceof Error ? error.message : String(error);
     this.emitDiagnosticLog(context, {
       level: 'error',
@@ -812,7 +812,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     }).trimEnd();
   }
 
-  protected async reconcileLatestAssistantMessage(
+  async reconcileLatestAssistantMessage(
     engine: ACPEngine,
     context: ACPExecutionContext,
     options: EngineOptions,

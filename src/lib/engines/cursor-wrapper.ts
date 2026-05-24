@@ -58,13 +58,13 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     return commandExists('agent', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }
 
-  protected beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {
+  beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {
     this.activeToolIds.clear();
     this.pendingTools.clear();
     this.lastEmittedText = '';
   }
 
-  protected handleAgentMessage(context: ACPExecutionContext, content: any): void {
+  handleAgentMessage(context: ACPExecutionContext, content: any): void {
     const text = this.extractText(content);
     if (!text || !text.trim()) return;
     if (text.trim() === this.lastEmittedText.trim()) return;
@@ -78,7 +78,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     this.emitText(context, prefix + text);
   }
 
-  protected handleAgentThought(context: ACPExecutionContext, content: any): void {
+  handleAgentThought(context: ACPExecutionContext, content: any): void {
     const text = this.extractText(content);
     if (!text) return;
     context.emitStream({
@@ -87,7 +87,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     });
   }
 
-  protected handleToolCall(context: ACPExecutionContext, toolCall: any): void {
+  handleToolCall(context: ACPExecutionContext, toolCall: any): void {
     const toolId = toolCall.id || '';
     if (!toolId || context.seenToolIds.has(toolId)) return;
     context.seenToolIds.add(toolId);
@@ -102,7 +102,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     });
   }
 
-  protected handleToolCallUpdate(context: ACPExecutionContext, toolUpdate: any): void {
+  handleToolCallUpdate(context: ACPExecutionContext, toolUpdate: any): void {
     const toolId = toolUpdate.id || '';
 
     if (toolId && !context.seenToolIds.has(toolId)) {
@@ -123,9 +123,9 @@ export class CursorEngineWrapper extends ACPWrapperBase {
     }
   }
 
-  protected handleEngineLog(_context: ACPExecutionContext, _payload: any): void {}
+  handleEngineLog(_context: ACPExecutionContext, _payload: any): void {}
 
-  protected handlePermissionRequest(context: ACPExecutionContext, params: any): void {
+  handlePermissionRequest(context: ACPExecutionContext, params: any): void {
     const toolCall = params?.toolCall;
     if (!toolCall) return;
     const toolId = toolCall.toolCallId || '';

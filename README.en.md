@@ -22,15 +22,7 @@ Your team of AIs, collaborating to get work done.
 
 ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
 
-![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
-
-<p><strong>Core Capability Highlights</strong></p>
-<p>From the product overview into daily work, ACEHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels.</p>
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg" alt="ACEHarness">
-</picture>
+![ACEHarness cover](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png)
 
 </div>
 
@@ -38,6 +30,7 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 
 ## Table of Contents
 
+- [Product Overview](#product-overview)
 - [Quick Start](#quick-start)
 - [Core Mechanisms](#core-mechanisms)
 - [Architecture](#architecture)
@@ -49,6 +42,19 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 - [Developer Reference](#developer-reference)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Product Overview
+
+![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
+
+ACEHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels. The capability map below expands the main entry points for daily work.
+
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg">
+    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.en.svg" alt="ACEHarness core capability highlights">
+</picture>
 
 ---
 
@@ -105,64 +111,7 @@ Open `http://127.0.0.1:3000` after startup. After entering the console, use Onbo
 
 ![Core mechanisms overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/core-mechanisms-overview.en.svg)
 
-ACEHarness is not just a chain of agents. It organizes engineering work into a loop that can be planned, rolled back, reviewed, resumed, observed, and reused:
-
-### Requirements and Plan Modeling
-
-**Spec Driven Development mode**  
-Start from requirement clarification, generate `requirements / design / tasks`, and bind them to workflow configuration and task execution so complex engineering work begins with a reviewable, traceable, and iterable plan.
-
-### Workflow Orchestration and Execution Control
-
-**Advanced state-machine transition strategies**  
-Model engineering decisions with states, steps, conditions, and priorities, supporting rollback, retry, review, branching, and conditional transitions beyond a linear process.
-
-**Concurrent state-machine steps**  
-Run multiple steps or agent tasks in parallel within the same state for implementation, review, testing, and information gathering, then aggregate results in later states to decide the next transition.
-
-**Supervisor routing**  
-When agents need missing context or human input, the Supervisor identifies the request, routes it to the right agent or user, and brings the answer back into the current workflow.
-
-**Adversarial iteration**  
-Defender, Attacker, and Judge roles can form a red/blue review loop so plans, code, tests, and evidence are challenged and adjudicated before the workflow advances.
-
-**Workflow Preflight checks**  
-Run configured or automatically inferred quality checks before a workflow starts, catching environment, build, test, and dependency issues before the run proceeds.
-
-**Human checkpoints with WeChat and email notification**  
-Approvals, follow-up questions, risk confirmations, and key decisions can reach users through the page, WeChat, and email so long-running workflows pause and resume at the right moments.
-
-**Git baseline and step-level change checkpoints**  
-Create a Git-backed run baseline and record code-change snapshots per step, making AI edits observable, comparable, traceable, and rollback-ready.
-
-### Multi-Agent Collaboration Spaces
-
-**Workflow Agent Agora**  
-Workflow runs can enter a multi-agent chat space where planning, disagreements, missing context, execution discussion, and retrospectives stay attached to the same topic.
-
-**Topic-mode Agora**  
-Standalone multi-agent topic rooms let teams use AI guests to discuss, compare approaches, make decisions, and collaborate outside a workflow run.
-
-### Knowledge and Long-Term Context
-
-**Layered persistent memory**  
-Persist experience across role, project, workflow, and chat scopes, then recall relevant context in later runs to reduce repeated explanations and repeated mistakes.
-
-**Cangjie Notebook collaborative documents**  
-Use personal and team Notebook spaces to manage documents, notes, run outputs, and retrospectives with collaborative editing, snapshots, and sharing.
-
-### Capability Extension and Model Governance
-
-**Skill Marketplace integration**  
-Install Skill packages from the marketplace, or import, export, and sync Skills so agents can use domain knowledge and specialized operating procedures in chat and workflows.
-
-**Model and engine diagnostics workbench**  
-Diagnose model, engine, SDK, ACP, and HTTP-driver behavior across connectivity, streaming events, structured output, coding, math, and reasoning to choose and troubleshoot execution backends.
-
-### External Channel Access
-
-**Chat mode binding for WeChat ClawBot sessions**  
-Home chat can bind to an external WeChat session, bringing external messages into the same ACEHarness conversation context.
+The workbench diagram above now carries the core mechanism details: Spec planning, state-machine execution, Supervisor routing, adversarial review, Agora collaboration, persistent memory, capability extension, model diagnostics, and external channels form one governed engineering loop.
 
 ---
 
@@ -171,12 +120,15 @@ Home chat can bind to an external WeChat session, bringing external messages int
 ![System architecture SVG](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/system-architecture.en.svg)
 
 Notes:
-- Real-time communication uses SSE to push execution status to the frontend
-- Persistent data is stored under `runs/{runId}/`, including state, output, and streamed content
+- The browser console contains the main pages: Home chat, workflow workbench, Agora, Notebook, Workspace, settings, and diagnostics.
+- Service entry centralizes startup, app routes, API routes, authentication, collaboration sockets, and streamed events.
+- Domain services cover tasks, chat, state machines, spec coding, Agora, Notebook, Workspace, channels, skills, and model diagnostics.
+- Runtime execution connects schedulers, process management, engine factories, context recovery, and result normalization to multiple execution backends.
+- The local data root persists config, data, cache, logs, workspaces, run records, notebooks, and skills, while external channel messages enter the same context.
 
 ## Functional Modules
 
-![Interface overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.en.svg)
+![Frontend page function cloud](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.en.svg)
 
 The ACEHarness interface is organized around daily engineering work:
 
@@ -186,6 +138,7 @@ The ACEHarness interface is organized around daily engineering work:
 - **Workspace and Changes**: embedded file editing, directory browsing, Git diff, step-level change review, and baseline comparison.
 - **Cangjie Notebook**: personal and team spaces for documents, notes, run outputs, and retrospectives with collaborative editing, snapshots, and sharing.
 - **Model and engine diagnostics**: standard probes for model and execution-backend evaluation, including SDK, ACP, HTTP drivers, and streaming-event troubleshooting.
+- **Governance and access**: account, users, system settings, channel integrations, and API docs connect all pages as governance entry points.
 
 ## Workflow Cases
 
@@ -195,11 +148,7 @@ Read the root-cause paths, execution data, and delivery results for all four cas
 
 ## Configuration and Engines
 
-## Channel Integrations
-
-ACEHarness can bridge workflow runtime conversations, human checkpoints, and multi-agent Agora rooms to external chat platforms. Built-in provider templates include `Feishu`, `DingTalk`, `WeChat Bridge`, and `Generic Webhook`; `POST /api/channels/setup` can generate the webhook and shared secret, and external platforms or bridge services can deliver messages to `/api/channels/inbound/:integrationId`.
-
-See [Channel Integrations](./docs/channel-integrations.md) for details.
+ACEHarness configuration is driven by the startup wizard, the engine management page, and environment variables. This repository currently supports local execution backends including `claude-code`, `kiro-cli`, `opencode`, `nga`, `codegenie`, `cursor`, `codex`, `trae-cli`, and `magic-cli`; the model and engine diagnostics workbench can verify connectivity, streaming events, structured output, coding, math, and reasoning behavior.
 
 ### ACE Service
 
@@ -260,15 +209,11 @@ Engine-specific ACE variables:
 | `ACE_NGA_SDK_COMMAND` | NGA SDK launch command | Auto-detected from PATH / SDK settings when unset |
 | `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK request timeout in ms | Uses the built-in default when unset |
 
-Global ACE Service CLI:
+## Channel Integrations
 
-```bash
-ace              # Start ACE Service
-ace start        # Explicitly start ACE Service
-ace service      # Inspect and stop managed ACE instances
-```
+ACEHarness can bridge workflow runtime conversations, human checkpoints, and multi-agent Agora rooms to external chat platforms. Built-in provider templates include `Feishu`, `DingTalk`, `WeChat Bridge`, and `Generic Webhook`; `POST /api/channels/setup` can generate the webhook and shared secret, and external platforms or bridge services can deliver messages to `/api/channels/inbound/:integrationId`.
 
-The startup wizard can enable background mode directly. If daemon supervision is also enabled, ACE will keep the background service under a daemon and automatically restart it after unexpected exits.
+See [Channel Integrations](./docs/channel-integrations.md) for details.
 
 ---
 

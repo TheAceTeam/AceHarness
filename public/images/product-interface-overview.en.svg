@@ -1,126 +1,117 @@
-<svg width="1200" height="620" viewBox="0 0 1200 620" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness Interface Overview</title>
-  <desc id="desc">Shows the main ACEHarness product surfaces across entry, runtime, collaboration, and asset layers.</desc>
+<svg width="1200" height="720" viewBox="0 0 1200 720" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ACEHarness Frontend Page Function Cloud</title>
+  <desc id="desc">A function-cloud map of ACEHarness frontend pages, including chat, workflows, Agora, Notebook, model engines, channels, users, and system settings.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#07111F"/>
-      <stop offset="55%" stop-color="#101827"/>
+      <stop offset="0%" stop-color="#06101F"/>
+      <stop offset="54%" stop-color="#101827"/>
       <stop offset="100%" stop-color="#171329"/>
     </linearGradient>
-    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#111C31" stop-opacity="0.98"/>
-      <stop offset="100%" stop-color="#0B1220" stop-opacity="0.98"/>
-    </linearGradient>
-    <radialGradient id="glowBlue" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.20"/>
-      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
+    <radialGradient id="core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="55%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
     </radialGradient>
-    <radialGradient id="glowOrange" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#FB923C" stop-opacity="0.15"/>
-      <stop offset="100%" stop-color="#FB923C" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="shadow" x="-12%" y="-16%" width="124%" height="142%">
+    <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M30 0H0V30" stroke="#FFFFFF" stroke-opacity="0.035"/>
+    </pattern>
+    <filter id="shadow" x="-14%" y="-18%" width="128%" height="148%">
       <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.38"/>
     </filter>
     <style>
       .font { font-family: Arial, sans-serif; }
-      .title { fill: #F8FAFC; font-size: 30px; font-weight: 800; }
+      .title { fill: #F8FAFC; font-size: 31px; font-weight: 800; }
       .subtitle { fill: #CBD5E1; font-size: 15px; }
-      .layer { fill: #F8FAFC; font-size: 22px; font-weight: 800; }
-      .item { fill: #F8FAFC; font-size: 15px; font-weight: 700; }
-      .desc { fill: #CBD5E1; font-size: 13px; }
+      .center { fill: #FFFFFF; font-size: 28px; font-weight: 800; }
+      .centerSub { fill: #DBEAFE; font-size: 14px; font-weight: 700; }
+      .bubble { fill: #F8FAFC; font-weight: 800; }
+      .sub { fill: #CBD5E1; font-size: 12px; font-weight: 700; }
+      .path { fill: #94A3B8; font-size: 11px; font-weight: 700; }
     </style>
   </defs>
 
-  <rect width="1200" height="620" rx="28" fill="url(#bg)"/>
-  <circle cx="140" cy="90" r="220" fill="url(#glowBlue)"/>
-  <circle cx="1050" cy="560" r="260" fill="url(#glowOrange)"/>
-  <path d="M0 92C206 36 344 144 535 132C742 118 930 36 1200 94V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
-  <path d="M0 514C210 446 410 548 600 526C828 498 1008 438 1200 480V620H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
+  <rect width="1200" height="720" rx="28" fill="url(#bg)"/>
+  <rect width="1200" height="720" rx="28" fill="url(#grid)"/>
+  <path d="M0 96C208 36 362 132 560 120C780 106 956 44 1200 96V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
+  <path d="M0 594C224 520 414 638 640 604C882 568 1022 516 1200 552V720H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
-  <rect x="34" y="34" width="1132" height="552" rx="24" fill="#0B1220" fill-opacity="0.72" stroke="#334155"/>
   <g class="font">
-    <text x="70" y="86" class="title">ACEHarness Interface Overview</text>
-    <text x="70" y="118" class="subtitle">From conversational creation to workbench execution, every surface is organized around the engineering task loop.</text>
+    <text x="70" y="78" class="title">ACEHarness Frontend Page Function Cloud</text>
+    <text x="70" y="110" class="subtitle">Page entry points for creation, execution, collaboration, knowledge, governance, channels, and administration.</text>
+  </g>
+
+  <g opacity="0.75" stroke="#334155" stroke-width="2">
+    <path d="M600 350C472 268 356 270 230 206"/>
+    <path d="M600 350C454 346 330 356 176 350"/>
+    <path d="M600 350C456 452 354 506 222 556"/>
+    <path d="M600 350C598 262 596 218 596 184"/>
+    <path d="M600 350C730 276 832 234 966 194"/>
+    <path d="M600 350C748 348 890 352 1030 354"/>
+    <path d="M600 350C736 456 850 514 998 560"/>
   </g>
 
   <g class="font" filter="url(#shadow)">
-    <rect x="68" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
-    <rect x="68" y="158" width="7" height="326" rx="4" fill="#38BDF8"/>
-    <circle cx="104" cy="198" r="18" fill="#0EA5E9" fill-opacity="0.20" stroke="#7DD3FC"/>
-    <text x="104" y="205" text-anchor="middle" fill="#BAE6FD" font-size="16" font-weight="800">01</text>
-    <text x="132" y="204" fill="#7DD3FC" font-size="14" font-weight="800">ENTRY</text>
-    <text x="96" y="238" class="layer">Entry Layer</text>
-    <circle cx="102" cy="278" r="6" fill="#38BDF8"/>
-    <text x="122" y="284" class="item">Chat /</text>
-    <text x="122" y="312" class="desc">Creation and sessions</text>
-    <circle cx="102" cy="354" r="6" fill="#38BDF8"/>
-    <text x="122" y="360" class="item">Dashboard</text>
-    <text x="122" y="388" class="desc">Trends, cost, runs</text>
-    <circle cx="102" cy="430" r="6" fill="#38BDF8"/>
-    <text x="122" y="436" class="item">Workflows</text>
-    <text x="122" y="464" class="desc">Search, filter, create</text>
-
-    <rect x="348" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
-    <rect x="348" y="158" width="7" height="326" rx="4" fill="#22C55E"/>
-    <circle cx="384" cy="198" r="18" fill="#22C55E" fill-opacity="0.20" stroke="#86EFAC"/>
-    <text x="384" y="205" text-anchor="middle" fill="#DCFCE7" font-size="16" font-weight="800">02</text>
-    <text x="412" y="204" fill="#86EFAC" font-size="14" font-weight="800">RUNTIME</text>
-    <text x="376" y="238" class="layer">Runtime Layer</text>
-    <circle cx="382" cy="278" r="6" fill="#22C55E"/>
-    <text x="402" y="284" class="item">Workbench Run</text>
-    <text x="402" y="312" class="desc">Streams and checkpoints</text>
-    <circle cx="382" cy="354" r="6" fill="#22C55E"/>
-    <text x="402" y="360" class="item">State-machine Views</text>
-    <text x="402" y="388" class="desc">Overview and graphs</text>
-    <circle cx="382" cy="430" r="6" fill="#22C55E"/>
-    <text x="402" y="436" class="item">History and Resume</text>
-    <text x="402" y="464" class="desc">Runs, docs, recovery</text>
-
-    <rect x="628" y="158" width="240" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
-    <rect x="628" y="158" width="7" height="326" rx="4" fill="#F59E0B"/>
-    <circle cx="664" cy="198" r="18" fill="#F59E0B" fill-opacity="0.20" stroke="#FCD34D"/>
-    <text x="664" y="205" text-anchor="middle" fill="#FEF3C7" font-size="16" font-weight="800">03</text>
-    <text x="692" y="204" fill="#FCD34D" font-size="14" font-weight="800">COLLAB</text>
-    <text x="656" y="238" class="layer">Collaboration Layer</text>
-    <circle cx="662" cy="278" r="6" fill="#F59E0B"/>
-    <text x="682" y="284" class="item">Spec Coding</text>
-    <text x="682" y="312" class="desc">Requirements and tasks</text>
-    <circle cx="662" cy="354" r="6" fill="#F59E0B"/>
-    <text x="682" y="360" class="item">Agents and Engines</text>
-    <text x="682" y="388" class="desc">Roles, pricing, CLIs</text>
-    <circle cx="662" cy="430" r="6" fill="#F59E0B"/>
-    <text x="682" y="436" class="item">Schedules and APIs</text>
-    <text x="682" y="464" class="desc">Cron jobs, API docs</text>
-
-    <rect x="908" y="158" width="224" height="326" rx="20" fill="url(#panel)" stroke="#334155"/>
-    <rect x="908" y="158" width="7" height="326" rx="4" fill="#A78BFA"/>
-    <circle cx="944" cy="198" r="18" fill="#8B5CF6" fill-opacity="0.20" stroke="#C4B5FD"/>
-    <text x="944" y="205" text-anchor="middle" fill="#EDE9FE" font-size="16" font-weight="800">04</text>
-    <text x="972" y="204" fill="#C4B5FD" font-size="14" font-weight="800">ASSETS</text>
-    <text x="936" y="238" class="layer">Asset Layer</text>
-    <circle cx="942" cy="278" r="6" fill="#A78BFA"/>
-    <text x="962" y="284" class="item">Workspace</text>
-    <text x="962" y="312" class="desc">Browse, edit, upload</text>
-    <circle cx="942" cy="354" r="6" fill="#A78BFA"/>
-    <text x="962" y="360" class="item">Notebook / Skills</text>
-    <text x="962" y="388" class="desc">Knowledge and reuse</text>
-    <circle cx="942" cy="430" r="6" fill="#A78BFA"/>
-    <text x="962" y="436" class="item">Users</text>
-    <text x="962" y="464" class="desc">Signup and approval</text>
+    <circle cx="600" cy="350" r="104" fill="url(#core)"/>
+    <circle cx="600" cy="350" r="78" fill="#FFFFFF" fill-opacity="0.10" stroke="#FFFFFF" stroke-opacity="0.34"/>
+    <text x="600" y="330" text-anchor="middle" class="center">ACEHarness</text>
+    <text x="600" y="363" text-anchor="middle" class="centerSub">Console Pages</text>
+    <text x="600" y="391" text-anchor="middle" class="centerSub">Chat / Workflow / Knowledge / Ops</text>
   </g>
 
-  <g stroke="#64748B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M308 320H348"/>
-    <path d="M588 320H628"/>
-    <path d="M868 320H908"/>
-    <path d="M336 314L348 320L336 326"/>
-    <path d="M616 314L628 320L616 326"/>
-    <path d="M896 314L908 320L896 326"/>
+  <g class="font" filter="url(#shadow)">
+    <ellipse cx="224" cy="204" rx="142" ry="66" fill="#0B1220" stroke="#38BDF8"/>
+    <text x="224" y="192" text-anchor="middle" class="bubble" font-size="20">Home Chat</text>
+    <text x="224" y="216" text-anchor="middle" class="sub">sessions, quick actions, wizards</text>
+    <text x="224" y="238" text-anchor="middle" class="path">/</text>
+
+    <ellipse cx="160" cy="350" rx="126" ry="60" fill="#0B1220" stroke="#38BDF8"/>
+    <text x="160" y="340" text-anchor="middle" class="bubble" font-size="19">Dashboard</text>
+    <text x="160" y="364" text-anchor="middle" class="sub">stats, trends, recent runs</text>
+    <text x="160" y="386" text-anchor="middle" class="path">/dashboard</text>
+
+    <ellipse cx="234" cy="548" rx="152" ry="64" fill="#0B1220" stroke="#22C55E"/>
+    <text x="234" y="536" text-anchor="middle" class="bubble" font-size="20">Workflows</text>
+    <text x="234" y="560" text-anchor="middle" class="sub">configs, search, create</text>
+    <text x="234" y="582" text-anchor="middle" class="path">/workflows</text>
+
+    <ellipse cx="444" cy="578" rx="138" ry="58" fill="#0B1220" stroke="#22C55E"/>
+    <text x="444" y="568" text-anchor="middle" class="bubble" font-size="19">Runs</text>
+    <text x="444" y="592" text-anchor="middle" class="sub">details, docs, recovery, logs</text>
+    <text x="444" y="614" text-anchor="middle" class="path">/runs /run-history</text>
+
+    <ellipse cx="596" cy="180" rx="156" ry="62" fill="#0B1220" stroke="#22C55E"/>
+    <text x="596" y="169" text-anchor="middle" class="bubble" font-size="20">Workflow Workbench</text>
+    <text x="596" y="194" text-anchor="middle" class="sub">state machine, SSE, gates, diffs</text>
+    <text x="596" y="216" text-anchor="middle" class="path">/workbench/[config]</text>
+
+    <ellipse cx="824" cy="258" rx="136" ry="58" fill="#0B1220" stroke="#F59E0B"/>
+    <text x="824" y="248" text-anchor="middle" class="bubble" font-size="19">Agora</text>
+    <text x="824" y="272" text-anchor="middle" class="sub">topics, multi-agent chat, review</text>
+    <text x="824" y="294" text-anchor="middle" class="path">/theaters</text>
+
+    <ellipse cx="986" cy="190" rx="148" ry="60" fill="#0B1220" stroke="#F59E0B"/>
+    <text x="986" y="180" text-anchor="middle" class="bubble" font-size="19">Notebook / Knowledge</text>
+    <text x="986" y="204" text-anchor="middle" class="sub">docs, snapshots, sharing, capture</text>
+    <text x="986" y="226" text-anchor="middle" class="path">/notebook /knowledge</text>
+
+    <ellipse cx="1030" cy="354" rx="148" ry="62" fill="#0B1220" stroke="#A78BFA"/>
+    <text x="1030" y="342" text-anchor="middle" class="bubble" font-size="19">Models and Engines</text>
+    <text x="1030" y="366" text-anchor="middle" class="sub">diagnostics, probes, backend switch</text>
+    <text x="1030" y="388" text-anchor="middle" class="path">/models /engines</text>
+
+    <ellipse cx="990" cy="556" rx="148" ry="62" fill="#0B1220" stroke="#A78BFA"/>
+    <text x="990" y="544" text-anchor="middle" class="bubble" font-size="19">Agents / Skills</text>
+    <text x="990" y="568" text-anchor="middle" class="sub">roles, marketplace, import/export</text>
+    <text x="990" y="590" text-anchor="middle" class="path">/agents /skills /marketplace</text>
+
+    <ellipse cx="776" cy="592" rx="136" ry="58" fill="#0B1220" stroke="#38BDF8"/>
+    <text x="776" y="582" text-anchor="middle" class="bubble" font-size="19">Workspace</text>
+    <text x="776" y="606" text-anchor="middle" class="sub">file tree, editing, uploads, Git</text>
+    <text x="776" y="628" text-anchor="middle" class="path">workspace APIs</text>
   </g>
 
   <g class="font">
-    <rect x="70" y="520" width="1062" height="42" rx="21" fill="#0B1220" fill-opacity="0.92" stroke="#334155"/>
-    <text x="600" y="547" text-anchor="middle" fill="#CBD5E1" font-size="15" font-weight="700">After entering the console, open Onboarding for the full usage path and module guide</text>
+    <rect x="156" y="646" width="888" height="42" rx="21" fill="#08101F" stroke="#334155"/>
+    <text x="600" y="673" text-anchor="middle" fill="#CBD5E1" font-size="14" font-weight="800">Account, users, system settings, channel integrations, and API docs connect every page as governance entry points</text>
   </g>
 </svg>

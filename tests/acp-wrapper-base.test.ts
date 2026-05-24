@@ -79,6 +79,8 @@ const BASE_OPTIONS: EngineOptions = {
   agent: 'test-agent',
   step: 'test-step',
   prompt: 'test prompt',
+  systemPrompt: 'test system prompt',
+  model: 'test-model',
   workingDirectory: process.cwd(),
 };
 
@@ -215,7 +217,8 @@ describe('ACPWrapperBase shared runner', () => {
     expect(acpMockState.sendPrompts).toHaveLength(1);
     expect(secondChunks).toEqual([]);
 
-    releaseFirst?.();
+    const release = releaseFirst as (() => void) | null;
+    release?.();
 
     const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
     expect(firstResult.output).toContain('first chunk');

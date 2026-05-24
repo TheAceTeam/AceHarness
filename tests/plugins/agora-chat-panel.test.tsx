@@ -79,7 +79,19 @@ function renderPanel() {
   return renderPanelWithCallAgent(mockCallAgent);
 }
 
-function renderPanelWithCallAgent(callAgent = mockCallAgent) {
+function renderPanelWithCallAgent(
+  callAgent = mockCallAgent,
+  options?: {
+    currentUser?: {
+      username?: string;
+      email?: string;
+      avatar?: string;
+      name?: string;
+      nickname?: string;
+      displayName?: string;
+    } | null;
+  }
+) {
   function Harness() {
     const [room, setRoom] = React.useState<CollaborationRoomState>(createEmptyRoom());
     const updateRoom = React.useCallback((updater: (room: CollaborationRoomState) => CollaborationRoomState) => {
@@ -91,6 +103,7 @@ function renderPanelWithCallAgent(callAgent = mockCallAgent) {
         availableAgents={mockAgents}
         room={room}
         updateRoom={updateRoom}
+        currentUser={options?.currentUser || null}
         callAgent={callAgent}
         toast={mockToast}
       />
@@ -372,6 +385,196 @@ describe('built-in agora chat panel', () => {
     expect(document.querySelector('[data-testid="ace-reasoning"]')).toBeTruthy();
 
     expect(screen.queryByText('回复缺少 <result>...</result>，议场最终发言必须通过结果块输出。')).toBeNull();
+  });
+
+  test('completed structured process panel keeps older details available after appending new messages', async () => {
+    const user = userEvent.setup();
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+    const firstMessage = {
+      id: 'older-agent-message',
+      createdAt: Date.now(),
+      speakerType: 'agent' as const,
+      speakerName: 'Agent-Alpha',
+      content: '这是最终发言',
+      rawContent: [
+        wrapAceProcessBlock('reasoning', {}, '我先把这件事拆一下。'),
+        buildAgoraResultEnvelope({ type: 'speech', content: '这是最终发言', mentions: [] }),
+      ].join('\n\n'),
+      status: 'done' as const,
+    };
+
+    const { rerender } = render(
+      <CollaborationRoomSurface
+        messages={[firstMessage]}
+        draft=""
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        submitLabel="发送"
+        placeholder="在议场发言"
+        mentionTargets={[]}
+        onInsertMention={() => {}}
+        inputRef={inputRef}
+        bottomRef={bottomRef}
+        getSpeakerAvatarSrc={() => ''}
+        getInitials={(name) => name.slice(0, 1)}
+        getMessageKindLabel={() => '议场发言'}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: '查看完整内容' }));
+    expect(document.querySelector('[data-testid="ace-reasoning"]')).toBeTruthy();
+
+    rerender(
+      <CollaborationRoomSurface
+        messages={[
+          firstMessage,
+          {
+            id: 'new-human-message',
+            createdAt: Date.now() + 1,
+            speakerType: 'human',
+            speakerName: '你',
+            content: '补一条新消息',
+            rawContent: '补一条新消息',
+            status: 'done',
+          },
+        ]}
+        draft=""
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        submitLabel="发送"
+        placeholder="在议场发言"
+        mentionTargets={[]}
+        onInsertMention={() => {}}
+        inputRef={inputRef}
+        bottomRef={bottomRef}
+        getSpeakerAvatarSrc={() => ''}
+        getInitials={(name) => name.slice(0, 1)}
+        getMessageKindLabel={() => '议场发言'}
+      />
+    );
+
+    expect(screen.getByTestId('agora-complete-raw-panel')).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="ace-reasoning"]')).toBeTruthy();
+  });
+
+  test('structured result without extra process details does not render an empty expand panel', () => {
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+
+    render(
+      <CollaborationRoomSurface
+        messages={[{
+          id: 'result-only-agent-message',
+          createdAt: Date.now(),
+          speakerType: 'agent',
+          speakerName: 'Agent-Alpha',
+          content: '只有最终发言',
+          rawContent: buildAgoraResultEnvelope({ type: 'speech', content: '只有最终发言', mentions: [] }),
+          status: 'done',
+        }]}
+        draft=""
+        onDraftChange={() => {}}
+        onSubmit={() => {}}
+        submitLabel="发送"
+        placeholder="在议场发言"
+        mentionTargets={[]}
+        onInsertMention={() => {}}
+        inputRef={inputRef}
+        bottomRef={bottomRef}
+        getSpeakerAvatarSrc={() => ''}
+        getInitials={(name) => name.slice(0, 1)}
+        getMessageKindLabel={() => '议场发言'}
+      />
+    );
+
+    expect(screen.queryByRole('button', { name: '查看完整内容' })).toBeNull();
+  });
+
+  test('agora panel uses the custom user avatar for older human messages matched by username alias', async () => {
+    const runningRoom: CollaborationRoomState = {
+      topic: '头像匹配测试',
+      selectedAgents: ['Agent-Alpha'],
+      mode: 'group-chat',
+      messages: [{
+        id: 'existing-human-message',
+        createdAt: Date.now(),
+        speakerType: 'human',
+        speakerName: 'zichexuelan',
+        content: '这是一条测试消息',
+        rawContent: '这是一条测试消息',
+        status: 'done',
+        chatroom: {
+          kind: 'host',
+          mode: 'mention-driven',
+          mentions: [],
+          participants: ['Agent-Alpha'],
+        },
+      }],
+      rounds: [],
+      agentSessions: {},
+      chatroom: {
+        status: 'running',
+        topic: '头像匹配测试',
+        participants: ['Agent-Alpha'],
+        facilitator: undefined,
+        rounds: [],
+        voteHistory: [],
+        summaries: [],
+        activeVote: null,
+        participantRoster: [{
+          id: 'participant-agent-alpha',
+          name: 'Agent-Alpha',
+          sourceType: 'agent',
+          sourceAgent: 'Agent-Alpha',
+          runtimeAgentName: 'Agent-Alpha',
+          useDefaultModel: true,
+          createdAt: Date.now(),
+        }],
+        temporaryAgents: [],
+        settings: {
+          responseMode: 'mention-driven',
+          maxTurnsPerRound: 2,
+          maxRepliesPerAgent: 1,
+          autoSummarize: true,
+          defaultEngine: '',
+          defaultModel: '',
+          defaultRuntimeMode: 'inherit',
+          agentOverrides: {},
+          workspacePath: '',
+        },
+      },
+    };
+
+    function Harness() {
+      const [room, setRoom] = React.useState<CollaborationRoomState>(runningRoom);
+      const updateRoom = React.useCallback((updater: (room: CollaborationRoomState) => CollaborationRoomState) => {
+        setRoom((prev) => updater(prev));
+      }, []);
+
+      return (
+        <AgoraChatPanel
+          availableAgents={mockAgents}
+          room={room}
+          updateRoom={updateRoom}
+          layout="workspace"
+          currentUser={{
+            username: 'zichexuelan',
+            displayName: '子车雪岚',
+            avatar: 'custom-user-avatar.png',
+          }}
+          callAgent={mockCallAgent}
+          toast={mockToast}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    await waitFor(() => {
+      const avatars = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
+      expect(avatars.some((avatar) => String(avatar.getAttribute('src') || avatar.src || '').includes('/avatar/custom-user-avatar.png'))).toBe(true);
+    });
   });
 
   test('vote dialog collects results and closes the active vote', async () => {

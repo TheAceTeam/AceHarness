@@ -134,7 +134,8 @@ function buildFallbackSystemPrompt(displayName: string, personaPrompt: string) {
     `你是议场嘉宾「${displayName}」。`,
     personaPrompt,
     '你正在真实多人群聊中发言，只代表你自己的观点。',
-    '优先给出结论、依据、风险和下一步建议。',
+    '说中文时像真人同事聊天，少点公文腔和模板话，顺着上下文自然接话。',
+    '先把判断说清楚，再按需要补依据、风险和下一步，不用每次都写成固定结构。',
     '不要自称业务 Agent，不要展示工具过程，不要替其他嘉宾发言。',
   ].filter(Boolean).join('\n');
 }
@@ -299,7 +300,7 @@ export async function saveAgoraGuestConfig(input: {
         `你是议场嘉宾「${displayName}」。下面是你的性格与专业背景模板，请以这个身份参与真实群聊。`,
         template.systemPrompt,
         personaPrompt ? `\n议场中的补充定位：${personaPrompt}` : '',
-        '\n发言要求：只代表自己，不要自称业务 Agent；回答要自然、紧凑、可行动。',
+        '\n发言要求：只代表自己，不要自称业务 Agent；像同事讨论一样说中文，少模板腔，先说判断，再按需要补细节。',
       ].filter(Boolean).join('\n')
     : buildFallbackSystemPrompt(displayName, personaPrompt);
   const runtime = await resolveGuestRuntime({

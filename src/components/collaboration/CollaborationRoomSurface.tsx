@@ -15,7 +15,7 @@ import { ThinkingBot, WrapperProcessBlocks } from '@/components/chat/ChatMessage
 import Markdown from '@/components/Markdown';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { useToast } from '@/components/ui/toast';
-import { getStreamingResultDisplay } from '@/lib/chat/actions';
+import { getStreamingResultDisplay, stripMachineResultBlocks } from '@/lib/chat/actions';
 import { copyText } from '@/lib/core/clipboard';
 import { createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { workspaceApi, type NotebookScope } from '@/lib/core/api';
@@ -99,7 +99,10 @@ function CompletedStructuredProcessPanel({
   rawContent: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const content = String(rawContent || '').trim();
+  const content = useMemo(
+    () => stripMachineResultBlocks(String(rawContent || '')).replace(/<!--\s*chunk-boundary\s*-->/gi, '').trim(),
+    [rawContent]
+  );
   if (!content) return null;
 
   return (
@@ -110,7 +113,7 @@ function CompletedStructuredProcessPanel({
           <span>{expanded ? '收起完整内容' : '查看完整内容'}</span>
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="pt-1">
+      <CollapsibleContent className="pt-1" forceMount>
         <div data-testid="agora-complete-raw-panel">
           <WrapperProcessBlocks content={content} isStreaming={false} />
         </div>

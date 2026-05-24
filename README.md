@@ -22,16 +22,7 @@ Your team of AIs, collaborating to get work done.
 
 ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。它把 Spec Driven Development、状态机工作流、Supervisor 智能路由、对抗式迭代、多 Agent 议场、Git 基线断点、多层永久记忆、Notebook 知识沉淀、Skill 能力扩展和模型/引擎诊断组合在一起，让复杂研发任务可以被规划、执行、协作、审查、回退、恢复和复盘。
 
-![ACEHarness 产品总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png)
-
-<p><strong>核心能力亮点</strong></p>
-<p>从产品全景进入日常工作流，ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工程任务闭环。</p>
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg" alt="ACEHarness">
-</picture>
-
+![ACEHarness 封面](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png)
 
 </div>
 
@@ -39,6 +30,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 
 ## 目录
 
+- [产品全景](#产品全景)
 - [快速开始](#快速开始)
 - [核心机制](#核心机制)
 - [系统架构](#系统架构)
@@ -53,12 +45,25 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 
 ---
 
+## 产品全景
+
+![ACEHarness 产品总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png)
+
+ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工程任务闭环；下图展开核心能力入口，便于从产品全景进入日常工作流。
+
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
+    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg" alt="ACEHarness 核心能力亮点">
+</picture>
+
+---
+
 ## 快速开始
 
 ### 前置条件
 
 - Node.js `>= 20` / npm `>= 9`：运行 Next.js 服务与 npm CLI 包
-- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli` 等至少一种
+- AI 执行引擎：`claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`magic-cli` 等至少一种
 
 ### 安装与运行
 
@@ -118,64 +123,7 @@ ace service      # 查看并停止当前受管的 ACE 实例
 
 ![核心机制总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/core-mechanisms-overview.svg)
 
-ACEHarness 的核心不是把多个 Agent 串起来跑一遍，而是把工程任务拆成可计划、可回退、可审查、可恢复、可复盘的闭环：
-
-### 需求与计划建模
-
-**Spec Driven Development 模式支持**  
-从需求澄清开始生成 `requirements / design / tasks`，再绑定到工作流配置和任务执行，让复杂工程任务先形成可审查、可追踪、可迭代的正式计划。
-
-### 工作流编排与执行控制
-
-**状态机工作流的高级转移策略**  
-用状态、步骤、条件和优先级描述工程决策路径，支持比线性流程更复杂的回退、重试、审查、分支和条件跳转。
-
-**状态机步骤并发模式**  
-同一状态内可并发调度多个步骤或 Agent 任务，用于并行实现、评审、测试和信息收集，再由后续状态汇总结果并决定下一步转移。
-
-**Supervisor 智能路由**  
-当 Agent 缺少上下文或需要人类输入时，由 Supervisor 负责识别需求、路由到合适的 Agent 或用户，并把补充信息带回当前工作流。
-
-**对抗式迭代**  
-Defender、Attacker 和 Judge 可以形成红蓝对抗式审查闭环，让方案、代码、测试和证据在进入下一阶段前经过主动质疑和结构化裁决。
-
-**工作流 Preflight 检查**  
-启动前运行配置或自动推断出的质量检查，提前发现环境、构建、测试和依赖问题，避免工作流带病执行。
-
-**人工检查点支持 WeChat、邮件通知**  
-人工审批、补充问题、风险确认和关键决策可以通过页面、微信和邮件触达，让长流程在需要人介入时及时停住并继续。
-
-**工作基线与步骤级代码变更可回退断点**  
-基于 Git 建立运行基线，按步骤记录代码变更快照，用于审查、定位、比较和回退，让 AI 对代码库的修改可观察、可追溯。
-
-### 多 Agent 协作空间
-
-**工作流 Agent 议场功能**  
-工作流执行过程可进入多 Agent 群聊式协作空间，让计划、分歧、补充上下文、执行讨论和复盘集中在同一议题里。
-
-**话题模式议场**  
-独立于工作流的多 Agent 群聊，用“话题”推进讨论、方案比较、决策和日常协作。
-
-### 知识沉淀与长期上下文
-
-**多层永久记忆**  
-按角色、项目、工作流、会话等层级沉淀经验，后续运行可按上下文召回，减少重复解释和重复踩坑。
-
-**Cangjie Notebook 协同编辑文档**  
-用个人/团队 Notebook 管理文档、笔记、运行产物和复盘材料，支持协作编辑、快照恢复和分享。
-
-### 能力扩展与模型治理
-
-**Skill 市场接入**  
-从 Skill 市场安装能力包，也支持导入、导出和同步，让 Agent 在对话和工作流中使用领域知识与专用操作流程。
-
-**模型/引擎诊断台**  
-诊断不同模型、引擎、SDK/ACP 链路的连接、流式事件、结构化输出、代码、数学、推理等能力，帮助选择和排查执行后端。
-
-### 外部渠道接入
-
-**对话模式支持绑定微信 ClawBot 会话**  
-首页对话可以绑定外部微信会话，把外部消息接入同一上下文，让 ACEHarness 的对话能力延伸到常用沟通渠道。
+ACEHarness 的核心机制已整合在上方工作台图中：从 Spec 计划与状态机执行，到 Supervisor 路由、对抗评审、议场协作、记忆沉淀、能力扩展、模型诊断和外部渠道接入，形成可治理的工程闭环。
 
 ---
 
@@ -184,12 +132,15 @@ Defender、Attacker 和 Judge 可以形成红蓝对抗式审查闭环，让方�
 ![系统架构 SVG 配图](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/system-architecture.svg)
 
 注：
-- 实时通信使用 SSE 推送执行状态到前端
-- 数据持久化采用 `runs/{runId}/` 目录存储状态、输出和流式内容
+- 浏览器前端承接首页对话、工作流工作台、议场、笔记本、工作区和设置诊断等主要页面。
+- 服务入口统一处理启动、页面路由、接口路由、鉴权、协作长连接和流式事件。
+- 业务服务负责任务、对话、状态机、规范开发、议场、笔记本、工作区、渠道、能力市场和模型诊断。
+- 运行与执行层通过调度器、进程管理器、引擎工厂、上下文恢复和结果归一化连接多种执行后端。
+- 本地数据根目录沉淀配置、数据、缓存、日志、工作区、运行记录、笔记本和能力包，外部渠道消息进入同一上下文。
 
 ## 产品界面
 
-![产品界面总览](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.svg)
+![前端页面功能云图](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/product-interface-overview.svg)
 
 ACEHarness 的界面围绕日常工程工作流组织：
 
@@ -199,6 +150,7 @@ ACEHarness 的界面围绕日常工程工作流组织：
 - **Workspace 与变更**：内嵌文件编辑、目录浏览、Git diff、步骤级变更和 baseline 对比。
 - **Cangjie Notebook**：沉淀文档、笔记、运行产物和复盘材料，支持个人/团队空间、协作编辑、快照和分享。
 - **模型/引擎诊断台**：用标准 probe 评估模型与执行后端，定位 SDK、ACP、HTTP driver 和流式事件问题。
+- **治理与接入**：账号、用户、系统设置、渠道接入和 API 文档作为治理入口串联所有页面。
 
 ## 工作流案例
 
@@ -208,11 +160,7 @@ ACEHarness 的界面围绕日常工程工作流组织：
 
 ## 配置与引擎
 
-## 渠道接入
-
-ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent 议场桥接到外部聊天平台。当前内置了 `Feishu`、`DingTalk`、`WeChat Bridge`、`Generic Webhook` 四类 provider 模板，可通过 `POST /api/channels/setup` 一键生成 webhook 和共享密钥，再由外部平台或桥接器把消息投递到 `/api/channels/inbound/:integrationId`。
-
-详细说明见：[渠道接入文档](./docs/channel-integrations.md)。
+ACEHarness 的配置主要由启动向导、引擎管理页和环境变量共同决定。当前仓库支持 `claude-code`、`kiro-cli`、`opencode`、`nga`、`codegenie`、`cursor`、`codex`、`trae-cli`、`magic-cli` 等本地执行后端；模型/引擎诊断台可验证连接、流式事件、结构化输出、代码、数学和推理能力。
 
 ### ACE Service
 
@@ -273,15 +221,11 @@ ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent
 | `ACE_NGA_SDK_COMMAND` | NGA SDK 启动命令 | 未设置时按 PATH / SDK 配置探测 |
 | `ACE_NGA_SDK_TIMEOUT_MS` | NGA SDK 请求超时（毫秒） | 未设置时使用内置默认 |
 
-全局 CLI 用法：
+## 渠道接入
 
-```bash
-ace              # 启动 ACE Service
-ace start        # 显式启动 ACE Service
-ace service      # 查看并停止当前受管的 ACE 实例
-```
+ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent 议场桥接到外部聊天平台。当前内置了 `Feishu`、`DingTalk`、`WeChat Bridge`、`Generic Webhook` 四类 provider 模板，可通过 `POST /api/channels/setup` 一键生成 webhook 和共享密钥，再由外部平台或桥接器把消息投递到 `/api/channels/inbound/:integrationId`。
 
-启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。
+详细说明见：[渠道接入文档](./docs/channel-integrations.md)。
 
 ## 文档
 
@@ -354,7 +298,7 @@ npm run lint
 | 可视化 | ReactFlow 11、Recharts 3、Mermaid 11 |
 | 表单与拖拽 | React Hook Form 7、@dnd-kit |
 | Markdown 与文档 | react-markdown、remark-gfm、rehype-raw、KaTeX |
-| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` |
+| AI SDK 与执行后端 | Anthropic Claude Agent SDK、OpenAI Codex SDK、`claude-code` / `kiro-cli` / `opencode` / `nga` / `codegenie` / `cursor` / `codex` / `trae-cli` / `magic-cli` |
 | 测试 | Vitest 4、Testing Library、jsdom |
 | 主题 | next-themes |
 

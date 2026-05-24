@@ -54,7 +54,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
     if (cached) {
       try {
         console.log(`[NGA] using cached ACP command: ${cached.command} (${cached.source ?? 'unknown'})`);
-        return await this.startEngineWithConfig(this.buildConfig(options, cached, diagnosticLoggingEnabled));
+        return await this.startEngineWithConfig(this.buildConfig(options, cached), diagnosticLoggingEnabled);
       } catch (cachedError) {
         NgaEngineWrapper.cachedResolution = null;
         console.warn(
@@ -89,7 +89,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
       );
 
       try {
-        const engine = await this.startEngineWithConfig(this.buildConfig(options, fallback, diagnosticLoggingEnabled));
+        const engine = await this.startEngineWithConfig(this.buildConfig(options, fallback), diagnosticLoggingEnabled);
         NgaEngineWrapper.cachedResolution = { ...fallback, source: 'codeagent' };
         console.log(`[NGA] codeagent ACP handshake succeeded: ${fallback.command}`);
         return engine;

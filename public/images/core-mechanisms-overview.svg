@@ -1,107 +1,171 @@
-<svg width="1200" height="680" viewBox="0 0 1200 680" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">ACEHarness 工程任务闭环</title>
-  <desc id="desc">展示 ACEHarness 以 Spec、状态机、议场、Git 断点、记忆和诊断组成的工程任务闭环。</desc>
+<svg width="1200" height="820" viewBox="0 0 1200 820" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ACEHarness 核心机制工作台</title>
+  <desc id="desc">以工程控制台构图展示 ACEHarness 的 Spec 计划、状态机运行、Supervisor 治理、协作记忆、扩展诊断与渠道接入。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#07111F"/>
-      <stop offset="55%" stop-color="#101827"/>
-      <stop offset="100%" stop-color="#171329"/>
+      <stop offset="0%" stop-color="#060914"/>
+      <stop offset="46%" stop-color="#0A1020"/>
+      <stop offset="100%" stop-color="#101525"/>
     </linearGradient>
     <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#111C31" stop-opacity="0.98"/>
-      <stop offset="100%" stop-color="#0B1220" stop-opacity="0.98"/>
+      <stop offset="0%" stop-color="#111C31" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#08101F" stop-opacity="0.98"/>
     </linearGradient>
-    <linearGradient id="center" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1D4ED8"/>
-      <stop offset="52%" stop-color="#0EA5E9"/>
-      <stop offset="100%" stop-color="#7C3AED"/>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1F2A44" stop-opacity="0.78"/>
+      <stop offset="100%" stop-color="#0B1220" stop-opacity="0.82"/>
     </linearGradient>
-    <radialGradient id="glowBlue" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.22"/>
-      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glowGreen" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#22C55E" stop-opacity="0.16"/>
-      <stop offset="100%" stop-color="#22C55E" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="shadow" x="-14%" y="-18%" width="128%" height="148%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.38"/>
+    <linearGradient id="spine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="45%" stop-color="#22C55E"/>
+      <stop offset="72%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#A78BFA"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" stroke="#FFFFFF" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-12%" y="-16%" width="124%" height="142%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#020617" flood-opacity="0.38"/>
     </filter>
-    <marker id="loopArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
-      <path d="M1 1L9 5L1 9Z" fill="#64748B"/>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L9 5L1 9Z" fill="#94A3B8"/>
     </marker>
     <style>
       .font { font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif; }
-      .title { fill: #F8FAFC; font-size: 32px; font-weight: 800; }
+      .title { fill: #F8FAFC; font-size: 34px; font-weight: 800; }
       .subtitle { fill: #CBD5E1; font-size: 16px; }
-      .h { fill: #F8FAFC; font-size: 21px; font-weight: 800; }
+      .kicker { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; }
+      .h { fill: #F8FAFC; font-size: 22px; font-weight: 800; }
       .p { fill: #CBD5E1; font-size: 14px; }
+      .tiny { fill: #94A3B8; font-size: 12px; font-weight: 700; }
+      .chip { fill: #E2E8F0; font-size: 12px; font-weight: 800; }
     </style>
   </defs>
 
-  <rect width="1200" height="680" rx="30" fill="url(#bg)"/>
-  <circle cx="150" cy="95" r="240" fill="url(#glowBlue)"/>
-  <circle cx="1040" cy="620" r="280" fill="url(#glowGreen)"/>
-  <path d="M0 106C210 42 370 164 570 150C780 134 938 44 1200 102V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
-  <path d="M0 560C226 486 420 606 626 576C858 542 1010 486 1200 522V680H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
+  <rect width="1200" height="820" rx="30" fill="url(#bg)"/>
+  <rect width="1200" height="820" rx="30" fill="url(#grid)"/>
+  <path d="M0 118C220 68 347 128 536 116C772 101 905 50 1200 91V0H0Z" fill="#FFFFFF" fill-opacity="0.04"/>
+  <path d="M0 712C220 656 392 732 612 704C842 674 1006 626 1200 664V820H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 
-  <rect x="34" y="34" width="1132" height="612" rx="26" fill="#0B1220" fill-opacity="0.72" stroke="#334155"/>
   <g class="font">
-    <text x="70" y="86" class="title">ACEHarness 工程任务闭环</text>
-    <text x="70" y="120" class="subtitle">从需求计划、状态机执行到协作、断点、记忆和诊断，形成可治理的本地 Multi-Agent 工作系统。</text>
+    <text x="70" y="82" class="title">ACEHarness 核心机制工作台</text>
+    <text x="70" y="116" class="subtitle">把封面里的 Spec/状态机、Supervisor 对抗、Agora/Notebook、模型引擎与渠道治理组织成一个可执行工程控制面。</text>
   </g>
 
-  <g transform="translate(0,-10)">
-    <g stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.92">
-      <path d="M414 238C492 198 708 198 786 238" marker-end="url(#loopArrow)"/>
-      <path d="M980 346C1008 374 1008 402 980 430" marker-end="url(#loopArrow)"/>
-      <path d="M786 522C708 562 492 562 414 522" marker-end="url(#loopArrow)"/>
-      <path d="M220 430C192 402 192 374 220 346" marker-end="url(#loopArrow)"/>
+  <g filter="url(#shadow)">
+    <rect x="58" y="150" width="1084" height="596" rx="28" fill="#0B1220" fill-opacity="0.82" stroke="#23324A"/>
+    <path d="M98 190H1102" stroke="url(#spine)" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="98" cy="190" r="8" fill="#38BDF8"/>
+    <circle cx="394" cy="190" r="8" fill="#22C55E"/>
+    <circle cx="806" cy="190" r="8" fill="#F97316"/>
+    <circle cx="1102" cy="190" r="8" fill="#A78BFA"/>
+    <text x="114" y="178" fill="#7DD3FC" class="tiny">SPEC PLANE</text>
+    <text x="410" y="178" fill="#86EFAC" class="tiny">STATE RUNTIME</text>
+    <text x="822" y="178" fill="#FDBA74" class="tiny">SUPERVISOR GATES</text>
+    <text x="960" y="216" fill="#C4B5FD" class="tiny">KNOWLEDGE / OPS</text>
+  </g>
+
+  <g class="font" filter="url(#shadow)">
+    <rect x="82" y="230" width="286" height="320" rx="20" fill="url(#panel)" stroke="#2A3A55"/>
+    <rect x="82" y="230" width="286" height="4" rx="2" fill="#38BDF8"/>
+    <text x="106" y="270" fill="#7DD3FC" class="kicker">01  SPEC DRIVEN</text>
+    <text x="106" y="306" class="h">需求计划层</text>
+
+    <g>
+      <rect x="106" y="330" width="70" height="78" rx="12" fill="#E0F2FE" fill-opacity="0.95"/>
+      <rect x="196" y="330" width="70" height="78" rx="12" fill="#DBEAFE" fill-opacity="0.95"/>
+      <rect x="286" y="330" width="58" height="78" rx="12" fill="#DCFCE7" fill-opacity="0.95"/>
+      <text x="141" y="358" text-anchor="middle" fill="#991B1B" font-size="12" font-weight="800">需求</text>
+      <text x="231" y="358" text-anchor="middle" fill="#1D4ED8" font-size="12" font-weight="800">设计</text>
+      <text x="315" y="358" text-anchor="middle" fill="#166534" font-size="12" font-weight="800">任务</text>
+      <path d="M120 374H162M120 388H154M210 374H252M210 388H246M299 374H331M299 388H326" stroke="#64748B" stroke-opacity="0.55" stroke-width="3" stroke-linecap="round"/>
     </g>
 
-    <g filter="url(#shadow)">
-      <circle cx="600" cy="370" r="118" fill="url(#center)"/>
-      <circle cx="600" cy="370" r="90" fill="#FFFFFF" fill-opacity="0.10" stroke="#FFFFFF" stroke-opacity="0.35"/>
-      <circle cx="600" cy="370" r="132" stroke="#38BDF8" stroke-opacity="0.20" stroke-width="2"/>
-      <text x="600" y="336" text-anchor="middle" fill="#FFFFFF" class="font" font-size="27" font-weight="800">工程任务闭环</text>
-      <text x="600" y="371" text-anchor="middle" fill="#DBEAFE" class="font" font-size="15">Plan / Run / Agora / Memory</text>
-      <rect x="509" y="394" width="182" height="34" rx="17" fill="#0B1220" fill-opacity="0.36" stroke="#FFFFFF" stroke-opacity="0.22"/>
-      <text x="600" y="416" text-anchor="middle" fill="#FFFFFF" class="font" font-size="15" font-weight="800">Git-backed control</text>
+    <text x="106" y="440" class="p">需求澄清生成正式计划</text>
+    <text x="106" y="466" class="p">绑定 workflow 配置与任务执行</text>
+    <text x="106" y="492" class="p">可审查、可追踪、可迭代</text>
+    <rect x="106" y="512" width="190" height="28" rx="14" fill="#0EA5E9" fill-opacity="0.15" stroke="#38BDF8" stroke-opacity="0.55"/>
+    <text x="201" y="531" text-anchor="middle" class="chip">requirements / design / tasks</text>
+  </g>
+
+  <g class="font" filter="url(#shadow)">
+    <rect x="398" y="214" width="396" height="356" rx="22" fill="url(#panel)" stroke="#2A3A55"/>
+    <rect x="398" y="214" width="396" height="4" rx="2" fill="#22C55E"/>
+    <text x="426" y="254" fill="#86EFAC" class="kicker">02  STATE MACHINE WORKFLOW</text>
+    <text x="426" y="290" class="h">状态机运行核心</text>
+
+    <rect x="426" y="312" width="340" height="172" rx="16" fill="#050A14" stroke="#334155"/>
+    <path d="M462 392H544M544 392V350H622M544 392V434H622M622 350H696M622 434H696M696 350V392H734M696 434V392H734" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <rect x="452" y="376" width="64" height="32" rx="16" fill="#0EA5E9" fill-opacity="0.28" stroke="#7DD3FC"/>
+    <text x="484" y="397" text-anchor="middle" fill="#E0F2FE" font-size="12" font-weight="800">Start</text>
+    <rect x="594" y="334" width="70" height="32" rx="10" fill="#22C55E" fill-opacity="0.22" stroke="#86EFAC"/>
+    <text x="629" y="355" text-anchor="middle" fill="#DCFCE7" font-size="12" font-weight="800">Build</text>
+    <rect x="594" y="418" width="70" height="32" rx="10" fill="#A78BFA" fill-opacity="0.22" stroke="#C4B5FD"/>
+    <text x="629" y="439" text-anchor="middle" fill="#F5F3FF" font-size="12" font-weight="800">Review</text>
+    <path d="M706 376L724 394L706 412L688 394Z" fill="#F59E0B" fill-opacity="0.24" stroke="#FCD34D"/>
+    <text x="706" y="399" text-anchor="middle" fill="#FEF3C7" font-size="13" font-weight="900">?</text>
+    <rect x="734" y="376" width="28" height="32" rx="8" fill="#22C55E" fill-opacity="0.24" stroke="#86EFAC"/>
+    <text x="748" y="397" text-anchor="middle" fill="#DCFCE7" font-size="11" font-weight="800">Go</text>
+    <path d="M516 460C486 472 462 462 462 436" stroke="#F97316" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+    <text x="468" y="466" fill="#FDBA74" font-size="11" font-weight="800">Retry / Rollback</text>
+    <rect x="646" y="454" width="86" height="20" rx="10" fill="#0F172A" stroke="#475569" stroke-dasharray="4 4"/>
+    <text x="689" y="468" text-anchor="middle" fill="#CBD5E1" font-size="11" font-weight="800">Parallel</text>
+
+    <text x="426" y="512" class="p">条件与优先级控制分支、重试、回退</text>
+    <text x="426" y="538" class="p">同一状态并发调度 Agent，汇总后决策</text>
+  </g>
+
+  <g class="font" filter="url(#shadow)">
+    <rect x="824" y="230" width="294" height="320" rx="20" fill="url(#panel)" stroke="#2A3A55"/>
+    <rect x="824" y="230" width="294" height="4" rx="2" fill="#EF4444"/>
+    <text x="848" y="270" fill="#FCA5A5" class="kicker">03  SUPERVISOR + REVIEW</text>
+    <text x="848" y="306" class="h">治理与检查点</text>
+
+    <rect x="858" y="330" width="226" height="38" rx="19" fill="#1D4ED8" fill-opacity="0.28" stroke="#60A5FA"/>
+    <text x="971" y="354" text-anchor="middle" fill="#DBEAFE" font-size="14" font-weight="800">Supervisor Router</text>
+    <path d="M971 368V394M971 394H898M971 394H1044M971 394V420" stroke="#94A3B8" stroke-width="2" stroke-linecap="round"/>
+    <rect x="850" y="406" width="88" height="34" rx="10" fill="#EF4444" fill-opacity="0.22" stroke="#FCA5A5"/>
+    <text x="894" y="428" text-anchor="middle" fill="#FEE2E2" font-size="12" font-weight="800">Defender</text>
+    <rect x="932" y="426" width="78" height="34" rx="10" fill="#F59E0B" fill-opacity="0.22" stroke="#FCD34D"/>
+    <text x="971" y="448" text-anchor="middle" fill="#FEF3C7" font-size="12" font-weight="800">Judge</text>
+    <rect x="1004" y="406" width="88" height="34" rx="10" fill="#2563EB" fill-opacity="0.24" stroke="#93C5FD"/>
+    <text x="1048" y="428" text-anchor="middle" fill="#DBEAFE" font-size="12" font-weight="800">Attacker</text>
+
+    <text x="848" y="488" class="p">缺上下文时路由到 Agent 或用户</text>
+    <text x="848" y="514" class="p">对抗式裁决方案、代码、证据</text>
+    <text x="848" y="540" class="p">审批和风险确认触达页面/微信/邮件</text>
+  </g>
+
+  <g class="font" filter="url(#shadow)">
+    <rect x="82" y="596" width="1036" height="112" rx="20" fill="url(#glass)" stroke="#2A3A55"/>
+    <text x="106" y="632" fill="#C4B5FD" class="kicker">04  COLLABORATION LAYER</text>
+    <text x="106" y="656" class="h">协作、记忆</text>
+    <text x="106" y="684" class="h">扩展与渠道平面</text>
+
+    <g>
+      <rect x="430" y="621" width="104" height="32" rx="16" fill="#F59E0B" fill-opacity="0.16" stroke="#FCD34D" stroke-opacity="0.55"/>
+      <text x="482" y="642" text-anchor="middle" class="chip">工作流议场</text>
+      <rect x="546" y="621" width="98" height="32" rx="16" fill="#F59E0B" fill-opacity="0.16" stroke="#FCD34D" stroke-opacity="0.55"/>
+      <text x="595" y="642" text-anchor="middle" class="chip">话题议场</text>
+      <rect x="656" y="621" width="98" height="32" rx="16" fill="#22C55E" fill-opacity="0.15" stroke="#86EFAC" stroke-opacity="0.55"/>
+      <text x="705" y="642" text-anchor="middle" class="chip">多层记忆</text>
+      <rect x="766" y="621" width="112" height="32" rx="16" fill="#38BDF8" fill-opacity="0.14" stroke="#7DD3FC" stroke-opacity="0.55"/>
+      <text x="822" y="642" text-anchor="middle" class="chip">Cangjie Notebook</text>
+      <rect x="890" y="621" width="92" height="32" rx="16" fill="#A78BFA" fill-opacity="0.16" stroke="#C4B5FD" stroke-opacity="0.55"/>
+      <text x="936" y="642" text-anchor="middle" class="chip">Skill 市场</text>
+      <rect x="994" y="621" width="108" height="32" rx="16" fill="#A78BFA" fill-opacity="0.16" stroke="#C4B5FD" stroke-opacity="0.55"/>
+      <text x="1048" y="642" text-anchor="middle" class="chip">模型诊断</text>
+      <rect x="430" y="664" width="170" height="30" rx="15" fill="#0EA5E9" fill-opacity="0.14" stroke="#7DD3FC" stroke-opacity="0.5"/>
+      <text x="515" y="684" text-anchor="middle" class="chip">微信 ClawBot / 外部渠道</text>
+      <rect x="612" y="664" width="226" height="30" rx="15" fill="#0F172A" stroke="#475569"/>
+      <text x="725" y="684" text-anchor="middle" class="chip">Notebook 协作编辑 / 快照 / 分享</text>
+      <rect x="850" y="664" width="252" height="30" rx="15" fill="#0F172A" stroke="#475569"/>
+      <text x="976" y="684" text-anchor="middle" class="chip">SDK / ACP / HTTP driver 能力诊断</text>
     </g>
+  </g>
 
-    <g class="font" filter="url(#shadow)">
-      <rect x="72" y="174" width="330" height="154" rx="20" fill="url(#panel)" stroke="#334155"/>
-      <rect x="72" y="174" width="7" height="154" rx="4" fill="#38BDF8"/>
-      <text x="108" y="218" fill="#7DD3FC" font-size="13" font-weight="800">01  PLAN</text>
-      <text x="108" y="254" class="h">Spec 驱动计划</text>
-      <text x="108" y="284" class="p">requirements / design / tasks</text>
-      <text x="108" y="310" class="p">绑定工作流步骤与任务执行</text>
-
-      <rect x="798" y="174" width="330" height="154" rx="20" fill="url(#panel)" stroke="#334155"/>
-      <rect x="798" y="174" width="7" height="154" rx="4" fill="#22C55E"/>
-      <text x="834" y="218" fill="#86EFAC" font-size="13" font-weight="800">02  RUN</text>
-      <text x="834" y="254" class="h">状态机执行控制</text>
-      <text x="834" y="284" class="p">高级转移、步骤并发、Supervisor 路由</text>
-      <text x="834" y="310" class="p">对抗式迭代、Preflight、Git 断点</text>
-
-      <rect x="72" y="440" width="330" height="154" rx="20" fill="url(#panel)" stroke="#334155"/>
-      <rect x="72" y="440" width="7" height="154" rx="4" fill="#F59E0B"/>
-      <text x="108" y="484" fill="#FCD34D" font-size="13" font-weight="800">03  AGORA</text>
-      <text x="108" y="520" class="h">多 Agent 协作</text>
-      <text x="108" y="550" class="p">工作流议场与话题议场</text>
-      <text x="108" y="576" class="p">计划、分歧、上下文和复盘</text>
-
-      <rect x="798" y="440" width="330" height="154" rx="20" fill="url(#panel)" stroke="#334155"/>
-      <rect x="798" y="440" width="7" height="154" rx="4" fill="#A78BFA"/>
-      <text x="834" y="484" fill="#C4B5FD" font-size="13" font-weight="800">04  LEARN</text>
-      <text x="834" y="520" class="h">沉淀与治理</text>
-      <text x="834" y="550" class="p">多层永久记忆与 Notebook</text>
-      <text x="834" y="576" class="p">Skill 市场、模型诊断、渠道接入</text>
-    </g>
-
-    <g class="font">
-      <rect x="350" y="604" width="500" height="42" rx="21" fill="#0B1220" fill-opacity="0.92" stroke="#334155"/>
-      <text x="600" y="631" text-anchor="middle" fill="#CBD5E1" font-size="15" font-weight="800">Spec 负责可追踪计划，运行态负责真实状态，记忆负责长期复用</text>
-    </g>
+  <g class="font">
+    <rect x="176" y="762" width="848" height="38" rx="19" fill="#08101F" stroke="#334155"/>
+    <text x="600" y="786" text-anchor="middle" fill="#CBD5E1" font-size="14" font-weight="800">Git 运行基线 + 步骤级代码变更快照，让 AI 修改可观察、可比较、可追溯、可回退</text>
   </g>
 </svg>
