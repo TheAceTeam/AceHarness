@@ -689,11 +689,9 @@ button[data-resize-btn][data-resize-btn]:hover {
 @keyframes robotPulse {
   0%, 100% {
     transform: scale(1);
-    filter: drop-shadow(0 0 0px rgba(99, 102, 241, 0));
   }
   50% {
     transform: scale(1.05);
-    filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.5));
   }
 }
 
@@ -702,14 +700,23 @@ button[data-resize-btn][data-resize-btn]:hover {
   50% { filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.8)); }
 }
 
-@keyframes deerRotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@keyframes deerInnerGlow {
+  0%, 100% {
+    filter:
+      drop-shadow(0 0 1px rgba(255, 255, 255, 0.38))
+      drop-shadow(0 0 4px rgba(125, 211, 252, 0.34));
+  }
+  50% {
+    filter:
+      drop-shadow(0 0 2px rgba(255, 255, 255, 0.82))
+      drop-shadow(0 0 8px rgba(125, 211, 252, 0.82))
+      drop-shadow(0 0 14px rgba(196, 181, 253, 0.58));
+  }
 }
 
 @keyframes deerRunSprite {
   from { background-position: 0 0; }
-  to { background-position: -128px 0; }
+  to { background-position: -160px 0; }
 }
 
 .animate-float {
@@ -728,17 +735,17 @@ button[data-resize-btn][data-resize-btn]:hover {
   animation: robotGlow 2s ease-in-out infinite;
 }
 
-.animate-deerRotate {
-  animation: deerRotate 8s linear infinite;
+.aceharness-deer-inner-glow {
+  animation: deerInnerGlow 2.4s ease-in-out infinite;
 }
 
 .deer-runner-sprite {
   display: inline-block;
-  width: 32px;
-  height: 32px;
-  background-image: url('/images/aceharness-deer-run.png');
+  width: 40px;
+  height: 40px;
+  background-image: url('/images/deer-sprite.png?v=4');
   background-repeat: no-repeat;
-  background-size: 128px 32px;
+  background-size: 160px 40px;
   animation: deerRunSprite 0.72s steps(4) infinite;
 }
 

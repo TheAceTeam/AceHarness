@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEventHandler, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { ArrowDown, ChevronDown, Copy, FilePlus2, MessageSquareQuote, RotateCcw, SendHorizontal, Square, Trash2 } from 'lucide-react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -649,16 +649,15 @@ export function CollaborationRoomSurface({
                 return (
                   <div key={message.id} className="group space-y-2">
                     <div className="flex items-start gap-3">
-                      <Avatar className="mt-0.5 h-9 w-9 ring-1 ring-primary/25">
-                        <AvatarImage
-                          src={getSpeakerAvatarSrc(message.speakerName, 'host')}
-                          alt={message.speakerName}
-                          className="object-cover"
-                        />
-                        <AvatarFallback className="bg-primary text-[10px] font-semibold text-primary-foreground">
-                          {getInitials(message.speakerName)}
-                        </AvatarFallback>
-                      </Avatar>
+                      <SpriteAvatar
+                        avatar={getSpeakerAvatarSrc(message.speakerName, 'host')}
+                        seed={message.speakerName}
+                        category="user-default"
+                        alt={message.speakerName}
+                        fallback={getInitials(message.speakerName)}
+                        className="mt-0.5 h-9 w-9 ring-1 ring-primary/25"
+                        fallbackClassName="bg-primary text-[10px] font-semibold text-primary-foreground"
+                      />
                       <article className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="truncate text-sm font-semibold text-foreground">{message.speakerName}</span>
@@ -734,16 +733,15 @@ export function CollaborationRoomSurface({
               return (
                 <div key={message.id} className="group space-y-2">
                   <div className="flex items-start gap-3">
-                    <Avatar className={cn('mt-0.5 h-9 w-9 ring-1', isHost ? 'ring-slate-900/20' : isHuman ? 'ring-primary/25' : 'ring-border/70')}>
-                      <AvatarImage
-                        src={getSpeakerAvatarSrc(message.speakerName, isHost || isHuman ? 'host' : 'agent')}
-                        alt={message.speakerName}
-                        className="object-cover"
-                      />
-                      <AvatarFallback className={cn('text-[10px] font-semibold', isHost ? 'bg-slate-950 text-slate-100' : isHuman ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary')}>
-                        {getInitials(message.speakerName)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={getSpeakerAvatarSrc(message.speakerName, isHost || isHuman ? 'host' : 'agent')}
+                      seed={message.speakerName}
+                      category={isHost || isHuman ? 'user-default' : 'agent-default'}
+                      alt={message.speakerName}
+                      fallback={getInitials(message.speakerName)}
+                      className={cn('mt-0.5 h-9 w-9 ring-1', isHost ? 'ring-slate-900/20' : isHuman ? 'ring-primary/25' : 'ring-border/70')}
+                      fallbackClassName={cn('text-[10px] font-semibold', isHost ? 'bg-slate-950 text-slate-100' : isHuman ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary')}
+                    />
                     <article className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="truncate text-sm font-semibold text-foreground">{message.speakerName}</span>
@@ -797,16 +795,15 @@ export function CollaborationRoomSurface({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-2">
                         {!isSystem ? (
-                          <Avatar className={cn('h-8 w-8 ring-1', isHost ? 'ring-white/15' : isHuman ? 'ring-primary/20' : 'ring-border/70')}>
-                            <AvatarImage
-                              src={getSpeakerAvatarSrc(message.speakerName, isHost || isHuman ? 'host' : 'agent')}
-                              alt={message.speakerName}
-                              className="object-cover"
-                            />
-                            <AvatarFallback className={cn('text-[10px] font-semibold', isHost ? 'bg-white/10 text-slate-100' : isHuman ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary')}>
-                              {getInitials(message.speakerName)}
-                            </AvatarFallback>
-                          </Avatar>
+                          <SpriteAvatar
+                            avatar={getSpeakerAvatarSrc(message.speakerName, isHost || isHuman ? 'host' : 'agent')}
+                            seed={message.speakerName}
+                            category={isHost || isHuman ? 'user-default' : 'agent-default'}
+                            alt={message.speakerName}
+                            fallback={getInitials(message.speakerName)}
+                            className={cn('h-8 w-8 ring-1', isHost ? 'ring-white/15' : isHuman ? 'ring-primary/20' : 'ring-border/70')}
+                            fallbackClassName={cn('text-[10px] font-semibold', isHost ? 'bg-white/10 text-slate-100' : isHuman ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary')}
+                          />
                         ) : null}
                         <span className={cn('truncate text-sm font-semibold', isHost ? 'text-white' : 'text-foreground')}>{message.speakerName}</span>
                         <Badge variant="outline" className={cn('text-[10px]', isHost && 'border-white/20 bg-white/10 text-slate-100')}>
@@ -843,16 +840,15 @@ export function CollaborationRoomSurface({
             <div className="group space-y-2">
               <div className={cn(isChannel ? 'flex items-start gap-3' : 'flex justify-start')}>
                 {isChannel ? (
-                  <Avatar className="mt-0.5 h-9 w-9 ring-1 ring-border/70">
-                    <AvatarImage
-                      src={getSpeakerAvatarSrc(inlineContentSpeakerName || 'Supervisor', 'agent')}
-                      alt={inlineContentSpeakerName || 'Supervisor'}
-                      className="object-cover"
-                    />
-                    <AvatarFallback className="bg-primary/10 text-[10px] font-semibold text-primary">
-                      {getInitials(inlineContentSpeakerName || 'Supervisor')}
-                    </AvatarFallback>
-                  </Avatar>
+                  <SpriteAvatar
+                    avatar={getSpeakerAvatarSrc(inlineContentSpeakerName || 'Supervisor', 'agent')}
+                    seed={inlineContentSpeakerName || 'Supervisor'}
+                    category="agent-default"
+                    alt={inlineContentSpeakerName || 'Supervisor'}
+                    fallback={getInitials(inlineContentSpeakerName || 'Supervisor')}
+                    className="mt-0.5 h-9 w-9 ring-1 ring-border/70"
+                    fallbackClassName="bg-primary/10 text-[10px] font-semibold text-primary"
+                  />
                 ) : null}
                 <article className="min-w-0 flex-1">
                   {isChannel ? (
@@ -997,12 +993,15 @@ export function CollaborationRoomSurface({
                     onPointerDown={(event) => handleMentionOptionPointerDown(event, name)}
                     onClick={(event) => handleMentionOptionClick(event, name)}
                   >
-                    <Avatar className="h-6 w-6 ring-1 ring-border/60">
-                      <AvatarImage src={getSpeakerAvatarSrc(name, name === '全员' ? 'system' : 'agent')} alt={name} className="object-cover" />
-                      <AvatarFallback className="bg-primary/10 text-[9px] font-semibold text-primary">
-                        {getInitials(name)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={getSpeakerAvatarSrc(name, name === '全员' ? 'system' : 'agent')}
+                      seed={name}
+                      category={name === '全员' ? 'plants-nature' : 'agent-default'}
+                      alt={name}
+                      fallback={getInitials(name)}
+                      className="h-6 w-6 ring-1 ring-border/60"
+                      fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
+                    />
                     <span className="min-w-0 flex-1 truncate">{name === '全员' ? '@全员' : `@${name}`}</span>
                   </button>
                 ))}

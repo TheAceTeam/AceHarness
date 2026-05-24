@@ -6,7 +6,7 @@ import ActionCard from './ActionCard';
 import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
@@ -62,8 +62,8 @@ const VISIBLE_SESSION_TAGS = {
     className: 'border-sky-500/25 bg-sky-500/8 text-sky-700 dark:text-sky-300',
   },
 } as const;
-const ACEHARNESS_DEER_AVATAR_SRC = '/images/aceharness-deer-avatar.png';
-const HAS_ANIMATION_CLASS_PATTERN = /\banimate-/;
+const ACEHARNESS_DEER_AVATAR_VALUE = 'sprite:group1:24';
+const DISABLE_LOGO_GLOW_CLASS_PATTERN = /\banimate-none\b/;
 const quoteActionIcon = <MessageSquareQuote className="h-3.5 w-3.5" />;
 
 function parseVisibleSessionTag(content: string): null | {
@@ -1770,16 +1770,18 @@ export function ThinkingBot() {
 }
 
 export function RobotLogo({ size = 32, className = '' }: { size?: number; className?: string }) {
-  const animationClass = HAS_ANIMATION_CLASS_PATTERN.test(className) ? '' : 'animate-robotGlow';
+  const innerGlowClass = DISABLE_LOGO_GLOW_CLASS_PATTERN.test(className) ? '' : 'aceharness-deer-inner-glow';
 
   return (
-    <img
-      src={ACEHARNESS_DEER_AVATAR_SRC}
-      alt=""
+    <SpriteAvatar
+      avatar={ACEHARNESS_DEER_AVATAR_VALUE}
+      seed="aceharness-deer"
+      category="animals"
+      fallback="鹿"
       aria-hidden="true"
-      width={size}
-      height={size}
-      className={`${animationClass} inline-block rounded-full object-contain ${className}`.trim()}
+      size={size}
+      className={`inline-flex rounded-full ${className}`.trim()}
+      spriteImageClassName={innerGlowClass}
       draggable={false}
     />
   );
@@ -1798,12 +1800,15 @@ function UserAvatar({ user }: { user?: ChatMessageProps['currentUser'] }) {
   const initials = username.slice(0, 2).toUpperCase();
 
   return (
-    <Avatar className="h-8 w-8 shrink-0 border border-primary/25">
-      {user?.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={username} /> : null}
-      <AvatarFallback className="bg-primary text-[11px] font-semibold text-primary-foreground">
-        {initials}
-      </AvatarFallback>
-    </Avatar>
+    <SpriteAvatar
+      avatar={user?.avatar}
+      seed={username}
+      category="user-default"
+      alt={username}
+      fallback={initials}
+      className="h-8 w-8 shrink-0 border border-primary/25"
+      fallbackClassName="bg-primary text-[11px] font-semibold text-primary-foreground"
+    />
   );
 }
 

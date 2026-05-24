@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
@@ -16,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import AvatarPicker from '@/components/AvatarPicker';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import AuthGuard from '@/components/AuthGuard';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -213,10 +213,15 @@ function UsersContent() {
           {items.map(user => (
             <TableRow key={user.id}>
               <TableCell>
-                <Avatar className="h-8 w-8">
-                  {user.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={user.username} /> : null}
-                  <AvatarFallback className="text-xs">{user.username.charAt(0).toUpperCase()}</AvatarFallback>
-                </Avatar>
+                <SpriteAvatar
+                  avatar={user.avatar}
+                  seed={user.username}
+                  category="user-default"
+                  alt={user.username}
+                  fallback={user.username.charAt(0).toUpperCase()}
+                  className="h-8 w-8"
+                  fallbackClassName="text-xs"
+                />
               </TableCell>
               <TableCell className="font-medium">{user.username}</TableCell>
               <TableCell>{user.email}</TableCell>
@@ -364,7 +369,7 @@ function UsersContent() {
             />
             <div>
               <label className="text-sm mb-2 block">选择头像：</label>
-              <AvatarPicker value={form.avatar} onChange={avatar => setForm(f => ({ ...f, avatar }))} />
+              <AvatarPicker value={form.avatar} onChange={avatar => setForm(f => ({ ...f, avatar }))} seed={form.username} className="h-64" />
             </div>
             {formError && <p className="text-sm text-destructive">{formError}</p>}
           </div>

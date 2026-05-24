@@ -46,7 +46,7 @@ import {
   type HomeSidebarTab,
 } from '@/lib/core/home-sidebar-state';
 import { dispatchHomeAction } from '@/lib/sidebar-plugins/intent-handlers';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { getSessionDirectoryKind } from '@/lib/agent/conversations';
@@ -1853,10 +1853,14 @@ function ChatPageContent() {
             </Button>
             {activeAgentBinding ? (
               <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
-                <Avatar className="h-8 w-8 ring-1 ring-border/70">
-                  <AvatarImage src={activeAgentAvatarSrc || undefined} alt={activeAgentBinding.agentName} />
-                  <AvatarFallback>{activeAgentBinding.agentName.slice(0, 2).toUpperCase()}</AvatarFallback>
-                </Avatar>
+                <SpriteAvatar
+                  avatar={activeAgentAvatarSrc}
+                  seed={activeAgentBinding.agentName}
+                  category="agent-default"
+                  alt={activeAgentBinding.agentName}
+                  fallback={activeAgentBinding.agentName.slice(0, 2).toUpperCase()}
+                  className="h-8 w-8 ring-1 ring-border/70"
+                />
                 <div className="flex items-center gap-2">
                   <div className="text-xs">
                     <div className="font-medium text-foreground">当前对话角色：{activeAgentBinding.agentName}</div>
@@ -1995,13 +1999,9 @@ function ChatPageContent() {
                     ) : messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
                         <div className="text-center">
-                          <motion.div
-                            animate={{ rotate: 360 }}
-                            transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}
-                            className="inline-flex p-3 mb-4"
-                          >
+                          <div className="inline-flex p-3 mb-4">
                             <RobotLogo size={56} className="animate-robotPulse" />
-                          </motion.div>
+                          </div>
                           <motion.h2
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}

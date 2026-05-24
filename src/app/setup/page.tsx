@@ -569,7 +569,7 @@ export default function SetupPage() {
 
               <div>
                 <label className="text-sm font-medium mb-2 block">选择头像</label>
-                <AvatarPicker value={avatar} onChange={setAvatar} />
+                <AvatarPicker value={avatar} onChange={setAvatar} seed={username} />
               </div>
 
               {error && (

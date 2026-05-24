@@ -1,12 +1,26 @@
+import {
+  DEFAULT_AGENT_AVATAR_CATEGORY,
+  buildSpriteAvatarValue,
+  normalizeImageAvatarSrc,
+  pickSpriteAvatarValue,
+  resolveAvatarSource,
+  resolveSpriteAvatarEntry,
+  type AvatarCategoryId,
+  type AvatarSpriteSheetId,
+} from '@/lib/avatar/sprite';
+
 export type AgentTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 export type AgentRoleType = 'normal' | 'supervisor';
-export type AgentAvatarMode = 'deterministic' | 'generated' | 'uploaded' | 'preset';
+export type AgentAvatarMode = 'deterministic' | 'generated' | 'uploaded' | 'preset' | 'sprite';
 export type AgentAvatarStyle = 'personas' | 'adventurer' | 'pixel-art';
 
 export interface AgentAvatarConfig {
   mode: AgentAvatarMode;
   seed?: string;
   style?: AgentAvatarStyle;
+  category?: AvatarCategoryId | string;
+  spriteSheet?: AvatarSpriteSheetId | string;
+  spriteIndex?: number;
   prompt?: string;
   imageUrl?: string;
   thumbUrl?: string;
@@ -30,6 +44,7 @@ export function createDeterministicAvatarConfig(
     mode: 'deterministic',
     seed,
     style: getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+    category: DEFAULT_AGENT_AVATAR_CATEGORY,
   };
 }
 
@@ -43,6 +58,28 @@ export function normalizeAgentAvatar(
   }
 
   if (typeof avatar === 'string') {
+    const spriteEntry = resolveSpriteAvatarEntry(avatar);
+    if (spriteEntry) {
+      return {
+        mode: 'sprite',
+        seed,
+        style: getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+        category: DEFAULT_AGENT_AVATAR_CATEGORY,
+        spriteSheet: spriteEntry.sheetId,
+        spriteIndex: spriteEntry.index,
+      };
+    }
+
+    const imageUrl = normalizeImageAvatarSrc(avatar);
+    if (imageUrl) {
+      return {
+        mode: 'uploaded',
+        seed,
+        style: getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+        imageUrl,
+      };
+    }
+
     return createDeterministicAvatarConfig(`${seed}:${avatar}`, options);
   }
 
@@ -50,6 +87,9 @@ export function normalizeAgentAvatar(
     mode: avatar.mode || 'deterministic',
     seed: avatar.seed || seed,
     style: avatar.style || getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+    category: avatar.category || DEFAULT_AGENT_AVATAR_CATEGORY,
+    spriteSheet: avatar.spriteSheet,
+    spriteIndex: avatar.spriteIndex,
     prompt: avatar.prompt,
     imageUrl: avatar.imageUrl,
     thumbUrl: avatar.thumbUrl,
@@ -63,6 +103,15 @@ export function resolveAgentAvatarSrc(
   fallbackSeed: string,
   options?: { team?: AgentTeam; roleType?: AgentRoleType }
 ): string {
+  if (typeof avatar === 'string' && avatar.trim()) {
+    const source = resolveAvatarSource(avatar, {
+      seed: `${fallbackSeed}:${avatar}`,
+      category: DEFAULT_AGENT_AVATAR_CATEGORY,
+    });
+    if (source.kind === 'sprite') return source.value;
+    if (source.kind === 'image') return source.src;
+  }
+
   const normalized = normalizeAgentAvatar(avatar, fallbackSeed, options);
 
   if (normalized.mode === 'uploaded' || normalized.mode === 'generated') {
@@ -74,8 +123,18 @@ export function resolveAgentAvatarSrc(
     return `/agent-avatars/presets/${normalized.presetName}`;
   }
 
+  if (
+    normalized.mode === 'sprite'
+    && normalized.spriteSheet
+    && typeof normalized.spriteIndex === 'number'
+  ) {
+    return buildSpriteAvatarValue(normalized.spriteSheet, normalized.spriteIndex);
+  }
+
   const seed = normalized.seed || fallbackSeed;
-  return buildDeterministicAvatarDataUri(seed, options);
+  return pickSpriteAvatarValue(seed, {
+    category: normalized.category || DEFAULT_AGENT_AVATAR_CATEGORY,
+  });
 }
 
 function hashSeed(seed: string): number {

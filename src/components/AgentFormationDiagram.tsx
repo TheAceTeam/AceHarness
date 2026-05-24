@@ -18,7 +18,7 @@ import ReactFlow, {
   useReactFlow,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from './ui/badge';
 import { resolveAgentAvatarSrc, type AgentAvatarConfig, type AgentRoleType, type AgentTeam } from '@/lib/agent/personas';
 import type { StateMachineState } from '@/lib/core/schemas';
@@ -249,12 +249,15 @@ const AgentFormationNode = memo(function AgentFormationNode({ data }: NodeProps<
       ) : null}
 
       <div className="flex items-center gap-3">
-        <Avatar className={`h-11 w-11 ring-2 ${teamTone.avatarRing}`}>
-          <AvatarImage src={avatarSrc} alt={data.name} className="object-cover" />
-          <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-            {data.name.charAt(0).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+        <SpriteAvatar
+          avatar={avatarSrc}
+          seed={data.name}
+          category="agent-default"
+          alt={data.name}
+          fallback={data.name.charAt(0).toUpperCase()}
+          className={`h-11 w-11 ring-2 ${teamTone.avatarRing}`}
+          fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1 break-words text-sm font-semibold leading-5">{data.name}</div>

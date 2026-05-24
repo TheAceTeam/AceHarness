@@ -1,6 +1,6 @@
 'use client';
 
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/core/utils';
 import {
@@ -81,10 +81,14 @@ export function AgentHeroCard({ agent, selected, compact = false, className, onC
           <div className={cn('flex min-w-0 items-start', compact ? 'gap-2.5' : 'gap-3')}>
             <div className="relative shrink-0">
               <div className={cn('absolute inset-0 rounded-full opacity-60 blur-xl', theme.halo)} />
-              <Avatar className={cn('relative ring-2 ring-white/20 shadow-xl', compact ? 'h-10 w-10' : 'h-12 w-12')}>
-              <AvatarImage src={avatarSrc} alt={agent.name} className="object-cover" />
-              <AvatarFallback>{agent.name.slice(0, 2).toUpperCase()}</AvatarFallback>
-            </Avatar>
+              <SpriteAvatar
+                avatar={avatarSrc}
+                seed={agent.name}
+                category="agent-default"
+                alt={agent.name}
+                fallback={agent.name.slice(0, 2).toUpperCase()}
+                className={cn('relative ring-2 ring-white/20 shadow-xl', compact ? 'h-10 w-10' : 'h-12 w-12')}
+              />
             </div>
             <div className="min-w-0">
               <div className={cn('mb-0.5 uppercase text-muted-foreground', compact ? 'text-[9px] tracking-[0.2em]' : 'text-[9px] tracking-[0.24em]')}>

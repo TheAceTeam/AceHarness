@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useChat } from '@/contexts/ChatContext';
 import { agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -2073,10 +2073,15 @@ function AgoraTopicCreateDialog({
               <div className="space-y-1 rounded-lg border p-2">
                 {temporaryGuests.map((guest, index) => (
                   <div key={`${guest.name}-${index}`} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm">
-                    <Avatar className="h-6 w-6 ring-1 ring-border/60">
-                      <AvatarImage src={resolveAgentAvatarSrc(undefined, guest.name)} alt={guest.name} className="object-cover" />
-                      <AvatarFallback className="bg-primary/10 text-[8px] font-semibold text-primary">{getSidebarInitials(guest.name)}</AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={resolveAgentAvatarSrc(undefined, guest.name)}
+                      seed={guest.name}
+                      category="agent-default"
+                      alt={guest.name}
+                      fallback={getSidebarInitials(guest.name)}
+                      className="h-6 w-6 ring-1 ring-border/60"
+                      fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
+                    />
                     <span className="min-w-0 flex-1 truncate text-xs">{guest.name}</span>
                     <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => onRemoveTemporaryGuest(index)}>
                       <span className="material-symbols-outlined text-[14px]">close</span>
@@ -2746,12 +2751,15 @@ function AgoraDirectory({
                   disabled={guestDeleting}
                 />
               ) : null}
-              <Avatar className="h-6 w-6 ring-1 ring-border/60">
-                <AvatarImage src={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName || guest.displayName)} alt={guest.displayName} className="object-cover" />
-                <AvatarFallback className="bg-primary/10 text-[8px] font-semibold text-primary">
-                  {getSidebarInitials(guest.displayName)}
-                </AvatarFallback>
-              </Avatar>
+              <SpriteAvatar
+                avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName || guest.displayName)}
+                seed={guest.runtimeAgentName || guest.displayName}
+                category="agent-default"
+                alt={guest.displayName}
+                fallback={getSidebarInitials(guest.displayName)}
+                className="h-6 w-6 ring-1 ring-border/60"
+                fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
+              />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs text-foreground">{guest.displayName}</div>
                 <div className="truncate text-[10px] text-muted-foreground">{getAgoraGuestRuntimeLabel(guest)}</div>

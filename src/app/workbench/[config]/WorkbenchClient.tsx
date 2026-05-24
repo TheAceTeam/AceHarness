@@ -28,7 +28,7 @@ import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
 import ResizablePanels from '@/components/ResizablePanels';
 import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
@@ -7060,12 +7060,15 @@ export default function WorkbenchPage() {
                             >
                               <td className="py-2 pr-2">
                                 <div className="flex items-center gap-2">
-                                  <Avatar className="h-6 w-6 ring-1 ring-border/60">
-                                    <AvatarImage src={avatarSrc} alt={agent.name} className="object-cover" />
-                                    <AvatarFallback className="bg-primary/10 text-[10px] font-bold text-primary">
-                                      {agent.name.charAt(0).toUpperCase()}
-                                    </AvatarFallback>
-                                  </Avatar>
+                                  <SpriteAvatar
+                                    avatar={avatarSrc}
+                                    seed={agent.name}
+                                    category="agent-default"
+                                    alt={agent.name}
+                                    fallback={agent.name.charAt(0).toUpperCase()}
+                                    className="h-6 w-6 ring-1 ring-border/60"
+                                    fallbackClassName="bg-primary/10 text-[10px] font-bold text-primary"
+                                  />
                                   <div className="min-w-0">
                                     <div className="font-medium text-foreground truncate max-w-[140px]">{agent.name}</div>
                                     {roleConfig?.roleType && (

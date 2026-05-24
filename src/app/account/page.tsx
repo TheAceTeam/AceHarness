@@ -5,9 +5,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import AvatarPicker from '@/components/AvatarPicker';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import AuthGuard from '@/components/AuthGuard';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import EnvVarsDialog from '@/components/EnvVarsDialog';
@@ -209,10 +209,15 @@ function AccountContent() {
         <div className="rounded-xl border bg-card p-6">
           <div className="flex items-center gap-4">
             <button onClick={() => { setSelectedAvatar(user.avatar || ''); setAvatarOpen(true); }} className="group relative">
-              <Avatar className="h-16 w-16">
-                {user.avatar ? <AvatarImage src={`/avatar/${user.avatar}`} alt={user.username} /> : null}
-                <AvatarFallback className="text-lg bg-primary/20 text-primary">{initials}</AvatarFallback>
-              </Avatar>
+              <SpriteAvatar
+                avatar={user.avatar}
+                seed={user.username}
+                category="user-default"
+                alt={user.username}
+                fallback={initials}
+                className="h-16 w-16"
+                fallbackClassName="text-lg bg-primary/20 text-primary"
+              />
               <div className="absolute inset-0 rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <span className="material-symbols-outlined text-white text-sm">edit</span>
               </div>
@@ -376,10 +381,10 @@ function AccountContent() {
 
       {/* Avatar Dialog */}
       <Dialog open={avatarOpen} onOpenChange={setAvatarOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>选择头像</DialogTitle></DialogHeader>
-          <AvatarPicker value={selectedAvatar} onChange={setSelectedAvatar} />
-          <DialogFooter>
+        <DialogContent className="flex h-[min(560px,calc(100vh-2rem))] max-w-md flex-col">
+          <DialogHeader className="shrink-0"><DialogTitle>选择头像</DialogTitle></DialogHeader>
+          <AvatarPicker value={selectedAvatar} onChange={setSelectedAvatar} seed={user.username} className="flex-1" />
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setAvatarOpen(false)}>取消</Button>
             <Button onClick={handleChangeAvatar} disabled={!selectedAvatar}>确认</Button>
           </DialogFooter>

@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FolderOpen, GitBranch, MessageSquareText, PanelRightClose, PanelRightOpen, Plus, Settings2, UserMinus, UserPlus } from 'lucide-react';
 import { agentApi, agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -1242,12 +1242,16 @@ export function AgoraShell({
         <div className="flex items-center gap-1.5">
           <div className="hidden -space-x-2 sm:flex">
             {guestRoster.slice(0, 5).map((participant) => (
-              <Avatar key={`header-${participant.id}`} className="h-7 w-7 border-2 border-background ring-1 ring-border/60">
-                <AvatarImage src={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)} alt={participant.name} className="object-cover" />
-                <AvatarFallback className="bg-primary/10 text-[9px] font-semibold text-primary">
-                  {getInitials(participant.name)}
-                </AvatarFallback>
-              </Avatar>
+              <SpriteAvatar
+                key={`header-${participant.id}`}
+                avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+                seed={participant.runtimeAgentName || participant.name}
+                category="agent-default"
+                alt={participant.name}
+                fallback={getInitials(participant.name)}
+                className="h-7 w-7 border-2 border-background ring-1 ring-border/60"
+                fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
+              />
             ))}
           </div>
           {lockWorkspace ? null : (
@@ -1402,12 +1406,15 @@ export function AgoraShell({
                       participant.openingStatus === 'failed' && 'bg-rose-50/80 text-rose-900 hover:bg-rose-50 dark:bg-rose-950/20 dark:text-rose-200 dark:hover:bg-rose-950/30'
                     )}
                   >
-                    <Avatar className={cn('h-7 w-7 ring-1 ring-border/60', participant.openingStatus === 'failed' && 'ring-rose-300/70 dark:ring-rose-500/40')}>
-                      <AvatarImage src={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)} alt={participant.name} className="object-cover" />
-                      <AvatarFallback className="bg-primary/10 text-[9px] font-semibold text-primary">
-                        {getInitials(participant.name)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+                      seed={participant.runtimeAgentName || participant.name}
+                      category="agent-default"
+                      alt={participant.name}
+                      fallback={getInitials(participant.name)}
+                      className={cn('h-7 w-7 ring-1 ring-border/60', participant.openingStatus === 'failed' && 'ring-rose-300/70 dark:ring-rose-500/40')}
+                      fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
+                    />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-medium text-foreground">{participant.name}</div>
                       {participant.openingStatus === 'failed' ? (
@@ -1452,12 +1459,15 @@ export function AgoraShell({
                       onClick={() => addGuestToRoom(guest)}
                       disabled={!isGuestAvailable(guest)}
                     >
-                      <Avatar className="h-6 w-6 ring-1 ring-border/60">
-                        <AvatarImage src={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName)} alt={guest.displayName} className="object-cover" />
-                        <AvatarFallback className="bg-primary/10 text-[8px] font-semibold text-primary">
-                          {getInitials(guest.displayName)}
-                        </AvatarFallback>
-                      </Avatar>
+                      <SpriteAvatar
+                        avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName)}
+                        seed={guest.runtimeAgentName || guest.displayName}
+                        category="agent-default"
+                        alt={guest.displayName}
+                        fallback={getInitials(guest.displayName)}
+                        className="h-6 w-6 ring-1 ring-border/60"
+                        fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
+                      />
                       <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{guest.displayName}</span>
                       {!isGuestAvailable(guest) ? (
                         <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] text-destructive">不可用</Badge>

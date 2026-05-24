@@ -184,7 +184,7 @@ export default function LoginPage() {
 
             {/* Logo */}
             <div className="flex items-center gap-3 mb-8">
-              <RobotLogo size={48} className="animate-deerRotate" />
+              <RobotLogo size={48} />
               <div>
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-transparent">
                   ACEHarness
@@ -242,7 +242,7 @@ export default function LoginPage() {
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
-                    <RobotLogo size={18} className="animate-deerRotate" />
+                    <RobotLogo size={18} />
                     登录中...
                   </span>
                 ) : (

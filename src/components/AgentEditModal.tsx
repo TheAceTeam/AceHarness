@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { EngineSelect } from '@/components/EngineSelect';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
@@ -288,15 +288,19 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               <Label>头像</Label>
               <div className="mt-2 rounded-2xl border bg-muted/20 p-4">
                 <div className="flex flex-col gap-4 md:flex-row md:items-center">
-                  <Avatar className="h-20 w-20 shrink-0 ring-2 ring-primary/20">
-                    <AvatarImage src={avatarSrc} alt={formData.name || 'agent avatar'} />
-                    <AvatarFallback>{(formData.name || 'AG').slice(0, 2).toUpperCase()}</AvatarFallback>
-                  </Avatar>
+                  <SpriteAvatar
+                    avatar={avatarSrc}
+                    seed={formData.name || 'agent'}
+                    category="agent-default"
+                    alt={formData.name || 'agent avatar'}
+                    fallback={(formData.name || 'AG').slice(0, 2).toUpperCase()}
+                    className="h-20 w-20 shrink-0 ring-2 ring-primary/20"
+                  />
                   <div className="min-w-0 flex-1 space-y-3">
                     <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
                       <div>
                         <div className="text-xs font-medium text-muted-foreground">当前模式</div>
-                        <div className="mt-1 text-sm">Deterministic Avatar</div>
+                        <div className="mt-1 text-sm">Sprite Avatar</div>
                       </div>
                       <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={refreshAvatar} disabled={refreshingAvatar}>
                         <span className="material-symbols-outlined mr-1 text-sm">refresh</span>

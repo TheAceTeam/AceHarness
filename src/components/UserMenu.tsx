@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import {
   DropdownMenu,
@@ -85,14 +85,15 @@ export default function UserMenu({ user }: UserMenuProps) {
       <DropdownMenuTrigger asChild>
         <button className="flex items-center gap-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
           <span className="relative">
-            <Avatar className="h-8 w-8">
-              {user.avatar ? (
-                <AvatarImage src={`/avatar/${user.avatar}`} alt={user.username} />
-              ) : null}
-              <AvatarFallback className="text-xs bg-primary/20 text-primary">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
+            <SpriteAvatar
+              avatar={user.avatar}
+              seed={user.username}
+              category="user-default"
+              alt={user.username}
+              fallback={initials}
+              className="h-8 w-8"
+              fallbackClassName="text-xs bg-primary/20 text-primary"
+            />
             {hasPendingUsers && (
               <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-destructive" />
             )}

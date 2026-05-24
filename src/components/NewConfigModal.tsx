@@ -24,7 +24,6 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import WorkflowModeSelector from './WorkflowModeSelector';
 import { EngineModelSelect } from './EngineModelSelect';
@@ -49,7 +48,6 @@ import {
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
 import { agentApi } from '@/lib/core/api';
-import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 const MonacoEditor = dynamic(

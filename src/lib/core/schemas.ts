@@ -3,9 +3,12 @@ import { z } from 'zod';
 const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'black-gold']);
 const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
 const agentAvatarConfigSchema = z.object({
-  mode: z.enum(['deterministic', 'generated', 'uploaded', 'preset']),
+  mode: z.enum(['deterministic', 'generated', 'uploaded', 'preset', 'sprite']),
   seed: z.string().optional(),
   style: z.enum(['personas', 'adventurer', 'pixel-art']).optional(),
+  category: z.string().optional(),
+  spriteSheet: z.string().optional(),
+  spriteIndex: z.number().int().min(0).optional(),
   prompt: z.string().optional(),
   imageUrl: z.string().optional(),
   thumbUrl: z.string().optional(),

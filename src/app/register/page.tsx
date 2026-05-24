@@ -188,7 +188,7 @@ export default function RegisterPage() {
                 </div>
                 <div>
                   <label className="mb-2 block text-sm font-medium">选择头像</label>
-                  <AvatarPicker value={form.avatar} onChange={(avatar) => updateForm('avatar', avatar)} />
+                  <AvatarPicker value={form.avatar} onChange={(avatar) => updateForm('avatar', avatar)} seed={form.username} />
                 </div>
 
                 {error && (

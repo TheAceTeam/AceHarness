@@ -561,7 +561,7 @@ describe('built-in agora chat panel', () => {
           currentUser={{
             username: 'zichexuelan',
             displayName: '子车雪岚',
-            avatar: 'custom-user-avatar.png',
+            avatar: '/uploads/images/custom-user-avatar.png',
           }}
           callAgent={mockCallAgent}
           toast={mockToast}
@@ -573,7 +573,7 @@ describe('built-in agora chat panel', () => {
 
     await waitFor(() => {
       const avatars = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
-      expect(avatars.some((avatar) => String(avatar.getAttribute('src') || avatar.src || '').includes('/avatar/custom-user-avatar.png'))).toBe(true);
+      expect(avatars.some((avatar) => String(avatar.getAttribute('src') || avatar.src || '').includes('/uploads/images/custom-user-avatar.png'))).toBe(true);
     });
   });
 

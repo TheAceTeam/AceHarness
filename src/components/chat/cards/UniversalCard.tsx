@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Progress } from '@/components/ui/progress';
 import { copyText } from '@/lib/core/clipboard';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 // --- Schema Types ---
@@ -299,12 +299,15 @@ function BarChartBlock({
                     className="group relative"
                     title={voter.weightLabel ? `${voter.name}（${voter.weightLabel}）` : voter.name}
                   >
-                    <Avatar className="h-6 w-6 border border-border/70 shadow-sm">
-                      {voter.avatarSrc ? <AvatarImage src={voter.avatarSrc} alt={voter.name} /> : null}
-                      <AvatarFallback className="bg-muted text-[10px] font-medium text-foreground">
-                        {voter.name.slice(0, 1)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={voter.avatarSrc}
+                      seed={voter.name}
+                      category="agent-default"
+                      alt={voter.name}
+                      fallback={voter.name.slice(0, 1)}
+                      className="h-6 w-6 border border-border/70 shadow-sm"
+                      fallbackClassName="bg-muted text-[10px] font-medium text-foreground"
+                    />
                     <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md group-hover:block">
                       {voter.name}{voter.weightLabel ? `（${voter.weightLabel}）` : ''}
                     </div>

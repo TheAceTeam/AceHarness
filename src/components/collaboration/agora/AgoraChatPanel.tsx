@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CollaborationRoomSurface } from '@/components/collaboration/CollaborationRoomSurface';
@@ -251,18 +251,7 @@ function buildCurrentUserIdentitySet(user?: AgoraChatPanelProps['currentUser']) 
 }
 
 function resolveCurrentUserAvatarSrc(avatar?: string | null) {
-  const value = String(avatar || '').trim();
-  if (!value) return '';
-  if (
-    value.startsWith('/') ||
-    value.startsWith('data:') ||
-    value.startsWith('blob:') ||
-    value.startsWith('http://') ||
-    value.startsWith('https://')
-  ) {
-    return value;
-  }
-  return `/avatar/${value}`;
+  return String(avatar || '').trim();
 }
 
 function delay(ms: number) {
@@ -2271,12 +2260,15 @@ export function AgoraChatPanel({
               <div className="mt-4 flex flex-wrap gap-2">
                 {participants.map((name) => (
                   <div key={`participant-${name}`} className="flex items-center gap-2 rounded-full border border-white/12 bg-white/6 px-2.5 py-1.5">
-                    <Avatar className="h-7 w-7 ring-1 ring-white/15">
-                      <AvatarImage src={resolveSpeakerAvatarSrc(name, 'agent')} alt={name} className="object-cover" />
-                      <AvatarFallback className="bg-white/10 text-[10px] font-semibold text-slate-100">
-                        {getInitials(name)}
-                      </AvatarFallback>
-                    </Avatar>
+                    <SpriteAvatar
+                      avatar={resolveSpeakerAvatarSrc(name, 'agent')}
+                      seed={name}
+                      category="agent-default"
+                      alt={name}
+                      fallback={getInitials(name)}
+                      className="h-7 w-7 ring-1 ring-white/15"
+                      fallbackClassName="bg-white/10 text-[10px] font-semibold text-slate-100"
+                    />
                     <span className="max-w-[140px] truncate text-xs text-slate-100">{name}</span>
                   </div>
                 ))}

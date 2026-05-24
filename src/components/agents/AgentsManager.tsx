@@ -17,7 +17,7 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useToast } from '@/components/ui/toast';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import SpriteAvatar from '@/components/SpriteAvatar';
 import {
   Table,
   TableBody,
@@ -907,10 +907,14 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                             </TableCell>
                             <TableCell className="min-w-[220px]">
                               <div className="flex items-center gap-3">
-                                <Avatar className="h-11 w-11 ring-1 ring-border/60">
-                                  <AvatarImage src={avatarSrc} alt={agent.name} className="object-cover" />
-                                  <AvatarFallback>{agent.name.slice(0, 2).toUpperCase()}</AvatarFallback>
-                                </Avatar>
+                                <SpriteAvatar
+                                  avatar={avatarSrc}
+                                  seed={agent.name}
+                                  category="agent-default"
+                                  alt={agent.name}
+                                  fallback={agent.name.slice(0, 2).toUpperCase()}
+                                  className="h-11 w-11 ring-1 ring-border/60"
+                                />
                                 <div className="min-w-0">
                                   <div className="truncate font-medium">{agent.name}</div>
                                   <div className="mt-1 flex flex-wrap gap-1.5">
@@ -1051,4 +1055,3 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
     </div>
   );
 }
-
