@@ -21,5 +21,7 @@ export * from './cursor-wrapper';
 export * from './claude-code-wrapper';
 export * from './claude-code-acp-wrapper';
 export * from './engine-config';
+export * from './cangjie-runtime-config';
+export * from './cangjie-runtime-wrapper';
 export * from './magic-cli-wrapper';
 export * from './trae-cli-wrapper';

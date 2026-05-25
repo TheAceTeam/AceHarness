@@ -24,6 +24,12 @@
       }
     ],
     "paths": {
+      "@cangjielang/napi-cj": [
+        "./packages/napi-cj/src"
+      ],
+      "@cangjielang/napi-cj/*": [
+        "./packages/napi-cj/src/*"
+      ],
       "@/*": [
         "./src/*"
       ]

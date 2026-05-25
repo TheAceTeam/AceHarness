@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      '@cangjielang/napi-cj': path.resolve(__dirname, 'packages/napi-cj/src'),
       '@': path.resolve(__dirname, 'src'),
     },
   },

@@ -22,6 +22,13 @@ import { NgaSdkEngineWrapper } from './nga-sdk-wrapper';
 import { CodegenieEngineWrapper } from './codegenie-wrapper';
 import { CodegenieSdkEngineWrapper } from './codegenie-sdk-wrapper';
 import { MagicCliEngineWrapper } from './magic-cli-wrapper';
+import { CangjieRuntimeEngineWrapper } from './cangjie-runtime-wrapper';
+import {
+  resolveEngineRuntimeMode,
+  shouldFallbackToJs,
+  type CangjieRuntimeConfig,
+  type EngineRuntime,
+} from './cangjie-runtime-config';
 import {
   getDefaultDriver,
   getLogicalEngineId,
@@ -44,6 +51,8 @@ interface EngineConfig {
   engine: EngineType;
   driver?: EngineDriver;
   drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
+  engineRuntime?: EngineRuntime;
+  cangjieRuntime?: CangjieRuntimeConfig;
   updatedAt?: string;
 }
 
@@ -402,21 +411,58 @@ async function instantiateResolvedEngine(engineType: EngineType, requestedType?:
   }
 }
 
+async function instantiateCangjieRuntimeEngine(
+  engineType: EngineType,
+  config: EngineConfig | null,
+): Promise<Engine | null> {
+  const engine = new CangjieRuntimeEngineWrapper(engineType, config?.cangjieRuntime);
+  if (await engine.isAvailable()) return engine;
+  engine.dispose();
+  return null;
+}
+
+async function instantiateResolvedEngineWithRuntime(
+  engineType: EngineType,
+  requestedType: EngineType | undefined,
+  config: EngineConfig | null,
+): Promise<Engine | null> {
+  const logicalEngineType = getLogicalEngineId(engineType) || engineType;
+  const runtimeMode = resolveEngineRuntimeMode(config, logicalEngineType);
+  if (runtimeMode === 'js') {
+    return await instantiateResolvedEngine(engineType, requestedType);
+  }
+
+  const nativeEngine = await instantiateCangjieRuntimeEngine(engineType, config);
+  if (nativeEngine) return nativeEngine;
+
+  if (runtimeMode === 'cangjie' && !shouldFallbackToJs(config)) {
+    console.warn(`[EngineFactory] Cangjie runtime is not available for ${engineType}`);
+    return null;
+  }
+
+  if (runtimeMode === 'cangjie') {
+    console.warn(`[EngineFactory] Cangjie runtime is not available for ${engineType}, falling back to JS wrapper`);
+  }
+  return await instantiateResolvedEngine(engineType, requestedType);
+}
+
 export async function createEngineForDriver(engine: EngineType, driver?: EngineDriver): Promise<Engine | null> {
+  const config = await loadEngineConfig();
   const resolved = resolveEffectiveEngine(engine, driver);
   if (!resolved) return null;
-  return await instantiateResolvedEngine(resolved, resolved);
+  return await instantiateResolvedEngineWithRuntime(resolved, resolved, config);
 }
 
 /**
  * Create an engine instance based on type
  */
 export async function createEngine(type?: EngineType): Promise<Engine | null> {
+  const config = await loadEngineConfig();
   const requestedType = type || await getConfiguredEngine();
   const engineType = type && !supportsDriverSelection(type)
     ? type
     : await resolveRequestedEngineType(requestedType);
-  return await instantiateResolvedEngine(engineType, type);
+  return await instantiateResolvedEngineWithRuntime(engineType, type, config);
 }
 
 /**

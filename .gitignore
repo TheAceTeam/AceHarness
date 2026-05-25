@@ -35,6 +35,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+packages/napi-cj/dist/
 
 # old files
 /src/main.ts

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { getDefaultDriver, normalizeDriverSelection, supportsDriverSelection, type EngineDriver } from '@/lib/engines/engine-factory';
+import { normalizeEngineRuntime, type CangjieRuntimeConfig, type EngineRuntime } from '@/lib/engines/cangjie-runtime-config';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
@@ -15,6 +16,8 @@ interface EngineConfig {
   defaultModel?: string;
   driver?: EngineDriver;
   drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
+  engineRuntime?: EngineRuntime;
+  cangjieRuntime?: CangjieRuntimeConfig;
   updatedAt: string;
 }
 
@@ -41,16 +44,18 @@ export async function GET() {
       defaultModel: config.defaultModel || '',
       driver: getConfiguredDriver(config, config.engine) || getDefaultDriver(config.engine),
       drivers: config.drivers || {},
+      engineRuntime: normalizeEngineRuntime(config.engineRuntime) || 'auto',
+      cangjieRuntime: config.cangjieRuntime || {},
     });
   } catch (error) {
     console.error('Failed to read engine config:', error);
-    return NextResponse.json({ engine: '', defaultModel: '', driver: 'sdk', drivers: {} });
+    return NextResponse.json({ engine: '', defaultModel: '', driver: 'sdk', drivers: {}, engineRuntime: 'auto', cangjieRuntime: {} });
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const { engine, targetEngine, defaultModel, driver } = await request.json();
+    const { engine, targetEngine, defaultModel, driver, engineRuntime, cangjieRuntime } = await request.json();
 
     if (!engine) {
       return NextResponse.json({ error: 'Engine is required' }, { status: 400 });
@@ -73,6 +78,19 @@ export async function POST(request: Request) {
     // Only update defaultModel if explicitly provided
     if (defaultModel !== undefined) {
       config.defaultModel = defaultModel;
+    }
+    if (engineRuntime !== undefined) {
+      const normalizedRuntime = normalizeEngineRuntime(engineRuntime);
+      if (!normalizedRuntime) {
+        return NextResponse.json({ error: 'Invalid engineRuntime' }, { status: 400 });
+      }
+      config.engineRuntime = normalizedRuntime;
+    }
+    if (cangjieRuntime !== undefined) {
+      if (!cangjieRuntime || typeof cangjieRuntime !== 'object' || Array.isArray(cangjieRuntime)) {
+        return NextResponse.json({ error: 'Invalid cangjieRuntime' }, { status: 400 });
+      }
+      config.cangjieRuntime = cangjieRuntime as CangjieRuntimeConfig;
     }
     // Only update driver if explicitly provided
     if (driver !== undefined) {
@@ -141,7 +159,13 @@ export async function POST(request: Request) {
       console.warn('[Engine] Failed to setup skills symlink:', e);
     }
 
-    return NextResponse.json({ success: true, engine, defaultModel: config.defaultModel });
+    return NextResponse.json({
+      success: true,
+      engine,
+      defaultModel: config.defaultModel,
+      engineRuntime: config.engineRuntime || 'auto',
+      cangjieRuntime: config.cangjieRuntime || {},
+    });
   } catch (error) {
     console.error('Failed to save engine config:', error);
     return NextResponse.json({ error: 'Failed to save engine config' }, { status: 500 });
