@@ -11,6 +11,8 @@ import { Textarea } from './ui/textarea';
 import { Checkbox } from './ui/checkbox';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog';
 import { ComboboxPortalProvider, SingleCombobox } from '@/components/ui/combobox';
+import SpriteAvatar from '@/components/SpriteAvatar';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import {
   DndContext,
   closestCenter,
@@ -38,6 +40,7 @@ interface StateMachineDesignPanelProps {
   onStatesChange: (states: StateMachineState[]) => void;
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
+  specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
 }
 
 type StepGroup = {
@@ -45,6 +48,64 @@ type StepGroup = {
   startIndex: number;
   steps: Array<{ step: WorkflowStep; index: number }>;
 };
+
+function getAgentTeamTone(team?: string) {
+  if (team === 'red') return { ring: 'ring-red-400/40' };
+  if (team === 'judge') return { ring: 'ring-amber-400/40' };
+  if (team === 'black-gold') return { ring: 'ring-yellow-400/40' };
+  return { ring: 'ring-blue-400/40' };
+}
+
+function findAgentConfig(agents: any[] | undefined, agentName: string) {
+  const normalized = agentName.trim();
+  if (!normalized) return undefined;
+  return agents?.find((agent) => agent?.name === normalized);
+}
+
+function StepAgentBadge({ step, availableAgents }: { step: WorkflowStep; availableAgents?: any[] }) {
+  const name = step.agent?.trim() || '未分配 Agent';
+  const agent = findAgentConfig(availableAgents, name);
+  const tone = getAgentTeamTone(agent?.team);
+  const avatarSrc = resolveAgentAvatarSrc(agent?.avatar, name, {
+    team: agent?.team,
+    roleType: agent?.roleType,
+  });
+
+  return (
+    <span className="inline-flex min-w-0 max-w-[180px] items-center gap-1.5">
+      <SpriteAvatar
+        avatar={avatarSrc}
+        seed={name}
+        category="agent-default"
+        alt={name}
+        fallback={name.charAt(0).toUpperCase()}
+        className={`h-4 w-4 shrink-0 ring-1 ${tone.ring}`}
+        fallbackClassName="bg-primary/10 text-[10px] font-semibold text-primary"
+      />
+      <span className="truncate">{name}</span>
+    </span>
+  );
+}
+
+function getStepSpecTaskIds(step: WorkflowStep): string[] {
+  return Array.from(new Set([
+    ...((step.specTaskBinding?.taskIds || []) as string[]),
+    step.specTaskBinding?.taskId,
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+}
+
+function MergeIntoParallelIcon({ direction }: { direction: 'previous' | 'next' }) {
+  const arrow = direction === 'previous' ? 'keyboard_arrow_up' : 'keyboard_arrow_down';
+  const arrowPosition = direction === 'previous' ? '-top-1' : '-bottom-1';
+  return (
+    <span className="relative inline-flex h-4 w-4 items-center justify-center">
+      <span className="material-symbols-outlined text-[15px] leading-none">call_merge</span>
+      <span className={`material-symbols-outlined absolute -right-1 ${arrowPosition} rounded-full bg-background text-[10px] leading-none`}>
+        {arrow}
+      </span>
+    </span>
+  );
+}
 
 const joinPolicyLabels: Record<string, string> = {
   all: '等待全部完成',
@@ -256,10 +317,11 @@ function getStateNodeErrors(state: StateMachineState, states: StateMachineState[
 
 // 可拖拽的步骤行
 function SortableStepRow({
-  step, index, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup,
+  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick,
 }: {
   step: WorkflowStep;
   index: number;
+  availableAgents?: any[];
   isParallel?: boolean;
   canGroupPrevious?: boolean;
   canGroupNext?: boolean;
@@ -268,6 +330,7 @@ function SortableStepRow({
   onGroupWithPrevious?: () => void;
   onGroupWithNext?: () => void;
   onUngroup?: () => void;
+  onSpecTaskClick?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -278,55 +341,75 @@ function SortableStepRow({
     : step.role === 'judge'
     ? 'bg-yellow-500/10 text-yellow-600 border-yellow-200 dark:border-yellow-800'
     : 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800';
+  const specTaskIds = getStepSpecTaskIds(step);
+  const specTaskLabel = specTaskIds.length > 1 ? `Spec ${specTaskIds.length}` : specTaskIds[0] || 'Spec 任务';
 
   return (
-    <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2 transition-colors ${roleColor}`}>
+    <div ref={setNodeRef} style={style} className={`group rounded-lg border px-3 py-2.5 transition-colors ${roleColor}`}>
       <div className="flex items-start gap-2.5">
-      <button {...attributes} {...listeners} className="mt-0.5 cursor-grab text-gray-400 hover:text-gray-600 flex-shrink-0">
-        <GripVertical className="w-4 h-4" />
-      </button>
-      <span className="material-symbols-outlined mt-0.5 text-sm flex-shrink-0">{roleIcon}</span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold leading-5 break-words">{step.name}</div>
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
-              <span className="truncate">{step.agent}</span>
-              {(isParallel || step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) && (
-                <>
-                  {isParallel ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">并发分支</Badge> : null}
-                  {(step.specTaskBinding?.taskId || step.specTaskBinding?.taskIds?.length) ? <Badge variant="outline" className="h-5 px-1.5 text-[10px]">Spec 任务</Badge> : null}
-                </>
-              )}
+        <button {...attributes} {...listeners} className="mt-1 flex-shrink-0 cursor-grab rounded p-0.5 text-gray-400 hover:text-gray-600">
+          <GripVertical className="w-4 h-4" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start justify-between gap-2">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-background/70 shadow-sm">
+                  <span className="material-symbols-outlined text-[13px]">{roleIcon}</span>
+                </span>
+                <span className="min-w-0 truncate text-sm font-semibold leading-5" title={step.name}>
+                  {step.name}
+                </span>
+                {isParallel ? <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">并发</Badge> : null}
+                {specTaskIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-5 max-w-[150px] shrink-0 items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-1.5 text-[10px] font-medium text-violet-700 transition hover:bg-violet-500/20 dark:text-violet-200"
+                    title={`打开 Spec 任务绑定：${specTaskIds.join(', ')}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSpecTaskClick?.();
+                    }}
+                  >
+                    <span className="material-symbols-outlined text-[12px]">assignment</span>
+                    <span className="truncate">{specTaskLabel}</span>
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+                <StepAgentBadge step={step} availableAgents={availableAgents} />
+                {step.task ? (
+                  <span className="min-w-0 flex-1 truncate" title={step.task}>
+                    {step.task}
+                  </span>
+                ) : (
+                  <span className="text-gray-400">未填写任务说明</span>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-1 rounded-full border border-border/70 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground shadow-sm opacity-45 transition-opacity group-hover:opacity-100">
-            <span className="material-symbols-outlined text-[12px]">edit</span>
-            <span>可编辑</span>
-          </div>
-        </div>
-          <div className="mt-1.5 flex flex-wrap items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
-            {canGroupPrevious && (
-              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
-                与上一并发
+            <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {canGroupPrevious && (
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="与上一并发" onClick={(e) => { e.stopPropagation(); onGroupWithPrevious?.(); }}>
+                  <MergeIntoParallelIcon direction="previous" />
+                </Button>
+              )}
+              {canGroupNext && (
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="与下一并发" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
+                  <MergeIntoParallelIcon direction="next" />
+                </Button>
+              )}
+              {isParallel && (
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="拆分并发组" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
+                  <span className="material-symbols-outlined text-[15px]">call_split</span>
+                </Button>
+              )}
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="编辑" onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+                <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
-            )}
-            {canGroupNext && (
-              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onGroupWithNext?.(); }}>
-                与下一并发
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+                <Trash2 className="w-3 h-3" />
               </Button>
-            )}
-            {isParallel && (
-              <Button size="sm" variant="ghost" className="h-5 px-1.5 text-[10px]" onClick={(e) => { e.stopPropagation(); onUngroup?.(); }}>
-                拆分
-              </Button>
-            )}
-            <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={onEdit}>
-              <span className="material-symbols-outlined text-sm">edit</span>
-            </Button>
-            <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive hover:text-destructive" onClick={onDelete}>
-              <Trash2 className="w-3 h-3" />
-            </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -778,12 +861,13 @@ export default function StateMachineDesignPanel({
   onStatesChange,
   availableAgents,
   availableSkills = [],
+  specTasks = [],
 }: StateMachineDesignPanelProps) {
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
     states.length > 0 ? states[0].name : null
   );
   const [editingStateInfo, setEditingStateInfo] = useState(false);
-  const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean } | null>(null);
+  const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean; focusSpec?: boolean } | null>(null);
 
   // Resizable panel for editor ↔ diagram split
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'design-editor-diagram' });
@@ -1241,6 +1325,7 @@ export default function StateMachineDesignPanel({
                                 key={index}
                                 step={step}
                                 index={index}
+                                availableAgents={availableAgents}
                                 isParallel
                                 canGroupPrevious={index > 0 && getStepParallelGroup((selectedState.steps || [])[index - 1]) !== getStepParallelGroup(step)}
                                 canGroupNext={index < (selectedState.steps?.length ?? 0) - 1 && getStepParallelGroup((selectedState.steps || [])[index + 1]) !== getStepParallelGroup(step)}
@@ -1248,6 +1333,7 @@ export default function StateMachineDesignPanel({
                                 onGroupWithNext={() => handleGroupWithNext(index)}
                                 onUngroup={() => handleUngroup(index)}
                                 onEdit={() => setEditingStep({ index, isNew: false })}
+                                onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                                 onDelete={() => handleDeleteStep(index)}
                               />
                             ))}
@@ -1261,11 +1347,13 @@ export default function StateMachineDesignPanel({
                         key={index}
                         step={step}
                         index={index}
+                        availableAgents={availableAgents}
                         canGroupPrevious={index > 0}
                         canGroupNext={index < (selectedState.steps?.length ?? 0) - 1}
                         onGroupWithPrevious={() => handleGroupWithPrevious(index)}
                         onGroupWithNext={() => handleGroupWithNext(index)}
                         onEdit={() => setEditingStep({ index, isNew: false })}
+                        onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                         onDelete={() => handleDeleteStep(index)}
                       />
                     );
@@ -1414,7 +1502,8 @@ export default function StateMachineDesignPanel({
           } : editingStepData}
           roles={availableAgents}
           availableSkills={availableSkills}
-          specTasks={[]}
+          specTasks={specTasks}
+          initialSection={editingStep.focusSpec ? 'spec' : undefined}
           isNew={editingStep.isNew}
           existingPhases={[]}
           existingSteps={selectedState?.steps ?? []}

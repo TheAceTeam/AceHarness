@@ -7898,9 +7898,18 @@ export default function WorkbenchPage() {
                       }}
                       availableAgents={agentConfigs}
                       availableSkills={availableSkills}
+                      specTasks={(specCodingDetails?.tasks || [])
+                        .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
+                        .map((task: any) => ({
+                          id: task.id,
+                          title: task.title,
+                          phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
+                          ownerAgents: task.ownerAgents || [],
+                        }))}
                     />
                   ) : (
                     <DesignPanel workflow={editingConfig.workflow}
+                      availableAgents={agentConfigs}
                       onSelectNode={handleSelectNode}
                       onAddPhase={handleAddPhase}
                       onAddStep={handleAddStep}

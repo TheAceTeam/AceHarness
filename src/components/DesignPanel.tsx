@@ -22,6 +22,8 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import SpriteAvatar from '@/components/SpriteAvatar';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 
 interface Step {
   name: string;
@@ -45,8 +47,16 @@ interface Workflow {
   phases: Phase[];
 }
 
+interface AgentAvatarSource {
+  name?: string;
+  avatar?: any;
+  team?: any;
+  roleType?: any;
+}
+
 interface DesignPanelProps {
   workflow: Workflow;
+  availableAgents?: AgentAvatarSource[];
   onSelectNode: (type: 'phase' | 'step', phaseIndex: number, stepIndex?: number) => void;
   onAddPhase: (afterIndex: number) => void;
   onAddStep: (phaseIndex: number) => void;
@@ -73,9 +83,61 @@ const roleBadge: Record<string, string> = {
   judge: 'bg-yellow-500/15 text-yellow-600 dark:text-yellow-400',
 };
 
+function findAgentConfig(agents: AgentAvatarSource[] | undefined, agentName: string) {
+  const normalizedName = agentName.trim();
+  if (!normalizedName) return undefined;
+  return agents?.find((agent) => agent?.name === normalizedName);
+}
+
+function StepAgentAvatar({
+  agentName,
+  availableAgents,
+  className = 'h-4 w-4',
+}: {
+  agentName: string;
+  availableAgents?: AgentAvatarSource[];
+  className?: string;
+}) {
+  const displayName = agentName?.trim() || '未分配 Agent';
+  const agent = findAgentConfig(availableAgents, displayName);
+  const avatarSrc = resolveAgentAvatarSrc(agent?.avatar, displayName, {
+    team: agent?.team,
+    roleType: agent?.roleType,
+  });
+
+  return (
+    <SpriteAvatar
+      avatar={avatarSrc}
+      seed={displayName}
+      category="agent-default"
+      alt={displayName}
+      fallback={displayName.charAt(0).toUpperCase()}
+      className={`${className} shrink-0 ring-1 ring-border/80`}
+      fallbackClassName="bg-primary/10 text-[10px] font-semibold text-primary"
+    />
+  );
+}
+
+function StepAgentLabel({
+  agentName,
+  availableAgents,
+}: {
+  agentName: string;
+  availableAgents?: AgentAvatarSource[];
+}) {
+  const displayName = agentName?.trim() || '未分配 Agent';
+  return (
+    <span className="inline-flex min-w-0 max-w-[180px] items-center gap-1.5">
+      <StepAgentAvatar agentName={displayName} availableAgents={availableAgents} />
+      <span className="truncate">{displayName}</span>
+    </span>
+  );
+}
+
 /* ─── Step Card (pure display) ─── */
 interface StepCardProps {
   step: Step;
+  availableAgents?: AgentAvatarSource[];
   dragHandleProps?: Record<string, any>;
   mergeActions?: React.ReactNode;
   onSelect: () => void;
@@ -83,49 +145,59 @@ interface StepCardProps {
   isDragging?: boolean;
 }
 
-function StepCard({ step, dragHandleProps, mergeActions, onSelect, onDelete, isDragging }: StepCardProps) {
+function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSelect, onDelete, isDragging }: StepCardProps) {
   const role = step.role || 'defender';
   return (
-    <div className={`group relative border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40 ${isDragging ? 'shadow-lg ring-2 ring-primary/30' : ''}`}>
-      <div className="flex items-start gap-3">
+    <div className={`group relative border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card px-3 py-2.5 transition-colors hover:bg-accent/40 ${isDragging ? 'shadow-lg ring-2 ring-primary/30' : ''}`}>
+      <div className="flex items-start gap-2.5">
         {dragHandleProps && (
-          <div {...dragHandleProps} className="mt-1 cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing">
+          <div {...dragHandleProps} className="mt-0.5 cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing">
             <span className="material-symbols-outlined" style={{ fontSize: 16 }}>drag_indicator</span>
           </div>
         )}
         <div className="flex-1 min-w-0" onClick={onSelect} role="button" tabIndex={0}>
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${roleBadge[role]}`}>
-              <span className="material-symbols-outlined" style={{ fontSize: 12 }}>{roleIcon[role]}</span>
-              {role}
-            </span>
-            <span className="text-sm font-medium truncate">{step.name}</span>
+          <div className="flex min-w-0 items-start justify-between gap-2">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${roleBadge[role]}`}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 11 }}>{roleIcon[role]}</span>
+                  {role}
+                </span>
+                <span className="min-w-0 truncate text-sm font-semibold leading-5">{step.name}</span>
+              </div>
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <StepAgentLabel agentName={step.agent} availableAgents={availableAgents} />
+                {step.task ? (
+                  <span className="min-w-0 flex-1 truncate" title={step.task}>
+                    {step.task}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground/70">未填写任务说明</span>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              {mergeActions}
+              <Button variant="ghost" size="icon" className="h-6 w-6" title="编辑"
+                onClick={(e) => { e.stopPropagation(); onSelect(); }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
+              </Button>
+              <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" title="删除"
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="material-symbols-outlined" style={{ fontSize: 13 }}>smart_toy</span>
-            <span className="truncate">{step.agent}</span>
-          </div>
-          {step.task && <p className="mt-1 text-xs text-muted-foreground/70 line-clamp-1">{step.task}</p>}
-        </div>
-        <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-          {mergeActions}
-          <Button variant="ghost" size="icon" className="h-6 w-6" title="编辑"
-            onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
-          </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" title="删除"
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}>
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
-          </Button>
-        </div>
       </div>
+    </div>
     </div>
   );
 }
 
 /* ─── Sortable Step Card (single step, not in parallel group) ─── */
-function SortableStepCard({ step, phaseIndex, stepIndex, mergeActions, onSelect, onDelete }: {
+function SortableStepCard({ step, phaseIndex, stepIndex, availableAgents, mergeActions, onSelect, onDelete }: {
   step: Step; phaseIndex: number; stepIndex: number;
+  availableAgents?: AgentAvatarSource[];
   mergeActions?: React.ReactNode;
   onSelect: () => void; onDelete: () => void;
 }) {
@@ -134,16 +206,17 @@ function SortableStepCard({ step, phaseIndex, stepIndex, mergeActions, onSelect,
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   return (
     <div ref={setNodeRef} style={style}>
-      <StepCard step={step} dragHandleProps={{ ...attributes, ...listeners }}
+      <StepCard step={step} availableAgents={availableAgents} dragHandleProps={{ ...attributes, ...listeners }}
         mergeActions={mergeActions} onSelect={onSelect} onDelete={onDelete} isDragging={isDragging} />
     </div>
   );
 }
 
 /* ─── Sortable Parallel Group (moves as a unit) ─── */
-function SortableParallelGroup({ phaseIndex, groupSteps, onSelectNode, onDeleteStep, onUngroup, mergeActions }: {
+function SortableParallelGroup({ phaseIndex, groupSteps, availableAgents, onSelectNode, onDeleteStep, onUngroup, mergeActions }: {
   phaseIndex: number;
   groupSteps: { step: Step; si: number }[];
+  availableAgents?: AgentAvatarSource[];
   onSelectNode: (type: 'phase' | 'step', pi: number, si?: number) => void;
   onDeleteStep: (pi: number, si: number) => void;
   onUngroup: (pi: number, si: number) => void;
@@ -170,7 +243,7 @@ function SortableParallelGroup({ phaseIndex, groupSteps, onSelectNode, onDeleteS
           </div>
         </div>
         {groupSteps.map(({ step, si }) => (
-          <StepCard key={si} step={step}
+          <StepCard key={si} step={step} availableAgents={availableAgents}
             onSelect={() => onSelectNode('step', phaseIndex, si)}
             onDelete={() => onDeleteStep(phaseIndex, si)} />
         ))}
@@ -192,26 +265,25 @@ function EmptyPhaseDropZone({ phaseIndex }: { phaseIndex: number }) {
 }
 
 /* ─── Overlay cards for DragOverlay ─── */
-function StepCardOverlay({ step }: { step: Step }) {
+function StepCardOverlay({ step, availableAgents }: { step: Step; availableAgents?: AgentAvatarSource[] }) {
   const role = step.role || 'defender';
   return (
-    <div className={`border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card p-3 shadow-xl ring-2 ring-primary/30 w-[300px]`}>
-      <div className="flex items-center gap-2 mb-1">
-        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${roleBadge[role]}`}>
-          <span className="material-symbols-outlined" style={{ fontSize: 12 }}>{roleIcon[role]}</span>
+    <div className={`border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card px-3 py-2.5 shadow-xl ring-2 ring-primary/30 w-[300px]`}>
+      <div className="flex items-start gap-2.5">
+        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${roleBadge[role]}`}>
+          <span className="material-symbols-outlined" style={{ fontSize: 11 }}>{roleIcon[role]}</span>
           {role}
         </span>
-        <span className="text-sm font-medium truncate">{step.name}</span>
+        <span className="min-w-0 truncate text-sm font-semibold leading-5">{step.name}</span>
       </div>
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span className="material-symbols-outlined" style={{ fontSize: 13 }}>smart_toy</span>
-        <span className="truncate">{step.agent}</span>
+      <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <StepAgentLabel agentName={step.agent} availableAgents={availableAgents} />
       </div>
     </div>
   );
 }
 
-function ParallelGroupOverlay({ steps }: { steps: Step[] }) {
+function ParallelGroupOverlay({ steps, availableAgents }: { steps: Step[]; availableAgents?: AgentAvatarSource[] }) {
   return (
     <div className="rounded-lg border-2 border-dashed border-primary/30 bg-primary/5 p-2 space-y-1 shadow-xl ring-2 ring-primary/30 w-[300px]">
       <div className="text-[10px] font-semibold text-primary uppercase tracking-wider px-2 pb-1">并行执行 ({steps.length})</div>
@@ -219,7 +291,10 @@ function ParallelGroupOverlay({ steps }: { steps: Step[] }) {
         const role = step.role || 'defender';
         return (
           <div key={i} className={`border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card p-2`}>
-            <span className="text-xs font-medium">{step.name}</span>
+            <div className="flex items-center gap-2">
+              <StepAgentAvatar agentName={step.agent} availableAgents={availableAgents} className="h-4 w-4" />
+              <span className="min-w-0 truncate text-xs font-medium">{step.name}</span>
+            </div>
           </div>
         );
       })}
@@ -262,7 +337,7 @@ function groupSteps(steps: Step[]) {
 
 /* ─── Main Design Panel ─── */
 export default function DesignPanel({
-  workflow, onSelectNode, onAddPhase, onAddStep, onAddStepAt,
+  workflow, availableAgents, onSelectNode, onAddPhase, onAddStep, onAddStepAt,
   onDeletePhase, onDeleteStep, onMoveStep, onToggleParallel, onUngroup,
   onCrossPhaseMove, onMoveGroup, onJoinGroup,
 }: DesignPanelProps) {
@@ -343,11 +418,11 @@ export default function DesignPanel({
         steps.push(phase.steps[i]);
         i++;
       }
-      return <ParallelGroupOverlay steps={steps} />;
+      return <ParallelGroupOverlay steps={steps} availableAgents={availableAgents} />;
     }
     const [pi, si] = activeId.split('-').map(Number);
     const step = workflow.phases[pi]?.steps[si];
-    return step ? <StepCardOverlay step={step} /> : null;
+    return step ? <StepCardOverlay step={step} availableAgents={availableAgents} /> : null;
   };
 
   const COLUMN_W = 340;
@@ -593,6 +668,7 @@ export default function DesignPanel({
                               <div key={`pg-${gi}`}>
                                 {gi > 0 && <InsertButton onClick={() => onAddStepAt(pi, group.steps[0].si - 1)} />}
                                 <SortableParallelGroup phaseIndex={pi} groupSteps={group.steps}
+                                  availableAgents={availableAgents}
                                   onSelectNode={onSelectNode} onDeleteStep={onDeleteStep} onUngroup={onUngroup}
                                   mergeActions={groupMerge} />
                               </div>
@@ -604,6 +680,7 @@ export default function DesignPanel({
                               <div key={`s-${si}`}>
                                 {gi > 0 && <InsertButton onClick={() => onAddStepAt(pi, si - 1)} />}
                                 <SortableStepCard step={step} phaseIndex={pi} stepIndex={si}
+                                  availableAgents={availableAgents}
                                   mergeActions={mergeActions}
                                   onSelect={() => onSelectNode('step', pi, si)}
                                   onDelete={() => onDeleteStep(pi, si)} />

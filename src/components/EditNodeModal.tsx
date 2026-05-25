@@ -16,6 +16,8 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { SingleCombobox, MultiCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
+import SpriteAvatar from '@/components/SpriteAvatar';
+import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -75,6 +77,98 @@ interface SpecTaskOption {
   ownerAgents?: string[];
 }
 
+function getAgentTeamTone(team?: string) {
+  if (team === 'red') {
+    return {
+      option: 'my-0.5 border border-red-500/10 bg-red-500/10 data-[highlighted]:bg-red-500/20',
+      chip: 'border-red-500/30 bg-red-500/12 text-red-700 dark:text-red-200',
+      avatar: 'ring-red-400/40',
+    };
+  }
+  if (team === 'judge') {
+    return {
+      option: 'my-0.5 border border-amber-500/10 bg-amber-500/10 data-[highlighted]:bg-amber-500/20',
+      chip: 'border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-200',
+      avatar: 'ring-amber-400/40',
+    };
+  }
+  if (team === 'black-gold') {
+    return {
+      option: 'my-0.5 border border-yellow-500/10 bg-yellow-500/10 data-[highlighted]:bg-yellow-500/20',
+      chip: 'border-yellow-500/30 bg-yellow-500/12 text-yellow-700 dark:text-yellow-200',
+      avatar: 'ring-yellow-400/40',
+    };
+  }
+  return {
+    option: 'my-0.5 border border-blue-500/10 bg-blue-500/10 data-[highlighted]:bg-blue-500/20',
+    chip: 'border-blue-500/30 bg-blue-500/12 text-blue-700 dark:text-blue-200',
+    avatar: 'ring-blue-400/40',
+  };
+}
+
+function AgentAvatar({
+  role,
+  className = 'h-6 w-6',
+}: {
+  role?: RoleOption;
+  className?: string;
+}) {
+  const name = role?.name || 'Agent';
+  const tone = getAgentTeamTone(role?.team);
+  const avatarSrc = resolveAgentAvatarSrc(role?.avatar, name, {
+    team: role?.team as any,
+    roleType: role?.roleType,
+  });
+  return (
+    <SpriteAvatar
+      avatar={avatarSrc}
+      seed={name}
+      category="agent-default"
+      alt={name}
+      fallback={name.charAt(0).toUpperCase()}
+      className={`${className} shrink-0 ring-2 ${tone.avatar}`}
+      fallbackClassName="bg-primary/10 text-[10px] font-semibold text-primary"
+    />
+  );
+}
+
+function AgentOptionContent({ role }: { role?: RoleOption }) {
+  if (!role) return null;
+  const tone = getAgentTeamTone(role.team);
+  const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean).join(' · ');
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <AgentAvatar role={role} className="h-7 w-7" />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium">{role.name}</span>
+          {role.roleType === 'supervisor' ? (
+            <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${tone.chip}`}>Supervisor</Badge>
+          ) : null}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">{role.description || meta || '暂无描述'}</div>
+      </div>
+    </div>
+  );
+}
+
+function AgentSelectedContent({ role, fallbackName }: { role?: RoleOption; fallbackName?: string }) {
+  const name = role?.name || fallbackName || '';
+  if (!name) return null;
+  const tone = getAgentTeamTone(role?.team);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-2">
+      <AgentAvatar role={role || { name, team: 'blue' }} className="h-5 w-5" />
+      <span className="truncate">{name}</span>
+      {role?.team ? (
+        <span className={`rounded-full border px-1.5 py-0.5 text-[10px] leading-none ${tone.chip}`}>
+          {role.team}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 interface EditNodeModalProps {
   isOpen: boolean;
   type: 'phase' | 'step';
@@ -85,6 +179,7 @@ interface EditNodeModalProps {
   existingPhases?: any[];
   existingSteps?: any[];
   specTasks?: SpecTaskOption[];
+  initialSection?: 'spec';
   onClose: () => void;
   onSave: (data: any) => void;
   onDelete?: () => void;
@@ -100,13 +195,14 @@ export default function EditNodeModal({
   existingPhases = [],
   existingSteps = [],
   specTasks = [],
+  initialSection,
   onClose,
   onSave,
   onDelete,
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
-  const [showAdvancedBindings, setShowAdvancedBindings] = useState(false);
+  const [showAdvancedBindings, setShowAdvancedBindings] = useState(initialSection === 'spec');
 
   const {
     register,
@@ -156,15 +252,12 @@ export default function EditNodeModal({
   );
   const agentOptions = roles.map((role) => {
     const meta = [role.category, role.team, ...(role.tags || []).slice(0, 2)].filter(Boolean);
+    const tone = getAgentTeamTone(role.team);
     return {
       value: role.name,
       label: role.name,
       description: role.description || meta.join(' · '),
-      icon: (
-        <span className="material-symbols-outlined text-sm">
-          {role.roleType === 'supervisor' ? 'supervisor_account' : 'smart_toy'}
-        </span>
-      ),
+      className: tone.option,
     };
   });
   const specTaskOptions = specTasks.map((task) => ({
@@ -411,6 +504,15 @@ export default function EditNodeModal({
                           options={agentOptions}
                           placeholder="选择 Agent..."
                           triggerClassName={errors.agent ? 'border-destructive' : ''}
+                          renderSelected={(option) => (
+                            <AgentSelectedContent
+                              role={roles.find((role) => role.name === option?.value)}
+                              fallbackName={option?.label || selectedAgentName}
+                            />
+                          )}
+                          renderOption={(option) => (
+                            <AgentOptionContent role={roles.find((role) => role.name === option.value)} />
+                          )}
                         />
                         {errors.agent && (
                           <p className="text-sm text-destructive">{errors.agent.message as string}</p>

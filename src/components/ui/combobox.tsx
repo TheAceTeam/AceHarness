@@ -226,6 +226,7 @@ interface ComboboxOptionType {
   description?: string;
   icon?: React.ReactNode;
   disabled?: boolean;
+  className?: string;
 }
 
 interface ComboboxGroupDef {
@@ -247,6 +248,8 @@ interface SingleComboboxProps {
   triggerClassName?: string;
   emptyText?: string;
   searchable?: boolean;
+  renderOption?: (option: ComboboxOptionType) => React.ReactNode;
+  renderSelected?: (option: ComboboxOptionType | null) => React.ReactNode;
 }
 
 function SingleCombobox({
@@ -260,6 +263,8 @@ function SingleCombobox({
   disabled = false,
   triggerClassName,
   emptyText = '无匹配项',
+  renderOption,
+  renderSelected,
 }: SingleComboboxProps) {
   const allOptions = React.useMemo(() => {
     if (groups) return groups.flatMap(g => g.items);
@@ -286,7 +291,7 @@ function SingleCombobox({
         placeholder={triggerLabel ? '' : (selected?.label || placeholder)}
         className={triggerClassName}
         leading={triggerIcon}
-        displayValue={triggerLabel || selected?.label}
+        displayValue={triggerLabel || (renderSelected ? renderSelected(selected) : selected?.label)}
       />
       <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
@@ -299,8 +304,10 @@ function SingleCombobox({
                 </ComboboxLabel>
                 <ComboboxCollection>
                   {(item: ComboboxOptionType) => (
-                    <ComboboxItem key={item.value} value={item} disabled={item.disabled}>
-                      <span className="flex items-center gap-1.5 truncate">{item.icon}{item.label}</span>
+                    <ComboboxItem key={item.value} value={item} disabled={item.disabled} className={item.className}>
+                      {renderOption ? renderOption(item) : (
+                        <span className="flex items-center gap-1.5 truncate">{item.icon}{item.label}</span>
+                      )}
                     </ComboboxItem>
                   )}
                 </ComboboxCollection>
@@ -310,8 +317,8 @@ function SingleCombobox({
         ) : (
           <ComboboxList>
             {(item: ComboboxOptionType) => (
-              <ComboboxItem key={item.value} value={item} disabled={item.disabled}>
-                {item.description ? (
+              <ComboboxItem key={item.value} value={item} disabled={item.disabled} className={item.className}>
+                {renderOption ? renderOption(item) : item.description ? (
                   <div className="flex flex-col min-w-0 overflow-hidden">
                     <span className="flex items-center gap-1.5 truncate">{item.icon}{item.label}</span>
                     <span className="text-xs text-muted-foreground line-clamp-1 break-all">{item.description}</span>
