@@ -50,6 +50,7 @@ async function discoverSkills(skillsDir: string) {
         const validation = validateSkillFrontmatter(content);
         if (!validation.ok) continue;
         const fm = validation.frontmatter;
+        const skillStat = await fs.stat(skillMdPath).catch(() => null);
 
         // Check for PROMPT.md
         const promptMdPath = path.join(skillsDir, entry.name, 'PROMPT.md');
@@ -63,6 +64,7 @@ async function discoverSkills(skillsDir: string) {
           tags: normalizeStringArray(fm.tags),
           source: normalizeSkillSource(fm.source),
           hasPromptMd,
+          updatedAt: skillStat?.mtime?.toISOString(),
           detailedDescription: content,
         });
       } catch { /* no SKILL.md */ }

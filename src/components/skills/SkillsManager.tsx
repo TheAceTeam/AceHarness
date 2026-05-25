@@ -109,8 +109,8 @@ function getSourceLabel(source: string): string {
   return SOURCE_LABELS[source] || source;
 }
 
-function formatLocalUpdatedAt(value?: string): string {
-  if (!value) return '-';
+function formatLocalUpdatedAt(value?: string): string | null {
+  if (!value) return null;
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return value;
   return new Date(timestamp).toLocaleString('zh-CN', {
@@ -1292,55 +1292,86 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
                   </div>
                 )}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {localPagination.items.map((skill) => (
-                    <motion.div
-                      key={skill.name}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)] cursor-pointer ${
-                        selectedForExport.has(skill.name) ? 'ring-2 ring-primary' : ''
-                      }`}
-                      onClick={() => setSelectedSkill(skill)}
-                    >
-                      <div className="absolute top-3 right-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="w-5 h-5 rounded flex items-center justify-center text-muted-foreground/60 hover:text-destructive transition-colors"
-                          onClick={() => handleDeleteSkills([skill.name])}
-                          title="删除"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                        <div onClick={() => toggleExportSelection(skill.name)} className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer ${
-                          selectedForExport.has(skill.name) ? 'bg-primary border-primary' : 'border-muted-foreground/40'
-                        }`}>
-                          {selectedForExport.has(skill.name) ? <span className="text-white text-xs">✓</span> : null}
+                  {localPagination.items.map((skill) => {
+                    const updatedAtLabel = formatLocalUpdatedAt(skill.updatedAt);
+                    const syncStatus = syncStatusByName[skill.name];
+                    const isSyncing = syncingSkillNames.has(skill.path);
+                    return (
+                      <motion.div
+                        key={skill.name}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)] cursor-pointer ${
+                          selectedForExport.has(skill.name) ? 'ring-2 ring-primary' : ''
+                        }`}
+                        onClick={() => setSelectedSkill(skill)}
+                      >
+                        <div className="absolute top-3 right-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            className="w-5 h-5 rounded flex items-center justify-center text-muted-foreground/60 hover:text-destructive transition-colors"
+                            onClick={() => handleDeleteSkills([skill.name])}
+                            title="删除"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                          <div onClick={() => toggleExportSelection(skill.name)} className={`w-5 h-5 rounded border-2 flex items-center justify-center cursor-pointer ${
+                            selectedForExport.has(skill.name) ? 'bg-primary border-primary' : 'border-muted-foreground/40'
+                          }`}>
+                            {selectedForExport.has(skill.name) ? <span className="text-white text-xs">✓</span> : null}
+                          </div>
                         </div>
-                      </div>
-                      <div className="pr-8">
-                        <h3 className="font-semibold text-sm">{skill.name}</h3>
-                        <p className="mt-2 text-xs leading-6 text-muted-foreground line-clamp-3">{getDisplayDescription(skill)}</p>
-                      </div>
-                      <div className="mt-4 flex flex-wrap gap-1.5">
-                        <Badge className={SOURCE_COLORS[normalizeSkillSource(skill)] || DEFAULT_SOURCE_COLOR}>
-                          {getSourceLabel(normalizeSkillSource(skill))}
-                        </Badge>
-                        {syncStatusByName[skill.name]?.aceharnessBuiltin ? (
-                          <Badge variant="outline" className="text-xs border-primary/40 text-primary">内置可同步</Badge>
-                        ) : null}
-                        {skill.hasPromptMd ? (
-                          <Badge variant="outline" className="text-xs border-green-500/40 text-green-600 dark:text-green-400">PROMPT</Badge>
-                        ) : null}
-                      </div>
-                      <div className="mt-4 flex min-h-12 flex-wrap gap-1.5">
-                        {(skill.tags || []).slice(0, 4).map((tag) => (
-                          <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
-                        ))}
-                      </div>
-                      <div className="mt-4 rounded-[18px] border border-border/60 bg-background/75 px-3 py-2 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                        {formatLocalUpdatedAt(skill.updatedAt)}
-                      </div>
-                    </motion.div>
-                  ))}
+                        <div className="pr-8">
+                          <h3 className="font-semibold text-sm">{skill.name}</h3>
+                          <p className="mt-2 text-xs leading-6 text-muted-foreground line-clamp-3">{getDisplayDescription(skill)}</p>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-1.5">
+                          <Badge className={SOURCE_COLORS[normalizeSkillSource(skill)] || DEFAULT_SOURCE_COLOR}>
+                            {getSourceLabel(normalizeSkillSource(skill))}
+                          </Badge>
+                          {syncStatusByName[skill.name]?.aceharnessBuiltin ? (
+                            <Badge variant="outline" className="text-xs border-primary/40 text-primary">内置可同步</Badge>
+                          ) : null}
+                          {skill.hasPromptMd ? (
+                            <Badge variant="outline" className="text-xs border-green-500/40 text-green-600 dark:text-green-400">PROMPT</Badge>
+                          ) : null}
+                        </div>
+                        <div className="mt-4 flex min-h-12 flex-wrap gap-1.5">
+                          {(skill.tags || []).slice(0, 4).map((tag) => (
+                            <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
+                          ))}
+                        </div>
+                        <div
+                          className="mt-4 flex items-center justify-between gap-3 rounded-[18px] border border-border/60 bg-background/75 px-3 py-2 text-xs text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span className="min-w-0 truncate">
+                            {updatedAtLabel || '本地 Skill'}
+                          </span>
+                          <div className="ml-auto flex items-center gap-1.5">
+                            {syncStatus?.inInstall ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 px-2 text-xs"
+                                disabled={isSyncing}
+                                onClick={() => syncInstalledSkills([skill.path], `已同步 ${skill.name}`)}
+                              >
+                                {isSyncing ? '同步中...' : '同步'}
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => setSelectedSkill(skill)}
+                            >
+                              详情
+                            </Button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
                 </div>
                 </>
               )}
