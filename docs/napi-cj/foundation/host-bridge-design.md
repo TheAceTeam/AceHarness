@@ -2,12 +2,12 @@
 
 ## 1. 目标
 
-Host bridge 解决的问题是：Cangjie engine 执行过程中，需要调用 ACEHarness 现有 TS/JS 能力。
+Host bridge 解决的问题是：Cangjie 业务库执行过程中，需要调用 JS/TS host 能力。
 
-这里不是让 Cangjie 直接 import TS 模块，而是通过 `napi-cj` 提供一条受控调用链：
+`@cangjielang/napi-cj` 提供受控调用链，Cangjie 不直接 import TS 模块：
 
 ```text
-Cangjie provider
+Cangjie business library
   -> C ABI callback
   -> Node-API addon HostBridge
   -> registered TS host handler
@@ -15,15 +15,15 @@ Cangjie provider
 
 适合放进 host bridge 的能力：
 
-- 读取 ACEHarness 运行时配置
-- 查询模型、engine 元数据、workspace 信息
+- 读取运行时配置
+- 查询 metadata、workspace 信息
 - 请求 JS 侧执行已有服务能力
-- 触发 tool call / host capability
+- 触发受控 host capability
 - 记录诊断日志或调试事件
 
 不适合放进 host bridge 的能力：
 
-- 高频 token 流输出，流事件继续走 `emit`
+- 高频 token 流输出，流事件走 data plane `emit_frame`
 - 大文件传输
 - 长时间阻塞的外部进程
 - 绕过权限模型的文件、网络、shell 操作
@@ -32,14 +32,14 @@ Cangjie provider
 
 ```mermaid
 sequenceDiagram
-  participant CJ as Cangjie Provider
+  participant CJ as Cangjie Library
   participant ABI as C ABI callback
   participant ADDON as napi-cj Addon
   participant TSFN as ThreadSafeFunction
   participant TS as TS Host Handler
 
-  CJ->>ABI: hostCall(requestJson)
-  ABI->>ADDON: HostBridge::Call(requestJson)
+  CJ->>ABI: hostCall(hostRequestJson)
+  ABI->>ADDON: HostBridge::Call(hostRequestJson)
   ADDON->>TSFN: dispatch to JS thread
   TSFN->>TS: onHostCall(request)
   TS-->>TSFN: responseJson
@@ -57,29 +57,28 @@ sequenceDiagram
 
 ## 3. C ABI 草案
 
-`emit` 和 `hostCall` 分开设计。
+`emit_frame` 和 `hostCall` 分开设计。
 
-- `emit`：事件流，单向、轻量、尽量不阻塞。
+- `emit_frame`：事件流，单向、轻量、支持背压。
 - `hostCall`：请求 TS 能力，有返回值、带超时、可失败。
 
-```cangjie
-@C
-public func ace_cj_engine_execute_json_with_host_callback(
-    handle: CPointer<Unit>,
-    requestJson: CString,
-    emit: CFunc<(Int32, CString, CString, CPointer<Unit>) -> Unit>,
-    hostCall: CFunc<(CString, CPointer<Unit>) -> CString>,
-    hostFreeString: CFunc<(CString, CPointer<Unit>) -> Unit>,
-    userData: CPointer<Unit>
-): CString
+```c
+int32_t napi_cj_call_data_v1(
+  void* library_ctx,
+  const napi_cj_call_request_v1* request,
+  napi_cj_emit_frame_callback emit_frame,
+  napi_cj_host_call_callback host_call,
+  napi_cj_host_free_string_callback host_free_string,
+  napi_cj_call_result_v1* result
+);
 ```
 
 内存规则：
 
-- `requestJson` 由 addon 持有，生命周期覆盖 native 调用。
+- data call request struct、input slice 和 `options_json` 由 addon 持有，生命周期覆盖 native 调用。
 - `hostCall` 返回的 `CString` 由 addon 分配。
 - Cangjie 侧必须在拷贝为 Cangjie `String` 后调用 `hostFreeString`。
-- Cangjie 返回给 addon 的字符串仍然走 `ace_cj_engine_free_string`。
+- Cangjie 返回给 addon 的字符串走 `napi_cj_free_string_v1`，buffer 走 `napi_cj_free_buffer_v1`。
 
 ## 4. Host Request 协议
 
@@ -91,7 +90,7 @@ public func ace_cj_engine_execute_json_with_host_callback(
   "capability": "config.get",
   "timeoutMs": 3000,
   "payload": {
-    "key": "engineRuntime"
+    "key": "runtime.mode"
   }
 }
 ```
@@ -121,19 +120,19 @@ public func ace_cj_engine_execute_json_with_host_callback(
 }
 ```
 
-默认 capability 建议：
+默认 capability：
 
 | capability | 用途 |
 | --- | --- |
 | `config.get` | 读取只读配置 |
-| `engine.metadata` | 查询 engine 元数据 |
+| `metadata.get` | 查询业务 metadata |
 | `model.resolve` | 查询模型配置 |
 | `workspace.info` | 获取工作目录、session 信息 |
 | `diagnostic.log` | 写诊断日志 |
 
 ## 5. TS API 草案
 
-`@cangjielang/napi-cj` 暴露的 TS 类型：
+`@cangjielang/napi-cj` 暴露通用 TS 类型：
 
 ```ts
 export interface HostCallRequest {
@@ -158,24 +157,30 @@ export type HostCallHandler = (
   request: HostCallRequest
 ) => Promise<HostCallResponse> | HostCallResponse;
 
-export interface NativeExecuteOptions {
-  engine: string;
-  driver: string;
-  requestJson: string;
-  onEvent?: (eventType: number, contentJson: string, metadataJson: string) => void;
+export interface NativeDataCallOptions {
+  requestId: string;
+  domain: string;
+  operation: string;
+  optionsJson?: string;
+  inputs?: Record<string, string | Buffer | Uint8Array>;
+  onFrame?: (frame: NativeFrame) => void;
   onHostCall?: HostCallHandler;
 }
 ```
 
-ACEHarness wrapper 中的使用方式：
+业务 adapter 中的使用方式：
 
 ```ts
-const resultJson = await addon.execute({
-  engine: this.targetEngine,
-  driver: this.targetDriver,
-  requestJson,
-  onEvent: (eventType, contentJson, metadataJson) => {
-    this.emit('stream', convertNativeEvent(eventType, contentJson, metadataJson));
+const result = await library.callData({
+  requestId,
+  domain,
+  operation,
+  optionsJson,
+  inputs: {
+    primary: payload,
+  },
+  onFrame: (frame) => {
+    emitBusinessEvent(frame);
   },
   onHostCall: async (request) => {
     return hostCapabilityRegistry.call(request);
@@ -185,7 +190,7 @@ const resultJson = await addon.execute({
 
 ## 6. Addon 内部模型
 
-建议在 `native/napi-cj-addon/src/` 下增加：
+`native/napi-cj-addon/src/` 文件结构：
 
 ```text
 host_bridge.h
@@ -210,33 +215,33 @@ host_call_context.cc
 
 每个 host call 必须有超时。
 
-优先级：
+选择顺序：
 
 1. request 内 `timeoutMs`
-2. execute options 的默认 host timeout
+2. data call options 的默认 host timeout
 3. addon 默认值，建议 `3000ms`
 
 取消规则：
 
-- 如果 JS 调用 `cancel(requestId)`，addon 标记当前 execute canceled。
+- 如果 JS 调用 `cancel(requestId)`，addon 标记本次 data call canceled。
 - 之后新的 host call 直接返回 `HOST_CALL_CANCELLED`。
-- 已经派发到 JS 的 host call 等待当前 handler 返回或超时，不强行杀 JS 逻辑。
-- Cangjie provider 收到取消错误后应尽快停止执行。
+- 已经派发到 JS 的 host call 等待 handler 返回或超时，不强行杀 JS 逻辑。
+- Cangjie 业务库收到取消错误后应尽快停止执行。
 
 ## 8. 死锁控制
 
 必须避免这些模式：
 
 - JS 主线程同步等待 native，native 又同步等待 JS 主线程。
-- host handler 内再次调用同一个 addon execute。
-- host handler 长时间等待当前 execute 的最终结果。
+- host handler 内再次调用同一个 library call。
+- host handler 长时间等待同一 data call 的最终结果。
 
 约束：
 
-- `execute()` 在 native worker 线程运行。
+- `callData()` 在 native worker 线程运行。
 - `hostCall` 只能阻塞 native worker 线程。
 - JS handler 必须是异步安全的普通函数。
-- addon 对嵌套 execute 做检测，发现同一 request 链路重入时返回 `HOST_REENTRANT_CALL`。
+- addon 对嵌套 call 做检测，发现同一 request 链路重入时返回 `HOST_REENTRANT_CALL`。
 
 ## 9. 安全与权限
 
@@ -271,9 +276,9 @@ public func callHostConfigGet(
 
 规则：
 
-- Cangjie provider 不直接拼接复杂 JSON。
-- host request / response 编解码集中到 `protocol/host_call.cj`。
-- host call 错误转换成 engine error 或 diagnostic event。
+- Cangjie 业务库不直接拼接复杂 JSON。
+- host request / response 编解码集中到业务库的 protocol 层。
+- host call 错误转换成业务错误或 diagnostic event。
 
 ## 11. 测试计划
 
@@ -289,20 +294,20 @@ Native / addon：
 
 JS 集成：
 
-- `CangjieRuntimeEngineWrapper` 能注册 `onHostCall`。
-- `config.get` 能读取 engine runtime 配置。
-- `diagnostic.log` 不影响 execute 结果。
-- host handler 不能触发同 request 的递归 execute。
+- native library wrapper 能注册 `onHostCall`。
+- `config.get` 能读取只读配置。
+- `diagnostic.log` 不影响 data call 结果。
+- host handler 不能触发同 request 的递归 call。
 
-## 12. 当前边界
+## 12. 边界
 
 host bridge 的最小闭环：
 
 - `diagnostic.log`
 - `config.get`
-- `engine.metadata`
+- `metadata.get`
 
-不在当前边界做：
+边界外：
 
 - 任意 tool execution
 - 大文件传输

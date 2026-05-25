@@ -1,6 +1,6 @@
 # Build 与 Packaging 设计
 
-## 1. 当前使用方式
+## 1. 使用方式
 
 `@cangjielang/napi-cj` 作为仓内本地依赖，不单独发布：
 
@@ -12,7 +12,7 @@
 }
 ```
 
-`packages/napi-cj` 使用 package-local build 生成 `dist/`，根仓 `prepare` / `build` 在主应用构建前触发它。
+`packages/napi-cj` 只发布通用 Node/Cangjie bridge。包内容包括 TS facade、Node-API addon、平台解析、错误诊断和 build-info。
 
 ## 2. 包结构
 
@@ -23,89 +23,83 @@ packages/napi-cj/
   src/
     index.ts
     load-addon.ts
-    resolve-binary.ts
+    resolve-addon.ts
+    resolve-library.ts
     types.ts
     errors.ts
   dist/
   native/
     win32-x64-msvc/
-      ace_cj_engine.node
-      ace_cj_engine.dll
+      napi_cj.node
       build-info.json
     darwin-arm64/
-      ace_cj_engine.node
-      libace_cj_engine.dylib
+      napi_cj.node
       build-info.json
     linux-x64-gnu/
-      ace_cj_engine.node
-      libace_cj_engine.so
+      napi_cj.node
       build-info.json
 ```
 
-## 3. Cangjie 构建
+## 3. Addon 构建
 
-`native/cangjie-engine/cjpm.toml`：
+`native/napi-cj-addon` 构建 `napi_cj.node`：
 
-```toml
-[package]
-  cjc-version = "1.1.0"
-  name = "ace_cj_engine"
-  version = "0.1.0"
-  output-type = "dynamic"
-  compile-option = "--static-std -Woff unused"
-
-[dependencies]
-  seajson = { version = "1.4.7", output-type = "static" }
-  markit = { version = "0.0.3", output-type = "static" }
+```text
+native/napi-cj-addon/
+  binding.gyp
+  src/
+    addon.cc
+    runtime_manager.cc
+    runtime_manager.h
+    library_bridge.cc
+    library_bridge.h
+    host_bridge.cc
+    host_bridge.h
+    data_call_worker.cc
+    frame_queue.cc
 ```
 
 约束：
 
-- 支持 Cangjie `1.1.0+`。
-- 必须支持中心仓依赖解析。
-- 中心仓只参与构建链路。
-- JS 用户不需要中心仓 token、不需要本地 `cjpm`。
+- 支持 Node `>=20`。
+- 支持 Cangjie `1.1.0+` runtime 初始化接口。
+- 使用 vendored `vendor/cangjie-sdk/include/Cangjie.h`。
+- 输出平台目录为 `packages/napi-cj/native/<target>`。
+- 只链接 Node-API 和 Cangjie runtime 启动所需系统库。
 
 ## 4. 构建链路
 
 ```mermaid
 flowchart LR
-  REG["Cangjie Center Registry"]
   CI["CI / local builder"]
-  CJB["cjpm build"]
-  NAPI["Node-API addon build"]
-  SYNC["sync artifacts<br/>packages/napi-cj/native/&lt;target&gt;"]
+  ADDON["napi_cj.node build"]
+  SYNC["sync addon artifacts<br/>packages/napi-cj/native/&lt;target&gt;"]
   TSC["packages/napi-cj tsc"]
   ACE["ACEHarness build"]
 
-  REG --> CI
-  CI --> CJB
-  CI --> NAPI
-  CJB --> SYNC
-  NAPI --> SYNC
+  CI --> ADDON
+  ADDON --> SYNC
   SYNC --> TSC
   TSC --> ACE
 ```
 
 ## 5. build-info
 
-每个平台产物写入 `build-info.json`：
+`packages/napi-cj/native/<target>/build-info.json`：
 
 ```json
 {
-  "sdkVersion": "1.1.0",
-  "cangjieHeader": "vendor/cangjie-sdk/include/Cangjie.h",
-  "dependencies": {
-    "seajson": "1.4.7",
-    "markit": "0.0.3"
-  },
+  "package": "@cangjielang/napi-cj",
+  "addon": "napi_cj.node",
+  "abiVersion": 1,
+  "sdkHeader": "vendor/cangjie-sdk/include/Cangjie.h",
   "target": "win32-x64-msvc",
   "gitCommit": "...",
   "builtAt": "..."
 }
 ```
 
-JS 侧通过 `getBuildInfo()` 暴露。
+JS 侧通过 `getAddonBuildInfo()` 暴露。
 
 ## 6. 包契约
 
@@ -114,12 +108,13 @@ JS 侧通过 `getBuildInfo()` 暴露。
 - root `package.json` dependencies
 - root build / prepare scripts
 - `tests/package-contract.test.ts`
-- `.npmignore` / package `files`，确保本地依赖产物被包含或在发布阶段有明确处理
+- `.npmignore` / package `files`
+- npm publish 文件清单包含 `packages/napi-cj` addon 产物
 
 ## 7. 验收
 
 - 干净环境安装后能解析 `@cangjielang/napi-cj`。
-- 当前平台 native 目录完整。
-- `.node` 加载失败时错误信息可诊断。
+- 本平台 `napi_cj.node` 目录完整。
+- addon 加载失败时错误信息可诊断。
 - build-info 可读取。
-- 不存在平台目录时，`engineRuntime=auto` 可以回到 JS 路径。
+- `@cangjielang/napi-cj` 不包含业务 provider、业务模型名或业务依赖。
