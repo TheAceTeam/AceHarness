@@ -84,6 +84,10 @@ const group1 = (start: number, end: number): AvatarSpriteEntry[] => {
   return entries;
 };
 
+const MODERN_CAREER_AVATARS = group1(50, 79);
+const ACADEMIC_ENGINEER_AVATARS = group1(80, 99);
+const PERSON_AVATARS = [...MODERN_CAREER_AVATARS, ...ACADEMIC_ENGINEER_AVATARS];
+
 export const AVATAR_CATEGORIES: AvatarCategory[] = [
   {
     id: 'animals',
@@ -103,25 +107,25 @@ export const AVATAR_CATEGORIES: AvatarCategory[] = [
     id: 'modern-careers',
     label: '现代职业',
     description: '程序员、设计师、医生、教师、管理者等',
-    entries: group1(50, 79),
+    entries: MODERN_CAREER_AVATARS,
     picker: true,
   },
   {
     id: 'academics-engineers',
     label: '学者工程师',
     description: '学者、研究员、工程师与技术专家',
-    entries: group1(80, 99),
+    entries: ACADEMIC_ENGINEER_AVATARS,
     picker: true,
   },
   {
     id: 'user-default',
     label: '用户默认',
-    entries: [...group1(50, 79), ...group1(80, 99)],
+    entries: PERSON_AVATARS,
   },
   {
     id: 'agent-default',
     label: 'Agent 默认',
-    entries: [...group1(50, 79), ...group1(80, 99), ...group1(20, 29)],
+    entries: PERSON_AVATARS,
   },
   {
     id: 'all',
