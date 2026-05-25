@@ -22,3 +22,4 @@ export * from './claude-code-wrapper';
 export * from './claude-code-acp-wrapper';
 export * from './engine-config';
 export * from './magic-cli-wrapper';
+export * from './trae-cli-wrapper';
