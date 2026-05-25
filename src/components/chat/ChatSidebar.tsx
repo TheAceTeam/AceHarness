@@ -56,7 +56,7 @@ import {
 } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
-import { RobotLogo } from './ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 
 type SkillItem = {
   name: string;

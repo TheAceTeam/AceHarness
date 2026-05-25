@@ -7,6 +7,7 @@ import UniversalCard from './cards/UniversalCard';
 import { memo, useEffect, useMemo, useState } from 'react';
 import { getEngineDisplayName } from '@/lib/core/engine-metadata';
 import SpriteAvatar from '@/components/SpriteAvatar';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 import { getWerewolfRoleSpriteStyle } from '@/plugins/werewolf/role-assets';
 import { copyText } from '@/lib/core/clipboard';
 import { useToast } from '@/components/ui/toast';
@@ -62,8 +63,6 @@ const VISIBLE_SESSION_TAGS = {
     className: 'border-sky-500/25 bg-sky-500/8 text-sky-700 dark:text-sky-300',
   },
 } as const;
-const ACEHARNESS_DEER_AVATAR_VALUE = 'sprite:group1:24';
-const DISABLE_LOGO_GLOW_CLASS_PATTERN = /\banimate-none\b/;
 const quoteActionIcon = <MessageSquareQuote className="h-3.5 w-3.5" />;
 
 function parseVisibleSessionTag(content: string): null | {
@@ -1766,24 +1765,6 @@ export function ThinkingBot() {
       <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
       <Shimmer as="span" className="text-[13px]">思考中...</Shimmer>
     </div>
-  );
-}
-
-export function RobotLogo({ size = 32, className = '' }: { size?: number; className?: string }) {
-  const innerGlowClass = DISABLE_LOGO_GLOW_CLASS_PATTERN.test(className) ? '' : 'aceharness-deer-inner-glow';
-
-  return (
-    <SpriteAvatar
-      avatar={ACEHARNESS_DEER_AVATAR_VALUE}
-      seed="aceharness-deer"
-      category="animals"
-      fallback="鹿"
-      aria-hidden="true"
-      size={size}
-      className={`inline-flex rounded-full ${className}`.trim()}
-      spriteImageClassName={innerGlowClass}
-      draggable={false}
-    />
   );
 }
 

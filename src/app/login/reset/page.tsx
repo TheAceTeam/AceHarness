@@ -7,7 +7,7 @@ import { ArrowLeft, CheckCircle2, KeyRound, ShieldQuestion } from 'lucide-react'
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 
 export default function ResetPasswordPage() {
   const router = useRouter();

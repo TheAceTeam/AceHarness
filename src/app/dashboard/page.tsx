@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import NewConfigModal from '@/components/NewConfigModal';
 import UserMenu from '@/components/UserMenu';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import pkgJson from '../../../package.json';
 

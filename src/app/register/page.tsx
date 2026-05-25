@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 

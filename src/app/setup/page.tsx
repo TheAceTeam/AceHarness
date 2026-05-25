@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { EngineSelect } from '@/components/EngineSelect';
 import { ModelSelect } from '@/components/ModelSelect';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { getConcreteEngines } from '@/lib/core/engine-metadata';

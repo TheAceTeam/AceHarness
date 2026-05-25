@@ -6,7 +6,7 @@ import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { RobotLogo } from '@/components/chat/ChatMessage';
+import { RobotLogo } from '@/components/brand/RobotLogo';
 import { KeyRound, Settings, UserPlus } from 'lucide-react';
 
 const CAROUSEL_ITEMS = [
