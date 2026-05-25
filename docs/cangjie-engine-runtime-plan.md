@@ -146,6 +146,7 @@ export type EngineRuntime = 'js' | 'cangjie' | 'auto';
 
 - 是否切换 runtime，只在执行开始前决定。
 - 已经进入流式执行后，不做自动重跑。
+- `engineRuntime` 和 `cangjieRuntime` 直接写入当前的 engine config JSON，并通过现有 `/api/engine` 读写链路暴露给 UI。
 
 ## 6. 目录结构建议
 
@@ -654,6 +655,8 @@ ACEHarness 根包先通过本地依赖接入：
 - 不需要先把仓库改成 monorepo 发布体系。
 - `napi-cj` 能独立演进，但仍跟 ACEHarness 同仓协作。
 - 等 ABI 和发布链路稳定后，再考虑是否拆出去单独发包。
+- `packages/napi-cj` 先按本地构建产物使用，配套一个 package-local `tsc` build 生成 `dist/`。
+- 根仓 `prepare` / `build` 需要先触发这个 package-local build，再执行主应用构建。
 
 ### 12.2 包内 native 布局
 
@@ -723,6 +726,33 @@ flowchart LR
 
 ## 13. 第一批改动范围
 
+第一批适配范围按当前代码的 engine 层来定：**9 个逻辑引擎，13 个 concrete wrapper**。
+
+| 逻辑引擎 | concrete wrapper | 当前实现类型 | driver 关系 | 第一版 Cangjie provider |
+| --- | --- | --- | --- | --- |
+| `claude-code` | `claude-code` | SDK wrapper | `sdk` | `claude_code_provider.cj` |
+| `claude-code` | `claude-code-acp` | ACP stdio wrapper | `stdio` | `claude_code_acp_provider.cj` |
+| `opencode` | `opencode` | ACP stdio wrapper | `stdio` | `opencode_provider.cj` |
+| `opencode` | `opencode-sdk` | SDK / HTTP wrapper | `sdk` | `opencode_sdk_provider.cj` |
+| `nga` | `nga` | ACP stdio wrapper | `stdio` | `nga_provider.cj` |
+| `nga` | `nga-sdk` | SDK / HTTP wrapper | `sdk` | `nga_sdk_provider.cj` |
+| `codegenie` | `codegenie` | ACP stdio wrapper | `stdio` | `codegenie_provider.cj` |
+| `codegenie` | `codegenie-sdk` | SDK / HTTP wrapper | `sdk` | `codegenie_sdk_provider.cj` |
+| `kiro-cli` | `kiro-cli` | ACP stdio wrapper | single | `kiro_cli_provider.cj` |
+| `cursor` | `cursor` | ACP stdio wrapper | single | `cursor_provider.cj` |
+| `trae-cli` | `trae-cli` | ACP stdio wrapper | single | `trae_cli_provider.cj` |
+| `magic-cli` | `magic-cli` | ACP stdio wrapper | single | `magic_cli_provider.cj` |
+| `codex` | `codex` | SDK / client wrapper | single | `codex_provider.cj` |
+
+当前 driver-capable 逻辑引擎只有：
+
+- `claude-code`
+- `opencode`
+- `nga`
+- `codegenie`
+
+其他 engine 没有 `sdk | stdio` driver 选择，第一版按 single wrapper 处理。
+
 ### 13.1 Cangjie 侧
 
 - `exports.cj`
@@ -760,12 +790,24 @@ flowchart LR
 
 ### 13.3 JS / TS 侧
 
+- `src/lib/engines/index.ts`
+- `src/lib/core/engine-metadata.ts`
+- `src/cli.ts`
+- `package.json`
+- `src/app/api/engine/route.ts`
+- `src/app/engines/page.tsx`
+- `src/app/setup/page.tsx`
+- `src/components/EngineSelect.tsx`
+- `src/components/EngineModelSelect.tsx`
+- `packages/napi-cj/package.json`
+- `packages/napi-cj/tsconfig.json`
 - `packages/napi-cj/src/index.ts`
 - `packages/napi-cj/src/load-addon.ts`
 - `packages/napi-cj/src/resolve-binary.ts`
 - `packages/napi-cj/src/types.ts`
 - `src/lib/engines/cangjie-runtime-wrapper.ts`
 - `src/lib/engines/engine-factory.ts`
+- `src/lib/engines/engine-interface.ts`
 - `src/lib/engines/claude-code-wrapper.ts`
 - `src/lib/engines/claude-code-acp-wrapper.ts`
 - `src/lib/engines/codex-wrapper.ts`
@@ -780,6 +822,11 @@ flowchart LR
 - `src/lib/engines/codegenie-sdk-wrapper.ts`
 - `src/lib/engines/trae-cli-wrapper.ts`
 - 运行时配置读取逻辑
+
+说明：
+
+- 现有引擎配置页、首次安装向导、全局引擎下拉都要一起接入 `engineRuntime`。
+- `compactContext` 继续保留为可选接口，第一版可以不进入 native ABI。
 
 ## 14. 测试计划
 
@@ -827,10 +874,12 @@ flowchart LR
 - `tests/engine-factory-pooling.test.ts`
 - `tests/engine-driver-resolution.test.ts`
 - `tests/acp-wrapper-base.test.ts`
+- `tests/wrapper-availability.test.ts`
 - `tests/opencode-sdk-wrapper.test.ts`
 - `tests/nga-sdk-wrapper.test.ts`
 - `tests/codegenie-sdk-wrapper.test.ts`
 - `tests/result-channel.test.ts`
+- `tests/package-contract.test.ts`
 
 ## 15. 风险与控制
 
