@@ -12,13 +12,8 @@ import { configApi, workflowApi, agentApi, runsApi, processApi, streamApi, works
 import { useWorkflowState } from '@/hooks/useWorkflowState';
 import type { ViewMode } from '@/hooks/useWorkflowState';
 import FlowDiagram from '@/components/FlowDiagram';
-import StateMachineDiagram from '@/components/StateMachineDiagram';
-import StateMachineDesignPanel from '@/components/StateMachineDesignPanel';
-import AgentsManager from '@/components/agents/AgentsManager';
-import SkillsManager from '@/components/skills/SkillsManager';
 import StateMachineExecutionView from '@/components/StateMachineExecutionView';
 import AgentFormationDiagram from '@/components/AgentFormationDiagram';
-import DesignPanel from '@/components/DesignPanel';
 import AgentPanel from '@/components/AgentPanel';
 import AgentConfigPanel from '@/components/AgentConfigPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
@@ -91,6 +86,23 @@ const loadingPanel = () => (
     </div>
   </div>
 );
+const designTabLoadingPanel = (message: string) => (
+  <div className="flex h-full min-h-[320px] flex-col justify-center bg-background p-6">
+    <div className="mx-auto w-full max-w-3xl space-y-4">
+      <div className="rounded-2xl border bg-background/80 p-5">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="material-symbols-outlined text-primary" style={{ fontSize: 18 }}>deployed_code</span>
+          {message}
+        </div>
+        <div className="mt-4 space-y-3">
+          <Skeleton className="h-8 w-40 rounded-xl" />
+          <Skeleton className="h-24 w-full rounded-2xl" />
+          <Skeleton className="h-56 w-full rounded-2xl" />
+        </div>
+      </div>
+    </div>
+  </div>
+);
 const ProcessPanel = dynamic(() => import('@/components/ProcessPanel'), {
   ssr: false,
   loading: () => loadingPanel(),
@@ -113,6 +125,26 @@ const WorkspaceEditor = dynamic(
 const RichTextEditor = dynamic(() => import('@/components/ui/RichTextEditor'), {
   ssr: false,
   loading: () => <div className="h-24 rounded-[24px] border bg-muted/30" />,
+});
+const StateMachineDiagram = dynamic(() => import('@/components/StateMachineDiagram'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载状态图...'),
+});
+const StateMachineDesignPanel = dynamic(() => import('@/components/StateMachineDesignPanel'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载状态机编排...'),
+});
+const DesignPanel = dynamic(() => import('@/components/DesignPanel'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载流程编排...'),
+});
+const AgentsManager = dynamic(() => import('@/components/agents/AgentsManager'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载 Agent 管理...'),
+});
+const SkillsManager = dynamic(() => import('@/components/skills/SkillsManager'), {
+  ssr: false,
+  loading: () => designTabLoadingPanel('正在加载 Skills 管理...'),
 });
 
 const MonacoEditor = dynamic(
@@ -1154,6 +1186,7 @@ export default function WorkbenchPage() {
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [workflowDefaultModel, setWorkflowDefaultModel] = useState('');
+  const [workflowAutoCompactOnStepChange, setWorkflowAutoCompactOnStepChange] = useState(false);
   const [workflowAgentOverrides, setWorkflowAgentOverrides] = useState<Record<string, WorkflowAgentExecutionOverride>>({});
   const [showAgentDrawer, setShowAgentDrawer] = useState(false);
   const [showRuntimeAgentCreator, setShowRuntimeAgentCreator] = useState(false);
@@ -1488,8 +1521,9 @@ export default function WorkbenchPage() {
   const currentWorkflowExecutionPolicy = useMemo(() => ({
     defaultEngine: engine || '',
     defaultModel: workflowDefaultModel || '',
+    autoCompactOnStepChange: workflowAutoCompactOnStepChange,
     agentOverrides: workflowAgentOverrides,
-  }), [engine, workflowAgentOverrides, workflowDefaultModel]);
+  }), [engine, workflowAgentOverrides, workflowAutoCompactOnStepChange, workflowDefaultModel]);
   const configuredWorkflowOverrideCount = useMemo(
     () => Object.values(workflowAgentOverrides).filter((value) => value?.enabled).length,
     [workflowAgentOverrides],
@@ -3857,6 +3891,7 @@ export default function WorkbenchPage() {
       const loadedExecutionPolicy = resolveWorkflowExecutionPolicy(config.context);
       dispatch({ type: 'SET_ENGINE', payload: loadedExecutionPolicy.defaultEngine || '' });
       setWorkflowDefaultModel(loadedExecutionPolicy.defaultModel || '');
+      setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
       setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
       dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
 
@@ -4115,6 +4150,7 @@ export default function WorkbenchPage() {
           executionPolicy: {
             defaultEngine: engine || undefined,
             defaultModel: workflowDefaultModel || undefined,
+            autoCompactOnStepChange: workflowAutoCompactOnStepChange,
             agentOverrides: normalizedAgentOverrides,
           },
           skills,
@@ -6007,6 +6043,7 @@ export default function WorkbenchPage() {
           executionPolicy: {
             defaultEngine: engine || undefined,
             defaultModel: workflowDefaultModel || undefined,
+            autoCompactOnStepChange: workflowAutoCompactOnStepChange,
             agentOverrides: normalizedAgentOverrides,
           },
           skills,
@@ -8534,7 +8571,7 @@ export default function WorkbenchPage() {
         )}
         {isDesignMode && editingConfig && (<>
           <div className="flex flex-1 overflow-hidden">
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex flex-1 min-h-0 flex-col min-w-0">
               {/* Design Tabs */}
               <div className="shrink-0 border-b bg-muted/30">
                 <div className="flex gap-0.5 px-2 pt-1">
@@ -8785,6 +8822,9 @@ export default function WorkbenchPage() {
                                 </Badge>
                                 <Badge variant="outline">
                                   默认模型: {workflowDefaultModel ? workflowDefaultModel : (globalDefaultModel ? `跟随全局 (${globalDefaultModel})` : '跟随全局')}
+                                </Badge>
+                                <Badge variant={workflowAutoCompactOnStepChange ? 'default' : 'outline'}>
+                                  步骤级总结: {workflowAutoCompactOnStepChange ? '开启' : '关闭'}
                                 </Badge>
                                 <Badge variant="secondary">
                                   Agent 覆盖: {configuredWorkflowOverrideCount}
@@ -9551,6 +9591,23 @@ export default function WorkbenchPage() {
                           allowGlobal
                         />
                       </div>
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="space-y-1">
+                        <Label htmlFor="workflow-auto-compact-on-step-change" className="text-sm font-medium">
+                          步骤级自动上下文总结
+                        </Label>
+                        <div className="text-xs text-muted-foreground">
+                          模型上下文较小时建议勾选。启用后，进入新的步骤时，如果该 Agent 之前已经执行过，系统会先自动压缩其上下文，再继续当前步骤。
+                        </div>
+                      </div>
+                      <Switch
+                        id="workflow-auto-compact-on-step-change"
+                        checked={workflowAutoCompactOnStepChange}
+                        onCheckedChange={setWorkflowAutoCompactOnStepChange}
+                      />
                     </div>
                   </div>
                 </section>

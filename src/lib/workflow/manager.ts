@@ -25,7 +25,7 @@ import { isWindows } from '@/lib/core/runtime-platform';
 import { createEngine, getConfiguredEngine, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import { compactEngineContextManually, executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getEngineConfigPath, getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -168,6 +168,32 @@ function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): bool
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
 
+function buildAgentCompactSourceFromStepLogs(
+  stepLogs: PersistedStepLog[],
+  agentName: string,
+  currentPrompt: string,
+): string {
+  const recentLogs = stepLogs.filter((log) => log.agent === agentName).slice(-5);
+  if (recentLogs.length === 0) return currentPrompt;
+
+  const history = recentLogs.map((log) => {
+    const summarySource = log.output || log.error || '';
+    const summary = compactStepConclusion(summarySource).slice(0, 4000);
+    return [
+      `## ${log.stepName}`,
+      `状态: ${log.status}`,
+      summary ? `${log.output ? '输出摘要' : '错误摘要'}:\n${summary}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+
+  return [
+    '# 该 Agent 在当前工作流中的历史步骤摘要',
+    history,
+    '# 当前步骤请求',
+    currentPrompt,
+  ].join('\n\n');
+}
+
 export class WorkflowManager extends EventEmitter {
   private currentWorkflow: WorkflowConfig | null = null;
   private logs: any[] = [];
@@ -246,6 +272,71 @@ export class WorkflowManager extends EventEmitter {
     return (this.currentWorkflow as any)?.workflow?.supervisor?.agent
       || this.agentConfigs.find((role: any) => role?.roleType === 'supervisor')?.name
       || undefined;
+  }
+
+  private async autoCompactAgentContextIfNeeded(input: {
+    agentName: string;
+    stepName: string;
+    workflowConfig: WorkflowConfig;
+    prompt: string;
+    systemPrompt: string;
+    model: string;
+    workingDirectory: string;
+    timeoutMs?: number;
+  }): Promise<{ prompt: string; sessionId?: string }> {
+    const policy = resolveWorkflowExecutionPolicy(input.workflowConfig.context);
+    const existingSessionId = this.agentSessionIds.get(input.agentName);
+    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentEngine) {
+      return { prompt: input.prompt, sessionId: existingSessionId };
+    }
+    if (!this.stepLogs.some((log) => log.agent === input.agentName)) {
+      return { prompt: input.prompt, sessionId: existingSessionId };
+    }
+
+    try {
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'info',
+        message: `步骤切换前自动压缩 ${input.agentName} 的上下文：${input.stepName}`,
+      });
+      const compacted = await compactEngineContextManually(this.currentEngine, {
+        agent: input.agentName,
+        step: input.stepName,
+        prompt: input.prompt,
+        systemPrompt: input.systemPrompt,
+        model: input.model,
+        workingDirectory: input.workingDirectory,
+        timeoutMs: input.timeoutMs,
+        sessionId: existingSessionId,
+        appendSystemPrompt: true,
+        runId: this.currentRunId || undefined,
+      }, {
+        buildCompactSource: async () => buildAgentCompactSourceFromStepLogs(this.stepLogs, input.agentName, input.prompt),
+      });
+      replaceAgentSessionId(this.agentSessionIds, input.agentName, compacted.nextSessionId);
+      const agent = this.agents.find((item) => item.name === input.agentName);
+      if (agent) {
+        agent.sessionId = compacted.nextSessionId || null;
+      }
+      await this.persistState();
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'info',
+        message: `已完成步骤级自动上下文总结：${compacted.method}`,
+      });
+      return {
+        prompt: compacted.prompt,
+        sessionId: compacted.nextSessionId || undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'warning',
+        message: `步骤级自动上下文总结失败，继续原会话：${message}`,
+      });
+      return { prompt: input.prompt, sessionId: existingSessionId };
+    }
   }
 
   private getWorkflowAgoraAgentSessions(): Record<string, string> {
@@ -2153,15 +2244,29 @@ try {
     }
 
     // Build main prompt that coordinates sub-agents
+    const model = resolveAgentModel(roleConfig, workflowConfig.context);
     const mainPrompt = await this.buildPrompt(step, workflowConfig, roleConfig, previousOutputs);
     const coordinatorPrompt = `${mainPrompt}\n\n# 专家模式说明\n你现在处于专家模式。你有 ${subAgentNames.length} 个专家子 Agent 可以调用：\n\n${subAgentNames.map(name => `- @${name}: ${subAgents[name].description}`).join('\n')}\n\n请使用 @agent-name 语法调用这些专家，收集他们的分析结果，最后汇总形成综合结论。`;
-
-    const processId = `${step.agent}-${step.name}-${Date.now()}`;
-    const existingSessionId = this.agentSessionIds.get(step.agent);
     const isIterationStep = step.name.includes('-迭代');
     const systemPromptToUse = isIterationStep && roleConfig.iterationPrompt
       ? roleConfig.iterationPrompt
       : roleConfig.systemPrompt;
+    const workingDirectory = this.getWorkingDirectory() || workflowConfig.context.projectRoot || this.resolveProjectRootPath();
+    const timeoutMs = workflowConfig.context.timeoutMinutes
+      ? workflowConfig.context.timeoutMinutes * 60 * 1000
+      : undefined;
+    const compactedExecution = await this.autoCompactAgentContextIfNeeded({
+      agentName: step.agent,
+      stepName: step.name,
+      workflowConfig,
+      prompt: coordinatorPrompt,
+      systemPrompt: systemPromptToUse,
+      model,
+      workingDirectory,
+      timeoutMs,
+    });
+    const processId = `${step.agent}-${step.name}-${Date.now()}`;
+    const existingSessionId = compactedExecution.sessionId;
 
     // Set up stream content flushing
     let lastFlush = 0;
@@ -2180,17 +2285,15 @@ try {
         processId,
         step.agent,
         step.name,
-        coordinatorPrompt,
+        compactedExecution.prompt,
         systemPromptToUse,
-        resolveAgentModel(roleConfig, workflowConfig.context),
+        model,
         {
-          workingDirectory: workflowConfig.context.projectRoot,
+          workingDirectory,
           allowedTools: roleConfig.allowedTools,
           resumeSessionId: existingSessionId,
           appendSystemPrompt: !!existingSessionId,
-          timeoutMs: workflowConfig.context.timeoutMinutes
-            ? workflowConfig.context.timeoutMinutes * 60 * 1000
-            : undefined,
+          timeoutMs,
           runId: this.currentRunId || undefined,
           agents: agentsJson, // Pass sub-agents configuration
           mcpServers: roleConfig.mcpServers,
@@ -2230,17 +2333,29 @@ try {
       } catch { /* non-critical */ }
     }
 
+    const model = resolveAgentModel(roleConfig, workflowConfig.context);
     const prompt = await this.buildPrompt(step, workflowConfig, roleConfig, previousOutputs, extraContext);
     const processId = `${step.agent}-${step.name}-${Date.now()}`;
-
-    // Check for existing session to resume (iterative phases)
-    const existingSessionId = this.agentSessionIds.get(step.agent);
 
     // Determine which system prompt to use: iterationPrompt for iteration steps, systemPrompt otherwise
     const isIterationStep = step.name.includes('-迭代');
     const systemPromptToUse = isIterationStep && roleConfig.iterationPrompt
       ? roleConfig.iterationPrompt
       : roleConfig.systemPrompt;
+    const workingDirectory = this.getWorkingDirectory() || workflowConfig.context.projectRoot || this.resolveProjectRootPath();
+    const timeoutMs = workflowConfig.context.timeoutMinutes
+      ? workflowConfig.context.timeoutMinutes * 60 * 1000
+      : undefined;
+    const compactedExecution = await this.autoCompactAgentContextIfNeeded({
+      agentName: step.agent,
+      stepName: step.name,
+      workflowConfig,
+      prompt,
+      systemPrompt: systemPromptToUse,
+      model,
+      workingDirectory,
+      timeoutMs,
+    });
 
     // Set up stream content flushing to disk (with chunk separators)
     let lastFlush = 0;
@@ -2278,8 +2393,8 @@ try {
     }, STREAM_IDLE_CHECK_MS);
 
     let currentProcessId = processId;
-    let currentPrompt = prompt;
-    let currentSessionId = existingSessionId;
+    let currentPrompt = compactedExecution.prompt;
+    let currentSessionId = compactedExecution.sessionId;
     let lastResult: EngineJsonResult;
     let accumulatedOutput = ''; // Accumulate result output across feedback rounds
 
@@ -2294,15 +2409,13 @@ try {
             step.name,
             currentPrompt,
             systemPromptToUse,
-            resolveAgentModel(roleConfig, workflowConfig.context),
+            model,
             {
-              workingDirectory: workflowConfig.context.projectRoot,
+              workingDirectory,
               allowedTools: roleConfig.allowedTools,
               resumeSessionId: currentSessionId,
               appendSystemPrompt: !!currentSessionId,
-              timeoutMs: workflowConfig.context.timeoutMinutes
-                ? workflowConfig.context.timeoutMinutes * 60 * 1000
-                : undefined,
+              timeoutMs,
               runId: this.currentRunId || undefined,
               mcpServers: roleConfig.mcpServers,
             }

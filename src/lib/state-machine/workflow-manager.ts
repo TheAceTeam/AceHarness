@@ -45,7 +45,7 @@ import { formatTimestamp } from '@/lib/core/utils';
 import { createEngine, getConfiguredEngine, getLogicalEngineId, resolveRequestedEngineType, type Engine, type EngineType } from '@/lib/engines';
 import { getEngineSkillsSubdir } from '@/lib/engines/engine-config';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import { compactEngineContextManually, executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
@@ -186,6 +186,32 @@ export function stripNonAiStreamArtifacts(text: string): string {
 
 function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): boolean {
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
+}
+
+function buildAgentCompactSourceFromStepLogs(
+  stepLogs: PersistedStepLog[],
+  agentName: string,
+  currentPrompt: string,
+): string {
+  const recentLogs = stepLogs.filter((log) => log.agent === agentName).slice(-5);
+  if (recentLogs.length === 0) return currentPrompt;
+
+  const history = recentLogs.map((log) => {
+    const summarySource = log.output || log.error || '';
+    const summary = compactStepConclusion(summarySource).slice(0, 4000);
+    return [
+      `## ${log.stepName}`,
+      `状态: ${log.status}`,
+      summary ? `${log.output ? '输出摘要' : '错误摘要'}:\n${summary}` : '',
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+
+  return [
+    '# 该 Agent 在当前工作流中的历史步骤摘要',
+    history,
+    '# 当前步骤请求',
+    currentPrompt,
+  ].join('\n\n');
 }
 
 export function extractTaggedBlock(text: string, tag: string): string | null {
@@ -421,6 +447,68 @@ export class StateMachineWorkflowManager extends EventEmitter {
       return await fn();
     } finally {
       release();
+    }
+  }
+
+  private async autoCompactAgentContextIfNeeded(input: {
+    agentName: string;
+    stepName: string;
+    workflowConfig: StateMachineWorkflowConfig;
+    prompt: string;
+    systemPrompt: string;
+    model: string;
+    workingDirectory: string;
+    timeoutMs?: number;
+  }): Promise<{ prompt: string; sessionId?: string }> {
+    const policy = resolveWorkflowExecutionPolicy(input.workflowConfig.context);
+    const agent = this.agents.find((item) => item.name === input.agentName);
+    const existingSessionId = agent?.sessionId || undefined;
+    if (!policy.autoCompactOnStepChange || !existingSessionId || !this.currentEngine) {
+      return { prompt: input.prompt, sessionId: existingSessionId };
+    }
+    if (!this.stepLogs.some((log) => log.agent === input.agentName)) {
+      return { prompt: input.prompt, sessionId: existingSessionId };
+    }
+
+    try {
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'info',
+        message: `步骤切换前自动压缩 ${input.agentName} 的上下文：${input.stepName}`,
+      });
+      const compacted = await this.withEngineExecutionLock(() => compactEngineContextManually(this.currentEngine!, {
+        agent: input.agentName,
+        step: input.stepName,
+        prompt: input.prompt,
+        systemPrompt: input.systemPrompt,
+        model: input.model,
+        workingDirectory: input.workingDirectory,
+        timeoutMs: input.timeoutMs,
+        sessionId: existingSessionId,
+        appendSystemPrompt: true,
+        runId: this.currentRunId || undefined,
+      }, {
+        buildCompactSource: async () => buildAgentCompactSourceFromStepLogs(this.stepLogs, input.agentName, input.prompt),
+      }));
+      replaceAgentStateSessionId(agent, compacted.nextSessionId);
+      await this.persistState();
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'info',
+        message: `已完成步骤级自动上下文总结：${compacted.method}`,
+      });
+      return {
+        prompt: compacted.prompt,
+        sessionId: compacted.nextSessionId || undefined,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit('log', {
+        agent: input.agentName,
+        level: 'warning',
+        message: `步骤级自动上下文总结失败，继续原会话：${message}`,
+      });
+      return { prompt: input.prompt, sessionId: existingSessionId };
     }
   }
 
@@ -3810,12 +3898,23 @@ try {
     const workingDirectory = config.context?.projectRoot
       ? this.resolveProjectRootPath(config.context.projectRoot)
       : this.resolveProjectRootPath();
+    const timeoutMs = (config.context?.timeoutMinutes || 60) * 60 * 1000;
 
     let currentProcessId = stepId || randomUUID();
-    let currentPrompt = context;
+    const compactedExecution = await this.autoCompactAgentContextIfNeeded({
+      agentName: runtimeAgentName,
+      stepName: this.currentState ? `${this.currentState} / ${step.name}` : step.name,
+      workflowConfig: config,
+      prompt: context,
+      systemPrompt,
+      model,
+      workingDirectory,
+      timeoutMs,
+    });
+    let currentPrompt = compactedExecution.prompt;
     // Reuse session from same agent if available (saves tokens, preserves memory)
     const agent = this.agents.find(a => a.name === runtimeAgentName);
-    let currentSessionId: string | undefined = agent?.sessionId || undefined;
+    let currentSessionId: string | undefined = compactedExecution.sessionId;
     let accumulatedOutput = '';
     let lastRoundOutput = '';
     let accumulatedStream = '';
@@ -3891,7 +3990,7 @@ try {
           model,
           {
             workingDirectory,
-            timeoutMs: (config.context?.timeoutMinutes || 60) * 60 * 1000,
+            timeoutMs,
             runId: this.currentRunId || undefined,
             stepId,
             resumeSessionId: currentSessionId,

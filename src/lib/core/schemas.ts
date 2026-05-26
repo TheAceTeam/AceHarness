@@ -189,6 +189,7 @@ export const workflowAgentExecutionOverrideSchema = z.object({
 export const workflowExecutionPolicySchema = z.object({
   defaultEngine: z.string().optional(),
   defaultModel: z.string().optional(),
+  autoCompactOnStepChange: z.boolean().optional(),
   agentOverrides: z.record(z.string(), workflowAgentExecutionOverrideSchema).default({}),
 });
 

@@ -52,12 +52,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <ChatProvider>
           <ToastProvider>
             {children}
-            {!isChatLikePage && (
-              <>
-                <OnboardingPortal />
-                <ChatModalWrapper />
-              </>
-            )}
+            <OnboardingPortal />
+            {!isChatLikePage && <ChatModalWrapper />}
           </ToastProvider>
         </ChatProvider>
       )}

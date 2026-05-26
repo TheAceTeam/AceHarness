@@ -681,7 +681,7 @@ export default function ModelsPage() {
       </header>
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'catalog' | 'probe' | 'diagnostics')} className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b bg-background/70 px-6 py-3">
+        <div className="border-b bg-background/70 px-6 py-3" data-tour-step-id="model-tabs">
           <TabsList className="grid w-full max-w-[540px] grid-cols-3 rounded-2xl">
             <TabsTrigger value="catalog" className="rounded-xl">模型管理</TabsTrigger>
             <TabsTrigger value="probe" className="rounded-xl">探针监控</TabsTrigger>
@@ -701,6 +701,7 @@ export default function ModelsPage() {
                   ? 'fixed inset-x-0 top-2 z-40 px-6'
                   : 'relative z-10'
               )}
+              data-tour-step-id="model-filter"
             >
               <div
                 ref={filterBarMeasureRef}

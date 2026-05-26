@@ -383,7 +383,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
             </Button>
             <h1 className="text-lg font-semibold">Agent 管理</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2" data-tour-step-id="agent-create">
             <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
               <FolderOpen className="w-4 h-4 mr-1" />
               打开工作目录
@@ -409,7 +409,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
         )}
       >
         {!embedded ? (
-        <section className="relative overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(135deg,rgba(8,11,21,0.98),rgba(19,19,20,0.94))] px-8 py-8 text-white shadow-[0_32px_120px_rgba(2,6,23,0.28)]">
+        <section data-tour-step-id="agent-hall" className="relative overflow-hidden rounded-[32px] border border-white/10 bg-[linear-gradient(135deg,rgba(8,11,21,0.98),rgba(19,19,20,0.94))] px-8 py-8 text-white shadow-[0_32px_120px_rgba(2,6,23,0.28)]">
           <div className="absolute inset-y-0 right-0 w-[32rem] bg-[radial-gradient(circle_at_center,_rgba(251,191,36,0.18),_transparent_52%)]" />
           <div className="absolute -left-12 top-10 h-48 w-48 rounded-full bg-sky-400/10 blur-3xl" />
           <div className="absolute bottom-0 right-24 h-56 w-56 rounded-full bg-rose-500/10 blur-3xl" />

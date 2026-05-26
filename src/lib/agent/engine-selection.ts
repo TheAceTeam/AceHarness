@@ -49,6 +49,7 @@ export function resolveWorkflowExecutionPolicy(
   return {
     defaultEngine: workflowContext?.executionPolicy?.defaultEngine || workflowContext?.engine || '',
     defaultModel: workflowContext?.executionPolicy?.defaultModel || '',
+    autoCompactOnStepChange: workflowContext?.executionPolicy?.autoCompactOnStepChange === true,
     agentOverrides: workflowContext?.executionPolicy?.agentOverrides || {},
   };
 }

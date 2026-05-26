@@ -235,6 +235,7 @@ function AccountContent() {
         <div
           role="button"
           tabIndex={0}
+          data-tour-step-id="account-notebook"
           onClick={() => setNotebookOpen(true)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -310,7 +311,7 @@ function AccountContent() {
               </span>
             </span>
           </button>
-          <div className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
+          <div data-tour-step-id="account-directory" className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
             <button onClick={() => { setNewDir(user.personalDir || ''); setDirError(''); setDirSuccess(''); setDirOpen(true); }} className="flex items-center gap-3">
               <span className="material-symbols-outlined text-muted-foreground">folder</span>
               <span>个人目录</span>

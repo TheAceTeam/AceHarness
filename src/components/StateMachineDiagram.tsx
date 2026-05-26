@@ -7,10 +7,6 @@ import ReactFlow, {
   Controls,
   Background,
   Panel,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-  Connection,
   MarkerType,
   NodeTypes,
   Handle,
@@ -24,6 +20,7 @@ import { Badge } from './ui/badge';
 
 // 稳定的空数组引用：避免默认参数 = [] 在每次渲染产生新数组，
 // 进而触发 useMemo 重算与 setNodes 写入新对象 → Maximum update depth exceeded
+const EMPTY_ACTIVE_STEPS: string[] = [];
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
@@ -271,7 +268,7 @@ function buildStateDiagramStepGroups(steps: any[]) {
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = [], completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, onStepClick, onForceTransition, isRunning } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
@@ -491,7 +488,7 @@ function StateMachineDiagramInner({
   onForceTransition,
   currentState,
   currentStep,
-  activeSteps = [],
+  activeSteps = EMPTY_ACTIVE_STEPS,
   completedSteps = EMPTY_COMPLETED_STEPS,
   stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
@@ -502,6 +499,11 @@ function StateMachineDiagramInner({
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const { setCenter, fitView: rfFitView } = useReactFlow();
   const initialFitDone = useRef(false);
+  const fitViewRef = useRef(rfFitView);
+
+  useEffect(() => {
+    fitViewRef.current = rfFitView;
+  }, [rfFitView]);
 
   // 转换为 ReactFlow 节点
   const initialNodes: Node[] = useMemo(() => {
@@ -565,7 +567,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, currentState, currentStep, activeSteps, completedSteps, onStepClick, onForceTransition, isRunning, stateHistory, supervisorFlow]);
+  }, [states, currentState, currentStep, activeSteps, completedSteps, onStepClick, onForceTransition, isRunning]);
 
   // 转换为 ReactFlow 边
   const initialEdges: Edge[] = useMemo(() => {
@@ -833,61 +835,40 @@ function StateMachineDiagramInner({
     }
 
     return edges;
-  }, [states, stateHistory, currentState, showAllEdges, supervisorFlow]);
+  }, [states, stateHistory, currentState, showAllEdges]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-
-  // Sync node data when runtime state changes, without replacing node positions
   useEffect(() => {
-    setNodes(prev => {
-      if (prev.length !== initialNodes.length) return initialNodes;
-      return prev.map((node, i) => {
-        const newNode = initialNodes[i];
-        if (!newNode || node.id !== newNode.id) return newNode || node;
-        // Only update data, keep existing position (user may have dragged)
-        return { ...node, data: newNode.data };
-      });
-    });
-    // Only fitView on first render, not on subsequent node updates
     if (!initialFitDone.current) {
       initialFitDone.current = true;
-      setTimeout(() => rfFitView({ padding: 0.3, maxZoom: 1.2 }), 50);
+      setTimeout(() => fitViewRef.current({ padding: 0.3, maxZoom: 1.2 }), 50);
     }
-  }, [initialNodes, setNodes, rfFitView]);
+  }, [initialNodes]);
 
-  // Sync edges when initialEdges changes
-  useEffect(() => {
-    setEdges(initialEdges);
-  }, [initialEdges, setEdges]);
+  const displayEdges = useMemo(() => {
+    if (!hoveredNode || showAllEdges) {
+      return initialEdges;
+    }
 
-  // 处理鼠标悬停时显示相关边
-  useEffect(() => {
-    if (!hoveredNode) return;
+    return initialEdges.map((edge) => {
+      const isRelated = edge.source === hoveredNode || edge.target === hoveredNode;
+      const isInHistory = stateHistory.some(
+        h => h.from === edge.source && h.to === edge.target
+      );
 
-    setEdges((eds) =>
-      eds.map((edge) => {
-        const isRelated = edge.source === hoveredNode || edge.target === hoveredNode;
-        const isInHistory = stateHistory.some(
-          h => h.from === edge.source && h.to === edge.target
-        );
+      if (isRelated && !isInHistory) {
+        return {
+          ...edge,
+          hidden: false,
+          style: {
+            ...edge.style,
+            opacity: 0.6,
+          },
+        };
+      }
 
-        // 如果是悬停节点相关的边，且原本是隐藏的，临时显示
-        if (isRelated && !isInHistory && !showAllEdges) {
-          return {
-            ...edge,
-            hidden: false,
-            style: {
-              ...edge.style,
-              opacity: 0.6,
-            },
-          };
-        }
-
-        return edge;
-      })
-    );
-  }, [hoveredNode, setEdges, stateHistory, showAllEdges]);
+      return edge;
+    });
+  }, [hoveredNode, initialEdges, showAllEdges, stateHistory]);
 
   // 当 focusedState 改变时，自动聚焦到对应节点（用于视图跳转，不影响执行状态）
   const prevFocusedState = useRef<string | null>(null);
@@ -906,11 +887,6 @@ function StateMachineDiagramInner({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedState, setCenter]);
-
-  const onConnect = useCallback(
-    (params: Connection) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges]
-  );
 
   const onNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
@@ -931,10 +907,8 @@ function StateMachineDiagramInner({
   const onNodeMouseLeave = useCallback(
     () => {
       setHoveredNode(null);
-      // 恢复原始边的状态
-      setEdges(initialEdges);
     },
-    [setEdges, initialEdges]
+    []
   );
 
   const onEdgeClick = useCallback(
@@ -949,11 +923,8 @@ function StateMachineDiagramInner({
   return (
     <div className="w-full h-full bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
+        nodes={initialNodes}
+        edges={displayEdges}
         onNodeClick={onNodeClick}
         onNodeMouseEnter={onNodeMouseEnter}
         onNodeMouseLeave={onNodeMouseLeave}
@@ -962,6 +933,9 @@ function StateMachineDiagramInner({
         defaultViewport={{ x: 0, y: 0, zoom: 0.6 }}
         minZoom={0.2}
         maxZoom={1.5}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
         attributionPosition="bottom-left"
       >
         <Controls />

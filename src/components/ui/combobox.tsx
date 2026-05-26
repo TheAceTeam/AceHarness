@@ -272,6 +272,7 @@ function SingleCombobox({
   }, [options, groups]);
 
   const selected = allOptions.find(o => o.value === value) || null;
+  const selectedDisplayValue = triggerLabel || (renderSelected ? renderSelected(selected) : selected?.label);
 
   // items: flat array or grouped array with `items` property
   const items = React.useMemo(() => {
@@ -288,10 +289,10 @@ function SingleCombobox({
       itemToStringValue={(opt) => opt.label}
     >
       <ComboboxInput
-        placeholder={triggerLabel ? '' : (selected?.label || placeholder)}
+        placeholder={selectedDisplayValue ? '' : placeholder}
         className={triggerClassName}
         leading={triggerIcon}
-        displayValue={triggerLabel || (renderSelected ? renderSelected(selected) : selected?.label)}
+        displayValue={selectedDisplayValue}
       />
       <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>

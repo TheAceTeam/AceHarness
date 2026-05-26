@@ -581,6 +581,7 @@ export default function DashboardPage() {
         <motion.header
           initial={{ y: -100 }}
           animate={{ y: 0 }}
+          data-tour-step-id="dashboard-overview"
           className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50"
         >
           <div className="container mx-auto px-6 py-4">
@@ -612,7 +613,7 @@ export default function DashboardPage() {
 
         <div className="container mx-auto px-6 py-8 space-y-8">
           {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" data-tour-step-id="dashboard-stats">
             <StatCard
               icon={Workflow}
               label={t('dashboard.stats.activeWorkflows')}
@@ -644,6 +645,7 @@ export default function DashboardPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15 }}
+            data-tour-step-id="dashboard-quick-actions"
           >
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Zap className="w-5 h-5 text-primary" />

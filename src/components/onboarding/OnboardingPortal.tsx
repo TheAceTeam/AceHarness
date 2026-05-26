@@ -1,39 +1,23 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
-import { usePathname } from 'next/navigation';
-import { StoryOnboarding } from '@/components/onboarding/StoryOnboarding';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { ModernOnboardingTour, type ModernOnboardingProgress } from '@/components/onboarding/ModernOnboardingTour';
 import { Button } from '@/components/ui/button';
 
 type Role = 'admin' | 'user';
-type ProgressPayload = {
-  done: boolean;
-  phase: 'intro' | 'overview' | 'module' | 'member' | 'admin' | 'adminReport' | 'done';
-  introIndex: number;
-  selectedModule: any;
-  moduleStepIndex: number;
-  visitedModules: any[];
-  memberChecks: {
-    homeGuideDone: boolean;
-    engineModelDone: boolean;
-    notebookDone: boolean;
-    personalDirConfirm: boolean;
-  };
-  adminChecks: {
-    engineReady: boolean;
-    defaultModel: boolean;
-    agentGroup: boolean;
-    personalDirReady: boolean;
-  };
-  maximized: boolean;
-};
+type TourLaunchMode = 'resume' | 'current-route';
 
 export default function OnboardingPortal() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState<Role>('user');
+  const [launchMode, setLaunchMode] = useState<TourLaunchMode>('resume');
   const [loadingProgress, setLoadingProgress] = useState(false);
-  const [progress, setProgress] = useState<ProgressPayload | null>(null);
+  const [progress, setProgress] = useState<ModernOnboardingProgress | null>(null);
+  const [dismissedForSession, setDismissedForSession] = useState(false);
+  const lastTourQueryRef = useRef<string | null>(null);
 
   const getAuthToken = useCallback(() => (typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null), []);
 
@@ -50,14 +34,15 @@ export default function OnboardingPortal() {
       if (data?.role === 'admin' || data?.role === 'user') setRole(data.role);
       if (data?.progress) {
         setProgress(data.progress);
-        setOpen(!data.progress.done);
+        setLaunchMode('resume');
+        setOpen(!data.progress.done && !dismissedForSession && pathname !== '/' && pathname !== '/chat');
       }
     } catch {
       // ignore
     } finally {
       setLoadingProgress(false);
     }
-  }, [getAuthToken]);
+  }, [dismissedForSession, getAuthToken, pathname]);
 
   useEffect(() => {
     const stored = localStorage.getItem('auth-user');
@@ -72,7 +57,28 @@ export default function OnboardingPortal() {
     void loadProgress();
   }, [loadProgress]);
 
-  const persistProgress = async (nextProgress: ProgressPayload, options?: { markCompleted?: boolean }) => {
+  const openWithRefresh = useCallback(async (mode: TourLaunchMode) => {
+    setDismissedForSession(false);
+    setLaunchMode(mode);
+    await loadProgress();
+    setLaunchMode(mode);
+    setOpen(true);
+  }, [loadProgress]);
+
+  useEffect(() => {
+    const tourParam = searchParams.get('tour');
+    if (!tourParam) {
+      lastTourQueryRef.current = null;
+      return;
+    }
+    if (tourParam === lastTourQueryRef.current) return;
+    if (tourParam === '1' || tourParam === 'true' || tourParam === 'onboarding') {
+      lastTourQueryRef.current = tourParam;
+      void openWithRefresh('current-route');
+    }
+  }, [openWithRefresh, searchParams]);
+
+  const persistProgress = async (nextProgress: ModernOnboardingProgress, options?: { markCompleted?: boolean }) => {
     setProgress(nextProgress);
     const token = getAuthToken();
     if (!token) return;
@@ -93,15 +99,6 @@ export default function OnboardingPortal() {
     }
   };
 
-  const openWithRefresh = async () => {
-    await loadProgress();
-    setOpen(true);
-  };
-
-  if (pathname === '/' || pathname === '/chat') {
-    return null;
-  }
-
   return (
     <>
       <div
@@ -116,24 +113,23 @@ export default function OnboardingPortal() {
             className="h-14 w-14 rounded-full shadow-lg"
             variant="outline"
             onClick={() => {
-              void openWithRefresh();
+              void openWithRefresh('current-route');
             }}
-            title="打开新手引导"
+            title="打开产品导览"
           >
             <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>school</span>
           </Button>
         </div>
       </div>
-      <StoryOnboarding
+      <ModernOnboardingTour
         open={open}
         role={role}
+        launchMode={launchMode}
         initialProgress={progress}
         loadingProgress={loadingProgress}
         onPersist={persistProgress}
         onClose={(completed) => {
-          if (completed && progress) {
-            void persistProgress({ ...progress, done: true, phase: 'done' }, { markCompleted: true });
-          }
+          if (!completed) setDismissedForSession(true);
           setOpen(false);
         }}
       />

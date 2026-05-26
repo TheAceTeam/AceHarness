@@ -88,6 +88,21 @@ html body .right-scroll-bar-position {
     --flow-agent-text: 215 16% 47%;
     --flow-group-bg: 217 91% 60% / 0.06;
     --flow-group-border: 214 32% 91%;
+
+    --tour-bg: hsl(var(--popover));
+    --tour-text: hsl(var(--popover-foreground));
+    --tour-text-secondary: hsl(var(--muted-foreground));
+    --tour-text-muted: hsl(var(--muted-foreground));
+    --tour-primary: hsl(var(--primary));
+    --tour-primary-foreground: hsl(var(--primary-foreground));
+    --tour-secondary: hsl(var(--secondary));
+    --tour-secondary-foreground: hsl(var(--secondary-foreground));
+    --tour-secondary-hover: hsl(var(--accent));
+    --tour-border: hsl(var(--border));
+    --tour-overlay: hsl(var(--background) / 0.76);
+    --tour-radius: 8px;
+    --tour-tooltip-width: 340px;
+    --tour-shadow: 0 10px 15px -3px hsl(var(--foreground) / 0.12), 0 4px 6px -4px hsl(var(--foreground) / 0.12);
   }
 
   .dark {
@@ -137,6 +152,24 @@ html body .right-scroll-bar-position {
     --flow-agent-text: 0 0% 50%;
     --flow-group-bg: 213 53% 53% / 0.06;
     --flow-group-border: 220 7% 32%;
+  }
+
+  html:root,
+  html:root[class~='dark'] {
+    --tour-bg: hsl(var(--popover));
+    --tour-text: hsl(var(--popover-foreground));
+    --tour-text-secondary: hsl(var(--muted-foreground));
+    --tour-text-muted: hsl(var(--muted-foreground));
+    --tour-primary: hsl(var(--primary));
+    --tour-primary-foreground: hsl(var(--primary-foreground));
+    --tour-secondary: hsl(var(--secondary));
+    --tour-secondary-foreground: hsl(var(--secondary-foreground));
+    --tour-secondary-hover: hsl(var(--accent));
+    --tour-border: hsl(var(--border));
+    --tour-overlay: hsl(var(--background) / 0.76);
+    --tour-radius: 8px;
+    --tour-tooltip-width: 340px;
+    --tour-shadow: 0 10px 15px -3px hsl(var(--foreground) / 0.12), 0 4px 6px -4px hsl(var(--foreground) / 0.12);
   }
 }
 

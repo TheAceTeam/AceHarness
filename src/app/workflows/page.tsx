@@ -678,7 +678,7 @@ export default function WorkflowsPage() {
             <p className="text-xs text-muted-foreground">管理和配置工作流 · 代码生产黑灯车间</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3" data-tour-step-id="workflow-create-actions">
           <LanguageToggle />
           <ThemeToggle />
           {activeTab === 'workflows' ? (
@@ -784,6 +784,7 @@ export default function WorkflowsPage() {
               ? 'fixed inset-x-0 top-2 z-40 px-6'
               : 'relative z-10'
           )}
+          data-tour-step-id="workflow-filter"
         >
           <div className={cn(floatingFilterBar && 'mx-auto max-w-[1680px]')}>
             <div ref={filterBarMeasureRef} className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
