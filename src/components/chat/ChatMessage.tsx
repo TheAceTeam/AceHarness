@@ -585,7 +585,7 @@ function isProcessEntryRunning(state: ProcessEntryState, isStreaming: boolean): 
 }
 
 function isCollapsedByDefaultTool(entry: ToolProcessEntry): boolean {
-  return ['bash', 'cmd', 'powershell', 'read', 'glob', 'grep', 'ls'].includes(entry.toolName);
+  return ['bash', 'cmd', 'powershell', 'read', 'glob', 'grep', 'ls', 'skill'].includes(entry.toolName);
 }
 
 function shouldOpenProcessCard({
