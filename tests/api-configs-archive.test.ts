@@ -53,6 +53,27 @@ function workflowConfig(projectRoot: string, name: string) {
   };
 }
 
+function portableWorkflowConfig(name: string) {
+  return {
+    workflow: {
+      name,
+      phases: [
+        {
+          name: 'Portable Phase',
+          steps: [
+            { name: 'Portable Step', agent: 'external-agent', task: 'Run outside this workspace' },
+          ],
+        },
+      ],
+      supervisor: { enabled: true, agent: 'external-supervisor' },
+    },
+    context: {
+      projectRoot: '{project_root}',
+      workspaceMode: 'in-place',
+    },
+  };
+}
+
 async function createZip(entries: Record<string, string>): Promise<Buffer> {
   const zipfile = new ZipFile();
   for (const [entryPath, content] of Object.entries(entries)) {
@@ -127,6 +148,30 @@ describe('/api/configs/archive', () => {
     });
   });
 
+  test('exports structurally valid portable workflows without runtime-specific checks', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { token } = await createAuthToken();
+      const configsDir = path.join(aceHome, 'configs');
+      await mkdir(configsDir, { recursive: true });
+      await writeFile(
+        path.join(configsDir, 'portable.yaml'),
+        stringify(portableWorkflowConfig('Portable Workflow')),
+        'utf8',
+      );
+
+      const { PUT } = await import('@/app/api/configs/archive/route');
+      const response = await PUT(makeRequest('/api/configs/archive', {
+        method: 'PUT',
+        token,
+        json: { workflows: ['portable.yaml'] },
+      }));
+
+      expect(response.status).toBe(200);
+      const zipBuffer = Buffer.from(await response.arrayBuffer());
+      await expect(listZipEntryPaths(zipBuffer)).resolves.toEqual(['portable.yaml']);
+    });
+  });
+
   test('imports workflow YAML files from a zip and records private metadata', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {
@@ -178,6 +223,31 @@ describe('/api/configs/archive', () => {
       expect(response.status).toBe(400);
       const body = await responseJson<any>(response);
       expect(body.error).toContain('未找到');
+    });
+  });
+
+  test('imports structurally valid portable workflows', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { token } = await createAuthToken();
+      const archive = await createZip({
+        'portable.yaml': stringify(portableWorkflowConfig('Portable Import')),
+      });
+      const formData = new FormData();
+      formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
+
+      const { POST } = await import('@/app/api/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await responseJson<any>(response);
+      expect(body.imported).toEqual(['portable.yaml']);
+
+      const imported = parse(await readFile(path.join(aceHome, 'configs', 'portable.yaml'), 'utf8'));
+      expect(imported.context.projectRoot).toBe('{project_root}');
     });
   });
 });

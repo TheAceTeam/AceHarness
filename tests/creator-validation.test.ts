@@ -137,6 +137,24 @@ describe('validateWorkflowDraft', () => {
     expect(result.ok).toBe(true); // warning, not error
     expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
   });
+
+  test('portable mode allows placeholder projectRoot and unresolved agents', () => {
+    const config = {
+      workflow: {
+        name: 'Portable Workflow',
+        phases: [{
+          name: 'Phase 1',
+          steps: [{ name: 'Step 1', agent: 'external-agent', task: 'Do something' }],
+        }],
+        supervisor: { enabled: true, agent: 'external-supervisor' },
+      },
+      context: { projectRoot: '{project_root}' },
+    };
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+    expect(result.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
 });
 
 describe('validateAgentDraft', () => {

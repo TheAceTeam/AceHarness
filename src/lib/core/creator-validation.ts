@@ -20,6 +20,10 @@ export interface ValidationResult<T> {
   issues: ValidationIssue[];
 }
 
+export interface WorkflowValidationOptions {
+  mode?: 'runtime' | 'portable';
+}
+
 function expandZodIssue(issue: ZodIssue, inheritedPath: string[] = []): ValidationIssue[] {
   const currentPath = [...inheritedPath, ...issue.path.map((item) => String(item))];
   const nestedErrors = (issue as any)?.errors;
@@ -133,7 +137,7 @@ export function validateAgentDraft(input: any): ValidationResult<any> {
   };
 }
 
-export function validateWorkflowDraft(input: any): ValidationResult<any> {
+export function validateWorkflowDraft(input: any, options: WorkflowValidationOptions = {}): ValidationResult<any> {
   const parsed = unifiedWorkflowConfigSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -146,24 +150,28 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
   const normalized = parsed.data;
   const issues: ValidationIssue[] = [];
   const mode = normalizeWorkflowMode(normalized);
+  const validationMode = options.mode || 'runtime';
+  const shouldCheckRuntimeEnvironment = validationMode === 'runtime';
   const workflowAny = normalized.workflow as any;
   const projectRoot = typeof normalized?.context?.projectRoot === 'string'
     ? normalized.context.projectRoot.trim()
     : '';
 
-  if (!projectRoot) {
-    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 不能为空');
-  } else if (!isAbsolute(projectRoot)) {
-    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须是绝对路径，必须以 / 开头，例如 "/Users/xxx/project" 或 "/home/user/repo"');
-  } else if (!existsSync(projectRoot)) {
-    pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 指向的目录不存在，请确认路径正确且目录已创建');
-  } else {
-    try {
-      if (!statSync(projectRoot).isDirectory()) {
-        pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须指向目录，不能是文件路径');
+  if (shouldCheckRuntimeEnvironment) {
+    if (!projectRoot) {
+      pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 不能为空');
+    } else if (!isAbsolute(projectRoot)) {
+      pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须是绝对路径，必须以 / 开头，例如 "/Users/xxx/project" 或 "/home/user/repo"');
+    } else if (!existsSync(projectRoot)) {
+      pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 指向的目录不存在，请确认路径正确且目录已创建');
+    } else {
+      try {
+        if (!statSync(projectRoot).isDirectory()) {
+          pushIssue(issues, 'error', ['context', 'projectRoot'], 'context.projectRoot 必须指向目录，不能是文件路径');
+        }
+      } catch {
+        pushIssue(issues, 'error', ['context', 'projectRoot'], '无法访问 context.projectRoot');
       }
-    } catch {
-      pushIssue(issues, 'error', ['context', 'projectRoot'], '无法访问 context.projectRoot');
     }
   }
 
@@ -171,7 +179,7 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
     pushIssue(issues, 'error', ['context', 'workspaceMode'], 'workspaceMode 只能是 isolated-copy 或 in-place');
   }
 
-  const availableAgents = new Set(getAvailableAgents());
+  const availableAgents = shouldCheckRuntimeEnvironment ? new Set(getAvailableAgents()) : null;
   const referencedAgents = new Set<string>();
   if (mode === 'state-machine') {
     const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
@@ -253,12 +261,12 @@ export function validateWorkflowDraft(input: any): ValidationResult<any> {
   const supervisorAgent = normalized.workflow.supervisor?.agent?.trim();
   if (!supervisorAgent) {
     pushIssue(issues, 'warning', ['workflow', 'supervisor', 'agent'], '未显式指定 supervisor，将回退到 default-supervisor');
-  } else if (availableAgents.size > 0 && !availableAgents.has(supervisorAgent)) {
+  } else if (availableAgents && availableAgents.size > 0 && !availableAgents.has(supervisorAgent)) {
     pushIssue(issues, 'error', ['workflow', 'supervisor', 'agent'], `supervisor "${supervisorAgent}" 当前未在 agents 目录中找到`);
   }
 
   for (const agent of referencedAgents) {
-    if (availableAgents.size > 0 && !availableAgents.has(agent)) {
+    if (availableAgents && availableAgents.size > 0 && !availableAgents.has(agent)) {
       pushIssue(issues, 'error', ['workflow'], `引用的 Agent 不存在: ${agent}`);
     }
   }
