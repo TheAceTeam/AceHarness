@@ -980,6 +980,9 @@ export default function StateMachineDesignPanel({
       channelIds: data.channelIds,
       specTaskBinding: data.specTaskBinding,
     };
+    if (Array.isArray(data.preCommands) && data.preCommands.length > 0) {
+      newStep.preCommands = data.preCommands;
+    }
     const steps = [...selectedState.steps];
     if (editingStep.isNew) {
       steps.push(newStep);

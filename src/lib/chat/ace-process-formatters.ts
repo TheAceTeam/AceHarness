@@ -25,6 +25,7 @@ const KNOWN_TOOLS = new Set([
   'task',
   'todowrite',
   'todo',
+  'plan',
   'webfetch',
   'websearch',
   'ls',
@@ -53,6 +54,7 @@ export function getAceToolTitle(toolName: string): string {
     task: '🤖 子任务',
     todo: '📋 任务列表',
     todowrite: '📋 任务列表',
+    plan: '📋 执行计划',
     webfetch: '🌐 获取网页',
     websearch: '🔎 搜索网页',
     skill: '技能文档',
@@ -186,6 +188,7 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   if ('content' in input && ('filePath' in input || 'path' in input) && !('oldString' in input) && !('old_string' in input)) return 'write';
   if ('oldString' in input || 'newString' in input || 'old_string' in input || 'new_string' in input) return 'edit';
   if ('todos' in input || 'items' in input) return 'todowrite';
+  if ('entries' in input || 'plan' in input) return 'plan';
   if ('pattern' in input && 'include' in input) return 'grep';
   if ('pattern' in input && ('path' in input || 'filePath' in input)) return 'grep';
   if ('pattern' in input) return 'glob';
@@ -195,6 +198,63 @@ export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord
   if ('filePath' in input || 'file_path' in input) return 'read';
   if ('path' in input) return 'ls';
   return title || 'tool';
+}
+
+function stripPlanJsonFence(text: string): string {
+  const trimmed = String(text || '').trim();
+  const fence = trimmed.match(/^```(?:text|json)?[ \t]*\r?\n([\s\S]*?)\r?\n```[ \t]*$/i);
+  return (fence ? fence[1] : trimmed).trim();
+}
+
+function parseJsonText(text: string): any | null {
+  const body = stripPlanJsonFence(text);
+  if (!body) return null;
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
+  }
+}
+
+function normalizePlanEntries(value: unknown): Array<{ content: string; status?: string }> {
+  const root = typeof value === 'string' ? parseJsonText(value) : value;
+  if (!root || typeof root !== 'object') return [];
+  const obj = root as UnknownRecord;
+  const entries: unknown[] = Array.isArray(obj.entries)
+    ? obj.entries
+    : obj.plan && typeof obj.plan === 'object' && Array.isArray((obj.plan as UnknownRecord).entries)
+      ? ((obj.plan as UnknownRecord).entries as unknown[])
+      : Array.isArray(obj.todos)
+        ? obj.todos
+        : [];
+  return entries
+    .map((entry: unknown) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const row = entry as UnknownRecord;
+      const content = String(row.content || row.title || row.task || row.description || '').trim();
+      if (!content) return null;
+      const status = String(row.status || '').trim();
+      return {
+        content,
+        ...(status ? { status } : {}),
+      };
+    })
+    .filter((entry): entry is { content: string; status?: string } => Boolean(entry));
+}
+
+function extractPlanEntriesFromRawOutput(raw: unknown): Array<{ content: string; status?: string }> {
+  const direct = normalizePlanEntries(raw);
+  if (direct.length > 0) return direct;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as UnknownRecord;
+    const candidates = [obj.output, obj.content, obj.text, obj.result, obj.message];
+    for (const candidate of candidates) {
+      if (typeof candidate !== 'string') continue;
+      const entries = normalizePlanEntries(candidate);
+      if (entries.length > 0) return entries;
+    }
+  }
+  return [];
 }
 
 export function inferCommandToolName(command: string): 'bash' | 'cmd' | 'powershell' | 'read' | 'grep' | 'ls' {
@@ -416,10 +476,13 @@ export function formatAceToolCall(params: {
       break;
     case 'todo':
     case 'todowrite':
+    case 'plan':
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
-        todos: Array.isArray(rawInput.todos || rawInput.items) ? (rawInput.todos || rawInput.items) as any[] : [],
+        todos: Array.isArray(rawInput.todos || rawInput.items || rawInput.entries)
+          ? (rawInput.todos || rawInput.items || rawInput.entries) as any[]
+          : [],
       }, '');
       break;
     case 'webfetch':
@@ -480,6 +543,17 @@ export function formatAceToolResult(params: {
     const text = extractTextFromUnknown(raw).trim();
     if (!text) return '';
     return formatAceSubtaskResult({ resultText: text, toolId: params.toolId });
+  }
+
+  if (toolName === 'plan') {
+    const todos = extractPlanEntriesFromRawOutput(raw);
+    if (todos.length > 0) {
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        todos,
+      }, ''), params.toolId);
+    }
   }
 
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {

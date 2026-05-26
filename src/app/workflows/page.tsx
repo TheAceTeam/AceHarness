@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, type ChangeEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/table';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
-import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2 } from 'lucide-react';
+import { Plus, LogIn, Edit, Trash2, ArrowLeft, FileText, ArrowDown, ArrowUp, ArrowUpDown, History, Copy, Globe, Lock, Share2, Upload, Download } from 'lucide-react';
 import NewConfigModal from '@/components/NewConfigModal';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -136,6 +136,9 @@ export default function WorkflowsPage() {
   const [shareableUsers, setShareableUsers] = useState<ShareableUser[]>([]);
   const [shareableUsersLoading, setShareableUsersLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [archiveImporting, setArchiveImporting] = useState(false);
+  const [archiveExporting, setArchiveExporting] = useState(false);
+  const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
   const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
   const [filterBarHeight, setFilterBarHeight] = useState(0);
@@ -342,6 +345,46 @@ export default function WorkflowsPage() {
       }
     }
   };
+
+  const handleImportWorkflowZip = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setArchiveImporting(true);
+    try {
+      const result = await configApi.importConfigZip(file);
+      toast('success', result.message || `已导入 ${result.imported?.length || 0} 个工作流`);
+      setSelectedWorkflows(new Set());
+      await loadWorkflows();
+    } catch (error: any) {
+      toast('error', error?.message || '导入工作流失败');
+    } finally {
+      setArchiveImporting(false);
+      if (archiveInputRef.current) archiveInputRef.current.value = '';
+    }
+  }, [loadWorkflows, toast]);
+
+  const handleExportSelectedWorkflows = useCallback(async () => {
+    if (selectedWorkflows.size === 0) {
+      toast('error', '请先选择要导出的工作流');
+      return;
+    }
+    setArchiveExporting(true);
+    try {
+      const selected = Array.from(selectedWorkflows);
+      const blob = await configApi.exportConfigs(selected);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'workflows-export.zip';
+      link.click();
+      URL.revokeObjectURL(url);
+      toast('success', `已导出 ${selected.length} 个工作流`);
+    } catch (error: any) {
+      toast('error', error?.message || '导出工作流失败');
+    } finally {
+      setArchiveExporting(false);
+    }
+  }, [selectedWorkflows, toast]);
 
   const handleConfirmCopy = useCallback(async () => {
     if (!activeWorkflow) return;
@@ -613,6 +656,13 @@ export default function WorkflowsPage() {
   );
   return (
     <div className="min-h-screen bg-background">
+      <input
+        ref={archiveInputRef}
+        type="file"
+        accept=".zip"
+        className="hidden"
+        onChange={handleImportWorkflowZip}
+      />
       {/* Header */}
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="flex items-center gap-4">
@@ -631,6 +681,30 @@ export default function WorkflowsPage() {
         <div className="flex items-center gap-3">
           <LanguageToggle />
           <ThemeToggle />
+          {activeTab === 'workflows' ? (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => archiveInputRef.current?.click()}
+                disabled={archiveImporting}
+                title="导入 workflow ZIP"
+              >
+                <Upload className={`w-4 h-4 xl:mr-2 ${archiveImporting ? 'animate-bounce' : ''}`} />
+                <span className="hidden xl:inline">{archiveImporting ? '导入中...' : '导入 ZIP'}</span>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleExportSelectedWorkflows}
+                disabled={archiveExporting || selectedWorkflows.size === 0}
+                title="导出选中的 workflow ZIP"
+              >
+                <Download className={`w-4 h-4 xl:mr-2 ${archiveExporting ? 'animate-bounce' : ''}`} />
+                <span className="hidden xl:inline">{archiveExporting ? '导出中...' : '导出'}</span>
+              </Button>
+            </>
+          ) : null}
           <Button size="sm" variant="outline" onClick={handleAICreate}>
             <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
             AI 创建

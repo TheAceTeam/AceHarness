@@ -347,10 +347,9 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('Step completed');
   });
 
-  test('agentInstanceId is used as the engine execution identity', async () => {
-    const engine = new MockEngine({ success: true, output: 'Step completed by runtime instance' });
+  test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {
+    const engine = new MockEngine({ success: true, output: 'Step completed by base role' });
     const manager = await createManagerForTest(engine);
-    (manager as any).agents.push(makeAgentState('developer-1'));
 
     const config = makeConfig({
       workflow: {
@@ -369,9 +368,99 @@ describe('state machine execution flow', () => {
 
     const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
 
-    expect(result.stepOutputs[0]).toContain('runtime instance');
-    expect(engine.calls[0].options.agent).toBe('developer-1');
-    expect((manager as any).stepLogs[0].agent).toBe('developer-1');
+    expect(result.stepOutputs[0]).toContain('base role');
+    expect(engine.calls[0].options.agent).toBe('developer');
+    expect((manager as any).stepLogs[0].agent).toBe('developer');
+  });
+
+  test('agentInstanceId is used only for step-level parallel branches', async () => {
+    const engine = new MockEngine({ success: true, output: 'Parallel branch completed' });
+    const manager = await createManagerForTest(engine);
+    (manager as any).agents.push(makeAgentState('developer-a'), makeAgentState('developer-b'));
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'branch-a', agent: 'developer', agentInstanceId: 'developer-a', parallelGroup: 'group-1', task: 'Design A', role: 'defender' },
+              { name: 'branch-b', agent: 'developer', agentInstanceId: 'developer-b', parallelGroup: 'group-1', task: 'Design B', role: 'defender' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(engine.calls.map((call) => call.options.agent).sort()).toEqual(['developer-a', 'developer-b']);
+    expect((manager as any).stepLogs.map((log: any) => log.agent).sort()).toEqual(['developer-a', 'developer-b']);
+  });
+
+  test('initializeAgents does not create unused serial agentInstanceId aliases', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig({
+      workflow: {
+        concurrency: {
+          enabled: false,
+          agentInstances: [
+            { id: 'developer-main', role: 'developer' },
+            { id: 'architect-main', role: 'architect' },
+          ],
+        },
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'developer-main', task: 'Design', role: 'judge' },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    (manager as any).initializeAgents(config);
+
+    expect((manager as any).agents.map((agent: any) => agent.name).sort()).toEqual([
+      'default-supervisor',
+      'developer',
+    ]);
+  });
+
+  test('run spec coding is not marked completed before workflow reaches a final state', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentRunSpecCoding = {
+      id: 'spec-1',
+      workflowName: 'Test Workflow',
+      version: 1,
+      status: 'completed',
+      summary: 'mapped phase completed',
+      requirements: [],
+      phases: [{ id: 'phase-1', title: '设计', status: 'completed', ownerAgents: [] }],
+      assignments: [],
+      checkpoints: [],
+      tasks: [],
+      artifacts: {},
+      progress: {
+        overallStatus: 'completed',
+        completedPhaseIds: ['phase-1'],
+        summary: '所有阶段已完成。',
+      },
+      revisions: [],
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    (manager as any).keepRunSpecCodingActiveUntilWorkflowFinal('状态 设计 已完成，下一状态为 实施。');
+
+    expect((manager as any).currentRunSpecCoding.status).toBe('in-progress');
+    expect((manager as any).currentRunSpecCoding.progress.overallStatus).toBe('in-progress');
+    expect((manager as any).currentRunSpecCoding.progress.summary).toBe('状态 设计 已完成，下一状态为 实施。');
   });
 
   test('supervisor cannot substitute a normal workflow step runtime agent', async () => {
@@ -386,7 +475,7 @@ describe('state machine execution flow', () => {
             name: '设计',
             isInitial: true,
             steps: [
-              { name: 'design-step', agent: 'developer', agentInstanceId: 'default-supervisor', task: 'Design', role: 'judge' },
+              { name: 'design-step', agent: 'developer', agentInstanceId: 'default-supervisor', parallelGroup: 'guard-group', task: 'Design', role: 'judge' },
             ],
             transitions: [],
           },

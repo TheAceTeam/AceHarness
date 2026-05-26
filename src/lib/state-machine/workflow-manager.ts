@@ -235,7 +235,7 @@ function getStepConcurrencyGroup(step: WorkflowStep): string | undefined {
 }
 
 function getStepRuntimeAgentName(step: WorkflowStep): string {
-  return step.agentInstanceId || step.agent;
+  return getStepConcurrencyGroup(step) ? (step.agentInstanceId || step.agent) : step.agent;
 }
 
 function normalizeGuardText(value: string | null | undefined): string {
@@ -1196,6 +1196,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.completeRunSpecCoding('工作流执行完成。');
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
@@ -1204,6 +1205,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile,
           workflowFrontendSessionId: this._frontendSessionId || null,
+          ...this.buildRunSpecCodingStatusPayload(),
         });
         await this.finalizeRun('completed');
       }
@@ -2166,12 +2168,8 @@ try {
 
     for (const state of workflowConfig.workflow.states) {
       for (const step of state.steps) {
-        addRuntimeAgent(step.agent, step.agent);
-        if (step.agentInstanceId) addRuntimeAgent(step.agentInstanceId, step.agent);
+        addRuntimeAgent(getStepRuntimeAgentName(step), step.agent);
       }
-    }
-    for (const instance of workflowConfig.workflow.concurrency?.agentInstances || []) {
-      addRuntimeAgent(instance.id, instance.role);
     }
     if (workflowConfig.workflow.supervisor?.enabled !== false) {
       addRuntimeAgent(this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME, this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME);
@@ -2334,6 +2332,9 @@ try {
         supervisorAgent: this.currentSupervisorAgent,
         verdict: result.verdict,
       });
+      if (!state.isFinal) {
+        this.keepRunSpecCodingActiveUntilWorkflowFinal(`状态 ${state.name} 已完成审阅，工作流仍在运行。`);
+      }
     }
     await this.persistState();
     return response;
@@ -2444,6 +2445,9 @@ try {
           status: statusUpdate.status,
           summary: statusUpdate.summary,
         });
+        if (!stateConfig.isFinal) {
+          this.keepRunSpecCodingActiveUntilWorkflowFinal(statusUpdate.summary);
+        }
         await this.persistState();
       }
 
@@ -2930,6 +2934,49 @@ try {
         checkpoints: this.currentRunSpecCoding.checkpoints,
         revisions: this.currentRunSpecCoding.revisions,
         artifacts: this.currentRunSpecCoding.artifacts,
+      },
+    };
+  }
+
+  private keepRunSpecCodingActiveUntilWorkflowFinal(summary?: string): void {
+    if (!this.currentRunSpecCoding) return;
+    const progress = this.currentRunSpecCoding.progress || {
+      overallStatus: 'pending' as const,
+      completedPhaseIds: [],
+    };
+    const status = this.currentRunSpecCoding.status === 'completed'
+      ? 'in-progress'
+      : this.currentRunSpecCoding.status;
+    const overallStatus = progress.overallStatus === 'completed'
+      ? 'in-progress'
+      : progress.overallStatus;
+
+    if (status === this.currentRunSpecCoding.status && overallStatus === progress.overallStatus && !summary) {
+      return;
+    }
+
+    this.currentRunSpecCoding = {
+      ...this.currentRunSpecCoding,
+      status,
+      progress: {
+        ...progress,
+        overallStatus,
+        summary: summary || progress.summary,
+      },
+    };
+  }
+
+  private completeRunSpecCoding(summary = '工作流执行完成。'): void {
+    if (!this.currentRunSpecCoding) return;
+    this.currentRunSpecCoding = {
+      ...this.currentRunSpecCoding,
+      status: 'completed',
+      progress: {
+        ...this.currentRunSpecCoding.progress,
+        overallStatus: 'completed',
+        completedPhaseIds: this.currentRunSpecCoding.phases.map((phase) => phase.id),
+        activePhaseId: undefined,
+        summary,
       },
     };
   }

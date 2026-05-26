@@ -16,7 +16,7 @@ import { useTranslations } from '@/hooks/useTranslations';
 import { useToast } from '@/components/ui/toast';
 import styles from '@/app/workbench/[config]/page.module.css';
 
-interface DocFile {
+export interface DocFile {
   filename: string;
   stepName: string;
   baseName: string;
@@ -38,6 +38,12 @@ interface DocTreeGroup {
   summary: DocFile | null;
   details: DocFile[];
   latestTime: number;
+}
+
+interface DocFolderGroup {
+  key: string;
+  label: string;
+  files: DocFile[];
 }
 
 interface DocumentsPanelProps {
@@ -89,14 +95,35 @@ const roleBadge: Record<string, string> = {
 const roleIcon: Record<string, string> = { attacker: 'swords', defender: 'shield', judge: 'gavel' };
 const roleLabel: Record<string, string> = { attacker: '攻击方', defender: '防守方', judge: '裁判' };
 
-/** Extract group name from filename: "根因定位-定位空指针路径.md" → "根因定位" */
-function getFileGroup(filename: string): string {
-  const base = filename.replace(/\.md$/i, '');
+function normalizeDocumentFolderLabel(value: string): string {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*/g, '-')
+    .trim();
+}
+
+function normalizeDocumentFolderKey(value: string): string {
+  return normalizeDocumentFolderLabel(value)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'other';
+}
+
+function getFallbackFileGroupLabel(filename: string): string {
+  const base = filename.replace(/\.(md|txt)$/i, '');
   // Strip ISO timestamp prefix like "2026-03-20T14-30-00-" from conclusion files
   const stripped = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/, '');
   const idx = stripped.indexOf('-');
-  if (idx > 0) return stripped.substring(0, idx);
-  return stripped || '其他';
+  const raw = idx > 0 ? stripped.substring(0, idx) : stripped;
+  return normalizeDocumentFolderLabel(raw) || '其他';
+}
+
+export function getDocumentFolderGroup(file: Pick<DocFile, 'filename' | 'phaseName'>): { key: string; label: string } {
+  const label = normalizeDocumentFolderLabel(file.phaseName) || getFallbackFileGroupLabel(file.filename);
+  return {
+    key: normalizeDocumentFolderKey(label),
+    label,
+  };
 }
 
 function getTreeLinkName(file: DocFile): string {
@@ -311,22 +338,22 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
     return files;
   }, [files, docFilter]);
 
-  // Build groups from filenames
-  const groups = useMemo(() => {
-    const map: Record<string, DocFile[]> = {};
+  // Build left folder groups from workflow metadata first, with filename fallback.
+  const folderGroups = useMemo<DocFolderGroup[]>(() => {
+    const map = new Map<string, DocFolderGroup>();
     tabFiles.forEach(f => {
-      const g = getFileGroup(f.filename);
-      (map[g] ||= []).push(f);
+      const group = getDocumentFolderGroup(f);
+      const existing = map.get(group.key) || { key: group.key, label: group.label, files: [] };
+      existing.files.push(f);
+      map.set(group.key, existing);
     });
-    return map;
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
   }, [tabFiles]);
-
-  const groupNames = useMemo(() => Object.keys(groups).sort(), [groups]);
 
   // Filtered + sorted files
   const scopedFiles = useMemo(() => {
-    return activeGroup ? (groups[activeGroup] || []) : [...tabFiles];
-  }, [activeGroup, groups, tabFiles]);
+    return activeGroup ? (folderGroups.find(group => group.key === activeGroup)?.files || []) : [...tabFiles];
+  }, [activeGroup, folderGroups, tabFiles]);
 
   const processedFiles = useMemo(() => {
     let filtered = [...scopedFiles];
@@ -579,15 +606,15 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
           <span className="flex-1">全部文件</span>
           <span className="text-[10px] text-muted-foreground">{tabFiles.length}</span>
         </div>
-        {groupNames.map(g => (
+        {folderGroups.map(group => (
           <div
-            key={g}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === g ? 'bg-accent text-accent-foreground font-medium' : ''}`}
-            onClick={() => setActiveGroup(g)}
+            key={group.key}
+            className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors hover:bg-muted/50 ${activeGroup === group.key ? 'bg-accent text-accent-foreground font-medium' : ''}`}
+            onClick={() => setActiveGroup(group.key)}
           >
             <span className="material-symbols-outlined text-sm">folder</span>
-            <span className="flex-1 truncate">{g}</span>
-            <span className="text-[10px] text-muted-foreground">{groups[g]?.length || 0}</span>
+            <span className="flex-1 truncate">{group.label}</span>
+            <span className="text-[10px] text-muted-foreground">{group.files.length}</span>
           </div>
         ))}
       </div>
@@ -885,13 +912,13 @@ export default function DocumentsPanel({ runId, openLatestTimestampedRequest = 0
       {!loading && files.length === 0 && (
         <div className="text-center text-xs text-muted-foreground py-8">暂无文档</div>
       )}
-      {!loading && groupNames.map(g => (
-        <div key={g}>
+      {!loading && folderGroups.map(group => (
+        <div key={group.key}>
           <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold text-muted-foreground bg-muted/30 border-b border-border/30 sticky top-0 z-10">
             <span className="material-symbols-outlined text-xs">folder</span>
-            {g} ({groups[g]?.length || 0})
+            {group.label} ({group.files.length})
           </div>
-          {(groups[g] || []).map(f => fileRow(f, true))}
+          {group.files.map(f => fileRow(f, true))}
         </div>
       ))}
         </>

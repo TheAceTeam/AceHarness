@@ -30,13 +30,10 @@ export function collectWorkflowRuntimeAgentNames(
   if (Array.isArray(workflow.states)) {
     for (const state of workflow.states) {
       for (const step of state?.steps || []) {
-        pushName(step?.agent);
+        const hasStepConcurrency = Boolean(step?.concurrency?.groupId || step?.parallelGroup);
+        pushName(hasStepConcurrency ? (step?.agentInstanceId || step?.agent) : step?.agent);
       }
     }
-  }
-
-  for (const instance of workflow.concurrency?.agentInstances || []) {
-    pushName(instance?.id);
   }
 
   return Array.from(names);

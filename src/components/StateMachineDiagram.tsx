@@ -113,6 +113,7 @@ interface StateMachineDiagramProps {
   onForceTransition?: (targetState: string) => void;
   currentState?: string | null;
   currentStep?: string | null;
+  activeSteps?: string[];
   completedSteps?: string[];
   stateHistory?: StateTransitionRecord[];
   isRunning?: boolean;
@@ -270,12 +271,13 @@ function buildStateDiagramStepGroups(steps: any[]) {
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = [], completedSteps = [], onStepClick, onForceTransition, isRunning } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
     const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
-    const isRunningStep = currentStep === step.name || currentStep === `${state.name}-${step.name}`;
+    const runningKeys = [currentStep, ...activeSteps].filter(Boolean);
+    const isRunningStep = runningKeys.some((key) => key === step.name || key === `${state.name}-${step.name}`);
     return { isDone, isRunningStep };
   };
   const renderStepPill = (step: any, idx: number, compact = false) => {
@@ -489,6 +491,7 @@ function StateMachineDiagramInner({
   onForceTransition,
   currentState,
   currentStep,
+  activeSteps = [],
   completedSteps = EMPTY_COMPLETED_STEPS,
   stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
@@ -521,6 +524,7 @@ function StateMachineDiagramInner({
           isFinal: state.isFinal,
           isCurrent: currentState === state.name,
           currentStep,
+          activeSteps,
           completedSteps,
           onStepClick,
           onForceTransition,
@@ -552,6 +556,7 @@ function StateMachineDiagramInner({
         isFinal: false,
         isCurrent: currentState === '__human_approval__',
         currentStep,
+        activeSteps,
         completedSteps,
         onStepClick,
         onForceTransition,
@@ -560,7 +565,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, currentState, currentStep, completedSteps, onStepClick, onForceTransition, isRunning, stateHistory, supervisorFlow]);
+  }, [states, currentState, currentStep, activeSteps, completedSteps, onStepClick, onForceTransition, isRunning, stateHistory, supervisorFlow]);
 
   // 转换为 ReactFlow 边
   const initialEdges: Edge[] = useMemo(() => {

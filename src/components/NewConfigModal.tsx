@@ -75,8 +75,10 @@ function normalizeBackendSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-const MAX_PLAN_DRAFT_REPAIR_ATTEMPTS = 2;
-const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = 3;
+const MAX_CREATION_AI_REPAIR_ATTEMPTS = 5;
+const MAX_CLARIFICATION_FORM_REPAIR_ATTEMPTS = MAX_CREATION_AI_REPAIR_ATTEMPTS;
+const MAX_PLAN_DRAFT_REPAIR_ATTEMPTS = MAX_CREATION_AI_REPAIR_ATTEMPTS;
+const MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS = MAX_CREATION_AI_REPAIR_ATTEMPTS;
 const MODAL_HISTORY_RECENT_WINDOW = 8;
 const PLANNING_STREAM_SCOPE = 'workflow-planning';
 const CREATION_SESSION_TAG_PREFIX = '创建工作流 ·';
@@ -129,7 +131,50 @@ function normalizeReferenceWorkflowMode(mode?: string) {
   return mode === 'state-machine' ? 'state-machine' : 'phase-based';
 }
 
-type ModalAiMessage = { role: 'ai' | 'user' | 'thinking'; content: string };
+type ModalAiMessage =
+  | { role: 'ai' | 'user' | 'thinking'; content: string }
+  | {
+      role: 'repair-diagnostic';
+      content: string;
+      kind: 'clarification_form' | 'plan_draft' | 'workflow_draft';
+      failedOutput: string;
+      repairPrompt: string;
+      attempt: number;
+      maxAttempts: number;
+      reason?: string;
+    };
+
+const MODAL_MACHINE_RESULT_KIND_PATTERN = '(?:workflow_draft|plan_draft|clarification_form|spec_coding_revision|spec-coding-revision)';
+const REPAIR_DIAGNOSTIC_KIND_LABELS: Record<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>['kind'], string> = {
+  clarification_form: '澄清表单',
+  plan_draft: '正式计划',
+  workflow_draft: 'Workflow 草案',
+};
+
+function isModalAiRepairDiagnosticMessage(message: ModalAiMessage): message is Extract<ModalAiMessage, { role: 'repair-diagnostic' }> {
+  return message.role === 'repair-diagnostic';
+}
+
+function createRepairDiagnosticMessage({
+  kind,
+  failedOutput,
+  repairPrompt,
+  attempt,
+  maxAttempts,
+  reason,
+}: Omit<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>, 'role' | 'content'>): ModalAiMessage {
+  const label = REPAIR_DIAGNOSTIC_KIND_LABELS[kind];
+  return {
+    role: 'repair-diagnostic',
+    kind,
+    failedOutput,
+    repairPrompt,
+    attempt,
+    maxAttempts,
+    reason,
+    content: `${label}格式未通过，正在自动纠正（${attempt}/${maxAttempts}）`,
+  };
+}
 
 function isEqualOptionalString(a?: string | null, b?: string | null): boolean {
   return (a || '') === (b || '');
@@ -188,6 +233,34 @@ function buildPlanDraftRepairMessage(previousOutput: string) {
     '7. 输出 </result> 后不要再追加任何文字。',
     '',
     SPEC_LANGUAGE_RULE,
+    '',
+    '上一轮未通过校验的输出如下，供你提取内容并修正为合法结构：',
+    '```text',
+    previousOutput.slice(0, 6000),
+    '```',
+  ].join('\n');
+}
+
+function buildClarificationFormRepairMessage(previousOutput: string) {
+  const diagnosis = diagnoseExtractionFailure(previousOutput, 'clarification_form');
+  return [
+    '你的上一条回复格式不正确，系统无法解析为合法的澄清表单。',
+    `具体错误：${diagnosis}`,
+    '',
+    '请继续当前对话，不要重新询问用户，不要输出解释，只补发合法的澄清表单结果。',
+    '',
+    '硬性格式要求：',
+    '1. 必须在 <result>...</result> 内直接输出 JSON 对象，不要包 ```json 代码块。',
+    '2. 顶层优先使用 {"kind":"clarification_form","payload":{...}}。',
+    '3. questions 数组不能为空，每个 question 必须有 id、label、question、selectionMode、options。',
+    '4. 每个问题提供 2 到 4 个 options；至少一个选项带 recommended=true。',
+    '5. 不要输出 markdown 表格、不要输出纯文字问题列表。',
+    '6. 输出 </result> 后不要再追加任何文字。',
+    '',
+    '参考格式：',
+    '<result>',
+    '{"kind":"clarification_form","payload":{"summary":"当前理解摘要","knownFacts":["已确认事实"],"missingFields":["缺失信息"],"questions":[{"id":"q1","label":"问题标签","question":"具体问题？","selectionMode":"single","options":[{"id":"opt1","label":"选项1","description":"说明","recommended":true},{"id":"opt2","label":"选项2","description":"说明"}],"placeholder":"补充说明"}]}}',
+    '</result>',
     '',
     '上一轮未通过校验的输出如下，供你提取内容并修正为合法结构：',
     '```text',
@@ -511,18 +584,16 @@ function stripResultBlocksForDisplay(markdown: string) {
 }
 
 function stripMachineJsonDraftBlocks(markdown: string) {
+  const kindRegex = new RegExp(`"(?:kind|type)"\\s*:\\s*"${MODAL_MACHINE_RESULT_KIND_PATTERN}"`, 'i');
   return markdown
-    .replace(/```json\s*([\s\S]*?)```/gi, (full, body: string) => {
+    .replace(/^```[ \t]*json[ \t]*\r?\n([\s\S]*?)^```[ \t]*$/gim, (full, body: string) => {
       const trimmed = String(body || '').trim();
-      if (
-        /"kind"\s*:\s*"(workflow_draft|plan_draft)"/.test(trimmed)
-        || /"type"\s*:\s*"(workflow_draft|plan_draft)"/.test(trimmed)
-      ) {
+      if (kindRegex.test(trimmed)) {
         return '';
       }
       return full;
     })
-    .replace(/(^|\n)\s*(\{[\s\S]*?"(?:kind|type)"\s*:\s*"(?:workflow_draft|plan_draft)"[\s\S]*?\})\s*(?=\n|$)/gi, '$1')
+    .replace(new RegExp(`(^|\\n)\\s*(\\{[\\s\\S]*?"(?:kind|type)"\\s*:\\s*"${MODAL_MACHINE_RESULT_KIND_PATTERN}"[\\s\\S]*?\\})\\s*(?=\\n|$)`, 'gi'), '$1')
     .trim();
 }
 
@@ -625,6 +696,46 @@ export function ModalAiGenerationPanel({
         />
       </div>
     </div>
+  );
+}
+
+function ModalRepairDiagnosticDetail({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px] font-medium uppercase tracking-normal text-muted-foreground">{title}</div>
+      <pre className="max-h-64 overflow-auto rounded-md border bg-background p-3 text-xs leading-5 text-foreground whitespace-pre-wrap break-words">
+        {value || '(空)'}
+      </pre>
+    </div>
+  );
+}
+
+function ModalRepairDiagnosticPanel({ message }: {
+  message: Extract<ModalAiMessage, { role: 'repair-diagnostic' }>;
+}) {
+  const label = REPAIR_DIAGNOSTIC_KIND_LABELS[message.kind];
+  return (
+    <details
+      className="group overflow-hidden rounded-lg border border-amber-500/30 bg-amber-500/10 [&_summary::-webkit-details-marker]:hidden"
+      data-testid="modal-repair-diagnostic"
+    >
+      <summary className="flex cursor-pointer select-none items-center gap-2 px-3 py-2.5 text-sm text-amber-900 dark:text-amber-100">
+        <span className="material-symbols-outlined text-base text-amber-600 dark:text-amber-300">build</span>
+        <span className="min-w-0 flex-1 font-medium">{message.content}</span>
+        <span className="rounded-full border border-amber-500/30 bg-background/60 px-2 py-0.5 text-[11px] text-amber-800 dark:text-amber-200">
+          {message.attempt}/{message.maxAttempts}
+        </span>
+        <span className="material-symbols-outlined text-base transition-transform group-open:rotate-180">expand_more</span>
+      </summary>
+      <div className="space-y-3 border-t border-amber-500/20 bg-background/75 px-3 py-3">
+        <div className="text-xs leading-5 text-muted-foreground">
+          {label}没有通过系统解析或校验，下面保留了失败内容和本轮发回 AI 的修复提示。
+          {message.reason ? ` ${message.reason}` : ''}
+        </div>
+        <ModalRepairDiagnosticDetail title="失败的结构化内容" value={message.failedOutput} />
+        <ModalRepairDiagnosticDetail title="发给 AI 的修复提示" value={message.repairPrompt} />
+      </div>
+    </details>
   );
 }
 
@@ -1643,7 +1754,6 @@ export default function NewConfigModal({
   const [modalHistoryExpanded, setModalHistoryExpanded] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const chatIdRef = useRef<string | null>(null);
-  const retryAttemptedRef = useRef(false);
   const userInputRef = useRef<HTMLInputElement>(null);
   const restoringSessionRef = useRef(false);
   const restoreGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1676,6 +1786,10 @@ export default function NewConfigModal({
   const aiModelRef = useRef(inheritModel);
   const backendSessionEngineRef = useRef(inheritEngine);
   const backendSessionModelRef = useRef(inheritModel);
+
+  const appendRepairDiagnosticMessage = useCallback((diagnostic: Omit<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>, 'role' | 'content'>) => {
+    setAiMessages((prev) => [...prev, createRepairDiagnosticMessage(diagnostic)]);
+  }, []);
 
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
     if (session.mode === 'ai-guided' && session.status === 'confirmed') {
@@ -2171,6 +2285,15 @@ export default function NewConfigModal({
 
   const renderModalAiMessage = useCallback((msg: ModalAiMessage, index: number, options?: { showUserMessages?: boolean }) => {
     const showUserMessages = options?.showUserMessages ?? false;
+    if (isModalAiRepairDiagnosticMessage(msg)) {
+      return (
+        <ModalRepairDiagnosticPanel
+          key={`${msg.role}-${index}`}
+          message={msg}
+        />
+      );
+    }
+
     if (msg.role === 'user') {
       if (!showUserMessages) return null;
       return (
@@ -2622,10 +2745,24 @@ export default function NewConfigModal({
             setWorkflowDraftConfig(null);
             setWorkflowDraftPreview(previewWithValidation);
             if (workflowDraftAttempt < MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS) {
+              const nextAttempt = workflowDraftAttempt + 1;
+              const repairPrompt = buildWorkflowDraftRepairMessage(
+                finalContent,
+                validation,
+                targetFilename || draftPreview.filename || 'workflow.yaml'
+              );
+              appendRepairDiagnosticMessage({
+                kind: 'workflow_draft',
+                failedOutput: finalContent,
+                repairPrompt,
+                attempt: nextAttempt,
+                maxAttempts: MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS,
+                reason: formatValidationIssuesForPrompt(validation),
+              });
               await sendToAi(
-                buildWorkflowDraftRepairMessage(finalContent, validation, targetFilename || draftPreview.filename || 'workflow.yaml'),
+                repairPrompt,
                 nextBackendSessionId,
-                { workflowDraftAttempt: workflowDraftAttempt + 1 }
+                { workflowDraftAttempt: nextAttempt }
               );
               return;
             }
@@ -2657,14 +2794,24 @@ export default function NewConfigModal({
 
         if (!draftConfig && targetFilename && workflowDraftAttempt < MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS) {
           const parseDetail = draftPreview.parseError || diagnoseExtractionFailure(finalContent, 'workflow_draft');
+          const nextAttempt = workflowDraftAttempt + 1;
+          const repairPrompt = buildWorkflowDraftRepairMessage(
+            finalContent,
+            { ok: false, message: parseDetail },
+            targetFilename
+          );
+          appendRepairDiagnosticMessage({
+            kind: 'workflow_draft',
+            failedOutput: finalContent,
+            repairPrompt,
+            attempt: nextAttempt,
+            maxAttempts: MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS,
+            reason: parseDetail,
+          });
           await sendToAi(
-            buildWorkflowDraftRepairMessage(
-              finalContent,
-              { ok: false, message: parseDetail },
-              targetFilename
-            ),
+            repairPrompt,
             nextBackendSessionId,
-            { workflowDraftAttempt: workflowDraftAttempt + 1 }
+            { workflowDraftAttempt: nextAttempt }
           );
           return;
         }
@@ -2705,7 +2852,7 @@ export default function NewConfigModal({
       toast('error', 'AI 请求失败: ' + err.message);
       setAiPhase('waiting');
     }
-  }, [backendSessionId, checkExistingWorkflowFile, ensurePlanningChatSession, formStep, getValues, persistStageSessionBinding, toast, validateWorkflowDraftConfig]);
+  }, [appendRepairDiagnosticMessage, backendSessionId, checkExistingWorkflowFile, ensurePlanningChatSession, formStep, getValues, persistStageSessionBinding, toast, validateWorkflowDraftConfig]);
 
   // PLACEHOLDER_SUBMIT_AND_RENDER
 
@@ -3664,7 +3811,17 @@ export default function NewConfigModal({
               const draft = extractPlanDraftResult(finalContent);
               if (!draft) {
                 if (attempt < MAX_PLAN_DRAFT_REPAIR_ATTEMPTS) {
-                  await runRevisionStream(buildPlanDraftRepairMessage(finalContent), attempt + 1);
+                  const nextAttempt = attempt + 1;
+                  const repairPrompt = buildPlanDraftRepairMessage(finalContent);
+                  appendRepairDiagnosticMessage({
+                    kind: 'plan_draft',
+                    failedOutput: finalContent,
+                    repairPrompt,
+                    attempt: nextAttempt,
+                    maxAttempts: MAX_PLAN_DRAFT_REPAIR_ATTEMPTS,
+                    reason: diagnoseExtractionFailure(finalContent, 'plan_draft'),
+                  });
+                  await runRevisionStream(repairPrompt, nextAttempt);
                   resolve();
                   return;
                 }
@@ -3708,7 +3865,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [appendPlanningAssistantMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, toast, updatePreviewSessionFromPlanDraft]);
+  }, [appendPlanningAssistantMessage, appendRepairDiagnosticMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, ensurePlanningChatSession, getValues, previewSession, revisionImpactArea, revisionNotes, revisionTarget, toast, updatePreviewSessionFromPlanDraft]);
 
   const saveArtifactEdits = useCallback(async () => {
     if (!previewSession?.id || !previewSession?.specCoding) return;
@@ -3920,267 +4077,168 @@ ${recommendationPrompt}
     setCurrentThinking('');
     setClarificationForm(null);
     setClarificationAnswers({});
-    retryAttemptedRef.current = false;
     const activeDraftSessionId = await ensureDraftCreationSession(targetFrontendSessionId);
     await persistStageSessionBinding('clarification', {
       frontendSessionId: targetFrontendSessionId,
       backendSessionId: backendSessionId,
     });
 
-    const startRes = await modalAuthFetch('/api/chat/stream', {
+    let activeBackendSessionId = backendSessionId;
+    const runClarificationStream = async (message: string, attempt: number): Promise<void> => {
+      setAiPhase('streaming');
+      setCurrentStream('');
+      setCurrentThinking('');
+
+      const startRes = await modalAuthFetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: clarificationRequestMessage,
-        model: aiModelRef.current,
-        engine: aiEngineRef.current,
-        sessionId: backendSessionId || undefined,
-        frontendSessionId: targetFrontendSessionId,
-        streamScope: PLANNING_STREAM_SCOPE,
-        mode: 'dashboard',
-        workingDirectory: values.workingDirectory,
-        extraSystemPrompt: clarificationSystemPrompt,
-      }),
-    });
-
-    const startData = await startRes.json().catch(() => null);
-    if (!startRes.ok || !startData?.chatId) {
-      setIsGeneratingPlan(false);
-      setAiPhase('waiting');
-      throw new Error(startData?.error || '启动计划生成失败');
-    }
-
-    const chatId = startData.chatId;
-    chatIdRef.current = chatId;
-
-    await new Promise<void>((resolve, reject) => {
-      const es = new EventSource(`/api/chat/stream?id=${chatId}`);
-      eventSourceRef.current = es;
-      let accumulated = '';
-      let thinkingAccumulated = '';
-
-      es.addEventListener('delta', (event) => {
-        const data = JSON.parse(event.data);
-        accumulated += data.content || '';
-        setCurrentStream(accumulated);
+        body: JSON.stringify({
+          message,
+          model: aiModelRef.current,
+          engine: aiEngineRef.current,
+          sessionId: activeBackendSessionId || undefined,
+          frontendSessionId: targetFrontendSessionId,
+          streamScope: PLANNING_STREAM_SCOPE,
+          mode: 'dashboard',
+          workingDirectory: values.workingDirectory,
+          extraSystemPrompt: clarificationSystemPrompt,
+        }),
       });
 
-      es.addEventListener('thinking', (event) => {
-        const data = JSON.parse(event.data);
-        thinkingAccumulated += data.content || '';
-        setCurrentThinking(thinkingAccumulated);
-      });
+      const startData = await startRes.json().catch(() => null);
+      if (!startRes.ok || !startData?.chatId) {
+        setIsGeneratingPlan(false);
+        setAiPhase('waiting');
+        throw new Error(startData?.error || '启动计划生成失败');
+      }
 
-      es.addEventListener('done', async (event) => {
-        try {
+      const chatId = startData.chatId;
+      chatIdRef.current = chatId;
+
+      await new Promise<void>((resolve, reject) => {
+        const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+        eventSourceRef.current = es;
+        let accumulated = '';
+        let thinkingAccumulated = '';
+
+        es.addEventListener('delta', (event) => {
           const data = JSON.parse(event.data);
-          es.close();
-          eventSourceRef.current = null;
-          chatIdRef.current = null;
+          accumulated += data.content || '';
+          setCurrentStream(accumulated);
+        });
 
-          const nextBackendSessionId = hasOwnKey(data, 'sessionId')
-            ? normalizeBackendSessionId(data.sessionId)
-            : backendSessionId;
-          if (hasOwnKey(data, 'sessionId')) {
-            setBackendSessionId(nextBackendSessionId);
-            backendSessionEngineRef.current = aiEngineRef.current;
-            backendSessionModelRef.current = aiModelRef.current;
-          }
-          await persistStageSessionBinding('clarification', {
-            frontendSessionId: targetFrontendSessionId,
-            backendSessionId: nextBackendSessionId,
-          });
+        es.addEventListener('thinking', (event) => {
+          const data = JSON.parse(event.data);
+          thinkingAccumulated += data.content || '';
+          setCurrentThinking(thinkingAccumulated);
+        });
 
-          const finalContent = data.result || accumulated;
-          setAiMessages((prev) => {
-            const next = [...prev];
-            if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
-            next.push({ role: 'ai', content: finalContent });
-            return next;
-          });
-          await appendPlanningAssistantMessage(targetFrontendSessionId, finalContent, data.sessionId);
-          setCurrentStream('');
-          setCurrentThinking('');
+        es.addEventListener('done', async (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            es.close();
+            eventSourceRef.current = null;
+            chatIdRef.current = null;
 
-          const clarification = extractClarificationFormResult(finalContent);
-          if (!clarification || clarification.questions.length === 0) {
-            // Auto-retry: send a correction prompt to the same session
-            const retrySessionId = nextBackendSessionId;
-            if (retrySessionId && !retryAttemptedRef.current) {
-              retryAttemptedRef.current = true;
-              setCurrentStream('');
-              setCurrentThinking('');
-              setAiMessages((prev) => [...prev, { role: 'ai', content: '⚠️ 格式不符，正在自动纠正...' }]);
+            if (hasOwnKey(data, 'sessionId')) {
+              activeBackendSessionId = normalizeBackendSessionId(data.sessionId);
+              setBackendSessionId(activeBackendSessionId);
+              backendSessionEngineRef.current = aiEngineRef.current;
+              backendSessionModelRef.current = aiModelRef.current;
+            }
+            await persistStageSessionBinding('clarification', {
+              frontendSessionId: targetFrontendSessionId,
+              backendSessionId: activeBackendSessionId,
+            });
 
-              const diagnosis = diagnoseExtractionFailure(finalContent, 'clarification_form');
-              const retryMessage = [
-                '你的上一条回复格式不正确，系统无法解析为合法的澄清表单。',
-                `具体错误：${diagnosis}`,
-                '',
-                '请严格按照以下格式重新输出（不要输出其他内容）：',
-                '<result>',
-                '{"kind":"clarification_form","payload":{"summary":"当前理解摘要","knownFacts":["已确认事实"],"missingFields":["缺失信息"],"questions":[{"id":"q1","label":"问题标签","question":"具体问题？","selectionMode":"single","options":[{"id":"opt1","label":"选项1","description":"说明","recommended":true}],"placeholder":"补充说明"}]}}',
-                '</result>',
-                '',
-                '注意：',
-                '- 必须在 <result> 内直接输出 JSON 对象，不要包 ```json 代码块',
-                '- 顶层优先使用 {"kind":"clarification_form","payload":{...}}',
-                '- questions 数组不能为空，每个 question 必须有 id、label、question、options',
-                '- 不要输出 markdown 表格、不要输出纯文字问题列表',
-              ].join('\n');
+            const finalContent = data.result || accumulated;
+            setAiMessages((prev) => {
+              const next = [...prev];
+              if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
+              next.push({ role: 'ai', content: finalContent });
+              return next;
+            });
+            await appendPlanningAssistantMessage(targetFrontendSessionId, finalContent, data.sessionId);
+            setCurrentStream('');
+            setCurrentThinking('');
 
-              try {
-                const retryRes = await modalAuthFetch('/api/chat/stream', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    message: retryMessage,
-                    model: aiModelRef.current,
-                    engine: aiEngineRef.current,
-                    sessionId: retrySessionId,
-                    frontendSessionId: targetFrontendSessionId,
-                    streamScope: PLANNING_STREAM_SCOPE,
-                    mode: 'dashboard',
-                    workingDirectory: values.workingDirectory,
-                  }),
+            const clarification = extractClarificationFormResult(finalContent);
+            if (!clarification || clarification.questions.length === 0) {
+              if (attempt < MAX_CLARIFICATION_FORM_REPAIR_ATTEMPTS) {
+                const nextAttempt = attempt + 1;
+                const repairPrompt = buildClarificationFormRepairMessage(finalContent);
+                appendRepairDiagnosticMessage({
+                  kind: 'clarification_form',
+                  failedOutput: finalContent,
+                  repairPrompt,
+                  attempt: nextAttempt,
+                  maxAttempts: MAX_CLARIFICATION_FORM_REPAIR_ATTEMPTS,
+                  reason: diagnoseExtractionFailure(finalContent, 'clarification_form'),
                 });
-                const retryData = await retryRes.json().catch(() => null);
-                if (retryRes.ok && retryData?.chatId) {
-                  const retryChatId = retryData.chatId;
-                  chatIdRef.current = retryChatId;
-                  // Listen for retry stream
-                  const retryEs = new EventSource(`/api/chat/stream?id=${retryChatId}`);
-                  eventSourceRef.current = retryEs;
-                  let retryAccumulated = '';
+                await runClarificationStream(repairPrompt, nextAttempt);
+                resolve();
+                return;
+              }
 
-                  retryEs.addEventListener('delta', (ev) => {
-                    const d = JSON.parse(ev.data);
-                    retryAccumulated += d.content || '';
-                    setCurrentStream(retryAccumulated);
-                  });
-
-                  retryEs.addEventListener('done', async (ev) => {
-                    try {
-                      const retryDoneData = JSON.parse(ev.data);
-                      retryEs.close();
-                      eventSourceRef.current = null;
-                      chatIdRef.current = null;
-                      const nextRetryBackendSessionId = hasOwnKey(retryDoneData, 'sessionId')
-                        ? normalizeBackendSessionId(retryDoneData.sessionId)
-                        : retrySessionId;
-                      if (hasOwnKey(retryDoneData, 'sessionId')) {
-                        setBackendSessionId(nextRetryBackendSessionId);
-                        backendSessionEngineRef.current = aiEngineRef.current;
-                        backendSessionModelRef.current = aiModelRef.current;
-                      }
-                      await persistStageSessionBinding('clarification', {
-                        frontendSessionId: targetFrontendSessionId,
-                        backendSessionId: nextRetryBackendSessionId,
-                      });
-
-                      const retryFinalContent = retryDoneData.result || retryAccumulated;
-                      setAiMessages((prev) => [...prev, { role: 'ai', content: retryFinalContent }]);
-                      await appendPlanningAssistantMessage(targetFrontendSessionId, retryFinalContent, retryDoneData.sessionId);
-                      setCurrentStream('');
-
-                      const retryClarification = extractClarificationFormResult(retryFinalContent);
-                      if (!retryClarification || retryClarification.questions.length === 0) {
-                        setAiPhase('waiting');
-                        setIsGeneratingPlan(false);
-                        setPlanningStage('idle');
-                        reject(new Error('AI 两次均未返回合法澄清表单，请检查引擎或手动重试'));
-                        return;
-                      }
-
-                      setAiPhase('idle');
-                      setIsGeneratingPlan(false);
-                      setPlanningStage('awaiting-answers');
-                      setClarificationForm(retryClarification);
-                      await persistDraftUiState({
-                        formStep: 2,
-                        planningStage: 'awaiting-answers',
-                        clarificationForm: retryClarification,
-                        clarificationAnswers: {},
-                      });
-                      resolve();
-                    } catch (retryErr) {
-                      setAiPhase('waiting');
-                      setIsGeneratingPlan(false);
-                      setPlanningStage('idle');
-                      reject(retryErr);
-                    }
-                  });
-
-                  retryEs.addEventListener('error', () => {
-                    retryEs.close();
-                    eventSourceRef.current = null;
-                    chatIdRef.current = null;
-                    setAiPhase('waiting');
-                    setIsGeneratingPlan(false);
-                    setPlanningStage('idle');
-                    reject(new Error('纠错重试流中断'));
-                  });
-                  return; // Don't reject yet, wait for retry
-                }
-              } catch { /* retry failed, fall through to reject */ }
+              setAiPhase('waiting');
+              setIsGeneratingPlan(false);
+              setPlanningStage('idle');
+              reject(new Error(`AI 自动纠正 ${MAX_CLARIFICATION_FORM_REPAIR_ATTEMPTS} 次后仍未返回合法澄清表单，请检查引擎或手动重试`));
+              return;
             }
 
+            setAiPhase('idle');
+            setIsGeneratingPlan(false);
+            setPlanningStage('awaiting-answers');
+            setClarificationForm(clarification);
+            await persistDraftUiState({
+              formStep: 2,
+              planningStage: 'awaiting-answers',
+              clarificationForm: clarification,
+              clarificationAnswers: {},
+            });
+            if (activeDraftSessionId) {
+              await appendCreationSessionTags({
+                id: activeDraftSessionId,
+                chatSessionId: targetFrontendSessionId,
+                workflowName: values.workflowName,
+                filename: values.filename,
+              }, '等待补充回答');
+            }
+            resolve();
+          } catch (error) {
             setAiPhase('waiting');
             setIsGeneratingPlan(false);
             setPlanningStage('idle');
-            reject(new Error('AI 没有返回可填写的澄清表单，请重试'));
-            return;
+            reject(error);
           }
+        });
 
-          setAiPhase('idle');
-          setIsGeneratingPlan(false);
-          setPlanningStage('awaiting-answers');
-          setClarificationForm(clarification);
-          await persistDraftUiState({
-            formStep: 2,
-            planningStage: 'awaiting-answers',
-            clarificationForm: clarification,
-            clarificationAnswers: {},
-          });
-          if (activeDraftSessionId) {
-            await appendCreationSessionTags({
-              id: activeDraftSessionId,
-              chatSessionId: targetFrontendSessionId,
-              workflowName: values.workflowName,
-              filename: values.filename,
-            }, '等待补充回答');
+        es.addEventListener('error', async () => {
+          es.close();
+          eventSourceRef.current = null;
+          chatIdRef.current = null;
+          if (accumulated) {
+            setAiMessages((prev) => {
+              const next = [...prev];
+              if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
+              next.push({ role: 'ai', content: accumulated });
+              return next;
+            });
+            await appendPlanningAssistantMessage(targetFrontendSessionId, accumulated);
           }
-          resolve();
-        } catch (error) {
+          setCurrentStream('');
+          setCurrentThinking('');
           setAiPhase('waiting');
           setIsGeneratingPlan(false);
           setPlanningStage('idle');
-          reject(error);
-        }
+          reject(new Error('澄清表单生成流中断'));
+        });
       });
+    };
 
-      es.addEventListener('error', async () => {
-        es.close();
-        eventSourceRef.current = null;
-        chatIdRef.current = null;
-        if (accumulated) {
-          setAiMessages((prev) => {
-            const next = [...prev];
-            if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
-            next.push({ role: 'ai', content: accumulated });
-            return next;
-          });
-          await appendPlanningAssistantMessage(targetFrontendSessionId, accumulated);
-        }
-        setCurrentStream('');
-        setCurrentThinking('');
-        setAiPhase('waiting');
-        setIsGeneratingPlan(false);
-        setPlanningStage('idle');
-        reject(new Error('计划生成流中断'));
-      });
-    });
-  }, [appendCreationSessionTags, appendPlanningAssistantMessage, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding]);
+    await runClarificationStream(clarificationRequestMessage, 0);
+  }, [appendCreationSessionTags, appendPlanningAssistantMessage, appendRepairDiagnosticMessage, backendSessionId, buildClarificationSystemPrompt, buildPreviewConfigFromForm, ensureDraftCreationSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding]);
 
   const generatePlanWithChatSession = useCallback(async () => {
     const values = getValues();
@@ -4299,7 +4357,17 @@ ${recommendationPrompt}
             const draft = extractPlanDraftResult(finalContent);
             if (!draft) {
               if (attempt < MAX_PLAN_DRAFT_REPAIR_ATTEMPTS) {
-                await runPlanDraftStream(buildPlanDraftRepairMessage(finalContent), attempt + 1);
+                const nextAttempt = attempt + 1;
+                const repairPrompt = buildPlanDraftRepairMessage(finalContent);
+                appendRepairDiagnosticMessage({
+                  kind: 'plan_draft',
+                  failedOutput: finalContent,
+                  repairPrompt,
+                  attempt: nextAttempt,
+                  maxAttempts: MAX_PLAN_DRAFT_REPAIR_ATTEMPTS,
+                  reason: diagnoseExtractionFailure(finalContent, 'plan_draft'),
+                });
+                await runPlanDraftStream(repairPrompt, nextAttempt);
                 resolve();
                 return;
               }
@@ -4354,7 +4422,7 @@ ${recommendationPrompt}
     };
 
     await runPlanDraftStream(planningRequestMessage, 0);
-  }, [appendPlanningAssistantMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, createPreviewSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding]);
+  }, [appendPlanningAssistantMessage, appendRepairDiagnosticMessage, backendSessionId, buildPlanningSystemPrompt, buildPreviewConfigFromForm, clarificationAnswers, clarificationForm, createPreviewSession, ensurePlanningChatSession, getValues, interruptPlanningRun, persistDraftUiState, persistStageSessionBinding]);
 
   const applyRecoveredClarificationResult = useCallback(async (
     finalContent: string,
@@ -4882,11 +4950,20 @@ ${recommendationPrompt}
     }
 
     if (!workflowDraftConfig) {
+      const failureMessage = '当前没有可保存的 workflow_draft.config。';
       const repairPrompt = buildWorkflowDraftRepairMessage(
-        '当前没有可保存的 workflow_draft.config。',
+        failureMessage,
         { ok: false, message: `系统未检测到已创建且合规的 configs/${filename}，也没有可保存的 workflow_draft.config。` },
         filename
       );
+      appendRepairDiagnosticMessage({
+        kind: 'workflow_draft',
+        failedOutput: failureMessage,
+        repairPrompt,
+        attempt: 1,
+        maxAttempts: MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS,
+        reason: `系统未检测到已创建且合规的 configs/${filename}，也没有可保存的 workflow_draft.config。`,
+      });
       await sendToAi(repairPrompt, backendSessionId, { workflowDraftAttempt: 1 });
       return true;
     }
@@ -4901,12 +4978,21 @@ ${recommendationPrompt}
       validation,
     }));
     if (!validation?.ok) {
+      const failedOutput = JSON.stringify(workflowDraftConfig, null, 2);
       const repairPrompt = buildWorkflowDraftRepairMessage(
-        JSON.stringify(workflowDraftConfig, null, 2),
+        failedOutput,
         validation,
         filename
       );
       setWorkflowDraftConfig(null);
+      appendRepairDiagnosticMessage({
+        kind: 'workflow_draft',
+        failedOutput,
+        repairPrompt,
+        attempt: 1,
+        maxAttempts: MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS,
+        reason: formatValidationIssuesForPrompt(validation),
+      });
       await sendToAi(repairPrompt, backendSessionId, { workflowDraftAttempt: 1 });
       return true;
     }
@@ -5001,8 +5087,9 @@ ${recommendationPrompt}
     } catch (error: any) {
       const errorMsg = error?.message || '保存 workflow 草案失败';
       // 将错误自动发回 AI 进行修复，而不是只显示 toast
+      const failedOutput = JSON.stringify(workflowDraftConfig, null, 2);
       const repairPrompt = buildWorkflowDraftRepairMessage(
-        JSON.stringify(workflowDraftConfig, null, 2),
+        failedOutput,
         error?.validation || { ok: false, message: errorMsg },
         filename
       );
@@ -5011,6 +5098,14 @@ ${recommendationPrompt}
         role: 'ai',
         content: `创建失败: ${errorMsg}，正在自动修复...`,
       }]);
+      appendRepairDiagnosticMessage({
+        kind: 'workflow_draft',
+        failedOutput,
+        repairPrompt,
+        attempt: 1,
+        maxAttempts: MAX_WORKFLOW_DRAFT_REPAIR_ATTEMPTS,
+        reason: errorMsg,
+      });
       await sendToAi(repairPrompt, backendSessionId, { workflowDraftAttempt: 1 });
       return true;
     } finally {
@@ -5032,6 +5127,7 @@ ${recommendationPrompt}
     validateWorkflowDraftConfig,
     workflowDraftConfig,
     workflowMode,
+    appendRepairDiagnosticMessage,
     bindDraftCreationSessionToChat,
     appendCreationSessionTags,
   ]);

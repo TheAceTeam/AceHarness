@@ -685,6 +685,7 @@ export default function StateMachineExecutionView({
             states={states}
             currentState={currentState}
             currentStep={currentStep}
+            activeSteps={activeSteps}
             completedSteps={completedSteps}
             stateHistory={stateHistory}
             isRunning={isRunning}

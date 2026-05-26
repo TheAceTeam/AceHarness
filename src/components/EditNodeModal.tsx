@@ -36,6 +36,7 @@ const stepSchema = z.object({
   agent: z.string().min(1, 'Agent 名称不能为空'),
   task: z.string().min(1, '任务描述不能为空'),
   constraints: z.string().optional(),
+  preCommands: z.string().optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   specTaskId: z.string().optional(),
@@ -49,6 +50,9 @@ type StepForm = z.infer<typeof stepSchema>;
 const listToInput = (value: unknown) => Array.isArray(value) ? value.join(', ') : '';
 const inputToList = (value: unknown) => typeof value === 'string'
   ? value.split(',').map((item) => item.trim()).filter(Boolean)
+  : [];
+const linesToList = (value: unknown) => typeof value === 'string'
+  ? value.split('\n').map((item) => item.trim()).filter(Boolean)
   : [];
 const cleanString = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
@@ -230,6 +234,7 @@ export default function EditNodeModal({
           agent: data?.agent || '',
           task: data?.task || '',
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
+          preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: data?.skills || [],
           specTaskId: [
@@ -290,6 +295,7 @@ export default function EditNodeModal({
         agent: source.agent || '',
         task: source.task || '',
         constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
+        preCommands: Array.isArray(source.preCommands) ? source.preCommands.join('\n') : '',
         enableReviewPanel: source.enableReviewPanel || false,
         skills: source.skills || [],
         specTaskId: '',
@@ -335,6 +341,9 @@ export default function EditNodeModal({
         stepData.constraints = formData.constraints
           .split('\n')
           .filter((c: string) => c.trim());
+      }
+      if (formData.preCommands !== undefined) {
+        stepData.preCommands = linesToList(formData.preCommands);
       }
       if (formData.enableReviewPanel !== undefined) {
         stepData.enableReviewPanel = formData.enableReviewPanel;
@@ -566,6 +575,17 @@ export default function EditNodeModal({
                         rows={5}
                         {...register('constraints')}
                         placeholder={"不得修改公共 API 接口\n必须保持向后兼容\n单个文件不超过 500 行"}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="preCommands">启动前检查命令（每行一条）</Label>
+                      <Textarea
+                        id="preCommands"
+                        rows={4}
+                        {...register('preCommands')}
+                        placeholder={"npm run lint\nnpm test\nnpm run build"}
+                        className="font-mono text-xs leading-5"
                       />
                     </div>
                   </div>

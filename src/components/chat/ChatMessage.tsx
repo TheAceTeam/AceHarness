@@ -544,9 +544,9 @@ function buildToolEntries(blocks: AceProcessBlock[]): ToolProcessEntry[] {
       : toolFingerprint && pendingEntryIndexesByFingerprint.has(toolFingerprint)
         ? pendingEntryIndexesByFingerprint.get(toolFingerprint)!
         : (() => {
-            const uniquePending = findUniquePendingToolIndex(entries, toolName);
-            return uniquePending >= 0 ? uniquePending : findFirstPendingToolIndex(entries, toolName);
-          })();
+          const uniquePending = findUniquePendingToolIndex(entries, toolName);
+          return uniquePending >= 0 ? uniquePending : findFirstPendingToolIndex(entries, toolName);
+        })();
 
     if (targetIndex >= 0) {
       const target = entries[targetIndex];
@@ -1045,69 +1045,69 @@ function ProcessCodeBlock({
           <code className="block whitespace-pre font-mono text-[12px] text-foreground">{text}</code>
         </div>
       </div>
-      ) : (
-        <Artifact value={text} className="bg-background/80">
-          <ArtifactHeader>
-            <ArtifactTitle>{normalizedLanguage}</ArtifactTitle>
-            <ArtifactActions>
-              {canRunCangjie ? (
-                <button
-                  type="button"
-                  onClick={() => { void handleRun(); }}
-                  disabled={running}
-                  className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
-                  title="运行仓颉代码"
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
-                    {running ? 'progress_activity' : 'play_arrow'}
-                  </span>
-                  <span>{running ? '运行中' : '运行'}</span>
-                </button>
-              ) : null}
-              <ArtifactCopyButton
-                onCopy={handleArtifactCopied}
-                title="复制代码"
-              />
-            </ArtifactActions>
-          </ArtifactHeader>
-          <ArtifactContent>
-            <div className="max-h-80 overflow-auto">
-              <CodeBlock
-                code={text}
-                language={normalizedLanguage as BundledLanguage}
-                className="rounded-none border-0 bg-transparent"
-              />
+    ) : (
+      <Artifact value={text} className="bg-background/80">
+        <ArtifactHeader>
+          <ArtifactTitle>{normalizedLanguage}</ArtifactTitle>
+          <ArtifactActions>
+            {canRunCangjie ? (
+              <button
+                type="button"
+                onClick={() => { void handleRun(); }}
+                disabled={running}
+                className="inline-flex h-7 items-center gap-1 rounded px-2 text-xs text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                title="运行仓颉代码"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                  {running ? 'progress_activity' : 'play_arrow'}
+                </span>
+                <span>{running ? '运行中' : '运行'}</span>
+              </button>
+            ) : null}
+            <ArtifactCopyButton
+              onCopy={handleArtifactCopied}
+              title="复制代码"
+            />
+          </ArtifactActions>
+        </ArtifactHeader>
+        <ArtifactContent>
+          <div className="max-h-80 overflow-auto">
+            <CodeBlock
+              code={text}
+              language={normalizedLanguage as BundledLanguage}
+              className="rounded-none border-0 bg-transparent"
+            />
+          </div>
+        </ArtifactContent>
+        {canRunCangjie && (running || runResult) ? (
+          <div className="border-t px-3 py-3 text-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-medium text-foreground">运行结果</span>
+              {runResult?.exitCode != null ? <span className="text-xs text-muted-foreground">exit code: {runResult.exitCode}</span> : null}
             </div>
-          </ArtifactContent>
-          {canRunCangjie && (running || runResult) ? (
-            <div className="border-t px-3 py-3 text-sm">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="font-medium text-foreground">运行结果</span>
-                {runResult?.exitCode != null ? <span className="text-xs text-muted-foreground">exit code: {runResult.exitCode}</span> : null}
+            {running ? (
+              <div className="text-muted-foreground">运行中...</div>
+            ) : (
+              <div className="space-y-2">
+                {runResult?.stdout ? (
+                  <div>
+                    <div className="mb-1 text-xs text-muted-foreground">stdout</div>
+                    <ProcessTerminalBlock text={runResult.stdout} />
+                  </div>
+                ) : null}
+                {runResult?.stderr ? (
+                  <div>
+                    <div className="mb-1 text-xs text-muted-foreground">stderr</div>
+                    <ProcessTerminalBlock text={runResult.stderr} />
+                  </div>
+                ) : null}
+                {!runResult?.stdout && !runResult?.stderr ? <div className="text-muted-foreground">无输出</div> : null}
               </div>
-              {running ? (
-                <div className="text-muted-foreground">运行中...</div>
-              ) : (
-                <div className="space-y-2">
-                  {runResult?.stdout ? (
-                    <div>
-                      <div className="mb-1 text-xs text-muted-foreground">stdout</div>
-                      <ProcessTerminalBlock text={runResult.stdout} />
-                    </div>
-                  ) : null}
-                  {runResult?.stderr ? (
-                    <div>
-                      <div className="mb-1 text-xs text-muted-foreground">stderr</div>
-                      <ProcessTerminalBlock text={runResult.stderr} />
-                    </div>
-                  ) : null}
-                  {!runResult?.stdout && !runResult?.stderr ? <div className="text-muted-foreground">无输出</div> : null}
-                </div>
-              )}
-            </div>
-          ) : null}
-        </Artifact>
-      )
+            )}
+          </div>
+        ) : null}
+      </Artifact>
+    )
   );
 }
 
@@ -1292,7 +1292,8 @@ function renderStructuredToolRequest(entry: ToolProcessEntry) {
       );
     }
     case 'todo':
-    case 'todowrite': {
+    case 'todowrite':
+    case 'plan': {
       const todos = asArray(meta.todos);
       return <ProcessTodoQueue todos={todos} />;
     }
@@ -1380,7 +1381,8 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
     case 'websearch':
     case 'skill':
     case 'todo':
-    case 'todowrite': {
+    case 'todowrite':
+    case 'plan': {
       if (entry.toolName === 'skill') {
         const skillDoc = extractSkillDocument(entry);
         if (skillDoc) {
@@ -2472,8 +2474,8 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   );
 
   return (
-      <div className="group flex items-start gap-2">
-        <AssistantAvatar />
+    <div className="group flex items-start gap-2">
+      <AssistantAvatar />
       <div className={`${STANDARD_CHAT_BUBBLE_WIDTH_CLASS} space-y-1`}>
         {sourceLabel ? (
           <div>
@@ -2533,27 +2535,27 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
           </div>
         )}
         {!isStreaming && (
-        <div className={`${actionBarClass} justify-start`}>
-          <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
-            <span className="material-symbols-outlined text-sm">content_copy</span>
-          </button>
-          {onQuoteMessage && (
-            <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
-              {quoteActionIcon}
+          <div className={`${actionBarClass} justify-start`}>
+            <button onClick={() => { void copyMessageContent(); }} className={actionButtonClass} title="复制">
+              <span className="material-symbols-outlined text-sm">content_copy</span>
             </button>
-          )}
-          {onSaveAsNotebook && (
-            <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
-              <span className="material-symbols-outlined text-sm">note_add</span>
-            </button>
-          )}
-          {onDelete && (
-            <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
-              <span className="material-symbols-outlined text-sm">delete</span>
-            </button>
-          )}
-        </div>
-      )}
+            {onQuoteMessage && (
+              <button onClick={() => onQuoteMessage(message.id)} className={actionButtonClass} title="引用">
+                {quoteActionIcon}
+              </button>
+            )}
+            {onSaveAsNotebook && (
+              <button onClick={() => onSaveAsNotebook(message.id)} className={actionButtonClass} title="另存为 Notebook">
+                <span className="material-symbols-outlined text-sm">note_add</span>
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={() => onDelete(message.id)} className={destructiveActionButtonClass} title="删除">
+                <span className="material-symbols-outlined text-sm">delete</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

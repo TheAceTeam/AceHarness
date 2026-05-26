@@ -2318,6 +2318,38 @@ describe('Wrapper stream markdown rendering', () => {
     expect(view.container.textContent || '').toContain('思考中...');
   });
 
+  test('plan tool result renders entries instead of raw text-fenced json', async () => {
+    const planPayload = {
+      entries: [
+        { content: '确认 plan 工具输出形态', status: 'completed', priority: 'medium' },
+        { content: '从 plan 渲染源头修复', status: 'pending', priority: 'high' },
+      ],
+    };
+    const content = [
+      wrapAceProcessBlock('tool-call', { toolName: 'plan', title: 'Plan' }, ''),
+      formatAceToolResult({
+        toolName: 'plan',
+        title: 'Plan',
+        rawOutput: {
+          output: [
+            '```text',
+            JSON.stringify(planPayload),
+            '```',
+          ].join('\n'),
+        },
+      }),
+    ].join('\n');
+
+    const view = renderMessage(content, { rawContent: content });
+    await openAllDetails(view.container);
+
+    expect(view.container.querySelector('[data-testid="ace-tool-card"]')?.getAttribute('data-tool-name')).toBe('plan');
+    expect(view.container.textContent || '').toContain('确认 plan 工具输出形态');
+    expect(view.container.textContent || '').toContain('从 plan 渲染源头修复');
+    expect(view.container.textContent || '').not.toContain('"entries"');
+    expect(view.container.textContent || '').not.toContain('"priority"');
+  });
+
   test('tool group collapses after streaming completes and ls path preview shows label', async () => {
     const content = [
       wrapAceProcessBlock('tool-call', { toolName: 'ls', title: '📂 列出目录', path: '.' }, ''),

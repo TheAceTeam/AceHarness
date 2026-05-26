@@ -748,6 +748,33 @@ export const configApi = {
     if (!response.ok) throw new Error('批量删除失败');
     return response.json();
   },
+
+  async exportConfigs(filenames: string[]): Promise<Blob> {
+    const response = await authFetch(`${API_BASE}/configs/archive`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflows: filenames }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '导出工作流失败');
+    }
+    return response.blob();
+  },
+
+  async importConfigZip(file: File): Promise<ApiResponse & { imported: string[] }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await authFetch(`${API_BASE}/configs/archive`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '导入工作流失败');
+    }
+    return data;
+  },
 };
 
 export const specCodingApi = {
