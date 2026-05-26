@@ -72,6 +72,16 @@ function normalizeWorkflowMode(input: any): 'phase-based' | 'state-machine' {
   return input?.workflow?.mode === 'state-machine' ? 'state-machine' : 'phase-based';
 }
 
+function hasAdvancedTransitionFilters(transition: any): boolean {
+  return Boolean(
+    transition?.condition?.issueTypes?.length
+    || transition?.condition?.severities?.length
+    || transition?.condition?.minIssueCount !== undefined
+    || transition?.condition?.maxIssueCount !== undefined
+    || transition?.condition?.custom?.trim()
+  );
+}
+
 function getAvailableAgents(): string[] {
   try {
     const agentsDir = getWorkspaceAgentsDir();
@@ -240,12 +250,23 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
             ['workflow', 'states', state.name, 'transitions'],
             `状态 "${state.name}" 缺少 ${verdict} 转移路径。每个非终止状态必须有 pass、conditional_pass、fail 三条转移。修复方法：添加 {"to": "<目标状态名>", "condition": {"verdict": "${verdict}"}}`
           );
-        } else if (matches.length > 1) {
+          continue;
+        }
+
+        const fallbackMatches = matches.filter((transition: any) => !hasAdvancedTransitionFilters(transition));
+        if (fallbackMatches.length === 0) {
           pushIssue(
             issues,
             'error',
             ['workflow', 'states', state.name, 'transitions'],
-            `状态 "${state.name}" 的 ${verdict} 转移路径重复（共 ${matches.length} 条），必须且只能保留一条。修复方法：删除多余的 ${verdict} 转移`
+            `状态 "${state.name}" 的 ${verdict} 缺少兜底转移。每个 verdict 必须保留 1 条无过滤条件的基础路径。修复方法：补充一条仅包含 {"verdict": "${verdict}"} 的转移`
+          );
+        } else if (fallbackMatches.length > 1) {
+          pushIssue(
+            issues,
+            'error',
+            ['workflow', 'states', state.name, 'transitions'],
+            `状态 "${state.name}" 的 ${verdict} 存在多条兜底转移（共 ${fallbackMatches.length} 条）。每个 verdict 只能保留 1 条无过滤条件的基础路径，其余规则需要补充过滤条件或删除`
           );
         }
       }

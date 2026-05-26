@@ -21,9 +21,6 @@
       <stop offset="50%" stop-color="#1D4ED8" stop-opacity="0.28"/>
       <stop offset="100%" stop-color="#7C2D12" stop-opacity="0.28"/>
     </linearGradient>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" stroke="#FFFFFF" stroke-opacity="0.04"/>
-    </pattern>
     <filter id="shadow" x="-14%" y="-16%" width="128%" height="136%">
       <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#020617" flood-opacity="0.36"/>
     </filter>
@@ -51,7 +48,6 @@
   </defs>
 
   <rect width="1600" height="1180" fill="url(#bg)"/>
-  <rect width="1600" height="1180" fill="url(#grid)"/>
   <path d="M0 118C230 64 414 136 650 108C918 76 1174 50 1600 112V0H0Z" fill="#FFFFFF" fill-opacity="0.045"/>
   <path d="M0 1052C252 988 470 1072 724 1034C1038 988 1304 968 1600 1018V1180H0Z" fill="#FFFFFF" fill-opacity="0.035"/>
 

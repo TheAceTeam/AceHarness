@@ -2,7 +2,7 @@
 
 # ACE Harness (Agent Centric Engineering Harness)
 
-[English](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/README.en.md) | 中文
+[English](./README.en.md) | 中文
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png">

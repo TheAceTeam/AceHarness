@@ -578,16 +578,6 @@ export default function EditNodeModal({
                       />
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="preCommands">启动前检查命令（每行一条）</Label>
-                      <Textarea
-                        id="preCommands"
-                        rows={4}
-                        {...register('preCommands')}
-                        placeholder={"npm run lint\nnpm test\nnpm run build"}
-                        className="font-mono text-xs leading-5"
-                      />
-                    </div>
                   </div>
                 </div>
 

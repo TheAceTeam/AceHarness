@@ -237,11 +237,7 @@ function buildVerdictTransitions(
   return VERDICT_TRANSITION_PRESETS.map((preset) => {
     const existing = transitions.find((transition) => (
       transition.condition?.verdict === preset.verdict
-      && !transition.condition?.issueTypes?.length
-      && !transition.condition?.severities?.length
-      && transition.condition?.minIssueCount === undefined
-      && transition.condition?.maxIssueCount === undefined
-      && !transition.condition?.custom?.trim()
+      && !hasAdvancedTransitionFilters(transition)
     ));
     return {
       to: existing?.to ?? '',
@@ -267,9 +263,17 @@ function hasAdvancedTransitionFilters(transition?: StateTransition | null): bool
 }
 
 function getAdvancedVerdictTransitions(verdict: VerdictTransition, transitions: StateTransition[] = []): StateTransition[] {
-  return transitions
-    .filter((transition) => transition.condition?.verdict === verdict && hasAdvancedTransitionFilters(transition))
-    .sort((a, b) => (a.priority || 100) - (b.priority || 100));
+  let consumedFallback = false;
+  return transitions.filter((transition) => {
+    if (transition.condition?.verdict !== verdict) {
+      return false;
+    }
+    if (!hasAdvancedTransitionFilters(transition) && !consumedFallback) {
+      consumedFallback = true;
+      return false;
+    }
+    return true;
+  });
 }
 
 function getStateNodeErrors(state: StateMachineState, states: StateMachineState[]): string[] {
@@ -519,6 +523,8 @@ function AdvancedVerdictTransitionsModal({
   onSave: (transitions: StateTransition[]) => void;
 }) {
   const [draft, setDraft] = useState<StateTransition[]>(transitions);
+  const advancedDraftCount = draft.filter((transition) => hasAdvancedTransitionFilters(transition)).length;
+  const duplicateFallbackDraftCount = draft.length - advancedDraftCount;
 
   useEffect(() => {
     if (open) setDraft(transitions);
@@ -604,6 +610,11 @@ function AdvancedVerdictTransitionsModal({
               </div>
             </div>
             <div className="flex-1 overflow-auto px-6 py-5 space-y-4">
+              {duplicateFallbackDraftCount > 0 ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-900/80 dark:bg-amber-950/40 dark:text-amber-200">
+                  检测到 {duplicateFallbackDraftCount} 条未设置过滤条件的额外路径。它们会作为重复兜底显示；保存时如果仍未补充条件，会被自动清理，只保留基础兜底路径。
+                </div>
+              ) : null}
               <div className="flex justify-end">
                 <Button type="button" variant="outline" size="sm" onClick={addRule}>
                   <Plus className="mr-1 h-3.5 w-3.5" />
@@ -614,131 +625,146 @@ function AdvancedVerdictTransitionsModal({
                 <div className="rounded-2xl border border-dashed border-border bg-muted/20 px-4 py-8 text-center text-sm text-muted-foreground">
                   暂无高级规则，未命中时将走基础兜底路径。
                 </div>
-              ) : draft.map((transition, index) => (
-                <div key={`${preset.verdict}-${index}`} className="rounded-2xl border bg-background/80 p-4 space-y-4">
-                  <div className="flex items-start justify-between gap-3">
+              ) : draft.map((transition, index) => {
+                const isDuplicateFallback = !hasAdvancedTransitionFilters(transition);
+                return (
+                  <div
+                    key={`${preset.verdict}-${index}`}
+                    className={`rounded-2xl border bg-background/80 p-4 space-y-4 ${isDuplicateFallback ? 'border-amber-300/80 bg-amber-500/[0.03] dark:border-amber-900/80' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-medium">规则 {index + 1}</div>
+                          <Badge variant={isDuplicateFallback ? 'destructive' : 'outline'} className="text-[10px]">
+                            {isDuplicateFallback ? '重复兜底' : '高级规则'}
+                          </Badge>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {isDuplicateFallback
+                            ? '这条额外路径当前没有过滤条件，会与基础兜底冲突。补上条件后才会作为高级规则保留。'
+                            : '优先级数字越小越先命中。'}
+                        </div>
+                      </div>
+                      <Button type="button" variant="ghost" size="sm" className="text-rose-600" onClick={() => removeRule(index)}>
+                        <Trash2 className="mr-1 h-3.5 w-3.5" />
+                        删除
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">跳转目标</Label>
+                        <SingleCombobox
+                          value={transition.to}
+                          onValueChange={(value) => updateTransition(index, { to: value })}
+                          options={states.map((state) => ({ value: state.name, label: state.name }))}
+                          placeholder="选择状态"
+                          searchable={false}
+                          triggerClassName="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">路径说明</Label>
+                        <Input
+                          className="h-9 text-sm"
+                          value={transition.label || ''}
+                          onChange={(e) => updateTransition(index, { label: e.target.value })}
+                          placeholder={`${preset.title}高级规则`}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">优先级</Label>
+                        <Input
+                          className="h-9 text-sm"
+                          type="number"
+                          value={transition.priority ?? preset.priority}
+                          onChange={(e) => updateTransition(index, { priority: parseInt(e.target.value, 10) || preset.priority })}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">模式匹配</Label>
+                      <Input
+                        className="h-9 text-sm"
+                        value={transition.condition?.custom || ''}
+                        onChange={(e) => updateTransition(index, { condition: { ...transition.condition, custom: e.target.value || undefined } })}
+                        placeholder="例如：timeout|memory leak|race condition"
+                      />
+                    </div>
                     <div>
-                      <div className="text-sm font-medium">规则 {index + 1}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">优先级数字越小越先命中。</div>
-                    </div>
-                    <Button type="button" variant="ghost" size="sm" className="text-rose-600" onClick={() => removeRule(index)}>
-                      <Trash2 className="mr-1 h-3.5 w-3.5" />
-                      删除
-                    </Button>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">跳转目标</Label>
-                      <SingleCombobox
-                        value={transition.to}
-                        onValueChange={(value) => updateTransition(index, { to: value })}
-                        options={states.map((state) => ({ value: state.name, label: state.name }))}
-                        placeholder="选择状态"
-                        searchable={false}
-                        triggerClassName="h-9"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">路径说明</Label>
-                      <Input
-                        className="h-9 text-sm"
-                        value={transition.label || ''}
-                        onChange={(e) => updateTransition(index, { label: e.target.value })}
-                        placeholder={`${preset.title}高级规则`}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">优先级</Label>
-                      <Input
-                        className="h-9 text-sm"
-                        type="number"
-                        value={transition.priority ?? preset.priority}
-                        onChange={(e) => updateTransition(index, { priority: parseInt(e.target.value, 10) || preset.priority })}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">模式匹配</Label>
-                    <Input
-                      className="h-9 text-sm"
-                      value={transition.condition?.custom || ''}
-                      onChange={(e) => updateTransition(index, { condition: { ...transition.condition, custom: e.target.value || undefined } })}
-                      placeholder="例如：timeout|memory leak|race condition"
-                    />
-                  </div>
-                  <div>
-                    <Label className="mb-1.5 block text-xs">问题类型过滤</Label>
-                    <div className="flex flex-wrap gap-2">
-                      {ISSUE_TYPE_OPTIONS.map((opt) => {
-                        const selected = transition.condition?.issueTypes?.includes(opt.value as any);
-                        return (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            title={opt.desc}
-                            className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
-                            onClick={() => toggleListValue(index, 'issueTypes', opt.value)}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="mb-1.5 block text-xs">严重程度过滤</Label>
-                    <div className="flex flex-wrap gap-2">
-                      {SEVERITY_OPTIONS.map((opt) => {
-                        const selected = transition.condition?.severities?.includes(opt.value as any);
-                        return (
-                          <button
-                            key={opt.value}
-                            type="button"
-                            className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
-                            onClick={() => toggleListValue(index, 'severities', opt.value)}
-                          >
-                            {opt.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">最少问题数量</Label>
-                      <Input
-                        className="h-9 text-sm"
-                        type="number"
-                        min={0}
-                        value={transition.condition?.minIssueCount ?? ''}
-                        placeholder="不限"
-                        onChange={(e) => updateTransition(index, {
-                          condition: {
-                            ...transition.condition,
-                            minIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
-                          },
+                      <Label className="mb-1.5 block text-xs">问题类型过滤</Label>
+                      <div className="flex flex-wrap gap-2">
+                        {ISSUE_TYPE_OPTIONS.map((opt) => {
+                          const selected = transition.condition?.issueTypes?.includes(opt.value as any);
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              title={opt.desc}
+                              className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
+                              onClick={() => toggleListValue(index, 'issueTypes', opt.value)}
+                            >
+                              {opt.label}
+                            </button>
+                          );
                         })}
-                      />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">最多问题数量</Label>
-                      <Input
-                        className="h-9 text-sm"
-                        type="number"
-                        min={0}
-                        value={transition.condition?.maxIssueCount ?? ''}
-                        placeholder="不限"
-                        onChange={(e) => updateTransition(index, {
-                          condition: {
-                            ...transition.condition,
-                            maxIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
-                          },
+                    <div>
+                      <Label className="mb-1.5 block text-xs">严重程度过滤</Label>
+                      <div className="flex flex-wrap gap-2">
+                        {SEVERITY_OPTIONS.map((opt) => {
+                          const selected = transition.condition?.severities?.includes(opt.value as any);
+                          return (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              className={`rounded-full border px-3 py-1.5 text-xs transition ${selected ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:bg-muted'}`}
+                              onClick={() => toggleListValue(index, 'severities', opt.value)}
+                            >
+                              {opt.label}
+                            </button>
+                          );
                         })}
-                      />
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">最少问题数量</Label>
+                        <Input
+                          className="h-9 text-sm"
+                          type="number"
+                          min={0}
+                          value={transition.condition?.minIssueCount ?? ''}
+                          placeholder="不限"
+                          onChange={(e) => updateTransition(index, {
+                            condition: {
+                              ...transition.condition,
+                              minIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
+                            },
+                          })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">最多问题数量</Label>
+                        <Input
+                          className="h-9 text-sm"
+                          type="number"
+                          min={0}
+                          value={transition.condition?.maxIssueCount ?? ''}
+                          placeholder="不限"
+                          onChange={(e) => updateTransition(index, {
+                            condition: {
+                              ...transition.condition,
+                              maxIssueCount: e.target.value === '' ? undefined : Math.max(0, parseInt(e.target.value, 10) || 0),
+                            },
+                          })}
+                        />
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="border-t px-6 py-4 flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button>
@@ -763,9 +789,15 @@ function VerdictTransitionCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const advancedRuleCount = advancedTransitions.filter((item) => hasAdvancedTransitionFilters(item)).length;
+  const duplicateFallbackCount = advancedTransitions.length - advancedRuleCount;
 
   const conditionSummary = () => (
-    advancedTransitions.length > 0 ? `${advancedTransitions.length} 条高级规则` : '仅使用基础兜底路径'
+    duplicateFallbackCount > 0
+      ? `${advancedRuleCount > 0 ? `${advancedRuleCount} 条高级规则 · ` : ''}${duplicateFallbackCount} 条待修复`
+      : advancedRuleCount > 0
+        ? `${advancedRuleCount} 条高级规则`
+        : '仅使用基础兜底路径'
   );
 
   return (
@@ -786,6 +818,9 @@ function VerdictTransitionCard({
                   <Badge variant="outline" className={`border-0 ${preset.badgeTone}`}>{preset.title}</Badge>
                   <span className="text-sm font-semibold text-foreground">{transition.to || '请选择目标状态'}</span>
                   {!transition.to ? <Badge variant="destructive" className="text-[10px]">未配置</Badge> : null}
+                  {duplicateFallbackCount > 0 ? (
+                    <Badge variant="destructive" className="text-[10px]">发现 {duplicateFallbackCount} 条重复兜底</Badge>
+                  ) : null}
                 </div>
                 <div className="text-xs text-muted-foreground">{preset.description}</div>
                 {!transition.to ? (
@@ -828,17 +863,23 @@ function VerdictTransitionCard({
               <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
               <span>基础路径始终作为兜底。更细粒度的场景跳转请放到高级状态转移设置里，并通过优先级控制覆盖顺序。</span>
             </div>
+            {duplicateFallbackCount > 0 ? (
+              <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                <span>检测到 {duplicateFallbackCount} 条没有过滤条件的额外路径，已经自动带入高级规则编辑里。你可以删除它们，或者补充过滤条件后作为高级规则保留。</span>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between gap-3 rounded-xl border bg-background/70 px-3 py-3">
               <div>
                 <div className="text-sm font-medium">高级状态转移设置</div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  {advancedTransitions.length > 0
-                    ? `已配置 ${advancedTransitions.length} 条高级规则，命中后会覆盖兜底路径。`
+                  {advancedRuleCount > 0
+                    ? `已配置 ${advancedRuleCount} 条高级规则，命中后会覆盖兜底路径。`
                     : '默认不显示，只有需要覆盖更细场景时再配置。'}
                 </div>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => setAdvancedOpen(true)}>
-                配置高级规则
+                {duplicateFallbackCount > 0 ? '查看并修复规则' : '配置高级规则'}
               </Button>
             </div>
           </div>
@@ -961,6 +1002,7 @@ export default function StateMachineDesignPanel({
 
   const handleSaveStep = (data: any) => {
     if (!selectedState || editingStep === null) return;
+    const existingStep = !editingStep.isNew ? selectedState.steps[editingStep.index] : null;
     const normalizedConstraints = Array.isArray(data.constraints)
       ? data.constraints.filter((c: string) => typeof c === 'string' && c.trim())
       : typeof data.constraints === 'string'
@@ -982,6 +1024,8 @@ export default function StateMachineDesignPanel({
     };
     if (Array.isArray(data.preCommands) && data.preCommands.length > 0) {
       newStep.preCommands = data.preCommands;
+    } else if (Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
+      newStep.preCommands = existingStep.preCommands;
     }
     const steps = [...selectedState.steps];
     if (editingStep.isNew) {
@@ -1088,28 +1132,28 @@ export default function StateMachineDesignPanel({
 
   const handleUpdateVerdictTransition = (verdict: VerdictTransition, transition: StateTransition) => {
     if (!selectedState) return;
-    const transitions = buildVerdictTransitions(selectedState, states, selectedState.transitions).map((item) => (
+    const fallbackTransitions = buildVerdictTransitions(selectedState, states, selectedState.transitions).map((item) => (
       item.condition.verdict === verdict
         ? { ...transition, condition: { ...(transition.condition || {}), verdict }, priority: VERDICT_TRANSITION_PRESETS.find((preset) => preset.verdict === verdict)?.priority || item.priority }
         : item
     ));
-    const advanced = (selectedState.transitions || []).filter((item) => (
-      item.condition?.verdict !== verdict || hasAdvancedTransitionFilters(item)
+    const supplementalTransitions = REQUIRED_VERDICTS.flatMap((currentVerdict) => (
+      getAdvancedVerdictTransitions(currentVerdict, selectedState.transitions || [])
     ));
-    updateState({ ...selectedState, transitions: [...transitions, ...advanced] });
+    updateState({ ...selectedState, transitions: [...fallbackTransitions, ...supplementalTransitions] });
   };
 
   const handleSaveAdvancedVerdictTransitions = (verdict: VerdictTransition, nextTransitions: StateTransition[]) => {
     if (!selectedState) return;
     const fallbackTransitions = buildVerdictTransitions(selectedState, states, selectedState.transitions);
-    const otherTransitions = (selectedState.transitions || []).filter((item) => item.condition?.verdict !== verdict);
-    const fallback = fallbackTransitions.find((item) => item.condition.verdict === verdict);
+    const otherSupplementalTransitions = REQUIRED_VERDICTS
+      .filter((currentVerdict) => currentVerdict !== verdict)
+      .flatMap((currentVerdict) => getAdvancedVerdictTransitions(currentVerdict, selectedState.transitions || []));
     updateState({
       ...selectedState,
       transitions: [
-        ...otherTransitions,
-        ...fallbackTransitions.filter((item) => item.condition.verdict !== verdict),
-        ...(fallback ? [fallback] : []),
+        ...fallbackTransitions,
+        ...otherSupplementalTransitions,
         ...nextTransitions.map((item) => ({
           ...item,
           condition: { ...(item.condition || {}), verdict },

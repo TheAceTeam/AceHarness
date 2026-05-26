@@ -155,6 +155,41 @@ describe('validateWorkflowDraft', () => {
     expect(result.ok).toBe(true);
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
   });
+
+  test('state-machine allows multiple advanced rules for the same verdict', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
+    const config = validStateMachineConfig(tmpDir);
+    (config.workflow.states[0].transitions as any[]).push(
+      {
+        to: 'Done',
+        condition: { verdict: 'pass', issueTypes: ['test'] },
+        priority: 50,
+      },
+      {
+        to: 'Done',
+        condition: { verdict: 'pass', severities: ['major'] },
+        priority: 40,
+      }
+    );
+
+    const result = validateWorkflowDraft(config);
+    expect(result.ok).toBe(true);
+    expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  test('state-machine rejects multiple fallback rules for the same verdict', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
+    const config = validStateMachineConfig(tmpDir);
+    config.workflow.states[0].transitions.push({
+      to: 'Done',
+      condition: { verdict: 'pass' },
+      priority: 60,
+    });
+
+    const result = validateWorkflowDraft(config);
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => i.message.includes('多条兜底转移'))).toBe(true);
+  });
 });
 
 describe('validateAgentDraft', () => {

@@ -19,6 +19,7 @@ import AgentConfigPanel from '@/components/AgentConfigPanel';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import NewConfigModal from '@/components/NewConfigModal';
 import EditNodeModal from '@/components/EditNodeModal';
+import WorkflowPreflightManagerDialog from '@/components/WorkflowPreflightManagerDialog';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
 import Markdown from '@/components/Markdown';
 import ResizablePanels from '@/components/ResizablePanels';
@@ -1438,6 +1439,7 @@ export default function WorkbenchPage() {
 
   type DesignTab = 'overview' | 'orchestration' | 'config' | 'agents' | 'skills';
   const [designTab, setDesignTab] = useState<DesignTab>('overview');
+  const [preflightManagerOpen, setPreflightManagerOpen] = useState(false);
 
   const refreshDesignPickerOptions = useCallback(async () => {
     try {
@@ -3216,6 +3218,23 @@ export default function WorkbenchPage() {
     : (workflowConfig?.workflow?.phases?.reduce(
         (sum: number, phase: any) => sum + phase.steps.length, 0
       ) ?? 0);
+  const editingPreflightSummary = useMemo(() => {
+    const workflow = editingConfig?.workflow;
+    if (!workflow) {
+      return { configuredSteps: 0, totalCommands: 0 };
+    }
+    const steps = workflow.mode === 'state-machine'
+      ? (workflow.states || []).flatMap((state: any) => state?.steps || [])
+      : (workflow.phases || []).flatMap((phase: any) => phase?.steps || []);
+    return steps.reduce((summary: { configuredSteps: number; totalCommands: number }, step: any) => {
+      const commandCount = Array.isArray(step?.preCommands) ? step.preCommands.filter((item: any) => typeof item === 'string' && item.trim()).length : 0;
+      if (commandCount > 0) {
+        summary.configuredSteps += 1;
+        summary.totalCommands += commandCount;
+      }
+      return summary;
+    }, { configuredSteps: 0, totalCommands: 0 });
+  }, [editingConfig?.workflow]);
 
   const fetchCurrentStatus = async () => {
     try {
@@ -8736,42 +8755,68 @@ export default function WorkbenchPage() {
 
               {/* Orchestration Tab */}
               {designTab === 'orchestration' && editingConfig?.workflow && (
-                <div className="flex-1 overflow-hidden">
-                  {editingConfig.workflow.mode === 'state-machine' ? (
-                    <StateMachineDesignPanel
-                      states={editingConfig.workflow.states || []}
-                      onStatesChange={(states) => {
-                        const newConfig = JSON.parse(JSON.stringify(editingConfig));
-                        newConfig.workflow.states = states;
-                        dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-                      }}
-                      availableAgents={agentConfigs}
-                      availableSkills={availableSkills}
-                      specTasks={(specCodingDetails?.tasks || [])
-                        .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
-                        .map((task: any) => ({
-                          id: task.id,
-                          title: task.title,
-                          phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
-                          ownerAgents: task.ownerAgents || [],
-                        }))}
-                    />
-                  ) : (
-                    <DesignPanel workflow={editingConfig.workflow}
-                      availableAgents={agentConfigs}
-                      onSelectNode={handleSelectNode}
-                      onAddPhase={handleAddPhase}
-                      onAddStep={handleAddStep}
-                      onAddStepAt={handleAddStepAt}
-                      onDeletePhase={handleDeletePhase}
-                      onDeleteStep={handleDeleteStep}
-                      onMoveStep={handleMoveStep}
-                      onToggleParallel={handleToggleParallel}
-                      onUngroup={handleUngroup}
-                      onCrossPhaseMove={handleCrossPhaseMove}
-                      onMoveGroup={handleMoveGroup}
-                      onJoinGroup={handleJoinGroup} />
-                  )}
+                <div className="flex h-full flex-col overflow-hidden">
+                  <div className="border-b bg-background/80 px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold">编排设计</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          启动前检查已改为统一管理，不再分散在单个步骤弹窗里。
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {editingPreflightSummary.configuredSteps > 0 ? (
+                          <Badge variant="outline" className="text-[10px]">
+                            已配置 {editingPreflightSummary.configuredSteps} 个步骤 / {editingPreflightSummary.totalCommands} 条命令
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">暂未配置 preflight</Badge>
+                        )}
+                        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={() => setPreflightManagerOpen(true)}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fact_check</span>
+                          统一管理启动前检查
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 flex-1">
+                    {editingConfig.workflow.mode === 'state-machine' ? (
+                      <StateMachineDesignPanel
+                        states={editingConfig.workflow.states || []}
+                        onStatesChange={(states) => {
+                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                          newConfig.workflow.states = states;
+                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                        }}
+                        availableAgents={agentConfigs}
+                        availableSkills={availableSkills}
+                        specTasks={(specCodingDetails?.tasks || [])
+                          .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
+                          .map((task: any) => ({
+                            id: task.id,
+                            title: task.title,
+                            phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
+                            ownerAgents: task.ownerAgents || [],
+                          }))}
+                      />
+                    ) : (
+                      <DesignPanel workflow={editingConfig.workflow}
+                        availableAgents={agentConfigs}
+                        onSelectNode={handleSelectNode}
+                        onAddPhase={handleAddPhase}
+                        onAddStep={handleAddStep}
+                        onAddStepAt={handleAddStepAt}
+                        onDeletePhase={handleDeletePhase}
+                        onDeleteStep={handleDeleteStep}
+                        onMoveStep={handleMoveStep}
+                        onToggleParallel={handleToggleParallel}
+                        onUngroup={handleUngroup}
+                        onCrossPhaseMove={handleCrossPhaseMove}
+                        onMoveGroup={handleMoveGroup}
+                        onJoinGroup={handleJoinGroup} />
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -9104,6 +9149,17 @@ export default function WorkbenchPage() {
       {showProcessPanel && (<div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50"><div className="bg-card rounded-lg w-[90%] max-w-[1200px] h-[80%] border relative overflow-hidden">
         <ProcessPanel onClose={() => dispatch({ type: 'SET_SHOW_PROCESS_PANEL', payload: false })} />
       </div></div>)}
+      <WorkflowPreflightManagerDialog
+        open={preflightManagerOpen}
+        onOpenChange={setPreflightManagerOpen}
+        workflow={editingConfig?.workflow}
+        onSave={(workflow) => {
+          if (!editingConfig) return;
+          const nextConfig = JSON.parse(JSON.stringify(editingConfig));
+          nextConfig.workflow = workflow;
+          dispatch({ type: 'SET_EDITING_CONFIG', payload: nextConfig });
+        }}
+      />
       {editingNode && (<EditNodeModal isOpen={showEditNodeModal} type={editingNode.type} data={getEditingNodeData()} roles={agentConfigs}
         availableSkills={availableSkills}
         specTasks={(specCodingDetails?.tasks || [])
