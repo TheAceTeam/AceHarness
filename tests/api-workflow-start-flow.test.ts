@@ -1,6 +1,22 @@
 import { describe, expect, test, vi, beforeEach } from 'vitest';
 import { makeRequest, responseJson, assertErrorResponse } from './helpers/route-helpers';
 
+const chatMocks = vi.hoisted(() => ({
+  loadChatSession: vi.fn(),
+  saveChatSession: vi.fn(),
+  updateChatSessionCreationBinding: vi.fn(),
+  updateChatSessionWorkflowBinding: vi.fn(),
+}));
+
+const agoraMocks = vi.hoisted(() => ({
+  appendWorkflowAgoraMessage: vi.fn(),
+  appendWorkflowAgoraOpeningMessages: vi.fn(),
+  createWorkflowAgoraWorkbenchState: vi.fn(),
+  createWorkflowParticipants: vi.fn(),
+  ensureWorkflowAgoraSession: vi.fn(),
+  extractWorkflowParticipantNames: vi.fn(),
+}));
+
 // Mock all heavy dependencies before importing the route
 vi.mock('@/lib/auth/middleware', () => ({
   requireAuth: vi.fn(),
@@ -31,12 +47,20 @@ vi.mock('@/lib/spec/coding-store', () => ({
   updateCreationSession: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('@/lib/chat/chat-persistence', () => ({
-  appendChatSessionMessage: vi.fn().mockResolvedValue(undefined),
-  loadChatSession: vi.fn().mockResolvedValue(null),
-  saveChatSession: vi.fn().mockResolvedValue(undefined),
-  updateChatSessionCreationBinding: vi.fn().mockResolvedValue(undefined),
-  updateChatSessionWorkflowBinding: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/lib/chat/persistence', () => ({
+  loadChatSession: chatMocks.loadChatSession,
+  saveChatSession: chatMocks.saveChatSession,
+  updateChatSessionCreationBinding: chatMocks.updateChatSessionCreationBinding,
+  updateChatSessionWorkflowBinding: chatMocks.updateChatSessionWorkflowBinding,
+}));
+
+vi.mock('@/lib/agora/workflow-topic', () => ({
+  appendWorkflowAgoraMessage: agoraMocks.appendWorkflowAgoraMessage,
+  appendWorkflowAgoraOpeningMessages: agoraMocks.appendWorkflowAgoraOpeningMessages,
+  createWorkflowAgoraWorkbenchState: agoraMocks.createWorkflowAgoraWorkbenchState,
+  createWorkflowParticipants: agoraMocks.createWorkflowParticipants,
+  ensureWorkflowAgoraSession: agoraMocks.ensureWorkflowAgoraSession,
+  extractWorkflowParticipantNames: agoraMocks.extractWorkflowParticipantNames,
 }));
 
 vi.mock('@/lib/run/runtime-configs', () => ({
@@ -59,6 +83,24 @@ vi.mock('crypto', () => ({
 describe('workflow start flow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chatMocks.loadChatSession.mockReset().mockResolvedValue({
+      id: 'sess-1',
+      title: 'existing session',
+      messages: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    chatMocks.saveChatSession.mockReset().mockResolvedValue(undefined);
+    chatMocks.updateChatSessionCreationBinding.mockReset().mockResolvedValue(undefined);
+    chatMocks.updateChatSessionWorkflowBinding.mockReset().mockResolvedValue(undefined);
+    agoraMocks.appendWorkflowAgoraMessage.mockReset().mockResolvedValue(undefined);
+    agoraMocks.appendWorkflowAgoraOpeningMessages.mockReset().mockResolvedValue(undefined);
+    agoraMocks.createWorkflowAgoraWorkbenchState.mockReset().mockReturnValue({ kind: 'workflow-agora' });
+    agoraMocks.createWorkflowParticipants.mockReset().mockImplementation((names: string[] = [], options: any = {}) =>
+      (names.length ? names : [options.coordinatorAgent || 'default-supervisor']).map((name: string) => ({ name }))
+    );
+    agoraMocks.ensureWorkflowAgoraSession.mockReset().mockResolvedValue({ kind: 'workflow-agora' });
+    agoraMocks.extractWorkflowParticipantNames.mockReset().mockReturnValue(['default-supervisor']);
   });
 
   test('returns 401 when no auth token', async () => {
@@ -241,5 +283,96 @@ describe('workflow start flow', () => {
       { globalContext: '', phaseContexts: {} },
       json.runId
     );
+  });
+
+  test('concurrent start requests cannot both pass while run-starting message is pending', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
+
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
+    (runWorkflowPreflight as any).mockResolvedValue({
+      ok: true,
+      failedCount: 0,
+      checks: [],
+      cwd: '/tmp',
+    });
+
+    let releaseRunStartingMessage!: () => void;
+    const runStartingMessage = new Promise<void>((resolve) => {
+      releaseRunStartingMessage = resolve;
+    });
+    agoraMocks.appendWorkflowAgoraMessage.mockImplementation(() => runStartingMessage);
+
+    let managerStatus: 'idle' | 'preparing' | 'running' | 'failed' = 'idle';
+    const mockManager = {
+      getStatus: vi.fn(() => ({ status: managerStatus })),
+      start: vi.fn().mockImplementation(() => {
+        if (managerStatus === 'preparing' || managerStatus === 'running') {
+          return Promise.reject(new Error('工作流已在运行中'));
+        }
+        managerStatus = 'preparing';
+        return new Promise(() => {});
+      }),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+
+    const { POST } = await import('@/app/api/workflow/start/route');
+    const first = POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
+    }));
+    const second = POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
+    }));
+
+    await vi.waitFor(() => {
+      expect(agoraMocks.appendWorkflowAgoraMessage).toHaveBeenCalledTimes(1);
+      expect(mockManager.start).toHaveBeenCalledTimes(1);
+    });
+    await expect(second).resolves.toHaveProperty('status', 409);
+
+    releaseRunStartingMessage();
+
+    const firstResponse = await first;
+    expect(firstResponse.status).toBe(200);
+    expect(mockManager.start).toHaveBeenCalledTimes(1);
+  });
+
+  test('already-running start rejection does not mark the active manager failed', async () => {
+    const { requireAuth } = await import('@/lib/auth/middleware');
+    (requireAuth as any).mockResolvedValue({ id: 'user-1', username: 'User', personalDir: '/tmp' });
+
+    const { runWorkflowPreflight } = await import('@/lib/workflow/preflight');
+    (runWorkflowPreflight as any).mockResolvedValue({
+      ok: true,
+      failedCount: 0,
+      checks: [],
+      cwd: '/tmp',
+    });
+
+    const mockManager = {
+      status: 'running',
+      statusReason: null,
+      getStatus: vi.fn().mockReturnValue({ status: 'idle', runId: 'run-existing' }),
+      start: vi.fn().mockRejectedValue(new Error('工作流已在运行中')),
+      emit: vi.fn(),
+    };
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    (workflowRegistry.getManager as any).mockResolvedValue(mockManager);
+
+    const { POST } = await import('@/app/api/workflow/start/route');
+    const response = await POST(makeRequest('/api/workflow/start', {
+      token: 'valid-token',
+      json: { configFile: 'test.yaml', frontendSessionId: 'sess-1' },
+    }));
+
+    expect(response.status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mockManager.status).toBe('running');
+    expect(mockManager.statusReason).toBeNull();
+    expect(mockManager.emit).not.toHaveBeenCalledWith('status', expect.objectContaining({ status: 'failed' }));
   });
 });

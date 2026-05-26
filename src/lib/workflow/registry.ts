@@ -33,6 +33,7 @@ interface ManagerEntry {
 
 class WorkflowRegistry extends EventEmitter {
   private managers = new Map<string, ManagerEntry>();
+  private pendingManagerCreations = new Map<string, Promise<AnyWorkflowManager>>();
 
   private isActiveStatus(status: string): boolean {
     return status === 'running' || status === 'preparing';
@@ -60,6 +61,9 @@ class WorkflowRegistry extends EventEmitter {
    * If it's running, return the existing running instance.
    */
   async getManager(configFile: string): Promise<AnyWorkflowManager> {
+    const pending = this.pendingManagerCreations.get(configFile);
+    if (pending) return pending;
+
     const expectedIsStateMachine = await this.detectStateMachine(configFile);
     const existing = this.managers.get(configFile);
     if (existing) {
@@ -69,7 +73,21 @@ class WorkflowRegistry extends EventEmitter {
       this.managers.delete(configFile);
       existing.manager.removeAllListeners();
     }
-    return this.createManager(configFile, expectedIsStateMachine);
+    return this.createManagerOnce(configFile, expectedIsStateMachine);
+  }
+
+  private createManagerOnce(configFile: string, isSM: boolean): Promise<AnyWorkflowManager> {
+    const pending = this.pendingManagerCreations.get(configFile);
+    if (pending) return pending;
+
+    const creation = this.createManager(configFile, isSM)
+      .finally(() => {
+        if (this.pendingManagerCreations.get(configFile) === creation) {
+          this.pendingManagerCreations.delete(configFile);
+        }
+      });
+    this.pendingManagerCreations.set(configFile, creation);
+    return creation;
   }
 
   private async createManager(configFile: string, isSM?: boolean): Promise<AnyWorkflowManager> {
@@ -110,7 +128,7 @@ class WorkflowRegistry extends EventEmitter {
       this.managers.delete(runState.configFile);
       existing.manager.removeAllListeners();
     }
-    return this.createManager(runState.configFile, expectedIsStateMachine);
+    return this.createManagerOnce(runState.configFile, expectedIsStateMachine);
   }
 
   getRunningManagers(): { configFile: string; manager: AnyWorkflowManager; isStateMachine: boolean }[] {

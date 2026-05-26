@@ -109,6 +109,11 @@ function normalizeInitialContexts(input: any): { globalContext: string; phaseCon
   };
 }
 
+function logWorkflowStartFailure(configFile: string, err: any) {
+  const message = err?.message || String(err);
+  console.error(`[Workflow] start failed for ${configFile}:`, message);
+}
+
 async function startRehearsalRun(input: {
   configFile: string;
   workflowSessionId?: string;
@@ -377,6 +382,12 @@ export async function POST(request: NextRequest) {
     (manager as any)._creationSessionId = boundCreationSession?.id || (typeof creationSessionId === 'string' ? creationSessionId : undefined);
     (manager as any)._initialContexts = initialContexts;
     const runId = `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    Promise.resolve((manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId))
+      .catch((err: any) => {
+        logWorkflowStartFailure(configFile, err);
+        // The manager owns its own status transitions. Mutating it here can
+        // corrupt an already-running workflow when a duplicate start is rejected.
+      });
     await appendWorkflowAgoraMessage({
       sessionId: workflowChatSessionId,
       type: 'run-starting',
@@ -387,15 +398,6 @@ export async function POST(request: NextRequest) {
       participants: workflowParticipants,
       workspacePath: config?.context?.projectRoot || config?.context?.workingDirectory,
     }).catch(() => {});
-    (manager as any).start(configFile, undefined, preflightChecks, initialContexts, runId).catch((err: any) => {
-      console.error(`[Workflow] start failed for ${configFile}:`, err?.message || err);
-      // Ensure status reflects the failure so frontend can detect it
-      try {
-        (manager as any).status = 'failed';
-        (manager as any).statusReason = err?.message || '启动失败';
-        manager.emit('status', { status: 'failed', message: err?.message || '启动失败' });
-      } catch { /* best effort */ }
-    });
 
     return NextResponse.json({
       success: true,

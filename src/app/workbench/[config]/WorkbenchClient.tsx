@@ -1386,6 +1386,8 @@ export default function WorkbenchPage() {
   const [startupCancelRequested, setStartupCancelRequested] = useState(false);
   const startupCancelRequestedRef = useRef(false);
   const startupCreatedRunIdRef = useRef<string | null>(null);
+  const startupExpectedRunIdRef = useRef<string | null>(null);
+  const startupInProgressRef = useRef(false);
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
@@ -1462,6 +1464,27 @@ export default function WorkbenchPage() {
     showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
+  const latestRunIdRef = useRef<string | null>(runId || null);
+  useEffect(() => {
+    latestRunIdRef.current = runId || null;
+    if (runId && startupExpectedRunIdRef.current) {
+      startupExpectedRunIdRef.current = null;
+    }
+  }, [runId]);
+
+  const shouldApplyRuntimePayload = useCallback((payload: any) => {
+    if (!payload) return true;
+    const eventConfigFile = payload.currentConfigFile || payload.configFile || payload.statusSnapshot?.currentConfigFile || payload.statusSnapshot?.configFile;
+    if (eventConfigFile && eventConfigFile !== configFile) return false;
+
+    const payloadRunId = payload.runId || payload.statusSnapshot?.runId || payload.question?.runId;
+    if (startupInProgressRef.current && !startupExpectedRunIdRef.current && payloadRunId) {
+      return false;
+    }
+    if (!payloadRunId) return true;
+    const expectedRunId = startupExpectedRunIdRef.current || latestRunIdRef.current;
+    return !expectedRunId || payloadRunId === expectedRunId;
+  }, [configFile]);
   const currentWorkflowExecutionPolicy = useMemo(() => ({
     defaultEngine: engine || '',
     defaultModel: workflowDefaultModel || '',
@@ -3162,9 +3185,14 @@ export default function WorkbenchPage() {
 
   const fetchCurrentStatus = async () => {
     try {
-      const requestedRunId = runId || initialRunId || selectedRun?.id || undefined;
+      const requestedRunId = startupExpectedRunIdRef.current
+        || runId
+        || selectedRun?.id
+        || (startupInProgressRef.current ? undefined : initialRunId)
+        || undefined;
       const status = await workflowApi.getStatus(configFile, requestedRunId);
       if (!status?.status) return;
+      if (!shouldApplyRuntimePayload(status)) return;
       const smStatus = status as typeof status & {
         mode?: 'state-machine' | 'phase-based';
         currentState?: string | null;
@@ -3851,10 +3879,7 @@ export default function WorkbenchPage() {
   };
 
   const handleEvent = useCallback((event: any) => {
-    // For status events, only apply if they're for the current config file
-    if (event.type === 'status' && event.data.currentConfigFile && event.data.currentConfigFile !== configFile) {
-      return; // Ignore status events from other workflow configs
-    }
+    if (!shouldApplyRuntimePayload(event?.data)) return;
 
     switch (event.type) {
       case 'status':
@@ -4057,7 +4082,7 @@ export default function WorkbenchPage() {
         setAgentFlow(event.data.agentFlow || []);
         break;
     }
-  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData]);
+  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload]);
 
   // Keep a ref to the latest handleEvent so SSE callback never goes stale
   const handleEventRef = useRef(handleEvent);
@@ -4207,6 +4232,8 @@ export default function WorkbenchPage() {
     }
 
     startupCancelRequestedRef.current = false;
+    startupInProgressRef.current = true;
+    startupExpectedRunIdRef.current = null;
     setStartupCancelRequested(false);
     startupCreatedRunIdRef.current = null;
     setStarting(true);
@@ -4282,6 +4309,8 @@ export default function WorkbenchPage() {
       }
       clearTransientRunUiState();
       dispatch({ type: 'RESET_RUN' });
+      latestRunIdRef.current = null;
+      startupExpectedRunIdRef.current = null;
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: 'preparing' });
       setWorkflowFrontendSessionId(null);
       addLog('system', 'info', isRehearsalStart ? '正在启动演练模式...' : '正在启动工作流...');
@@ -4296,6 +4325,7 @@ export default function WorkbenchPage() {
         },
       });
       startupCreatedRunIdRef.current = startResult.runId || null;
+      startupExpectedRunIdRef.current = startResult.runId || null;
       if (startupCancelRequestedRef.current) {
         if (startResult.runId) {
           try {
@@ -4310,6 +4340,7 @@ export default function WorkbenchPage() {
         return;
       }
       if (!isRehearsalStart && startResult.runId) {
+        latestRunIdRef.current = startResult.runId;
         dispatch({ type: 'SET_RUN_ID', payload: startResult.runId });
         dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
         updateUrl({ mode: 'run', run: startResult.runId });
@@ -4335,6 +4366,7 @@ export default function WorkbenchPage() {
       addLog('system', 'error', `启动失败: ${error.message}`);
     } finally {
       startupCancelRequestedRef.current = false;
+      startupInProgressRef.current = false;
       setStartupCancelRequested(false);
       startupCreatedRunIdRef.current = null;
       setStarting(false);

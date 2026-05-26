@@ -35,6 +35,7 @@ const INITIAL_STATE: WorkflowLiveStateSnapshot = {
   chatSessionSignalsById: {},
   lastEventAt: null,
 };
+const ACTIVE_WORKFLOW_STATUSES = new Set(['preparing', 'running', 'waiting']);
 
 let snapshot = INITIAL_STATE;
 let eventSource: EventSource | null = null;
@@ -85,9 +86,20 @@ function normalizeChatStream(input: any): WorkflowLiveChatStream | null {
 function applyWorkflowStatus(nextState: WorkflowLiveStateSnapshot, statusSnapshot: any) {
   const configFile = typeof statusSnapshot?.currentConfigFile === 'string' ? statusSnapshot.currentConfigFile : '';
   if (!configFile) return nextState;
+  const existingStatus = nextState.workflowStatusByConfig[configFile];
+  const incomingRunId = statusSnapshot?.runId ? String(statusSnapshot.runId) : '';
+  const existingRunId = existingStatus?.runId ? String(existingStatus.runId) : '';
+  const existingActive = ACTIVE_WORKFLOW_STATUSES.has(String(existingStatus?.status || ''));
+  const incomingActive = ACTIVE_WORKFLOW_STATUSES.has(String(statusSnapshot?.status || ''));
+  const shouldReplaceConfigStatus =
+    !existingStatus
+    || !existingActive
+    || incomingActive
+    || !incomingRunId
+    || incomingRunId === existingRunId;
   const nextWorkflowStatusByConfig = {
     ...nextState.workflowStatusByConfig,
-    [configFile]: statusSnapshot,
+    ...(shouldReplaceConfigStatus ? { [configFile]: statusSnapshot } : {}),
   };
   const nextRunStatusById = { ...nextState.runStatusById };
   if (statusSnapshot?.runId && statusSnapshot?.status) {
