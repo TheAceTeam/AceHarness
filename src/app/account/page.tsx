@@ -381,7 +381,7 @@ function AccountContent() {
 
       {/* Avatar Dialog */}
       <Dialog open={avatarOpen} onOpenChange={setAvatarOpen}>
-        <DialogContent className="flex h-[min(560px,calc(100vh-2rem))] max-w-md flex-col">
+        <DialogContent className="flex h-[min(560px,calc(100vh-2rem))] max-w-md flex-col overflow-hidden">
           <DialogHeader className="shrink-0"><DialogTitle>选择头像</DialogTitle></DialogHeader>
           <AvatarPicker value={selectedAvatar} onChange={setSelectedAvatar} seed={user.username} className="flex-1" />
           <DialogFooter className="shrink-0">

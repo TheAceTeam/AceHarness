@@ -51,7 +51,7 @@ export default function AvatarPicker({ value, onChange, className, seed }: Avata
       </div>
 
       <TooltipProvider delayDuration={120}>
-        <div className="grid min-h-0 grid-cols-6 gap-2 overflow-y-auto pr-1">
+        <div className="grid min-h-0 grid-cols-6 gap-2 overflow-x-hidden overflow-y-auto pr-1">
           {currentCategory.entries.map((entry) => {
             const avatar = buildSpriteAvatarValue(entry.sheetId, entry.index);
             const name = getSpriteAvatarName(entry);
@@ -65,10 +65,10 @@ export default function AvatarPicker({ value, onChange, className, seed }: Avata
                     onClick={() => onChange(avatar)}
                     aria-label={`${currentCategory.label} · ${name}`}
                     className={cn(
-                      'h-12 w-12 overflow-hidden rounded-full border-2 transition-all hover:scale-110',
+                      'h-12 w-12 overflow-hidden rounded-full border-2 transition-[border-color,box-shadow] duration-150 focus-visible:outline-none',
                       selected
                         ? 'border-primary ring-2 ring-primary/30'
-                        : 'border-transparent hover:border-muted-foreground/30'
+                        : 'border-transparent hover:border-muted-foreground/30 hover:ring-2 hover:ring-primary/10'
                     )}
                   >
                     <SpriteAvatar
