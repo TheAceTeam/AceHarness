@@ -18,7 +18,12 @@ import {
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { requireAuth } from '@/lib/auth/middleware';
 import { EventEmitter } from 'events';
-import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
+import {
+  buildChatRequestContext,
+  ensureEngineRuntimeSkillsAvailable,
+  type RequestedMcpServersInput,
+  type RequestedSkillsInput,
+} from '@/lib/chat/request-options';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
@@ -174,6 +179,7 @@ export async function POST(request: NextRequest) {
       workingDirectory,
       extraSystemPrompt,
       skills,
+      mcpServers,
     } = await request.json();
     if (!message?.trim()) {
       return NextResponse.json({ error: '消息不能为空' }, { status: 400 });
@@ -184,13 +190,14 @@ export async function POST(request: NextRequest) {
     const useModel = model || '';
 
     const isResume = !!sessionId;
-    const { systemPrompt } = await buildChatRequestContext({
+    const { systemPrompt, enabledMcpServers } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
       workingDirectory,
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
+      requestedMcpServers: mcpServers as RequestedMcpServersInput,
       personalDir: auth.personalDir,
     });
 
@@ -342,6 +349,7 @@ export async function POST(request: NextRequest) {
         workingDirectory: engineRuntimeDirectory,
         sessionId: validResumeSid,
         appendSystemPrompt: !!validResumeSid && !!systemPrompt,
+        mcpServers: enabledMcpServers,
       }, {
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });

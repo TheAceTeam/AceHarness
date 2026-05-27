@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import {
@@ -11,7 +11,10 @@ import {
   Download,
   FolderOpen,
   Puzzle,
+  Plus,
+  Save,
   Search,
+  Server,
   Store,
   Trash2,
   Upload,
@@ -20,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -49,6 +53,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import type { MarketplaceSkill, InstallProgress as InstallProgressType } from '@/types/marketplace';
+import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { DEFAULT_PAGE_SIZE } from '@/constants/marketplace';
 
 interface LocalSkill {
@@ -71,7 +76,7 @@ interface SyncStatus {
   aceharnessBuiltin: boolean;
 }
 
-type TabType = 'local' | 'online' | 'plugins';
+type TabType = 'local' | 'online' | 'mcp' | 'plugins';
 type ViewMode = 'gallery' | 'table';
 type LocalSortKey = 'name' | 'updatedAt' | 'source';
 type SortDirection = 'asc' | 'desc';
@@ -82,8 +87,10 @@ interface SkillsManagerProps {
 
 const LOCAL_VIEW_MODE_KEY = 'aceharness:skills:local-view-mode';
 const ONLINE_VIEW_MODE_KEY = 'aceharness:skills:online-view-mode';
+const MCP_VIEW_MODE_KEY = 'aceharness:skills:mcp-view-mode';
 const LOCAL_PAGE_SIZE_KEY = 'aceharness:skills:local-page-size';
 const ONLINE_PAGE_SIZE_KEY = 'aceharness:skills:online-page-size';
+const MCP_PAGE_SIZE_KEY = 'aceharness:skills:mcp-page-size';
 const ACTIVE_TAB_KEY = 'aceharness:skills:active-tab';
 const PAGE_SIZE_OPTIONS = [12, 24, 48, 96];
 
@@ -259,10 +266,465 @@ function PluginsTab() {
   );
 }
 
+type McpServerDraft = {
+  name: string;
+  command: string;
+  projectDir: string;
+  envText: string;
+};
+
+function formatMcpEnv(env?: Record<string, string>): string {
+  return env && Object.keys(env).length > 0 ? JSON.stringify(env, null, 2) : '';
+}
+
+function toMcpDraft(server?: Partial<ManagedMcpServer>): McpServerDraft {
+  return {
+    name: server?.name || '',
+    command: server?.command || '',
+    projectDir: server?.projectDir || '',
+    envText: formatMcpEnv(server?.env),
+  };
+}
+
+function parseMcpEnv(text: string): Record<string, string> | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const parsed = JSON.parse(trimmed);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('ENV 必须是 JSON 对象');
+  }
+  return Object.fromEntries(
+    Object.entries(parsed)
+      .filter(([key]) => key.trim().length > 0)
+      .map(([key, value]) => [key.trim(), String(value)]),
+  );
+}
+
+function getMcpEnvStatus(text: string): { count: number; valid: boolean } {
+  if (!text.trim()) return { count: 0, valid: true };
+  try {
+    return { count: Object.keys(parseMcpEnv(text) || {}).length, valid: true };
+  } catch {
+    return { count: 0, valid: false };
+  }
+}
+
+function McpServersTab() {
+  const { toast } = useToast();
+  const [servers, setServers] = useState<McpServerDraft[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [searchDraft, setSearchDraft] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+
+  useEffect(() => {
+    try {
+      const savedViewMode = localStorage.getItem(MCP_VIEW_MODE_KEY);
+      if (savedViewMode === 'gallery' || savedViewMode === 'table') {
+        setViewMode(savedViewMode);
+      }
+      const savedPageSize = Number(localStorage.getItem(MCP_PAGE_SIZE_KEY) || DEFAULT_PAGE_SIZE);
+      if (PAGE_SIZE_OPTIONS.includes(savedPageSize)) setPageSize(savedPageSize);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(MCP_VIEW_MODE_KEY, viewMode); } catch {}
+  }, [viewMode]);
+
+  useEffect(() => {
+    try { localStorage.setItem(MCP_PAGE_SIZE_KEY, String(pageSize)); } catch {}
+  }, [pageSize]);
+
+  const loadServers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/mcp');
+      const data = await response.json();
+      setServers(Array.isArray(data.servers) ? data.servers.map((server: ManagedMcpServer) => toMcpDraft(server)) : []);
+    } catch {
+      toast('error', '加载 MCP 配置失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void loadServers();
+  }, [loadServers]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, pageSize]);
+
+  const updateServer = (index: number, patch: Partial<McpServerDraft>) => {
+    setServers((prev) => prev.map((server, itemIndex) => (
+      itemIndex === index ? { ...server, ...patch } : server
+    )));
+  };
+
+  const addServer = () => {
+    setSearchDraft('');
+    setSearchQuery('');
+    setServers((prev) => [...prev, toMcpDraft()]);
+    setPage(Math.max(1, Math.ceil((servers.length + 1) / pageSize)));
+  };
+
+  const removeServer = (index: number) => {
+    setServers((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  };
+
+  const saveServers = async () => {
+    setSaving(true);
+    try {
+      const payload = servers
+        .map((server) => ({
+          name: server.name.trim(),
+          type: 'stdio' as const,
+          command: server.command.trim(),
+          projectDir: server.projectDir.trim() || undefined,
+          env: parseMcpEnv(server.envText),
+        }))
+        .filter((server) => server.name && server.command);
+
+      const response = await fetch('/api/mcp', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: payload }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        toast('error', data.error || '保存 MCP 配置失败');
+        return;
+      }
+      setServers(Array.isArray(data.servers) ? data.servers.map((server: ManagedMcpServer) => toMcpDraft(server)) : []);
+      toast('success', 'MCP 配置已保存');
+    } catch (error: any) {
+      toast('error', error?.message || '保存 MCP 配置失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredServers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return servers
+      .map((server, index) => ({ server, index }))
+      .filter(({ server }) => {
+        if (!query) return true;
+        return [
+          server.name,
+          server.command,
+          server.projectDir,
+          server.envText,
+        ].join(' ').toLowerCase().includes(query);
+      });
+  }, [searchQuery, servers]);
+
+  const pagination = useMemo(() => {
+    const total = filteredServers.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const start = (safePage - 1) * pageSize;
+    const end = start + pageSize;
+    return {
+      total,
+      totalPages,
+      page: safePage,
+      pageSize,
+      items: filteredServers.slice(start, end),
+    };
+  }, [filteredServers, page, pageSize]);
+
+  useEffect(() => {
+    if (page !== pagination.page) {
+      setPage(pagination.page);
+    }
+  }, [page, pagination.page]);
+
+  const handleApplySearch = () => {
+    setSearchQuery(searchDraft);
+  };
+
+  const renderServerFields = (server: McpServerDraft, index: number, compact = false) => (
+    <div className={cn('grid gap-3', compact ? 'grid-cols-1' : 'md:grid-cols-2')}>
+      <div className="space-y-1.5">
+        <div className="text-xs font-medium text-muted-foreground">名称</div>
+        <Input
+          value={server.name}
+          onChange={(event) => updateServer(index, { name: event.target.value })}
+          placeholder="filesystem"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <div className="text-xs font-medium text-muted-foreground">项目目录</div>
+        <Input
+          value={server.projectDir}
+          onChange={(event) => updateServer(index, { projectDir: event.target.value })}
+          placeholder="可留空，支持相对工作目录"
+        />
+      </div>
+      <div className={cn('space-y-1.5', compact ? '' : 'md:col-span-2')}>
+        <div className="text-xs font-medium text-muted-foreground">启动命令</div>
+        <Input
+          value={server.command}
+          onChange={(event) => updateServer(index, { command: event.target.value })}
+          placeholder="npx -y @modelcontextprotocol/server-filesystem ."
+          className="font-mono"
+        />
+      </div>
+      <div className={cn('space-y-1.5', compact ? '' : 'md:col-span-2')}>
+        <div className="text-xs font-medium text-muted-foreground">ENV JSON</div>
+        <Textarea
+          value={server.envText}
+          onChange={(event) => updateServer(index, { envText: event.target.value })}
+          placeholder='{"API_KEY":"..."}'
+          className="min-h-24 font-mono text-xs"
+        />
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <section className="rounded-[28px] border border-border/70 bg-card/90 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
+        <div className="flex min-w-0 flex-wrap items-center gap-3 xl:flex-nowrap">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="搜索 MCP Servers..."
+                value={searchDraft}
+                onChange={(event) => setSearchDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    handleApplySearch();
+                  }
+                }}
+                className="h-11 w-full rounded-2xl border-border/70 bg-background/80 pl-10 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+              />
+            </div>
+            <Button size="sm" onClick={handleApplySearch} className="h-11 shrink-0">
+              <Search className="mr-1 h-4 w-4" />
+              搜索
+            </Button>
+          </div>
+          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div className="inline-flex rounded-full border border-border/60 bg-muted/40 p-1">
+              <Button
+                size="sm"
+                variant={viewMode === 'gallery' ? 'default' : 'ghost'}
+                className="h-8 rounded-full px-3"
+                onClick={() => setViewMode('gallery')}
+              >
+                <span className="material-symbols-outlined text-sm">grid_view</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                className="h-8 rounded-full px-3"
+                onClick={() => setViewMode('table')}
+              >
+                <span className="material-symbols-outlined text-sm">table_rows</span>
+              </Button>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => void loadServers()} disabled={loading || saving}>
+              重新加载
+            </Button>
+            <Button size="sm" variant="outline" onClick={addServer} disabled={saving}>
+              <Plus className="mr-1 h-4 w-4" />
+              添加
+            </Button>
+            <Button size="sm" onClick={() => void saveServers()} disabled={saving}>
+              <Save className="mr-1 h-4 w-4" />
+              {saving ? '保存中...' : '保存'}
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-[28px] border border-border/60 bg-card/80 p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">MCP Servers</h3>
+            <p className="mt-1 text-xs text-muted-foreground">已配置 {servers.length} 个，当前列表 {pagination.total} 个</p>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex h-64 items-center justify-center text-muted-foreground">加载中...</div>
+        ) : servers.length === 0 ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-[24px] border border-dashed text-sm text-muted-foreground">
+            <Server className="h-10 w-10" />
+            <div>暂无 MCP Server</div>
+            <Button size="sm" variant="outline" onClick={addServer}>添加 Server</Button>
+          </div>
+        ) : pagination.total === 0 ? (
+          <div className="flex h-64 flex-col items-center justify-center gap-3 text-muted-foreground">
+            <Server className="h-10 w-10" />
+            <div>没有匹配的 MCP Server</div>
+          </div>
+        ) : viewMode === 'table' ? (
+          <div className="overflow-hidden rounded-[24px] border border-border/70 bg-background/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[180px] min-w-[180px]">名称</TableHead>
+                    <TableHead className="w-[320px] min-w-[320px]">启动命令</TableHead>
+                    <TableHead className="w-[220px] min-w-[220px]">项目目录</TableHead>
+                    <TableHead className="w-[260px] min-w-[260px]">ENV JSON</TableHead>
+                    <TableHead className="w-[110px] min-w-[110px]">状态</TableHead>
+                    <TableHead className="w-[60px]">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagination.items.map(({ server, index }) => {
+                    const envStatus = getMcpEnvStatus(server.envText);
+                    const configured = Boolean(server.name.trim() && server.command.trim());
+                    return (
+                      <TableRow key={`${server.name || 'new'}-${index}`}>
+                        <TableCell className="align-top">
+                          <Input
+                            value={server.name}
+                            onChange={(event) => updateServer(index, { name: event.target.value })}
+                            placeholder="filesystem"
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <Input
+                            value={server.command}
+                            onChange={(event) => updateServer(index, { command: event.target.value })}
+                            placeholder="npx -y @modelcontextprotocol/server-filesystem ."
+                            className="font-mono"
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <Input
+                            value={server.projectDir}
+                            onChange={(event) => updateServer(index, { projectDir: event.target.value })}
+                            placeholder="可留空，支持相对工作目录"
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <Textarea
+                            value={server.envText}
+                            onChange={(event) => updateServer(index, { envText: event.target.value })}
+                            placeholder='{"API_KEY":"..."}'
+                            className="min-h-20 font-mono text-xs"
+                          />
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant={configured ? 'outline' : 'secondary'} className="text-xs">
+                              {configured ? '已配置' : '待补全'}
+                            </Badge>
+                            {!envStatus.valid ? (
+                              <Badge variant="outline" className="text-xs border-destructive/40 text-destructive">
+                                ENV 错误
+                              </Badge>
+                            ) : envStatus.count > 0 ? (
+                              <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                                ENV {envStatus.count}
+                              </Badge>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeServer(index)}
+                            title="删除"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+            {pagination.items.map(({ server, index }) => {
+              const envStatus = getMcpEnvStatus(server.envText);
+              const configured = Boolean(server.name.trim() && server.command.trim());
+              return (
+                <motion.div
+                  key={`${server.name || 'new'}-${index}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)]"
+                >
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <Server className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                      <div className="min-w-0">
+                        <h4 className="truncate text-sm font-semibold">{server.name || '新 MCP Server'}</h4>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <Badge variant={configured ? 'outline' : 'secondary'} className="text-xs">
+                            {configured ? 'stdio' : '待补全'}
+                          </Badge>
+                          {!envStatus.valid ? (
+                            <Badge variant="outline" className="text-xs border-destructive/40 text-destructive">
+                              ENV 错误
+                            </Badge>
+                          ) : envStatus.count > 0 ? (
+                            <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
+                              ENV {envStatus.count}
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeServer(index)}
+                      title="删除"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {renderServerFields(server, index, true)}
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {pagination.total > 0 ? (
+        <PaginationBar
+          current={pagination.page}
+          total={pagination.total}
+          pageSize={pagination.pageSize}
+          onPageChange={setPage}
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+          itemLabel="MCP Server"
+        />
+      ) : null}
+    </>
+  );
+}
+
 export default function SkillsManager({ embedded = false }: SkillsManagerProps) {
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
-  useDocumentTitle(embedded ? null : 'Skills 管理');
+  useDocumentTitle(embedded ? null : 'Skills/MCP 管理');
 
   const [activeTab, setActiveTab] = useState<TabType>('local');
 
@@ -315,7 +777,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
   useEffect(() => {
     try {
       const savedActiveTab = localStorage.getItem(ACTIVE_TAB_KEY);
-      if (savedActiveTab === 'local' || savedActiveTab === 'online' || savedActiveTab === 'plugins') {
+      if (savedActiveTab === 'local' || savedActiveTab === 'online' || savedActiveTab === 'mcp' || savedActiveTab === 'plugins') {
         setActiveTab(savedActiveTab);
       }
       const savedLocalViewMode = localStorage.getItem(LOCAL_VIEW_MODE_KEY);
@@ -394,7 +856,9 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
       void loadSkills();
       return;
     }
-    void loadCategories();
+    if (activeTab === 'online') {
+      void loadCategories();
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -877,6 +1341,15 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
         </Button>
         <Button
           size="sm"
+          variant={activeTab === 'mcp' ? 'default' : 'ghost'}
+          className="rounded-full"
+          onClick={() => setActiveTab('mcp')}
+        >
+          <Server className="w-4 h-4 mr-2" />
+          MCP 管理
+        </Button>
+        <Button
+          size="sm"
           variant={activeTab === 'plugins' ? 'default' : 'ghost'}
           className="rounded-full"
           onClick={() => setActiveTab('plugins')}
@@ -1055,8 +1528,8 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
             </Button>
             <div className="h-6 w-px bg-border" />
             <div>
-              <h1 className="text-2xl font-bold">Skills 管理</h1>
-              <p className="text-xs text-muted-foreground">统一管理本地 Skills 与应用市场安装</p>
+              <h1 className="text-2xl font-bold">Skills/MCP 管理</h1>
+              <p className="text-xs text-muted-foreground">统一管理本地 Skills、MCP 与应用市场安装</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1100,7 +1573,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
           renderTabStrip('rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/95')
         )}
 
-        {!embedded && activeTab !== 'plugins' ? (
+        {!embedded && activeTab !== 'plugins' && activeTab !== 'mcp' ? (
           <>
             <div ref={toolbarAnchorRef} className="h-px" />
             {floatingToolbar ? <div style={{ height: toolbarHeight }} /> : null}
@@ -1569,6 +2042,8 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
               />
             ) : null}
           </>
+        ) : activeTab === 'mcp' ? (
+          <McpServersTab />
         ) : activeTab === 'plugins' ? (
           <PluginsTab />
         ) : null}

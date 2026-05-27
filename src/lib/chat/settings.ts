@@ -7,6 +7,7 @@ import { readFile, writeFile, mkdir, readdir } from 'fs/promises';
 import { dirname, resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { loadMcpRegistry } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { normalizeSkillSource, normalizeStringArray, validateSkillFrontmatter } from '@/lib/skill/frontmatter';
 
@@ -32,6 +33,7 @@ export interface SkillInfo {
 
 export interface ChatSettings {
   skills: Record<string, boolean>;
+  mcpServers: Record<string, boolean>;
   workingDirectory?: string;
 }
 
@@ -115,6 +117,10 @@ export async function loadChatSettings(): Promise<ChatSettings> {
   const defaults: Record<string, boolean> = {};
   const DEFAULT_ENABLED = ['aceharness-chat-card'];
   for (const s of discovered) defaults[s.name] = DEFAULT_ENABLED.includes(s.name);
+  const discoveredMcpServers = await loadMcpRegistry();
+  const discoveredMcpNames = new Set(discoveredMcpServers.map((server) => server.name));
+  const defaultMcpServers: Record<string, boolean> = {};
+  for (const server of discoveredMcpServers) defaultMcpServers[server.name] = false;
 
   let value: ChatSettings;
   try {
@@ -125,9 +131,18 @@ export async function loadChatSettings(): Promise<ChatSettings> {
         ([name, enabled]) => discoveredNames.has(name) && typeof enabled === 'boolean'
       )
     ) as Record<string, boolean>;
-    value = { skills: { ...defaults, ...persistedSkills }, workingDirectory: parsed?.workingDirectory };
+    const persistedMcpServers: Record<string, boolean> = Object.fromEntries(
+      Object.entries(parsed?.mcpServers || {}).filter(
+        ([name, enabled]) => discoveredMcpNames.has(name) && typeof enabled === 'boolean'
+      )
+    ) as Record<string, boolean>;
+    value = {
+      skills: { ...defaults, ...persistedSkills },
+      mcpServers: { ...defaultMcpServers, ...persistedMcpServers },
+      workingDirectory: parsed?.workingDirectory,
+    };
   } catch {
-    value = { skills: defaults };
+    value = { skills: defaults, mcpServers: defaultMcpServers };
   }
 
   settingsCache = { value, expiresAt: now + CACHE_TTL_MS };

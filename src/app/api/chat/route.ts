@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
-import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
+import {
+  buildChatRequestContext,
+  ensureEngineRuntimeSkillsAvailable,
+  type RequestedMcpServersInput,
+  type RequestedSkillsInput,
+} from '@/lib/chat/request-options';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 
 export async function POST(request: NextRequest) {
@@ -16,6 +21,7 @@ export async function POST(request: NextRequest) {
       workingDirectory,
       extraSystemPrompt,
       skills,
+      mcpServers,
     } = await request.json();
 
     if (!message?.trim()) {
@@ -23,13 +29,14 @@ export async function POST(request: NextRequest) {
     }
 
     const useModel = model || '';
-    const { systemPrompt } = await buildChatRequestContext({
+    const { systemPrompt, enabledMcpServers } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
       workingDirectory,
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
+      requestedMcpServers: mcpServers as RequestedMcpServersInput,
     });
 
     const engineType = await resolveRequestedEngineType(requestedEngine);
@@ -54,6 +61,7 @@ export async function POST(request: NextRequest) {
         model: useModel,
         workingDirectory: getWorkspaceRoot(),
         sessionId: sessionId || undefined,
+        mcpServers: enabledMcpServers,
     });
 
     return NextResponse.json({

@@ -7,6 +7,7 @@ import { extractLastChatPreview } from '@/lib/chat/message-preview';
 import type { HomeSidebarHint, SessionWorkbenchState } from '@/lib/core/home-sidebar-state';
 import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
+import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
 
 // --- Types ---
@@ -107,6 +108,14 @@ interface StreamCheckResponse {
   liveSession?: ChatSession | null;
 }
 
+type DiscoveredSkill = {
+  name: string;
+  label: string;
+  description: string;
+  source?: string;
+  tags?: string[];
+};
+
 function resolveNextActiveSessionIdAfterDelete(
   remainingSessions: SessionSummary[],
   deletedActiveSession?: Pick<SessionSummary, 'workflowBinding' | 'creationSession' | 'sessionWorkbenchState'> | null,
@@ -190,9 +199,13 @@ interface DashboardChatContextType {
   retryAction: (messageId: string, actionId: string) => Promise<void>;
   reloadActionResult: (messageId: string, actionId: string) => Promise<void>;
   skillSettings: Record<string, boolean>;
-  discoveredSkills: { name: string; label: string; description: string; source?: string; tags?: string[] }[];
+  discoveredSkills: DiscoveredSkill[];
   toggleSkill: (skill: string) => void;
   setSkillsEnabled: (skills: Record<string, boolean>) => void;
+  mcpSettings: Record<string, boolean>;
+  discoveredMcpServers: ManagedMcpServer[];
+  toggleMcpServer: (serverName: string) => void;
+  setMcpServersEnabled: (servers: Record<string, boolean>) => void;
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
   setSessionWorkbenchState: (state: SessionWorkbenchState | ((prev: SessionWorkbenchState | undefined) => SessionWorkbenchState)) => void;
@@ -224,6 +237,7 @@ const DashboardChatContext = createContext<DashboardChatContextType>({
   confirmAction: async () => {}, rejectAction: () => {},
   undoActionById: async () => {}, retryAction: async () => {}, reloadActionResult: async () => {},
   skillSettings: {}, discoveredSkills: [], toggleSkill: () => {}, setSkillsEnabled: () => {},
+  mcpSettings: {}, discoveredMcpServers: [], toggleMcpServer: () => {}, setMcpServersEnabled: () => {},
   workingDirectory: '', setWorkingDirectory: () => {},
   setSessionWorkbenchState: () => {},
   updateSessionCreationBinding: async () => {},
@@ -426,7 +440,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [refreshGlobalEngineConfig]);
 
   const [skillSettings, setSkillSettings] = useState<Record<string, boolean>>({});
-  const [discoveredSkills, setDiscoveredSkills] = useState<{ name: string; label: string; description: string; source?: string; tags?: string[] }[]>([]);
+  const [discoveredSkills, setDiscoveredSkills] = useState<DiscoveredSkill[]>([]);
+  const [mcpSettings, setMcpSettings] = useState<Record<string, boolean>>({});
+  const [discoveredMcpServers, setDiscoveredMcpServers] = useState<ManagedMcpServer[]>([]);
   const [workingDirectory, setWorkingDirectoryState] = useState('');
 
   // Load skill settings on mount
@@ -434,6 +450,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     fetch('/api/chat/settings').then(r => r.json()).then(data => {
       if (data.skills) setSkillSettings(data.skills);
       if (data.discoveredSkills) setDiscoveredSkills(data.discoveredSkills);
+      if (data.mcpServers) setMcpSettings(data.mcpServers);
+      if (data.discoveredMcpServers) setDiscoveredMcpServers(data.discoveredMcpServers);
       const wdKey = getWorkingDirStorageKey();
       const localDir = localStorage.getItem(wdKey);
       if (localDir) {
@@ -482,6 +500,30 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const toggleMcpServer = useCallback((serverName: string) => {
+    setMcpSettings(prev => {
+      const next = { ...prev, [serverName]: !prev[serverName] };
+      fetch('/api/chat/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpServers: next }),
+      }).catch(() => {});
+      return next;
+    });
+  }, []);
+
+  const setMcpServersEnabled = useCallback((servers: Record<string, boolean>) => {
+    setMcpSettings(prev => {
+      const next = { ...prev, ...servers };
+      fetch('/api/chat/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpServers: next }),
+      }).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const setWorkingDirectory = useCallback((dir: string) => {
     setWorkingDirectoryState(dir);
     if (typeof window !== 'undefined') {
@@ -500,6 +542,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sessionLoadTokenRef = useRef(0);
   const hasHydratedStoredSessionRef = useRef(false);
   const skillSettingsRef = useRef(skillSettings);
+  const mcpSettingsRef = useRef(mcpSettings);
   const backendSessionStatusRef = useRef<Record<string, StreamCheckResponse['status'] | null>>({});
   const handledChatSessionSignalsRef = useRef<Record<string, number>>({});
   const modelRef = useRef(model);
@@ -510,6 +553,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const sessionCacheRef = useRef<Record<string, ChatSession>>({});
   activeSessionRef.current = activeSession;
   skillSettingsRef.current = skillSettings;
+  mcpSettingsRef.current = mcpSettings;
   modelRef.current = model;
   engineRef.current = engine;
   globalEngineRef.current = effectiveGlobalEngine;
@@ -1629,6 +1673,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             skipUserMessage: true,
             mode: 'dashboard',
             workingDirectory: workingDirectory || undefined,
+            mcpServers: mcpSettingsRef.current,
           }),
         });
         const { chatId } = await startRes.json();
@@ -1853,6 +1898,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           engine: resolvedEngine || undefined,
           workingDirectory: workingDirectory || undefined,
           skills: skillSettingsRef.current,
+          mcpServers: mcpSettingsRef.current,
         }),
       });
       const data = await response.json().catch(() => null);
@@ -1968,6 +2014,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             mode: 'standalone-chat',
             sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || undefined),
             workingDirectory: workingDirectory || undefined,
+            requestedMcpServers: mcpSettingsRef.current,
           }),
         }).then(async (response) => {
           const data = await response.json().catch(() => null);
@@ -2021,6 +2068,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               supervisorAgent: workflowBinding.supervisorAgent,
               supervisorSessionId: workflowBinding.supervisorSessionId || null,
             },
+            requestedMcpServers: mcpSettingsRef.current,
           }),
         }).then(async (response) => {
           const data = await response.json().catch(() => null);
@@ -2095,6 +2143,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           assistantMessageId: assistantMsgId,
           mode: 'dashboard',
           workingDirectory: workingDirectory || undefined,
+          mcpServers: mcpSettingsRef.current,
         }),
       });
       const startData = await startRes.json();
@@ -2562,6 +2611,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       engine, effectiveEngine, isModelSelectionReady, setEngine: handleSetEngine,
       confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
       skillSettings, discoveredSkills, toggleSkill, setSkillsEnabled,
+      mcpSettings, discoveredMcpServers, toggleMcpServer, setMcpServersEnabled,
       workingDirectory, setWorkingDirectory,
       setSessionWorkbenchState,
       updateSessionCreationBinding,

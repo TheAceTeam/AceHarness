@@ -77,6 +77,22 @@ export type OpenCodeHttpClient = {
   config?: {
     get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
   };
+  mcp?: {
+    status(options?: {
+      query?: { directory?: string };
+    }): Promise<{ data?: unknown; error?: unknown }>;
+    add(options: {
+      body?: {
+        name: string;
+        config: unknown;
+      };
+      query?: { directory?: string };
+    }): Promise<{ data?: unknown; error?: unknown }>;
+    connect(options: {
+      path: { name: string };
+      query?: { directory?: string };
+    }): Promise<{ data?: unknown; error?: unknown }>;
+  };
   event?: {
     subscribe(options?: {
       signal?: AbortSignal;

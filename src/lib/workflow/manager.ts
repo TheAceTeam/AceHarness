@@ -41,6 +41,11 @@ import {
   recordWorkflowGitSnapshot,
   upsertWorkflowGitStepDiff,
 } from '@/lib/workflow/git-baseline';
+import {
+  mergeMcpServers,
+  resolveMcpServersByNames,
+  type ManagedMcpServer,
+} from '@/lib/mcp/registry';
 
 /** 根据工作流引擎配置解析 Agent 实际使用的模型 */
 export function resolveAgentModel(roleConfig: any, workflowContext?: any): string {
@@ -250,6 +255,8 @@ export class WorkflowManager extends EventEmitter {
   }
   /** Cached workflow-level skills from context.skills */
   private workflowSkillsContent: string = '';
+  /** Resolved workflow-level MCP servers from context.mcpServers */
+  private workflowMcpServers: ManagedMcpServer[] = [];
   /** Skills copied to workspace that need cleanup on finish */
   private copiedSkills: { dir: string; names: string[]; indexCopied: boolean; dirExistedBefore: boolean } | null = null;
   /** Current engine instance (Kiro CLI, Codex, etc.) */
@@ -266,6 +273,18 @@ export class WorkflowManager extends EventEmitter {
   private resolveProjectRootPath(projectRoot?: string | null): string {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
+  }
+
+  private async resolveWorkflowMcpServers(workflowConfig: WorkflowConfig): Promise<void> {
+    const names = Array.isArray((workflowConfig.context as any)?.mcpServers)
+      ? (workflowConfig.context as any).mcpServers
+      : [];
+    const baseDirectory = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || this.resolveProjectRootPath();
+    this.workflowMcpServers = await resolveMcpServersByNames(names, baseDirectory);
+  }
+
+  private getEffectiveMcpServers(roleConfig?: RoleConfig | null): ManagedMcpServer[] {
+    return mergeMcpServers(this.workflowMcpServers, roleConfig?.mcpServers as any);
   }
 
   private getWorkflowSupervisorAgentName(): string | undefined {
@@ -861,6 +880,7 @@ try {
         sessionId: options.resumeSessionId,
         appendSystemPrompt: options.appendSystemPrompt,
         runId: options.runId,
+        mcpServers: options.mcpServers,
       }, {
         onContextReset: (event) => {
           this.emit('log', {
@@ -1162,6 +1182,7 @@ try {
     this.liveFeedback = [];
     this.globalContext = initialContexts?.globalContext || '';
     this.workspaceSkills = '';
+    this.workflowMcpServers = [];
     this.phaseContexts = new Map(Object.entries(initialContexts?.phaseContexts || {}));
     this.isolatedDir = null;
     this.currentProjectRoot = null;
@@ -1270,6 +1291,10 @@ try {
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
         await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+      if (this.shouldStop) return;
+      await reportPreparingProgress('准备中：加载 MCP 配置...', '加载 MCP 配置');
+      await this.resolveWorkflowMcpServers(workflowConfig);
+
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
       await this.syncSkillsToWorkspace(workflowConfig);
@@ -2296,7 +2321,7 @@ try {
           timeoutMs,
           runId: this.currentRunId || undefined,
           agents: agentsJson, // Pass sub-agents configuration
-          mcpServers: roleConfig.mcpServers,
+          mcpServers: this.getEffectiveMcpServers(roleConfig),
         }
       );
 
@@ -2417,7 +2442,7 @@ try {
               appendSystemPrompt: !!currentSessionId,
               timeoutMs,
               runId: this.currentRunId || undefined,
-              mcpServers: roleConfig.mcpServers,
+              mcpServers: this.getEffectiveMcpServers(roleConfig),
             }
           );
         } catch (err) {
@@ -3063,6 +3088,7 @@ try {
     this.agentSessionIds.clear();
     this.liveFeedback = [];
     this.globalContext = runState.globalContext || '';
+    this.workflowMcpServers = [];
     this.phaseContexts = new Map(Object.entries(runState.phaseContexts || {}));
     this.isolatedDir = runState.workingDirectory || null;
     this.currentProjectRoot = runState.workingDirectory || workflowConfig.context.projectRoot || null;
@@ -3077,6 +3103,7 @@ try {
 
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.resolveWorkflowMcpServers(workflowConfig);
 
     await this.ensureWorkflowGitBaseline(workflowConfig.context.projectRoot || runState.workingDirectory);
 

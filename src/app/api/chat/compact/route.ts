@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/middleware';
 import { loadChatSession } from '@/lib/chat/persistence';
-import { buildChatRequestContext, ensureEngineRuntimeSkillsAvailable, type RequestedSkillsInput } from '@/lib/chat/request-options';
+import {
+  buildChatRequestContext,
+  ensureEngineRuntimeSkillsAvailable,
+  type RequestedMcpServersInput,
+  type RequestedSkillsInput,
+} from '@/lib/chat/request-options';
 import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { createEngine, resolveRequestedEngineType } from '@/lib/engines/engine-factory';
 import { compactEngineContextManually } from '@/lib/engines/context-recovery';
@@ -169,11 +174,12 @@ export async function POST(request: NextRequest) {
 
     const useModel = typeof body?.model === 'string' ? body.model : (session.model || '');
     const engineType = await resolveRequestedEngineType(typeof body?.engine === 'string' ? body.engine : session.engine);
-    const { systemPrompt } = await buildChatRequestContext({
+    const { systemPrompt, enabledMcpServers } = await buildChatRequestContext({
       mode: 'dashboard',
       frontendSessionId,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
       requestedSkills: body?.skills as RequestedSkillsInput,
+      requestedMcpServers: body?.mcpServers as RequestedMcpServersInput,
       personalDir: user.personalDir,
     });
     await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot());
@@ -191,6 +197,7 @@ export async function POST(request: NextRequest) {
       model: useModel,
       workingDirectory: getWorkspaceRoot(),
       sessionId: requestedBackendSessionId,
+      mcpServers: enabledMcpServers,
     }, {
       buildCompactSource: () => compactSource,
       compactInstructions: 'This is a manual user-triggered /compact command. Preserve user intent, tool/action results, files, errors, and pending tasks for future chat turns.',
@@ -206,6 +213,7 @@ export async function POST(request: NextRequest) {
       allowedTools: [],
       forceNewSession: true,
       appendSystemPrompt: false,
+      mcpServers: enabledMcpServers,
     }), () => engine.cancel());
 
     if (!result.success && !result.sessionId) {

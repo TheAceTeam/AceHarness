@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { mcpServerSchema } from '@/lib/mcp/types';
 
 const agentTeamSchema = z.enum(['blue', 'red', 'judge', 'black-gold']);
 const agentRoleTypeSchema = z.enum(['normal', 'supervisor']);
@@ -171,13 +172,7 @@ export const roleConfigSchema = z.object({
       model: z.string(),
     })),
   }).optional(),
-  mcpServers: z.array(z.object({
-    name: z.string().min(1),
-    type: z.enum(['stdio']),
-    command: z.string().min(1),
-    projectDir: z.string().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-  })).optional(),
+  mcpServers: z.array(mcpServerSchema).optional(),
 });
 
 export const workflowAgentExecutionOverrideSchema = z.object({
@@ -203,6 +198,7 @@ export const contextConfigSchema = z.object({
   engine: z.string().optional(), // 工作流级别引擎覆盖
   executionPolicy: workflowExecutionPolicySchema.optional(),
   skills: z.array(z.string()).optional(), // 启用的 skills 列表
+  mcpServers: z.array(z.string()).optional(), // 启用的 MCP server 名称
   routerModel: z.string().optional(), // Supervisor-Lite 路由模型（可选）
 });
 

@@ -12,6 +12,7 @@
 
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { EventEmitter } from 'events';
+import { ensureOpenCodeCompatibleMcpServers } from '@/lib/mcp/registry';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
@@ -236,6 +237,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         detail: url,
         verbose: true,
       });
+      await ensureOpenCodeCompatibleMcpServers(client as any, options.workingDirectory, options.mcpServers as any);
 
       // Create or resume session
       if (options.sessionId) {

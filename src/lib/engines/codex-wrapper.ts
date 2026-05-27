@@ -22,6 +22,7 @@ import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
+import { toCodexMcpServers } from '@/lib/mcp/registry';
 
 const requireFromHere = createRequire(__filename);
 
@@ -100,6 +101,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private codexInstance: any = null;
   private _abortController: AbortController | null = null;
   private lastBlockWasTool = false;
+  private lastMcpSignature = '';
 
   private getThreadOptions(options: EngineOptions) {
     return {
@@ -193,18 +195,26 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     });
   }
 
-  private async createCodexClient(Codex: any, codexPathOverride?: string | null): Promise<any> {
+  private async createCodexClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<any> {
     const clientEnv = buildConfiguredProcessEnvSync();
+    const mcpServers = options.mcpServers?.length
+      ? toCodexMcpServers(options.mcpServers as any)
+      : undefined;
+    const codexOptions = {
+      ...(codexPathOverride ? { codexPathOverride } : {}),
+      ...(mcpServers && Object.keys(mcpServers).length > 0 ? { config: { mcp_servers: mcpServers } } : {}),
+      env: clientEnv,
+    };
 
-    return codexPathOverride
-      ? new Codex({ codexPathOverride, env: clientEnv })
-      : new Codex({ env: clientEnv });
+    return new Codex(codexOptions);
   }
 
   private async runWithClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<EngineResult> {
-    if (!this.codexInstance || codexPathOverride) {
-      this.codexInstance = await this.createCodexClient(Codex, codexPathOverride);
+    const mcpSignature = JSON.stringify(options.mcpServers || []);
+    if (!this.codexInstance || codexPathOverride || this.lastMcpSignature !== mcpSignature) {
+      this.codexInstance = await this.createCodexClient(Codex, options, codexPathOverride);
       this.currentThread = null;
+      this.lastMcpSignature = mcpSignature;
     }
 
     // Create or reuse thread

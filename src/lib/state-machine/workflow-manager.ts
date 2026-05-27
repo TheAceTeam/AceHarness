@@ -89,6 +89,11 @@ import {
   recordWorkflowGitSnapshot,
   upsertWorkflowGitStepDiff,
 } from '@/lib/workflow/git-baseline';
+import {
+  mergeMcpServers,
+  resolveMcpServersByNames,
+  type ManagedMcpServer,
+} from '@/lib/mcp/registry';
 
 export interface TokenUsage {
   inputTokens: number;
@@ -396,6 +401,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private engineType: EngineType = 'claude-code';
   private engineExecutionTail: Promise<void> = Promise.resolve();
   private workflowGit: WorkflowGitState | null = null;
+  /** Resolved workflow-level MCP servers from context.mcpServers */
+  private workflowMcpServers: ManagedMcpServer[] = [];
   /** Optional frontend chat session to auto-bind with this run */
   public _frontendSessionId?: string;
   /** Explicit creation session to bind to the next run */
@@ -409,6 +416,18 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private resolveProjectRootPath(projectRoot?: string | null): string {
     const baseDir = this._userPersonalDir || getWorkspaceRoot();
     return projectRoot ? resolve(baseDir, projectRoot) : baseDir;
+  }
+
+  private async resolveWorkflowMcpServers(workflowConfig: StateMachineWorkflowConfig): Promise<void> {
+    const names = Array.isArray(workflowConfig.context?.mcpServers)
+      ? workflowConfig.context.mcpServers
+      : [];
+    const baseDirectory = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || this.resolveProjectRootPath();
+    this.workflowMcpServers = await resolveMcpServersByNames(names, baseDirectory);
+  }
+
+  private getEffectiveMcpServers(roleConfig?: RoleConfig | null): ManagedMcpServer[] {
+    return mergeMcpServers(this.workflowMcpServers, roleConfig?.mcpServers as any);
   }
 
   private getWorkflowAgoraAgentSessions(): Record<string, string> {
@@ -1066,6 +1085,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentRunSpecCoding = null;
       this.currentSpecRootDir = null;
       this.workflowGit = null;
+      this.workflowMcpServers = [];
       this.stepTaskBindingsByStepKey.clear();
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;
@@ -1234,6 +1254,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.initializeAgents(workflowConfig);
       await reportPreparingProgress('准备中：初始化执行引擎...', '初始化执行引擎');
         await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+      if (this.shouldStop) return;
+      await reportPreparingProgress('准备中：加载 MCP 配置...', '加载 MCP 配置');
+      await this.resolveWorkflowMcpServers(workflowConfig);
       if (this.shouldStop) return;
       await reportPreparingProgress('准备中：同步 Skills...', '同步 Skills');
       await this.syncSkillsToWorkspace(workflowConfig);
@@ -2198,6 +2221,7 @@ try {
           sessionId: options.resumeSessionId,
           appendSystemPrompt: options.appendSystemPrompt,
           runId: options.runId,
+          mcpServers: options.mcpServers,
         }, {
           onContextReset: (event) => {
             this.emit('log', {
@@ -3996,6 +4020,7 @@ try {
             resumeSessionId: currentSessionId,
             appendSystemPrompt: !!currentSessionId,
             streamStepName,
+            mcpServers: this.getEffectiveMcpServers(roleConfig),
           }
         );
       } catch (err) {
@@ -4507,6 +4532,7 @@ try {
       workflowConfig.context.projectRoot = runState.workingDirectory;
     }
     this.currentWorkflowConfig = workflowConfig;
+    this.workflowMcpServers = [];
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
@@ -4522,6 +4548,7 @@ try {
 
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.resolveWorkflowMcpServers(workflowConfig);
     await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
 
     // If resuming from __human_approval__, restore the approval wait flow
@@ -4870,6 +4897,8 @@ try {
     const configContent = await readFile(configPath, 'utf-8');
     const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
     this.currentWorkflowConfig = workflowConfig;
+    this.workflowMcpServers = [];
+    await this.resolveWorkflowMcpServers(workflowConfig);
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
     // Load agent configs and initialize agents
@@ -4967,6 +4996,7 @@ try {
             : this.resolveProjectRootPath(),
           timeoutMs: 60000,
           resumeSessionId: agentState?.sessionId || undefined,
+          mcpServers: this.getEffectiveMcpServers(roleConfig),
         }
       );
       const answer = result.result || '[无输出]';

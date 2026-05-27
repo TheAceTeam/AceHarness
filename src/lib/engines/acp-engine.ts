@@ -12,6 +12,7 @@ import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
+import { toAcpMcpServers, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
   ClientSideConnection,
@@ -52,6 +53,8 @@ export interface ACPEngineConfig {
   promptField?: string;
   /** Environment variables */
   env?: Record<string, string>;
+  /** MCP server configs for the current session */
+  mcpServers?: ManagedMcpServer[];
   /** Enable detailed lifecycle logs for diagnostics. */
   diagnosticLogging?: boolean;
 }
@@ -287,12 +290,18 @@ export class ACPEngine extends EventEmitter {
   private sessionId: string | null = null;
   private initialized = false;
   private availableModels: Array<{ modelId: string; name: string }> = [];
+  private mcpServers: ManagedMcpServer[] = [];
   private lastStderrChunk = '';
   private lastExitInfo = '';
   private historyReplayCollector: ACPHistoryReplayCollector | null = null;
 
   constructor(private config: ACPEngineConfig) {
     super();
+    this.mcpServers = config.mcpServers || [];
+  }
+
+  setMcpServers(servers: ManagedMcpServer[] | undefined): void {
+    this.mcpServers = servers || [];
   }
 
   private isDiagnosticLoggingEnabled(): boolean {
@@ -581,7 +590,7 @@ export class ACPEngine extends EventEmitter {
     });
     const newSessionPromise = this.connection.newSession({
       cwd: this.config.workingDirectory,
-      mcpServers: [],
+      mcpServers: toAcpMcpServers(this.mcpServers),
     });
 
     const sessionTimeoutMs = getAcpNewSessionTimeoutMs();
@@ -643,7 +652,7 @@ export class ACPEngine extends EventEmitter {
     const loadPromise = this.connection.loadSession({
       sessionId,
       cwd: this.config.workingDirectory,
-      mcpServers: [],
+      mcpServers: toAcpMcpServers(this.mcpServers),
     });
     const loadTimeoutMs = getAcpLoadSessionTimeoutMs();
     let result;
@@ -763,7 +772,7 @@ export class ACPEngine extends EventEmitter {
     const loadPromise = this.connection.loadSession({
       sessionId,
       cwd: this.config.workingDirectory,
-      mcpServers: [],
+      mcpServers: toAcpMcpServers(this.mcpServers),
     });
     const loadTimeoutMs = getAcpLoadSessionTimeoutMs();
     const tReplay = Date.now();

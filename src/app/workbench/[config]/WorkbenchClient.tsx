@@ -68,6 +68,7 @@ import {
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import type { ManagedMcpServer } from '@/lib/mcp/types';
 import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
@@ -145,7 +146,7 @@ const AgentsManager = dynamic(() => import('@/components/agents/AgentsManager'),
 });
 const SkillsManager = dynamic(() => import('@/components/skills/SkillsManager'), {
   ssr: false,
-  loading: () => designTabLoadingPanel('正在加载 Skills 管理...'),
+  loading: () => designTabLoadingPanel('正在加载 Skills/MCP 管理...'),
 });
 
 const MonacoEditor = dynamic(
@@ -1182,6 +1183,7 @@ export default function WorkbenchPage() {
   const [isNewNode, setIsNewNode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
+  const [availableMcpServers, setAvailableMcpServers] = useState<ManagedMcpServer[]>([]);
   const [starting, setStarting] = useState(false);
   const [rehearsalMode, setRehearsalMode] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
@@ -1455,6 +1457,13 @@ export default function WorkbenchPage() {
     } catch {
       /* ignore */
     }
+    try {
+      const mcpRes = await fetch('/api/mcp');
+      const mcpData = await mcpRes.json();
+      setAvailableMcpServers(Array.isArray(mcpData.servers) ? mcpData.servers : []);
+    } catch {
+      /* ignore */
+    }
   }, [dispatch]);
 
   const handleDesignTabChange = useCallback((tab: DesignTab) => {
@@ -1495,7 +1504,7 @@ export default function WorkbenchPage() {
     viewMode, workflowConfig, editingConfig, agentConfigs,
     workflowStatus, runId, currentPhase, currentStep, agents, logs, completedSteps, failedSteps,
     showCheckpoint, checkpointMessage, checkpointIsIterative, activeTab, selectedAgent, selectedStep,
-    projectRoot, workspaceMode, requirements, timeoutMinutes, engine, skills, showProcessPanel,
+    projectRoot, workspaceMode, requirements, timeoutMinutes, engine, skills, mcpServers, showProcessPanel,
     showEditNodeModal, editingNode, iterationStates, stepResults, stepIdMap,
     globalContext, phaseContexts,
   } = state;
@@ -3913,12 +3922,18 @@ export default function WorkbenchPage() {
       setWorkflowAutoCompactOnStepChange(loadedExecutionPolicy.autoCompactOnStepChange === true);
       setWorkflowAgentOverrides(loadedExecutionPolicy.agentOverrides || {});
       dispatch({ type: 'SET_SKILLS', payload: config.context?.skills || [] });
+      dispatch({ type: 'SET_MCP_SERVERS', payload: config.context?.mcpServers || [] });
 
       // Load available skills
       try {
         const skillsRes = await fetch('/api/skills');
         const skillsData = await skillsRes.json();
         setAvailableSkills(skillsData.skills?.map((s: any) => ({ name: s.name, description: s.description })) || []);
+      } catch { /* ignore */ }
+      try {
+        const mcpRes = await fetch('/api/mcp');
+        const mcpData = await mcpRes.json();
+        setAvailableMcpServers(Array.isArray(mcpData.servers) ? mcpData.servers : []);
       } catch { /* ignore */ }
     } catch (error: any) {
       const message = error?.message || '加载失败';
@@ -4173,6 +4188,7 @@ export default function WorkbenchPage() {
             agentOverrides: normalizedAgentOverrides,
           },
           skills,
+          mcpServers,
         },
       };
       await configApi.saveConfig(configFile, config);
@@ -6066,6 +6082,7 @@ export default function WorkbenchPage() {
             agentOverrides: normalizedAgentOverrides,
           },
           skills,
+          mcpServers,
         },
       };
       const specCodingDocument = specCodingSummary && specCodingDetails ? {
@@ -8627,7 +8644,7 @@ export default function WorkbenchPage() {
                     onClick={() => handleDesignTabChange('skills')}
                   >
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">extension</span>
-                    Skills 管理
+                    Skills/MCP 管理
                   </button>
                 </div>
               </div>
@@ -8991,6 +9008,27 @@ export default function WorkbenchPage() {
                               />
                             </div>
                             <p className="text-xs text-muted-foreground mt-1.5">选择工作流运行时可用的 Skills</p>
+                          </div>
+                        )}
+
+                        {availableMcpServers.length > 0 && (
+                          <div>
+                            <Label className="text-sm font-medium">MCP Servers</Label>
+                            <div className="mt-2">
+                              <MultiCombobox
+                                value={mcpServers}
+                                onValueChange={(value) => dispatch({ type: 'SET_MCP_SERVERS', payload: value })}
+                                options={availableMcpServers.map((server) => ({
+                                  value: server.name,
+                                  label: server.name,
+                                  description: server.projectDir
+                                    ? `${server.command} · ${server.projectDir}`
+                                    : server.command,
+                                }))}
+                                placeholder="选择 MCP Servers..."
+                              />
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-1.5">选择工作流运行时默认启用的 MCP Servers</p>
                           </div>
                         )}
                       </div>

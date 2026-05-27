@@ -67,6 +67,7 @@ export interface WorkflowState {
   timeoutMinutes: number;
   engine: string;
   skills: string[];
+  mcpServers: string[];
   showProcessPanel: boolean;
   showEditNodeModal: boolean;
   editingNode: { type: 'phase' | 'step'; phaseIndex: number; stepIndex?: number } | null;
@@ -108,6 +109,7 @@ type WorkflowAction =
   | { type: 'SET_TIMEOUT_MINUTES'; payload: number }
   | { type: 'SET_ENGINE'; payload: string }
   | { type: 'SET_SKILLS'; payload: string[] }
+  | { type: 'SET_MCP_SERVERS'; payload: string[] }
   | { type: 'SET_SHOW_PROCESS_PANEL'; payload: boolean }
   | { type: 'SET_SHOW_EDIT_NODE_MODAL'; payload: boolean }
   | { type: 'SET_EDITING_NODE'; payload: WorkflowState['editingNode'] }
@@ -149,6 +151,7 @@ function createInitialState(initialViewMode: ViewMode = 'run'): WorkflowState {
     timeoutMinutes: 30,
     engine: '',
     skills: [],
+    mcpServers: [],
     showProcessPanel: false,
     showEditNodeModal: false,
     editingNode: null,
@@ -221,6 +224,7 @@ function workflowReducer(state: WorkflowState, action: WorkflowAction): Workflow
     case 'SET_TIMEOUT_MINUTES': return { ...state, timeoutMinutes: action.payload };
     case 'SET_ENGINE': return { ...state, engine: action.payload };
     case 'SET_SKILLS': return { ...state, skills: action.payload };
+    case 'SET_MCP_SERVERS': return { ...state, mcpServers: action.payload };
     case 'SET_SHOW_PROCESS_PANEL': return { ...state, showProcessPanel: action.payload };
     case 'SET_SHOW_EDIT_NODE_MODAL': return { ...state, showEditNodeModal: action.payload };
     case 'SET_EDITING_NODE': return { ...state, editingNode: action.payload };

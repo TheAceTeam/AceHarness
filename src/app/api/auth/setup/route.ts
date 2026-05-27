@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     for (const s of discovered) {
       skills[s.name] = DEFAULT_ENABLED.includes(s.name);
     }
-    await saveChatSettings({ skills });
+    await saveChatSettings({ skills, mcpServers: {} });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

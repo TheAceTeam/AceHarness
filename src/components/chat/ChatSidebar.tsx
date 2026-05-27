@@ -56,6 +56,7 @@ import {
 } from '@/lib/core/home-sidebar-state';
 import type { HumanQuestion } from '@/lib/run/state-persistence';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
+import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { RobotLogo } from '@/components/brand/RobotLogo';
 
 type SkillItem = {
@@ -65,6 +66,8 @@ type SkillItem = {
   source?: string;
   tags?: string[];
 };
+
+type McpServerItem = ManagedMcpServer;
 
 type SidebarSession = ChatSessionSummaryLike & {
   agentBinding?: {
@@ -550,6 +553,10 @@ export default function ChatSidebar({
     discoveredSkills,
     toggleSkill,
     setSkillsEnabled,
+    mcpSettings,
+    discoveredMcpServers,
+    toggleMcpServer,
+    setMcpServersEnabled,
   } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
   const [internalSessionView, setInternalSessionView] = useState<SessionDirectoryView>('conversation');
@@ -608,6 +615,7 @@ export default function ChatSidebar({
   }, [agoraGuestPresets, agoraGuestsLoading, agoraSavedGuests, onAgoraGuestDataChange]);
 
   const enabledCount = discoveredSkills.filter(s => !!skillSettings[s.name]).length;
+  const enabledMcpCount = discoveredMcpServers.filter(server => !!mcpSettings[server.name]).length;
   const currentSessionView: SessionDirectoryView =
     sessionView === 'conversation' || sessionView === 'agora' || sessionView === 'workflow'
       ? sessionView
@@ -1653,30 +1661,33 @@ export default function ChatSidebar({
           </div>
         )}
       </div>
-      {/* Skills 入口 */}
-      {discoveredSkills.length > 0 && (
-        <div className="border-t p-3">
+      {(discoveredSkills.length > 0 || discoveredMcpServers.length > 0) && (
+        <div className="border-t p-3 space-y-1.5">
           <button
             className="w-full flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors"
             onClick={() => setSkillModalOpen(true)}
           >
             <div className="flex items-center gap-1.5">
               <span className="material-symbols-outlined text-sm text-muted-foreground">extension</span>
-              <span className="text-xs font-semibold text-muted-foreground">Skills</span>
+              <span className="text-xs font-semibold text-muted-foreground">Skills/MCP</span>
             </div>
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
-              {enabledCount}/{discoveredSkills.length}
+              {enabledCount + enabledMcpCount}/{discoveredSkills.length + discoveredMcpServers.length}
             </span>
           </button>
         </div>
       )}
-      {/* Skills 管理弹窗 */}
+      {/* Skills/MCP 管理弹窗 */}
       {skillModalOpen && (
         <SkillManagerModal
           skills={discoveredSkills}
           skillSettings={skillSettings}
           toggleSkill={toggleSkill}
           setSkillsEnabled={setSkillsEnabled}
+          servers={discoveredMcpServers}
+          mcpSettings={mcpSettings}
+          toggleMcpServer={toggleMcpServer}
+          setMcpServersEnabled={setMcpServersEnabled}
           onClose={() => setSkillModalOpen(false)}
         />
       )}
@@ -1751,29 +1762,34 @@ export default function ChatSidebar({
 
 const LOCKED_SKILLS = ['aceharness-chat-card'];
 
-/* ========== Skills 管理弹窗 ========== */
+/* ========== Skills/MCP 管理弹窗 ========== */
 
 function SkillManagerModal({
   skills,
   skillSettings,
   toggleSkill,
   setSkillsEnabled,
+  servers,
+  mcpSettings,
+  toggleMcpServer,
+  setMcpServersEnabled,
   onClose,
 }: {
   skills: SkillItem[];
   skillSettings: Record<string, boolean>;
   toggleSkill: (name: string) => void;
   setSkillsEnabled: (skills: Record<string, boolean>) => void;
+  servers: McpServerItem[];
+  mcpSettings: Record<string, boolean>;
+  toggleMcpServer: (name: string) => void;
+  setMcpServersEnabled: (servers: Record<string, boolean>) => void;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'cangjie' | 'anthropics'>('all');
+  const [activeTab, setActiveTab] = useState<'skills' | 'mcp'>('skills');
 
-  const filtered = useMemo(() => {
+  const filteredSkills = useMemo(() => {
     let list = skills;
-    if (activeTab !== 'all') {
-      list = list.filter(s => (s.source || 'cangjie') === activeTab);
-    }
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(s =>
@@ -1784,13 +1800,27 @@ function SkillManagerModal({
       );
     }
     return list;
-  }, [skills, activeTab, search]);
+  }, [skills, search]);
 
-  const cangjieCount = skills.filter(s => (s.source || 'cangjie') === 'cangjie').length;
-  const anthropicsCount = skills.filter(s => (s.source || 'cangjie') === 'anthropics').length;
+  const filteredServers = useMemo(() => {
+    if (!search.trim()) return servers;
+    const query = search.trim().toLowerCase();
+    return servers.filter((server) => {
+      const envKeys = Object.keys(server.env || {}).join(' ');
+      return [
+        server.name,
+        server.command,
+        server.projectDir || '',
+        envKeys,
+      ].join(' ').toLowerCase().includes(query);
+    });
+  }, [search, servers]);
+
   const enabledCount = skills.filter(s => !!skillSettings[s.name]).length;
+  const enabledMcpCount = servers.filter((server) => !!mcpSettings[server.name]).length;
   const selectableSkills = skills.filter(s => !LOCKED_SKILLS.includes(s.name));
-  const selectedFilteredCount = filtered.filter(s => !!skillSettings[s.name]).length;
+  const selectedFilteredSkillCount = filteredSkills.filter(s => !!skillSettings[s.name]).length;
+  const selectedFilteredMcpCount = filteredServers.filter((server) => !!mcpSettings[server.name]).length;
 
   const setAllSelectableSkills = (enabled: boolean) => {
     const next = Object.fromEntries(selectableSkills.map(skill => [skill.name, enabled]));
@@ -1800,24 +1830,29 @@ function SkillManagerModal({
     setSkillsEnabled(next);
   };
 
+  const setAllServers = (enabled: boolean) => {
+    const next = Object.fromEntries(servers.map((server) => [server.name, enabled]));
+    setMcpServersEnabled(next);
+  };
+
   const tabs = [
-    { key: 'all' as const, label: '全部', count: skills.length },
-    { key: 'cangjie' as const, label: 'Cangjie', count: cangjieCount },
-    { key: 'anthropics' as const, label: 'Anthropics', count: anthropicsCount },
+    { key: 'skills' as const, label: 'Skills', count: skills.length },
+    { key: 'mcp' as const, label: 'MCP', count: servers.length },
   ];
+  const selectedFilteredCount = activeTab === 'skills' ? selectedFilteredSkillCount : selectedFilteredMcpCount;
+  const filteredCount = activeTab === 'skills' ? filteredSkills.length : filteredServers.length;
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-card rounded-lg w-[560px] max-w-[90vw] max-h-[75vh] flex flex-col border"
+        className="bg-card rounded-lg w-[620px] max-w-[92vw] max-h-[75vh] flex flex-col border"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="p-4 border-b flex items-center justify-between shrink-0">
           <div>
-            <h3 className="text-base font-semibold">Skills 管理</h3>
+            <h3 className="text-base font-semibold">Skills/MCP</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              已启用 {enabledCount} / {skills.length} 个技能
+              Skills {enabledCount}/{skills.length} · MCP {enabledMcpCount}/{servers.length}
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -1825,7 +1860,6 @@ function SkillManagerModal({
           </Button>
         </div>
 
-        {/* Tabs + Search */}
         <div className="px-4 pt-3 pb-2 space-y-2 shrink-0">
           <div className="flex gap-1">
             {tabs.map(tab => (
@@ -1845,7 +1879,7 @@ function SkillManagerModal({
           <div className="relative">
             <span className="material-symbols-outlined text-sm absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">search</span>
             <Input
-              placeholder="搜索技能名称、描述或标签..."
+              placeholder={activeTab === 'skills' ? '搜索技能名称、描述或标签...' : '搜索 MCP 名称、命令或目录...'}
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs"
@@ -1853,7 +1887,7 @@ function SkillManagerModal({
           </div>
           <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-2">
             <span className="text-[11px] text-muted-foreground">
-              当前列表 {selectedFilteredCount} / {filtered.length} 已启用
+              当前列表 {selectedFilteredCount} / {filteredCount} 已启用
             </span>
             <div className="flex gap-1.5">
               <Button
@@ -1861,8 +1895,8 @@ function SkillManagerModal({
                 size="sm"
                 variant="outline"
                 className="h-7 px-2 text-xs"
-                onClick={() => setAllSelectableSkills(true)}
-                disabled={selectableSkills.length === 0}
+                onClick={() => activeTab === 'skills' ? setAllSelectableSkills(true) : setAllServers(true)}
+                disabled={activeTab === 'skills' ? selectableSkills.length === 0 : servers.length === 0}
               >
                 全选
               </Button>
@@ -1871,8 +1905,8 @@ function SkillManagerModal({
                 size="sm"
                 variant="outline"
                 className="h-7 px-2 text-xs"
-                onClick={() => setAllSelectableSkills(false)}
-                disabled={selectableSkills.length === 0}
+                onClick={() => activeTab === 'skills' ? setAllSelectableSkills(false) : setAllServers(false)}
+                disabled={activeTab === 'skills' ? selectableSkills.length === 0 : servers.length === 0}
               >
                 全部取消
               </Button>
@@ -1880,32 +1914,24 @@ function SkillManagerModal({
           </div>
         </div>
 
-        {/* Skills List */}
         <div className="home-chat-scroll flex-1 overflow-y-auto px-4 pb-4">
-          {filtered.length === 0 ? (
+          {activeTab === 'skills' && filteredSkills.length === 0 ? (
             <div className="py-10 text-center text-xs text-muted-foreground">没有匹配的技能</div>
-          ) : (
+          ) : activeTab === 'mcp' && filteredServers.length === 0 ? (
+            <div className="py-10 text-center text-xs text-muted-foreground">没有匹配的 MCP Server</div>
+          ) : activeTab === 'skills' ? (
             <div className="space-y-1">
-              {filtered.map(skill => (
+              {filteredSkills.map(skill => (
                 <div
                   key={skill.name}
                   className="flex items-start gap-3 p-2.5 rounded-md hover:bg-muted/50 transition-colors group"
                 >
                   <div className="mt-0.5 shrink-0">
-                    <span className={`material-symbols-outlined text-base ${
-                      (skill.source || 'cangjie') === 'anthropics' ? 'text-orange-400' : 'text-blue-400'
-                    }`}>
-                      {(skill.source || 'cangjie') === 'anthropics' ? 'auto_awesome' : 'extension'}
-                    </span>
+                    <span className="material-symbols-outlined text-base text-blue-400">extension</span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-medium">{skill.label}</span>
-                      {skill.source === 'anthropics' && (
-                        <span className="text-[9px] px-1 py-0.5 rounded bg-orange-500/10 text-orange-500 font-medium leading-none">
-                          Anthropics
-                        </span>
-                      )}
                     </div>
                     <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2 leading-relaxed">
                       {skill.description || '暂无描述'}
@@ -1936,6 +1962,50 @@ function SkillManagerModal({
                   </div>
                 </div>
               ))}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredServers.map((server) => {
+                const envCount = Object.keys(server.env || {}).length;
+                return (
+                  <div
+                    key={server.name}
+                    className="flex items-start gap-3 rounded-md border border-border/60 bg-muted/20 p-3"
+                  >
+                    <div className="mt-0.5 shrink-0">
+                      <span className="material-symbols-outlined text-base text-emerald-500">developer_board</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-medium">{server.name}</span>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-medium leading-none">
+                          stdio
+                        </span>
+                        {envCount > 0 && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-secondary text-secondary-foreground font-medium leading-none">
+                            ENV {envCount}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                        {server.command}
+                      </p>
+                      {server.projectDir && (
+                        <p className="mt-1 break-all text-[11px] text-muted-foreground">
+                          目录: {server.projectDir}
+                        </p>
+                      )}
+                    </div>
+                    <div className="shrink-0 mt-0.5">
+                      <Switch
+                        checked={!!mcpSettings[server.name]}
+                        onCheckedChange={() => toggleMcpServer(server.name)}
+                        className="scale-75"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

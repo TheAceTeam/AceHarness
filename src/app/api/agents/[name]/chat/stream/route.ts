@@ -30,6 +30,8 @@ type StreamBody = {
   workingDirectory?: string;
   workflowContext?: Record<string, any>;
   temporaryRoleConfig?: Record<string, any>;
+  requestedMcpServers?: string[] | Record<string, boolean>;
+  mcpServers?: string[] | Record<string, boolean>;
 };
 
 function hasWerewolfResult(rawOutput: string): boolean {
@@ -98,6 +100,7 @@ export async function POST(
       temporaryRoleConfig: body?.temporaryRoleConfig && typeof body.temporaryRoleConfig === 'object'
         ? body.temporaryRoleConfig as any
         : null,
+      requestedMcpServers: body?.requestedMcpServers ?? body?.mcpServers,
       userContext: {
         id: user.id,
         username: user.username,

@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { existsSync, readFileSync } from 'fs';
-import { getRuntimeAgentConfigPath } from '@/lib/run/runtime-configs';
+import { getRuntimeAgentConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getConfiguredEngine, getOrCreateEngine, type EngineType } from '@/lib/engines/engine-factory';
 import { resolveAgentSelection } from '@/lib/agent/engine-selection';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
@@ -30,7 +30,16 @@ import {
 } from '@/lib/spec/coding-revision-protocol';
 import { getRuntimeSkillPath } from '@/lib/run/runtime-skills';
 import { extractStructuredResult as extractResultChannelStructuredResult } from '@/lib/ai/result-channel';
-import { ensureEngineRuntimeSkillsAvailable } from '@/lib/chat/request-options';
+import {
+  ensureEngineRuntimeSkillsAvailable,
+  resolveChatRequestedMcpServers,
+  type RequestedMcpServersInput,
+} from '@/lib/chat/request-options';
+import {
+  mergeMcpServers,
+  resolveMcpServersByNames,
+  type ManagedMcpServer,
+} from '@/lib/mcp/registry';
 
 export interface AgentChatUserContext {
   id: string;
@@ -48,6 +57,7 @@ export interface ExecuteAgentChatInput {
   workingDirectory?: string;
   workflowContext?: Record<string, any> | null;
   temporaryRoleConfig?: RoleConfig | null;
+  requestedMcpServers?: RequestedMcpServersInput;
   userContext: AgentChatUserContext;
 }
 
@@ -107,6 +117,33 @@ function isTemporaryAgoraChat(workflowContext?: Record<string, any> | null): boo
 function getAgoraExpectedResultType(workflowContext?: Record<string, any> | null): 'speech' | 'summary' | 'vote' {
   const raw = String(workflowContext?.agoraExpectedResultType || '').trim();
   return raw === 'summary' || raw === 'vote' ? raw : 'speech';
+}
+
+async function resolveWorkflowChatMcpServers(
+  workflowContext: Record<string, any> | null,
+  baseDirectory?: string,
+): Promise<ManagedMcpServer[]> {
+  if (!workflowContext) return [];
+
+  const directNames = Array.isArray(workflowContext.mcpServers)
+    ? workflowContext.mcpServers.filter((item: unknown): item is string => typeof item === 'string')
+    : [];
+  if (directNames.length > 0) {
+    return resolveMcpServersByNames(directNames, baseDirectory);
+  }
+
+  const configFile = typeof workflowContext.configFile === 'string'
+    ? workflowContext.configFile.trim()
+    : '';
+  if (!configFile) return [];
+
+  try {
+    const configPath = await getRuntimeWorkflowConfigPath(configFile);
+    const workflowConfig = parse(await readFile(configPath, 'utf-8')) as { context?: { mcpServers?: string[] } };
+    return resolveMcpServersByNames(workflowConfig.context?.mcpServers || [], baseDirectory);
+  } catch {
+    return [];
+  }
 }
 
 function stripHtmlTags(text: string): string {
@@ -643,6 +680,23 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
           ].filter(Boolean).join('\n'),
         } as RoleConfig
     : roleConfig;
+  const requestedMcpServers = input.requestedMcpServers !== undefined
+    ? await resolveChatRequestedMcpServers({
+        requestedMcpServers: input.requestedMcpServers,
+        workingDirectory,
+      })
+    : [];
+  const workflowMcpServers = mode === 'workflow-chat'
+    ? await resolveWorkflowChatMcpServers(workflowContext, workingDirectory)
+    : [];
+  const effectiveRoleConfigWithMcp = mergeMcpServers(
+    requestedMcpServers,
+    workflowMcpServers,
+    effectiveRoleConfig.mcpServers as any,
+  );
+  if (effectiveRoleConfigWithMcp.length > 0 || effectiveRoleConfig.mcpServers?.length) {
+    effectiveRoleConfig.mcpServers = effectiveRoleConfigWithMcp as any;
+  }
 
   const globalSelection = readGlobalEngineSelection();
   const configuredEngine = (await getConfiguredEngine().catch(() => globalSelection.engine || 'claude-code')) as EngineType;

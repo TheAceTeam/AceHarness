@@ -51,6 +51,7 @@ export async function POST(
         ? body.workflowContext as Record<string, any>
         : null,
       temporaryRoleConfig: parseTemporaryRoleConfig(body),
+      requestedMcpServers: body?.requestedMcpServers ?? body?.mcpServers,
       userContext: {
         id: user.id,
         username: user.username,

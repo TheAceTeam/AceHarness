@@ -8,6 +8,7 @@ import { loadChatSession } from '@/lib/chat/persistence';
 import { loadCreationSession } from '@/lib/spec/coding-store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
+import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
 
@@ -17,6 +18,7 @@ const MAX_HISTORY_CHARS = 6000;
 const REQUIRED_DASHBOARD_SKILLS = ['aceharness-workflow-creator'];
 
 export type RequestedSkillsInput = string[] | Record<string, boolean> | undefined;
+export type RequestedMcpServersInput = string[] | Record<string, boolean> | undefined;
 
 function normalizeRequestedSkills(
   input: RequestedSkillsInput,
@@ -53,6 +55,60 @@ function resolveEnabledSkills(
   return Object.entries(settings.skills || {})
     .filter(([, enabled]) => Boolean(enabled))
     .map(([name]) => name);
+}
+
+function normalizeRequestedMcpServers(
+  input: RequestedMcpServersInput,
+  discoveredNames: Set<string>
+): string[] | undefined {
+  if (!input) return undefined;
+
+  if (Array.isArray(input)) {
+    const names = input
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0 && discoveredNames.has(item));
+    return Array.from(new Set(names));
+  }
+
+  if (typeof input === 'object') {
+    const names = Object.entries(input)
+      .filter(([name, enabled]) => Boolean(enabled) && discoveredNames.has(name))
+      .map(([name]) => name);
+    return Array.from(new Set(names));
+  }
+
+  return undefined;
+}
+
+async function resolveEnabledMcpServers(
+  settings: ChatSettings,
+  requestedMcpServers: RequestedMcpServersInput,
+  baseDirectory?: string,
+): Promise<ManagedMcpServer[]> {
+  const discoveredServers = await resolveMcpServersByNames(Object.keys(settings.mcpServers || {}), baseDirectory);
+  const discoveredNames = new Set(discoveredServers.map((server) => server.name));
+  const requestScopedNames = normalizeRequestedMcpServers(requestedMcpServers, discoveredNames);
+  if (requestScopedNames) {
+    return resolveMcpServersByNames(requestScopedNames, baseDirectory);
+  }
+
+  const enabledNames = Object.entries(settings.mcpServers || {})
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([name]) => name);
+  return resolveMcpServersByNames(enabledNames, baseDirectory);
+}
+
+export async function resolveChatRequestedMcpServers(options: {
+  requestedMcpServers?: RequestedMcpServersInput;
+  workingDirectory?: string;
+}): Promise<ManagedMcpServer[]> {
+  const chatSettings = await loadChatSettings();
+  const requestedWorkingDirectory = typeof options.workingDirectory === 'string'
+    ? options.workingDirectory.trim()
+    : '';
+  const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings.workingDirectory || getWorkspaceRoot();
+  return resolveEnabledMcpServers(chatSettings, options.requestedMcpServers, resolvedWorkingDirectory);
 }
 
 function buildRuntimeEnvPrompt(resolvedWorkingDirectory: string): string {
@@ -167,12 +223,14 @@ export async function buildChatRequestContext(options: {
   workingDirectory?: string;
   extraSystemPrompt?: string;
   requestedSkills?: RequestedSkillsInput;
+  requestedMcpServers?: RequestedMcpServersInput;
   personalDir?: string;
 }): Promise<{
   systemPrompt: string;
   resolvedWorkingDirectory: string;
   chatSettings: ChatSettings | null;
   enabledSkills: string[];
+  enabledMcpServers: ManagedMcpServer[];
 }> {
   const {
     mode,
@@ -181,12 +239,19 @@ export async function buildChatRequestContext(options: {
     workingDirectory,
     extraSystemPrompt,
     requestedSkills,
+    requestedMcpServers,
     personalDir,
   } = options;
 
   const isResume = Boolean(sessionId);
   const chatSettings = mode === 'dashboard' ? await loadChatSettings() : null;
   const enabledSkills = chatSettings ? resolveEnabledSkills(chatSettings, requestedSkills) : [];
+  const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
+  const engineRuntimeDirectory = getWorkspaceRoot();
+  const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings?.workingDirectory || engineRuntimeDirectory;
+  const enabledMcpServers = chatSettings
+    ? await resolveEnabledMcpServers(chatSettings, requestedMcpServers, resolvedWorkingDirectory)
+    : [];
 
   let systemPrompt = '';
   if (mode === 'dashboard') {
@@ -205,9 +270,6 @@ export async function buildChatRequestContext(options: {
     systemPrompt = DEFAULT_PROMPT;
   }
 
-  const requestedWorkingDirectory = typeof workingDirectory === 'string' ? workingDirectory.trim() : '';
-  const engineRuntimeDirectory = getWorkspaceRoot();
-  const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings?.workingDirectory || engineRuntimeDirectory;
   const runtimeEnvPrompt = buildRuntimeEnvPrompt(resolvedWorkingDirectory);
   const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
   const extraPrompt = typeof extraSystemPrompt === 'string' ? extraSystemPrompt.trim() : '';
@@ -219,6 +281,7 @@ export async function buildChatRequestContext(options: {
     resolvedWorkingDirectory,
     chatSettings,
     enabledSkills,
+    enabledMcpServers,
   };
 }
 

@@ -29,6 +29,7 @@ import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 import { readTextFileBestEffort } from '@/lib/core/text-decoding';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
+import { toClaudeSdkMcpServers } from '@/lib/mcp/registry';
 import { getRuntimePlatform, isLinux, isWindows } from '@/lib/core/runtime-platform';
 
 const requireFromHere = createRequire(__filename);
@@ -385,6 +386,9 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
 
       if (options.sessionId) {
         (sdkOptions as any).resume = options.sessionId;
+      }
+      if (options.mcpServers?.length) {
+        (sdkOptions as any).mcpServers = toClaudeSdkMcpServers(options.mcpServers as any);
       }
 
       const iter = query({ prompt: userFacingPrompt, options: sdkOptions as any });
