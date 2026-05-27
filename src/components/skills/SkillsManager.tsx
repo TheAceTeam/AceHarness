@@ -1612,7 +1612,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
 
             <section className="rounded-[28px] border border-border/70 bg-card/70 p-4 shadow-sm">
               <div className="rounded-[24px] border border-border/60 bg-background/70 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                <div className="flex flex-nowrap items-center gap-2 overflow-x-auto">
+                <div className="flex flex-wrap items-center gap-2 overflow-x-hidden">
                   <span className="shrink-0 text-sm text-muted-foreground">标签筛选</span>
                   {allTags.length > 0 ? (
                     allTags.map((tag) => (

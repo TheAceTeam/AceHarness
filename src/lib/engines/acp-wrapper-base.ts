@@ -417,7 +417,9 @@ class ACPSharedRunner {
     if (!engine) {
       throw new Error('ACP engine not initialized');
     }
-    engine.setMcpServers(options.mcpServers as any);
+    if (typeof (engine as any).setMcpServers === 'function') {
+      (engine as any).setMcpServers(options.mcpServers as any);
+    }
 
     if (options.sessionId) {
       if (this.currentSessionId === options.sessionId) {

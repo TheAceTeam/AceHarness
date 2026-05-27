@@ -49,6 +49,7 @@ import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
 import { agentApi } from '@/lib/core/api';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
+import { createSafeEventSource } from '@/lib/core/safe-event-source';
 
 const MonacoEditor = dynamic(
   async () => {
@@ -2675,7 +2676,7 @@ export default function NewConfigModal({
       const chatId = startData.chatId;
       chatIdRef.current = chatId;
 
-      const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+      const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
       eventSourceRef.current = es;
       let accumulated = '';
       let thinkingAccumulated = '';
@@ -3768,7 +3769,7 @@ export default function NewConfigModal({
         chatIdRef.current = chatId;
 
         await new Promise<void>((resolve, reject) => {
-          const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+          const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
           eventSourceRef.current = es;
           let accumulated = '';
           let thinkingAccumulated = '';
@@ -4116,7 +4117,7 @@ ${recommendationPrompt}
       chatIdRef.current = chatId;
 
       await new Promise<void>((resolve, reject) => {
-        const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+        const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
         eventSourceRef.current = es;
         let accumulated = '';
         let thinkingAccumulated = '';
@@ -4308,7 +4309,7 @@ ${recommendationPrompt}
       chatIdRef.current = chatId;
 
       await new Promise<void>((resolve, reject) => {
-        const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+        const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
         eventSourceRef.current = es;
         let accumulated = '';
         let thinkingAccumulated = '';
@@ -4700,7 +4701,7 @@ ${recommendationPrompt}
         setBackendSessionId(checkData.backendSessionId);
       }
 
-      const es = new EventSource(`/api/chat/stream?id=${encodeURIComponent(checkData.chatId)}`);
+      const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(checkData.chatId)}`);
       eventSourceRef.current = es;
       let accumulated = checkData.streamContent || '';
       let thinkingAccumulated = '';

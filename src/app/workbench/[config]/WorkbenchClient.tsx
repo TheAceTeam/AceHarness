@@ -74,6 +74,7 @@ import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
 import { cn } from '@/lib/core/utils';
+import { createSafeEventSource } from '@/lib/core/safe-event-source';
 import styles from './page.module.css';
 
 const loadingPanel = () => (
@@ -2464,7 +2465,7 @@ export default function WorkbenchPage() {
       }
 
       const finalContent = await new Promise<string>((resolve, reject) => {
-        const es = new EventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+        const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
         let accumulated = '';
         let thinkingAccumulated = '';
         let settled = false;

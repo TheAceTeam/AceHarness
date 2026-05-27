@@ -549,14 +549,14 @@ export default function ChatSidebar({
     activeStreamingSessionIds = [],
     recentlyCompletedSessionIds = [],
     sessionLoadingId,
-    skillSettings,
-    discoveredSkills,
-    toggleSkill,
-    setSkillsEnabled,
-    mcpSettings,
-    discoveredMcpServers,
-    toggleMcpServer,
-    setMcpServersEnabled,
+    skillSettings = {},
+    discoveredSkills = [],
+    toggleSkill = () => {},
+    setSkillsEnabled = () => {},
+    mcpSettings = {},
+    discoveredMcpServers = [],
+    toggleMcpServer = () => {},
+    setMcpServersEnabled = () => {},
   } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
   const [internalSessionView, setInternalSessionView] = useState<SessionDirectoryView>('conversation');
@@ -1852,7 +1852,8 @@ function SkillManagerModal({
           <div>
             <h3 className="text-base font-semibold">Skills/MCP</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Skills {enabledCount}/{skills.length} · MCP {enabledMcpCount}/{servers.length}
+              <span>已启用 {enabledCount} / {skills.length} 个技能</span>
+              <span> · MCP {enabledMcpCount}/{servers.length}</span>
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>

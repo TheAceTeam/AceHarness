@@ -4,6 +4,7 @@
 
 import type { RunRecord } from '@/lib/run/store';
 import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import { createSafeEventSource } from '@/lib/core/safe-event-source';
 
 const API_BASE = '/api';
 
@@ -1004,7 +1005,7 @@ export const agentApi = {
     if (!response.ok || !data?.streamId) {
       throw new Error(data?.error || 'Agent 流式对话失败');
     }
-    const events = new EventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
+    const events = createSafeEventSource(`${API_BASE}/agents/${encodeURIComponent(name)}/chat/stream?id=${encodeURIComponent(data.streamId)}`);
     return {
       streamId: data.streamId,
       events,
@@ -1648,7 +1649,7 @@ export const workflowApi = {
   },
 
   connectEventStream(onMessage: (data: any) => void): EventSource {
-    const eventSource = new EventSource(`${API_BASE}/workflow/events`);
+    const eventSource = createSafeEventSource(`${API_BASE}/workflow/events`);
 
     eventSource.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -1696,7 +1697,7 @@ export const streamApi = {
     onDone?: (status: string) => void,
   ): EventSource {
     const url = `${API_BASE}/runs/${encodeURIComponent(runId)}/stream?step=${encodeURIComponent(stepName)}&live=1`;
-    const es = new EventSource(url);
+    const es = createSafeEventSource(url);
     es.addEventListener('delta', (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data);

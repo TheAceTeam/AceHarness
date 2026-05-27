@@ -594,6 +594,7 @@ export function RichNotebookEditor({
   const lastKnownContentRef = useRef(content);
   const derivedRefreshFrameRef = useRef<number | null>(null);
   const [collabReady, setCollabReady] = useState(!collaborationEnabled);
+  const [collabDisabled, setCollabDisabled] = useState(false);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [collabUser, setCollabUser] = useState<{ id: string; name: string; color: string }>({
     id: '',
@@ -657,12 +658,13 @@ export function RichNotebookEditor({
   }, [content]);
 
   useEffect(() => {
+    setCollabDisabled(false);
     setCollabReady(!collaborationEnabled);
   }, [collaborationEnabled, filePath, scope, shareToken]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!collaborationEnabled) {
+    if (!collaborationEnabled || collabDisabled) {
       setCollabReady(true);
       setAuthToken(null);
       setCollabSession(null);
@@ -673,6 +675,8 @@ export function RichNotebookEditor({
     if (!token) {
       cachedCollabIdentity = null;
       setAuthToken(null);
+      setCollabReady(true);
+      setCollabDisabled(true);
       return;
     }
     if (cachedCollabIdentity?.token === token) {
@@ -687,6 +691,8 @@ export function RichNotebookEditor({
       .then((data) => {
         if (!data?.user?.id || !data?.user?.username) {
           setAuthToken(null);
+          setCollabReady(true);
+          setCollabDisabled(true);
           toast('error', '无法获取当前登录用户，协作已禁用');
           return;
         }
@@ -700,19 +706,22 @@ export function RichNotebookEditor({
       .catch(() => {
         cachedCollabIdentity = null;
         setAuthToken(null);
+        setCollabReady(true);
+        setCollabDisabled(true);
         toast('error', '获取当前用户失败，协作已禁用');
       });
-  }, [collaborationEnabled, toast]);
+  }, [collabDisabled, collaborationEnabled, toast]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (!collaborationEnabled) {
+    if (!collaborationEnabled || collabDisabled) {
+      setCollabReady(true);
       setCollabSession(null);
       setCollabUsers([]);
       return;
     }
     if (!authToken) {
-      setCollabReady(false);
+      setCollabReady(true);
       setCollabSession(null);
       return;
     }
@@ -731,13 +740,29 @@ export function RichNotebookEditor({
 
     setCollabReady(false);
     setCollabSession({ doc, provider });
+    const timeout = window.setTimeout(() => {
+      provider.destroy();
+      doc.destroy();
+      setCollabSession((prev) => (prev?.provider === provider ? null : prev));
+      setCollabUsers([]);
+      setCollabReady(true);
+      setCollabDisabled(true);
+      toast('warning', '协作连接超时，已切换为本地编辑模式');
+    }, 5_000);
+    const handleStatus = (event: { status: string }) => {
+      if (event.status !== 'connected') return;
+      window.clearTimeout(timeout);
+    };
+    provider.on('status', handleStatus);
     return () => {
+      window.clearTimeout(timeout);
+      provider.off('status', handleStatus);
       provider.destroy();
       doc.destroy();
       setCollabSession((prev) => (prev?.provider === provider ? null : prev));
       setCollabUsers([]);
     };
-  }, [authToken, collaborationEnabled, filePath, scope, shareToken]);
+  }, [authToken, collabDisabled, collaborationEnabled, filePath, scope, shareToken, toast]);
 
   const resolveCellStatus = useCallback((cellId: string, currentEditor?: Editor): 'idle' | 'running' | 'success' | 'failed' => {
     const state = cellRunStateRef.current[cellId];
@@ -1399,7 +1424,7 @@ export function RichNotebookEditor({
     const currentEditor = editor;
     if (!currentEditor) return;
     if (!canWriteEditorContent(currentEditor)) return;
-    if (collabSession) return;
+    if (collabSession && !collabDisabled) return;
     if (changeSourceRef.current === 'internal') {
       changeSourceRef.current = 'external';
       return;
@@ -1408,7 +1433,7 @@ export function RichNotebookEditor({
     currentEditor.commands.setContent(content, { contentType: 'markdown', emitUpdate: false });
     lastKnownContentRef.current = content;
     refreshDerivedNotebookState(currentEditor);
-  }, [canWriteEditorContent, collabSession, content, editor, refreshDerivedNotebookState]);
+  }, [canWriteEditorContent, collabDisabled, collabSession, content, editor, refreshDerivedNotebookState]);
 
   useEffect(() => {
     if (!editor) return;
@@ -2987,7 +3012,7 @@ export function RichNotebookEditor({
     return <div className="flex items-center justify-center h-full text-muted-foreground">加载 Notebook 编辑器...</div>;
   }
 
-  const syncPending = collaborationEnabled && !collabReady;
+  const syncPending = collaborationEnabled && !collabDisabled && !collabReady;
 
   if (syncPending) {
     return (

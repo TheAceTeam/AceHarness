@@ -9,6 +9,7 @@ import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
 import { appendStreamChunk, buildFinalRawContent } from '@/lib/chat/stream-assembly';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
 import { useWorkflowLiveState } from '@/lib/workflow/live-store';
+import { createSafeEventSource } from '@/lib/core/safe-event-source';
 
 // --- Types ---
 
@@ -855,7 +856,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           activeChatIdRef.current = streamState.chatId;
           attachedStreamingSessionIdRef.current = activeSessionId;
 
-          const es = new EventSource(`/api/chat/stream?id=${streamState.chatId}`);
+          const es = createSafeEventSource(`/api/chat/stream?id=${streamState.chatId}`);
           activeEventSourceRef.current = es;
           let accumulated = initialStreamContent;
           let accumulatedRawStream = initialStreamContent;
@@ -1689,7 +1690,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           const MAX_RECONNECTS = 3;
 
         const connectSSE = () => {
-          const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+          const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           let hasConnected = false;
 
@@ -2181,7 +2182,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         };
 
         const connectSSE = () => {
-          const es = new EventSource(`/api/chat/stream?id=${chatId}`);
+          const es = createSafeEventSource(`/api/chat/stream?id=${chatId}`);
           activeEventSourceRef.current = es;
           resetInactivityTimer();
           let accumulatedRawContent = '';
