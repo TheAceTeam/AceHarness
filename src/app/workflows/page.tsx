@@ -10,6 +10,12 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { MultiCombobox } from '@/components/ui/combobox';
 import {
   Table,
@@ -65,6 +71,17 @@ type SortDirection = 'asc' | 'desc';
 type WorkflowsPageTab = 'workflows' | 'drafts';
 type DraftViewMode = 'gallery' | 'table';
 type DraftSortDirection = 'desc' | 'asc';
+type NewWorkflowModalPreset = {
+  initialMode?: 'phase-based' | 'state-machine' | 'ai-guided';
+  initialWorkflowName?: string;
+  initialReferenceWorkflow?: string;
+  initialRequirements?: string;
+  initialDescription?: string;
+  initialWorkingDirectory?: string;
+  initialWorkspaceMode?: 'isolated-copy' | 'in-place';
+  hideAiGuided?: boolean;
+  focusRequirementsOnOpen?: boolean;
+};
 
 const VIEW_MODE_KEY = 'aceharness:workflows:view-mode';
 const DRAFT_VIEW_MODE_KEY = 'aceharness:workflows:drafts:view-mode';
@@ -117,6 +134,7 @@ export default function WorkflowsPage() {
   });
   const [showNewModal, setShowNewModal] = useState(false);
   const [resumeCreationDraftId, setResumeCreationDraftId] = useState<string | null>(null);
+  const [newWorkflowModalPreset, setNewWorkflowModalPreset] = useState<NewWorkflowModalPreset | null>(null);
   const [creationDrafts, setCreationDrafts] = useState<CreationDraftSession[]>([]);
   const [creationDraftsLoading, setCreationDraftsLoading] = useState(false);
   const [showAIGuide, setShowAIGuide] = useState(false);
@@ -272,6 +290,18 @@ export default function WorkflowsPage() {
     }
   }, [shareableUsers.length, shareableUsersLoading, toast]);
 
+  const openNewWorkflowModal = useCallback((preset?: NewWorkflowModalPreset) => {
+    setResumeCreationDraftId(null);
+    setNewWorkflowModalPreset(preset || null);
+    setShowNewModal(true);
+  }, []);
+
+  const resumeCreationDraft = useCallback((sessionId: string) => {
+    setNewWorkflowModalPreset(null);
+    setResumeCreationDraftId(sessionId);
+    setShowNewModal(true);
+  }, []);
+
   const openCopyDialog = useCallback((workflow: WorkflowConfig) => {
     const nextFilename = workflow.filename.endsWith('.yaml')
       ? workflow.filename.replace(/\.yaml$/i, '-copy.yaml')
@@ -284,6 +314,18 @@ export default function WorkflowsPage() {
     setCopyDialogOpen(true);
     void loadShareableUsers();
   }, [loadShareableUsers]);
+
+  const openAiCopyWorkflow = useCallback((workflow: WorkflowConfig) => {
+    openNewWorkflowModal({
+      initialMode: 'ai-guided',
+      initialWorkflowName: `${workflow.name} AI 副本`,
+      initialReferenceWorkflow: workflow.filename,
+      initialRequirements: '',
+      initialDescription: workflow.description || '',
+      hideAiGuided: false,
+      focusRequirementsOnOpen: true,
+    });
+  }, [openNewWorkflowModal]);
 
   const openShareDialog = useCallback((workflow: WorkflowConfig) => {
     setActiveWorkflow(workflow);
@@ -569,6 +611,25 @@ export default function WorkflowsPage() {
         ? 'bg-violet-500/10 text-violet-700 dark:text-violet-300'
         : 'bg-slate-500/10 text-slate-700 dark:text-slate-300'
   );
+  const renderCopyMenu = (workflow: WorkflowConfig) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" title="复制工作流">
+          <Copy className="w-3 h-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuItem onSelect={() => openCopyDialog(workflow)}>
+          <Copy className="mr-2 h-3.5 w-3.5" />
+          直接复制
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openAiCopyWorkflow(workflow)}>
+          <span className="material-symbols-outlined mr-2 text-[16px]">auto_awesome</span>
+          AI 复制
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
   const getCreationStageLabel = (session: CreationDraftSession) => {
     if (session.status === 'run-bound') return '已生成工作流并启动运行';
     if (session.status === 'config-generated') return '已生成工作流';
@@ -644,8 +705,7 @@ export default function WorkflowsPage() {
             variant="outline"
             size="sm"
             onClick={() => {
-              setResumeCreationDraftId(session.id);
-              setShowNewModal(true);
+              resumeCreationDraft(session.id);
             }}
           >
             继续创建
@@ -709,7 +769,7 @@ export default function WorkflowsPage() {
             <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
             AI 创建
           </Button>
-          <Button onClick={() => setShowNewModal(true)}>
+          <Button onClick={() => openNewWorkflowModal({ hideAiGuided: true })}>
             <Plus className="w-4 h-4 mr-2" />
             手动创建
           </Button>
@@ -865,7 +925,7 @@ export default function WorkflowsPage() {
                       <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
                       AI 创建
                     </Button>
-                    <Button onClick={() => setShowNewModal(true)}>
+                    <Button onClick={() => openNewWorkflowModal({ hideAiGuided: true })}>
                       <Plus className="w-4 h-4 mr-2" />
                       手动创建
                     </Button>
@@ -978,9 +1038,7 @@ export default function WorkflowsPage() {
                                 <Edit className="w-3 h-3" />
                               </Link>
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => openCopyDialog(wf)}>
-                              <Copy className="w-3 h-3" />
-                            </Button>
+                            {renderCopyMenu(wf)}
                             <Button size="sm" variant="outline" onClick={() => openShareDialog(wf)}>
                               <Share2 className="w-3 h-3" />
                             </Button>
@@ -1061,9 +1119,7 @@ export default function WorkflowsPage() {
                         <Edit className="w-3 h-3" />
                       </Link>
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => openCopyDialog(workflow)}>
-                      <Copy className="w-3 h-3" />
-                    </Button>
+                    {renderCopyMenu(workflow)}
                     <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
                       <Share2 className="w-3 h-3" />
                     </Button>
@@ -1163,8 +1219,7 @@ export default function WorkflowsPage() {
                                         variant="outline"
                                         size="sm"
                                         onClick={() => {
-                                          setResumeCreationDraftId(session.id);
-                                          setShowNewModal(true);
+                                          resumeCreationDraft(session.id);
                                         }}
                                       >
                                         继续创建
@@ -1291,17 +1346,27 @@ export default function WorkflowsPage() {
           onClose={() => {
             setShowNewModal(false);
             setResumeCreationDraftId(null);
+            setNewWorkflowModalPreset(null);
             void loadCreationDrafts();
           }}
-          hideAiGuided
           onSuccess={(filename) => {
             setShowNewModal(false);
             setResumeCreationDraftId(null);
+            setNewWorkflowModalPreset(null);
             loadWorkflows();
             void loadCreationDrafts();
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }}
           resumeCreationSessionId={resumeCreationDraftId}
+          initialMode={newWorkflowModalPreset?.initialMode}
+          initialWorkflowName={newWorkflowModalPreset?.initialWorkflowName}
+          initialReferenceWorkflow={newWorkflowModalPreset?.initialReferenceWorkflow}
+          initialRequirements={newWorkflowModalPreset?.initialRequirements}
+          initialDescription={newWorkflowModalPreset?.initialDescription}
+          initialWorkingDirectory={newWorkflowModalPreset?.initialWorkingDirectory}
+          initialWorkspaceMode={newWorkflowModalPreset?.initialWorkspaceMode}
+          hideAiGuided={newWorkflowModalPreset?.hideAiGuided ?? true}
+          focusRequirementsOnOpen={newWorkflowModalPreset?.focusRequirementsOnOpen}
         />
       )}
 

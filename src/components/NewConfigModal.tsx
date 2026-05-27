@@ -393,6 +393,7 @@ interface NewConfigModalProps {
   hideAiGuided?: boolean;
   inheritEngine?: string;
   inheritModel?: string;
+  focusRequirementsOnOpen?: boolean;
 }
 
 type ReferenceWorkflowSummary = {
@@ -1705,6 +1706,7 @@ export default function NewConfigModal({
   hideAiGuided = false,
   inheritEngine = '',
   inheritModel = '',
+  focusRequirementsOnOpen = false,
 }: NewConfigModalProps) {
   const { toast } = useToast();
   const { appendSessionMessage, updateSessionCreationBinding, appendVisibleSessionTag } = useChat();
@@ -1780,6 +1782,8 @@ export default function NewConfigModal({
   const [planningFrontendSessionId, setPlanningFrontendSessionId] = useState<string | null>(null);
   const [draftCreationSessionId, setDraftCreationSessionId] = useState<string | null>(null);
   const [specPlanningEnabled, setSpecPlanningEnabled] = useState(true);
+  const requirementsSectionRef = useRef<HTMLDivElement | null>(null);
+  const requirementsInputRef = useRef<HTMLTextAreaElement | null>(null);
   const draftBootstrapStartedRef = useRef(false);
   const draftFieldSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Refs to always read latest engine/model in sendToAi
@@ -1853,7 +1857,12 @@ export default function NewConfigModal({
   const showReferenceWorkflowOptions = workflowMode === 'ai-guided' && !hideAiGuided;
   const useSpecPlanningFlow = workflowMode === 'ai-guided' && specPlanningEnabled;
   const showSpecPlanningToggle = workflowMode === 'ai-guided' || workflowMode === 'state-machine';
-  const referenceWorkflowMode = getReferenceWorkflowMode(workflowMode);
+  const selectedReferenceWorkflowMode = referenceWorkflowValue
+    ? referenceWorkflows.find((workflow) => workflow.filename === referenceWorkflowValue)?.mode
+    : undefined;
+  const referenceWorkflowMode = selectedReferenceWorkflowMode && workflowMode === 'ai-guided'
+    ? normalizeReferenceWorkflowMode(selectedReferenceWorkflowMode)
+    : getReferenceWorkflowMode(workflowMode);
   const filteredReferenceWorkflows = useMemo(() => (
     referenceWorkflows.filter((workflow) => normalizeReferenceWorkflowMode(workflow.mode) === referenceWorkflowMode)
   ), [referenceWorkflowMode, referenceWorkflows]);
@@ -1884,6 +1893,7 @@ export default function NewConfigModal({
   const preventCreationDialogOutsideClose = useCallback((event: Event) => {
     event.preventDefault();
   }, []);
+  const requirementsField = register('requirements');
 
   const generateDefaultFilename = useCallback(() => {
     const now = new Date();
@@ -1985,6 +1995,15 @@ export default function NewConfigModal({
       setValue('workspaceMode', initialWorkspaceMode, { shouldDirty: false, shouldValidate: false });
     }
   }, [initialDescription, initialMode, initialReferenceWorkflow, initialRequirements, initialWorkflowName, initialWorkingDirectory, initialWorkspaceMode, isOpen, setValue]);
+
+  useEffect(() => {
+    if (!isOpen || !focusRequirementsOnOpen || resumeCreationSessionId) return;
+    const timer = window.setTimeout(() => {
+      requirementsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      requirementsInputRef.current?.focus({ preventScroll: true });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [focusRequirementsOnOpen, isOpen, resumeCreationSessionId, workflowMode]);
 
   const applyRestoredSession = useCallback((session: any) => {
     hydratingRestoredSessionRef.current = true;
@@ -6838,7 +6857,10 @@ ${recommendationPrompt}
 
           {/* AI 引导模式的需求输入 */}
           {workflowMode === 'ai-guided' && (
-            <div className={homepageCompact ? 'space-y-2' : 'space-y-4 bg-green-50 dark:bg-green-950/30 rounded-lg p-4 border border-green-200 dark:border-green-800'}>
+            <div
+              ref={requirementsSectionRef}
+              className={homepageCompact ? 'space-y-2' : 'space-y-4 bg-green-50 dark:bg-green-950/30 rounded-lg p-4 border border-green-200 dark:border-green-800'}
+            >
               {!homepageCompact && (
                 <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
                   <span className="material-symbols-outlined">auto_awesome</span>
@@ -6851,7 +6873,11 @@ ${recommendationPrompt}
                 </Label>
               )}
               <Textarea
-                {...register('requirements')}
+                {...requirementsField}
+                ref={(element) => {
+                  requirementsField.ref(element);
+                  requirementsInputRef.current = element;
+                }}
                 id="requirements"
                 placeholder="例如：我想创建一个代码审查工作流，包含设计评审、代码审查、测试验证等阶段，需要支持发现问题时自动回退..."
                 rows={5}
@@ -6916,12 +6942,16 @@ ${recommendationPrompt}
           </div>
 
           {workflowMode !== 'ai-guided' ? (
-            <div className="space-y-2">
+            <div ref={requirementsSectionRef} className="space-y-2">
               <Label htmlFor="requirements">
                 需求描述 <span className="text-destructive">*</span>
               </Label>
               <Textarea
-                {...register('requirements')}
+                {...requirementsField}
+                ref={(element) => {
+                  requirementsField.ref(element);
+                  requirementsInputRef.current = element;
+                }}
                 id="requirements"
                 placeholder="描述这个工作流要解决的问题、目标产物和验收标准..."
                 rows={5}
