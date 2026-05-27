@@ -21,8 +21,8 @@ export function createSafeEventSource(url: string | URL, options: SafeEventSourc
     ...eventSourceOptions
   } = options;
   const eventSource = new EventSource(url, eventSourceOptions);
-  const rawAddEventListener = eventSource.addEventListener.bind(eventSource);
-  const rawRemoveEventListener = eventSource.removeEventListener.bind(eventSource);
+  const rawAddEventListener = eventSource.addEventListener.bind(eventSource) as EventTarget['addEventListener'];
+  const rawRemoveEventListener = eventSource.removeEventListener.bind(eventSource) as EventTarget['removeEventListener'];
   const rawClose = eventSource.close.bind(eventSource);
   const wrappedListeners = new WeakMap<EventListenerOrEventListenerObject, EventListenerOrEventListenerObject>();
   let closed = false;
@@ -81,11 +81,21 @@ export function createSafeEventSource(url: string | URL, options: SafeEventSourc
     return wrapped;
   };
 
-  eventSource.addEventListener = ((type, listener, listenerOptions) => {
+  eventSource.addEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    listenerOptions?: boolean | AddEventListenerOptions,
+  ) => {
+    if (!listener) return;
     rawAddEventListener(type, wrapListener(listener), listenerOptions);
   }) as EventSource['addEventListener'];
 
-  eventSource.removeEventListener = ((type, listener, listenerOptions) => {
+  eventSource.removeEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    listenerOptions?: boolean | EventListenerOptions,
+  ) => {
+    if (!listener) return;
     rawRemoveEventListener(type, wrapListener(listener), listenerOptions);
   }) as EventSource['removeEventListener'];
 
