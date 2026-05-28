@@ -1692,7 +1692,7 @@ export default function WorkbenchPage() {
         filePath?: string | null;
       }>).detail;
       if (!detail?.workspacePath) return;
-      openWorkspaceEditorAtPath(detail.workspacePath, '文档链接', detail.absolutePath || detail.filePath || null);
+      openWorkspaceEditorAtPath(detail.workspacePath, '文档链接', detail.filePath || detail.absolutePath || null);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     return () => {

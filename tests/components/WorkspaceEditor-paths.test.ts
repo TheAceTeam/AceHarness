@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { treeCanResolvePath } from "@/components/workspace/WorkspaceEditor"
+import { resolveWorkspaceEditorTargetFile, treeCanResolvePath } from "@/components/workspace/WorkspaceEditor"
 import type { TreeNode } from "@/lib/core/api"
 
 describe("treeCanResolvePath", () => {
@@ -60,5 +60,37 @@ describe("treeCanResolvePath", () => {
     ]
 
     expect(treeCanResolvePath(tree, ".android/avd/Medium_Phone.avd/missing.ini")).toBe(false)
+  })
+})
+
+describe("resolveWorkspaceEditorTargetFile", () => {
+  it("prefers the requested initial absolute file over stale url state", () => {
+    expect(resolveWorkspaceEditorTargetFile({
+      workspacePath: "/Users/shawn/project",
+      initialFilePath: "/Users/shawn/project/docs/briefing.pptx",
+      urlFilePath: "stale.md",
+    })).toBe("docs/briefing.pptx")
+  })
+
+  it("keeps valid relative url selections inside the current workspace", () => {
+    expect(resolveWorkspaceEditorTargetFile({
+      workspacePath: "/Users/shawn/project",
+      urlFilePath: "docs/briefing.pptx",
+    })).toBe("docs/briefing.pptx")
+  })
+
+  it("normalizes windows absolute paths case-insensitively", () => {
+    expect(resolveWorkspaceEditorTargetFile({
+      workspacePath: "C:/Users/Shawn/project",
+      initialFilePath: "c:/Users/Shawn/project/src/app.ts",
+    })).toBe("src/app.ts")
+  })
+
+  it("rejects absolute files outside the current workspace", () => {
+    expect(resolveWorkspaceEditorTargetFile({
+      workspacePath: "/Users/shawn/project",
+      initialFilePath: "/Users/shawn/other/file.md",
+      urlFilePath: "docs/briefing.pptx",
+    })).toBe("docs/briefing.pptx")
   })
 })

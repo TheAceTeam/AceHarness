@@ -81,6 +81,9 @@ const PREVIEW_EXTENSIONS = new Set([
   "mp4", "webm", "mp3",
 ])
 
+const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[a-zA-Z]:\//
+const UNC_ABSOLUTE_PATH = /^\/\/[^/]+\/[^/]+/
+
 function isPreviewFile(filePath: string): boolean {
   const ext = filePath.split(".").pop()?.toLowerCase() || ""
   return PREVIEW_EXTENSIONS.has(ext)
@@ -88,6 +91,63 @@ function isPreviewFile(filePath: string): boolean {
 
 function getFileType(filePath: string): string {
   return filePath.split(".").pop()?.toLowerCase() || ""
+}
+
+function normalizeWorkspacePathValue(value: string | null | undefined): string {
+  return String(value || "").replace(/\\/g, "/").trim()
+}
+
+function isWorkspaceAbsolutePath(value: string): boolean {
+  return value.startsWith("/") || WINDOWS_DRIVE_ABSOLUTE_PATH.test(value) || UNC_ABSOLUTE_PATH.test(value)
+}
+
+function resolveWorkspaceSelectionCandidate(
+  workspacePath: string,
+  candidatePath?: string | null,
+): string | null {
+  const normalizedWorkspace = normalizeWorkspacePathValue(workspacePath).replace(/\/+$/g, "")
+  const normalizedCandidate = normalizeWorkspacePathValue(candidatePath)
+    .replace(/^\.\//, "")
+
+  if (!normalizedWorkspace || !normalizedCandidate) return null
+  if (normalizedCandidate === normalizedWorkspace) return null
+
+  if (!isWorkspaceAbsolutePath(normalizedCandidate)) {
+    return normalizedCandidate.replace(/^\/+/, "") || null
+  }
+
+  const compareAsCaseInsensitive = WINDOWS_DRIVE_ABSOLUTE_PATH.test(normalizedWorkspace)
+    || UNC_ABSOLUTE_PATH.test(normalizedWorkspace)
+  const comparableWorkspace = compareAsCaseInsensitive
+    ? normalizedWorkspace.toLowerCase()
+    : normalizedWorkspace
+  const comparableCandidate = compareAsCaseInsensitive
+    ? normalizedCandidate.toLowerCase()
+    : normalizedCandidate
+
+  if (!comparableCandidate.startsWith(`${comparableWorkspace}/`)) {
+    return null
+  }
+
+  return normalizedCandidate.slice(normalizedWorkspace.length + 1) || null
+}
+
+export function resolveWorkspaceEditorTargetFile(payload: {
+  workspacePath: string
+  mode?: WorkspaceMode
+  initialFilePath?: string | null
+  urlFilePath?: string | null
+}): string | null {
+  const { workspacePath, mode = "default", initialFilePath, urlFilePath } = payload
+
+  if (mode === "notebook") {
+    return normalizeWorkspacePathValue(urlFilePath || initialFilePath)
+      .replace(/^\.\//, "")
+      .replace(/^\/+/, "") || null
+  }
+
+  return resolveWorkspaceSelectionCandidate(workspacePath, initialFilePath)
+    || resolveWorkspaceSelectionCandidate(workspacePath, urlFilePath)
 }
 
 export function treeCanResolvePath(tree: TreeNode[], targetPath: string): boolean {
@@ -309,6 +369,8 @@ export function WorkspaceEditor({
   const fileParamKey = mode === "notebook" ? "notebookFile" : "workspaceFile"
   const panelParamKey = mode === "notebook" ? "notebook" : "workspace"
   const scopeParamKey = mode === "notebook" ? "notebookScope" : "workspaceScope"
+  const initialSelectionSeedRef = React.useRef<string | null>(null)
+  const lastUrlSelectionRef = React.useRef<string | null>(null)
 
   const baseTitle = React.useMemo(() => {
     if (title?.trim()) return title.trim()
@@ -505,28 +567,53 @@ export function WorkspaceEditor({
   }, [mode, notebookScope, notebookShareToken, open, toast, workspacePath])
 
   React.useEffect(() => {
+    if (open) return
+    initialSelectionSeedRef.current = null
+    lastUrlSelectionRef.current = null
+  }, [open])
+
+  React.useEffect(() => {
     if (!open) return
     const fileFromUrl = searchParams.get(fileParamKey)
-    if (fileFromUrl) {
-      setSelectedFile(fileFromUrl)
+    const seed = [
+      mode,
+      workspacePath,
+      initialFilePath || "",
+      notebookScope,
+      notebookShareToken || "",
+    ].join("::")
+
+    if (initialSelectionSeedRef.current === seed) return
+    initialSelectionSeedRef.current = seed
+    lastUrlSelectionRef.current = fileFromUrl
+
+    setSelectedFile(resolveWorkspaceEditorTargetFile({
+      workspacePath,
+      mode,
+      initialFilePath,
+      urlFilePath: fileFromUrl,
+    }))
+  }, [fileParamKey, initialFilePath, mode, notebookScope, notebookShareToken, open, searchParams, workspacePath])
+
+  React.useEffect(() => {
+    if (!open) return
+    const fileFromUrl = searchParams.get(fileParamKey)
+    if (lastUrlSelectionRef.current === fileFromUrl) return
+    lastUrlSelectionRef.current = fileFromUrl
+
+    const nextSelectedFile = resolveWorkspaceEditorTargetFile({
+      workspacePath,
+      mode,
+      urlFilePath: fileFromUrl,
+    })
+    if (nextSelectedFile) {
+      setSelectedFile(nextSelectedFile)
       return
     }
-    if (initialFilePath && mode !== 'notebook') {
-      const normalizedWorkspace = workspacePath.replace(/\\/g, "/").replace(/\/+$/g, "")
-      const normalizedFile = initialFilePath.replace(/\\/g, "/")
-      if (normalizedFile === normalizedWorkspace) {
-        setSelectedFile(null)
-        return
-      }
-      if (normalizedFile.startsWith(`${normalizedWorkspace}/`)) {
-        const relativePath = normalizedFile.slice(normalizedWorkspace.length + 1)
-        if (relativePath) {
-          setSelectedFile(relativePath)
-          return
-        }
-      }
+    if (!fileFromUrl) {
+      setSelectedFile(null)
     }
-  }, [fileParamKey, initialFilePath, mode, open, searchParams, workspacePath])
+  }, [fileParamKey, mode, open, searchParams, workspacePath])
 
   React.useEffect(() => {
     if (!selectedFile || !workspacePath) return

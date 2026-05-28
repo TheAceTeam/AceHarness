@@ -699,7 +699,7 @@ function ChatPageContent() {
       if (!detail?.workspacePath) return;
       setWorkspaceEditorPath(detail.workspacePath);
       setWorkspaceEditorTitle('文档链接');
-      setWorkspaceEditorFilePath(detail.absolutePath || detail.filePath || null);
+      setWorkspaceEditorFilePath(detail.filePath || detail.absolutePath || null);
       setWorkspaceEditorOpen(true);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);

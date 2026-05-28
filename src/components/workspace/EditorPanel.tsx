@@ -9,6 +9,7 @@ import { AnsiLogBlock } from "@/components/AnsiLogBlock"
 import { registerCangjieLanguage } from "@/lib/cangjie/language"
 import { registerCMakeLanguage } from "@/lib/core/cmake-language"
 import { workspaceApi, type NotebookScope, type WorkspaceMode } from "@/lib/core/api"
+import { cn } from "@/lib/core/utils"
 import { useToast } from "@/components/ui/toast"
 import {
   Dialog,
@@ -36,6 +37,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import previewStyles from "./EditorPanelPreview.module.css"
 
 const MonacoEditor = dynamic(
   async () => {
@@ -70,6 +72,10 @@ const PREVIEW_EXTENSIONS = new Set([
   "pdf", "docx", "xlsx", "pptx",
   "png", "jpg", "jpeg", "gif",
   "mp4", "webm", "mp3",
+])
+
+const OFFICE_PREVIEW_EXTENSIONS = new Set([
+  "docx", "xlsx", "pptx",
 ])
 
 interface EditorPanelProps {
@@ -262,6 +268,8 @@ export function EditorPanel({
   const cmakeRegistered = React.useRef(false)
   const suggestionDecorationIdsRef = React.useRef<string[]>([])
   const suggestionZoneIdsRef = React.useRef<string[]>([])
+  const previewHostRef = React.useRef<HTMLDivElement | null>(null)
+  const [previewViewport, setPreviewViewport] = React.useState({ width: 0, height: 0 })
 
   React.useEffect(() => {
     setEditorContent(content)
@@ -519,6 +527,51 @@ export function EditorPanel({
     }
   }, [isNotebook])
 
+  React.useEffect(() => {
+    const isPreviewableFile = Boolean(fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType))
+    if (!isPreviewableFile) {
+      setPreviewViewport({ width: 0, height: 0 })
+      return
+    }
+
+    const host = previewHostRef.current
+    if (!host) return
+
+    const updateViewport = () => {
+      const rect = host.getBoundingClientRect()
+      const width = Math.max(0, Math.floor(rect.width))
+      const height = Math.max(0, Math.floor(rect.height))
+      setPreviewViewport((prev) => (
+        prev.width === width && prev.height === height
+          ? prev
+          : { width, height }
+      ))
+    }
+
+    updateViewport()
+
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => updateViewport())
+      observer.observe(host)
+      return () => observer.disconnect()
+    }
+
+    window.addEventListener("resize", updateViewport)
+    return () => window.removeEventListener("resize", updateViewport)
+  }, [fileBlob, fileType])
+
+  const resolvedPreviewTheme = resolvedTheme === "dark" ? "dark" : "light"
+  const previewViewerWidth = previewViewport.width > 0 ? Math.max(previewViewport.width, 320) : null
+  const previewViewerHeight = previewViewport.height > 0 ? Math.max(previewViewport.height, 240) : null
+  const isOfficePreview = Boolean(fileType && OFFICE_PREVIEW_EXTENSIONS.has(fileType))
+  const MeasuredFileViewer = FileViewer as unknown as React.ComponentType<{
+    file: Blob
+    fileType: string
+    theme?: "auto" | "light" | "dark"
+    width?: number
+    height?: number
+  }>
+
   return (
     <>
       <div className="flex flex-col h-full w-full">
@@ -641,8 +694,27 @@ export function EditorPanel({
               <p className="text-sm">文件过大（{fileSize ? (fileSize >= 1024 * 1024 ? `${(fileSize / 1024 / 1024).toFixed(1)}MB` : `${(fileSize / 1024).toFixed(1)}KB`) : ""}），仅支持预览和编辑 1MB 以下的文件</p>
             </div>
           ) : fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType) ? (
-            <div className="h-full overflow-auto">
-              <FileViewer file={fileBlob} fileType={fileType} />
+            <div
+              ref={previewHostRef}
+              className={cn(
+                "h-full min-h-0 overflow-auto",
+                previewStyles.fileViewerShell,
+                isOfficePreview && previewStyles.officeViewerShell,
+              )}
+            >
+              {previewViewerWidth && previewViewerHeight ? (
+                <MeasuredFileViewer
+                  file={fileBlob}
+                  fileType={fileType}
+                  theme={resolvedPreviewTheme}
+                  width={previewViewerWidth}
+                  height={previewViewerHeight}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
             </div>
           ) : isNotebook && content != null ? (
             <NotebookEditor
