@@ -9,12 +9,13 @@ import Image from '@tiptap/extension-image';
 import Typography from '@tiptap/extension-typography';
 import Mention from '@tiptap/extension-mention';
 import { Markdown } from '@tiptap/markdown';
-import { Extension } from '@tiptap/core';
+import { Extension, generateJSON } from '@tiptap/core';
 import { useEffect, forwardRef, useImperativeHandle, useRef, useState, useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { createPortal } from 'react-dom';
 import { uploadImageFile } from '@/lib/core/client-image-upload';
 import { cn } from '@/lib/core/utils';
+import Link from '@tiptap/extension-link';
 
 export interface RichTextEditorHandle {
   clear: () => void;
@@ -49,6 +50,7 @@ interface RichTextEditorProps {
   surfaceClassName?: string;
   contentAreaClassName?: string;
   footerClassName?: string;
+  preferMarkdownPaste?: boolean;
 }
 
 type MentionItem = {
@@ -61,6 +63,11 @@ const EMPTY_MENTION_ITEMS: NonNullable<RichTextEditorProps['mentionItems']> = []
 
 function trimTrailingNewlines(value: string): string {
   return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
+}
+
+function getClipboardMarkdown(clipboard: DataTransfer | null | undefined): string {
+  if (!clipboard) return '';
+  return clipboard.getData('text/markdown') || clipboard.getData('text/x-markdown') || '';
 }
 
 function trySetEditorContent(
@@ -176,6 +183,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   surfaceClassName = '',
   contentAreaClassName = '',
   footerClassName = '',
+  preferMarkdownPaste = false,
 }, ref) => {
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
@@ -254,6 +262,31 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     }
   }, []);
 
+  const pasteMarkdownSource = useCallback((markdown: string, event?: ClipboardEvent | null) => {
+    const targetEditor = editorRuntimeRef.current;
+    if (!targetEditor || (targetEditor as any).isDestroyed) return false;
+    const normalized = trimPastedTrailingNewlines ? trimTrailingNewlines(markdown) : markdown;
+    try {
+      targetEditor.view.pasteText(normalized, event ?? undefined);
+      return true;
+    } catch (error) {
+      console.warn('[RichTextEditor] markdown paste fallback failed', error);
+      return false;
+    }
+  }, [trimPastedTrailingNewlines]);
+
+  const convertHtmlToMarkdown = useCallback((html: string) => {
+    const targetEditor = editorRuntimeRef.current;
+    if (!targetEditor || (targetEditor as any).isDestroyed || !html.trim()) return '';
+    try {
+      const json = generateJSON(html, targetEditor.extensionManager.extensions);
+      return targetEditor.markdown?.serialize(json) || '';
+    } catch (error) {
+      console.warn('[RichTextEditor] html to markdown conversion failed', error);
+      return '';
+    }
+  }, []);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -265,6 +298,11 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       Markdown,
       Typography,
       Image,
+      Link.configure({
+        autolink: false,
+        linkOnPaste: false,
+        openOnClick: false,
+      }),
       Mention.configure({
         HTMLAttributes: {
           class: 'ace-mention',
@@ -504,6 +542,23 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
           return true;
         }
 
+        if (preferMarkdownPaste) {
+          const markdownClipboard = getClipboardMarkdown(clipboard);
+          if (markdownClipboard) {
+            event.preventDefault();
+            return pasteMarkdownSource(markdownClipboard, event);
+          }
+
+          const html = clipboard.getData('text/html');
+          if (html) {
+            const convertedMarkdown = convertHtmlToMarkdown(html);
+            if (convertedMarkdown) {
+              event.preventDefault();
+              return pasteMarkdownSource(convertedMarkdown, event);
+            }
+          }
+        }
+
         if (trimPastedTrailingNewlines) {
           const text = clipboard.getData('text/plain');
           const trimmed = trimTrailingNewlines(text);
@@ -540,7 +595,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       const text = editor.getText();
       onChange?.(markdown, text);
     },
-  }, [mentionItemsSignature]);
+  }, [convertHtmlToMarkdown, mentionItemsSignature, pasteMarkdownSource, preferMarkdownPaste]);
 
   useEffect(() => {
     editorRuntimeRef.current = editor || null;

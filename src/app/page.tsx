@@ -1942,6 +1942,7 @@ function ChatPageContent() {
                       content={input}
                       onEnter={handleEditorEnter}
                       onChange={(markdown) => setInput(markdown)}
+                      preferMarkdownPaste
                       placeholder="输入议场消息"
                       minHeight={116}
                       maxHeight={220}
@@ -2111,6 +2112,7 @@ function ChatPageContent() {
                           content={input}
                           onEnter={handleEditorEnter}
                           onChange={(markdown) => setInput(markdown)}
+                          preferMarkdownPaste
                           placeholder="描述你的需求或问题"
                           minHeight={116}
                           maxHeight={220}

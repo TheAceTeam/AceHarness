@@ -1287,12 +1287,27 @@ export function RichNotebookEditor({
         const clipboard = event.clipboardData;
         if (!clipboard) return false;
         const files = Array.from(clipboard.files || []).filter((file) => file.type?.startsWith('image/'));
-        if (files.length === 0) return false;
-        event.preventDefault();
-        files.forEach((file) => {
-          void insertUploadedImage(file);
-        });
-        return true;
+        if (files.length > 0) {
+          event.preventDefault();
+          files.forEach((file) => {
+            void insertUploadedImage(file);
+          });
+          return true;
+        }
+
+        const markdownText = clipboard.getData('text/markdown') || clipboard.getData('text/x-markdown');
+        const html = clipboard.getData('text/html');
+        const plainText = clipboard.getData('text/plain');
+        const insertableMarkdown = markdownText || (!html ? plainText : '');
+        if (insertableMarkdown) {
+          const targetEditor = editorRef.current;
+          if (!targetEditor || targetEditor.isDestroyed) return false;
+          event.preventDefault();
+          targetEditor.chain().focus().insertContent(insertableMarkdown, { contentType: 'markdown' }).run();
+          return true;
+        }
+
+        return false;
       },
       handleDrop: (view, event, _slice, moved) => {
         if (moved) return false;
