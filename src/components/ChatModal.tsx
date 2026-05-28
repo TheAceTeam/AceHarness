@@ -7,7 +7,6 @@ import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { useCurrentEngine } from '@/components/EngineSelect';
 import ChatMessage from '@/components/chat/ChatMessage';
 import { RobotLogo } from '@/components/brand/RobotLogo';
-import { Persona } from '@/components/ai-elements/persona';
 import { Shimmer } from '@/components/ai-elements/shimmer';
 import { Conversation, ConversationContent, ConversationScrollButton } from '@/components/ai-elements/conversation';
 import { PromptInput, PromptInputTextarea, PromptInputFooter, PromptInputSubmit } from '@/components/ai-elements/prompt-input';
@@ -218,15 +217,15 @@ export default function ChatModal() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-14 w-14 rounded-full p-0 shadow-lg hover:bg-transparent"
+              className="h-14 w-14 rounded-full border border-border/60 bg-background/94 p-0 shadow-lg backdrop-blur hover:bg-background"
               onClick={toggleChat}
               title="轻聊"
             >
-              <Persona
-                state="idle"
-                variant="obsidian"
-                className="h-14 w-14 rounded-full"
-              />
+              <span className="chat-modal-rainbow" aria-hidden="true">
+                <span className="chat-modal-rainbow__curve chat-modal-rainbow__curve--green" />
+                <span className="chat-modal-rainbow__curve chat-modal-rainbow__curve--pink" />
+                <span className="chat-modal-rainbow__curve chat-modal-rainbow__curve--blue" />
+              </span>
             </Button>
           </div>
         </div>

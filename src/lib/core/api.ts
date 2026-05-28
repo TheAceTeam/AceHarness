@@ -1656,9 +1656,9 @@ export const workflowApi = {
       onMessage(data);
     };
 
-    eventSource.onerror = (error) => {
-      console.error('EventSource 错误:', error);
-    };
+    // EventSource may emit many transient errors while it auto-reconnects.
+    // Keep this silent so blocked or proxied environments do not flood console noise.
+    eventSource.onerror = () => {};
 
     return eventSource;
   },

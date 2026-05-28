@@ -58,14 +58,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { cn } from '@/lib/core/utils';
-import { MultiCombobox } from '@/components/ui/combobox';
+import { ComboboxPortalProvider, MultiCombobox } from '@/components/ui/combobox';
 import { PaginationBar } from '@/components/PaginationBar';
 import { useToast } from '@/components/ui/toast';
 import ModelProbeMonitor from '@/components/models/ModelProbeMonitor';
 import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkbench';
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
-import { getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { getConcreteEngines, getEngineDisplayName } from '@/lib/core/engine-metadata';
 
 interface Model {
   id: string;
@@ -78,6 +78,8 @@ interface Model {
   createdAt?: string;
   updatedAt?: string;
 }
+
+const DEFAULT_MODEL_ENDPOINTS = ['anthropic', 'openai', 'cangjie'] as const;
 
 function EndpointTag({ endpoint, iconOnly = false }: { endpoint: string; iconOnly?: boolean }) {
   const label = getEndpointDisplayName(endpoint);
@@ -471,6 +473,46 @@ export default function ModelsPage() {
     return Array.from(set).sort();
   }, [models]);
 
+  const endpointOptions = useMemo(() => {
+    const set = new Set<string>(DEFAULT_MODEL_ENDPOINTS);
+    allEndpoints.forEach((endpoint) => set.add(endpoint));
+    editingModel?.endpoints.forEach((endpoint) => set.add(endpoint));
+    newModel.endpoints.forEach((endpoint) => set.add(endpoint));
+    return Array.from(set)
+      .filter(Boolean)
+      .sort((a, b) => getEndpointDisplayName(a).localeCompare(getEndpointDisplayName(b), 'zh-CN'))
+      .map((endpoint) => ({
+        value: endpoint,
+        label: getEndpointDisplayName(endpoint),
+        description: endpoint,
+        icon: (
+          <EndpointIcon
+            endpoint={endpoint}
+            mode={endpointHasWordmark(endpoint) ? 'logo' : 'mark'}
+            className={endpointHasWordmark(endpoint) ? 'h-3.5 w-auto max-w-[4.75rem]' : 'h-3.5 w-3.5'}
+            alt={getEndpointDisplayName(endpoint)}
+            decorative={false}
+          />
+        ),
+      }));
+  }, [allEndpoints, editingModel, newModel.endpoints]);
+
+  const engineOptions = useMemo(() => {
+    const set = new Set<string>(getConcreteEngines().map((engine) => engine.id));
+    allEngines.forEach((engine) => set.add(engine));
+    editingModel?.engines.forEach((engine) => set.add(engine));
+    newModel.engines.forEach((engine) => set.add(engine));
+    return Array.from(set)
+      .filter(Boolean)
+      .sort((a, b) => getEngineDisplayName(a).localeCompare(getEngineDisplayName(b), 'zh-CN'))
+      .map((engine) => ({
+        value: engine,
+        label: getEngineDisplayName(engine) || engine,
+        description: engine,
+        icon: <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />,
+      }));
+  }, [allEngines, editingModel, newModel.engines]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -506,7 +548,7 @@ export default function ModelsPage() {
     if (filterBarMeasureRef.current) {
       setFilterBarHeight(filterBarMeasureRef.current.offsetHeight);
     }
-  });
+  }, []);
 
   const filteredModels = useMemo(() => {
     let result = models;
@@ -1045,35 +1087,150 @@ export default function ModelsPage() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>编辑模型</DialogTitle>
-            <DialogDescription>
-              修改模型 {editingModel?.name} 的配置信息。
-            </DialogDescription>
-          </DialogHeader>
-          {editingModel && (
+        <DialogContent className="sm:max-w-[560px]">
+          <ComboboxPortalProvider>
+            <DialogHeader>
+              <DialogTitle>编辑模型</DialogTitle>
+              <DialogDescription>
+                修改模型 {editingModel?.name} 的配置信息。
+              </DialogDescription>
+            </DialogHeader>
+            {editingModel && (
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">模型名称</label>
+                  <Input
+                    value={editingModel.name}
+                    onChange={(e) => setEditingModel({ ...editingModel, name: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">模型 ID</label>
+                  <Input
+                    value={editingModel.id}
+                    onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">端点</label>
+                  <MultiCombobox
+                    value={editingModel.endpoints}
+                    onValueChange={(endpoints) => setEditingModel({ ...editingModel, endpoints })}
+                    options={endpointOptions}
+                    placeholder="选择可访问该模型的 API 端点"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">引擎</label>
+                  <MultiCombobox
+                    value={editingModel.engines}
+                    onValueChange={(engines) => setEditingModel({ ...editingModel, engines })}
+                    options={engineOptions}
+                    placeholder="选择可使用该模型的执行引擎"
+                  />
+                  <p className="text-xs text-muted-foreground">留空表示不限制，由各引擎按自身兼容性决定是否可用。</p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium">启用状态</label>
+                  <Switch
+                    checked={editingModel.status === 'active'}
+                    onCheckedChange={(checked: boolean) =>
+                      setEditingModel({ ...editingModel, status: checked ? 'active' : 'inactive' })
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">费用倍率</label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={editingModel.costMultiplier}
+                    onChange={(e) =>
+                      setEditingModel({ ...editingModel, costMultiplier: parseFloat(e.target.value) || 0 })
+                    }
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium">上下文窗口</label>
+                  <Input
+                    type="number"
+                    step="1000"
+                    min="0"
+                    value={editingModel.contextWindow ?? ''}
+                    onChange={(e) =>
+                      setEditingModel({
+                        ...editingModel,
+                        contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingModel(null)}>
+                取消
+              </Button>
+              <Button onClick={handleEditSave}>
+                保存
+              </Button>
+            </DialogFooter>
+          </ComboboxPortalProvider>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={creatingModel} onOpenChange={setCreatingModel}>
+        <DialogContent className="sm:max-w-[560px]">
+          <ComboboxPortalProvider>
+            <DialogHeader>
+              <DialogTitle>新建模型</DialogTitle>
+              <DialogDescription>
+                添加一个新的模型配置。
+              </DialogDescription>
+            </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
                 <label className="text-sm font-medium">模型名称</label>
                 <Input
-                  value={editingModel.name}
-                  onChange={(e) => setEditingModel({ ...editingModel, name: e.target.value })}
+                  value={newModel.name}
+                  onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+                  placeholder="例如: Claude 3.5 Sonnet"
                 />
               </div>
               <div className="grid gap-2">
                 <label className="text-sm font-medium">模型 ID</label>
                 <Input
-                  value={editingModel.id}
-                  onChange={(e) => setEditingModel({ ...editingModel, id: e.target.value })}
+                  value={newModel.id}
+                  onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
+                  placeholder="例如: claude-3-5-sonnet"
                 />
+              </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">端点</label>
+                <MultiCombobox
+                  value={newModel.endpoints}
+                  onValueChange={(endpoints) => setNewModel({ ...newModel, endpoints })}
+                  options={endpointOptions}
+                  placeholder="选择可访问该模型的 API 端点"
+                />
+              </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium">引擎</label>
+                <MultiCombobox
+                  value={newModel.engines}
+                  onValueChange={(engines) => setNewModel({ ...newModel, engines })}
+                  options={engineOptions}
+                  placeholder="选择可使用该模型的执行引擎"
+                />
+                <p className="text-xs text-muted-foreground">留空表示不限制，由各引擎按自身兼容性决定是否可用。</p>
               </div>
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">启用状态</label>
                 <Switch
-                  checked={editingModel.status === 'active'}
+                  checked={newModel.status === 'active'}
                   onCheckedChange={(checked: boolean) =>
-                    setEditingModel({ ...editingModel, status: checked ? 'active' : 'inactive' })
+                    setNewModel({ ...newModel, status: checked ? 'active' : 'inactive' })
                   }
                 />
               </div>
@@ -1083,9 +1240,9 @@ export default function ModelsPage() {
                   type="number"
                   step="0.1"
                   min="0"
-                  value={editingModel.costMultiplier}
+                  value={newModel.costMultiplier}
                   onChange={(e) =>
-                    setEditingModel({ ...editingModel, costMultiplier: parseFloat(e.target.value) || 0 })
+                    setNewModel({ ...newModel, costMultiplier: parseFloat(e.target.value) || 0 })
                   }
                 />
               </div>
@@ -1095,98 +1252,25 @@ export default function ModelsPage() {
                   type="number"
                   step="1000"
                   min="0"
-                  value={editingModel.contextWindow ?? ''}
+                  value={newModel.contextWindow ?? ''}
                   onChange={(e) =>
-                    setEditingModel({
-                      ...editingModel,
+                    setNewModel({
+                      ...newModel,
                       contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined,
                     })
                   }
                 />
               </div>
             </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingModel(null)}>
-              取消
-            </Button>
-            <Button onClick={handleEditSave}>
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={creatingModel} onOpenChange={setCreatingModel}>
-        <DialogContent className="sm:max-w-[480px]">
-          <DialogHeader>
-            <DialogTitle>新建模型</DialogTitle>
-            <DialogDescription>
-              添加一个新的模型配置。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">模型名称</label>
-              <Input
-                value={newModel.name}
-                onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
-                placeholder="例如: Claude 3.5 Sonnet"
-              />
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">模型 ID</label>
-              <Input
-                value={newModel.id}
-                onChange={(e) => setNewModel({ ...newModel, id: e.target.value })}
-                placeholder="例如: claude-3-5-sonnet"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium">启用状态</label>
-              <Switch
-                checked={newModel.status === 'active'}
-                onCheckedChange={(checked: boolean) =>
-                  setNewModel({ ...newModel, status: checked ? 'active' : 'inactive' })
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">费用倍率</label>
-              <Input
-                type="number"
-                step="0.1"
-                min="0"
-                value={newModel.costMultiplier}
-                onChange={(e) =>
-                  setNewModel({ ...newModel, costMultiplier: parseFloat(e.target.value) || 0 })
-                }
-              />
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium">上下文窗口</label>
-              <Input
-                type="number"
-                step="1000"
-                min="0"
-                value={newModel.contextWindow ?? ''}
-                onChange={(e) =>
-                  setNewModel({
-                    ...newModel,
-                    contextWindow: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                  })
-                }
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreatingModel(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCreateSave} disabled={!newModel.id || !newModel.name}>
-              创建
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setCreatingModel(false)}>
+                取消
+              </Button>
+              <Button onClick={handleCreateSave} disabled={!newModel.id || !newModel.name}>
+                创建
+              </Button>
+            </DialogFooter>
+          </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
     </div>

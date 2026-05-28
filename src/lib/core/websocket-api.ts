@@ -15,7 +15,6 @@ export class WorkflowWebSocket {
     this.ws = new WebSocket(`${protocol}//${window.location.host}/api/workflow/ws`);
 
     this.ws.onopen = () => {
-      console.log('[WS] Connected');
       this.send({ type: 'subscribe', events: ['status', 'log', 'step'] });
     };
 
@@ -24,12 +23,9 @@ export class WorkflowWebSocket {
       this.handleMessage(data);
     };
 
-    this.ws.onerror = (error) => {
-      console.error('[WS] Error:', error);
-    };
+    this.ws.onerror = () => {};
 
     this.ws.onclose = () => {
-      console.log('[WS] Disconnected, reconnecting...');
       this.reconnectTimer = setTimeout(() => this.connect(), 3000);
     };
   }
