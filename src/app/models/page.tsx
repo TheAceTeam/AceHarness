@@ -66,6 +66,7 @@ import ModelDiagnosticsWorkbench from '@/components/models/ModelDiagnosticsWorkb
 import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getConcreteEngines, getEngineDisplayName } from '@/lib/core/engine-metadata';
+import { getLogicalEngineId } from '@/lib/engines/engine-selection';
 
 interface Model {
   id: string;
@@ -79,7 +80,35 @@ interface Model {
   updatedAt?: string;
 }
 
-const DEFAULT_MODEL_ENDPOINTS = ['anthropic', 'openai', 'cangjie'] as const;
+const DEFAULT_MODEL_ENDPOINTS = ['anthropic', 'openai'] as const;
+
+function normalizeClientModelEngines(engines: unknown): string[] {
+  if (!Array.isArray(engines)) return [];
+  return Array.from(
+    new Set(
+      engines
+        .map((engine) => String(engine || '').trim())
+        .filter(Boolean)
+        .map((engine) => getLogicalEngineId(engine) || engine),
+    ),
+  );
+}
+
+function normalizeClientModelOptions(models: any[]): Model[] {
+  return models.map((model) => ({
+    id: String(model.value || ''),
+    name: String(model.label || model.value || ''),
+    endpoints: Array.isArray(model.endpoints)
+      ? Array.from(new Set(model.endpoints.map((endpoint: unknown) => String(endpoint || '').trim()).filter(Boolean)))
+      : [],
+    engines: normalizeClientModelEngines(model.engines),
+    status: model.status === 'inactive' ? 'inactive' : 'active',
+    costMultiplier: Number.isFinite(Number(model.costMultiplier)) ? Number(model.costMultiplier) : 1,
+    contextWindow: Number.isFinite(Number(model.contextWindow)) ? Number(model.contextWindow) : undefined,
+    createdAt: typeof model.createdAt === 'string' ? model.createdAt : undefined,
+    updatedAt: typeof model.updatedAt === 'string' ? model.updatedAt : undefined,
+  }));
+}
 
 function EndpointTag({ endpoint, iconOnly = false }: { endpoint: string; iconOnly?: boolean }) {
   const label = getEndpointDisplayName(endpoint);
@@ -118,7 +147,7 @@ function EngineTag({ engine, compact = false }: { engine: string; compact?: bool
       )}
     >
       <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={label} decorative={false} />
-      <span className="truncate">{engine}</span>
+      <span className="truncate">{label}</span>
     </Badge>
   );
 }
@@ -415,17 +444,7 @@ export default function ModelsPage() {
       const res = await fetch('/api/models');
       const data = await res.json();
       if (data.models) {
-        const transformedModels: Model[] = data.models.map((m: any) => ({
-          id: m.value,
-          name: m.label,
-          endpoints: m.endpoints || [],
-          engines: m.engines || [],
-          status: m.status || 'active',
-          costMultiplier: m.costMultiplier ?? 1,
-          contextWindow: m.contextWindow,
-          createdAt: m.createdAt,
-          updatedAt: m.updatedAt,
-        }));
+        const transformedModels = normalizeClientModelOptions(data.models);
         setModels(transformedModels);
       }
     } catch (error) {
@@ -440,7 +459,7 @@ export default function ModelsPage() {
       value: model.id,
       label: model.name,
       endpoints: model.endpoints || [],
-      engines: model.engines || [],
+      engines: normalizeClientModelEngines(model.engines),
       status: model.status,
       costMultiplier: model.costMultiplier,
       contextWindow: model.contextWindow,
@@ -469,8 +488,8 @@ export default function ModelsPage() {
 
   const allEngines = useMemo(() => {
     const set = new Set<string>();
-    models.forEach((m) => m.engines.forEach((e) => set.add(e)));
-    return Array.from(set).sort();
+    models.forEach((m) => normalizeClientModelEngines(m.engines).forEach((engine) => set.add(engine)));
+    return Array.from(set).sort((a, b) => getEngineDisplayName(a).localeCompare(getEngineDisplayName(b), 'zh-CN'));
   }, [models]);
 
   const endpointOptions = useMemo(() => {
@@ -498,17 +517,17 @@ export default function ModelsPage() {
   }, [allEndpoints, editingModel, newModel.endpoints]);
 
   const engineOptions = useMemo(() => {
-    const set = new Set<string>(getConcreteEngines().map((engine) => engine.id));
+    const set = new Set<string>();
+    getConcreteEngines().forEach((engine) => normalizeClientModelEngines([engine.id]).forEach((id) => set.add(id)));
     allEngines.forEach((engine) => set.add(engine));
-    editingModel?.engines.forEach((engine) => set.add(engine));
-    newModel.engines.forEach((engine) => set.add(engine));
+    normalizeClientModelEngines(editingModel?.engines).forEach((engine) => set.add(engine));
+    normalizeClientModelEngines(newModel.engines).forEach((engine) => set.add(engine));
     return Array.from(set)
       .filter(Boolean)
       .sort((a, b) => getEngineDisplayName(a).localeCompare(getEngineDisplayName(b), 'zh-CN'))
       .map((engine) => ({
         value: engine,
         label: getEngineDisplayName(engine) || engine,
-        description: engine,
         icon: <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />,
       }));
   }, [allEngines, editingModel, newModel.engines]);
@@ -845,7 +864,7 @@ export default function ModelsPage() {
                             }}
                           >
                             <EngineIcon engineId={engine} className="h-3.5 w-3.5" alt={getEngineDisplayName(engine)} decorative={false} />
-                            {engine}
+                            {getEngineDisplayName(engine) || engine}
                           </Button>
                         );
                       })}

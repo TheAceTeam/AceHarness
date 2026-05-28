@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import { parse, stringify } from 'yaml';
-import { getModelOptions, clearModelsCache, type ModelOption } from '@/lib/core/models';
+import { getModelOptions, clearModelsCache, normalizeModelOptions, type ModelOption } from '@/lib/core/models';
 import { getRuntimeModelsConfigPath } from '@/lib/run/runtime-configs';
 
 export async function GET() {
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Update models
-    config.models = models;
+    config.models = normalizeModelOptions(models);
 
     // Write back to YAML
     const yamlContent = stringify(config, { lineWidth: 0 });
