@@ -24,7 +24,7 @@ import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/core/sche
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatAceToolResult } from '@/lib/chat/ace-process-formatters';
+import { formatAceFileChangesResult, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
 import {
   REAL_OPENCODE_CONNECTED_REPLAY,
   REAL_OPENCODE_DONE_RESULT,
@@ -3159,6 +3159,32 @@ describe('Wrapper stream markdown rendering', () => {
       expect(block.meta.content).toContain('需求文档');
       expect(block.meta.content).not.toContain('瑙勮');
     }
+  });
+
+  test('single file-change ace blocks stay renderable as tool-result cards without leaking raw protocol', async () => {
+    const raw = [
+      '先更新兼容编译设计文档。',
+      formatAceFileChangesResult({
+        changes: [
+          {
+            filePath: '/root/wjw/docs/compat-compile-mode/cangjie-compatible-compilation-design.md',
+            kind: 'update',
+          },
+        ],
+        fallbackToolName: 'edit',
+        fallbackTitle: '文件变更',
+      }),
+      '接着同步镜像章节。',
+    ].join('\n');
+
+    const view = renderMessage(raw, { rawContent: raw });
+
+    await openAllDetails(view.container);
+    const toolCards = getToolCards(view.container);
+    expect(toolCards.some((card) => card.toolName === 'edit')).toBe(true);
+    expect(view.container.textContent || '').toContain('先更新兼容编译设计文档。');
+    expect(view.container.textContent || '').toContain('接着同步镜像章节。');
+    expectNoProtocolLeak(view.container);
   });
 
   test('mergeFinalRawStreamContent keeps streamed reasoning when final rawOutput omits it', () => {

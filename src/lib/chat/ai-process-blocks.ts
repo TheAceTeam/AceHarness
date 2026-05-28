@@ -216,7 +216,7 @@ function normalizePayload(raw: unknown): AceProcessPayload | null {
 }
 
 export function wrapAceProcessBlock<T extends AceProcessPayload>(kind: T['kind'], payload: Omit<T, 'kind' | 'body'>, body = ''): string {
-  return `\n<ace-process>${JSON.stringify({ kind, ...payload, body })}</ace-process>\n`;
+  return `\n<ace-process>${JSON.stringify({ ...payload, kind, body })}</ace-process>\n`;
 }
 
 type AceProcessRawSpan = {
