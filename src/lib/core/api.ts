@@ -3,7 +3,12 @@
  */
 
 import type { RunRecord } from '@/lib/run/store';
-import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import type {
+  DeltaMergeState,
+  HumanQuestion,
+  HumanQuestionAnswer,
+  WorkflowSpecRevisionVoteRecord,
+} from '@/lib/run/state-persistence';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
 
 const API_BASE = '/api';
@@ -284,6 +289,8 @@ interface WorkflowStatusResponse {
   humanQuestions?: HumanQuestion[];
   pendingHumanQuestionId?: string | null;
   pendingHumanQuestion?: HumanQuestion | null;
+  specRevisionVote?: WorkflowSpecRevisionVoteRecord | null;
+  specRevisionVoteHistory?: WorkflowSpecRevisionVoteRecord[];
   humanAnswersContext?: Array<{
     questionId: string;
     title: string;

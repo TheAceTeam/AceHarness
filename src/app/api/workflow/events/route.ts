@@ -68,6 +68,8 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
     pendingHumanQuestionId: status.pendingHumanQuestionId || null,
     pendingHumanQuestion: status.pendingHumanQuestion || null,
     humanQuestions: Array.isArray(status.humanQuestions) ? status.humanQuestions : undefined,
+    specRevisionVote: status.specRevisionVote || null,
+    specRevisionVoteHistory: Array.isArray(status.specRevisionVoteHistory) ? status.specRevisionVoteHistory : [],
     runSpecCoding: status.runSpecCoding || null,
     persistMode: status.persistMode || null,
     deltaSpecMerged: status.deltaSpecMerged || false,
@@ -123,7 +125,7 @@ export async function GET(request: NextRequest) {
         'state-change', 'step-start', 'step-complete', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
         'human-question-required', 'human-question-answered', 'human-question-updated',
-        'agent-flow',
+        'agent-flow', 'supervisor-review',
       ];
 
       // Map SM events to frontend-compatible types

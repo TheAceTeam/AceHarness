@@ -69,7 +69,12 @@ import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { createInitialAgentDraft, type AgentDraftState } from '@/lib/agent/draft';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import type { ManagedMcpServer } from '@/lib/mcp/types';
-import type { DeltaMergeState, HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import type {
+  DeltaMergeState,
+  HumanQuestion,
+  HumanQuestionAnswer,
+  WorkflowSpecRevisionVoteRecord,
+} from '@/lib/run/state-persistence';
 import type { WorkflowAgentExecutionOverride } from '@/lib/core/schemas';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
@@ -1175,6 +1180,8 @@ export default function WorkbenchPage() {
   const [pendingHumanQuestion, setPendingHumanQuestion] = useState<HumanQuestion | null>(null);
   const [submittingHumanQuestion, setSubmittingHumanQuestion] = useState(false);
   const humanQuestionSignatureRef = useRef<string | null>(null);
+  const [specRevisionVote, setSpecRevisionVote] = useState<WorkflowSpecRevisionVoteRecord | null>(null);
+  const [specRevisionVoteHistory, setSpecRevisionVoteHistory] = useState<WorkflowSpecRevisionVoteRecord[]>([]);
   const pendingApprovalRedirectRef = useRef<string | null>(null);
   const [openLatestAiDocRequest, setOpenLatestAiDocRequest] = useState(0);
   const [liveStream, setLiveStream] = useState<string[]>([]);
@@ -3314,6 +3321,8 @@ export default function WorkbenchPage() {
         setSupervisorFlow((status as any).supervisorFlow);
       }
       setLatestSupervisorReview((status as any).latestSupervisorReview || null);
+      setSpecRevisionVote((status as any).specRevisionVote || null);
+      setSpecRevisionVoteHistory(Array.isArray((status as any).specRevisionVoteHistory) ? (status as any).specRevisionVoteHistory : []);
       setRehearsalInfo((status as any).rehearsal || null);
       if ((status as any).agentFlow) {
         setAgentFlow((status as any).agentFlow);
@@ -3478,6 +3487,22 @@ export default function WorkbenchPage() {
     setHumanApprovalMinimizedPulse(false);
   }, [clearPendingHumanQuestion]);
 
+  const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
+    if (!snapshot) return;
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'specRevisionVote')) {
+      setSpecRevisionVote(snapshot.specRevisionVote || null);
+    }
+    if (Array.isArray(snapshot.specRevisionVoteHistory)) {
+      setSpecRevisionVoteHistory(snapshot.specRevisionVoteHistory);
+    }
+    if (snapshot.latestSupervisorReview) {
+      setLatestSupervisorReview(snapshot.latestSupervisorReview);
+    }
+    if (snapshot.pendingHumanQuestion !== undefined && snapshot.status === 'running') {
+      setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
+    }
+  }, [setPendingHumanQuestionIfChanged]);
+
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
     setHumanApprovalData(null);
@@ -3507,6 +3532,8 @@ export default function WorkbenchPage() {
     setQualityChecks([]);
     setMemoryLayers(null);
     setLatestSupervisorReview(null);
+    setSpecRevisionVote(null);
+    setSpecRevisionVoteHistory([]);
     setRehearsalInfo(null);
     dispatch({ type: 'SET_SELECTED_STEP', payload: null });
     dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
@@ -3970,14 +3997,18 @@ export default function WorkbenchPage() {
         if (event.data.endTime) setRunEndTime(event.data.endTime);
         if (event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
         if (event.data.specCodingDetails) setSpecCodingDetails(event.data.specCodingDetails);
+        applyWorkflowStatusSnapshot(event.data);
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
         break;
       case 'phase':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.phase });
         addLog('system', 'info', `📍 ${event.data.message}`);
         break;
       case 'step':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.step });
         if (event.data.id) {
           dispatch({ type: 'MAP_STEP_ID', payload: { stepName: event.data.step, stepId: event.data.id } });
@@ -3985,6 +4016,7 @@ export default function WorkbenchPage() {
         addLog(event.data.agent, 'info', `开始执行: ${event.data.step}`);
         break;
       case 'result': {
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         const resultKey = event.data.id || event.data.step;
         if (event.data.error) {
           addLog(event.data.agent, 'error', event.data.output);
@@ -4065,6 +4097,7 @@ export default function WorkbenchPage() {
         });
         break;
       case 'human-question-required':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         if (event.data.question) {
           addLog('system', 'info', `👤 Supervisor 等待回复: ${event.data.question.title}`);
           setPendingHumanQuestionIfChanged(event.data.question);
@@ -4080,6 +4113,7 @@ export default function WorkbenchPage() {
         }
         break;
       case 'human-question-answered':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         addLog('system', 'success', 'Supervisor 消息已回复');
         if (!event.data.question || event.data.question.id === pendingHumanQuestion?.id) {
           clearPendingHumanQuestion();
@@ -4087,13 +4121,16 @@ export default function WorkbenchPage() {
         }
         break;
       case 'force-transition':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         addLog('system', 'warning', `⚡ 强制跳转请求: ${event.data.from} → ${event.data.targetState}`);
         break;
       case 'transition-forced':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         addLog('system', 'info', `⚡ 已强制跳转: ${event.data.from} → ${event.data.to}`);
         dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.to });
         break;
       case 'sm-transition':
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         setSmStateHistory(prev => [...prev, {
           from: event.data.from,
           to: event.data.to,
@@ -4151,8 +4188,12 @@ export default function WorkbenchPage() {
       case 'agent-flow':
         setAgentFlow(event.data.agentFlow || []);
         break;
+      case 'supervisor-review':
+        setLatestSupervisorReview(event.data);
+        applyWorkflowStatusSnapshot(event.data.statusSnapshot);
+        break;
     }
-  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload]);
+  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload, applyWorkflowStatusSnapshot]);
 
   // Keep a ref to the latest handleEvent so SSE callback never goes stale
   const handleEventRef = useRef(handleEvent);
@@ -8166,6 +8207,8 @@ export default function WorkbenchPage() {
                                       pendingHumanQuestion={pendingHumanQuestion}
                                       submittingHumanQuestion={submittingHumanQuestion}
                                       onSubmitHumanQuestion={handleSubmitHumanQuestion}
+                                      specRevisionVote={specRevisionVote}
+                                      specRevisionVoteHistory={specRevisionVoteHistory}
                                       formationPanel={(
                                         <div className="h-full min-h-0 bg-muted/20 p-4">
                                           <div className="h-full min-h-[420px] overflow-hidden rounded-2xl border bg-background">

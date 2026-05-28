@@ -52,7 +52,7 @@ class WorkflowRegistry extends EventEmitter {
     'human-question-required', 'human-question-answered', 'human-question-updated',
     'status', 'agents', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled',
-    'route-decision', 'agent-flow',
+    'route-decision', 'agent-flow', 'supervisor-review',
   ];
 
   /**

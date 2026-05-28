@@ -1,12 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, type ReactNode } from 'react';
-import { ClipboardCheck, UsersRound } from 'lucide-react';
+import { ClipboardCheck, UsersRound, Vote } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { AgoraShell } from '@/components/collaboration/AgoraShell';
 import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
+import WorkflowSpecRevisionVotePanel from '@/components/workflow/WorkflowSpecRevisionVotePanel';
 import { Badge } from '@/components/ui/badge';
-import type { HumanQuestion, HumanQuestionAnswer } from '@/lib/run/state-persistence';
+import type {
+  HumanQuestion,
+  HumanQuestionAnswer,
+  WorkflowSpecRevisionVoteRecord,
+} from '@/lib/run/state-persistence';
 import type { CollaborationChatroomParticipant } from '@/lib/core/home-sidebar-state';
 import { createInitialChatroomState, ensureChatroomRoomState } from '@/lib/agora/chatroom-state';
 
@@ -30,6 +35,8 @@ interface WorkflowSupervisorAgoraPanelProps {
   pendingHumanQuestion?: HumanQuestion | null;
   submittingHumanQuestion?: boolean;
   onSubmitHumanQuestion?: (answer: HumanQuestionAnswer) => Promise<void> | void;
+  specRevisionVote?: WorkflowSpecRevisionVoteRecord | null;
+  specRevisionVoteHistory?: WorkflowSpecRevisionVoteRecord[];
   formationPanel?: ReactNode;
   summaryPanel?: ReactNode;
 }
@@ -88,6 +95,8 @@ export default function WorkflowSupervisorAgoraPanel({
   pendingHumanQuestion,
   submittingHumanQuestion,
   onSubmitHumanQuestion,
+  specRevisionVote,
+  specRevisionVoteHistory = [],
   formationPanel,
   summaryPanel,
 }: WorkflowSupervisorAgoraPanelProps) {
@@ -182,19 +191,38 @@ export default function WorkflowSupervisorAgoraPanel({
   }, [loaded, roster, rosterKey, sessionMap, sessionMapKey, setSessionWorkbenchState, topic, workingDirectory]);
 
   const terminalWorkflowStatus = ['stopped', 'completed', 'failed', 'crashed'].includes(String(workflowStatus || '').toLowerCase());
-  const chatBanner = !terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion ? (
+  const activeSpecVote = specRevisionVote?.status === 'running' ? specRevisionVote : null;
+  const chatBanner = (!terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion) || activeSpecVote ? (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Badge variant="destructive" className="text-[10px]">等待人工审查</Badge>
-        <span className="text-muted-foreground">{configFile}</span>
-        {runId ? <span className="text-muted-foreground">Run: {runId}</span> : null}
-      </div>
-      <HumanQuestionCard
-        question={pendingHumanQuestion}
-        submitting={submittingHumanQuestion}
-        onSubmit={onSubmitHumanQuestion}
-        collapsible={false}
-      />
+      {!terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant="destructive" className="text-[10px]">等待人工审查</Badge>
+            <span className="text-muted-foreground">{configFile}</span>
+            {runId ? <span className="text-muted-foreground">Run: {runId}</span> : null}
+          </div>
+          <HumanQuestionCard
+            question={pendingHumanQuestion}
+            submitting={submittingHumanQuestion}
+            onSubmit={onSubmitHumanQuestion}
+            collapsible={false}
+          />
+        </>
+      ) : null}
+      {activeSpecVote ? (
+        <div className="rounded-xl border bg-amber-50 p-3 text-sm text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+          <div className="flex flex-wrap items-center gap-2 font-medium">
+            <Vote className="h-4 w-4" />
+            <span>{activeSpecVote.title}</span>
+            <Badge variant="outline" className="border-amber-300 bg-background/60 text-[10px]">
+              {activeSpecVote.ballots.length} 票
+            </Badge>
+          </div>
+          <div className="mt-1 text-xs opacity-80">
+            {activeSpecVote.question}
+          </div>
+        </div>
+      ) : null}
     </div>
   ) : null;
 
@@ -208,6 +236,22 @@ export default function WorkflowSupervisorAgoraPanel({
         <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
           暂无编队状态
         </div>
+      ),
+    },
+    {
+      id: 'spec-vote',
+      title: '表决',
+      icon: <Vote className="h-4 w-4" />,
+      badge: (activeSpecVote || specRevisionVoteHistory.length > 0) ? (
+        <Badge variant={activeSpecVote ? 'default' : 'outline'} className="h-5 px-1.5 text-[10px]">
+          {activeSpecVote ? '进行中' : specRevisionVoteHistory.length}
+        </Badge>
+      ) : null,
+      content: (
+        <WorkflowSpecRevisionVotePanel
+          activeVote={specRevisionVote}
+          voteHistory={specRevisionVoteHistory}
+        />
       ),
     },
     {

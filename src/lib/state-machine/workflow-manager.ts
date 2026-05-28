@@ -29,6 +29,9 @@ import {
   type HumanQuestion,
   type HumanQuestionAnswer,
   type HumanAnswerContext,
+  type WorkflowSpecRevisionBallot,
+  type WorkflowSpecRevisionVoteChoice,
+  type WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import {
   appendWorkflowExperience,
@@ -65,6 +68,8 @@ import {
   normalizeSpecCodingDocument,
   updateSpecCodingTaskStatuses,
 } from '@/lib/spec/coding-store';
+import { applyAiSpecCodingDraft, normalizeStringArray } from '@/lib/ai/draft-utils';
+import { extractPlanDraftResult } from '@/lib/ai/result-normalizers';
 import {
   compileStepTaskBindings,
   getSpecTaskBindingIds,
@@ -83,7 +88,10 @@ import {
 import { importWorkspaceArtifactsIntoRunSpecCoding } from '@/lib/run/runtime-spec-import';
 import { appendMemoryEntries } from '@/lib/workflow/memory-store';
 import { upsertRelationshipSignal } from '@/lib/agent/relationship-store';
-import { extractJsonObject as extractStructuredJsonObject } from '@/lib/ai/result-channel';
+import {
+  extractJsonObject as extractStructuredJsonObject,
+  extractStructuredResult,
+} from '@/lib/ai/result-channel';
 import {
   ensureWorkflowGitState,
   recordWorkflowGitSnapshot,
@@ -234,6 +242,42 @@ export function compactStepConclusion(raw: string): string {
   return tail.length > 4000 ? tail.slice(-4000).trim() : tail;
 }
 
+function createEmptySpecRevisionTally(): Record<WorkflowSpecRevisionVoteChoice, number> {
+  return {
+    revise: 0,
+    keep: 0,
+    defer: 0,
+  };
+}
+
+function countSpecRevisionVotes(ballots: WorkflowSpecRevisionBallot[]): Record<WorkflowSpecRevisionVoteChoice, number> {
+  const tally = createEmptySpecRevisionTally();
+  for (const ballot of ballots) {
+    tally[ballot.choice] = (tally[ballot.choice] || 0) + 1;
+  }
+  return tally;
+}
+
+function getSpecRevisionChoiceLabel(choice: WorkflowSpecRevisionVoteChoice): string {
+  switch (choice) {
+    case 'revise':
+      return '建议修订';
+    case 'keep':
+      return '保持现状';
+    default:
+      return '暂缓判断';
+  }
+}
+
+function decideSpecRevisionChoice(tally: Record<WorkflowSpecRevisionVoteChoice, number>): WorkflowSpecRevisionVoteChoice {
+  const ordered = (Object.entries(tally) as Array<[WorkflowSpecRevisionVoteChoice, number]>)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+  const [topChoice, topCount] = ordered[0] || ['defer', 0];
+  const secondCount = ordered[1]?.[1] || 0;
+  if (topCount === 0 || topCount === secondCount) return 'defer';
+  return topChoice;
+}
+
 export type StepSegment =
   | { type: 'serial'; step: WorkflowStep }
   | { type: 'parallel'; groupId: string; steps: WorkflowStep[] };
@@ -259,6 +303,33 @@ type ChannelOutputEntry = {
   agent: string;
   summary: string;
   timestamp: string;
+};
+
+type SpecRevisionVoteTrigger = WorkflowSpecRevisionVoteRecord['trigger'];
+
+type SpecRevisionVoteTriggerInput = {
+  trigger: SpecRevisionVoteTrigger;
+  stateName?: string | null;
+  nextState?: string | null;
+  result?: StateExecutionResult | null;
+  instruction?: string | null;
+  checkpointAdvice?: string | null;
+  question?: HumanQuestion | null;
+  answer?: HumanQuestionAnswer | null;
+};
+
+type SpecRevisionVoteAgentDecision = {
+  choice: WorkflowSpecRevisionVoteChoice;
+  reason: string;
+  rawOutput: string;
+};
+
+type SpecRevisionVoteSupervisorDecision = {
+  apply: boolean;
+  summary: string;
+  affectedArtifacts: string[];
+  impact: string[];
+  rawOutput: string;
 };
 
 function getStepConcurrencyGroup(step: WorkflowStep): string | undefined {
@@ -371,6 +442,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private pendingHumanQuestionId: string | null = null;
   private humanAnswersContext: HumanAnswerContext[] = [];
   private humanQuestionWaiters = new Map<string, (question: HumanQuestion | null) => void>();
+  private specRevisionVote: WorkflowSpecRevisionVoteRecord | null = null;
+  private specRevisionVoteHistory: WorkflowSpecRevisionVoteRecord[] = [];
+  private specRevisionVoteTail: Promise<void> = Promise.resolve();
   private currentRunSpecCoding: SpecCodingDocument | null = null;
   private currentWorkflowConfig: StateMachineWorkflowConfig | null = null;
   private currentSpecRootDir: string | null = null;
@@ -927,6 +1001,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       pendingHumanQuestionId: this.pendingHumanQuestionId,
       pendingHumanQuestion: this.getPendingHumanQuestion(),
       humanAnswersContext: this.humanAnswersContext,
+      specRevisionVote: this.specRevisionVote,
+      specRevisionVoteHistory: this.specRevisionVoteHistory,
       qualityChecks: this.qualityChecks,
       runSpecCoding,
       stepTaskBindingsSnapshot: this.stepTaskBindingsSnapshot,
@@ -1082,6 +1158,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.currentState = null;
       this.currentSupervisorAgent = DEFAULT_SUPERVISOR_NAME;
       this.latestSupervisorReview = null;
+      this.specRevisionVote = null;
+      this.specRevisionVoteHistory = [];
+      this.specRevisionVoteTail = Promise.resolve();
       this.currentRunSpecCoding = null;
       this.currentSpecRootDir = null;
       this.workflowGit = null;
@@ -1277,6 +1356,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.humanQuestions = existingState.humanQuestions || [];
         this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
         this.humanAnswersContext = existingState.humanAnswersContext || [];
+        this.specRevisionVote = existingState.specRevisionVote || null;
+        this.specRevisionVoteHistory = existingState.specRevisionVoteHistory || [];
         this.currentRunSpecCoding = existingState.runSpecCoding
           ? normalizeSpecCodingDocument(existingState.runSpecCoding)
           : this.currentRunSpecCoding;
@@ -1304,6 +1385,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       await this.persistState();
 
       await this.executeStateMachine(workflowConfig, this.currentRequirements);
+      await this.specRevisionVoteTail.catch(() => {});
 
       if (!this.shouldStop) {
         this.status = 'completed';
@@ -1360,11 +1442,20 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (this.status !== 'running') {
       throw new Error('工作流未在运行中');
     }
+    const fromState = this.currentState;
     this.pendingForceTransition = targetState;
     if (instruction) {
       this.pendingForceInstruction = instruction;
     }
     this.emit('force-transition', { targetState, from: this.currentState, instruction });
+    if (fromState !== '__human_approval__' && fromState !== targetState && this.currentWorkflowConfig) {
+      this.queueSpecRevisionVote({
+        trigger: 'force-transition',
+        stateName: fromState,
+        nextState: targetState,
+        instruction,
+      }, this.currentWorkflowConfig);
+    }
 
     // Kill the running processes so the main loop can pick up the forced transition immediately
     this.cancelCurrentProcesses();
@@ -1783,6 +1874,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         humanQuestions: this.humanQuestions,
         pendingHumanQuestionId: this.pendingHumanQuestionId,
         humanAnswersContext: this.humanAnswersContext,
+        specRevisionVote: this.specRevisionVote,
+        specRevisionVoteHistory: this.specRevisionVoteHistory,
         qualityChecks: this.qualityChecks,
         creationSessionId: this._creationSessionId,
         runSpecCoding: this.currentRunSpecCoding,
@@ -1814,6 +1907,403 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private extractJsonObject(raw: string): any | null {
     return extractStructuredJsonObject(raw);
+  }
+
+  private buildSpecRevisionVoteContext(input: SpecRevisionVoteTriggerInput): string {
+    const result = input.result;
+    const issueSummary = result?.issues?.length
+      ? result.issues.map((issue) => `- [${issue.severity}] ${issue.type}: ${issue.description}`).join('\n')
+      : '- 无';
+    const stepOutputSummary = result?.stepOutputs?.length
+      ? result.stepOutputs
+        .map((output, index) => `- 步骤 ${index + 1}: ${compactStepConclusion(output).replace(/\s+/g, ' ').slice(0, 800) || '[无输出]'}`)
+        .join('\n')
+      : '- 无';
+    const humanAnswer = input.answer ? this.formatHumanQuestionAnswer(input.answer) : '';
+    const recentAnswers = this.humanAnswersContext.slice(-5)
+      .map((item) => `- ${item.title}: ${item.answer}`)
+      .join('\n');
+    const specCoding = this.currentRunSpecCoding;
+    const specSummary = specCoding
+      ? [
+        `- 版本: v${specCoding.version}`,
+        specCoding.summary ? `- 摘要: ${specCoding.summary}` : '',
+        specCoding.progress?.summary ? `- 进度: ${specCoding.progress.summary}` : '',
+        `- 阶段: ${specCoding.phases.length}，任务: ${specCoding.tasks.length}，修订: ${specCoding.revisions.length}`,
+        specCoding.revisions.at(-1)?.summary ? `- 最近修订: ${specCoding.revisions.at(-1)?.summary}` : '',
+      ].filter(Boolean).join('\n')
+      : '- 当前没有 Run Spec Coding';
+
+    return [
+      `触发类型: ${input.trigger}`,
+      input.stateName ? `当前状态: ${input.stateName}` : '',
+      input.nextState ? `下一状态: ${input.nextState}` : '',
+      input.instruction ? `强制/人工指令: ${input.instruction}` : '',
+      input.checkpointAdvice ? `Supervisor 检查点建议:\n${input.checkpointAdvice.slice(0, 2000)}` : '',
+      input.question ? `人工审查问题: ${input.question.title}\n${input.question.message}` : '',
+      humanAnswer ? `人工输入:\n${humanAnswer}` : '',
+      recentAnswers ? `最近人工输入:\n${recentAnswers}` : '',
+      result ? `执行结论: ${result.verdict}\n${result.summary}` : '',
+      `问题摘要:\n${issueSummary}`,
+      `步骤输出摘要:\n${stepOutputSummary}`,
+      `当前 Spec Coding:\n${specSummary}`,
+    ].filter(Boolean).join('\n\n');
+  }
+
+  private emitSpecRevisionVoteStatus(message?: string): void {
+    this.emit('status', {
+      status: this.status,
+      message,
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      currentConfigFile: this.currentConfigFile,
+      workflowFrontendSessionId: this._frontendSessionId || null,
+      specRevisionVote: this.specRevisionVote,
+      specRevisionVoteHistory: this.specRevisionVoteHistory,
+      ...this.buildRunSpecCodingStatusPayload(),
+    });
+  }
+
+  private normalizeSpecRevisionVoteChoice(value: unknown): WorkflowSpecRevisionVoteChoice {
+    const text = String(value || '').trim().toLowerCase();
+    if (text === 'revise' || /修订|修改|更新|调整/.test(text)) return 'revise';
+    if (text === 'keep' || /保持|无需|不需要|不用|现状/.test(text)) return 'keep';
+    return 'defer';
+  }
+
+  private getSpecRevisionVoterAgents(input: SpecRevisionVoteTriggerInput): string[] {
+    const names = new Set<string>();
+    const addName = (name?: string | null) => {
+      const trimmed = String(name || '').trim();
+      if (trimmed && trimmed !== this.currentSupervisorAgent) names.add(trimmed);
+    };
+    const state = input.stateName
+      ? this.currentWorkflowConfig?.workflow?.states?.find((item) => item.name === input.stateName)
+      : null;
+    state?.steps?.forEach((step) => addName(getStepRuntimeAgentName(step)));
+    if (names.size === 0) {
+      this.agents.forEach((agent) => addName(agent.name));
+    }
+    return [...names].slice(0, 8);
+  }
+
+  private async requestSpecRevisionVoteFromAgent(
+    agentName: string,
+    context: string,
+    config: StateMachineWorkflowConfig
+  ): Promise<SpecRevisionVoteAgentDecision> {
+    const prompt = [
+      '请作为工作流议场成员，判断当前是否需要修订 Run Spec Coding。',
+      '只能在以下三项中选择一个：',
+      '- revise: 需要修订 requirements/design/tasks/progress 中的内容',
+      '- keep: 当前 spec 仍准确，无需修订',
+      '- defer: 信息不足，暂缓判断',
+      '',
+      '请输出 <result> JSON，格式：',
+      '{"kind":"spec_revision_vote","payload":{"choice":"revise|keep|defer","reason":"你的理由，说明是否受人工输入、AI结论或状态跳转影响"}}',
+      '',
+      '# 上下文',
+      context,
+    ].join('\n');
+
+    const rawOutput = await this.queryAgent(agentName, prompt, config);
+    const parsed = extractStructuredResult<any>(rawOutput, (value: any): value is any => (
+      value?.kind === 'spec_revision_vote'
+      || value?.type === 'spec_revision_vote'
+      || value?.kind === 'vote'
+      || value?.type === 'vote'
+    )) || this.extractJsonObject(rawOutput);
+    const payload = parsed?.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
+    const choice = this.normalizeSpecRevisionVoteChoice(payload?.choice || payload?.vote || payload?.decision);
+    const reason = typeof payload?.reason === 'string' && payload.reason.trim()
+      ? payload.reason.trim()
+      : compactStepConclusion(rawOutput).slice(0, 1000) || `${agentName} 未提供理由`;
+
+    return { choice, reason, rawOutput };
+  }
+
+  private async requestSupervisorSpecRevisionDecision(
+    vote: WorkflowSpecRevisionVoteRecord,
+    context: string,
+    config: StateMachineWorkflowConfig
+  ): Promise<SpecRevisionVoteSupervisorDecision> {
+    const ballotSummary = vote.ballots.map((ballot) => (
+      `- ${ballot.agent}: ${getSpecRevisionChoiceLabel(ballot.choice)}。${ballot.reason}`
+    )).join('\n') || '- 无有效投票';
+    const prompt = [
+      `你是工作流指挥官 ${this.currentSupervisorAgent}。内部 Agent 已完成一次 spec 修订表决，请根据投票、人工输入和 AI 执行结论做最终判断。`,
+      '',
+      `推荐结果: ${getSpecRevisionChoiceLabel(vote.recommendedChoice || 'defer')}`,
+      `票数: revise=${vote.tally.revise}, keep=${vote.tally.keep}, defer=${vote.tally.defer}`,
+      '',
+      'Agent 投票:',
+      ballotSummary,
+      '',
+      '# 上下文',
+      context,
+      '',
+      '如果需要修订，请在同一回复中输出两个 <result>：',
+      '1. {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"修订摘要","affectedArtifacts":["requirements","design","tasks"],"impact":["影响点"]}}',
+      '2. {"kind":"plan_draft","payload":{"summary":"新的摘要","goals":[],"nonGoals":[],"constraints":[],"clarification":{"summary":"进度摘要"},"artifacts":{"requirements":"完整 requirements.md","design":"完整 design.md","tasks":"完整 tasks.md"}}}',
+      '',
+      '如果不需要修订，只输出 spec_coding_revision，apply=false，并说明理由。',
+    ].join('\n');
+
+    const rawOutput = await this.queryAgent(this.currentSupervisorAgent, prompt, config);
+    const parsed = extractStructuredResult<any>(rawOutput, (value: any): value is any => (
+      value?.kind === 'spec_coding_revision'
+      || value?.type === 'spec_coding_revision'
+      || value?.type === 'spec-coding-revision'
+    )) || this.extractJsonObject(rawOutput);
+    const payload = parsed?.payload && typeof parsed.payload === 'object' ? parsed.payload : parsed;
+    const recommendedApply = vote.recommendedChoice === 'revise';
+    return {
+      apply: typeof payload?.apply === 'boolean' ? payload.apply : recommendedApply,
+      summary: typeof payload?.summary === 'string' && payload.summary.trim()
+        ? payload.summary.trim()
+        : (recommendedApply ? '内部表决建议修订 Spec Coding。' : '内部表决建议保持当前 Spec Coding。'),
+      affectedArtifacts: normalizeStringArray(payload?.affectedArtifacts || payload?.affected_artifacts, 6),
+      impact: normalizeStringArray(payload?.impact, 8),
+      rawOutput,
+    };
+  }
+
+  private async applySupervisorVoteSpecRevision(
+    vote: WorkflowSpecRevisionVoteRecord,
+    decision: SpecRevisionVoteSupervisorDecision,
+    config: StateMachineWorkflowConfig
+  ): Promise<WorkflowSpecRevisionVoteRecord> {
+    if (!this.currentRunSpecCoding || !decision.apply) {
+      return {
+        ...vote,
+        revision: {
+          applied: false,
+          summary: decision.summary,
+          affectedArtifacts: decision.affectedArtifacts,
+          error: null,
+        },
+      };
+    }
+
+    const draft = extractPlanDraftResult(decision.rawOutput);
+    if (!draft) {
+      return {
+        ...vote,
+        revision: {
+          applied: false,
+          summary: decision.summary,
+          affectedArtifacts: decision.affectedArtifacts,
+          error: 'Supervisor 未返回 plan_draft，已记录决策但未自动改写 spec。',
+        },
+      };
+    }
+
+    try {
+      let nextSpecCoding = applyAiSpecCodingDraft(this.currentRunSpecCoding, draft);
+      nextSpecCoding = appendSpecCodingRevision(nextSpecCoding, {
+        summary: decision.summary,
+        createdBy: this.currentSupervisorAgent,
+        status: nextSpecCoding.status === 'draft' ? 'in-progress' : nextSpecCoding.status,
+        progressSummary: decision.summary,
+      });
+
+      const compiled = compileStepTaskBindings(config, nextSpecCoding);
+      if (!compiled.validation.ok) {
+        throw new Error(`自动修订后的 Spec task 与 workflow step 绑定不一致: ${compiled.validation.errors.join('; ')}`);
+      }
+      this.currentWorkflowConfig = compiled.config as StateMachineWorkflowConfig;
+      this.bindingValidation = compiled.validation;
+      this.stepTaskBindingsSnapshot = compiled.validation.bindings;
+      this.stepTaskBindingsByStepKey = new Map(
+        this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+      );
+      this.currentRunSpecCoding = nextSpecCoding;
+      this.deltaSpecMerged = false;
+      await this.syncRunSpecCodingDelta().catch(() => {});
+
+      this.latestSupervisorReview = {
+        type: 'chat-revision',
+        stateName: vote.stateName || this.currentState || '全局',
+        content: decision.summary,
+        timestamp: new Date().toISOString(),
+        affectedArtifacts: decision.affectedArtifacts,
+        impact: decision.impact,
+      };
+      this.emit('supervisor-review', this.latestSupervisorReview);
+
+      return {
+        ...vote,
+        revision: {
+          applied: true,
+          summary: decision.summary,
+          affectedArtifacts: decision.affectedArtifacts,
+          error: null,
+        },
+      };
+    } catch (error: any) {
+      return {
+        ...vote,
+        revision: {
+          applied: false,
+          summary: decision.summary,
+          affectedArtifacts: decision.affectedArtifacts,
+          error: error?.message || String(error),
+        },
+      };
+    }
+  }
+
+  private async runSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): Promise<void> {
+    if (!this.currentRunId || !this.currentRunSpecCoding || config.workflow.supervisor?.enabled === false || this.shouldStop) {
+      return;
+    }
+
+    const context = this.buildSpecRevisionVoteContext(input);
+    const voters = this.getSpecRevisionVoterAgents(input);
+    if (voters.length === 0) return;
+
+    const voteId = `spec-revision-vote-${Date.now()}-${randomUUID().slice(0, 8)}`;
+    const voteTitle = input.trigger === 'human-review'
+      ? '人工审查后 Spec 修订表决'
+      : input.trigger === 'force-transition'
+        ? '强制跳转后 Spec 修订表决'
+        : '状态完成后 Spec 修订表决';
+    const voteQuestion = '是否需要基于本次人工输入、AI 结论或状态流转修订 Run Spec Coding？';
+    let vote: WorkflowSpecRevisionVoteRecord = {
+      id: voteId,
+      trigger: input.trigger,
+      title: voteTitle,
+      question: voteQuestion,
+      status: 'running',
+      stateName: input.stateName || null,
+      nextState: input.nextState || null,
+      contextSummary: [
+        input.stateName ? `状态 ${input.stateName}` : '',
+        input.nextState ? `下一状态 ${input.nextState}` : '',
+        input.result?.verdict ? `verdict=${input.result.verdict}` : '',
+      ].filter(Boolean).join('；') || undefined,
+      createdAt: new Date().toISOString(),
+      ballots: [],
+      tally: createEmptySpecRevisionTally(),
+    };
+
+    this.specRevisionVote = vote;
+    await this.persistState();
+    await this.appendSupervisorChatEvent({
+      type: 'spec-revision-vote',
+      title: vote.title,
+      body: `${vote.question}\n参与 Agent: ${voters.join('、')}`,
+      tags: ['spec', 'vote', input.trigger],
+      dedupeKey: `workflow-spec-revision-vote-start-${vote.id}`,
+      speakerName: this.currentSupervisorAgent,
+    });
+    this.emitSpecRevisionVoteStatus('已发起 Spec 修订内部表决');
+
+    const ballots: WorkflowSpecRevisionBallot[] = [];
+    for (const agentName of voters) {
+      if (this.shouldStop) break;
+      try {
+        const decision = await this.requestSpecRevisionVoteFromAgent(agentName, context, config);
+        ballots.push({
+          agent: agentName,
+          choice: decision.choice,
+          reason: decision.reason,
+          votedAt: new Date().toISOString(),
+        });
+      } catch (error: any) {
+        ballots.push({
+          agent: agentName,
+          choice: 'defer',
+          reason: error?.message || String(error),
+          votedAt: new Date().toISOString(),
+        });
+      }
+      vote = {
+        ...vote,
+        ballots: [...ballots],
+        tally: countSpecRevisionVotes(ballots),
+      };
+      this.specRevisionVote = vote;
+      await this.persistState();
+      this.emitSpecRevisionVoteStatus(`${agentName} 已完成 Spec 修订表决`);
+    }
+
+    vote = {
+      ...vote,
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      ballots,
+      tally: countSpecRevisionVotes(ballots),
+      recommendedChoice: decideSpecRevisionChoice(countSpecRevisionVotes(ballots)),
+    };
+
+    const decision = await this.requestSupervisorSpecRevisionDecision(vote, context, this.currentWorkflowConfig || config);
+    vote = {
+      ...vote,
+      supervisorDecision: {
+        apply: decision.apply,
+        summary: decision.summary,
+        madeAt: new Date().toISOString(),
+        affectedArtifacts: decision.affectedArtifacts,
+        impact: decision.impact,
+      },
+    };
+    vote = await this.applySupervisorVoteSpecRevision(vote, decision, this.currentWorkflowConfig || config);
+
+    this.specRevisionVote = vote;
+    this.specRevisionVoteHistory = [vote, ...this.specRevisionVoteHistory.filter((item) => item.id !== vote.id)].slice(0, 20);
+    await this.persistState();
+    await this.appendSupervisorChatEvent({
+      type: 'spec-revision-vote-result',
+      title: `Spec 修订表决完成：${getSpecRevisionChoiceLabel(vote.recommendedChoice || 'defer')}`,
+      body: [
+        `票数: 修订 ${vote.tally.revise} / 保持 ${vote.tally.keep} / 暂缓 ${vote.tally.defer}`,
+        vote.supervisorDecision?.summary,
+        vote.revision?.applied ? 'Supervisor 已应用 spec 修订。' : vote.revision?.error ? `未自动应用: ${vote.revision.error}` : '未应用 spec 修订。',
+      ].filter(Boolean).join('\n'),
+      tags: ['spec', 'vote-result', input.trigger],
+      dedupeKey: `workflow-spec-revision-vote-result-${vote.id}`,
+      speakerName: this.currentSupervisorAgent,
+    });
+    this.emitSpecRevisionVoteStatus('Spec 修订内部表决完成');
+  }
+
+  private queueSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): void {
+    if (!this.currentRunSpecCoding || this.shouldStop) return;
+    const workflowConfig = this.currentWorkflowConfig || config;
+    this.specRevisionVoteTail = this.specRevisionVoteTail
+      .catch(() => {})
+      .then(() => this.runSpecRevisionVote(input, workflowConfig))
+      .catch(async (error: any) => {
+        const now = new Date().toISOString();
+        const failedVote: WorkflowSpecRevisionVoteRecord = {
+          id: `spec-revision-vote-failed-${Date.now()}-${randomUUID().slice(0, 8)}`,
+          trigger: input.trigger,
+          title: 'Spec 修订表决失败',
+          question: '是否需要修订 Run Spec Coding？',
+          status: 'failed',
+          stateName: input.stateName || null,
+          nextState: input.nextState || null,
+          contextSummary: error?.message || String(error),
+          createdAt: now,
+          completedAt: now,
+          ballots: [],
+          tally: createEmptySpecRevisionTally(),
+          recommendedChoice: 'defer',
+          revision: {
+            applied: false,
+            summary: '内部表决执行失败',
+            error: error?.message || String(error),
+          },
+        };
+        this.specRevisionVote = failedVote;
+        this.specRevisionVoteHistory = [failedVote, ...this.specRevisionVoteHistory].slice(0, 20);
+        this.emitSpecRevisionVoteStatus('Spec 修订内部表决失败');
+        await this.persistState();
+      });
   }
 
   private async ensureWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
@@ -2530,6 +3020,12 @@ try {
             });
             await this.persistState();
           }
+          this.queueSpecRevisionVote({
+            trigger: 'state-complete',
+            stateName: stateConfig.name,
+            nextState: null,
+            result: finalResult,
+          }, config);
         }
         this.emit('state-change', {
           state: this.currentState,
@@ -2549,6 +3045,14 @@ try {
         result,
         config
       );
+      if (!wasForced && nextState !== '__human_approval__') {
+        this.queueSpecRevisionVote({
+          trigger: 'state-complete',
+          stateName: stateConfig.name,
+          nextState,
+          result,
+        }, config);
+      }
 
       if (this.currentRunSpecCoding) {
         const statusUpdate = this.deriveRunSpecCodingStateUpdate(stateConfig, result, nextState);
@@ -2689,11 +3193,24 @@ try {
         // After human approval, pendingForceTransition will be set
         const humanSelectedState: string = this.pendingForceTransition || nextState;
         this.pendingForceTransition = null;
+        const answeredHumanQuestion = humanQuestion.status === 'answered'
+          ? humanQuestion
+          : this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
         this.pendingApprovalInfo = null;
 
         // Second transition: __human_approval__ -> selected state
         const instruction = this.pendingForceInstruction || '';
         this.pendingForceInstruction = null;
+        this.queueSpecRevisionVote({
+          trigger: 'human-review',
+          stateName: fromStateName,
+          nextState: humanSelectedState,
+          result,
+          instruction,
+          checkpointAdvice,
+          question: humanQuestion,
+          answer: answeredHumanQuestion.answer,
+        }, config);
         this.stateHistory.push({
           from: '__human_approval__',
           to: humanSelectedState,
@@ -4454,6 +4971,9 @@ try {
     this.humanQuestions = runState.humanQuestions || [];
     this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
     this.humanAnswersContext = runState.humanAnswersContext || [];
+    this.specRevisionVote = runState.specRevisionVote || null;
+    this.specRevisionVoteHistory = runState.specRevisionVoteHistory || [];
+    this.specRevisionVoteTail = Promise.resolve();
     this.stateHistory = runState.stateHistory || [];
     this.issueTracker = (runState.issueTracker || []) as Issue[];
     this.transitionCount = runState.transitionCount || 0;

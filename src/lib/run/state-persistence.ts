@@ -216,6 +216,44 @@ export interface HumanAnswerContext {
   answeredAt: string;
 }
 
+export type WorkflowSpecRevisionVoteChoice = 'revise' | 'keep' | 'defer';
+
+export interface WorkflowSpecRevisionBallot {
+  agent: string;
+  choice: WorkflowSpecRevisionVoteChoice;
+  reason: string;
+  votedAt: string;
+}
+
+export interface WorkflowSpecRevisionVoteRecord {
+  id: string;
+  trigger: 'state-complete' | 'human-review' | 'force-transition';
+  title: string;
+  question: string;
+  status: 'running' | 'completed' | 'failed';
+  stateName?: string | null;
+  nextState?: string | null;
+  contextSummary?: string;
+  createdAt: string;
+  completedAt?: string;
+  ballots: WorkflowSpecRevisionBallot[];
+  tally: Record<WorkflowSpecRevisionVoteChoice, number>;
+  recommendedChoice?: WorkflowSpecRevisionVoteChoice;
+  supervisorDecision?: {
+    apply: boolean;
+    summary: string;
+    madeAt: string;
+    affectedArtifacts?: string[];
+    impact?: string[];
+  };
+  revision?: {
+    applied: boolean;
+    summary: string;
+    affectedArtifacts?: string[];
+    error?: string | null;
+  };
+}
+
 export interface PersistedRunState {
   runId: string;
   configFile: string;
@@ -330,6 +368,10 @@ export interface PersistedRunState {
     affectedArtifacts?: string[];
     impact?: string[];
   } | null;
+  /** 最近一次 spec 修订投票（进行中或最近完成） */
+  specRevisionVote?: WorkflowSpecRevisionVoteRecord | null;
+  /** spec 修订投票历史 */
+  specRevisionVoteHistory?: WorkflowSpecRevisionVoteRecord[];
   /** preCommands 收集到的结构化质量门禁结果 */
   qualityChecks?: PersistedQualityCheck[];
   /** Explicit creation session bound to this run, only set when provided at start */

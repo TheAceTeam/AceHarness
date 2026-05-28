@@ -273,6 +273,13 @@ function SingleCombobox({
 
   const selected = allOptions.find(o => o.value === value) || null;
   const selectedDisplayValue = triggerLabel || (renderSelected ? renderSelected(selected) : selected?.label);
+  const [inputValue, setInputValue] = React.useState('');
+  const [open, setOpen] = React.useState(false);
+  const inputValueRef = React.useRef(inputValue);
+
+  React.useEffect(() => {
+    inputValueRef.current = inputValue;
+  }, [inputValue]);
 
   // items: flat array or grouped array with `items` property
   const items = React.useMemo(() => {
@@ -283,16 +290,32 @@ function SingleCombobox({
   return (
     <Combobox<ComboboxOptionType>
       value={selected}
-      onValueChange={(val, _details) => onValueChange((val as ComboboxOptionType | null)?.value ?? '')}
+      onValueChange={(val, _details) => {
+        onValueChange((val as ComboboxOptionType | null)?.value ?? '');
+        setInputValue('');
+      }}
       disabled={disabled}
       items={items}
       itemToStringValue={(opt) => opt.label}
+      inputValue={inputValue}
+      onInputValueChange={(nextValue, details) => {
+        if (details.reason === 'none' && nextValue === selected?.label && inputValueRef.current === '') {
+          details.cancel();
+          return;
+        }
+        setInputValue(nextValue);
+      }}
+      open={open}
+      onOpenChange={(nextOpen) => setOpen(nextOpen)}
+      onOpenChangeComplete={(nextOpen) => {
+        if (!nextOpen) setInputValue('');
+      }}
     >
       <ComboboxInput
         placeholder={selectedDisplayValue ? '' : placeholder}
         className={triggerClassName}
         leading={triggerIcon}
-        displayValue={selectedDisplayValue}
+        displayValue={!open && !inputValue ? selectedDisplayValue : null}
       />
       <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
