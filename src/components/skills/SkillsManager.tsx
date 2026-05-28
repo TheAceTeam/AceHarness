@@ -10,9 +10,11 @@ import {
   ArrowUpDown,
   Download,
   FolderOpen,
+  Loader2,
+  Pencil,
+  Play,
   Puzzle,
   Plus,
-  Save,
   Search,
   Server,
   Store,
@@ -25,6 +27,14 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
@@ -269,8 +279,64 @@ function PluginsTab() {
 type McpServerDraft = {
   name: string;
   command: string;
-  projectDir: string;
   envText: string;
+};
+
+type McpToolSummary = {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+};
+
+type McpPromptSummary = {
+  name: string;
+  title?: string;
+  description?: string;
+  arguments?: Array<{
+    name: string;
+    description?: string;
+    required?: boolean;
+  }>;
+};
+
+type McpResourceSummary = {
+  name?: string;
+  uri?: string;
+  description?: string;
+  mimeType?: string;
+};
+
+type McpResourceTemplateSummary = {
+  name?: string;
+  uriTemplate?: string;
+  description?: string;
+  mimeType?: string;
+};
+
+type McpDiscoverResponse = {
+  success: true;
+  mode: 'discover';
+  server: {
+    name: string;
+    command: string;
+  };
+  workingDirectory: string;
+  serverInfo?: {
+    name?: string;
+    version?: string;
+  };
+  capabilities: {
+    tools: boolean;
+    prompts: boolean;
+    resources: boolean;
+  };
+  tools: McpToolSummary[];
+  prompts: McpPromptSummary[];
+  resources: McpResourceSummary[];
+  resourceTemplates: McpResourceTemplateSummary[];
+  stderr?: string;
+  durationMs: number;
 };
 
 function formatMcpEnv(env?: Record<string, string>): string {
@@ -281,8 +347,17 @@ function toMcpDraft(server?: Partial<ManagedMcpServer>): McpServerDraft {
   return {
     name: server?.name || '',
     command: server?.command || '',
-    projectDir: server?.projectDir || '',
     envText: formatMcpEnv(server?.env),
+  };
+}
+
+function normalizeMcpServer(server: McpServerDraft): ManagedMcpServer {
+  const env = parseMcpEnv(server.envText);
+  return {
+    name: server.name.trim(),
+    type: 'stdio',
+    command: server.command.trim(),
+    ...(env ? { env } : {}),
   };
 }
 
@@ -309,9 +384,381 @@ function getMcpEnvStatus(text: string): { count: number; valid: boolean } {
   }
 }
 
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function getMcpEnvPreview(env?: Record<string, string>): string {
+  const keys = Object.keys(env || {});
+  if (keys.length === 0) return '未设置';
+  if (keys.length <= 3) return keys.join(', ');
+  return `${keys.slice(0, 3).join(', ')} +${keys.length - 3}`;
+}
+
+function McpServerEditorDialog({
+  open,
+  mode,
+  draft,
+  saving,
+  onOpenChange,
+  onDraftChange,
+  onSubmit,
+}: {
+  open: boolean;
+  mode: 'create' | 'edit';
+  draft: McpServerDraft;
+  saving: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDraftChange: (patch: Partial<McpServerDraft>) => void;
+  onSubmit: () => void;
+}) {
+  const envStatus = getMcpEnvStatus(draft.envText);
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!saving) onOpenChange(nextOpen);
+    }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{mode === 'create' ? '新增 MCP Server' : '编辑 MCP Server'}</DialogTitle>
+          <DialogDescription>
+            这里只维护 MCP 服务本身的定义。工作目录会在聊天、工作流或测试时按调用上下文提供。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-4 py-1">
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">名称</label>
+            <Input
+              value={draft.name}
+              onChange={(event) => onDraftChange({ name: event.target.value })}
+              placeholder="filesystem"
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">启动命令</label>
+            <Input
+              value={draft.command}
+              onChange={(event) => onDraftChange({ command: event.target.value })}
+              placeholder="npx -y @modelcontextprotocol/server-filesystem ."
+              className="font-mono"
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-sm font-medium">ENV JSON</label>
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                {envStatus.valid ? (
+                  <span className="text-muted-foreground">
+                    {envStatus.count > 0 ? `共 ${envStatus.count} 个变量` : '未设置环境变量'}
+                  </span>
+                ) : (
+                  <span className="text-destructive">JSON 格式无效</span>
+                )}
+              </div>
+            </div>
+            <Textarea
+              value={draft.envText}
+              onChange={(event) => onDraftChange({ envText: event.target.value })}
+              placeholder='{"API_KEY":"..."}'
+              className="min-h-32 font-mono text-xs"
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            取消
+          </Button>
+          <Button onClick={onSubmit} disabled={saving}>
+            {saving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                保存中...
+              </>
+            ) : mode === 'create' ? '创建' : '保存'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function McpServerTestDialog({
+  open,
+  server,
+  workingDirectory,
+  testing,
+  result,
+  error,
+  onOpenChange,
+  onWorkingDirectoryChange,
+  onRunTest,
+}: {
+  open: boolean;
+  server: ManagedMcpServer | null;
+  workingDirectory: string;
+  testing: boolean;
+  result: McpDiscoverResponse | null;
+  error: string | null;
+  onOpenChange: (open: boolean) => void;
+  onWorkingDirectoryChange: (value: string) => void;
+  onRunTest: () => void;
+}) {
+  const tools = result?.tools || [];
+  const prompts = result?.prompts || [];
+  const resources = result?.resources || [];
+  const resourceTemplates = result?.resourceTemplates || [];
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!testing) onOpenChange(nextOpen);
+    }}>
+      <DialogContent className="max-h-[88vh] overflow-hidden p-0 sm:max-w-5xl">
+        <DialogHeader className="border-b px-6 py-5">
+          <DialogTitle>测试 MCP Server</DialogTitle>
+          <DialogDescription>
+            这里只做 MCP 进程连接、自检和能力发现，不会触发模型推理，也不会直接调用 AI API。
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[calc(88vh-146px)] overflow-y-auto px-6 py-5">
+          <div className="grid gap-4">
+            <div className="rounded-2xl border border-border/70 bg-muted/20 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold">{server?.name || '未选择 Server'}</div>
+                  <div className="mt-2 break-all rounded-xl bg-background/80 px-3 py-2 font-mono text-xs text-muted-foreground">
+                    {server?.command || '-'}
+                  </div>
+                </div>
+                <Badge variant="outline" className="text-xs">stdio</Badge>
+              </div>
+
+              <div className="mt-4 grid gap-2">
+                <label className="text-sm font-medium">测试工作目录</label>
+                <Input
+                  value={workingDirectory}
+                  onChange={(event) => onWorkingDirectoryChange(event.target.value)}
+                  placeholder="留空则使用当前 workspace 根目录"
+                  className="font-mono"
+                  disabled={testing}
+                />
+                <p className="text-xs text-muted-foreground">
+                  这里模拟实际调用时的上下文目录。MCP 本身不再存项目目录配置。
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={onRunTest} disabled={testing || !server}>
+                {testing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    测试中...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-2 h-4 w-4" />
+                    开始测试
+                  </>
+                )}
+              </Button>
+              {result ? (
+                <span className="text-xs text-muted-foreground">
+                  最近一次完成耗时 {result.durationMs} ms
+                </span>
+              ) : null}
+            </div>
+
+            {error ? (
+              <div className="rounded-2xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+                <div className="font-medium">测试失败</div>
+                <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs">{error}</pre>
+              </div>
+            ) : null}
+
+            {result ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="text-xs text-muted-foreground">工作目录</div>
+                    <div className="mt-2 break-all font-mono text-xs">{result.workingDirectory}</div>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="text-xs text-muted-foreground">服务端信息</div>
+                    <div className="mt-2 text-sm font-medium">
+                      {result.serverInfo?.name || server?.name || '-'}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {result.serverInfo?.version || '未返回版本'}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="text-xs text-muted-foreground">能力</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Badge variant={result.capabilities.tools ? 'outline' : 'secondary'} className="text-xs">Tools</Badge>
+                      <Badge variant={result.capabilities.prompts ? 'outline' : 'secondary'} className="text-xs">Prompts</Badge>
+                      <Badge variant={result.capabilities.resources ? 'outline' : 'secondary'} className="text-xs">Resources</Badge>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="text-xs text-muted-foreground">发现结果</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Badge variant="outline" className="text-xs">Tools {tools.length}</Badge>
+                      <Badge variant="outline" className="text-xs">Prompts {prompts.length}</Badge>
+                      <Badge variant="outline" className="text-xs">Resources {resources.length}</Badge>
+                      <Badge variant="outline" className="text-xs">Templates {resourceTemplates.length}</Badge>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h4 className="text-sm font-semibold">Tools</h4>
+                      <Badge variant="outline" className="text-xs">{tools.length}</Badge>
+                    </div>
+                    {tools.length === 0 ? (
+                      <div className="text-sm text-muted-foreground">未暴露可发现的工具。</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {tools.map((tool) => (
+                          <div key={tool.name} className="rounded-xl border border-border/60 bg-muted/15 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-sm font-medium">{tool.name}</span>
+                              {tool.title ? (
+                                <Badge variant="secondary" className="text-[10px]">{tool.title}</Badge>
+                              ) : null}
+                            </div>
+                            {tool.description ? (
+                              <p className="mt-2 text-xs leading-5 text-muted-foreground">{tool.description}</p>
+                            ) : null}
+                            {tool.inputSchema ? (
+                              <pre className="mt-3 overflow-auto rounded-xl border bg-background/80 p-3 font-mono text-[11px] leading-5">
+                                {safeJsonStringify(tool.inputSchema)}
+                              </pre>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid gap-4">
+                    <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold">Prompts</h4>
+                        <Badge variant="outline" className="text-xs">{prompts.length}</Badge>
+                      </div>
+                      {prompts.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">未暴露 Prompt 列表。</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {prompts.map((prompt) => (
+                            <div key={prompt.name} className="rounded-xl border border-border/60 bg-muted/15 p-3">
+                              <div className="font-mono text-sm font-medium">{prompt.name}</div>
+                              {prompt.description ? (
+                                <p className="mt-2 text-xs leading-5 text-muted-foreground">{prompt.description}</p>
+                              ) : null}
+                              {prompt.arguments && prompt.arguments.length > 0 ? (
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {prompt.arguments.map((arg) => (
+                                    <Badge key={arg.name} variant="outline" className="text-[10px]">
+                                      {arg.name}{arg.required ? ' *' : ''}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold">Resources</h4>
+                        <Badge variant="outline" className="text-xs">{resources.length}</Badge>
+                      </div>
+                      {resources.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">未暴露 Resource 列表。</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {resources.map((resource, index) => (
+                            <div key={`${resource.uri || resource.name || 'resource'}-${index}`} className="rounded-xl border border-border/60 bg-muted/15 p-3">
+                              <div className="font-mono text-sm font-medium">{resource.name || resource.uri || '未命名资源'}</div>
+                              {resource.uri ? (
+                                <div className="mt-2 break-all text-xs text-muted-foreground">{resource.uri}</div>
+                              ) : null}
+                              {resource.description ? (
+                                <p className="mt-2 text-xs leading-5 text-muted-foreground">{resource.description}</p>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <h4 className="text-sm font-semibold">Resource Templates</h4>
+                        <Badge variant="outline" className="text-xs">{resourceTemplates.length}</Badge>
+                      </div>
+                      {resourceTemplates.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">未暴露 Resource Template 列表。</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {resourceTemplates.map((template, index) => (
+                            <div key={`${template.uriTemplate || template.name || 'template'}-${index}`} className="rounded-xl border border-border/60 bg-muted/15 p-3">
+                              <div className="font-mono text-sm font-medium">{template.name || template.uriTemplate || '未命名模板'}</div>
+                              {template.uriTemplate ? (
+                                <div className="mt-2 break-all text-xs text-muted-foreground">{template.uriTemplate}</div>
+                              ) : null}
+                              {template.description ? (
+                                <p className="mt-2 text-xs leading-5 text-muted-foreground">{template.description}</p>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {result.stderr ? (
+                  <div className="rounded-2xl border border-border/70 bg-card/90 p-4">
+                    <div className="text-sm font-semibold">stderr</div>
+                    <pre className="mt-3 overflow-auto rounded-xl border bg-background/80 p-3 font-mono text-[11px] leading-5 text-muted-foreground">
+                      {result.stderr}
+                    </pre>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        <DialogFooter className="border-t px-6 py-4">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={testing}>
+            关闭
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function McpServersTab() {
   const { toast } = useToast();
-  const [servers, setServers] = useState<McpServerDraft[]>([]);
+  const { confirm, dialogProps } = useConfirmDialog();
+  const [servers, setServers] = useState<ManagedMcpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [searchDraft, setSearchDraft] = useState('');
@@ -319,6 +766,17 @@ function McpServersTab() {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<'create' | 'edit'>('create');
+  const [editorDraft, setEditorDraft] = useState<McpServerDraft>(toMcpDraft());
+  const [editingServerName, setEditingServerName] = useState<string | null>(null);
+  const [testOpen, setTestOpen] = useState(false);
+  const [testingServer, setTestingServer] = useState<ManagedMcpServer | null>(null);
+  const [testWorkingDirectory, setTestWorkingDirectory] = useState('');
+  const [lastTestWorkingDirectory, setLastTestWorkingDirectory] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<McpDiscoverResponse | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -344,7 +802,7 @@ function McpServersTab() {
     try {
       const response = await fetch('/api/mcp');
       const data = await response.json();
-      setServers(Array.isArray(data.servers) ? data.servers.map((server: ManagedMcpServer) => toMcpDraft(server)) : []);
+      setServers(Array.isArray(data.servers) ? data.servers : []);
     } catch {
       toast('error', '加载 MCP 配置失败');
     } finally {
@@ -360,66 +818,153 @@ function McpServersTab() {
     setPage(1);
   }, [searchQuery, pageSize]);
 
-  const updateServer = (index: number, patch: Partial<McpServerDraft>) => {
-    setServers((prev) => prev.map((server, itemIndex) => (
-      itemIndex === index ? { ...server, ...patch } : server
-    )));
-  };
-
-  const addServer = () => {
-    setSearchDraft('');
-    setSearchQuery('');
-    setServers((prev) => [...prev, toMcpDraft()]);
-    setPage(Math.max(1, Math.ceil((servers.length + 1) / pageSize)));
-  };
-
-  const removeServer = (index: number) => {
-    setServers((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const saveServers = async () => {
+  const persistServers = useCallback(async (nextServers: ManagedMcpServer[], successMessage: string) => {
     setSaving(true);
     try {
-      const payload = servers
-        .map((server) => ({
-          name: server.name.trim(),
-          type: 'stdio' as const,
-          command: server.command.trim(),
-          projectDir: server.projectDir.trim() || undefined,
-          env: parseMcpEnv(server.envText),
-        }))
-        .filter((server) => server.name && server.command);
-
       const response = await fetch('/api/mcp', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ servers: payload }),
+        body: JSON.stringify({ servers: nextServers }),
       });
       const data = await response.json();
       if (!response.ok || data.error) {
         toast('error', data.error || '保存 MCP 配置失败');
-        return;
+        return false;
       }
-      setServers(Array.isArray(data.servers) ? data.servers.map((server: ManagedMcpServer) => toMcpDraft(server)) : []);
-      toast('success', 'MCP 配置已保存');
+      const savedServers = Array.isArray(data.servers) ? data.servers : [];
+      setServers(savedServers);
+      toast('success', successMessage);
+      return true;
     } catch (error: any) {
       toast('error', error?.message || '保存 MCP 配置失败');
+      return false;
     } finally {
       setSaving(false);
+    }
+  }, [toast]);
+
+  const openCreateDialog = () => {
+    setEditorMode('create');
+    setEditingServerName(null);
+    setEditorDraft(toMcpDraft());
+    setEditorOpen(true);
+  };
+
+  const openEditDialog = (server: ManagedMcpServer) => {
+    setEditorMode('edit');
+    setEditingServerName(server.name);
+    setEditorDraft(toMcpDraft(server));
+    setEditorOpen(true);
+  };
+
+  const handleEditorSubmit = async () => {
+    const trimmedName = editorDraft.name.trim();
+    const trimmedCommand = editorDraft.command.trim();
+    if (!trimmedName) {
+      toast('error', '请先填写 MCP Server 名称');
+      return;
+    }
+    if (!trimmedCommand) {
+      toast('error', '请先填写启动命令');
+      return;
+    }
+
+    let normalized: ManagedMcpServer;
+    try {
+      normalized = normalizeMcpServer(editorDraft);
+    } catch (error: any) {
+      toast('error', error?.message || 'ENV 配置无效');
+      return;
+    }
+
+    const duplicated = servers.some((server) => server.name === trimmedName && server.name !== editingServerName);
+    if (duplicated) {
+      toast('error', `已存在同名 MCP Server: ${trimmedName}`);
+      return;
+    }
+
+    const nextServers = editorMode === 'create'
+      ? [...servers, normalized]
+      : servers.some((server) => server.name === editingServerName)
+        ? servers.map((server) => (server.name === editingServerName ? normalized : server))
+        : [...servers, normalized];
+
+    const success = await persistServers(
+      nextServers,
+      editorMode === 'create' ? 'MCP Server 已添加' : 'MCP Server 已更新',
+    );
+    if (success) {
+      setEditorOpen(false);
+    }
+  };
+
+  const handleDeleteServer = async (server: ManagedMcpServer) => {
+    const confirmed = await confirm({
+      title: '删除 MCP Server',
+      description: `确定要删除 MCP Server “${server.name}” 吗？`,
+      confirmLabel: '删除',
+      cancelLabel: '取消',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
+
+    await persistServers(
+      servers.filter((item) => item.name !== server.name),
+      'MCP Server 已删除',
+    );
+  };
+
+  const openTestDialog = (server: ManagedMcpServer) => {
+    setTestingServer(server);
+    setTestWorkingDirectory(lastTestWorkingDirectory);
+    setTestResult(null);
+    setTestError(null);
+    setTestOpen(true);
+  };
+
+  const runServerTest = async () => {
+    if (!testingServer) return;
+    setTesting(true);
+    setTestError(null);
+    setTestResult(null);
+
+    const workingDirectory = testWorkingDirectory.trim();
+    try {
+      const response = await fetch('/api/mcp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: testingServer.name,
+          ...(workingDirectory ? { workingDirectory } : {}),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) {
+        setTestError(data.error || 'MCP 测试失败');
+        return;
+      }
+      setTestResult(data as McpDiscoverResponse);
+      if (workingDirectory) {
+        setLastTestWorkingDirectory(workingDirectory);
+      }
+      toast('success', 'MCP 测试完成');
+    } catch (error: any) {
+      setTestError(error?.message || 'MCP 测试失败');
+    } finally {
+      setTesting(false);
     }
   };
 
   const filteredServers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return servers
-      .map((server, index) => ({ server, index }))
+      .map((server) => ({ server }))
       .filter(({ server }) => {
         if (!query) return true;
         return [
           server.name,
           server.command,
-          server.projectDir,
-          server.envText,
+          formatMcpEnv(server.env),
         ].join(' ').toLowerCase().includes(query);
       });
   }, [searchQuery, servers]);
@@ -448,45 +993,6 @@ function McpServersTab() {
   const handleApplySearch = () => {
     setSearchQuery(searchDraft);
   };
-
-  const renderServerFields = (server: McpServerDraft, index: number, compact = false) => (
-    <div className={cn('grid gap-3', compact ? 'grid-cols-1' : 'md:grid-cols-2')}>
-      <div className="space-y-1.5">
-        <div className="text-xs font-medium text-muted-foreground">名称</div>
-        <Input
-          value={server.name}
-          onChange={(event) => updateServer(index, { name: event.target.value })}
-          placeholder="filesystem"
-        />
-      </div>
-      <div className="space-y-1.5">
-        <div className="text-xs font-medium text-muted-foreground">项目目录</div>
-        <Input
-          value={server.projectDir}
-          onChange={(event) => updateServer(index, { projectDir: event.target.value })}
-          placeholder="可留空，支持相对工作目录"
-        />
-      </div>
-      <div className={cn('space-y-1.5', compact ? '' : 'md:col-span-2')}>
-        <div className="text-xs font-medium text-muted-foreground">启动命令</div>
-        <Input
-          value={server.command}
-          onChange={(event) => updateServer(index, { command: event.target.value })}
-          placeholder="npx -y @modelcontextprotocol/server-filesystem ."
-          className="font-mono"
-        />
-      </div>
-      <div className={cn('space-y-1.5', compact ? '' : 'md:col-span-2')}>
-        <div className="text-xs font-medium text-muted-foreground">ENV JSON</div>
-        <Textarea
-          value={server.envText}
-          onChange={(event) => updateServer(index, { envText: event.target.value })}
-          placeholder='{"API_KEY":"..."}'
-          className="min-h-24 font-mono text-xs"
-        />
-      </div>
-    </div>
-  );
 
   return (
     <>
@@ -532,16 +1038,9 @@ function McpServersTab() {
                 <span className="material-symbols-outlined text-sm">table_rows</span>
               </Button>
             </div>
-            <Button size="sm" variant="outline" onClick={() => void loadServers()} disabled={loading || saving}>
-              重新加载
-            </Button>
-            <Button size="sm" variant="outline" onClick={addServer} disabled={saving}>
+            <Button size="sm" onClick={openCreateDialog} disabled={saving}>
               <Plus className="mr-1 h-4 w-4" />
               添加
-            </Button>
-            <Button size="sm" onClick={() => void saveServers()} disabled={saving}>
-              <Save className="mr-1 h-4 w-4" />
-              {saving ? '保存中...' : '保存'}
             </Button>
           </div>
         </div>
@@ -551,7 +1050,9 @@ function McpServersTab() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-lg font-semibold">MCP Servers</h3>
-            <p className="mt-1 text-xs text-muted-foreground">已配置 {servers.length} 个，当前列表 {pagination.total} 个</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              已配置 {servers.length} 个，当前列表 {pagination.total} 个。工作目录在聊天、工作流或测试时按调用上下文提供。
+            </p>
           </div>
         </div>
 
@@ -561,7 +1062,7 @@ function McpServersTab() {
           <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-[24px] border border-dashed text-sm text-muted-foreground">
             <Server className="h-10 w-10" />
             <div>暂无 MCP Server</div>
-            <Button size="sm" variant="outline" onClick={addServer}>添加 Server</Button>
+            <Button size="sm" variant="outline" onClick={openCreateDialog}>添加 Server</Button>
           </div>
         ) : pagination.total === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -575,75 +1076,49 @@ function McpServersTab() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-[180px] min-w-[180px]">名称</TableHead>
-                    <TableHead className="w-[320px] min-w-[320px]">启动命令</TableHead>
-                    <TableHead className="w-[220px] min-w-[220px]">项目目录</TableHead>
-                    <TableHead className="w-[260px] min-w-[260px]">ENV JSON</TableHead>
-                    <TableHead className="w-[110px] min-w-[110px]">状态</TableHead>
-                    <TableHead className="w-[60px]">操作</TableHead>
+                    <TableHead className="w-[420px] min-w-[420px]">启动命令</TableHead>
+                    <TableHead className="w-[220px] min-w-[220px]">ENV</TableHead>
+                    <TableHead className="w-[120px] min-w-[120px]">类型</TableHead>
+                    <TableHead className="w-[220px] min-w-[220px]">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {pagination.items.map(({ server, index }) => {
-                    const envStatus = getMcpEnvStatus(server.envText);
-                    const configured = Boolean(server.name.trim() && server.command.trim());
+                  {pagination.items.map(({ server }) => {
+                    const envCount = Object.keys(server.env || {}).length;
                     return (
-                      <TableRow key={`${server.name || 'new'}-${index}`}>
+                      <TableRow key={server.name}>
                         <TableCell className="align-top">
-                          <Input
-                            value={server.name}
-                            onChange={(event) => updateServer(index, { name: event.target.value })}
-                            placeholder="filesystem"
-                          />
+                          <div className="font-medium">{server.name}</div>
                         </TableCell>
                         <TableCell className="align-top">
-                          <Input
-                            value={server.command}
-                            onChange={(event) => updateServer(index, { command: event.target.value })}
-                            placeholder="npx -y @modelcontextprotocol/server-filesystem ."
-                            className="font-mono"
-                          />
+                          <div className="break-all font-mono text-xs text-muted-foreground">{server.command}</div>
                         </TableCell>
                         <TableCell className="align-top">
-                          <Input
-                            value={server.projectDir}
-                            onChange={(event) => updateServer(index, { projectDir: event.target.value })}
-                            placeholder="可留空，支持相对工作目录"
-                          />
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <Textarea
-                            value={server.envText}
-                            onChange={(event) => updateServer(index, { envText: event.target.value })}
-                            placeholder='{"API_KEY":"..."}'
-                            className="min-h-20 font-mono text-xs"
-                          />
-                        </TableCell>
-                        <TableCell className="align-top">
-                          <div className="flex flex-wrap gap-1">
-                            <Badge variant={configured ? 'outline' : 'secondary'} className="text-xs">
-                              {configured ? '已配置' : '待补全'}
+                          <div className="space-y-2">
+                            <Badge variant={envCount > 0 ? 'outline' : 'secondary'} className="text-xs">
+                              {envCount > 0 ? `ENV ${envCount}` : '未设置'}
                             </Badge>
-                            {!envStatus.valid ? (
-                              <Badge variant="outline" className="text-xs border-destructive/40 text-destructive">
-                                ENV 错误
-                              </Badge>
-                            ) : envStatus.count > 0 ? (
-                              <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
-                                ENV {envStatus.count}
-                              </Badge>
-                            ) : null}
+                            <div className="text-xs text-muted-foreground">{getMcpEnvPreview(server.env)}</div>
                           </div>
                         </TableCell>
                         <TableCell className="align-top">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                            onClick={() => removeServer(index)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                          <Badge variant="outline" className="text-xs">stdio</Badge>
+                        </TableCell>
+                        <TableCell className="align-top">
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" className="h-8" onClick={() => openEditDialog(server)} disabled={saving}>
+                              <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                              编辑
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-8" onClick={() => openTestDialog(server)} disabled={saving}>
+                              <Play className="mr-1.5 h-3.5 w-3.5" />
+                              测试
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-8 text-muted-foreground hover:text-destructive" onClick={() => void handleDeleteServer(server)} disabled={saving}>
+                              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                              删除
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -654,12 +1129,11 @@ function McpServersTab() {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-            {pagination.items.map(({ server, index }) => {
-              const envStatus = getMcpEnvStatus(server.envText);
-              const configured = Boolean(server.name.trim() && server.command.trim());
+            {pagination.items.map(({ server }) => {
+              const envCount = Object.keys(server.env || {}).length;
               return (
                 <motion.div
-                  key={`${server.name || 'new'}-${index}`}
+                  key={server.name}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="relative rounded-[24px] border border-border/70 bg-card/88 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_24px_70px_rgba(15,23,42,0.14)]"
@@ -668,34 +1142,39 @@ function McpServersTab() {
                     <div className="flex min-w-0 items-start gap-2">
                       <Server className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
                       <div className="min-w-0">
-                        <h4 className="truncate text-sm font-semibold">{server.name || '新 MCP Server'}</h4>
+                        <h4 className="truncate text-sm font-semibold">{server.name}</h4>
                         <div className="mt-1 flex flex-wrap gap-1.5">
-                          <Badge variant={configured ? 'outline' : 'secondary'} className="text-xs">
-                            {configured ? 'stdio' : '待补全'}
+                          <Badge variant="outline" className="text-xs">stdio</Badge>
+                          <Badge variant={envCount > 0 ? 'outline' : 'secondary'} className="text-xs">
+                            {envCount > 0 ? `ENV ${envCount}` : '无 ENV'}
                           </Badge>
-                          {!envStatus.valid ? (
-                            <Badge variant="outline" className="text-xs border-destructive/40 text-destructive">
-                              ENV 错误
-                            </Badge>
-                          ) : envStatus.count > 0 ? (
-                            <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
-                              ENV {envStatus.count}
-                            </Badge>
-                          ) : null}
                         </div>
                       </div>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => removeServer(index)}
-                      title="删除"
-                    >
+                    <Button size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive" onClick={() => void handleDeleteServer(server)} title="删除" disabled={saving}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
-                  {renderServerFields(server, index, true)}
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Command</div>
+                      <div className="mt-2 break-all font-mono text-xs text-muted-foreground">{server.command}</div>
+                    </div>
+                    <div className="rounded-2xl border border-border/60 bg-background/70 p-3">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">ENV</div>
+                      <div className="mt-2 text-xs text-muted-foreground">{getMcpEnvPreview(server.env)}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" className="h-8" onClick={() => openEditDialog(server)} disabled={saving}>
+                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                        编辑
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-8" onClick={() => openTestDialog(server)} disabled={saving}>
+                        <Play className="mr-1.5 h-3.5 w-3.5" />
+                        测试
+                      </Button>
+                    </div>
+                  </div>
                 </motion.div>
               );
             })}
@@ -717,6 +1196,30 @@ function McpServersTab() {
           itemLabel="MCP Server"
         />
       ) : null}
+
+      <McpServerEditorDialog
+        open={editorOpen}
+        mode={editorMode}
+        draft={editorDraft}
+        saving={saving}
+        onOpenChange={setEditorOpen}
+        onDraftChange={(patch) => setEditorDraft((prev) => ({ ...prev, ...patch }))}
+        onSubmit={() => void handleEditorSubmit()}
+      />
+
+      <McpServerTestDialog
+        open={testOpen}
+        server={testingServer}
+        workingDirectory={testWorkingDirectory}
+        testing={testing}
+        result={testResult}
+        error={testError}
+        onOpenChange={setTestOpen}
+        onWorkingDirectoryChange={setTestWorkingDirectory}
+        onRunTest={() => void runServerTest()}
+      />
+
+      {dialogProps && <ConfirmDialog {...dialogProps} />}
     </>
   );
 }

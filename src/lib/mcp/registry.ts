@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from 'path';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { dirname } from 'path';
 import { parse, stringify } from 'yaml';
@@ -18,7 +17,6 @@ function normalizeManagedMcpServer(input: unknown): ManagedMcpServer | null {
 
   const name = parsed.data.name.trim();
   const command = parsed.data.command.trim();
-  const projectDir = parsed.data.projectDir?.trim();
   const envEntries = Object.entries(parsed.data.env || {})
     .filter(([key, value]) => key.trim().length > 0 && typeof value === 'string');
   const env = envEntries.length > 0
@@ -31,7 +29,6 @@ function normalizeManagedMcpServer(input: unknown): ManagedMcpServer | null {
     name,
     type: 'stdio',
     command,
-    ...(projectDir ? { projectDir } : {}),
     ...(env ? { env } : {}),
   };
 }
@@ -52,25 +49,14 @@ function readRegistryArray(raw: unknown): unknown[] {
   return [];
 }
 
-function absolutizeProjectDir(server: ManagedMcpServer, baseDirectory?: string): ManagedMcpServer {
-  const projectDir = server.projectDir?.trim();
-  if (!projectDir || !baseDirectory || isAbsolute(projectDir)) {
-    return server;
-  }
-  return {
-    ...server,
-    projectDir: resolve(baseDirectory, projectDir),
-  };
-}
-
 export function invalidateMcpRegistryCache(): void {
   registryCache = null;
 }
 
-export async function loadMcpRegistry(baseDirectory?: string): Promise<ManagedMcpServer[]> {
+export async function loadMcpRegistry(_baseDirectory?: string): Promise<ManagedMcpServer[]> {
   const now = Date.now();
   if (registryCache && registryCache.expiresAt > now) {
-    return registryCache.value.map((server) => absolutizeProjectDir(server, baseDirectory));
+    return registryCache.value.map((server) => ({ ...server }));
   }
 
   let value: ManagedMcpServer[] = [];
@@ -87,7 +73,7 @@ export async function loadMcpRegistry(baseDirectory?: string): Promise<ManagedMc
   }
 
   registryCache = { value, expiresAt: now + CACHE_TTL_MS };
-  return value.map((server) => absolutizeProjectDir(server, baseDirectory));
+  return value.map((server) => ({ ...server }));
 }
 
 export async function saveMcpRegistry(servers: unknown[]): Promise<ManagedMcpServer[]> {

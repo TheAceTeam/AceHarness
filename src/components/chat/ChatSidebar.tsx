@@ -1810,7 +1810,6 @@ function SkillManagerModal({
       return [
         server.name,
         server.command,
-        server.projectDir || '',
         envKeys,
       ].join(' ').toLowerCase().includes(query);
     });
@@ -1880,7 +1879,7 @@ function SkillManagerModal({
           <div className="relative">
             <span className="material-symbols-outlined text-sm absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground">search</span>
             <Input
-              placeholder={activeTab === 'skills' ? '搜索技能名称、描述或标签...' : '搜索 MCP 名称、命令或目录...'}
+              placeholder={activeTab === 'skills' ? '搜索技能名称、描述或标签...' : '搜索 MCP 名称、命令或 ENV...'}
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs"
@@ -1991,11 +1990,6 @@ function SkillManagerModal({
                       <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
                         {server.command}
                       </p>
-                      {server.projectDir && (
-                        <p className="mt-1 break-all text-[11px] text-muted-foreground">
-                          目录: {server.projectDir}
-                        </p>
-                      )}
                     </div>
                     <div className="shrink-0 mt-0.5">
                       <Switch

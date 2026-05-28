@@ -9065,9 +9065,7 @@ export default function WorkbenchPage() {
                                 options={availableMcpServers.map((server) => ({
                                   value: server.name,
                                   label: server.name,
-                                  description: server.projectDir
-                                    ? `${server.command} · ${server.projectDir}`
-                                    : server.command,
+                                  description: server.command,
                                 }))}
                                 placeholder="选择 MCP Servers..."
                               />
