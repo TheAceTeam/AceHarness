@@ -80,6 +80,7 @@ import HumanQuestionCard from '@/components/workflow/HumanQuestionCard';
 import { GitWorkspaceDiffPanel } from '@/components/workflow/GitWorkspaceDiffPanel';
 import { cn } from '@/lib/core/utils';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import styles from './page.module.css';
 
 const loadingPanel = () => (
@@ -1699,13 +1700,19 @@ export default function WorkbenchPage() {
         filePath?: string | null;
       }>).detail;
       if (!detail?.workspacePath) return;
-      openWorkspaceEditorAtPath(detail.workspacePath, '文档链接', detail.filePath || detail.absolutePath || null);
+      const target = resolveWorkspaceLinkTarget({
+        currentWorkspacePath: currentRunWorkspacePath,
+        linkWorkspacePath: detail.workspacePath,
+        absolutePath: detail.absolutePath,
+        filePath: detail.filePath,
+      });
+      openWorkspaceEditorAtPath(target.workspacePath, '文档链接', target.initialFilePath);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     return () => {
       window.removeEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     };
-  }, [openWorkspaceEditorAtPath]);
+  }, [currentRunWorkspacePath, openWorkspaceEditorAtPath]);
 
   const activeSpecCodingPhase = useMemo(() => {
     if (!specCodingDetails?.phases?.length) return null;

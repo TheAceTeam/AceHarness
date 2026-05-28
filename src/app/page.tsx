@@ -54,6 +54,7 @@ import { getSessionDirectoryKind } from '@/lib/agent/conversations';
 import { createInitialChatroomState } from '@/lib/agora/chatroom-state';
 import { computeAdaptiveRecentWindow } from '@/lib/chat/message-window';
 import { cn } from '@/lib/core/utils';
+import { resolveWorkspaceLinkTarget } from '@/lib/workspace/link-target';
 import pkgJson from '../../package.json';
 
 // 动态导入 RichTextEditor - TipTap 是重量级库，延迟加载
@@ -697,16 +698,22 @@ function ChatPageContent() {
         filePath?: string | null;
       }>).detail;
       if (!detail?.workspacePath) return;
-      setWorkspaceEditorPath(detail.workspacePath);
+      const target = resolveWorkspaceLinkTarget({
+        currentWorkspacePath: workingDirectory,
+        linkWorkspacePath: detail.workspacePath,
+        absolutePath: detail.absolutePath,
+        filePath: detail.filePath,
+      });
       setWorkspaceEditorTitle('文档链接');
-      setWorkspaceEditorFilePath(detail.filePath || detail.absolutePath || null);
+      setWorkspaceEditorPath(target.workspacePath);
+      setWorkspaceEditorFilePath(target.initialFilePath);
       setWorkspaceEditorOpen(true);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     return () => {
       window.removeEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     };
-  }, []);
+  }, [workingDirectory]);
 
   const chatTitle = useMemo(() => {
     const notebookFile = searchParams.get('notebookFile');

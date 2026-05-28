@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolveWorkspaceEditorTargetFile, treeCanResolvePath } from "@/components/workspace/WorkspaceEditor"
 import type { TreeNode } from "@/lib/core/api"
+import { resolveWorkspaceLinkTarget } from "@/lib/workspace/link-target"
 
 describe("treeCanResolvePath", () => {
   it("keeps deep files selectable while ancestor children are still unloaded", () => {
@@ -92,5 +93,31 @@ describe("resolveWorkspaceEditorTargetFile", () => {
       initialFilePath: "/Users/shawn/other/file.md",
       urlFilePath: "docs/briefing.pptx",
     })).toBe("docs/briefing.pptx")
+  })
+})
+
+describe("resolveWorkspaceLinkTarget", () => {
+  it("reuses the current workspace root for absolute files inside it", () => {
+    expect(resolveWorkspaceLinkTarget({
+      currentWorkspacePath: "/Users/shawn/project",
+      linkWorkspacePath: "/Users/shawn/project/docs",
+      absolutePath: "/Users/shawn/project/docs/briefing.pptx",
+      filePath: "briefing.pptx",
+    })).toEqual({
+      workspacePath: "/Users/shawn/project",
+      initialFilePath: "/Users/shawn/project/docs/briefing.pptx",
+    })
+  })
+
+  it("falls back to the link workspace when the file is outside the current workspace", () => {
+    expect(resolveWorkspaceLinkTarget({
+      currentWorkspacePath: "/Users/shawn/project",
+      linkWorkspacePath: "/Users/shawn/other/docs",
+      absolutePath: "/Users/shawn/other/docs/briefing.pptx",
+      filePath: "briefing.pptx",
+    })).toEqual({
+      workspacePath: "/Users/shawn/other/docs",
+      initialFilePath: "briefing.pptx",
+    })
   })
 })
