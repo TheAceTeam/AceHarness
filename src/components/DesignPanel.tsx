@@ -69,6 +69,7 @@ interface DesignPanelProps {
   onCrossPhaseMove: (fromPhase: number, fromIndex: number, toPhase: number, toIndex: number) => void;
   onMoveGroup: (fromPhase: number, groupStartIndex: number, toPhase: number, toIndex: number) => void;
   onJoinGroup: (phaseIndex: number, stepIndex: number, groupId: string) => void;
+  onOptimizeStep?: (phaseIndex: number, stepIndex: number) => void;
 }
 
 const roleIcon: Record<string, string> = { attacker: 'swords', defender: 'shield', judge: 'balance' };
@@ -142,10 +143,11 @@ interface StepCardProps {
   mergeActions?: React.ReactNode;
   onSelect: () => void;
   onDelete: () => void;
+  onOptimize?: () => void;
   isDragging?: boolean;
 }
 
-function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSelect, onDelete, isDragging }: StepCardProps) {
+function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSelect, onDelete, onOptimize, isDragging }: StepCardProps) {
   const role = step.role || 'defender';
   return (
     <div className={`group relative border-l-4 ${roleColor[role]} rounded-lg border border-border bg-card px-3 py-2.5 transition-colors hover:bg-accent/40 ${isDragging ? 'shadow-lg ring-2 ring-primary/30' : ''}`}>
@@ -178,6 +180,12 @@ function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSele
             </div>
             <div className="flex shrink-0 gap-0.5 rounded-md border border-border/60 bg-background/75 p-0.5 text-muted-foreground shadow-sm opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               {mergeActions}
+              {onOptimize ? (
+                <Button variant="ghost" size="icon" className="h-6 w-6" title="AI 优化"
+                  onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>auto_fix_high</span>
+                </Button>
+              ) : null}
               <Button variant="ghost" size="icon" className="h-6 w-6" title="编辑"
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
@@ -195,11 +203,12 @@ function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSele
 }
 
 /* ─── Sortable Step Card (single step, not in parallel group) ─── */
-function SortableStepCard({ step, phaseIndex, stepIndex, availableAgents, mergeActions, onSelect, onDelete }: {
+function SortableStepCard({ step, phaseIndex, stepIndex, availableAgents, mergeActions, onSelect, onDelete, onOptimize }: {
   step: Step; phaseIndex: number; stepIndex: number;
   availableAgents?: AgentAvatarSource[];
   mergeActions?: React.ReactNode;
   onSelect: () => void; onDelete: () => void;
+  onOptimize?: () => void;
 }) {
   const id = `${phaseIndex}-${stepIndex}`;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -207,13 +216,13 @@ function SortableStepCard({ step, phaseIndex, stepIndex, availableAgents, mergeA
   return (
     <div ref={setNodeRef} style={style}>
       <StepCard step={step} availableAgents={availableAgents} dragHandleProps={{ ...attributes, ...listeners }}
-        mergeActions={mergeActions} onSelect={onSelect} onDelete={onDelete} isDragging={isDragging} />
+        mergeActions={mergeActions} onSelect={onSelect} onDelete={onDelete} onOptimize={onOptimize} isDragging={isDragging} />
     </div>
   );
 }
 
 /* ─── Sortable Parallel Group (moves as a unit) ─── */
-function SortableParallelGroup({ phaseIndex, groupSteps, availableAgents, onSelectNode, onDeleteStep, onUngroup, mergeActions }: {
+function SortableParallelGroup({ phaseIndex, groupSteps, availableAgents, onSelectNode, onDeleteStep, onUngroup, mergeActions, onOptimizeStep }: {
   phaseIndex: number;
   groupSteps: { step: Step; si: number }[];
   availableAgents?: AgentAvatarSource[];
@@ -221,6 +230,7 @@ function SortableParallelGroup({ phaseIndex, groupSteps, availableAgents, onSele
   onDeleteStep: (pi: number, si: number) => void;
   onUngroup: (pi: number, si: number) => void;
   mergeActions?: React.ReactNode;
+  onOptimizeStep?: (phaseIndex: number, stepIndex: number) => void;
 }) {
   const firstSi = groupSteps[0].si;
   const id = `group-${phaseIndex}-${firstSi}`;
@@ -245,6 +255,7 @@ function SortableParallelGroup({ phaseIndex, groupSteps, availableAgents, onSele
         {groupSteps.map(({ step, si }) => (
           <StepCard key={si} step={step} availableAgents={availableAgents}
             onSelect={() => onSelectNode('step', phaseIndex, si)}
+            onOptimize={onOptimizeStep ? () => onOptimizeStep(phaseIndex, si) : undefined}
             onDelete={() => onDeleteStep(phaseIndex, si)} />
         ))}
       </div>
@@ -339,7 +350,7 @@ function groupSteps(steps: Step[]) {
 export default function DesignPanel({
   workflow, availableAgents, onSelectNode, onAddPhase, onAddStep, onAddStepAt,
   onDeletePhase, onDeleteStep, onMoveStep, onToggleParallel, onUngroup,
-  onCrossPhaseMove, onMoveGroup, onJoinGroup,
+  onCrossPhaseMove, onMoveGroup, onJoinGroup, onOptimizeStep,
 }: DesignPanelProps) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -670,7 +681,8 @@ export default function DesignPanel({
                                 <SortableParallelGroup phaseIndex={pi} groupSteps={group.steps}
                                   availableAgents={availableAgents}
                                   onSelectNode={onSelectNode} onDeleteStep={onDeleteStep} onUngroup={onUngroup}
-                                  mergeActions={groupMerge} />
+                                  mergeActions={groupMerge}
+                                  onOptimizeStep={onOptimizeStep} />
                               </div>
                             );
                           } else {
@@ -683,7 +695,8 @@ export default function DesignPanel({
                                   availableAgents={availableAgents}
                                   mergeActions={mergeActions}
                                   onSelect={() => onSelectNode('step', pi, si)}
-                                  onDelete={() => onDeleteStep(pi, si)} />
+                                  onDelete={() => onDeleteStep(pi, si)}
+                                  onOptimize={onOptimizeStep ? () => onOptimizeStep(pi, si) : undefined} />
                               </div>
                             );
                           }

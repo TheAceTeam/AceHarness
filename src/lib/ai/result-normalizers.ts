@@ -38,6 +38,16 @@ export type WorkflowDraftPreviewState = {
   validation?: any;
 };
 
+export type WorkflowPatchPreviewState = {
+  source: 'result-json' | 'none';
+  filename?: string;
+  summary?: string;
+  scope?: 'workflow' | 'state' | 'step';
+  workflowMode?: 'phase-based' | 'state-machine';
+  patch?: Record<string, any> | null;
+  parseError?: string;
+};
+
 export type ClarificationQuestionItem = {
   id: string;
   label: string;
@@ -145,6 +155,83 @@ export function extractWorkflowDraftPreview(markdown: string, fallbackFilename?:
   };
 }
 
+export function extractWorkflowPatchPreview(markdown: string, fallbackFilename?: string): WorkflowPatchPreviewState {
+  const parsed = extractStructuredResultPayload<Record<string, any>>(markdown, 'workflow_patch');
+  if (!parsed) {
+    return {
+      source: 'none',
+      filename: fallbackFilename,
+      patch: null,
+      parseError: '未检测到可读取的 workflow_patch JSON 结果',
+    };
+  }
+
+  const scope = parsed.scope === 'workflow' || parsed.scope === 'state' || parsed.scope === 'step'
+    ? parsed.scope
+    : undefined;
+  const workflowMode = parsed.workflowMode === 'state-machine'
+    ? 'state-machine'
+    : parsed.workflowMode === 'phase-based'
+      ? 'phase-based'
+      : undefined;
+  const patch = parsed.patch && typeof parsed.patch === 'object' ? parsed.patch : null;
+
+  if (!scope) {
+    return {
+      source: 'result-json',
+      filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      patch,
+      parseError: 'workflow_patch.scope 缺失或非法，必须是 workflow / state / step',
+    };
+  }
+
+  if (!workflowMode) {
+    return {
+      source: 'result-json',
+      filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      scope,
+      patch,
+      parseError: 'workflow_patch.workflowMode 缺失或非法，必须是 phase-based 或 state-machine',
+    };
+  }
+
+  if (!patch || typeof patch !== 'object') {
+    return {
+      source: 'result-json',
+      filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      scope,
+      workflowMode,
+      patch: null,
+      parseError: 'workflow_patch.patch 缺失或不是对象',
+    };
+  }
+
+  const expectedKey = scope === 'workflow' ? 'workflow' : scope === 'state' ? 'state' : 'step';
+  if (!patch[expectedKey] || typeof patch[expectedKey] !== 'object') {
+    return {
+      source: 'result-json',
+      filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      scope,
+      workflowMode,
+      patch,
+      parseError: `workflow_patch.patch.${expectedKey} 缺失或不是对象`,
+    };
+  }
+
+  return {
+    source: 'result-json',
+    filename: typeof parsed.filename === 'string' ? parsed.filename : fallbackFilename,
+    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+    scope,
+    workflowMode,
+    patch,
+  };
+}
+
 export function extractClarificationFormResult(markdown: string): ClarificationFormResult | null {
   const parsed = extractStructuredResultPayload<ClarificationFormResult>(markdown, 'clarification_form');
   if (!parsed) return null;
@@ -219,6 +306,19 @@ export function diagnoseExtractionFailure(markdown: string, expectedKind: string
       if (!payload.artifacts || typeof payload.artifacts !== 'object') return 'payload 中缺少 artifacts 对象。artifacts 必须包含 requirements、design、tasks 三个字符串字段。';
       const missing = ['requirements', 'design', 'tasks'].filter(k => typeof payload.artifacts[k] !== 'string' || !payload.artifacts[k].trim());
       if (missing.length > 0) return `artifacts 中以下字段缺失或为空: [${missing.join(', ')}]。三份制品都必须有内容。`;
+    }
+
+    if (expectedKind === 'workflow_patch') {
+      if (!['workflow', 'state', 'step'].includes(String(payload.scope || ''))) {
+        return 'payload.scope 必须是 workflow、state 或 step。';
+      }
+      if (!payload.patch || typeof payload.patch !== 'object') {
+        return 'payload 中缺少 patch 对象。';
+      }
+      const expectedKey = payload.scope === 'workflow' ? 'workflow' : payload.scope === 'state' ? 'state' : 'step';
+      if (!payload.patch[expectedKey] || typeof payload.patch[expectedKey] !== 'object') {
+        return `payload.patch.${expectedKey} 缺失或不是对象。`;
+      }
     }
 
     return `JSON 解析成功且 kind="${expectedKind}"，但后续结构校验未通过。顶层 payload key: [${Object.keys(payload).join(', ')}]`;

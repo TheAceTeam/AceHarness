@@ -526,6 +526,7 @@ const MACHINE_RESULT_KINDS = new Set([
   'clarification_form',
   'plan_draft',
   'workflow_draft',
+  'workflow_patch',
   'spec_coding_revision',
   'spec-coding-revision',
 ]);

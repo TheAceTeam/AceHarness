@@ -134,6 +134,29 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       config: { type: 'object' },
     },
   },
+  workflow_patch: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string' },
+      type: { type: 'string' },
+      payload: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string' },
+          summary: { type: 'string' },
+          scope: { type: 'string' },
+          workflowMode: { type: 'string' },
+          patch: { type: 'object' },
+        },
+        required: ['scope', 'patch'],
+      },
+      filename: { type: 'string' },
+      summary: { type: 'string' },
+      scope: { type: 'string' },
+      workflowMode: { type: 'string' },
+      patch: { type: 'object' },
+    },
+  },
   spec_coding_revision: {
     type: 'object',
     properties: {

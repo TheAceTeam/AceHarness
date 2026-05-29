@@ -41,6 +41,8 @@ interface StateMachineDesignPanelProps {
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
+  onOptimizeState?: (stateIndex: number) => void;
+  onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
 }
 
 type StepGroup = {
@@ -321,7 +323,7 @@ function getStateNodeErrors(state: StateMachineState, states: StateMachineState[
 
 // 可拖拽的步骤行
 function SortableStepRow({
-  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick,
+  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick, onOptimize,
 }: {
   step: WorkflowStep;
   index: number;
@@ -335,6 +337,7 @@ function SortableStepRow({
   onGroupWithNext?: () => void;
   onUngroup?: () => void;
   onSpecTaskClick?: () => void;
+  onOptimize?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -407,6 +410,11 @@ function SortableStepRow({
                   <span className="material-symbols-outlined text-[15px]">call_split</span>
                 </Button>
               )}
+              {onOptimize ? (
+                <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="AI 优化" onClick={(e) => { e.stopPropagation(); onOptimize(); }}>
+                  <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
+                </Button>
+              ) : null}
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="编辑" onClick={(e) => { e.stopPropagation(); onEdit(); }}>
                 <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
@@ -903,6 +911,8 @@ export default function StateMachineDesignPanel({
   availableAgents,
   availableSkills = [],
   specTasks = [],
+  onOptimizeState,
+  onOptimizeStep,
 }: StateMachineDesignPanelProps) {
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
     states.length > 0 ? states[0].name : null
@@ -1296,7 +1306,15 @@ export default function StateMachineDesignPanel({
                     onChange={(e) => updateState({ ...selectedState, description: e.target.value })}
                   />
                 </div>
-                <Button size="sm" variant="outline" onClick={() => setEditingStateInfo(false)}>完成</Button>
+                <div className="flex flex-wrap gap-2">
+                  {onOptimizeState && selectedStateIndex >= 0 ? (
+                    <Button size="sm" variant="outline" onClick={() => onOptimizeState(selectedStateIndex)}>
+                      <span className="material-symbols-outlined mr-1 text-sm">auto_fix_high</span>
+                      AI 优化状态
+                    </Button>
+                  ) : null}
+                  <Button size="sm" variant="outline" onClick={() => setEditingStateInfo(false)}>完成</Button>
+                </div>
               </div>
             ) : (
               <div
@@ -1317,7 +1335,24 @@ export default function StateMachineDesignPanel({
                     <div className="text-xs text-muted-foreground mt-0.5">{selectedState.description}</div>
                   )}
                 </div>
-                <span className="material-symbols-outlined text-sm text-muted-foreground opacity-0 group-hover:opacity-100">edit</span>
+                <div className="flex items-center gap-1">
+                  {onOptimizeState && selectedStateIndex >= 0 ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs opacity-80"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOptimizeState(selectedStateIndex);
+                      }}
+                    >
+                      <span className="material-symbols-outlined text-[14px]">auto_fix_high</span>
+                      AI 优化
+                    </Button>
+                  ) : null}
+                  <span className="material-symbols-outlined text-sm text-muted-foreground opacity-0 group-hover:opacity-100">edit</span>
+                </div>
               </div>
             )}
           </div>
@@ -1380,6 +1415,7 @@ export default function StateMachineDesignPanel({
                                 onGroupWithNext={() => handleGroupWithNext(index)}
                                 onUngroup={() => handleUngroup(index)}
                                 onEdit={() => setEditingStep({ index, isNew: false })}
+                                onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                                 onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                                 onDelete={() => handleDeleteStep(index)}
                               />
@@ -1400,6 +1436,7 @@ export default function StateMachineDesignPanel({
                         onGroupWithPrevious={() => handleGroupWithPrevious(index)}
                         onGroupWithNext={() => handleGroupWithNext(index)}
                         onEdit={() => setEditingStep({ index, isNew: false })}
+                        onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                         onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
                         onDelete={() => handleDeleteStep(index)}
                       />

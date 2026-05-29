@@ -60,7 +60,24 @@ import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervis
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
 import { mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
-import { diagnoseExtractionFailure, extractStructuredResultPayload } from '@/lib/ai/result-normalizers';
+import {
+  diagnoseExtractionFailure,
+  extractStructuredResultPayload,
+  extractWorkflowPatchPreview,
+} from '@/lib/ai/result-normalizers';
+import {
+  applyDesignOptimizationPatch,
+  buildDesignOptimizationPrompt,
+  doesWorkflowPatchMatchTarget,
+  extractDesignOptimizationSnapshot,
+  extractWorkflowPatchValue,
+  getDesignOptimizationDialogTitle,
+  getDesignOptimizationScopeHint,
+  getDesignOptimizationTargetLabel,
+  getWorkflowMode,
+  type DesignOptimizationTarget,
+  type WorkflowPatchPayload,
+} from '@/lib/workflow/design-ai-optimization';
 import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
@@ -605,6 +622,28 @@ type SpecRevisionCandidate = {
   createdAt: string;
   rawOutput?: string;
   targetVersion?: number;
+};
+
+type WorkflowValidationIssue = {
+  severity?: 'error' | 'warning' | string;
+  path?: Array<string | number>;
+  message?: string;
+};
+
+type DesignOptimizationCandidate = {
+  summary: string;
+  createdAt: string;
+  rawOutput: string;
+  filename?: string;
+  payload: WorkflowPatchPayload;
+  candidateConfig: any;
+  baseSnapshot: any;
+  candidateSnapshot: any;
+  configValidation: {
+    ok: boolean;
+    issues: WorkflowValidationIssue[];
+  } | null;
+  bindingValidation: StepTaskBindingValidation | null;
 };
 
 type SpecArtifactSnapshot = {
@@ -1451,6 +1490,12 @@ export default function WorkbenchPage() {
   type DesignTab = 'overview' | 'orchestration' | 'config' | 'agents' | 'skills';
   const [designTab, setDesignTab] = useState<DesignTab>('overview');
   const [preflightManagerOpen, setPreflightManagerOpen] = useState(false);
+  const [designOptimizationDialogOpen, setDesignOptimizationDialogOpen] = useState(false);
+  const [designOptimizationTarget, setDesignOptimizationTarget] = useState<DesignOptimizationTarget | null>(null);
+  const [designOptimizationInstruction, setDesignOptimizationInstruction] = useState('');
+  const [designOptimizationGenerating, setDesignOptimizationGenerating] = useState(false);
+  const [designOptimizationStream, setDesignOptimizationStream] = useState('');
+  const [designOptimizationCandidate, setDesignOptimizationCandidate] = useState<DesignOptimizationCandidate | null>(null);
 
   const refreshDesignPickerOptions = useCallback(async () => {
     try {
@@ -1948,6 +1993,16 @@ export default function WorkbenchPage() {
     }),
     [specCodingDetails?.artifacts, structuredTasksMarkdown]
   );
+  const designOptimizationSpecTaskOptions = useMemo(() => (
+    (specCodingDetails?.tasks || [])
+      .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
+      .map((task: any) => ({
+        id: task.id,
+        title: task.title,
+        phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
+        ownerAgents: task.ownerAgents || [],
+      }))
+  ), [specCodingDetails?.phases, specCodingDetails?.tasks]);
   const effectiveSpecRevisionDraft = specRevisionCandidate
     ? specRevisionCandidate.artifacts[specRevisionTarget]
     : specRevisionDraft;
@@ -1963,6 +2018,25 @@ export default function WorkbenchPage() {
   const specArtifactDiffRows = useMemo(
     () => computeSimpleDiff(specRevisionBaseArtifact?.content || '', effectiveSpecRevisionDraft),
     [effectiveSpecRevisionDraft, specRevisionBaseArtifact?.content]
+  );
+  const designOptimizationDiffRows = useMemo(() => {
+    if (!designOptimizationCandidate) return [] as Array<{ type: 'same' | 'add' | 'remove'; text: string }>;
+    return computeSimpleDiff(
+      JSON.stringify(designOptimizationCandidate.baseSnapshot ?? {}, null, 2),
+      JSON.stringify(designOptimizationCandidate.candidateSnapshot ?? {}, null, 2),
+    );
+  }, [designOptimizationCandidate]);
+  const designOptimizationValidationIssues = useMemo(
+    () => designOptimizationCandidate?.configValidation?.issues || [],
+    [designOptimizationCandidate]
+  );
+  const designOptimizationValidationErrors = useMemo(
+    () => designOptimizationValidationIssues.filter((issue) => issue?.severity === 'error'),
+    [designOptimizationValidationIssues]
+  );
+  const designOptimizationValidationWarnings = useMemo(
+    () => designOptimizationValidationIssues.filter((issue) => issue?.severity === 'warning'),
+    [designOptimizationValidationIssues]
   );
   const sortedSpecArtifactSnapshots = useMemo(
     () => [...specArtifactSnapshots].sort((a, b) => b.version - a.version),
@@ -2599,6 +2673,281 @@ export default function WorkbenchPage() {
       setSpecArtifactViewMode('preview');
     }
   }, [specArtifactViewMode, specRevisionDraft]);
+  const buildDefaultDesignOptimizationInstruction = useCallback((target: DesignOptimizationTarget) => {
+    if (target.scope === 'workflow') {
+      return '请根据最新 Spec 重新审视整个工作流编排，优化阶段/状态划分、Agent 分工、步骤任务说明、Spec 任务绑定和审查策略。';
+    }
+    if (target.scope === 'state') {
+      return `请根据最新 Spec 优化状态「${target.stateName}」，重点检查状态描述、内部步骤拆分、Agent 分工、转移规则和人工审查策略。`;
+    }
+    return `请根据最新 Spec 优化步骤「${target.stepName}」，重点检查 Agent 选择、task 提示词、constraints、skills 和 specTaskBinding。`;
+  }, []);
+  const openDesignOptimizationDialog = useCallback((target: DesignOptimizationTarget, presetInstruction?: string) => {
+    setDesignOptimizationTarget(target);
+    setDesignOptimizationInstruction(presetInstruction || buildDefaultDesignOptimizationInstruction(target));
+    setDesignOptimizationDialogOpen(true);
+    setDesignOptimizationGenerating(false);
+    setDesignOptimizationStream('');
+    setDesignOptimizationCandidate(null);
+  }, [buildDefaultDesignOptimizationInstruction]);
+  const handleOpenWorkflowOptimization = useCallback(() => {
+    const sourceConfig = editingConfig || workflowConfig;
+    if (!sourceConfig?.workflow) {
+      toast('warning', '当前没有可优化的工作流草稿');
+      return;
+    }
+    openDesignOptimizationDialog({
+      scope: 'workflow',
+      workflowMode: getWorkflowMode(sourceConfig),
+      workflowName: sourceConfig.workflow.name || configFile,
+    });
+  }, [configFile, editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
+  const handleOptimizePhaseStep = useCallback((phaseIndex: number, stepIndex: number) => {
+    const sourceConfig = editingConfig || workflowConfig;
+    const phase = sourceConfig?.workflow?.phases?.[phaseIndex];
+    const step = phase?.steps?.[stepIndex];
+    if (!phase || !step) {
+      toast('warning', '找不到要优化的步骤');
+      return;
+    }
+    openDesignOptimizationDialog({
+      scope: 'step',
+      workflowMode: 'phase-based',
+      containerType: 'phase',
+      containerIndex: phaseIndex,
+      containerName: phase.name || `阶段 ${phaseIndex + 1}`,
+      stepIndex,
+      stepName: step.name || `步骤 ${stepIndex + 1}`,
+    });
+  }, [editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
+  const handleOptimizeStateMachineState = useCallback((stateIndex: number) => {
+    const sourceConfig = editingConfig || workflowConfig;
+    const stateNode = sourceConfig?.workflow?.states?.[stateIndex];
+    if (!stateNode) {
+      toast('warning', '找不到要优化的状态');
+      return;
+    }
+    openDesignOptimizationDialog({
+      scope: 'state',
+      workflowMode: 'state-machine',
+      stateIndex,
+      stateName: stateNode.name || `状态 ${stateIndex + 1}`,
+    });
+  }, [editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
+  const handleOptimizeStateMachineStep = useCallback((stateIndex: number, stepIndex: number) => {
+    const sourceConfig = editingConfig || workflowConfig;
+    const stateNode = sourceConfig?.workflow?.states?.[stateIndex];
+    const step = stateNode?.steps?.[stepIndex];
+    if (!stateNode || !step) {
+      toast('warning', '找不到要优化的步骤');
+      return;
+    }
+    openDesignOptimizationDialog({
+      scope: 'step',
+      workflowMode: 'state-machine',
+      containerType: 'state',
+      containerIndex: stateIndex,
+      containerName: stateNode.name || `状态 ${stateIndex + 1}`,
+      stepIndex,
+      stepName: step.name || `步骤 ${stepIndex + 1}`,
+    });
+  }, [editingConfig, openDesignOptimizationDialog, toast, workflowConfig]);
+  const handleGenerateDesignOptimization = useCallback(async () => {
+    const instruction = designOptimizationInstruction.trim();
+    const target = designOptimizationTarget;
+    const sourceConfig = editingConfig || workflowConfig;
+    if (!target) {
+      toast('warning', '请先选择要优化的范围');
+      return;
+    }
+    if (!instruction) {
+      toast('warning', '请先写清楚要如何优化');
+      return;
+    }
+    if (!sourceConfig?.workflow) {
+      toast('error', '当前没有可优化的工作流草稿');
+      return;
+    }
+    if (!currentSpecArtifacts.requirements.trim() && !currentSpecArtifacts.design.trim() && !currentSpecArtifacts.tasks.trim()) {
+      toast('error', '当前没有可用的 Spec 内容，暂时无法进行 AI 优化');
+      return;
+    }
+    const model = workflowDefaultModel || globalDefaultModel;
+    const selectedEngine = engine || globalEngine;
+    if (!model || !selectedEngine) {
+      toast('error', '缺少可用的 AI engine/model 配置');
+      return;
+    }
+
+    setDesignOptimizationGenerating(true);
+    setDesignOptimizationStream('');
+    setDesignOptimizationCandidate(null);
+
+    try {
+      const startRes = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({
+          message: buildDesignOptimizationPrompt({
+            target,
+            workflowName: sourceConfig.workflow.name || creationSessionSummary?.workflowName || configFile,
+            configFile,
+            instruction,
+            currentConfig: sourceConfig,
+            currentSpecArtifacts,
+            requirements,
+            availableAgents: agentConfigs.map((agent: any) => ({
+              name: agent?.name,
+              team: agent?.team,
+              roleType: agent?.roleType,
+              description: agent?.description,
+              capabilities: Array.isArray(agent?.capabilities) ? agent.capabilities : [],
+            })),
+            availableSkills,
+            specTasks: designOptimizationSpecTaskOptions,
+          }),
+          displayMessage: `${getDesignOptimizationDialogTitle(target)}：${instruction.slice(0, 80)}`,
+          model,
+          engine: selectedEngine,
+          frontendSessionId: `design-opt-${configFile}-${target.scope}`,
+          streamScope: 'workbench-design-optimization',
+          mode: 'dashboard',
+          workingDirectory: resolvedProjectRoot || projectRoot || undefined,
+          skipUserMessage: true,
+        }),
+      });
+      const startData = await startRes.json().catch(() => null);
+      if (!startRes.ok || !startData?.chatId) {
+        throw new Error(startData?.error || '启动 AI 工作流优化失败');
+      }
+
+      const finalContent = await new Promise<string>((resolve, reject) => {
+        const es = createSafeEventSource(`/api/chat/stream?id=${encodeURIComponent(startData.chatId)}`);
+        let accumulated = '';
+        let thinkingAccumulated = '';
+        let settled = false;
+        const fail = (message: string) => {
+          if (settled) return;
+          settled = true;
+          es.close();
+          reject(new Error(message));
+        };
+        es.addEventListener('delta', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          accumulated += String(data.content || '');
+          setDesignOptimizationStream(accumulated);
+        });
+        es.addEventListener('thinking', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          thinkingAccumulated += String(data.content || '');
+          if (!accumulated) {
+            setDesignOptimizationStream(thinkingAccumulated);
+          }
+        });
+        es.addEventListener('done', (event) => {
+          if (settled) return;
+          settled = true;
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          es.close();
+          if (data.isError) {
+            reject(new Error(data.error || data.result || accumulated || 'AI 工作流优化失败'));
+            return;
+          }
+          resolve(String(data.result || accumulated || ''));
+        });
+        es.addEventListener('engine_error', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          fail(data.message || 'AI 工作流优化失败');
+        });
+        es.addEventListener('failed', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          fail(data.message || 'AI 工作流优化失败');
+        });
+        es.onerror = () => fail('AI 工作流优化连接中断');
+      });
+
+      const preview = extractWorkflowPatchPreview(finalContent, configFile);
+      if (preview.parseError || !preview.patch || !preview.scope || !preview.workflowMode) {
+        throw new Error(preview.parseError || diagnoseExtractionFailure(finalContent, 'workflow_patch'));
+      }
+      const payload: WorkflowPatchPayload = {
+        filename: preview.filename,
+        summary: preview.summary,
+        scope: preview.scope,
+        workflowMode: preview.workflowMode,
+        patch: preview.patch,
+      };
+      if (!doesWorkflowPatchMatchTarget(payload, target, sourceConfig)) {
+        throw new Error('AI 返回的 workflow_patch 作用域或工作流模式与当前目标不匹配');
+      }
+      const candidateConfig = applyDesignOptimizationPatch(sourceConfig, payload, target);
+      if (!candidateConfig) {
+        throw new Error('workflow_patch 无法应用到当前工作流草稿，请检查 patch 结构');
+      }
+
+      const validationRes = await configApi.validateConfig({ config: candidateConfig });
+      const bindingResult = specCodingDetails
+        ? compileStepTaskBindings(candidateConfig as any, specCodingDetails as any, { requireFullCoverage: true })
+        : null;
+      const baseSnapshot = extractDesignOptimizationSnapshot(sourceConfig, target);
+      const candidateSnapshot = extractDesignOptimizationSnapshot(candidateConfig, target);
+      const patchValue = extractWorkflowPatchValue(payload, target);
+      setDesignOptimizationCandidate({
+        summary: preview.summary?.trim() || `${getDesignOptimizationTargetLabel(target)} 优化候选`,
+        createdAt: new Date().toISOString(),
+        rawOutput: finalContent,
+        filename: preview.filename,
+        payload,
+        candidateConfig,
+        baseSnapshot: baseSnapshot ?? patchValue,
+        candidateSnapshot: candidateSnapshot ?? patchValue,
+        configValidation: validationRes?.validation
+          ? {
+              ok: !!validationRes.validation.ok,
+              issues: Array.isArray(validationRes.validation.issues) ? validationRes.validation.issues : [],
+            }
+          : null,
+        bindingValidation: bindingResult?.validation || null,
+      });
+      toast('success', 'AI 已生成优化候选，请检查 diff 后应用');
+    } catch (error: any) {
+      toast('error', error?.message || 'AI 工作流优化失败');
+    } finally {
+      setDesignOptimizationGenerating(false);
+    }
+  }, [
+    agentConfigs,
+    availableSkills,
+    configFile,
+    creationSessionSummary?.workflowName,
+    currentSpecArtifacts,
+    designOptimizationInstruction,
+    designOptimizationSpecTaskOptions,
+    designOptimizationTarget,
+    editingConfig,
+    engine,
+    globalDefaultModel,
+    globalEngine,
+    projectRoot,
+    requirements,
+    resolvedProjectRoot,
+    specCodingDetails,
+    toast,
+    workflowConfig,
+    workflowDefaultModel,
+  ]);
+  const handleApplyDesignOptimizationCandidate = useCallback(() => {
+    if (!designOptimizationCandidate) return;
+    dispatch({ type: 'SET_EDITING_CONFIG', payload: designOptimizationCandidate.candidateConfig });
+    setDesignOptimizationCandidate(null);
+    setDesignOptimizationDialogOpen(false);
+    setDesignOptimizationStream('');
+    setDesignTab('orchestration');
+    toast('success', 'AI 优化候选已应用到当前工作流草稿，请记得保存配置');
+  }, [designOptimizationCandidate, dispatch, toast]);
+  const handleDiscardDesignOptimizationCandidate = useCallback(() => {
+    setDesignOptimizationCandidate(null);
+  }, []);
   const saveSpecCodingArtifactToNotebook = useCallback(async () => {
     if (!activeSpecCodingArtifact?.content?.trim()) return;
     setSavingSpecCodingArtifact(true);
@@ -8833,6 +9182,10 @@ export default function WorkbenchPage() {
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
+                        <Button type="button" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={handleOpenWorkflowOptimization}>
+                          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>auto_fix_high</span>
+                          AI 修订工作流
+                        </Button>
                         {editingPreflightSummary.configuredSteps > 0 ? (
                           <Badge variant="outline" className="text-[10px]">
                             已配置 {editingPreflightSummary.configuredSteps} 个步骤 / {editingPreflightSummary.totalCommands} 条命令
@@ -8859,14 +9212,9 @@ export default function WorkbenchPage() {
                         }}
                         availableAgents={agentConfigs}
                         availableSkills={availableSkills}
-                        specTasks={(specCodingDetails?.tasks || [])
-                          .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
-                          .map((task: any) => ({
-                            id: task.id,
-                            title: task.title,
-                            phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
-                            ownerAgents: task.ownerAgents || [],
-                          }))}
+                        specTasks={designOptimizationSpecTaskOptions}
+                        onOptimizeState={handleOptimizeStateMachineState}
+                        onOptimizeStep={handleOptimizeStateMachineStep}
                       />
                     ) : (
                       <DesignPanel workflow={editingConfig.workflow}
@@ -8882,7 +9230,8 @@ export default function WorkbenchPage() {
                         onUngroup={handleUngroup}
                         onCrossPhaseMove={handleCrossPhaseMove}
                         onMoveGroup={handleMoveGroup}
-                        onJoinGroup={handleJoinGroup} />
+                        onJoinGroup={handleJoinGroup}
+                        onOptimizeStep={handleOptimizePhaseStep} />
                     )}
                   </div>
                 </div>
@@ -9249,14 +9598,7 @@ export default function WorkbenchPage() {
       />
       {editingNode && (<EditNodeModal isOpen={showEditNodeModal} type={editingNode.type} data={getEditingNodeData()} roles={agentConfigs}
         availableSkills={availableSkills}
-        specTasks={(specCodingDetails?.tasks || [])
-          .filter((task: any) => !(Array.isArray(task?.children) && task.children.length > 0))
-          .map((task: any) => ({
-            id: task.id,
-            title: task.title,
-            phaseTitle: specCodingDetails?.phases?.find((phase: any) => phase.id === task.phaseId)?.title,
-            ownerAgents: task.ownerAgents || [],
-          }))}
+        specTasks={designOptimizationSpecTaskOptions}
         isNew={isNewNode}
         existingPhases={editingConfig?.workflow?.phases || []}
         existingSteps={editingConfig?.workflow?.phases?.flatMap((p: any) => p.steps) || []}
@@ -9592,6 +9934,239 @@ export default function WorkbenchPage() {
         <DialogContent className={`p-0 flex flex-col gap-0 ${specCodingModalFullscreen ? 'max-w-none w-screen h-screen rounded-none' : 'max-w-5xl w-[90vw] h-[80vh]'}`}>
           <DialogTitle className="sr-only">SpecCoding 文件管理器</DialogTitle>
           {renderSpecCodingExplorer()}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={designOptimizationDialogOpen} onOpenChange={(open) => {
+        setDesignOptimizationDialogOpen(open);
+        if (!open) {
+          setDesignOptimizationTarget(null);
+          setDesignOptimizationGenerating(false);
+          setDesignOptimizationCandidate(null);
+          setDesignOptimizationStream('');
+        }
+      }}>
+        <DialogContent className="max-w-5xl w-[94vw] h-[86vh] overflow-hidden p-0">
+          <DialogTitle className="sr-only">
+            {designOptimizationTarget ? getDesignOptimizationDialogTitle(designOptimizationTarget) : 'AI 工作流优化'}
+          </DialogTitle>
+          {designOptimizationTarget ? (
+            <div className="flex h-full flex-col">
+              <div className="border-b px-6 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold">{getDesignOptimizationDialogTitle(designOptimizationTarget)}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {getDesignOptimizationTargetLabel(designOptimizationTarget)} · {getDesignOptimizationScopeHint(designOptimizationTarget)}
+                    </div>
+                  </div>
+                  <Badge variant="outline" className="text-[10px]">
+                    {designOptimizationTarget.workflowMode}
+                  </Badge>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto px-6 py-5">
+                <div className="space-y-4">
+                  <div className="rounded-xl border bg-background/80 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">优化要求</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          生成的是 `workflow_patch` 候选，系统会先做作用域校验、配置校验和 Spec 绑定检查。
+                        </div>
+                      </div>
+                      {designOptimizationGenerating ? (
+                        <Badge variant="secondary" className="text-[10px]">生成中</Badge>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                      <Textarea
+                        value={designOptimizationInstruction}
+                        onChange={(event) => setDesignOptimizationInstruction(event.target.value)}
+                        rows={4}
+                        className="min-h-[96px] resize-y text-xs leading-5"
+                        placeholder="例如：根据最新 spec 优化该步骤的 agent 选择和提示词，并确保 spec task 绑定完整"
+                        disabled={designOptimizationGenerating}
+                      />
+                      <div className="flex items-end justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 text-xs"
+                          onClick={() => {
+                            setDesignOptimizationCandidate(null);
+                            setDesignOptimizationStream('');
+                            setDesignOptimizationInstruction(buildDefaultDesignOptimizationInstruction(designOptimizationTarget));
+                          }}
+                          disabled={designOptimizationGenerating}
+                        >
+                          重置
+                        </Button>
+                        <Button
+                          type="button"
+                          className="h-9 text-xs"
+                          onClick={() => void handleGenerateDesignOptimization()}
+                          disabled={designOptimizationGenerating || !designOptimizationInstruction.trim()}
+                        >
+                          {designOptimizationGenerating ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                          生成候选
+                        </Button>
+                      </div>
+                    </div>
+                    {designOptimizationStream.trim() ? (
+                      <details className="mt-3 rounded-lg border bg-muted/20 p-3 text-xs">
+                        <summary className="cursor-pointer text-muted-foreground">
+                          {designOptimizationGenerating ? '正在接收 AI 输出' : '查看最近一次 AI 输出'}
+                        </summary>
+                        <div className={`${styles.markdownContent} mt-3 max-h-56 overflow-auto text-xs`}>
+                          <AceAwareMarkdown content={designOptimizationStream} isStreaming={designOptimizationGenerating} />
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
+
+                  {designOptimizationCandidate ? (
+                    <div className="space-y-4">
+                      <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                              <Badge variant="secondary" className="text-[10px]">AI 候选</Badge>
+                              <span>{designOptimizationCandidate.summary}</span>
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {new Date(designOptimizationCandidate.createdAt).toLocaleString()} · 先看差异，再应用到当前草稿
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs"
+                              onClick={handleDiscardDesignOptimizationCandidate}
+                            >
+                              放弃候选
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-8 text-xs"
+                              onClick={handleApplyDesignOptimizationCandidate}
+                              disabled={
+                                designOptimizationValidationErrors.length > 0
+                                || (designOptimizationCandidate.bindingValidation?.errors.length || 0) > 0
+                              }
+                            >
+                              应用候选
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-4">
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">配置错误</div>
+                          <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationValidationErrors.length}</div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">配置警告</div>
+                          <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationValidationWarnings.length}</div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">绑定错误</div>
+                          <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationCandidate.bindingValidation?.errors.length || 0}</div>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">绑定警告</div>
+                          <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationCandidate.bindingValidation?.warnings.length || 0}</div>
+                        </div>
+                      </div>
+
+                      {designOptimizationValidationErrors.length > 0 ? (
+                        <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
+                          <div className="text-sm font-medium text-red-600">配置校验错误</div>
+                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                            {designOptimizationValidationErrors.map((issue, index) => (
+                              <div key={`design-opt-validation-error-${index}`}>
+                                {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知错误'}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {designOptimizationValidationWarnings.length > 0 ? (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
+                          <div className="text-sm font-medium text-amber-700 dark:text-amber-300">配置校验警告</div>
+                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                            {designOptimizationValidationWarnings.map((issue, index) => (
+                              <div key={`design-opt-validation-warning-${index}`}>
+                                {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知提示'}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {designOptimizationCandidate.bindingValidation?.errors.length ? (
+                        <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
+                          <div className="text-sm font-medium text-red-600">Spec 绑定错误</div>
+                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                            {designOptimizationCandidate.bindingValidation.errors.map((message, index) => (
+                              <div key={`design-opt-binding-error-${index}`}>{message}</div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {designOptimizationCandidate.bindingValidation?.warnings.length ? (
+                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
+                          <div className="text-sm font-medium text-amber-700 dark:text-amber-300">Spec 绑定警告</div>
+                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                            {designOptimizationCandidate.bindingValidation.warnings.map((message, index) => (
+                              <div key={`design-opt-binding-warning-${index}`}>{message}</div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="rounded-xl border overflow-hidden">
+                        <div className="border-b px-4 py-3">
+                          <div className="text-sm font-medium">候选差异</div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">
+                            当前展示的是 {getDesignOptimizationTargetLabel(designOptimizationTarget)} 的前后 JSON 对比。
+                          </div>
+                        </div>
+                        <div className="max-h-[46vh] overflow-auto p-4 font-mono text-xs leading-6">
+                          {designOptimizationDiffRows.length ? (
+                            designOptimizationDiffRows.map((row, index) => (
+                              <div
+                                key={`${row.type}-${index}`}
+                                className={
+                                  row.type === 'add'
+                                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                    : row.type === 'remove'
+                                      ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                                      : 'text-muted-foreground'
+                                }
+                              >
+                                <span className="mr-2 inline-block w-4 text-center">
+                                  {row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' '}
+                                </span>
+                                <span className="whitespace-pre-wrap break-words">{row.text || ' '}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-muted-foreground">没有差异。</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
       <Dialog open={!!specBindingReview} onOpenChange={(open) => !open && setSpecBindingReview(null)}>
