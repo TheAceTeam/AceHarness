@@ -5,8 +5,47 @@ function normalizeWorkspacePathValue(value: string | null | undefined): string {
   return String(value || "").replace(/\\/g, "/").trim();
 }
 
+export type WorkspaceFileLocation = {
+  path: string;
+  lineNumber: number | null;
+  column: number | null;
+};
+
 function isWorkspaceAbsolutePath(value: string): boolean {
   return value.startsWith("/") || WINDOWS_DRIVE_ABSOLUTE_PATH.test(value) || UNC_ABSOLUTE_PATH.test(value);
+}
+
+function toPositiveInteger(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function parseWorkspaceFileLocation(value: string | null | undefined): WorkspaceFileLocation {
+  const normalized = normalizeWorkspacePathValue(value);
+  if (!normalized) {
+    return { path: "", lineNumber: null, column: null };
+  }
+
+  const hashMatch = normalized.match(/^(.*)#L?([1-9]\d*)(?::([1-9]\d*))?$/i);
+  if (hashMatch?.[1]) {
+    return {
+      path: hashMatch[1],
+      lineNumber: toPositiveInteger(hashMatch[2]),
+      column: toPositiveInteger(hashMatch[3]),
+    };
+  }
+
+  const colonMatch = normalized.match(/^(.+?):([1-9]\d*)(?::([1-9]\d*))?$/);
+  if (!colonMatch?.[1]) {
+    return { path: normalized, lineNumber: null, column: null };
+  }
+
+  return {
+    path: colonMatch[1],
+    lineNumber: toPositiveInteger(colonMatch[2]),
+    column: toPositiveInteger(colonMatch[3]),
+  };
 }
 
 function resolveWorkspaceSelectionCandidate(
@@ -48,10 +87,17 @@ export function resolveWorkspaceLinkTarget(payload: {
 }): {
   workspacePath: string;
   initialFilePath: string | null;
+  lineNumber: number | null;
+  column: number | null;
 } {
   const currentWorkspacePath = normalizeWorkspacePathValue(payload.currentWorkspacePath).replace(/\/+$/g, "");
   const linkWorkspacePath = normalizeWorkspacePathValue(payload.linkWorkspacePath).replace(/\/+$/g, "");
-  const absolutePath = normalizeWorkspacePathValue(payload.absolutePath);
+  const absoluteLocation = parseWorkspaceFileLocation(payload.absolutePath);
+  const fileLocation = parseWorkspaceFileLocation(payload.filePath);
+  const absolutePath = absoluteLocation.path;
+  const filePath = fileLocation.path;
+  const lineNumber = absoluteLocation.lineNumber ?? fileLocation.lineNumber;
+  const column = absoluteLocation.column ?? fileLocation.column;
   const relativePathInCurrentWorkspace = currentWorkspacePath && absolutePath
     ? resolveWorkspaceSelectionCandidate(currentWorkspacePath, absolutePath)
     : null;
@@ -60,11 +106,15 @@ export function resolveWorkspaceLinkTarget(payload: {
     return {
       workspacePath: currentWorkspacePath,
       initialFilePath: absolutePath,
+      lineNumber,
+      column,
     };
   }
 
   return {
     workspacePath: linkWorkspacePath || currentWorkspacePath,
-    initialFilePath: payload.filePath || absolutePath || null,
+    initialFilePath: filePath || absolutePath || null,
+    lineNumber,
+    column,
   };
 }

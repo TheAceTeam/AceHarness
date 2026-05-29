@@ -17,6 +17,7 @@ import { NOTEBOOK_OUTPUT_ATTR } from '@/lib/notebook/markdown';
 import { copyText } from '@/lib/core/clipboard';
 import { AnsiLogBlock } from '@/components/AnsiLogBlock';
 import { Button } from '@/components/ui/button';
+import { parseWorkspaceFileLocation } from '@/lib/workspace/link-target';
 import styles from './Markdown.module.css';
 
 function normalizeWindowsSeparators(input: string): string {
@@ -71,19 +72,24 @@ function toWorkspaceAbsolutePath(href: string): string | null {
   return null;
 }
 
-function getWorkspaceLinkParts(absolutePath: string): { workspacePath: string; filePath: string | null } {
-  const normalized = normalizeWindowsSeparators(absolutePath);
+function getWorkspaceLinkParts(absolutePath: string): { workspacePath: string; filePath: string | null; lineNumber: number | null; column: number | null } {
+  const parsed = parseWorkspaceFileLocation(absolutePath);
+  const normalized = normalizeWindowsSeparators(parsed.path);
   const trimmed = normalized.replace(/\/+$/g, '');
   const slashIndex = trimmed.lastIndexOf('/');
   if (slashIndex <= 0) {
     return {
       workspacePath: trimmed || normalized,
       filePath: null,
+      lineNumber: parsed.lineNumber,
+      column: parsed.column,
     };
   }
   return {
     workspacePath: trimmed.slice(0, slashIndex) || '/',
     filePath: trimmed.slice(slashIndex + 1) || null,
+    lineNumber: parsed.lineNumber,
+    column: parsed.column,
   };
 }
 
@@ -467,7 +473,7 @@ const components = {
     const workspaceAbsolutePath = href ? toWorkspaceAbsolutePath(href) : null;
 
     if (workspaceAbsolutePath) {
-      const { workspacePath, filePath } = getWorkspaceLinkParts(workspaceAbsolutePath);
+      const { workspacePath, filePath, lineNumber, column } = getWorkspaceLinkParts(workspaceAbsolutePath);
       return (
         <button
           type="button"
@@ -479,6 +485,8 @@ const components = {
                 absolutePath: workspaceAbsolutePath,
                 workspacePath,
                 filePath,
+                lineNumber,
+                column,
               },
             }));
           }}

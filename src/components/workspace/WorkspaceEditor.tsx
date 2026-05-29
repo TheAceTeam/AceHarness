@@ -24,12 +24,15 @@ import * as VisuallyHidden from "@radix-ui/react-visually-hidden"
 import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useToast } from "@/components/ui/toast"
 import { cn } from "@/lib/core/utils"
+import { parseWorkspaceFileLocation } from "@/lib/workspace/link-target"
 
 interface WorkspaceEditorProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   workspacePath: string
   initialFilePath?: string | null
+  initialLineNumber?: number | null
+  initialColumn?: number | null
   mode?: WorkspaceMode
   title?: string
   presentation?: "drawer" | "page"
@@ -139,15 +142,17 @@ export function resolveWorkspaceEditorTargetFile(payload: {
   urlFilePath?: string | null
 }): string | null {
   const { workspacePath, mode = "default", initialFilePath, urlFilePath } = payload
+  const initialLocation = parseWorkspaceFileLocation(initialFilePath)
+  const urlLocation = parseWorkspaceFileLocation(urlFilePath)
 
   if (mode === "notebook") {
-    return normalizeWorkspacePathValue(urlFilePath || initialFilePath)
+    return normalizeWorkspacePathValue(urlLocation.path || initialLocation.path)
       .replace(/^\.\//, "")
       .replace(/^\/+/, "") || null
   }
 
-  return resolveWorkspaceSelectionCandidate(workspacePath, initialFilePath)
-    || resolveWorkspaceSelectionCandidate(workspacePath, urlFilePath)
+  return resolveWorkspaceSelectionCandidate(workspacePath, initialLocation.path)
+    || resolveWorkspaceSelectionCandidate(workspacePath, urlLocation.path)
 }
 
 export function treeCanResolvePath(tree: TreeNode[], targetPath: string): boolean {
@@ -287,6 +292,8 @@ export function WorkspaceEditor({
   onOpenChange,
   workspacePath,
   initialFilePath,
+  initialLineNumber,
+  initialColumn,
   mode = "default",
   title,
   presentation = "drawer",
@@ -369,8 +376,12 @@ export function WorkspaceEditor({
   const fileParamKey = mode === "notebook" ? "notebookFile" : "workspaceFile"
   const panelParamKey = mode === "notebook" ? "notebook" : "workspace"
   const scopeParamKey = mode === "notebook" ? "notebookScope" : "workspaceScope"
+  const lineParamKey = mode === "notebook" ? "notebookLine" : "workspaceLine"
+  const columnParamKey = mode === "notebook" ? "notebookColumn" : "workspaceColumn"
   const initialSelectionSeedRef = React.useRef<string | null>(null)
   const lastUrlSelectionRef = React.useRef<string | null>(null)
+  const [selectedLineNumber, setSelectedLineNumber] = React.useState<number | null>(null)
+  const [selectedColumn, setSelectedColumn] = React.useState<number | null>(null)
 
   const baseTitle = React.useMemo(() => {
     if (title?.trim()) return title.trim()
@@ -531,20 +542,26 @@ export function WorkspaceEditor({
     id: layoutId,
   })
 
-  const updateUrlFileState = React.useCallback((filePath: string | null) => {
+  const updateUrlFileState = React.useCallback((filePath: string | null, lineNumber?: number | null, column?: number | null) => {
     const params = new URLSearchParams(searchParams.toString())
     if (filePath) {
       params.set(fileParamKey, filePath)
       params.set(panelParamKey, "1")
       if (mode === 'notebook') params.set(scopeParamKey, notebookScope)
+      if (lineNumber && lineNumber > 0) params.set(lineParamKey, String(lineNumber))
+      else params.delete(lineParamKey)
+      if (column && column > 0) params.set(columnParamKey, String(column))
+      else params.delete(columnParamKey)
     } else {
       params.delete(fileParamKey)
       params.delete(panelParamKey)
+      params.delete(lineParamKey)
+      params.delete(columnParamKey)
       if (mode === 'notebook') params.delete(scopeParamKey)
     }
     const query = params.toString()
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
-  }, [fileParamKey, mode, notebookScope, panelParamKey, pathname, router, scopeParamKey, searchParams])
+  }, [columnParamKey, fileParamKey, lineParamKey, mode, notebookScope, panelParamKey, pathname, router, scopeParamKey, searchParams])
 
   React.useEffect(() => {
     if (!open || !workspacePath) return
@@ -575,31 +592,56 @@ export function WorkspaceEditor({
   React.useEffect(() => {
     if (!open) return
     const fileFromUrl = searchParams.get(fileParamKey)
+    const lineFromUrl = Number.parseInt(searchParams.get(lineParamKey) || "", 10)
+    const columnFromUrl = Number.parseInt(searchParams.get(columnParamKey) || "", 10)
+    const initialLocation = parseWorkspaceFileLocation(initialFilePath)
+    const urlLocation = parseWorkspaceFileLocation(fileFromUrl)
+    const nextLineNumber = initialLineNumber || initialLocation.lineNumber || urlLocation.lineNumber || (lineFromUrl > 0 ? lineFromUrl : null)
+    const nextColumn = initialColumn || initialLocation.column || urlLocation.column || (columnFromUrl > 0 ? columnFromUrl : null)
     const seed = [
       mode,
       workspacePath,
       initialFilePath || "",
+      nextLineNumber || "",
+      nextColumn || "",
       notebookScope,
       notebookShareToken || "",
     ].join("::")
 
+    const urlSelectionKey = [
+      fileFromUrl || "",
+      lineFromUrl > 0 ? lineFromUrl : "",
+      columnFromUrl > 0 ? columnFromUrl : "",
+    ].join("::")
+
     if (initialSelectionSeedRef.current === seed) return
     initialSelectionSeedRef.current = seed
-    lastUrlSelectionRef.current = fileFromUrl
+    lastUrlSelectionRef.current = urlSelectionKey
 
-    setSelectedFile(resolveWorkspaceEditorTargetFile({
+    const nextSelectedFile = resolveWorkspaceEditorTargetFile({
       workspacePath,
       mode,
       initialFilePath,
       urlFilePath: fileFromUrl,
-    }))
-  }, [fileParamKey, initialFilePath, mode, notebookScope, notebookShareToken, open, searchParams, workspacePath])
+    })
+    setSelectedFile(nextSelectedFile)
+    setSelectedLineNumber(nextSelectedFile ? nextLineNumber : null)
+    setSelectedColumn(nextSelectedFile ? nextColumn : null)
+  }, [columnParamKey, fileParamKey, initialColumn, initialFilePath, initialLineNumber, lineParamKey, mode, notebookScope, notebookShareToken, open, searchParams, workspacePath])
 
   React.useEffect(() => {
     if (!open) return
     const fileFromUrl = searchParams.get(fileParamKey)
-    if (lastUrlSelectionRef.current === fileFromUrl) return
-    lastUrlSelectionRef.current = fileFromUrl
+    const lineFromUrl = Number.parseInt(searchParams.get(lineParamKey) || "", 10)
+    const columnFromUrl = Number.parseInt(searchParams.get(columnParamKey) || "", 10)
+    const urlSelectionKey = [
+      fileFromUrl || "",
+      lineFromUrl > 0 ? lineFromUrl : "",
+      columnFromUrl > 0 ? columnFromUrl : "",
+    ].join("::")
+    if (lastUrlSelectionRef.current === urlSelectionKey) return
+    lastUrlSelectionRef.current = urlSelectionKey
+    const urlLocation = parseWorkspaceFileLocation(fileFromUrl)
 
     const nextSelectedFile = resolveWorkspaceEditorTargetFile({
       workspacePath,
@@ -608,12 +650,16 @@ export function WorkspaceEditor({
     })
     if (nextSelectedFile) {
       setSelectedFile(nextSelectedFile)
+      setSelectedLineNumber(urlLocation.lineNumber || (lineFromUrl > 0 ? lineFromUrl : null))
+      setSelectedColumn(urlLocation.column || (columnFromUrl > 0 ? columnFromUrl : null))
       return
     }
     if (!fileFromUrl) {
       setSelectedFile(null)
+      setSelectedLineNumber(null)
+      setSelectedColumn(null)
     }
-  }, [fileParamKey, mode, open, searchParams, workspacePath])
+  }, [columnParamKey, fileParamKey, lineParamKey, mode, open, searchParams, workspacePath])
 
   React.useEffect(() => {
     if (!selectedFile || !workspacePath) return
@@ -684,6 +730,8 @@ export function WorkspaceEditor({
     setAiContext("")
     setAiAutoTask(null)
     setAiSelectionMeta(null)
+    setSelectedLineNumber(null)
+    setSelectedColumn(null)
     setPendingAiSuggestions([])
     setApplyAiSuggestionRequest(null)
     setApplyAiSuggestionQueue([])
@@ -722,6 +770,8 @@ export function WorkspaceEditor({
 
   const handleSelectFile = React.useCallback((filePath: string) => {
     setSelectedFile(filePath)
+    setSelectedLineNumber(null)
+    setSelectedColumn(null)
     updateUrlFileState(filePath)
   }, [updateUrlFileState])
 
@@ -771,6 +821,8 @@ export function WorkspaceEditor({
         setFileBlob(null)
         setTree([])
         setTreeError(null)
+        setSelectedLineNumber(null)
+        setSelectedColumn(null)
         setAiSheetOpen(false)
         setAiContext("")
         setAiAutoTask(null)
@@ -904,6 +956,8 @@ export function WorkspaceEditor({
             fileBlob={fileBlob}
             error={fileError}
             fileType={selectedFile ? getFileType(selectedFile) : undefined}
+            targetLineNumber={selectedLineNumber}
+            targetColumn={selectedColumn}
             mode={mode}
             notebookScope={notebookScope}
             notebookShareToken={notebookShareToken}

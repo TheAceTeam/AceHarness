@@ -520,6 +520,8 @@ function ChatPageContent() {
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
+  const [workspaceEditorLineNumber, setWorkspaceEditorLineNumber] = useState<number | null>(null);
+  const [workspaceEditorColumn, setWorkspaceEditorColumn] = useState<number | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
   const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
   const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => (
@@ -696,6 +698,8 @@ function ChatPageContent() {
         absolutePath?: string;
         workspacePath?: string;
         filePath?: string | null;
+        lineNumber?: number | null;
+        column?: number | null;
       }>).detail;
       if (!detail?.workspacePath) return;
       const target = resolveWorkspaceLinkTarget({
@@ -707,6 +711,8 @@ function ChatPageContent() {
       setWorkspaceEditorTitle('文档链接');
       setWorkspaceEditorPath(target.workspacePath);
       setWorkspaceEditorFilePath(target.initialFilePath);
+      setWorkspaceEditorLineNumber(target.lineNumber || detail.lineNumber || null);
+      setWorkspaceEditorColumn(target.column || detail.column || null);
       setWorkspaceEditorOpen(true);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
@@ -2355,6 +2361,8 @@ function ChatPageContent() {
             onOpenChange={setWorkspaceEditorOpen}
             workspacePath={workspaceEditorPath}
             initialFilePath={workspaceEditorFilePath}
+            initialLineNumber={workspaceEditorLineNumber}
+            initialColumn={workspaceEditorColumn}
             title={workspaceEditorTitle}
           />
         )}

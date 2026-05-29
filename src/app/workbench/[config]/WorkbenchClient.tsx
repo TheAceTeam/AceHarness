@@ -1202,6 +1202,8 @@ export default function WorkbenchPage() {
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
+  const [workspaceEditorLineNumber, setWorkspaceEditorLineNumber] = useState<number | null>(null);
+  const [workspaceEditorColumn, setWorkspaceEditorColumn] = useState<number | null>(null);
   const [workspaceChangeCount, setWorkspaceChangeCount] = useState(0);
   const [smIssueTracker, setSmIssueTracker] = useState<any[]>([]);
   const [smTransitionCount, setSmTransitionCount] = useState(0);
@@ -1257,17 +1259,21 @@ export default function WorkbenchPage() {
     stateName?: string;
   }[]>([]);
 
-  const openWorkspaceEditorAtPath = useCallback((path: string, title?: string, filePath?: string | null) => {
+  const openWorkspaceEditorAtPath = useCallback((path: string, title?: string, filePath?: string | null, lineNumber?: number | null, column?: number | null) => {
     if (!path) return;
     const relativeFilePath = toRelativeWorkspaceFilePath(path, filePath);
     setWorkspaceEditorPath(path);
     setWorkspaceEditorTitle(title);
     setWorkspaceEditorFilePath(filePath || null);
+    setWorkspaceEditorLineNumber(lineNumber || null);
+    setWorkspaceEditorColumn(column || null);
     setRunWorkbenchTab('workspace');
     updateUrl({
       workspace: '1',
       changes: null,
       workspaceFile: relativeFilePath,
+      workspaceLine: lineNumber && lineNumber > 0 ? String(lineNumber) : null,
+      workspaceColumn: column && column > 0 ? String(column) : null,
     });
   }, [updateUrl]);
   const [agentFlow, setAgentFlow] = useState<{
@@ -1743,6 +1749,8 @@ export default function WorkbenchPage() {
         absolutePath?: string;
         workspacePath?: string;
         filePath?: string | null;
+        lineNumber?: number | null;
+        column?: number | null;
       }>).detail;
       if (!detail?.workspacePath) return;
       const target = resolveWorkspaceLinkTarget({
@@ -1751,7 +1759,7 @@ export default function WorkbenchPage() {
         absolutePath: detail.absolutePath,
         filePath: detail.filePath,
       });
-      openWorkspaceEditorAtPath(target.workspacePath, '文档链接', target.initialFilePath);
+      openWorkspaceEditorAtPath(target.workspacePath, '文档链接', target.initialFilePath, target.lineNumber || detail.lineNumber || null, target.column || detail.column || null);
     };
     window.addEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     return () => {
@@ -8625,6 +8633,8 @@ export default function WorkbenchPage() {
                             onOpenChange={() => {}}
                             workspacePath={workspaceEditorPath || currentRunWorkspacePath}
                             initialFilePath={workspaceEditorFilePath}
+                            initialLineNumber={workspaceEditorLineNumber}
+                            initialColumn={workspaceEditorColumn}
                             title={workspaceEditorTitle}
                             presentation="page"
                           />

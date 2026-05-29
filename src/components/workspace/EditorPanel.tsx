@@ -88,6 +88,8 @@ interface EditorPanelProps {
   fileBlob?: Blob | null
   error?: string | null
   fileType?: string
+  targetLineNumber?: number | null
+  targetColumn?: number | null
   mode?: WorkspaceMode
   notebookScope?: NotebookScope
   notebookShareToken?: string
@@ -239,6 +241,8 @@ export function EditorPanel({
   fileBlob,
   error,
   fileType,
+  targetLineNumber,
+  targetColumn,
   mode = 'default',
   notebookScope = 'personal',
   notebookShareToken,
@@ -268,8 +272,12 @@ export function EditorPanel({
   const cmakeRegistered = React.useRef(false)
   const suggestionDecorationIdsRef = React.useRef<string[]>([])
   const suggestionZoneIdsRef = React.useRef<string[]>([])
+  const targetLineDecorationIdsRef = React.useRef<string[]>([])
+  const appliedTargetSignatureRef = React.useRef<string | null>(null)
   const previewHostRef = React.useRef<HTMLDivElement | null>(null)
   const [previewViewport, setPreviewViewport] = React.useState({ width: 0, height: 0 })
+  const [editorMountVersion, setEditorMountVersion] = React.useState(0)
+  const hasEditorContent = editorContent != null
 
   React.useEffect(() => {
     setEditorContent(content)
@@ -290,6 +298,74 @@ export function EditorPanel({
     setEditorContent(next)
     onApplyAiSuggestionDone?.(applyAiSuggestion.id)
   }, [applyAiSuggestion, onApplyAiSuggestionDone])
+
+  React.useEffect(() => {
+    const editor = editorRef.current
+    const monacoGlobal = monacoRef.current
+    if (!editor || !monacoGlobal) return
+
+    const clearDecorations = () => {
+      targetLineDecorationIdsRef.current = editor.deltaDecorations(targetLineDecorationIdsRef.current, [])
+    }
+
+    const requestedLine = targetLineNumber && targetLineNumber > 0 ? targetLineNumber : null
+    if (!filePath || !requestedLine || loading || !hasEditorContent) {
+      appliedTargetSignatureRef.current = null
+      clearDecorations()
+      return
+    }
+
+    const signature = `${editorMountVersion}:${filePath}:${requestedLine}:${targetColumn || 1}`
+    if (appliedTargetSignatureRef.current === signature) return
+    appliedTargetSignatureRef.current = signature
+
+    const model = editor.getModel?.()
+    if (!model) {
+      clearDecorations()
+      return
+    }
+
+    let styleEl = document.getElementById('workspace-target-line-style') as HTMLStyleElement | null
+    if (!styleEl) {
+      styleEl = document.createElement('style')
+      styleEl.id = 'workspace-target-line-style'
+      styleEl.textContent = `
+        .workspace-target-line { background: rgba(59, 130, 246, 0.18); }
+        .workspace-target-line-glyph {
+          margin-left: 3px;
+          width: 4px !important;
+          background: rgba(59, 130, 246, 0.9);
+          border-radius: 999px;
+        }
+      `
+      document.head.appendChild(styleEl)
+    }
+
+    const lineCount = Math.max(1, model.getLineCount?.() || 1)
+    const lineNumber = Math.min(requestedLine, lineCount)
+    const lineLength = Math.max(1, model.getLineLength?.(lineNumber) || 1)
+    const column = Math.min(Math.max(1, targetColumn || 1), lineLength + 1)
+    const range = new monacoGlobal.Range(lineNumber, 1, lineNumber, lineLength + 1)
+
+    targetLineDecorationIdsRef.current = editor.deltaDecorations(targetLineDecorationIdsRef.current, [{
+      range,
+      options: {
+        isWholeLine: true,
+        className: 'workspace-target-line',
+        linesDecorationsClassName: 'workspace-target-line-glyph',
+      },
+    }])
+
+    editor.revealLineInCenter?.(lineNumber)
+    editor.setPosition?.({ lineNumber, column })
+    editor.focus?.()
+
+    return () => {
+      const currentEditor = editorRef.current
+      if (!currentEditor) return
+      targetLineDecorationIdsRef.current = currentEditor.deltaDecorations(targetLineDecorationIdsRef.current, [])
+    }
+  }, [editorMountVersion, filePath, hasEditorContent, loading, targetColumn, targetLineNumber])
 
   React.useEffect(() => {
     const editor = editorRef.current
@@ -739,6 +815,7 @@ export function EditorPanel({
               onMount={(editor, monaco) => {
                 editorRef.current = editor
                 monacoRef.current = monaco
+                setEditorMountVersion((version) => version + 1)
                 if (!cangjieRegistered.current) {
                   registerCangjieLanguage(monaco)
                   cangjieRegistered.current = true

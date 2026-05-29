@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolveWorkspaceEditorTargetFile, treeCanResolvePath } from "@/components/workspace/WorkspaceEditor"
 import type { TreeNode } from "@/lib/core/api"
-import { resolveWorkspaceLinkTarget } from "@/lib/workspace/link-target"
+import { parseWorkspaceFileLocation, resolveWorkspaceLinkTarget } from "@/lib/workspace/link-target"
 
 describe("treeCanResolvePath", () => {
   it("keeps deep files selectable while ancestor children are still unloaded", () => {
@@ -87,12 +87,45 @@ describe("resolveWorkspaceEditorTargetFile", () => {
     })).toBe("src/app.ts")
   })
 
+  it("strips line and column suffixes before selecting the workspace file", () => {
+    expect(resolveWorkspaceEditorTargetFile({
+      workspacePath: "/Users/shawn/project",
+      initialFilePath: "/Users/shawn/project/src/app.ts:42:7",
+    })).toBe("src/app.ts")
+  })
+
   it("rejects absolute files outside the current workspace", () => {
     expect(resolveWorkspaceEditorTargetFile({
       workspacePath: "/Users/shawn/project",
       initialFilePath: "/Users/shawn/other/file.md",
       urlFilePath: "docs/briefing.pptx",
     })).toBe("docs/briefing.pptx")
+  })
+})
+
+describe("parseWorkspaceFileLocation", () => {
+  it("parses colon line and column suffixes", () => {
+    expect(parseWorkspaceFileLocation("/Users/shawn/project/src/app.ts:42:7")).toEqual({
+      path: "/Users/shawn/project/src/app.ts",
+      lineNumber: 42,
+      column: 7,
+    })
+  })
+
+  it("parses hash line suffixes", () => {
+    expect(parseWorkspaceFileLocation("/Users/shawn/project/src/app.ts#L42")).toEqual({
+      path: "/Users/shawn/project/src/app.ts",
+      lineNumber: 42,
+      column: null,
+    })
+  })
+
+  it("keeps windows drive paths intact when there is no line suffix", () => {
+    expect(parseWorkspaceFileLocation("C:/Users/Shawn/project/src/app.ts")).toEqual({
+      path: "C:/Users/Shawn/project/src/app.ts",
+      lineNumber: null,
+      column: null,
+    })
   })
 })
 
@@ -106,6 +139,22 @@ describe("resolveWorkspaceLinkTarget", () => {
     })).toEqual({
       workspacePath: "/Users/shawn/project",
       initialFilePath: "/Users/shawn/project/docs/briefing.pptx",
+      lineNumber: null,
+      column: null,
+    })
+  })
+
+  it("carries line and column metadata without treating it as part of the filename", () => {
+    expect(resolveWorkspaceLinkTarget({
+      currentWorkspacePath: "/Users/shawn/project",
+      linkWorkspacePath: "/Users/shawn/project/src",
+      absolutePath: "/Users/shawn/project/src/app.ts:42:7",
+      filePath: "app.ts:42:7",
+    })).toEqual({
+      workspacePath: "/Users/shawn/project",
+      initialFilePath: "/Users/shawn/project/src/app.ts",
+      lineNumber: 42,
+      column: 7,
     })
   })
 
@@ -118,6 +167,8 @@ describe("resolveWorkspaceLinkTarget", () => {
     })).toEqual({
       workspacePath: "/Users/shawn/other/docs",
       initialFilePath: "briefing.pptx",
+      lineNumber: null,
+      column: null,
     })
   })
 })
