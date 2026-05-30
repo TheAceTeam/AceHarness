@@ -70,6 +70,26 @@ function getClipboardMarkdown(clipboard: DataTransfer | null | undefined): strin
   return clipboard.getData('text/markdown') || clipboard.getData('text/x-markdown') || '';
 }
 
+export function insertMarkdownAtSelection(
+  editor: {
+    isDestroyed?: boolean;
+    commands?: {
+      insertContent?: (content: string, options?: { contentType?: 'markdown' }) => boolean;
+    };
+  } | null | undefined,
+  markdown: string,
+  options: { trimTrailingNewlines?: boolean } = {},
+): boolean {
+  if (!editor || editor.isDestroyed || typeof editor.commands?.insertContent !== 'function') return false;
+  const normalized = options.trimTrailingNewlines ? trimTrailingNewlines(markdown) : markdown;
+  try {
+    return editor.commands.insertContent(normalized, { contentType: 'markdown' });
+  } catch (error) {
+    console.warn('[RichTextEditor] markdown paste insert failed', error);
+    return false;
+  }
+}
+
 function trySetEditorContent(
   editor: ReturnType<typeof useEditor> | null | undefined,
   content: string,
@@ -262,17 +282,10 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     }
   }, []);
 
-  const pasteMarkdownSource = useCallback((markdown: string, event?: ClipboardEvent | null) => {
+  const pasteMarkdownSource = useCallback((markdown: string) => {
     const targetEditor = editorRuntimeRef.current;
     if (!targetEditor || (targetEditor as any).isDestroyed) return false;
-    const normalized = trimPastedTrailingNewlines ? trimTrailingNewlines(markdown) : markdown;
-    try {
-      targetEditor.view.pasteText(normalized, event ?? undefined);
-      return true;
-    } catch (error) {
-      console.warn('[RichTextEditor] markdown paste fallback failed', error);
-      return false;
-    }
+    return insertMarkdownAtSelection(targetEditor, markdown, { trimTrailingNewlines: trimPastedTrailingNewlines });
   }, [trimPastedTrailingNewlines]);
 
   const convertHtmlToMarkdown = useCallback((html: string) => {
@@ -291,7 +304,9 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        link: false,
         bulletList: false,
+        listKeymap: false,
         orderedList: false,
         listItem: false,
       }),
@@ -546,7 +561,8 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
           const markdownClipboard = getClipboardMarkdown(clipboard);
           if (markdownClipboard) {
             event.preventDefault();
-            return pasteMarkdownSource(markdownClipboard, event);
+            pasteMarkdownSource(markdownClipboard);
+            return true;
           }
 
           const html = clipboard.getData('text/html');
@@ -554,7 +570,8 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
             const convertedMarkdown = convertHtmlToMarkdown(html);
             if (convertedMarkdown) {
               event.preventDefault();
-              return pasteMarkdownSource(convertedMarkdown, event);
+              pasteMarkdownSource(convertedMarkdown);
+              return true;
             }
           }
         }
