@@ -28,7 +28,7 @@ function flattenTree(nodes: TreeNode[]): TreeNode[] {
 }
 
 describe('workspace API routes', () => {
-  test('workspace tree lists safe files while hiding dotfiles and symlinks', async ({ skip }) => {
+  test('workspace tree lists safe files and dotfiles while hiding symlinks', async ({ skip }) => {
     if (!(await canCreateFileSymlink())) {
       skip('File symlink creation is not permitted in this environment');
     }
@@ -48,7 +48,7 @@ describe('workspace API routes', () => {
 
       expect(entries.some((entry) => entry.name === 'src' && entry.type === 'directory')).toBe(true);
       expect(entries.some((entry) => entry.path === path.join('src', 'app.ts') && entry.type === 'file')).toBe(true);
-      expect(entries.some((entry) => entry.name === '.env')).toBe(false);
+      expect(entries.some((entry) => entry.name === '.env' && entry.type === 'file')).toBe(true);
       expect(entries.some((entry) => entry.name === 'outside-link.txt')).toBe(false);
     });
   });

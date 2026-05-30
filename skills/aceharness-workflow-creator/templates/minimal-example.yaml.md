@@ -12,11 +12,11 @@
    └──fail──> 审查（自身循环）
 ```
 
-## 完整输出
+## 编排参考
 
-<result>
-{"kind":"workflow_draft","payload":{"filename":"minimal-review.yaml","summary":"最小代码审查工作流","config":{"workflow":{"states":[{"name":"审查","isInitial":true,"steps":[{"name":"执行审查","agent":"reviewer","prompt":"审查代码质量"}],"transitions":[{"to":"完成","condition":{"verdict":"pass"}},{"to":"完成","condition":{"verdict":"conditional_pass"}},{"to":"审查","condition":{"verdict":"fail"}}]},{"name":"完成","isFinal":true,"steps":[],"transitions":[]}]},"context":{"projectRoot":"/Users/example/project","workspaceMode":"in-place"}}}}
-</result>
+- 审查状态：一个 reviewer 步骤完成审查，输出问题、风险、建议和验证证据。
+- 完成状态：一个汇总步骤整理最终结果。
+- 如果审查不通过，失败流转应回到审查状态继续补充。
 
 ## 关键要点
 

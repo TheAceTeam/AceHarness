@@ -138,6 +138,36 @@ describe('validateWorkflowDraft', () => {
     expect(result.issues.some((i) => i.severity === 'warning')).toBe(true);
   });
 
+  test('phase steps cannot use the configured supervisor agent', () => {
+    const config = validPhaseBasedConfig('{project_root}');
+    config.workflow.phases[0].steps[0].agent = 'default-supervisor';
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => (
+      i.severity === 'error'
+      && i.code === 'supervisor_step_agent'
+      && i.path.join('.') === 'workflow.phases.0.steps.0.agent'
+      && i.message.includes('不能使用 supervisor')
+    ))).toBe(true);
+  });
+
+  test('state steps cannot use the configured supervisor agent', () => {
+    const config = validStateMachineConfig('{project_root}');
+    (config.workflow as any).supervisor = { enabled: true, agent: 'chief-supervisor' };
+    config.workflow.states[1].steps[0].agent = 'chief-supervisor';
+
+    const result = validateWorkflowDraft(config, { mode: 'portable' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues.some((i) => (
+      i.severity === 'error'
+      && i.code === 'supervisor_step_agent'
+      && i.path.join('.') === 'workflow.states.1.steps.0.agent'
+    ))).toBe(true);
+  });
+
   test('portable mode allows placeholder projectRoot and unresolved agents', () => {
     const config = {
       workflow: {

@@ -10,6 +10,20 @@ export interface ResultSection {
 type JsonSchema = Record<string, any>;
 
 const STRING_ARRAY_SCHEMA = { type: 'array', items: { type: 'string' } };
+const SIMPLE_ITEM_RESULT_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string' },
+    data: { type: 'object' },
+    payload: {
+      type: 'object',
+      properties: {
+        data: { type: 'object' },
+      },
+      required: ['data'],
+    },
+  },
+};
 
 type AiJsonRepairLoads = (input: string, options?: Record<string, any>) => any;
 
@@ -157,6 +171,19 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       patch: { type: 'object' },
     },
   },
+  workflow_clarification_summary: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_clarification_facts: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_clarification_gaps: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_clarification_question: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_coding_meta: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_requirement: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_design: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_decision: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_task: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_state_outline: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_state_steps: SIMPLE_ITEM_RESULT_SCHEMA,
+  workflow_patch_item: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_revision_item: SIMPLE_ITEM_RESULT_SCHEMA,
   spec_coding_revision: {
     type: 'object',
     properties: {

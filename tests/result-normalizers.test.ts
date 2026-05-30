@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
   extractPlanDraftResult,
-  extractWorkflowDraftPreview,
   extractWorkflowPatchPreview,
 } from '@/lib/ai/result-normalizers';
 
@@ -36,37 +35,6 @@ describe('result normalizers', () => {
       summary: '批量删除工作流对话',
       goals: ['支持分组多选', '避免误删运行中会话'],
       artifacts: payload.payload.artifacts,
-    });
-  });
-
-  test('extracts workflow_draft result JSON for final preview state', () => {
-    const workflow = [
-      '<result>',
-      JSON.stringify({
-        kind: 'workflow_draft',
-        payload: {
-          filename: 'cleanup.yaml',
-          summary: '清理历史会话工作流',
-          config: {
-            workflow: {
-              name: 'cleanup',
-              phases: [{ name: 'Delete', steps: [{ name: 'Batch', agent: 'developer', task: 'delete sessions' }] }],
-            },
-          },
-        },
-      }),
-      '</result>',
-    ].join('\n');
-
-    const preview = extractWorkflowDraftPreview(workflow);
-
-    expect(preview).toMatchObject({
-      source: 'result-json',
-      filename: 'cleanup.yaml',
-      summary: '清理历史会话工作流',
-    });
-    expect(preview.config).toMatchObject({
-      workflow: { name: 'cleanup' },
     });
   });
 

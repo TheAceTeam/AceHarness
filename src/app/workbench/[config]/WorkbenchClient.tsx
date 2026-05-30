@@ -63,13 +63,13 @@ import { mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-
 import {
   diagnoseExtractionFailure,
   extractStructuredResultPayload,
-  extractWorkflowPatchPreview,
 } from '@/lib/ai/result-normalizers';
 import {
   applyDesignOptimizationPatch,
   buildDesignOptimizationPrompt,
   doesWorkflowPatchMatchTarget,
   extractDesignOptimizationSnapshot,
+  extractWorkflowPatchItemPayload,
   extractWorkflowPatchValue,
   getDesignOptimizationDialogTitle,
   getDesignOptimizationScopeHint,
@@ -2874,17 +2874,11 @@ export default function WorkbenchPage() {
         es.onerror = () => fail('AI 工作流优化连接中断');
       });
 
-      const preview = extractWorkflowPatchPreview(finalContent, configFile);
-      if (preview.parseError || !preview.patch || !preview.scope || !preview.workflowMode) {
-        throw new Error(preview.parseError || diagnoseExtractionFailure(finalContent, 'workflow_patch'));
+      const itemPreview = extractWorkflowPatchItemPayload(finalContent, configFile);
+      if (itemPreview.parseError || !itemPreview.payload?.patch || !itemPreview.payload.scope || !itemPreview.payload.workflowMode) {
+        throw new Error(itemPreview.parseError || diagnoseExtractionFailure(finalContent, 'workflow_patch_item'));
       }
-      const payload: WorkflowPatchPayload = {
-        filename: preview.filename,
-        summary: preview.summary,
-        scope: preview.scope,
-        workflowMode: preview.workflowMode,
-        patch: preview.patch,
-      };
+      const payload: WorkflowPatchPayload = itemPreview.payload;
       if (!doesWorkflowPatchMatchTarget(payload, target, sourceConfig)) {
         throw new Error('AI 返回的 workflow_patch 作用域或工作流模式与当前目标不匹配');
       }
@@ -2901,10 +2895,10 @@ export default function WorkbenchPage() {
       const candidateSnapshot = extractDesignOptimizationSnapshot(candidateConfig, target);
       const patchValue = extractWorkflowPatchValue(payload, target);
       setDesignOptimizationCandidate({
-        summary: preview.summary?.trim() || `${getDesignOptimizationTargetLabel(target)} 优化候选`,
+        summary: payload.summary?.trim() || `${getDesignOptimizationTargetLabel(target)} 优化候选`,
         createdAt: new Date().toISOString(),
         rawOutput: finalContent,
-        filename: preview.filename,
+        filename: payload.filename,
         payload,
         candidateConfig,
         baseSnapshot: baseSnapshot ?? patchValue,

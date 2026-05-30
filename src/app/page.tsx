@@ -1929,7 +1929,7 @@ function ChatPageContent() {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0" data-tour-step-id="home-chat-main">
           {isBuiltInAgoraMode ? (
             <div className="flex h-full min-h-0 flex-col">
               <div className="min-h-0 flex-1">
@@ -1949,7 +1949,7 @@ function ChatPageContent() {
               </div>
               <div className="home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16">
                 <div className="mx-auto max-w-5xl">
-                  <div className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+                  <div className="home-chat-composer relative overflow-hidden rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
                     <RichTextEditor
                       ref={editorRef}
                       content={input}
@@ -2090,7 +2090,7 @@ function ChatPageContent() {
                       </div>
                     )}
                     <div className="mx-auto max-w-5xl">
-                      <div className="home-chat-composer relative rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+                      <div className="home-chat-composer relative rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
                         {slashMenuOpen ? (
                           <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-[320px] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
                             <PromptInputCommand className="bg-transparent">

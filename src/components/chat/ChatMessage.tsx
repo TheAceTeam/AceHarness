@@ -733,13 +733,19 @@ function extractSkillName(entry: ToolProcessEntry): string {
     : null;
   const rawSkillContent = asString(resultMeta?.output) || asString(resultMeta?.content) || entry.result;
   const taggedName = rawSkillContent.match(/<skill_content\b[^>]*\bname=(["'])(.*?)\1[^>]*>/i)?.[2] || '';
+  const skillFilePath = asString(requestMeta?.filePath) || asString(resultMeta?.filePath);
+  const skillFileParts = skillFilePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const skillNameFromPath = /(^|[/\\])SKILL\.md$/i.test(skillFilePath) && skillFileParts.length >= 2
+    ? skillFileParts[skillFileParts.length - 2]
+    : '';
 
   return asString(requestMeta?.name)
     || asString(requestInput?.name)
     || asString(requestInput?.skill)
     || asString(requestInput?.id)
     || asString(resultMeta?.name)
-    || taggedName;
+    || taggedName
+    || skillNameFromPath;
 }
 
 function extractSkillDocument(entry: ToolProcessEntry): null | { name: string; body: string } {

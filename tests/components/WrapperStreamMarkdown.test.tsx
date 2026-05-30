@@ -12,19 +12,22 @@ import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
 import { createStreamingDisplayCapability } from '@/lib/sidebar-plugins/capabilities/streaming-display';
 import { extractSpecCodingRevisionCommand } from '@/lib/spec/coding-revision-protocol';
 import { extractStructuredResult } from '@/lib/ai/result-channel';
+import { extractPlanDraftResult } from '@/lib/ai/result-normalizers';
 import {
-  extractClarificationFormResult,
-  extractPlanDraftResult,
-  extractWorkflowDraftPreview,
-} from '@/lib/ai/result-normalizers';
+  WORKFLOW_CLARIFICATION_QUESTION_KIND,
+  WORKFLOW_STATE_OUTLINE_KIND,
+  applyWorkflowCreationItem,
+  assembleClarificationForm,
+  createEmptyWorkflowCreationState,
+  extractWorkflowCreationItemResult,
+} from '@/lib/ai/workflow-creation-items';
 import { applyAiSpecCodingDraft } from '@/lib/ai/draft-utils';
-import { validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { buildCreationSession } from '@/lib/spec/coding-store';
 import { creationSessionSchema, specCodingDocumentSchema } from '@/lib/core/schemas';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatAceFileChangesResult, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
+import { formatAceFileChangesResult, formatAceToolCall, formatAceToolResult } from '@/lib/chat/ace-process-formatters';
 import {
   REAL_OPENCODE_CONNECTED_REPLAY,
   REAL_OPENCODE_DONE_RESULT,
@@ -597,11 +600,11 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
-  test('codex wrapper clarification form result stays hidden while streaming and parses after completion', async () => {
+  test('codex wrapper workflow clarification item stays hidden while streaming and parses after completion', async () => {
     const finalContent = [
       '先补几个关键问题。',
       '<result>',
-      '{kind:"clarification_form",payload:{summary:"需要确认边界",knownFacts:["已提供目录"],missingFields:["目标用户"],questions:[{id:"q1",label:"目标用户",question:"主要给谁用？",selectionMode:"single",options:[{id:"dev",label:"开发者",description:"面向研发",recommended:true}]}]}}',
+      '{kind:"workflow_clarification_question",data:{id:"target_outcome",label:"目标结果",question:"主要给谁用，这会影响角色和验收口径？",selectionMode:"single",options:[{id:"dev",label:"开发者",description:"面向研发",recommended:true},{id:"ops",label:"运维",description:"面向运维"}],placeholder:"默认面向开发者。",required:true}}',
       '</result>',
     ].join('\n');
 
@@ -623,22 +626,22 @@ describe('Wrapper stream markdown rendering', () => {
       { type: 'turn.completed' },
     ]);
 
-    const parsed = extractStructuredResult(content, (value: any): value is any => value?.kind === 'clarification_form');
+    const parsed = extractStructuredResult(content, (value: any): value is any => value?.kind === WORKFLOW_CLARIFICATION_QUESTION_KIND);
     expect(parsed).toMatchObject({
-      kind: 'clarification_form',
-      payload: {
-        summary: '需要确认边界',
-        knownFacts: ['已提供目录'],
-        missingFields: ['目标用户'],
+      kind: WORKFLOW_CLARIFICATION_QUESTION_KIND,
+      data: {
+        id: 'target_outcome',
+        label: '目标结果',
       },
     });
-    expect(parsed?.payload?.questions).toHaveLength(1);
-    const clarificationForm = extractClarificationFormResult(content);
-    expect(clarificationForm).toMatchObject({
-      type: 'clarification_form',
-      summary: '需要确认边界',
-      knownFacts: ['已提供目录'],
-      missingFields: ['目标用户'],
+    const item = extractWorkflowCreationItemResult(content, WORKFLOW_CLARIFICATION_QUESTION_KIND);
+    expect(item.ok).toBe(true);
+    if (!item.ok) return;
+    const creationState = applyWorkflowCreationItem(createEmptyWorkflowCreationState(), item.result);
+    const clarificationForm = assembleClarificationForm(creationState);
+    expect(clarificationForm.questions[0]).toMatchObject({
+      id: 'target_outcome',
+      label: '目标结果',
     });
     expect(clarificationForm?.questions).toHaveLength(1);
 
@@ -728,16 +731,15 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
-  test('acp wrapper workflow draft result parses after streaming completes', async () => {
-    const projectRoot = mkdtempSync(join(tmpdir(), 'ace-ai-result-'));
+  test('acp wrapper workflow outline item parses after streaming completes', async () => {
     const finalContent = [
-      '这是 workflow 草案。',
+      '这是 workflow 状态轮廓。',
       '<result>',
-      `{kind:"workflow_draft",payload:{filename:"history.yaml",summary:"历史查询工作流",config:{workflow:{name:"history-query",phases:[{name:"Implement",steps:[{name:"Code",agent:"developer",task:"Implement"}]}],supervisor:{enabled:true,agent:"default-supervisor"}},context:{projectRoot:${JSON.stringify(projectRoot)},workspaceMode:"in-place"}}}}`,
+      '{kind:"workflow_state_outline",data:{states:[{name:"需求确认",description:"确认范围"},{name:"实现验证",description:"实现和测试"},{name:"完成",description:"汇总交付",isFinal:true}]}}',
       '</result>',
     ].join('\n');
 
-    expect(normalizeAssistantDisplay(finalContent, true).visibleText).toBe('这是 workflow 草案。');
+    expect(normalizeAssistantDisplay(finalContent, true).visibleText).toBe('这是 workflow 状态轮廓。');
 
     const { content } = await buildAcpRenderedMessage(
       () => import('@/lib/engines/opencode-wrapper'),
@@ -747,35 +749,24 @@ describe('Wrapper stream markdown rendering', () => {
       },
     );
 
-    const parsed = extractStructuredResult(content, (value: any): value is any => value?.kind === 'workflow_draft');
+    const parsed = extractStructuredResult(content, (value: any): value is any => value?.kind === WORKFLOW_STATE_OUTLINE_KIND);
     expect(parsed).toEqual({
-      kind: 'workflow_draft',
-      payload: {
-        filename: 'history.yaml',
-          summary: '历史查询工作流',
-          config: {
-          workflow: {
-            name: 'history-query',
-            phases: [{ name: 'Implement', steps: [{ name: 'Code', agent: 'developer', task: 'Implement' }] }],
-            supervisor: { enabled: true, agent: 'default-supervisor' },
-          },
-          context: { projectRoot, workspaceMode: 'in-place' },
-        },
+      kind: WORKFLOW_STATE_OUTLINE_KIND,
+      data: {
+        states: [
+          { name: '需求确认', description: '确认范围' },
+          { name: '实现验证', description: '实现和测试' },
+          { name: '完成', description: '汇总交付', isFinal: true },
+        ],
       },
     });
-    const preview = extractWorkflowDraftPreview(content, 'fallback.yaml');
-    expect(preview).toMatchObject({
-      source: 'result-json',
-      filename: 'history.yaml',
-      summary: '历史查询工作流',
-    });
-    expect(preview.config).toMatchObject({
-      workflow: { name: 'history-query' },
-      context: { projectRoot, workspaceMode: 'in-place' },
-    });
-    expect(validateWorkflowDraft(preview.config).ok).toBe(true);
+    const item = extractWorkflowCreationItemResult(content, WORKFLOW_STATE_OUTLINE_KIND);
+    expect(item.ok).toBe(true);
+    if (!item.ok) return;
+    const creationState = applyWorkflowCreationItem(createEmptyWorkflowCreationState(), item.result);
+    expect(creationState.workflow.outline.map((state) => state.name)).toEqual(['需求确认', '实现验证', '完成']);
     expect(normalizeAssistantDisplay(content, false)).toEqual({
-      visibleText: '这是 workflow 草案。',
+      visibleText: '这是 workflow 状态轮廓。',
       hasMachineResult: true,
       hasSidebarHint: false,
     });
@@ -1796,6 +1787,41 @@ describe('Wrapper stream markdown rendering', () => {
     expect(text).not.toContain('<skill_content');
     expect(text).not.toContain('# Skill: cangjie-lang-features');
     expect(text).not.toContain('"name": "cangjie-lang-features"');
+  });
+
+  test('read tool for SKILL.md is rendered as a skill document', async () => {
+    const raw = [
+      formatAceToolCall({
+        toolName: 'read',
+        toolId: 'read-skill-1',
+        rawInput: { filePath: '/repo/skills/workflow-helper/SKILL.md' },
+      }),
+      formatAceToolResult({
+        toolName: 'read',
+        toolId: 'read-skill-1',
+        rawOutput: {
+          filePath: '/repo/skills/workflow-helper/SKILL.md',
+          content: '# Workflow Helper\n\nUse this when designing workflows.',
+        },
+      }),
+    ].join('\n');
+
+    const parsed = extractAceProcessBlocks(raw);
+    expect(parsed.blocks).toHaveLength(2);
+    for (const block of parsed.blocks) {
+      if (block.meta.kind === 'tool-call' || block.meta.kind === 'tool-result') {
+        expect(block.meta.toolName).toBe('skill');
+      }
+    }
+
+    const view = renderWrapperStream([{ type: 'text', content: raw }]);
+    await openAllDetails(view.container);
+
+    const text = view.container.textContent || '';
+    expect(screen.getAllByText('技能文档').length).toBeGreaterThan(0);
+    expect(text).toContain('workflow-helper');
+    expect(text).toContain('Workflow Helper');
+    expect(text).toContain('designing workflows');
   });
 
   test('ace-process stream groups consecutive tool cards into a task container', async () => {

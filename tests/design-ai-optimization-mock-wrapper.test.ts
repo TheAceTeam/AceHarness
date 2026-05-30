@@ -5,11 +5,11 @@ import {
   buildDesignOptimizationPrompt,
   doesWorkflowPatchMatchTarget,
   type DesignOptimizationTarget,
+  extractWorkflowPatchItemPayload,
 } from '@/lib/workflow/design-ai-optimization';
-import { extractWorkflowPatchPreview } from '@/lib/ai/result-normalizers';
 
 describe('design optimization mock wrapper contract', () => {
-  test('prompt steers AI toward workflow_patch and returned patch can be applied', async () => {
+  test('prompt steers AI toward workflow_patch_item and returned patch can be applied', async () => {
     const currentConfig = {
       workflow: {
         name: 'feature-delivery',
@@ -65,14 +65,13 @@ describe('design optimization mock wrapper contract', () => {
       specTasks: [{ id: 'T1.1', title: '编码实现', ownerAgents: ['developer'] }],
     });
 
-    expect(prompt).toContain('workflow_patch');
-    expect(prompt).toContain('不要返回完整 workflow_draft');
+    expect(prompt).toContain('workflow_patch_item');
     expect(prompt).toContain('"scope":"step"');
     expect(prompt).toContain('"patch":{"step":{完整步骤对象}}');
 
     const engine = new MockEngine();
     engine.executeImpl = async (options) => {
-      expect(options.prompt).toContain('workflow_patch');
+      expect(options.prompt).toContain('workflow_patch_item');
       expect(options.prompt).toContain('阶段 "实现" 内的步骤 "编码实现"');
       return {
         success: true,
@@ -80,8 +79,8 @@ describe('design optimization mock wrapper contract', () => {
           '下面是优化思路。',
           '<result>',
           JSON.stringify({
-            kind: 'workflow_patch',
-            payload: {
+            kind: 'workflow_patch_item',
+            data: {
               filename: 'feature-delivery.yaml',
               summary: '增强步骤的执行说明与绑定',
               scope: 'step',
@@ -113,18 +112,12 @@ describe('design optimization mock wrapper contract', () => {
     } as any);
 
     expect(result.success).toBe(true);
-    const preview = extractWorkflowPatchPreview(result.output || '', 'feature-delivery.yaml');
+    const preview = extractWorkflowPatchItemPayload(result.output || '', 'feature-delivery.yaml');
     expect(preview.parseError).toBeUndefined();
-    expect(preview.scope).toBe('step');
-    expect(preview.patch?.step).toBeTruthy();
+    expect(preview.payload?.scope).toBe('step');
+    expect(preview.payload?.patch?.step).toBeTruthy();
 
-    const payload = {
-      filename: preview.filename,
-      summary: preview.summary,
-      scope: preview.scope,
-      workflowMode: preview.workflowMode,
-      patch: preview.patch || undefined,
-    };
+    const payload = preview.payload!;
     expect(doesWorkflowPatchMatchTarget(payload, target, currentConfig)).toBe(true);
 
     const nextConfig = applyDesignOptimizationPatch(currentConfig, payload, target);

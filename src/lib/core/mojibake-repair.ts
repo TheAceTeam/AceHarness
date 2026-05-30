@@ -22,9 +22,11 @@ function scoreText(text: string): number {
 }
 
 export function repairWindowsMojibake(text: string): string {
-  if (!isWindows() || !text) {
+  if (!text) {
     return text;
   }
+  const strongGarbled = STRONG_GARBLED_PATTERNS.test(text);
+  if (!isWindows() && !strongGarbled) return text;
 
   let best = text;
   let bestScore = scoreText(text);
@@ -45,7 +47,7 @@ export function repairWindowsMojibake(text: string): string {
     return text;
   }
 
-  if (STRONG_GARBLED_PATTERNS.test(text)) {
+  if (strongGarbled) {
     return best;
   }
 

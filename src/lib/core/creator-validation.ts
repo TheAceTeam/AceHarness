@@ -166,6 +166,12 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   const projectRoot = typeof normalized?.context?.projectRoot === 'string'
     ? normalized.context.projectRoot.trim()
     : '';
+  const stepAgentRefs: Array<{
+    agent: string;
+    path: string[];
+    nodeName: string;
+    stepName: string;
+  }> = [];
 
   if (shouldCheckRuntimeEnvironment) {
     if (!projectRoot) {
@@ -194,13 +200,19 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
   if (mode === 'state-machine') {
     const requiredVerdicts = ['pass', 'conditional_pass', 'fail'] as const;
     const stateNames = new Set<string>();
-    for (const state of workflowAny.states || []) {
+    for (const [stateIndex, state] of (workflowAny.states || []).entries()) {
       if (stateNames.has(state.name)) {
         pushIssue(issues, 'error', ['workflow', 'states'], `状态名称重复: ${state.name}`);
       }
       stateNames.add(state.name);
-      for (const step of state.steps || []) {
+      for (const [stepIndex, step] of (state.steps || []).entries()) {
         referencedAgents.add(step.agent);
+        stepAgentRefs.push({
+          agent: step.agent,
+          path: ['workflow', 'states', String(stateIndex), 'steps', String(stepIndex), 'agent'],
+          nodeName: state.name || `状态 ${stateIndex + 1}`,
+          stepName: step.name || `步骤 ${stepIndex + 1}`,
+        });
       }
       for (const transition of state.transitions || []) {
         if (!stateNames.has(transition.to) && !(workflowAny.states || []).some((item: any) => item.name === transition.to)) {
@@ -272,18 +284,37 @@ export function validateWorkflowDraft(input: any, options: WorkflowValidationOpt
       }
     }
   } else {
-    for (const phase of workflowAny.phases || []) {
-      for (const step of phase.steps || []) {
+    for (const [phaseIndex, phase] of (workflowAny.phases || []).entries()) {
+      for (const [stepIndex, step] of (phase.steps || []).entries()) {
         referencedAgents.add(step.agent);
+        stepAgentRefs.push({
+          agent: step.agent,
+          path: ['workflow', 'phases', String(phaseIndex), 'steps', String(stepIndex), 'agent'],
+          nodeName: phase.name || `阶段 ${phaseIndex + 1}`,
+          stepName: step.name || `步骤 ${stepIndex + 1}`,
+        });
       }
     }
   }
 
   const supervisorAgent = normalized.workflow.supervisor?.agent?.trim();
+  const effectiveSupervisorAgent = supervisorAgent || 'default-supervisor';
   if (!supervisorAgent) {
     pushIssue(issues, 'warning', ['workflow', 'supervisor', 'agent'], '未显式指定 supervisor，将回退到 default-supervisor');
   } else if (availableAgents && availableAgents.size > 0 && !availableAgents.has(supervisorAgent)) {
     pushIssue(issues, 'error', ['workflow', 'supervisor', 'agent'], `supervisor "${supervisorAgent}" 当前未在 agents 目录中找到`);
+  }
+
+  for (const stepRef of stepAgentRefs) {
+    if (stepRef.agent === effectiveSupervisorAgent) {
+      pushIssue(
+        issues,
+        'error',
+        stepRef.path,
+        `步骤 "${stepRef.nodeName} / ${stepRef.stepName}" 不能使用 supervisor "${effectiveSupervisorAgent}" 作为任务 Agent。supervisor 只负责调度、审阅和检查点建议；请把该步骤 agent 改为普通执行 Agent，例如 developer、architect、tester 或你的业务 Agent。`,
+        'supervisor_step_agent'
+      );
+    }
   }
 
   for (const agent of referencedAgents) {

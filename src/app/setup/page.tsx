@@ -459,7 +459,7 @@ export default function SetupPage() {
                   transition={{ duration: 0.35, ease: 'easeOut' }}
                   className="mt-8"
                 >
-                  <Button size="lg" className="min-w-40" disabled={!showContinue} onClick={() => router.push('/')}>
+                  <Button size="lg" className="min-w-40" disabled={!showContinue} onClick={() => router.push('/?tour=1')}>
                     {'\u7ee7\u7eed'}
                   </Button>
                 </motion.div>
@@ -581,7 +581,7 @@ export default function SetupPage() {
               <Button type="submit" className="w-full h-10">
                 <span className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-sm">arrow_forward</span>
-                  下一步：选择技能
+                  下一步：选择首页对话的 Skill
                 </span>
               </Button>
             </form>
@@ -607,15 +607,15 @@ export default function SetupPage() {
 
           <div className="bg-card rounded-2xl border p-8 shadow-xl">
             <div className="text-center mb-6">
-              <h2 className="text-xl font-semibold">选择要安装的技能</h2>
-              <p className="text-sm text-muted-foreground mt-1">已发现 {skills.length} 个技能，可根据需要选择启用</p>
+              <h2 className="text-xl font-semibold">选择首页对话的 Skill</h2>
+              <p className="text-sm text-muted-foreground mt-1">已发现 {skills.length} 个 Skill，可选择首页对话默认启用哪些能力</p>
             </div>
 
             {skills.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <span className="material-symbols-outlined text-4xl mb-2">extension</span>
-                <p>未发现任何技能</p>
-                <p className="text-xs mt-1">请将技能放入 skills/ 目录</p>
+                <p>未发现任何 Skill</p>
+                <p className="text-xs mt-1">请将 Skill 放入 skills/ 目录</p>
               </div>
             ) : (
               <>
@@ -673,12 +673,12 @@ export default function SetupPage() {
             <div className="bg-muted/50 rounded-lg p-4 mb-6">
               <h3 className="text-sm font-medium mb-2 flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">info</span>
-                如何安装更多技能？
+                如何添加更多 Skill？
               </h3>
               <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
-                <li>将技能文件夹放入 <code className="bg-muted px-1 rounded">skills/</code> 目录</li>
-                <li>每个技能需要包含带 frontmatter 的 <code className="bg-muted px-1 rounded">SKILL.md</code> 文件</li>
-                <li>刷新页面后技能将自动被发现</li>
+                <li>将 Skill 文件夹放入 <code className="bg-muted px-1 rounded">skills/</code> 目录</li>
+                <li>每个 Skill 需要包含带 frontmatter 的 <code className="bg-muted px-1 rounded">SKILL.md</code> 文件</li>
+                <li>刷新页面后 Skill 将自动被发现</li>
               </ol>
             </div>
 
@@ -704,7 +704,7 @@ export default function SetupPage() {
                 ) : (
                   <span className="flex items-center gap-2">
                     <span className="material-symbols-outlined text-sm">check</span>
-                    完成设置 ({selectedSkills.size} 个技能)
+                    完成选择 ({selectedSkills.size} 个 Skill)
                   </span>
                 )}
               </Button>

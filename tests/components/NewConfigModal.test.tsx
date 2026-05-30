@@ -80,9 +80,7 @@ vi.mock('@/lib/chat/chat-actions', () => ({
 }));
 
 vi.mock('@/lib/ai/result-normalizers', () => ({
-  extractClarificationFormResult: () => null,
   extractPlanDraftResult: () => null,
-  extractWorkflowDraftPreview: () => ({ filename: '', config: null, yaml: '', parseError: '' }),
 }));
 
 vi.mock('@/lib/core/api', () => ({
@@ -175,7 +173,12 @@ vi.mock('@/components/ui/table', () => ({
   TableRow: ({ children }: { children: React.ReactNode }) => <tr>{children}</tr>,
 }));
 
-import NewConfigModal, { ModalAiGenerationPanel, getDisplayContentForAiStream } from '@/components/NewConfigModal';
+import NewConfigModal, {
+  ModalAiGenerationPanel,
+  getDisplayContentForAiStream,
+  parseWorkflowRepairReasonForDisplay,
+  resolveValidatedWorkflowDraftConfig,
+} from '@/components/NewConfigModal';
 
 type FetchCall = {
   url: string;
@@ -207,6 +210,7 @@ describe('NewConfigModal backend draft isolation', () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test('bootstraps independent planning chat and creation session on open', async () => {
@@ -604,6 +608,123 @@ describe('NewConfigModal backend draft isolation', () => {
     expect(screen.queryByDisplayValue('第二步恢复')).toBeNull();
   });
 
+  test('keeps partial clarification in step 2 while active AI generation continues', async () => {
+    vi.stubGlobal('EventSource', class MockEventSource extends EventTarget {
+      url: string;
+      withCredentials = false;
+      readyState = 0;
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+
+      constructor(url: string | URL) {
+        super();
+        this.url = String(url);
+      }
+
+      close() {}
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || 'GET').toUpperCase();
+      fetchCalls.push({ url, method });
+
+      if (url === '/api/configs' && method === 'GET') {
+        return createJsonResponse({ configs: [] });
+      }
+      if (url === '/api/configs/recommendations' && method === 'POST') {
+        return createJsonResponse({ recommendations: null });
+      }
+      if (url === '/api/spec-coding/sessions/partial-step-2' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'partial-step-2',
+            chatSessionId: 'planning-partial',
+            mode: 'ai-guided',
+            workflowName: '部分出题恢复',
+            filename: 'partial-step-2.yaml',
+            referenceWorkflow: '',
+            workingDirectory: '/tmp/partial',
+            workspaceMode: 'in-place',
+            description: '恢复描述',
+            requirements: '恢复需求',
+            status: 'draft',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            specCoding: {
+              id: 'spec-partial-step-2',
+              persistMode: 'none',
+              specRoot: '.spec',
+              artifacts: {},
+            },
+            uiState: {
+              formStep: 2,
+              planningStage: 'clarifying',
+              clarificationForm: {
+                type: 'clarification_form',
+                summary: '已先生成目标问题',
+                knownFacts: ['需要拆小点生成'],
+                missingFields: ['scope'],
+                questions: [{
+                  id: 'target_outcome',
+                  label: '目标结果',
+                  question: '最终要交付什么？',
+                  selectionMode: 'single',
+                  options: [{ id: 'workflow', label: '工作流', description: '生成工作流配置', recommended: true }],
+                }],
+              },
+              clarificationAnswers: {},
+            },
+          },
+        });
+      }
+      if (url === '/api/chat/sessions/planning-partial' && method === 'GET') {
+        return createJsonResponse({
+          session: {
+            id: 'planning-partial',
+            title: '创建计划：部分出题恢复',
+            model: 'test-model',
+            messages: [],
+            createdAt: 1,
+            updatedAt: 20,
+          },
+        });
+      }
+      if (url === '/api/chat/stream?checkActive=planning-partial&streamScope=workflow-planning' && method === 'GET') {
+        return createJsonResponse({
+          found: true,
+          active: true,
+          chatId: 'planning-stream-1',
+          streamContent: '正在生成后续澄清问题',
+        });
+      }
+
+      throw new Error(`Unhandled fetch: ${method} ${url}`);
+    });
+
+    renderWithProviders(
+      <NewConfigModal
+        isOpen
+        onClose={() => {}}
+        onSuccess={() => {}}
+        initialMode="ai-guided"
+        frontendSessionId="parent-1"
+        resumeCreationSessionId="partial-step-2"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('最终要交付什么？')).toBeTruthy();
+      expect(screen.getByText('继续出题中')).toBeTruthy();
+      expect(screen.getByText('生成补充问答表')).toBeTruthy();
+    });
+
+    expect(screen.queryByText('用当前回答生成计划')).toBeNull();
+    expect(screen.queryByText('提交回答并生成计划')).toBeNull();
+    expect(screen.getByText('停止出题')).toBeTruthy();
+  });
+
   test('does not restore completed homepage creation and records completion tags for new draft', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -994,13 +1115,13 @@ describe('NewConfigModal AI process rendering helpers', () => {
     cleanup();
   });
 
-  test('modal AI content hides machine result and workflow draft JSON while preserving visible process stream', () => {
+  test('modal AI content hides machine result and workflow item JSON while preserving visible process stream', () => {
     const content = [
       '<ace-process>{"kind":"reasoning","body":"Checking requirements"}</ace-process>',
       'Visible answer',
-      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '<result>{"kind":"workflow_state_outline","data":{"states":[{"name":"实现"},{"name":"完成","isFinal":true}]}}</result>',
       '```json',
-      '{"kind":"plan_draft","payload":{"summary":"hidden"}}',
+      '{"kind":"spec_requirement","data":{"id":"R1","title":"hidden"}}',
       '```',
     ].join('\n');
 
@@ -1008,8 +1129,8 @@ describe('NewConfigModal AI process rendering helpers', () => {
 
     expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Checking requirements');
     expect(screen.getByTestId('wrapper-process-blocks').textContent).toContain('Visible answer');
-    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('workflow_draft');
-    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('plan_draft');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('workflow_state_outline');
+    expect(screen.getByTestId('wrapper-process-blocks').textContent).not.toContain('spec_requirement');
   });
 
   test('modal AI content keeps card payloads renderable without leaking raw JSON', () => {
@@ -1030,15 +1151,44 @@ describe('NewConfigModal AI process rendering helpers', () => {
   test('display helper strips result and draft side channels before modal rendering', () => {
     const display = getDisplayContentForAiStream([
       'Visible answer',
-      '<result>{"kind":"workflow_draft","payload":{"filename":"demo.yaml"}}</result>',
+      '<result>{"kind":"workflow_state_outline","data":{"states":[{"name":"实现"},{"name":"完成","isFinal":true}]}}</result>',
       '```json',
-      '{"type":"plan_draft","payload":{"summary":"hidden"}}',
+      '{"kind":"spec_task","data":{"id":"T1.1","title":"hidden"}}',
       '```',
     ].join('\n'));
 
     expect(display).toContain('Visible answer');
     expect(display).not.toContain('<result>');
-    expect(display).not.toContain('workflow_draft');
-    expect(display).not.toContain('plan_draft');
+    expect(display).not.toContain('workflow_state_outline');
+    expect(display).not.toContain('spec_task');
+  });
+
+  test('repair display helper turns structured validation errors into friendly fields', () => {
+    const display = parseWorkflowRepairReasonForDisplay(
+      '错误字段：data.steps.0.agent。问题：agent 不能是 default-supervisor。修改方式：改成普通执行 Agent，例如 developer。'
+    );
+
+    expect(display.field).toBe('data.steps.0.agent');
+    expect(display.problem).toContain('default-supervisor');
+    expect(display.fix).toContain('developer');
+  });
+
+  test('workflow confirmation can save a validated preview even when draft config state was cleared', () => {
+    const previewConfig = {
+      workflow: { name: 'Preview Workflow', phases: [] },
+      context: { projectRoot: '/tmp/demo', workspaceMode: 'in-place' },
+    };
+
+    expect(resolveValidatedWorkflowDraftConfig({
+      workflowDraftConfig: null,
+      workflowDraftValidation: null,
+      workflowDraftPreview: {
+        source: 'result-json',
+        filename: 'preview.yaml',
+        config: previewConfig,
+        yaml: 'workflow:\n  name: Preview Workflow\n',
+        validation: { ok: true, issues: [] },
+      },
+    })).toBe(previewConfig);
   });
 });

@@ -43,6 +43,25 @@ type ProductTourStep = {
 
 const TOUR_STEPS: ProductTourStep[] = [
   {
+    id: 'home-chat-main',
+    route: '/',
+    targetId: 'home-chat-main',
+    eyebrow: '首页对话',
+    title: '先从首页对话开始',
+    body: '这里是日常入口。你可以直接描述需求、让 AI 帮你整理 workflow/Agent 草案，也可以继续追问、查看历史回复和结构化结果。',
+    position: 'bottom-start',
+    checklist: ['描述需求', '让 AI 整理上下文', '从对话进入创建流程'],
+  },
+  {
+    id: 'home-chat-composer',
+    route: '/',
+    targetId: 'home-chat-composer',
+    eyebrow: '首页对话',
+    title: '在这里输入你的下一步',
+    body: '输入框支持自然语言、粘贴 Markdown 和快捷命令。模型选择、调试开关和发送按钮都在同一个操作区，适合从一句话启动后续工作。',
+    position: 'top',
+  },
+  {
     id: 'dashboard-overview',
     route: '/dashboard',
     targetId: 'dashboard-overview',

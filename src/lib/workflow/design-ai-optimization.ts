@@ -3,6 +3,7 @@ import type {
   UnifiedWorkflowConfig,
   WorkflowStep,
 } from '@/lib/core/schemas';
+import { extractWorkflowCreationItemResult, WORKFLOW_PATCH_ITEM_KIND } from '@/lib/ai/workflow-creation-items';
 
 export type DesignOptimizationWorkflowMode = 'phase-based' | 'state-machine';
 
@@ -293,23 +294,23 @@ function buildScopeRules(target: DesignOptimizationTarget): string[] {
   if (target.scope === 'workflow') {
     return [
       '- 允许根据最新 Spec 调整阶段/状态、步骤拆分、Agent 分工、状态转移与 specTaskBinding。',
-      '- 只输出 workflow 级 patch；不要输出完整 config，也不要修改 context.projectRoot、workspaceMode、executionPolicy、skills、mcpServers 等运行时设置。',
-      '- 不要移除已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或最新 Spec 明确冲突。',
+      '- patch.workflow 是新的 workflow 对象；context.projectRoot、workspaceMode、executionPolicy、skills、mcpServers 等运行时设置由系统保留。',
+      '- 保留已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或最新 Spec 明确冲突。',
     ];
   }
   if (target.scope === 'state') {
     return [
-      `- 只优化状态 "${target.stateName}"；不要修改其他状态。`,
+      `- 优化状态 "${target.stateName}"。`,
       `- 保持状态名称 "${target.stateName}" 不变。`,
       '- 可以调整该状态的描述、内部步骤、skills、Agent 选择、人工审查、最大自循环次数和转移规则。',
-      '- 只输出这个状态对象的 patch；不要输出完整 workflow/config，不要修改 workflow mode、其他状态顺序、context 或运行时设置。',
+      '- patch.state 是这个状态对象；workflow mode、其他状态顺序、context 和运行时设置由系统保持原样。',
     ];
   }
   return [
-    `- 只优化 ${target.containerType === 'state' ? '状态' : '阶段'} "${target.containerName}" 内的步骤 "${target.stepName}"；不要修改其他步骤。`,
+    `- 优化 ${target.containerType === 'state' ? '状态' : '阶段'} "${target.containerName}" 内的步骤 "${target.stepName}"。`,
     `- 保持该步骤在容器中的位置不变。`,
     '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel 与 specTaskBinding。',
-    '- 只输出这个步骤对象的 patch；不要输出完整 workflow/config，不要修改其他步骤、容器内容或 workflow mode。',
+    '- patch.step 是这个步骤对象；其他步骤、容器内容和 workflow mode 由系统保持原样。',
   ];
 }
 
@@ -319,7 +320,7 @@ function buildPatchSchemaHint(target: DesignOptimizationTarget, configFile: stri
     : target.scope === 'state'
       ? `"scope":"state","workflowMode":"state-machine","patch":{"state":{完整状态对象}}`
       : `"scope":"step","workflowMode":"${target.workflowMode}","patch":{"step":{完整步骤对象}}`;
-  return `{"kind":"workflow_patch","payload":{"filename":"${configFile}","summary":"一句话摘要",${targetShape}}}`;
+  return `{"kind":"${WORKFLOW_PATCH_ITEM_KIND}","data":{"filename":"${configFile}","summary":"一句话摘要",${targetShape}}}`;
 }
 
 export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationPromptInput): string {
@@ -328,7 +329,7 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
   const lines = [
     '请基于当前最新 Spec 和当前工作流配置，生成一版工作流优化候选。',
     '你只生成候选 patch，不要声称已经保存；系统会先展示 diff，由用户确认后再应用。',
-    '最终必须返回 workflow_patch，不要返回完整 workflow_draft。',
+    `最终必须返回 kind="${WORKFLOW_PATCH_ITEM_KIND}" 的小 JSON。`,
     '',
     `当前优化目标：${getDesignOptimizationTargetLabel(input.target)}`,
     `工作流：${input.workflowName}`,
@@ -388,11 +389,49 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
     '1. 可以先用 1-3 句简短说明优化思路。',
     '2. 最终必须在 <result>...</result> 内输出一个 JSON 对象，不要包 ```json 代码块。',
     `3. JSON 格式必须是 ${buildPatchSchemaHint(input.target, input.configFile)}。`,
-    '4. patch 必须只包含当前目标作用域对应的对象，不要夹带完整 config/context。',
+    '4. patch 字段放当前目标作用域对应的对象。',
     '5. 输出 </result> 后不要追加任何文字。',
   );
 
   return lines.filter(Boolean).join('\n\n');
+}
+
+export function extractWorkflowPatchItemPayload(
+  markdown: string,
+  fallbackFilename?: string,
+): { payload: WorkflowPatchPayload | null; parseError?: string } {
+  const extracted = extractWorkflowCreationItemResult(markdown, WORKFLOW_PATCH_ITEM_KIND);
+  if (!extracted.ok) {
+    return { payload: null, parseError: extracted.error };
+  }
+
+  const data = extracted.result.data || {};
+  const scope = data.scope === 'workflow' || data.scope === 'state' || data.scope === 'step'
+    ? data.scope
+    : undefined;
+  const workflowMode = data.workflowMode === 'state-machine'
+    ? 'state-machine'
+    : data.workflowMode === 'phase-based'
+      ? 'phase-based'
+      : undefined;
+  const patch = data.patch && typeof data.patch === 'object' ? data.patch : null;
+  if (!scope) return { payload: null, parseError: 'workflow_patch item 的 data.scope 必须是 workflow/state/step。' };
+  if (!workflowMode) return { payload: null, parseError: 'workflow_patch item 的 data.workflowMode 必须是 phase-based/state-machine。' };
+  if (!patch) return { payload: null, parseError: 'workflow_patch item 的 data.patch 必须是对象。' };
+  const expectedKey = scope === 'workflow' ? 'workflow' : scope === 'state' ? 'state' : 'step';
+  if (!patch[expectedKey] || typeof patch[expectedKey] !== 'object') {
+    return { payload: null, parseError: `workflow_patch item 的 data.patch.${expectedKey} 必须是对象。` };
+  }
+
+  return {
+    payload: {
+      filename: typeof data.filename === 'string' && data.filename.trim() ? data.filename.trim() : fallbackFilename,
+      summary: typeof data.summary === 'string' ? data.summary : '',
+      scope,
+      workflowMode,
+      patch,
+    },
+  };
 }
 
 export function workflowOptimizationModesMatch(

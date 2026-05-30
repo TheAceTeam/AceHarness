@@ -225,7 +225,7 @@ export function compileStepTaskBindings(
       errors.push(`${ref.stepKey} 没有可绑定的 tasks.md 任务`);
     } else if (options.requireExplicit && validExistingIds.length === 0) {
       unboundStepKeys.push(ref.stepKey);
-      errors.push(`${ref.stepKey} 必须在 workflow_draft.config 中显式提供 specTaskBinding.taskIds，不能依赖系统自动推断`);
+      errors.push(`${ref.stepKey} 必须在 workflow 草案步骤中显式提供 specTaskBinding.taskIds，不能依赖系统自动推断`);
     } else if (chosen.source !== 'explicit') {
       warnings.push(`${ref.stepKey} 已由系统自动绑定 tasks.md taskId: ${chosen.taskIds.join(', ')}`);
     }

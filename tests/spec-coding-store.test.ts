@@ -1,4 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { withIsolatedAceHome } from './helpers/module-helpers';
 
 interface PhaseConfig {
@@ -187,6 +189,35 @@ describe('spec-coding-store', () => {
       expect(loaded!.specCoding.status).toBe('draft');
       expect(loaded!.specCoding.phases).toHaveLength(2);
       expect(loaded!.artifactSnapshots).toHaveLength(1);
+    });
+  });
+
+  test('loadCreationSession repairs a trailing numeric fragment left after updatedAt', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { buildCreationSession, saveCreationSession, loadCreationSession } = await loadStore();
+      const config = buildPhaseConfig('/test/workspace');
+
+      const session = buildCreationSession({
+        chatSessionId: 'chat-repair',
+        filename: 'repair.yaml',
+        workflowName: 'Repair Workflow',
+        mode: 'phase-based',
+        workingDirectory: '/test/workspace',
+        workspaceMode: 'in-place',
+        config,
+      });
+
+      await saveCreationSession(session);
+      const sessionFile = path.join(aceHome, 'data', 'workflow-creation-sessions', `${session.id}.yaml`);
+      const original = await readFile(sessionFile, 'utf-8');
+      await writeFile(sessionFile, `${original}\n80078727705\n`, 'utf-8');
+
+      const loaded = await loadCreationSession(session.id);
+      expect(loaded?.id).toBe(session.id);
+
+      const repaired = await readFile(sessionFile, 'utf-8');
+      expect(repaired).toContain(`updatedAt: ${session.updatedAt}`);
+      expect(repaired.trim().endsWith('80078727705')).toBe(false);
     });
   });
 

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, unlink, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -16,6 +16,7 @@ import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { readMasterSpec, getSpecRootDir, hasPersistedSpec } from '@/lib/spec/persistence';
 
 const CREATION_SESSIONS_DIR = getWorkspaceDataFile('workflow-creation-sessions');
+const creationSessionWriteQueues = new Map<string, Promise<void>>();
 
 const TASK_NUMBER_PATTERN = /^(([A-Za-z]+\d+(?:\.\d+)*|\d+(?:\.\d+)*)\b)\s+(.+)$/;
 
@@ -43,6 +44,37 @@ function isSyntheticTaskId(id?: string | null): boolean {
 function sessionPath(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9_-]/g, '_');
   return resolve(CREATION_SESSIONS_DIR, `${safeId}.yaml`);
+}
+
+async function runExclusiveCreationSessionWrite<T>(filePath: string, task: () => Promise<T>): Promise<T> {
+  const previous = creationSessionWriteQueues.get(filePath) || Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolveCurrent) => {
+    releaseCurrent = resolveCurrent;
+  });
+  const queued = previous.catch(() => {}).then(() => current);
+  creationSessionWriteQueues.set(filePath, queued);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    releaseCurrent();
+    if (creationSessionWriteQueues.get(filePath) === queued) {
+      creationSessionWriteQueues.delete(filePath);
+    }
+  }
+}
+
+async function atomicWriteUtf8(filePath: string, content: string): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tempPath, content, 'utf-8');
+    await rename(tempPath, filePath);
+  } catch (error) {
+    await unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function ensureDir(): Promise<void> {
@@ -1034,7 +1066,28 @@ export async function saveCreationSession(session: CreationSession): Promise<voi
     ...session,
     specCoding: normalizeSpecCodingDocument(session.specCoding),
   }));
-  await writeFile(sessionPath(normalized.id), stringify(normalized), 'utf-8');
+  const filePath = sessionPath(normalized.id);
+  await runExclusiveCreationSessionWrite(filePath, async () => {
+    await atomicWriteUtf8(filePath, stringify(normalized));
+  });
+}
+
+function parseCreationSessionContent(content: string): { value: unknown; repairedContent?: string } {
+  try {
+    return { value: parse(content) };
+  } catch (error) {
+    const repaired = content.replace(/(?:\r?\n[0-9]{6,}\s*)+$/u, '\n');
+    if (repaired === content) throw error;
+    return { value: parse(repaired), repairedContent: repaired };
+  }
+}
+
+function normalizeLoadedCreationSession(value: unknown): CreationSession {
+  const parsed = creationSessionSchema.parse(value);
+  return syncCreationSessionArtifactSnapshots({
+    ...parsed,
+    specCoding: normalizeSpecCodingDocument(parsed.specCoding),
+  } as CreationSession);
 }
 
 export async function loadCreationSession(id: string): Promise<CreationSession | null> {
@@ -1042,11 +1095,14 @@ export async function loadCreationSession(id: string): Promise<CreationSession |
   if (!existsSync(filePath)) return null;
   try {
     const content = await readFile(filePath, 'utf-8');
-    const parsed = creationSessionSchema.parse(parse(content));
-    return syncCreationSessionArtifactSnapshots({
-      ...parsed,
-      specCoding: normalizeSpecCodingDocument(parsed.specCoding),
-    } as CreationSession);
+    const parsed = parseCreationSessionContent(content);
+    const session = normalizeLoadedCreationSession(parsed.value);
+    if (parsed.repairedContent) {
+      await runExclusiveCreationSessionWrite(filePath, async () => {
+        await atomicWriteUtf8(filePath, stringify(session));
+      });
+    }
+    return session;
   } catch (err) {
     console.error(`[spec-coding-store] loadCreationSession(${id}) file exists but parse failed:`, err instanceof Error ? err.message : err);
     return null;
@@ -1060,14 +1116,18 @@ export async function listCreationSessions(filter?: { chatSessionId?: string; cr
   for (const file of files) {
     if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
     try {
-      const content = await readFile(resolve(CREATION_SESSIONS_DIR, file), 'utf-8');
-      const session = creationSessionSchema.parse(parse(content));
+      const filePath = resolve(CREATION_SESSIONS_DIR, file);
+      const content = await readFile(filePath, 'utf-8');
+      const parsed = parseCreationSessionContent(content);
+      const session = normalizeLoadedCreationSession(parsed.value);
+      if (parsed.repairedContent) {
+        await runExclusiveCreationSessionWrite(filePath, async () => {
+          await atomicWriteUtf8(filePath, stringify(session));
+        });
+      }
       if (filter?.chatSessionId && session.chatSessionId !== filter.chatSessionId && session.homeChatSessionId !== filter.chatSessionId) continue;
       if (filter?.createdBy && session.createdBy && session.createdBy !== filter.createdBy) continue;
-      sessions.push(syncCreationSessionArtifactSnapshots({
-        ...session,
-        specCoding: normalizeSpecCodingDocument(session.specCoding),
-      } as CreationSession));
+      sessions.push(session);
     } catch {
       // skip broken records
     }
@@ -1082,36 +1142,50 @@ export async function loadLatestCreationSessionByFilename(filename: string): Pro
 }
 
 export async function updateCreationSession(id: string, patch: Partial<CreationSession>): Promise<CreationSession | null> {
-  const existing = await loadCreationSession(id);
-  if (!existing) return null;
-  const mergedSpecCoding = patch.specCoding
-    ? {
-        ...existing.specCoding,
-        ...patch.specCoding,
-        progress: patch.specCoding.progress
-          ? {
-              ...existing.specCoding.progress,
-              ...patch.specCoding.progress,
-            }
-          : existing.specCoding.progress,
-        artifacts: patch.specCoding.artifacts
-          ? {
-              ...existing.specCoding.artifacts,
-              ...patch.specCoding.artifacts,
-            }
-          : existing.specCoding.artifacts,
-      }
-    : existing.specCoding;
-  const next = creationSessionSchema.parse({
-    ...existing,
-    ...patch,
-    specCoding: mergedSpecCoding,
-    id: existing.id,
-    updatedAt: Date.now(),
+  const filePath = sessionPath(id);
+  if (!existsSync(filePath)) return null;
+  return runExclusiveCreationSessionWrite(filePath, async () => {
+    let existing: CreationSession;
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      existing = normalizeLoadedCreationSession(parseCreationSessionContent(content).value);
+    } catch (err) {
+      console.error(`[spec-coding-store] updateCreationSession(${id}) file exists but parse failed:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+
+    const mergedSpecCoding = patch.specCoding
+      ? {
+          ...existing.specCoding,
+          ...patch.specCoding,
+          progress: patch.specCoding.progress
+            ? {
+                ...existing.specCoding.progress,
+                ...patch.specCoding.progress,
+              }
+            : existing.specCoding.progress,
+          artifacts: patch.specCoding.artifacts
+            ? {
+                ...existing.specCoding.artifacts,
+                ...patch.specCoding.artifacts,
+              }
+            : existing.specCoding.artifacts,
+        }
+      : existing.specCoding;
+    const next = creationSessionSchema.parse({
+      ...existing,
+      ...patch,
+      specCoding: mergedSpecCoding,
+      id: existing.id,
+      updatedAt: Date.now(),
+    });
+    const synced = creationSessionSchema.parse(syncCreationSessionArtifactSnapshots({
+      ...next,
+      specCoding: normalizeSpecCodingDocument(next.specCoding),
+    }));
+    await atomicWriteUtf8(filePath, stringify(synced));
+    return synced;
   });
-  const synced = syncCreationSessionArtifactSnapshots(next);
-  await saveCreationSession(synced);
-  return synced;
 }
 
 export async function deleteCreationSession(id: string): Promise<boolean> {

@@ -527,6 +527,19 @@ const MACHINE_RESULT_KINDS = new Set([
   'plan_draft',
   'workflow_draft',
   'workflow_patch',
+  'workflow_clarification_summary',
+  'workflow_clarification_facts',
+  'workflow_clarification_gaps',
+  'workflow_clarification_question',
+  'spec_coding_meta',
+  'spec_requirement',
+  'spec_design',
+  'spec_decision',
+  'spec_task',
+  'workflow_state_outline',
+  'workflow_state_steps',
+  'workflow_patch_item',
+  'spec_revision_item',
   'spec_coding_revision',
   'spec-coding-revision',
 ]);
@@ -765,8 +778,8 @@ export function parseActions(markdown: string): { text: string; actions: ActionB
         sectionHasStructured = collectMachinePayload(parsed, match[1], cards, sidebarHints, { allowLegacyShape: true }) || sectionHasStructured;
 
         // Any card/json code block inside <result> is machine-readable output.
-        // Non-visual JSON (for example workflow_draft/plan_draft) is consumed by
-        // feature-specific code and must not leak into the visible markdown body.
+        // Non-visual JSON (for example workflow item or plan item results) is
+        // consumed by feature-specific code and must not leak into the visible markdown body.
         removals.push([
           section.contentStart + match.index,
           section.contentStart + localBlockEnd,

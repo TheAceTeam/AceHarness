@@ -305,6 +305,32 @@ function normalizeFilePath(rawInput: UnknownRecord): string {
   return typeof filePath === 'string' ? filePath : '';
 }
 
+function extractTaggedToolValue(text: string, tag: string): string {
+  if (!text) return '';
+  const match = text.match(new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return String(match?.[1] || '').trim();
+}
+
+function extractToolPath(raw: unknown): string {
+  if (typeof raw === 'string') return extractTaggedToolValue(raw, 'path');
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
+  const obj = raw as UnknownRecord;
+  return normalizeFilePath(obj)
+    || extractTaggedToolValue(typeof obj.output === 'string' ? obj.output : '', 'path')
+    || extractTaggedToolValue(typeof obj.content === 'string' ? obj.content : '', 'path')
+    || extractTaggedToolValue(typeof obj.text === 'string' ? obj.text : '', 'path')
+    || extractTaggedToolValue(typeof obj.result === 'string' ? obj.result : '', 'path');
+}
+
+function getSkillReadInfo(toolName: string, raw: unknown): null | { filePath: string; name: string } {
+  if (toolName !== 'read') return null;
+  const filePath = extractToolPath(raw).trim();
+  if (!/(^|[/\\])SKILL\.md$/i.test(filePath)) return null;
+  const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const name = parts.length >= 2 ? parts[parts.length - 2] : '';
+  return { filePath, name };
+}
+
 function extractExitCode(raw: UnknownRecord): number | undefined {
   if (typeof raw.exitCode === 'number') return raw.exitCode;
   if (typeof raw.exit_code === 'number') return raw.exit_code;
@@ -407,8 +433,9 @@ export function formatAceToolCall(params: {
   title?: string;
   toolId?: string;
 }): string {
-  const toolName = params.toolName || 'tool';
   const rawInput = params.rawInput || {};
+  const skillReadInfo = getSkillReadInfo(params.toolName || 'tool', rawInput);
+  const toolName = skillReadInfo ? 'skill' : (params.toolName || 'tool');
   const title = params.title || getAceToolTitle(toolName);
 
   let block = '';
@@ -495,7 +522,8 @@ export function formatAceToolCall(params: {
       block = wrapAceProcessBlock('tool-call', {
         toolName,
         title,
-        name: String(rawInput.name || rawInput.skill || rawInput.id || ''),
+        name: skillReadInfo?.name || String(rawInput.name || rawInput.skill || rawInput.id || ''),
+        filePath: skillReadInfo?.filePath || undefined,
         input: rawInput,
       }, '');
       break;
@@ -513,7 +541,8 @@ export function formatAceToolResult(params: {
   title?: string;
   toolId?: string;
 }): string {
-  const toolName = params.toolName || 'tool';
+  const skillReadInfo = getSkillReadInfo(params.toolName || 'tool', params.rawOutput);
+  const toolName = skillReadInfo ? 'skill' : (params.toolName || 'tool');
   const title = params.title || getAceToolTitle(toolName);
   const raw = params.rawOutput;
 
@@ -574,6 +603,15 @@ export function formatAceToolResult(params: {
         output: extractTextFromUnknown(obj.output),
       });
     }
+    if (typeof obj.content === 'string' && toolName === 'skill') {
+      return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+        toolName,
+        title,
+        name: skillReadInfo?.name || '',
+        filePath: skillReadInfo?.filePath || normalizeFilePath(obj),
+        content: normalizeToolText(obj.content),
+      }, ''), params.toolId);
+    }
     if (typeof obj.content === 'string' && toolName === 'read') {
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
         toolName,
@@ -595,6 +633,19 @@ export function formatAceToolResult(params: {
         fallbackToolName: toolName,
         fallbackTitle: title,
       });
+    }
+    if (toolName === 'skill') {
+      const rawText = extractTextFromUnknown(obj.output ?? obj.result ?? obj.text ?? obj.message ?? '').trim();
+      const content = extractTaggedToolValue(rawText, 'content') || rawText;
+      if (content) {
+        return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+          toolName,
+          title,
+          name: skillReadInfo?.name || '',
+          filePath: skillReadInfo?.filePath || normalizeFilePath(obj),
+          content,
+        }, ''), params.toolId);
+      }
     }
     if ('totalMatches' in obj || 'numMatches' in obj) {
       const totalMatches = String(obj.totalMatches ?? obj.numMatches);
@@ -642,5 +693,14 @@ export function formatAceToolResult(params: {
 
   const text = extractTextFromUnknown(raw).trim();
   if (!text) return '';
+  if (toolName === 'skill') {
+    return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {
+      toolName,
+      title,
+      name: skillReadInfo?.name || '',
+      filePath: skillReadInfo?.filePath || '',
+      content: extractTaggedToolValue(text, 'content') || text,
+    }, ''), params.toolId);
+  }
   return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', { toolName, title, output: text }, ''), params.toolId);
 }

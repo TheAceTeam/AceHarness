@@ -447,7 +447,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: 'Spec task 绑定校验失败',
-          message: 'AI 生成的 workflow_draft 必须为每个 step 显式提供有效的 specTaskBinding.taskIds',
+          message: 'AI 生成的 workflow 草案必须为每个 step 显式提供有效的 specTaskBinding.taskIds',
           bindingValidation: bindingCompilation.validation,
         },
         { status: 400 }
