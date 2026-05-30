@@ -287,9 +287,49 @@ function safeParseJson(raw) {
 }
 
 function extractResultTag(text) {
-  const m = String(text || '').match(/<result>([\s\S]*?)<\/result>/);
-  if (!m) return { parsed: null, error: 'No <result>...</result> tags found' };
-  return safeParseJson(m[1]);
+  const source = String(text || '');
+  const m = source.match(/<result>([\s\S]*?)<\/result>/);
+  if (m) return safeParseJson(m[1]);
+
+  const openIndex = source.search(/<result>/i);
+  if (openIndex < 0) return { parsed: null, error: 'No <result>...</result> tags found' };
+  const contentStart = openIndex + '<result>'.length;
+  const bounds = findBalancedJsonObjectBounds(source.slice(contentStart));
+  if (!bounds) return { parsed: null, error: 'No balanced JSON after <result> tag' };
+  return safeParseJson(source.slice(contentStart + bounds.start, contentStart + bounds.end));
+}
+
+function findBalancedJsonObjectBounds(text) {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return { start, end: index + 1 };
+    }
+  }
+  return null;
 }
 
 module.exports = {

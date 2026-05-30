@@ -421,7 +421,23 @@ function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: 
     return { kind, data: { id: name || 'T1.1', title: '任务标题', requirementIds: ['R1'], designRefs: ['D1'], actions: ['具体动作'], deliverables: ['交付物'], validation: '验证方式' } };
   }
   if (kind === WORKFLOW_STATE_OUTLINE_KIND) {
-    return { kind, data: { states: [{ name: '准备', description: '准备输入与约束' }, { name: '执行', description: '完成核心工作' }, { name: '完成', description: '汇总结果', isFinal: true }] } };
+    return {
+      kind,
+      data: {
+        states: [
+          {
+            name: '准备',
+            description: '准备输入与约束',
+            transitions: [
+              { to: '执行', condition: { verdict: 'pass' }, label: '准备完成' },
+              { to: '准备', condition: { verdict: 'fail' }, label: '信息不足，继续准备' },
+            ],
+          },
+          { name: '执行', description: '完成核心工作' },
+          { name: '完成', description: '汇总结果', isFinal: true },
+        ],
+      },
+    };
   }
   if (kind === WORKFLOW_STATE_STEPS_KIND) {
     return {
@@ -435,6 +451,10 @@ function buildWorkflowCreationItemExample(kind: WorkflowCreationItemKind, name: 
             task: '清楚说明该步骤要完成的工作和输出。',
             specTaskBinding: { taskIds: ['T1.1'], requirementIds: ['R1'], artifactKeys: ['requirements', 'design', 'tasks'] },
           },
+        ],
+        transitions: [
+          { to: '完成', condition: { verdict: 'pass' }, label: '执行完成' },
+          { to: name || '执行', condition: { verdict: 'conditional_pass' }, label: '带条件继续迭代' },
         ],
       },
     };
@@ -463,6 +483,7 @@ function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): 
     workflow: {
       outline: state.workflow.outline,
       statesWithSteps: Object.keys(state.workflow.stateSteps),
+      statesWithTransitions: Object.keys(state.workflow.stateTransitions || {}),
     },
   };
   return truncateForPrompt(JSON.stringify(summary, null, 2), 6000);
@@ -4790,7 +4811,7 @@ export default function NewConfigModal({
       specContext,
       buildCreationRecommendationsPrompt(creationRecommendations),
       '',
-      'Workflow 装配规则：状态必须按顺序串行推进；并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
+      'Workflow 装配规则：状态按主要执行顺序组织；如果审查、返工、失败恢复或提前收口需要不同目标，请在 transitions 中明确 pass / conditional_pass / fail 的目标状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
       `Supervisor "${creationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 或 phase.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
       '每个非终态状态都应该有 1-4 个步骤；如果需要红蓝审查或多角色协作，把这些并行或协作步骤放在同一个状态中。',
       '如果提供了 SpecCoding 任务，specTaskBinding.taskIds 必须优先使用当前 tasks 中真实存在的叶子任务 id。',
@@ -4801,7 +4822,7 @@ export default function NewConfigModal({
         kind: WORKFLOW_STATE_OUTLINE_KIND,
         name: 'state_outline',
         title: 'Workflow 状态轮廓',
-        guidance: '生成 3-5 个按执行顺序串行推进的状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。状态名短、稳定、适合状态图展示。',
+        guidance: '生成 3-5 个按主要执行顺序组织的状态。第一个状态是初始状态，最后一个状态标记 isFinal=true。状态名短、稳定、适合状态图展示；如果流程需要返工、审查分支或失败恢复，可在非终态状态上补 transitions，使用 condition.verdict=pass/conditional_pass/fail 指向目标状态。',
       };
       const outlineOutput = await runWorkflowCreationItemStream({
         step: outlineStep,
@@ -4825,7 +4846,7 @@ export default function NewConfigModal({
           guidance: [
             `只为状态 "${outlineState.name}" 生成 steps。data.stateName 必须完全等于 "${outlineState.name}"。`,
             '每个步骤包含 name、agent、task；如果需要并发，只能给同一状态内的多个步骤设置相同 parallelGroup。',
-            '不要描述跨状态并发，不要创建下一状态的步骤。',
+            '不要描述跨状态并发，不要创建下一状态的步骤；但可以在 data.transitions 中补充当前状态的 pass/conditional_pass/fail 流转目标。',
             '如果可用，给每个步骤补上 specTaskBinding.taskIds、requirementIds、artifactKeys。',
           ].join('\n'),
         };

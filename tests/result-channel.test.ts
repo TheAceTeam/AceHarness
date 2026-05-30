@@ -52,6 +52,33 @@ describe('result-channel', () => {
     });
   });
 
+  test('recovers a result section when the closing tag is replaced by tool-call markup', () => {
+    const markdown = [
+      '长上下文输出了一段说明。',
+      '<result>{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"首期目标是什么？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}</arg_value></tool_call>',
+    ].join('\n');
+
+    expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
+      '{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"首期目标是什么？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}',
+    ]);
+    const parsed = extractStructuredResult(markdown, (value: any): value is any => value?.kind === 'workflow_clarification_question');
+    expect(parsed?.data?.id).toBe('target_outcome');
+  });
+
+  test('does not recover unclosed result examples inside fenced code blocks', () => {
+    const markdown = [
+      '示例：',
+      '```xml',
+      '<result>{"kind":"workflow_clarification_question","data":{"id":"example"}}',
+      '```',
+      '<result>{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"目标？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}</result>',
+    ].join('\n');
+
+    expect(getResultSections(markdown).map((section) => section.content.trim())).toEqual([
+      '{"kind":"workflow_clarification_question","data":{"id":"target_outcome","question":"目标？","options":[{"label":"推荐","recommended":true},{"label":"备选"}]}}',
+    ]);
+  });
+
   test('collects multiple result sections in order', () => {
     const markdown = [
       '前文',

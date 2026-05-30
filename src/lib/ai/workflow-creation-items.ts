@@ -73,6 +73,7 @@ export interface WorkflowOutlineStateItem {
   description?: string;
   isInitial?: boolean;
   isFinal?: boolean;
+  transitions?: any[];
 }
 
 export interface WorkflowCreationState {
@@ -108,6 +109,7 @@ export interface WorkflowCreationState {
   workflow: {
     outline: WorkflowOutlineStateItem[];
     stateSteps: Record<string, any[]>;
+    stateTransitions: Record<string, any[]>;
   };
 }
 
@@ -305,6 +307,30 @@ function normalizeTask(data: Record<string, any>, index: number): SpecTaskItem |
   };
 }
 
+const REQUIRED_WORKFLOW_VERDICTS = ['pass', 'conditional_pass', 'fail'] as const;
+type WorkflowTransitionVerdict = typeof REQUIRED_WORKFLOW_VERDICTS[number];
+
+const WORKFLOW_VERDICT_LABELS: Record<WorkflowTransitionVerdict, string> = {
+  pass: '通过',
+  conditional_pass: '有条件通过',
+  fail: '失败重试',
+};
+
+const WORKFLOW_VERDICT_PRIORITIES: Record<WorkflowTransitionVerdict, number> = {
+  pass: 100,
+  conditional_pass: 90,
+  fail: 80,
+};
+
+const WORKFLOW_VERDICT_COMPACT_KEYS: Record<WorkflowTransitionVerdict, string[]> = {
+  pass: ['passTo', 'onPass', 'pass'],
+  conditional_pass: ['conditionalPassTo', 'onConditionalPass', 'onConditional', 'conditionalPass', 'conditional'],
+  fail: ['failTo', 'onFail', 'fail'],
+};
+
+const WORKFLOW_ISSUE_TYPES = new Set(['design', 'implementation', 'test', 'performance', 'security']);
+const WORKFLOW_SEVERITIES = new Set(['critical', 'major', 'minor']);
+
 function normalizeWorkflowOutline(states: WorkflowOutlineStateItem[]): WorkflowOutlineStateItem[] {
   const deduped: WorkflowOutlineStateItem[] = [];
   const names = new Set<string>();
@@ -332,7 +358,60 @@ function normalizeOutlineStates(data: Record<string, any>): WorkflowOutlineState
     description: cleanString(state?.description) || cleanString(state?.purpose) || undefined,
     isInitial: state?.isInitial === true || index === 0,
     isFinal: state?.isFinal === true,
+    transitions: extractWorkflowTransitionItems(state),
   })));
+}
+
+function normalizeWorkflowVerdict(value: unknown): WorkflowTransitionVerdict | null {
+  const raw = cleanString(value).toLowerCase();
+  if (!raw) return null;
+  const normalized = raw.replace(/[\s-]+/g, '_');
+  if (['conditional_pass', 'conditional', 'partial_pass', 'partial', 'warning'].includes(normalized) || raw.includes('有条件') || raw.includes('条件通过')) {
+    return 'conditional_pass';
+  }
+  if (['fail', 'failed', 'failure', 'error', 'reject', 'rejected', 'blocked', 'retry', 'rollback'].includes(normalized) || raw.includes('失败') || raw.includes('驳回') || raw.includes('不通过')) {
+    return 'fail';
+  }
+  if (['pass', 'passed', 'success', 'succeed', 'ok', 'approve', 'approved', 'accept', 'accepted'].includes(normalized) || raw.includes('通过') || raw.includes('成功')) {
+    return 'pass';
+  }
+  return null;
+}
+
+function transitionFromCompactField(verdict: WorkflowTransitionVerdict, value: unknown): any | null {
+  if (typeof value === 'string') {
+    const to = cleanString(value);
+    return to ? { to, condition: { verdict } } : null;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source = value as any;
+  const condition = source.condition && typeof source.condition === 'object'
+    ? { ...source.condition, verdict: normalizeWorkflowVerdict(source.condition.verdict) || verdict }
+    : { verdict };
+  return {
+    ...source,
+    to: cleanString(source.to || source.target || source.targetState || source.nextState || source.state || source.destination),
+    condition,
+  };
+}
+
+function extractWorkflowTransitionItems(source: any): any[] {
+  if (!source || typeof source !== 'object') return [];
+  const result: any[] = [];
+  for (const key of ['transitions', 'transitionRules', 'routes', 'routing']) {
+    if (Array.isArray(source[key])) result.push(...source[key]);
+  }
+  for (const verdict of REQUIRED_WORKFLOW_VERDICTS) {
+    for (const key of WORKFLOW_VERDICT_COMPACT_KEYS[verdict]) {
+      const value = source[key];
+      const values = Array.isArray(value) ? value : [value];
+      for (const item of values) {
+        const transition = transitionFromCompactField(verdict, item);
+        if (transition) result.push(transition);
+      }
+    }
+  }
+  return result;
 }
 
 export function createEmptyWorkflowCreationState(): WorkflowCreationState {
@@ -369,6 +448,7 @@ export function createEmptyWorkflowCreationState(): WorkflowCreationState {
     workflow: {
       outline: [],
       stateSteps: {},
+      stateTransitions: {},
     },
   };
 }
@@ -438,7 +518,7 @@ export function validateWorkflowCreationItem(result: WorkflowCreationItemResult)
   } else if (result.kind === SPEC_TASK_KIND) {
     if (!normalizeTask(data, 0)) errors.push(validationError('data.title', '任务小点缺少 title/name。', '补齐 id、title、requirementIds、actions、deliverables、validation。'));
   } else if (result.kind === WORKFLOW_STATE_OUTLINE_KIND) {
-    if (normalizeOutlineStates(data).length < 2) errors.push(validationError('data.states', 'states 缺失或少于 2 个状态。', '按执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；状态会串行执行。'));
+    if (normalizeOutlineStates(data).length < 2) errors.push(validationError('data.states', 'states 缺失或少于 2 个状态。', '按主要执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；需要非线性流转时可在状态上补 transitions。'));
   } else if (result.kind === WORKFLOW_STATE_STEPS_KIND) {
     if (!cleanString(data.stateName)) errors.push(validationError('data.stateName', 'stateName 缺失或为空。', '把 data.stateName 设置为系统当前要求的状态名，必须完全一致。'));
     if (!Array.isArray(data.steps) || data.steps.length === 0) errors.push(validationError('data.steps', 'steps 缺失、不是数组或为空。', '提供 1-4 个步骤对象；并发只在同一 stateName 的 steps 内用相同 parallelGroup 表达。'));
@@ -456,6 +536,9 @@ export function validateWorkflowCreationItem(result: WorkflowCreationItemResult)
 export function applyWorkflowCreationItem(state: WorkflowCreationState, result: WorkflowCreationItemResult): WorkflowCreationState {
   const next: WorkflowCreationState = JSON.parse(JSON.stringify(state || createEmptyWorkflowCreationState()));
   const data = result.data || {};
+  if (!next.workflow) next.workflow = { outline: [], stateSteps: {}, stateTransitions: {} };
+  if (!next.workflow.stateSteps) next.workflow.stateSteps = {};
+  if (!next.workflow.stateTransitions) next.workflow.stateTransitions = {};
 
   switch (result.kind) {
     case WORKFLOW_CLARIFICATION_SUMMARY_KIND:
@@ -513,9 +596,15 @@ export function applyWorkflowCreationItem(state: WorkflowCreationState, result: 
     case WORKFLOW_STATE_OUTLINE_KIND:
       next.workflow.outline = normalizeOutlineStates(data);
       break;
-    case WORKFLOW_STATE_STEPS_KIND:
-      next.workflow.stateSteps[cleanString(data.stateName)] = Array.isArray(data.steps) ? data.steps : [];
+    case WORKFLOW_STATE_STEPS_KIND: {
+      const stateName = cleanString(data.stateName);
+      if (!stateName) break;
+      next.workflow.stateSteps[stateName] = Array.isArray(data.steps) ? data.steps : [];
+      const transitions = extractWorkflowTransitionItems(data);
+      if (transitions.length > 0) next.workflow.stateTransitions[stateName] = transitions;
+      else delete next.workflow.stateTransitions[stateName];
       break;
+    }
   }
 
   return next;
@@ -871,6 +960,155 @@ function replaceSupervisorStepAgent(step: any, fallbackAgent: string, supervisor
   };
 }
 
+function extractWorkflowTransitionVerdict(transition: any): WorkflowTransitionVerdict | null {
+  if (typeof transition === 'string') {
+    const [head] = transition.split(/->|=>|:/);
+    return normalizeWorkflowVerdict(head);
+  }
+  const condition = transition?.condition;
+  const candidates = [
+    condition && typeof condition === 'object' ? condition.verdict : condition,
+    transition?.verdict,
+    transition?.on,
+    transition?.when,
+    transition?.result,
+    transition?.outcome,
+    transition?.status,
+    transition?.kind,
+  ];
+  for (const candidate of candidates) {
+    const verdict = normalizeWorkflowVerdict(candidate);
+    if (verdict) return verdict;
+  }
+  return null;
+}
+
+function resolveWorkflowStateName(value: unknown, stateNames: string[], fallback: string): string {
+  const raw = cleanString(value);
+  if (!raw) return fallback;
+  return stateNames.find((name) => name === raw || name.toLowerCase() === raw.toLowerCase()) || fallback;
+}
+
+function transitionTargetValue(transition: any): unknown {
+  if (typeof transition === 'string') {
+    const [, target = ''] = transition.split(/->|=>/);
+    return target;
+  }
+  return transition?.to
+    || transition?.target
+    || transition?.targetState
+    || transition?.nextState
+    || transition?.state
+    || transition?.destination;
+}
+
+function enumStringArray(value: unknown, allowed: Set<string>, limit = 5): string[] {
+  const rawValues = Array.isArray(value) ? value : (typeof value === 'string' ? [value] : []);
+  return uniqueStrings(rawValues.map((item) => cleanString(item)))
+    .filter((item) => allowed.has(item))
+    .slice(0, limit);
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : (typeof value === 'string' ? Number(value) : NaN);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeWorkflowTransitionCondition(transition: any, verdict: WorkflowTransitionVerdict) {
+  const rawCondition = transition?.condition && typeof transition.condition === 'object' ? transition.condition : {};
+  const condition: any = { verdict };
+  const issueTypes = enumStringArray(rawCondition.issueTypes || transition?.issueTypes, WORKFLOW_ISSUE_TYPES);
+  const severities = enumStringArray(rawCondition.severities || transition?.severities, WORKFLOW_SEVERITIES);
+  const minIssueCount = finiteNumber(rawCondition.minIssueCount ?? transition?.minIssueCount);
+  const maxIssueCount = finiteNumber(rawCondition.maxIssueCount ?? transition?.maxIssueCount);
+  const custom = cleanString(rawCondition.custom || transition?.custom || rawCondition.expression || transition?.expression || transition?.filter);
+  if (issueTypes.length > 0) condition.issueTypes = issueTypes;
+  if (severities.length > 0) condition.severities = severities;
+  if (minIssueCount !== null) condition.minIssueCount = minIssueCount;
+  if (maxIssueCount !== null) condition.maxIssueCount = maxIssueCount;
+  if (custom) condition.custom = custom;
+  return condition;
+}
+
+function hasWorkflowTransitionAdvancedFilters(transition: any): boolean {
+  return Boolean(
+    transition?.condition?.issueTypes?.length
+    || transition?.condition?.severities?.length
+    || transition?.condition?.minIssueCount !== undefined
+    || transition?.condition?.maxIssueCount !== undefined
+    || cleanString(transition?.condition?.custom)
+  );
+}
+
+function createDefaultWorkflowTransition(verdict: WorkflowTransitionVerdict, target: string) {
+  return {
+    to: target,
+    condition: { verdict },
+    priority: WORKFLOW_VERDICT_PRIORITIES[verdict],
+    label: WORKFLOW_VERDICT_LABELS[verdict],
+  };
+}
+
+function normalizeWorkflowTransition(transition: any, verdict: WorkflowTransitionVerdict, context: {
+  stateNames: string[];
+  defaultTargets: Record<WorkflowTransitionVerdict, string>;
+  index: number;
+}) {
+  const condition = normalizeWorkflowTransitionCondition(transition, verdict);
+  const advanced = hasWorkflowTransitionAdvancedFilters({ condition });
+  const explicitPriority = finiteNumber(transition?.priority);
+  return {
+    to: resolveWorkflowStateName(transitionTargetValue(transition), context.stateNames, context.defaultTargets[verdict]),
+    condition,
+    priority: explicitPriority ?? (advanced
+      ? WORKFLOW_VERDICT_PRIORITIES[verdict] - Math.min(50, (context.index + 1) * 5)
+      : WORKFLOW_VERDICT_PRIORITIES[verdict]),
+    label: cleanString(transition?.label || transition?.title || transition?.name) || WORKFLOW_VERDICT_LABELS[verdict],
+  };
+}
+
+function normalizeWorkflowTransitions(input: {
+  outline: WorkflowOutlineStateItem[];
+  stateIndex: number;
+  stateName: string;
+  isFinal?: boolean;
+  explicitTransitions?: any[];
+}) {
+  if (input.isFinal) return [];
+  const stateNames = input.outline.map((state) => state.name);
+  const finalState = input.outline.find((state) => state.isFinal)?.name;
+  const nextState = input.outline[input.stateIndex + 1]?.name || finalState || input.stateName;
+  const defaultTargets: Record<WorkflowTransitionVerdict, string> = {
+    pass: nextState,
+    conditional_pass: nextState,
+    fail: input.stateName,
+  };
+  const grouped: Record<WorkflowTransitionVerdict, any[]> = {
+    pass: [],
+    conditional_pass: [],
+    fail: [],
+  };
+  for (const [index, transition] of (input.explicitTransitions || []).entries()) {
+    const verdict = extractWorkflowTransitionVerdict(transition);
+    if (!verdict) continue;
+    grouped[verdict].push(normalizeWorkflowTransition(transition, verdict, {
+      stateNames,
+      defaultTargets,
+      index,
+    }));
+  }
+
+  const result: any[] = [];
+  for (const verdict of REQUIRED_WORKFLOW_VERDICTS) {
+    const transitions = grouped[verdict];
+    const advancedTransitions = transitions.filter(hasWorkflowTransitionAdvancedFilters);
+    const fallbackTransition = transitions.find((transition) => !hasWorkflowTransitionAdvancedFilters(transition));
+    result.push(...advancedTransitions);
+    result.push(fallbackTransition || createDefaultWorkflowTransition(verdict, defaultTargets[verdict]));
+  }
+  return result;
+}
+
 export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, input: WorkflowCreationAssemblyInput): any {
   const outline = state.workflow.outline.length
     ? normalizeWorkflowOutline(state.workflow.outline)
@@ -934,7 +1172,10 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
       globalStepIndex += 1;
       return normalized;
     });
-    const nextState = outline[stateIndex + 1]?.name || outline.find((item) => item.isFinal)?.name || outlineState.name;
+    const explicitTransitions = [
+      ...(Array.isArray(state.workflow.stateTransitions?.[outlineState.name]) ? state.workflow.stateTransitions[outlineState.name] : []),
+      ...(Array.isArray(outlineState.transitions) ? outlineState.transitions : []),
+    ];
     return {
       name: outlineState.name,
       description: outlineState.description || `${outlineState.name}。`,
@@ -942,11 +1183,12 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
       isFinal: false,
       maxSelfTransitions: 3,
       steps: normalizedSteps,
-      transitions: [
-        { to: nextState, condition: { verdict: 'pass' }, priority: 100, label: '通过' },
-        { to: nextState, condition: { verdict: 'conditional_pass' }, priority: 90, label: '有条件通过' },
-        { to: outlineState.name, condition: { verdict: 'fail' }, priority: 80, label: '失败重试' },
-      ],
+      transitions: normalizeWorkflowTransitions({
+        outline,
+        stateIndex,
+        stateName: outlineState.name,
+        explicitTransitions,
+      }),
     };
   });
 

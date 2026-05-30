@@ -17,6 +17,37 @@ import {
 } from '@/lib/ai/workflow-creation-items';
 import { validateWorkflowDraft } from '@/lib/core/creator-validation';
 
+function applyItems(items: Array<{ kind: any; data: any }>) {
+  let state = createEmptyWorkflowCreationState();
+  for (const item of items) {
+    state = applyWorkflowCreationItem(state, item as any);
+  }
+  return state;
+}
+
+function assembleForTest(state: ReturnType<typeof createEmptyWorkflowCreationState>, overrides: Record<string, any> = {}) {
+  return assembleWorkflowConfigFromItems(state, {
+    workflowName: '测试工作流',
+    filename: 'test-workflow.yaml',
+    workingDirectory: process.cwd(),
+    workspaceMode: 'in-place',
+    requirements: '验证工作流装配',
+    recommendedAgents: ['architect', 'developer', 'tester'],
+    recommendedSupervisorAgent: 'default-supervisor',
+    ...overrides,
+  });
+}
+
+function fallbackTransitionMap(transitions: any[]) {
+  return Object.fromEntries(transitions
+    .filter((transition) => !transition.condition?.issueTypes?.length
+      && !transition.condition?.severities?.length
+      && transition.condition?.minIssueCount === undefined
+      && transition.condition?.maxIssueCount === undefined
+      && !transition.condition?.custom)
+    .map((transition) => [transition.condition.verdict, transition]));
+}
+
 describe('workflow creation item protocol', () => {
   test('extracts one named item from the result channel', () => {
     const content = [
@@ -143,5 +174,152 @@ describe('workflow creation item protocol', () => {
 
     const validation = validateWorkflowDraft(config, { mode: 'portable' });
     expect(validation.ok).toBe(true);
+  });
+
+  test('preserves explicit state-machine transition targets from outline and state-step items', () => {
+    const state = applyItems([
+      {
+        kind: WORKFLOW_STATE_OUTLINE_KIND,
+        data: {
+          states: [
+            { name: '设计', description: '确认方案' },
+            {
+              name: '实现',
+              description: '实现功能',
+              transitions: [
+                { to: '审查', condition: { verdict: 'pass' }, label: '实现完成，进入审查' },
+                { to: '实现', condition: { verdict: 'conditional_pass' }, label: '小问题继续实现' },
+                { to: '设计', condition: { verdict: 'fail' }, label: '方案失配，返回设计' },
+              ],
+            },
+            {
+              name: '审查',
+              description: '验证和裁决',
+              transitions: [
+                { to: '完成', condition: { verdict: 'pass' }, label: '审查通过' },
+                { to: '实现', condition: { verdict: 'conditional_pass' }, label: '带条件返工' },
+                { to: '设计', condition: { verdict: 'fail' }, label: '重新设计' },
+              ],
+            },
+            { name: '完成', description: '汇总结果', isFinal: true },
+          ],
+        },
+      },
+      { kind: WORKFLOW_STATE_STEPS_KIND, data: { stateName: '设计', steps: [{ name: '设计方案', agent: 'architect', task: '产出设计' }] } },
+      {
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        data: {
+          stateName: '实现',
+          steps: [{ name: '编码实现', agent: 'developer', task: '实现并自测' }],
+          transitions: [
+            { to: '审查', condition: { verdict: 'pass' }, label: '提交审查' },
+            { to: '实现', condition: { verdict: 'conditional_pass' }, label: '继续完善' },
+            { to: '设计', condition: { verdict: 'fail' }, label: '退回设计' },
+          ],
+        },
+      },
+      { kind: WORKFLOW_STATE_STEPS_KIND, data: { stateName: '审查', steps: [{ name: '审查结果', agent: 'tester', task: '验证并裁决' }] } },
+    ]);
+
+    const config = assembleForTest(state);
+    const states = config.workflow.states;
+    const designFallbacks = fallbackTransitionMap(states[0].transitions);
+    const implementationFallbacks = fallbackTransitionMap(states[1].transitions);
+    const reviewFallbacks = fallbackTransitionMap(states[2].transitions);
+
+    expect(designFallbacks.pass.to).toBe('实现');
+    expect(designFallbacks.conditional_pass.to).toBe('实现');
+    expect(designFallbacks.fail.to).toBe('设计');
+    expect(implementationFallbacks.pass.to).toBe('审查');
+    expect(implementationFallbacks.conditional_pass.to).toBe('实现');
+    expect(implementationFallbacks.fail.to).toBe('设计');
+    expect(reviewFallbacks.pass.to).toBe('完成');
+    expect(reviewFallbacks.conditional_pass.to).toBe('实现');
+    expect(reviewFallbacks.fail.to).toBe('设计');
+    expect(validateWorkflowDraft(config, { mode: 'portable' }).ok).toBe(true);
+  });
+
+  test('keeps advanced transition filters and fills missing verdict paths', () => {
+    const state = applyItems([
+      {
+        kind: WORKFLOW_STATE_OUTLINE_KIND,
+        data: {
+          states: [
+            { name: '实现', description: '实现核心能力' },
+            {
+              name: '验证',
+              description: '检查质量',
+              transitions: [
+                { to: '完成', condition: { verdict: 'pass', issueTypes: ['test'] }, label: '测试专项通过' },
+                { to: '实现', condition: { verdict: 'fail', severities: ['major'] }, label: '重大问题返工' },
+              ],
+            },
+            { name: '完成', description: '汇总交付', isFinal: true },
+          ],
+        },
+      },
+      { kind: WORKFLOW_STATE_STEPS_KIND, data: { stateName: '实现', steps: [{ name: '实现', agent: 'developer', task: '完成实现' }] } },
+      { kind: WORKFLOW_STATE_STEPS_KIND, data: { stateName: '验证', steps: [{ name: '验证', agent: 'tester', task: '运行测试' }] } },
+    ]);
+
+    const config = assembleForTest(state);
+    const validationState = config.workflow.states.find((item: any) => item.name === '验证');
+    const fallbackMap = fallbackTransitionMap(validationState.transitions);
+
+    expect(validationState.transitions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ to: '完成', condition: expect.objectContaining({ verdict: 'pass', issueTypes: ['test'] }) }),
+      expect.objectContaining({ to: '实现', condition: expect.objectContaining({ verdict: 'fail', severities: ['major'] }) }),
+    ]));
+    expect(fallbackMap.pass.to).toBe('完成');
+    expect(fallbackMap.conditional_pass.to).toBe('完成');
+    expect(fallbackMap.fail.to).toBe('验证');
+    expect(validateWorkflowDraft(config, { mode: 'portable' }).ok).toBe(true);
+  });
+
+  test('deduplicates fallback verdict transitions and replaces configured supervisor step agents', () => {
+    const state = applyItems([
+      {
+        kind: WORKFLOW_STATE_OUTLINE_KIND,
+        data: {
+          states: [
+            {
+              name: '处理',
+              transitions: [
+                { to: '完成', condition: { verdict: 'pass' }, label: '第一条通过' },
+                { to: '处理', condition: { verdict: 'pass' }, label: '重复通过应被忽略' },
+                { to: '未知状态', condition: { verdict: 'fail' }, label: '非法目标应回到默认目标' },
+                { to: '完成', condition: { custom: 'legacy-extra-rule' }, label: '无 verdict 的旧规则应被忽略' },
+              ],
+            },
+            { name: '完成', isFinal: true },
+          ],
+        },
+      },
+      {
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        data: {
+          stateName: '处理',
+          steps: [
+            { name: '规划', agent: 'chief-supervisor', task: '规划任务' },
+            { name: '执行', agent: 'default-supervisor', task: '执行任务' },
+          ],
+        },
+      },
+    ]);
+
+    const config = assembleForTest(state, {
+      recommendedAgents: ['developer', 'tester'],
+      recommendedSupervisorAgent: 'chief-supervisor',
+    });
+    const stateConfig = config.workflow.states[0];
+    const fallbackMap = fallbackTransitionMap(stateConfig.transitions);
+
+    expect(stateConfig.transitions.filter((transition: any) => transition.condition.verdict === 'pass')).toHaveLength(1);
+    expect(fallbackMap.pass.to).toBe('完成');
+    expect(fallbackMap.conditional_pass.to).toBe('完成');
+    expect(fallbackMap.fail.to).toBe('处理');
+    expect(stateConfig.steps.map((step: any) => step.agent)).not.toContain('chief-supervisor');
+    expect(stateConfig.steps.map((step: any) => step.agent)).not.toContain('default-supervisor');
+    expect(validateWorkflowDraft(config, { mode: 'portable' }).ok).toBe(true);
   });
 });

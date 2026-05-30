@@ -269,6 +269,20 @@ export function getResultSections(markdown: string): ResultSection[] {
       content: match[1],
     });
   }
+  const resultOpenRegex = /<result>/gi;
+  while ((match = resultOpenRegex.exec(markdown)) !== null) {
+    if (isInsideRanges(match.index, skipRanges)) continue;
+    if (sections.some((section) => match!.index >= section.start && match!.index < section.end)) continue;
+    const contentStart = match.index + match[0].length;
+    const bounds = findBalancedJsonObjectBounds(markdown.slice(contentStart));
+    if (!bounds) continue;
+    sections.push({
+      start: match.index,
+      end: contentStart + bounds.end,
+      content: markdown.slice(contentStart + bounds.start, contentStart + bounds.end),
+    });
+  }
+  sections.sort((left, right) => left.start - right.start);
   return sections;
 }
 
