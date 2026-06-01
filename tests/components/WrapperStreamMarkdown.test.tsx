@@ -1127,6 +1127,108 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
+  test('opencode todowrite completed raw JSON output stays a task list without leaking a code block', async () => {
+    const rawTodoOutput = JSON.stringify([
+      {
+        content: '探索 jinja 源项目结构，了解需实现的模块',
+        status: 'completed',
+        priority: 'high',
+      },
+      {
+        content: '检查目标目录 opencode_glm5.1_ace_new',
+        status: 'in_progress',
+        priority: 'high',
+      },
+      {
+        content: '设计工作流并输出 workflow_draft + home_sidebar',
+        status: 'pending',
+        priority: 'high',
+      },
+    ], null, 2);
+
+    const todos = [
+      { content: '探索 jinja 源项目结构，了解需实现的模块', status: 'completed', priority: 'high' },
+      { content: '检查目标目录 opencode_glm5.1_ace_new', status: 'in_progress', priority: 'high' },
+      { content: '设计工作流并输出 workflow_draft + home_sidebar', status: 'pending', priority: 'high' },
+    ];
+
+    const { view } = await buildAcpRenderedMessage(
+      () => import('@/lib/engines/opencode-wrapper'),
+      'OpenCodeEngineWrapper',
+      async (engine) => {
+        engine.emit('tool-call', {
+          id: 'todo-opencode-1',
+          title: 'todowrite',
+          rawInput: { todos },
+        });
+        engine.emit('tool-call-update', {
+          id: 'todo-opencode-1',
+          status: 'completed',
+          title: 'todowrite',
+          rawInput: { todos },
+          rawOutput: `\`\`\`text\n${rawTodoOutput}\n\`\`\``,
+        });
+      },
+    );
+
+    await openAllDetails(view.container);
+
+    expect(view.container.querySelectorAll('[data-testid="ace-todo-queue"]').length).toBe(1);
+    expect(screen.getByText('探索 jinja 源项目结构，了解需实现的模块')).toBeInTheDocument();
+    expect(screen.getByText('检查目标目录 opencode_glm5.1_ace_new')).toBeInTheDocument();
+    expect(screen.getByText('设计工作流并输出 workflow_draft + home_sidebar')).toBeInTheDocument();
+    expect(view.container.textContent || '').not.toContain('"priority": "high"');
+    expect(view.container.textContent || '').not.toContain('"content": "探索 jinja 源项目结构');
+  });
+
+  test('opencode independent subagent task starts render as siblings instead of nested process cards', async () => {
+    const { view } = await buildAcpRenderedMessage(
+      () => import('@/lib/engines/opencode-wrapper'),
+      'OpenCodeEngineWrapper',
+      async (engine) => {
+        engine.emit('tool-call', {
+          id: 'task-1',
+          title: 'task',
+          rawInput: {
+            description: '探索 jinja 源项目结构',
+            prompt: 'Explore the jinja source tree and summarize the modules.',
+            subagent_type: 'explore',
+          },
+        });
+        engine.emit('tool-call', {
+          id: 'task-2',
+          title: 'task',
+          rawInput: {
+            description: '检查目标目录结构',
+            prompt: 'Inspect the target directory and list relevant files.',
+            subagent_type: 'explore',
+          },
+        });
+        engine.emit('tool-call', {
+          id: 'task-3',
+          title: 'task',
+          rawInput: {
+            description: '检查已有工作流和Agent',
+            prompt: 'List existing workflow configs and agent configs.',
+            subagent_type: 'explore',
+          },
+        });
+        engine.emit('agent-message', 'Subagent tasks started.');
+      },
+    );
+
+    await openAllDetails(view.container);
+
+    const subtaskCards = getSubtaskCards(view.container);
+    expect(subtaskCards).toHaveLength(3);
+    expect(subtaskCards[0].text).toContain('探索 jinja 源项目结构');
+    expect(subtaskCards[1].text).toContain('检查目标目录结构');
+    expect(subtaskCards[2].text).toContain('检查已有工作流和Agent');
+    expect(subtaskCards[0].text).not.toContain('检查目标目录结构');
+    expect(subtaskCards[0].text).not.toContain('检查已有工作流和Agent');
+    expect(subtaskCards[1].text).not.toContain('检查已有工作流和Agent');
+  });
+
   test('claude-code routes scalar tool results through the shared formatter path', async () => {
     const { content, view } = await buildClaudeRenderedMessage([
       {

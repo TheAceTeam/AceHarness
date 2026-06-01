@@ -1,9 +1,14 @@
-import { readdir, readFile, mkdir, rm } from 'fs/promises';
+import { mkdir, rm } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
-import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import {
+  buildRunSummaryCacheFromRecord,
+  ensureRunSummaryCache,
+  listRunSummaryCaches,
+  saveRunSummaryCache,
+  type RunSummaryCache,
+} from '@/lib/run/summary-cache';
 
 const RUNS_DIR = getWorkspaceRunsDir();
 
@@ -13,7 +18,7 @@ export interface RunRecord {
   configName: string;
   startTime: string;
   endTime: string | null;
-  status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed';
+  status: 'preparing' | 'running' | 'completed' | 'failed' | 'stopped' | 'crashed' | 'pending' | string;
   currentPhase: string | null;
   totalSteps: number;
   completedSteps: number;
@@ -24,82 +29,29 @@ export interface RunRecord {
   totalTokens?: number;
 }
 
-function numberOrZero(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-function readTokenUsage(source: any): {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheReadInputTokens: number;
-} {
-  const usage = source?.tokenUsage || source || {};
-  return {
-    inputTokens: numberOrZero(usage.inputTokens),
-    outputTokens: numberOrZero(usage.outputTokens),
-    cacheCreationInputTokens: numberOrZero(usage.cacheCreationInputTokens),
-    cacheReadInputTokens: numberOrZero(usage.cacheReadInputTokens),
-  };
-}
-
-function totalTokens(usage: {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheReadInputTokens: number;
-}): number {
-  return usage.inputTokens + usage.outputTokens + usage.cacheCreationInputTokens + usage.cacheReadInputTokens;
-}
-
-function getRunTokenUsage(state: any) {
-  const usage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheCreationInputTokens: 0,
-    cacheReadInputTokens: 0,
-  };
-
-  if (Array.isArray(state?.stepLogs) && state.stepLogs.length > 0) {
-    for (const log of state.stepLogs) {
-      const tokenUsage = readTokenUsage(log);
-      usage.inputTokens += tokenUsage.inputTokens;
-      usage.outputTokens += tokenUsage.outputTokens;
-      usage.cacheCreationInputTokens += tokenUsage.cacheCreationInputTokens;
-      usage.cacheReadInputTokens += tokenUsage.cacheReadInputTokens;
-    }
-    return usage;
-  }
-
-  if (Array.isArray(state?.agents)) {
-    for (const agent of state.agents) {
-      const tokenUsage = readTokenUsage(agent);
-      usage.inputTokens += tokenUsage.inputTokens;
-      usage.outputTokens += tokenUsage.outputTokens;
-      usage.cacheCreationInputTokens += tokenUsage.cacheCreationInputTokens;
-      usage.cacheReadInputTokens += tokenUsage.cacheReadInputTokens;
-    }
-  }
-
-  return usage;
-}
-
 async function ensureRunsDir() {
   if (!existsSync(RUNS_DIR)) {
     await mkdir(RUNS_DIR, { recursive: true });
   }
 }
 
-async function getConfigName(configFile: string): Promise<string> {
-  try {
-    await ensureRuntimeConfigsSeeded();
-    const configPath = resolve(await getRuntimeConfigsDirPath(), configFile);
-    const content = await readFile(configPath, 'utf-8');
-    const config = parse(content);
-    return config.workflow?.name || configFile;
-  } catch {
-    return configFile;
-  }
+function runRecordFromSummary(summary: RunSummaryCache): RunRecord {
+  return {
+    id: summary.runId,
+    configFile: summary.configFile,
+    configName: summary.configName || summary.configFile,
+    startTime: summary.startTime,
+    endTime: summary.endTime,
+    status: summary.status,
+    currentPhase: summary.currentPhase,
+    totalSteps: summary.totalSteps,
+    completedSteps: summary.completedSteps,
+    inputTokens: summary.tokenUsage.inputTokens,
+    outputTokens: summary.tokenUsage.outputTokens,
+    cacheCreationInputTokens: summary.tokenUsage.cacheCreationInputTokens,
+    cacheReadInputTokens: summary.tokenUsage.cacheReadInputTokens,
+    totalTokens: summary.totalTokens,
+  };
 }
 
 /**
@@ -110,6 +62,10 @@ export async function createRun(record: RunRecord): Promise<void> {
   const runDir = resolve(RUNS_DIR, record.id);
   if (!existsSync(runDir)) {
     await mkdir(runDir, { recursive: true });
+  }
+  const summary = buildRunSummaryCacheFromRecord(record);
+  if (summary) {
+    await saveRunSummaryCache(summary).catch(() => {});
   }
 }
 
@@ -122,73 +78,25 @@ export async function updateRun(_id: string, _patch: Partial<RunRecord>): Promis
 }
 
 export async function getRun(id: string): Promise<RunRecord | null> {
-  try {
-    const stateFile = resolve(RUNS_DIR, id, 'state.yaml');
-    const content = await readFile(stateFile, 'utf-8');
-    const state = parse(content);
-    const configName = await getConfigName(state.configFile);
-    const usage = getRunTokenUsage(state);
-    return {
-      id: state.runId,
-      configFile: state.configFile,
-      configName,
-      startTime: state.startTime,
-      endTime: state.endTime,
-      status: state.status,
-      currentPhase: state.currentPhase || null,
-      totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
-      completedSteps: state.completedSteps?.length || 0,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      cacheCreationInputTokens: usage.cacheCreationInputTokens,
-      cacheReadInputTokens: usage.cacheReadInputTokens,
-      totalTokens: totalTokens(usage),
-    };
-  } catch {
-    return null;
-  }
+  const summary = await ensureRunSummaryCache(id);
+  return summary ? runRecordFromSummary(summary) : null;
 }
 
 export async function listRuns(): Promise<RunRecord[]> {
   await ensureRunsDir();
-  const entries = await readdir(RUNS_DIR, { withFileTypes: true });
-  const runs: RunRecord[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-    try {
-      const stateFile = resolve(RUNS_DIR, entry.name, 'state.yaml');
-      if (!existsSync(stateFile)) continue;
-      const content = await readFile(stateFile, 'utf-8');
-      const state = parse(content);
-      const configName = await getConfigName(state.configFile);
-      const usage = getRunTokenUsage(state);
-      runs.push({
-        id: state.runId,
-        configFile: state.configFile,
-        configName,
-        startTime: state.startTime,
-        endTime: state.endTime,
-        status: state.status,
-        currentPhase: state.currentPhase || null,
-        totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
-        completedSteps: state.completedSteps?.length || 0,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        cacheCreationInputTokens: usage.cacheCreationInputTokens,
-        cacheReadInputTokens: usage.cacheReadInputTokens,
-        totalTokens: totalTokens(usage),
-      });
-    } catch { /* skip corrupted */ }
-  }
+  const runs = (await listRunSummaryCaches()).map(runRecordFromSummary);
 
   runs.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
   return runs;
 }
 
 export async function listRunsByConfig(configFile: string): Promise<RunRecord[]> {
-  const all = await listRuns();
-  return all.filter((r) => r.configFile === configFile);
+  const runs = (await listRunSummaryCaches())
+    .filter((summary) => summary.configFile === configFile)
+    .map(runRecordFromSummary);
+
+  runs.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+  return runs;
 }
 
 export async function deleteRunsByConfig(configFile: string): Promise<{ deletedCount: number; runIds: string[] }> {

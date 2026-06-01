@@ -839,12 +839,30 @@ function buildProcessTimelineState(content: string, isStreaming: boolean): Proce
   const renderedKeys = new Set<string>();
   const toolEntriesByBlockStart = new Map<number, { key: string; entry: ToolProcessEntry }>();
   const subtaskEntriesByBlockStart = new Map<number, { key: string; entry: SubtaskProcessEntry }>();
+  const nextSubtaskStartByEntry = new Map<SubtaskProcessEntry, number>();
+  const subtaskStarts = subtaskEntries
+    .map((entry) => ({ entry, start: entry.anchorStart }))
+    .sort((a, b) => a.start - b.start);
+
+  for (let index = 0; index < subtaskStarts.length; index += 1) {
+    const current = subtaskStarts[index];
+    const next = subtaskStarts[index + 1];
+    if (next && next.start > current.entry.startBlockEnd) {
+      nextSubtaskStartByEntry.set(current.entry, next.start);
+    }
+  }
+
   const subtaskTextRanges = subtaskEntries
-    .map((entry) => ({
-      entry,
-      start: entry.startBlockEnd,
-      end: entry.resultBlockStart ?? ((entry.toolId || entry.sessionId) ? source.length : entry.startBlockEnd),
-    }))
+    .map((entry) => {
+      const nextSiblingStart = nextSubtaskStartByEntry.get(entry);
+      return {
+        entry,
+        start: entry.startBlockEnd,
+        end: entry.resultBlockStart
+          ?? nextSiblingStart
+          ?? ((entry.toolId || entry.sessionId) ? source.length : entry.startBlockEnd),
+      };
+    })
     .filter(({ start, end }) => end > start)
     .sort((a, b) => a.start - b.start);
 
@@ -1472,9 +1490,13 @@ function renderToolEntryCard(
 ) {
   const preview = getToolPreview(entry);
   const suppressRequestDetails = Boolean(preview) && ['bash', 'cmd', 'powershell', 'skill'].includes(entry.toolName);
+  const resultHasTodos = ['todo', 'todowrite', 'plan'].includes(entry.toolName)
+    && asArray(entry.resultMeta?.todos).length > 0;
   const requestContent = suppressRequestDetails
     ? null
-    : (renderStructuredToolRequest(entry) || (entry.request ? <Markdown>{entry.request}</Markdown> : null));
+    : resultHasTodos
+      ? null
+      : (renderStructuredToolRequest(entry) || (entry.request ? <Markdown>{entry.request}</Markdown> : null));
   const resultContent = entry.state === 'output-available'
     ? (renderStructuredToolResult(entry) || (entry.result ? <Markdown>{entry.result}</Markdown> : null))
     : null;

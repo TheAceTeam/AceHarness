@@ -6,6 +6,7 @@ import { chatSessionEvents, type ChatSessionEvent } from '@/lib/chat/persistence
 import { engineStreamStateEvents, listPublicEngineStreams, type EngineStreamStateEvent } from '@/lib/chat/stream-state';
 import { loadRunState, type HumanQuestion } from '@/lib/run/state-persistence';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
+import { compactWorkflowEventPayloadForLive, compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,45 +55,7 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
   const entry = workflowRegistry.getAllManagers().find((item) => item.configFile === configFile);
   const status = entry?.manager?.getStatus?.();
   if (!status) return null;
-  return {
-    status: status.status || '',
-    statusReason: status.statusReason || null,
-    runId: status.runId || '',
-    currentState: status.currentState || null,
-    currentPhase: status.currentPhase || null,
-    currentStep: status.currentStep || null,
-    activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : [],
-    activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : [],
-    completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps : [],
-    failedSteps: Array.isArray(status.failedSteps) ? status.failedSteps : [],
-    agents: Array.isArray(status.agents) ? status.agents : [],
-    stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory : [],
-    issueTracker: Array.isArray(status.issueTracker) ? status.issueTracker : [],
-    transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
-    startTime: status.startTime || null,
-    endTime: status.endTime || null,
-    workingDirectory: status.workingDirectory || null,
-    globalContext: status.globalContext,
-    phaseContexts: status.phaseContexts || {},
-    supervisorFlow: Array.isArray(status.supervisorFlow) ? status.supervisorFlow : [],
-    agentFlow: Array.isArray(status.agentFlow) ? status.agentFlow : [],
-    pendingLiveFeedback: Array.isArray(status.pendingLiveFeedback) ? status.pendingLiveFeedback : [],
-    currentConfigFile: status.currentConfigFile || configFile,
-    workflowFrontendSessionId: status.workflowFrontendSessionId || null,
-    supervisorAgent: status.supervisorAgent || null,
-    latestSupervisorReview: status.latestSupervisorReview || null,
-    pendingHumanQuestionId: status.pendingHumanQuestionId || null,
-    pendingHumanQuestion: status.pendingHumanQuestion || null,
-    humanQuestions: Array.isArray(status.humanQuestions) ? status.humanQuestions : undefined,
-    specRevisionVote: status.specRevisionVote || null,
-    specRevisionVoteHistory: Array.isArray(status.specRevisionVoteHistory) ? status.specRevisionVoteHistory : [],
-    runSpecCoding: status.runSpecCoding || null,
-    qualityChecks: Array.isArray(status.qualityChecks) ? status.qualityChecks : [],
-    persistMode: status.persistMode || null,
-    specRootDir: status.specRootDir || null,
-    deltaSpecMerged: status.deltaSpecMerged || false,
-    deltaMergeState: status.deltaMergeState || null,
-  };
+  return compactWorkflowStatusForLive(status, configFile);
 }
 
 function buildLiveSnapshot(workflowStatusesFallback: Record<string, any> = {}) {
@@ -123,18 +86,28 @@ export async function GET(request: NextRequest) {
     async start(controller) {
       let closed = false;
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+      const handlers: Record<string, (data: any) => void> = {};
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        for (const evt of eventTypes) {
+          workflowRegistry.off(evt, handlers[evt]);
+        }
+        engineStreamStateEvents.off('change', onEngineStreamState);
+        chatSessionEvents.off('change', onChatSessionEvent);
+      };
       const sendEvent = (data: any) => {
         if (closed) return;
         const message = `data: ${JSON.stringify(data)}\n\n`;
         try {
           controller.enqueue(encoder.encode(message));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
       // Normalized event handlers — forward from registry which tags with __configFile
-      const handlers: Record<string, (data: any) => void> = {};
       const eventTypes = [
         'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
         'iteration', 'iteration-complete', 'escalation', 'token-usage',
@@ -160,6 +133,7 @@ export async function GET(request: NextRequest) {
       for (const evt of eventTypes) {
         handlers[evt] = (data: any) => {
           const { __configFile, ...rest } = data;
+          const compactRest = compactWorkflowEventPayloadForLive(rest) as any;
           const mappedType = smTypeMap[evt];
           const configFile = typeof __configFile === 'string' ? __configFile : undefined;
           const statusSnapshot = getWorkflowStatusSnapshot(configFile);
@@ -171,8 +145,8 @@ export async function GET(request: NextRequest) {
             sendEvent({
               type: 'phase',
               data: {
-                phase: rest.state,
-                message: rest.message,
+                phase: compactRest.state,
+                message: compactRest.message,
                 configFile,
                 statusSnapshot,
               },
@@ -181,8 +155,8 @@ export async function GET(request: NextRequest) {
             sendEvent({
               type: 'step',
               data: {
-                ...rest,
-                step: `${rest.state}-${rest.step}`,
+                ...compactRest,
+                step: `${compactRest.state}-${compactRest.step}`,
                 configFile,
                 statusSnapshot,
               },
@@ -191,8 +165,8 @@ export async function GET(request: NextRequest) {
             sendEvent({
               type: 'result',
               data: {
-                ...rest,
-                step: `${rest.state}-${rest.step}`,
+                ...compactRest,
+                step: `${compactRest.state}-${compactRest.step}`,
                 configFile,
                 statusSnapshot,
               },
@@ -201,7 +175,7 @@ export async function GET(request: NextRequest) {
             sendEvent({
               type: mappedType || evt,
               data: {
-                ...rest,
+                ...compactRest,
                 configFile,
                 statusSnapshot,
               },
@@ -234,14 +208,7 @@ export async function GET(request: NextRequest) {
       chatSessionEvents.on('change', onChatSessionEvent);
 
       request.signal.addEventListener('abort', () => {
-        if (closed) return;
-        closed = true;
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        for (const evt of eventTypes) {
-          workflowRegistry.off(evt, handlers[evt]);
-        }
-        engineStreamStateEvents.off('change', onEngineStreamState);
-        chatSessionEvents.off('change', onChatSessionEvent);
+        cleanup();
         try {
           controller.close();
         } catch {}

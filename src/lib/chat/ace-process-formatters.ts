@@ -216,17 +216,21 @@ function parseJsonText(text: string): any | null {
   }
 }
 
-function normalizePlanEntries(value: unknown): Array<{ content: string; status?: string }> {
+function normalizePlanEntries(value: unknown): Array<{ content: string; status?: string; description?: string; priority?: string }> {
   const root = typeof value === 'string' ? parseJsonText(value) : value;
   if (!root || typeof root !== 'object') return [];
-  const obj = root as UnknownRecord;
-  const entries: unknown[] = Array.isArray(obj.entries)
-    ? obj.entries
-    : obj.plan && typeof obj.plan === 'object' && Array.isArray((obj.plan as UnknownRecord).entries)
-      ? ((obj.plan as UnknownRecord).entries as unknown[])
-      : Array.isArray(obj.todos)
-        ? obj.todos
-        : [];
+  const entries: unknown[] = Array.isArray(root)
+    ? root
+    : (() => {
+        const obj = root as UnknownRecord;
+        return Array.isArray(obj.entries)
+          ? obj.entries
+          : obj.plan && typeof obj.plan === 'object' && Array.isArray((obj.plan as UnknownRecord).entries)
+            ? ((obj.plan as UnknownRecord).entries as unknown[])
+            : Array.isArray(obj.todos)
+              ? obj.todos
+              : [];
+      })();
   return entries
     .map((entry: unknown) => {
       if (!entry || typeof entry !== 'object') return null;
@@ -234,15 +238,19 @@ function normalizePlanEntries(value: unknown): Array<{ content: string; status?:
       const content = String(row.content || row.title || row.task || row.description || '').trim();
       if (!content) return null;
       const status = String(row.status || '').trim();
+      const description = String(row.description || row.details || '').trim();
+      const priority = String(row.priority || '').trim();
       return {
         content,
         ...(status ? { status } : {}),
+        ...(description && description !== content ? { description } : {}),
+        ...(priority ? { priority } : {}),
       };
     })
-    .filter((entry): entry is { content: string; status?: string } => Boolean(entry));
+    .filter((entry): entry is { content: string; status?: string; description?: string; priority?: string } => Boolean(entry));
 }
 
-function extractPlanEntriesFromRawOutput(raw: unknown): Array<{ content: string; status?: string }> {
+function extractPlanEntriesFromRawOutput(raw: unknown): Array<{ content: string; status?: string; description?: string; priority?: string }> {
   const direct = normalizePlanEntries(raw);
   if (direct.length > 0) return direct;
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -574,7 +582,7 @@ export function formatAceToolResult(params: {
     return formatAceSubtaskResult({ resultText: text, toolId: params.toolId });
   }
 
-  if (toolName === 'plan') {
+  if (toolName === 'plan' || toolName === 'todo' || toolName === 'todowrite') {
     const todos = extractPlanEntriesFromRawOutput(raw);
     if (todos.length > 0) {
       return appendToolIdToAceBlock(wrapAceProcessBlock('tool-result', {

@@ -1,13 +1,10 @@
-import { existsSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { parse } from 'yaml';
 import { canAccessConfigMeta, listConfigsWithMeta } from '@/lib/config/metadata';
-import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
+import { listRunSummaryCaches } from '@/lib/run/summary-cache';
 import { loadUsers } from '@/lib/core/user-store';
-
-const RUNS_DIR = getWorkspaceRunsDir();
 
 export interface TokenUsageSummary {
   inputTokens: number;
@@ -50,39 +47,6 @@ export function getSafeTime(value: unknown): number {
   if (typeof value !== 'string' || !value) return 0;
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : 0;
-}
-
-function isValidRunState(state: any): state is {
-  runId?: string;
-  configFile?: string;
-  startTime?: string;
-  endTime?: string | null;
-  status?: string;
-  currentPhase?: string | null;
-  completedSteps?: any[];
-  failedSteps?: any[];
-  stepLogs?: any[];
-  agents?: any[];
-  runOwnerName?: string;
-  createdByName?: string;
-  runOwnerId?: string;
-  createdBy?: string;
-} {
-  return !!state && typeof state === 'object' && !Array.isArray(state);
-}
-
-function numberOrZero(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
-function readTokenUsage(source: any): TokenUsageSummary {
-  const usage = source?.tokenUsage || source || {};
-  return {
-    inputTokens: numberOrZero(usage.inputTokens),
-    outputTokens: numberOrZero(usage.outputTokens),
-    cacheCreationInputTokens: numberOrZero(usage.cacheCreationInputTokens),
-    cacheReadInputTokens: numberOrZero(usage.cacheReadInputTokens),
-  };
 }
 
 function addUsage(target: TokenUsageSummary, usage: TokenUsageSummary): void {
@@ -178,32 +142,6 @@ function getRunOwnerName(state: any, ownerNameById: Record<string, string>, lega
 
   const legacyOwner = stringValue(state?.createdBy) || stringValue(state?.runOwnerId);
   return legacyOwner || legacyDefaultOwnerName || '未知用户';
-}
-
-function getRunOwnerId(state: any): string {
-  return stringValue(state?.runOwnerId) || stringValue(state?.createdBy);
-}
-
-function getRunTokenUsage(state: any): { usage: TokenUsageSummary; cost: number } {
-  const usage: TokenUsageSummary = { inputTokens: 0, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 };
-  let cost = 0;
-
-  if (Array.isArray(state?.stepLogs) && state.stepLogs.length > 0) {
-    for (const log of state.stepLogs) {
-      addUsage(usage, readTokenUsage(log));
-      cost += numberOrZero(log?.costUsd);
-    }
-    return { usage, cost };
-  }
-
-  if (Array.isArray(state?.agents)) {
-    for (const ag of state.agents) {
-      addUsage(usage, readTokenUsage(ag));
-      cost += numberOrZero(ag?.costUsd);
-    }
-  }
-
-  return { usage, cost };
 }
 
 export async function readAccessibleConfigNameMap(userId: string, role: 'admin' | 'user'): Promise<Record<string, string>> {
@@ -338,45 +276,20 @@ export async function readAllRunsSummary() {
   const configMetaMap: Record<string, { createdBy?: string }> = await listConfigsWithMeta('workflow').catch(() => ({}));
   const configNameMap: Record<string, string> = await readAccessibleConfigNameMap('', 'admin').catch(() => ({}));
 
-  if (!existsSync(RUNS_DIR)) {
-    return {
-      runs,
-      agentUsage,
-      tokenRankingByUser: [],
-      tokenRankingByWorkflow: [],
-    };
-  }
+  const summaries = await listRunSummaryCaches();
+  summaries.sort((a, b) => getSafeTime(b.startTime) - getSafeTime(a.startTime));
 
-  const entries = await readdir(RUNS_DIR, { withFileTypes: true });
-  const dirs = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'));
-  const results = await Promise.all(
-    dirs.map(async (entry) => {
-      const stateFile = resolve(RUNS_DIR, entry.name, 'state.yaml');
-      if (!existsSync(stateFile)) return null;
-      try {
-        const content = await readFile(stateFile, 'utf-8');
-        const state = parse(content);
-        if (!isValidRunState(state)) return null;
-        return { dirName: entry.name, state };
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  const valid = results.filter(Boolean) as { dirName: string; state: NonNullable<ReturnType<typeof parse>> }[];
-  valid.sort((a, b) => getSafeTime(b.state.startTime) - getSafeTime(a.state.startTime));
-
-  for (const { state } of valid) {
-    const { usage, cost } = getRunTokenUsage(state);
+  for (const summary of summaries) {
+    const usage = summary.tokenUsage;
+    const cost = summary.cost;
     const runTotalTokens = totalTokens(usage);
-    const configFile = state.configFile || '';
+    const configFile = summary.configFile || '';
     const configMetaOwnerId = stringValue(configMetaMap[configFile]?.createdBy);
-    const stateOwnerId = getRunOwnerId(state);
+    const stateOwnerId = summary.ownerId || '';
     const ownerId = stateOwnerId || configMetaOwnerId;
     const ownerName = getRunOwnerName(
       {
-        ...state,
+        runOwnerName: summary.ownerName,
         runOwnerId: stateOwnerId || configMetaOwnerId,
         createdBy: stateOwnerId || configMetaOwnerId,
       },
@@ -386,15 +299,15 @@ export async function readAllRunsSummary() {
     const workflowName = configNameMap[configFile] || configFile || '未知工作流';
 
     runs.push({
-      id: state.runId || '',
+      id: summary.runId || summary.id || '',
       configFile,
       configName: workflowName,
-      startTime: state.startTime || '',
-      endTime: state.endTime || null,
-      status: state.status || 'unknown',
-      currentPhase: state.currentPhase || null,
-      totalSteps: (state.completedSteps?.length || 0) + (state.failedSteps?.length || 0),
-      completedSteps: state.completedSteps?.length || 0,
+      startTime: summary.startTime || '',
+      endTime: summary.endTime || null,
+      status: summary.status || 'unknown',
+      currentPhase: summary.currentPhase || null,
+      totalSteps: summary.totalSteps,
+      completedSteps: summary.completedSteps,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       cacheCreationInputTokens: usage.cacheCreationInputTokens,
@@ -409,24 +322,11 @@ export async function readAllRunsSummary() {
 
   const { tokenRankingByUser, tokenRankingByWorkflow } = buildTokenRankingsForRuns(runs);
 
-  for (const { state } of valid.slice(0, 50)) {
-    if (state.stepLogs) {
-      for (const log of state.stepLogs) {
-        if (!log.agent) continue;
-        if (!agentUsage[log.agent]) agentUsage[log.agent] = { calls: 0, cost: 0 };
-        agentUsage[log.agent].calls += 1;
-        agentUsage[log.agent].cost += log.costUsd || 0;
-      }
-    }
-    if (state.agents) {
-      for (const ag of state.agents) {
-        if (!ag.name) continue;
-        if (!agentUsage[ag.name]) agentUsage[ag.name] = { calls: 0, cost: 0 };
-        if (agentUsage[ag.name].calls === 0) {
-          agentUsage[ag.name].calls = ag.completedTasks || 0;
-          agentUsage[ag.name].cost = ag.costUsd || 0;
-        }
-      }
+  for (const summary of summaries.slice(0, 50)) {
+    for (const [agent, usage] of Object.entries(summary.agentUsage)) {
+      if (!agentUsage[agent]) agentUsage[agent] = { calls: 0, cost: 0 };
+      agentUsage[agent].calls += usage.calls;
+      agentUsage[agent].cost += usage.cost;
     }
   }
 

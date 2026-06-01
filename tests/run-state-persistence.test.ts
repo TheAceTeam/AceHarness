@@ -130,6 +130,60 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('saveRunState writes compact summary cache for history lists', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState } = await loadPersistence();
+      const { listRuns } = await import('@/lib/run/store');
+
+      const state = minimalRunState({
+        runId: 'run-summary-cache',
+        configFile: 'summary-workflow.yaml',
+        workflowName: 'Summary Workflow',
+        status: 'completed',
+        currentPhase: 'Done',
+        completedSteps: ['Done-Step A'],
+        failedSteps: [],
+        stepLogs: [{
+          id: 'log-1',
+          stepName: 'Done-Step A',
+          agent: 'developer',
+          status: 'completed',
+          output: 'large output should stay in state.yaml only',
+          error: '',
+          costUsd: 0.25,
+          durationMs: 100,
+          timestamp: new Date().toISOString(),
+          tokenUsage: {
+            inputTokens: 120,
+            outputTokens: 80,
+            cacheCreationInputTokens: 10,
+            cacheReadInputTokens: 5,
+          },
+        }],
+      });
+
+      await saveRunState(state);
+
+      const summaryPath = resolve(aceHome, 'runs', state.runId, 'summary.json');
+      expect(existsSync(summaryPath)).toBe(true);
+      const summary = JSON.parse(await readFile(summaryPath, 'utf-8'));
+      expect(summary.runId).toBe(state.runId);
+      expect(summary.configFile).toBe('summary-workflow.yaml');
+      expect(summary.totalTokens).toBe(215);
+      expect(summary.cost).toBe(0.25);
+      expect(summary.stepLogs).toBeUndefined();
+
+      const runs = await listRuns();
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        id: state.runId,
+        configName: 'Summary Workflow',
+        completedSteps: 1,
+        totalTokens: 215,
+      });
+    });
+  });
+
   test('saveProcessOutput writes output file and loadStepOutputs reads it back', async () => {
     await withIsolatedAceHome(async () => {
       const { saveRunState, saveProcessOutput, loadStepOutputs } = await loadPersistence();

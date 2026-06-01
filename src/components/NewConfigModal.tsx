@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type Ref } from 'react';
 import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
 import { useForm, type FieldErrors } from 'react-hook-form';
@@ -25,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import WorkflowModeSelector from './WorkflowModeSelector';
 import { EngineModelSelect } from './EngineModelSelect';
 import { ComboboxPortalProvider } from './ui/combobox';
@@ -70,6 +71,7 @@ import { useChat } from '@/contexts/ChatContext';
 import { agentApi } from '@/lib/core/api';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
+import { cn } from '@/lib/core/utils';
 
 const MonacoEditor = dynamic(
   async () => {
@@ -1465,43 +1467,43 @@ function PlanningContextSnapshot({
   ].filter(Boolean).join('\n');
 
   return (
-    <div className={`grid gap-3 ${showClarification ? 'lg:grid-cols-2' : ''}`}>
-      <div className="rounded-xl border bg-muted/20 p-3">
-        <div className="mb-2 flex items-center gap-2 text-xs font-medium">
+    <div className="space-y-5 text-xs">
+      <section className="space-y-3">
+        <div className="flex items-center gap-2 font-medium text-foreground">
           <span className="material-symbols-outlined text-sm text-amber-500">looks_one</span>
-          步骤 1：基础输入
+          基础输入
         </div>
-        <div className="grid gap-2 text-xs sm:grid-cols-2">
+        <div className="divide-y rounded-lg border bg-background">
           {baseRows.map((row) => (
-            <div key={row.label} className="min-w-0">
-              <div className="text-[10px] text-muted-foreground">{row.label}</div>
-              <div className="truncate text-foreground" title={row.value}>{row.value}</div>
+            <div key={row.label} className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+              <div className="text-muted-foreground">{row.label}</div>
+              <div className="min-w-0 truncate text-foreground" title={row.value}>{row.value}</div>
             </div>
           ))}
         </div>
         {requirementText ? (
-          <div className="mt-2 rounded-lg bg-background/70 p-2 text-xs leading-6 text-muted-foreground whitespace-pre-wrap break-words">
+          <div className="border-l-2 border-amber-500/50 bg-amber-500/5 px-3 py-2.5 leading-6 text-muted-foreground whitespace-pre-wrap break-words">
             {requirementText}
           </div>
         ) : null}
-      </div>
+      </section>
 
       {showClarification ? (
-        <div className="rounded-xl border bg-muted/20 p-3">
-        <div className="mb-2 flex items-center gap-2 text-xs font-medium">
-          <span className="material-symbols-outlined text-sm text-amber-500">looks_two</span>
-          步骤 2：补充问答
-        </div>
-        {clarificationSummary ? (
-            <div className="rounded-lg bg-background/70 p-2 text-xs leading-6 text-muted-foreground whitespace-pre-wrap break-words">
+        <section className="space-y-3">
+          <div className="flex items-center gap-2 font-medium text-foreground">
+            <span className="material-symbols-outlined text-sm text-amber-500">looks_two</span>
+            补充问答
+          </div>
+          {clarificationSummary ? (
+            <div className="border-l-2 border-primary/40 bg-primary/5 px-3 py-2.5 leading-6 text-muted-foreground whitespace-pre-wrap break-words">
               {clarificationSummary}
             </div>
           ) : (
-            <div className="rounded-lg bg-background/70 p-2 text-xs leading-5 text-muted-foreground">
+            <div className="rounded-lg border border-dashed px-3 py-3 leading-5 text-muted-foreground">
               暂无补充问答内容。
             </div>
           )}
-        </div>
+        </section>
       ) : null}
     </div>
   );
@@ -1906,38 +1908,36 @@ function CreationStageStepper({ currentStep }: { currentStep: 1 | 2 | 3 | 4 }) {
   ];
 
   return (
-    <div className="grid grid-cols-4 gap-3 rounded-xl border bg-muted/20 p-4">
-        {items.map((item) => {
-          const state = item.step < currentStep ? 'done' : item.step === currentStep ? 'current' : 'pending';
-          return (
-            <div
-              key={item.step}
-              className={`min-w-0 rounded-xl border p-3 transition-colors ${
-                state === 'current'
-                  ? 'border-primary bg-primary/5'
-                  : state === 'done'
-                    ? 'border-emerald-500/40 bg-emerald-500/5'
-                    : 'border-border bg-background'
-              }`}
-            >
-              <div className="flex items-center gap-2 whitespace-nowrap">
-                <div
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
-                    state === 'current'
-                      ? 'bg-primary text-primary-foreground'
-                      : state === 'done'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-muted text-muted-foreground'
-                  }`}
-                >
-                  {state === 'done' ? '✓' : item.step}
-                </div>
-                <div className="truncate text-sm font-medium">{item.title}</div>
+    <div className="grid grid-cols-4 overflow-hidden rounded-lg border bg-background">
+      {items.map((item, index) => {
+        const state = item.step < currentStep ? 'done' : item.step === currentStep ? 'current' : 'pending';
+        return (
+          <div
+            key={item.step}
+            className={cn(
+              'min-w-0 px-3 py-2.5 transition-colors',
+              index > 0 && 'border-l',
+              state === 'current' && 'bg-primary/5',
+              state === 'done' && 'bg-emerald-500/5',
+            )}
+          >
+            <div className="flex items-center gap-2 whitespace-nowrap">
+              <div
+                className={cn(
+                  'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold',
+                  state === 'current' && 'bg-primary text-primary-foreground',
+                  state === 'done' && 'bg-emerald-600 text-white',
+                  state === 'pending' && 'bg-muted text-muted-foreground',
+                )}
+              >
+                {state === 'done' ? '✓' : item.step}
               </div>
-              <div className="mt-2 hidden truncate whitespace-nowrap text-xs text-muted-foreground xl:block">{item.description}</div>
+              <div className="truncate text-sm font-medium">{item.title}</div>
             </div>
-          );
-        })}
+            <div className="mt-1 hidden truncate whitespace-nowrap text-[11px] text-muted-foreground xl:block">{item.description}</div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2300,6 +2300,270 @@ function WorkflowCreationProgressPanel({
   );
 }
 
+type CreationWorkspaceStatusTone = 'amber' | 'blue' | 'emerald' | 'green' | 'muted';
+
+function CreationWorkspaceStatus({
+  label,
+  tone = 'muted',
+  spinning = false,
+}: {
+  label?: string;
+  tone?: CreationWorkspaceStatusTone;
+  spinning?: boolean;
+}) {
+  if (!label) return null;
+  const toneClassName: Record<CreationWorkspaceStatusTone, string> = {
+    amber: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+    blue: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300',
+    emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    green: 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-300',
+    muted: 'border-border bg-muted/50 text-muted-foreground',
+  };
+
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-normal', toneClassName[tone])}>
+      {spinning ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+      {label}
+    </span>
+  );
+}
+
+function CreationWorkspaceShell({
+  currentStep,
+  title,
+  subtitle,
+  icon,
+  iconClassName,
+  statusLabel,
+  statusTone = 'muted',
+  statusSpinning = false,
+  engineControls,
+  onBack,
+  backTitle = '返回上一步',
+  fullscreen,
+  onToggleFullscreen,
+  onClose,
+  context,
+  contextCollapsed,
+  onToggleContext,
+  activity,
+  activityCollapsed,
+  onToggleActivity,
+  activityScrollRef,
+  resultTitle,
+  resultDescription,
+  resultMeta,
+  children,
+  footerLeft,
+  footerStatus,
+  footerRight,
+}: {
+  currentStep: 2 | 3 | 4;
+  title: string;
+  subtitle?: string;
+  icon: string;
+  iconClassName?: string;
+  statusLabel?: string;
+  statusTone?: CreationWorkspaceStatusTone;
+  statusSpinning?: boolean;
+  engineControls?: ReactNode;
+  onBack?: () => void;
+  backTitle?: string;
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+  onClose: () => void;
+  context: ReactNode;
+  contextCollapsed: boolean;
+  onToggleContext: () => void;
+  activity: ReactNode;
+  activityCollapsed: boolean;
+  onToggleActivity: () => void;
+  activityScrollRef?: Ref<HTMLDivElement>;
+  resultTitle: string;
+  resultDescription?: string;
+  resultMeta?: ReactNode;
+  children: ReactNode;
+  footerLeft?: ReactNode;
+  footerStatus?: ReactNode;
+  footerRight?: ReactNode;
+}) {
+  const centerDefaultSize = contextCollapsed && activityCollapsed
+    ? '100%'
+    : contextCollapsed && !activityCollapsed
+      ? '76%'
+      : !contextCollapsed && activityCollapsed
+        ? '78%'
+        : '54%';
+  const canUseResizablePanels = typeof window !== 'undefined' && typeof window.ResizeObserver === 'function';
+
+  const contextRail = (
+    <aside className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-4">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          <span className="material-symbols-outlined text-base text-amber-500">subject</span>
+          <span className="truncate">输入上下文</span>
+        </div>
+        <CollapsePanelButton collapsed={false} onClick={onToggleContext} label="输入上下文" />
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {context}
+      </div>
+    </aside>
+  );
+
+  const resultPanel = (
+    <main className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex min-h-[3rem] shrink-0 items-start justify-between gap-3 border-b px-5 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-base text-primary">dashboard_customize</span>
+            <div className="truncate text-sm font-medium">{resultTitle}</div>
+          </div>
+          {resultDescription ? (
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">{resultDescription}</div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          {resultMeta}
+          {contextCollapsed ? (
+            <Button type="button" variant="outline" size="sm" onClick={onToggleContext} className="h-8 gap-1.5">
+              <span className="material-symbols-outlined text-sm">left_panel_open</span>
+              上下文
+            </Button>
+          ) : null}
+          {activityCollapsed ? (
+            <Button type="button" variant="outline" size="sm" onClick={onToggleActivity} className="h-8 gap-1.5">
+              <span className="material-symbols-outlined text-sm">right_panel_open</span>
+              过程
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+        {children}
+      </div>
+    </main>
+  );
+
+  const activityRail = (
+    <aside className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-4">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+          <span className="material-symbols-outlined text-base text-blue-500">auto_awesome</span>
+          <span className="truncate">AI 过程</span>
+        </div>
+        <CollapsePanelButton collapsed={false} onClick={onToggleActivity} label="AI 过程" />
+      </div>
+      <div ref={activityScrollRef} className="min-h-0 flex-1 overflow-auto p-4">
+        {activity}
+      </div>
+    </aside>
+  );
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div className="border-b bg-background/95 px-5 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              {onBack ? (
+                <Button type="button" variant="ghost" size="icon" onClick={onBack} title={backTitle} className="h-8 w-8 shrink-0">
+                  <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                </Button>
+              ) : null}
+              <span className={cn('material-symbols-outlined text-[20px]', iconClassName)}>{icon}</span>
+              <DialogTitle className="truncate text-base">{title}</DialogTitle>
+              <CreationWorkspaceStatus label={statusLabel} tone={statusTone} spinning={statusSpinning} />
+            </div>
+            {subtitle ? (
+              <div className="mt-1 line-clamp-1 pl-10 text-xs leading-5 text-muted-foreground">{subtitle}</div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {engineControls}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleFullscreen}
+              title={fullscreen ? '退出全屏' : '全屏'}
+              className="h-8 w-8"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {fullscreen ? 'close_fullscreen' : 'open_in_full'}
+              </span>
+            </Button>
+            <Button type="button" variant="ghost" size="icon" onClick={onClose} className="h-8 w-8">
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </Button>
+          </div>
+        </div>
+        <div className="mt-3">
+          <CreationStageStepper currentStep={currentStep} />
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 bg-muted/25">
+        {canUseResizablePanels ? (
+          <ResizablePanelGroup
+            key={`${contextCollapsed ? 'context-off' : 'context-on'}-${activityCollapsed ? 'activity-off' : 'activity-on'}`}
+            orientation="horizontal"
+            className="h-full min-h-0"
+          >
+            {!contextCollapsed ? (
+              <>
+                <ResizablePanel id="creation-context" defaultSize="22%" minSize="16%" maxSize="32%" className="min-w-0">
+                  {contextRail}
+                </ResizablePanel>
+                <ResizableHandle withHandle className="bg-border/70" />
+              </>
+            ) : null}
+
+            <ResizablePanel id="creation-result" defaultSize={centerDefaultSize} minSize="34%" className="min-w-0">
+              {resultPanel}
+            </ResizablePanel>
+
+            {!activityCollapsed ? (
+              <>
+                <ResizableHandle withHandle className="bg-border/70" />
+                <ResizablePanel id="creation-activity" defaultSize="24%" minSize="18%" maxSize="36%" className="min-w-0">
+                  {activityRail}
+                </ResizablePanel>
+              </>
+            ) : null}
+          </ResizablePanelGroup>
+        ) : (
+          <div className="flex h-full min-h-0">
+            {!contextCollapsed ? (
+              <div className="min-w-[15rem] basis-[22%] border-r">
+                {contextRail}
+              </div>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              {resultPanel}
+            </div>
+            {!activityCollapsed ? (
+              <div className="min-w-[17rem] basis-[24%] border-l">
+                {activityRail}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background px-5 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          {footerLeft}
+          {footerStatus ? <div className="min-w-0 text-xs text-muted-foreground">{footerStatus}</div> : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {footerRight}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function NewConfigModal({
   isOpen,
   onClose,
@@ -2342,6 +2606,7 @@ export default function NewConfigModal({
   const [planWorkspaceFullscreen, setPlanWorkspaceFullscreen] = useState(false);
   const [creationFullscreen, setCreationFullscreen] = useState(false);
   const [creationContextCollapsed, setCreationContextCollapsed] = useState(false);
+  const [creationActivityCollapsed, setCreationActivityCollapsed] = useState(false);
   const [savingArtifact, setSavingArtifact] = useState(false);
   const [isRevisingPlan, setIsRevisingPlan] = useState(false);
   const [selectedSnapshotVersion, setSelectedSnapshotVersion] = useState<string>('current');
@@ -2505,7 +2770,7 @@ export default function NewConfigModal({
     : 'max-w-4xl flex flex-col p-0 max-h-[90vh]';
   const creationStageDialogClassName = creationFullscreen
     ? creationDialogClassName
-    : 'max-w-5xl flex h-[90vh] max-h-[90vh] flex-col p-0';
+    : 'flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[1600px] flex-col p-0';
   const planWorkspaceDialogClassName = planWorkspaceFullscreen
     ? 'flex h-screen max-h-none w-screen max-w-none flex-col p-0 sm:rounded-none'
     : 'flex h-[92vh] max-h-[92vh] w-[96vw] max-w-[96vw] flex-col p-0';
@@ -2905,7 +3170,7 @@ export default function NewConfigModal({
     scroller.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => scroller.removeEventListener('scroll', handleScroll);
-  }, [formStep, clarificationForm]);
+  }, [formStep, clarificationForm, creationActivityCollapsed]);
 
   // Auto-scroll streaming content only while the user stays near the bottom.
   useEffect(() => {
@@ -3088,6 +3353,7 @@ export default function NewConfigModal({
     setPlanWorkspaceFullscreen(false);
     setCreationFullscreen(false);
     setCreationContextCollapsed(false);
+    setCreationActivityCollapsed(false);
     setWorkflowCreationProgressState(createEmptyWorkflowCreationState());
     setWorkflowCreationProgressStage(null);
     setWorkflowCreationActiveStep(null);
@@ -5635,6 +5901,313 @@ export default function NewConfigModal({
     && aiPhase === 'waiting'
     && !isSavingWorkflowDraft;
 
+  const creationEngineControls = (
+    <EngineModelSelect
+      engine={aiEngine}
+      model={aiModel}
+      onEngineChange={handleAiEngineChange}
+      onModelChange={handleAiModelChange}
+      className="w-56"
+    />
+  );
+
+  const renderCreationContextPanel = (showClarification = false) => (
+    <PlanningContextSnapshot
+      workflowName={workflowNameValue}
+      filename={filenameValue}
+      workingDirectory={workingDirectoryValue}
+      workspaceMode={workspaceModeValue}
+      referenceWorkflow={effectiveReferenceWorkflowValue}
+      description={descriptionValue}
+      requirements={requirementsValue}
+      clarificationForm={clarificationForm}
+      clarificationAnswers={clarificationAnswers}
+      showClarification={showClarification}
+    />
+  );
+
+  const renderCreationActivityPanel = ({
+    showUserMessages = false,
+    title,
+    description,
+    isStreaming,
+    emptyLabel,
+  }: {
+    showUserMessages?: boolean;
+    title: string;
+    description: string;
+    isStreaming: boolean;
+    emptyLabel: string;
+  }) => (
+    <div className="space-y-4 pb-12">
+      {renderModalHistorySection({
+        showUserMessages,
+        tailContent: (
+          <>
+            {currentThinking || currentStream || isStreaming ? (
+              <ModalAiGenerationPanel
+                content={joinModalAiProcessContent(currentThinking, currentStream)}
+                isStreaming={isStreaming}
+                title={title}
+                description={description}
+                className="border-blue-500/20 bg-blue-500/5"
+              />
+            ) : null}
+            {!aiMessages.length && !currentThinking && !currentStream && !isStreaming ? (
+              <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-6 text-center text-xs leading-5 text-muted-foreground">
+                {emptyLabel}
+              </div>
+            ) : null}
+          </>
+        ),
+      })}
+      <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
+    </div>
+  );
+
+  const renderClarificationResultPanel = () => {
+    if (!clarificationForm) {
+      return (
+        <div className="flex min-h-[24rem] flex-col gap-4">
+          <WorkflowCreationProgressPanel
+            state={workflowCreationProgressState}
+            stage={workflowCreationProgressStage}
+            activeStep={workflowCreationActiveStep}
+            retryNotice={workflowCreationRetryNotice}
+            retryEvents={workflowCreationRetryEvents}
+          />
+          <div className="flex min-h-[16rem] flex-1 flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-amber-500" />
+            <div className="mt-3 text-sm font-medium">正在整理关键问题</div>
+            <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+              结构化问答生成后会直接出现在这里，右侧保留完整 AI 输出和自动修复记录。
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b pb-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">AI 补充问答表</div>
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">
+              已生成的问题可以先回答；AI 继续出题时，新问题会追加到下面。
+            </div>
+          </div>
+          {isGeneratingPlan ? (
+            <Badge variant="outline" className="gap-1.5">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              继续出题中
+            </Badge>
+          ) : (
+            <Badge variant="secondary">已生成 {clarificationForm.questions.length} 题</Badge>
+          )}
+          {clarificationForm.summary ? (
+            <div className="basis-full text-xs leading-5 text-muted-foreground">{clarificationForm.summary}</div>
+          ) : null}
+        </div>
+
+        {workflowCreationRetryNotice ? (
+          <WorkflowCreationRetryCallout
+            notice={workflowCreationRetryNotice}
+            events={workflowCreationRetryEvents}
+          />
+        ) : null}
+
+        {(clarificationForm.knownFacts?.length || clarificationForm.missingFields?.length) ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {clarificationForm.knownFacts?.length ? (
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <div className="text-xs font-medium">已确认信息</div>
+                <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                  {clarificationForm.knownFacts.map((item) => (
+                    <div key={item}>- {item}</div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {clarificationForm.missingFields?.length ? (
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <div className="text-xs font-medium">待补全信息</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {clarificationForm.missingFields.map((item) => (
+                    <Badge key={item} variant="outline">{item}</Badge>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="space-y-4">
+          {clarificationForm.questions.map((item, index) => (
+            <div key={item.id} className="space-y-3 rounded-lg border bg-background p-4">
+              {(() => {
+                const options = getClarificationQuestionOptions(item);
+                const selectionMode = item.selectionMode === 'multiple' ? 'multiple' : 'single';
+                return (
+                  <>
+                    <Label htmlFor={`clarification-${item.id}`} className="text-sm">
+                      {index + 1}. {item.label}
+                      {item.required !== false ? <span className="text-destructive"> *</span> : null}
+                    </Label>
+                    <div className="text-xs leading-5 text-muted-foreground">{item.question}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {selectionMode === 'multiple' ? '可多选，按需要勾选所有适用项。' : '单选，请选择最接近当前需求的一项。'}
+                    </div>
+                    <div className="grid gap-2">
+                      {options.map((option) => {
+                        const selected = clarificationAnswers[item.id]?.optionIds?.includes(option.id) || false;
+                        return (
+                          <label
+                            key={`${item.id}-${option.id}`}
+                            className={cn(
+                              'flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 transition-colors',
+                              selected
+                                ? 'border-primary bg-primary/5'
+                                : 'border-border bg-background hover:bg-muted/40',
+                            )}
+                          >
+                            {selectionMode === 'multiple' ? (
+                              <Checkbox
+                                checked={selected}
+                                onCheckedChange={(checked) => setClarificationAnswers((prev) => {
+                                  const current = prev[item.id]?.optionIds || [];
+                                  const nextOptionIds = checked
+                                    ? [...new Set([...current, option.id])]
+                                    : current.filter((id) => id !== option.id);
+                                  return {
+                                    ...prev,
+                                    [item.id]: {
+                                      optionIds: nextOptionIds,
+                                      note: prev[item.id]?.note || '',
+                                    },
+                                  };
+                                })}
+                                className="mt-0.5"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className="mt-0.5"
+                                onClick={() => setClarificationAnswers((prev) => ({
+                                  ...prev,
+                                  [item.id]: {
+                                    optionIds: [option.id],
+                                    note: prev[item.id]?.note || '',
+                                  },
+                                }))}
+                              >
+                                <div className={cn('h-4 w-4 rounded-full border', selected ? 'border-primary' : 'border-muted-foreground/40')}>
+                                  <div className={cn('m-[3px] h-2 w-2 rounded-full', selected ? 'bg-primary' : 'bg-transparent')} />
+                                </div>
+                              </button>
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-medium">{option.label}</div>
+                                {option.recommended ? <Badge variant="secondary">推荐</Badge> : null}
+                              </div>
+                              {option.description ? (
+                                <div className="mt-2 text-xs leading-5 text-muted-foreground">{option.description}</div>
+                              ) : null}
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <Textarea
+                      id={`clarification-${item.id}`}
+                      rows={4}
+                      value={clarificationAnswers[item.id]?.note || ''}
+                      placeholder={item.placeholder || '请输入你的回答'}
+                      onChange={(event) => setClarificationAnswers((prev) => ({
+                        ...prev,
+                        [item.id]: {
+                          optionIds: prev[item.id]?.optionIds || [],
+                          note: event.target.value,
+                        },
+                      }))}
+                    />
+                    <div className="text-[11px] leading-5 text-muted-foreground">
+                      先选一个最接近的方案；如果需要补充边界、例外或更具体的要求，再在下方补充说明。
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderSpecPlanResultPanel = () => (
+    <div className="space-y-4">
+      <WorkflowCreationProgressPanel
+        state={workflowCreationProgressState}
+        stage={workflowCreationProgressStage}
+        activeStep={workflowCreationActiveStep}
+        retryNotice={workflowCreationRetryNotice}
+        retryEvents={workflowCreationRetryEvents}
+      />
+      {!workflowCreationProgressState.spec.requirements.length
+        && !workflowCreationProgressState.spec.tasks.length
+        && !workflowCreationProgressState.spec.design.overview ? (
+          <div className="flex min-h-[24rem] flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-amber-500" />
+            <div className="mt-3 text-sm font-medium">正在生成正式计划制品</div>
+            <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+              requirements、design、tasks 的结构化结果会实时填充到这里，右侧显示完整生成过程。
+            </div>
+          </div>
+        ) : null}
+    </div>
+  );
+
+  const renderWorkflowDraftResultPanel = () => (
+    <div className="space-y-4">
+      <WorkflowDraftPreviewCard preview={workflowDraftPreview} />
+      <WorkflowCreationProgressPanel
+        state={workflowCreationProgressState}
+        stage={workflowCreationProgressStage}
+        activeStep={workflowCreationActiveStep}
+        retryNotice={workflowCreationRetryNotice}
+        retryEvents={workflowCreationRetryEvents}
+      />
+      {!workflowDraftPreview ? (
+        <div className="flex min-h-[22rem] flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 px-6 text-center">
+          {aiPhase === 'streaming' ? <Loader2 className="h-6 w-6 animate-spin text-green-500" /> : <span className="material-symbols-outlined text-3xl text-muted-foreground">account_tree</span>}
+          <div className="mt-3 text-sm font-medium">等待 workflow 草案</div>
+          <div className="mt-1 max-w-md text-xs leading-5 text-muted-foreground">
+            草案通过解析后会在这里展示结构、Agent 分工、校验结果和 YAML。
+          </div>
+        </div>
+      ) : null}
+      {aiPhase === 'waiting' && validatedWorkflowDraftConfig && !aiFilename ? (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+          系统已校验 workflow 草案，点击“确认创建”后写入 configs/{getValues('filename')}。
+        </div>
+      ) : null}
+      {aiPhase === 'waiting' && workflowDraftValidation && !workflowDraftValidation.ok ? (
+        <div className="space-y-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          <div>workflow 草案未通过系统校验。请查看校验信息并重新生成草案。</div>
+          {Array.isArray(workflowDraftValidation?.issues) && workflowDraftValidation.issues.length > 0 ? (
+            <div className="space-y-1">
+              {workflowDraftValidation.issues.map((issue: any, index: number) => (
+                <div key={`${issue.path?.join('.') || 'root'}-${index}`}>
+                  {index + 1}. {issue.path?.join('.') || '(root)'}: {issue.message}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
   if (formStep === 2) {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
@@ -5643,12 +6216,17 @@ export default function NewConfigModal({
           className={creationStageDialogClassName}
         >
           <ComboboxPortalProvider>
-          <div className="px-6 pt-6">
-            <CreationStageStepper currentStep={2} />
-          </div>
-          <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="ghost" size="icon" onClick={() => {
+            <CreationWorkspaceShell
+              currentStep={2}
+              title="补充问答"
+              subtitle="先补全会影响计划和 Agent 编排的关键信息，然后再生成正式计划。"
+              icon="route"
+              iconClassName="text-amber-500"
+              statusLabel={isGeneratingPlan ? '分析中' : clarificationForm ? `已生成 ${clarificationForm.questions.length} 题` : '等待问题'}
+              statusTone={isGeneratingPlan ? 'amber' : clarificationForm ? 'emerald' : 'muted'}
+              statusSpinning={isGeneratingPlan}
+              engineControls={creationEngineControls}
+              onBack={() => {
                 interruptPlanningRun();
                 setAiMessages([]);
                 setAiPhase('idle');
@@ -5656,324 +6234,58 @@ export default function NewConfigModal({
                 setClarificationForm(null);
                 setClarificationAnswers({});
                 setFormStep(1);
-              }} title="返回上一步">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </Button>
-              <DialogTitle className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-500">route</span>
-                补充问答
-                {isGeneratingPlan ? (
-                  <span className="inline-flex items-center gap-1 text-sm text-muted-foreground font-normal">
-                    <span className="animate-pulse text-amber-500">●</span> 分析中...
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-sm text-muted-foreground font-normal">
-                    先补全关键信息，再生成正式计划
-                  </span>
-                )}
-              </DialogTitle>
-            </div>
-            <div className="flex items-center gap-2">
-              <EngineModelSelect
-                engine={aiEngine}
-                model={aiModel}
-                onEngineChange={handleAiEngineChange}
-                onModelChange={handleAiModelChange}
-                className="w-56"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setCreationFullscreen((prev) => !prev)}
-                title={creationFullscreen ? '退出全屏' : '全屏'}
-              >
-                <span className="material-symbols-outlined">
-                  {creationFullscreen ? 'close_fullscreen' : 'open_in_full'}
-                </span>
-              </Button>
-              <Button type="button" variant="ghost" size="icon" onClick={handleClose}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-6">
-            <div className="flex-shrink-0 text-xs leading-5 text-muted-foreground">
-              AI 会先提出会影响后续计划和 Agent 编排的关键问题。你用表单补全后，系统才会继续生成正式计划。
-            </div>
-            {!clarificationForm ? (
-              <div className="mt-4 flex-shrink-0 overflow-hidden rounded-xl border bg-muted/10">
-                <div className="flex items-center justify-between gap-3 border-b bg-background/70 px-4 py-2.5">
-                  <div className="flex items-center gap-2 text-xs font-medium">
-                    <span className="material-symbols-outlined text-sm text-amber-500">info</span>
-                    创建上下文
-                  </div>
-                  <CollapsePanelButton
-                    collapsed={creationContextCollapsed}
-                    onClick={() => setCreationContextCollapsed((prev) => !prev)}
-                    label="创建上下文"
-                  />
-                </div>
-                {!creationContextCollapsed ? (
-                  <div className="max-h-[28vh] overflow-auto px-4 py-3">
-                    <PlanningContextSnapshot
-                      workflowName={workflowNameValue}
-                      filename={filenameValue}
-                      workingDirectory={workingDirectoryValue}
-                      workspaceMode={workspaceModeValue}
-                      referenceWorkflow={effectiveReferenceWorkflowValue}
-                      description={descriptionValue}
-                      requirements={requirementsValue}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            <div
-              ref={!clarificationForm ? streamContentRef : undefined}
-              className={`relative mt-4 min-h-[26rem] flex-1 overflow-hidden rounded-xl border bg-background ${
-                clarificationForm ? 'p-4' : ''
-              }`}
+              }}
+              backTitle="返回基础输入"
+              fullscreen={creationFullscreen}
+              onToggleFullscreen={() => setCreationFullscreen((prev) => !prev)}
+              onClose={handleClose}
+              context={renderCreationContextPanel(false)}
+              contextCollapsed={creationContextCollapsed}
+              onToggleContext={() => setCreationContextCollapsed((prev) => !prev)}
+              activity={renderCreationActivityPanel({
+                title: '生成补充问答表',
+                description: clarificationForm
+                  ? 'AI 还在继续整理后续问题；已出现的问题可以先回答。'
+                  : 'AI 正在整理已知事实、缺失信息和需要确认的问题。',
+                isStreaming: isGeneratingPlan,
+                emptyLabel: 'AI 过程会在这里出现。',
+              })}
+              activityCollapsed={creationActivityCollapsed}
+              onToggleActivity={() => setCreationActivityCollapsed((prev) => !prev)}
+              activityScrollRef={streamContentRef}
+              resultTitle="问答结果"
+              resultDescription="中间区域只放可操作的结构化问答，生成过程移到右侧，避免把表单挤到下面。"
+              resultMeta={clarificationForm ? <Badge variant="outline">{planningStage === 'awaiting-answers' ? '等待回答' : '可继续补充'}</Badge> : null}
+              footerStatus={clarificationForm ? '回答完成后进入正式计划生成。' : 'AI 会先提出会影响后续计划和 Agent 编排的关键问题。'}
+              footerRight={isGeneratingPlan ? (
+                <Button type="button" variant="outline" onClick={() => {
+                  clarificationAbortRef.current = true;
+                  interruptPlanningRun();
+                  setAiPhase('waiting');
+                  setPlanningStage('idle');
+                  setWorkflowCreationActiveStep(null);
+                  void persistDraftUiState({
+                    formStep: 2,
+                    planningStage: 'idle',
+                    clarificationForm,
+                    clarificationAnswers,
+                  });
+                }}>
+                  停止出题
+                </Button>
+              ) : (
+                <>
+                  <Button type="button" variant="outline" onClick={() => void generateClarificationWithChatSession()}>
+                    重新提问
+                  </Button>
+                  <Button type="button" onClick={() => void handleSubmitClarificationAnswers()} disabled={!canSubmitClarificationAnswers}>
+                    {canSubmitClarificationAnswers ? '提交回答并生成计划' : '出题完成后可继续'}
+                  </Button>
+                </>
+              )}
             >
-                {clarificationForm ? (
-                  <>
-                  <div ref={streamContentRef} className="h-full overflow-y-auto space-y-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium">AI 补充问答表</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          已生成的问题可以先回答；AI 继续出题时，新问题会追加到下面。
-                        </div>
-                      </div>
-                      {isGeneratingPlan ? (
-                        <Badge variant="outline" className="gap-1.5">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          继续出题中
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">已生成 {clarificationForm.questions.length} 题</Badge>
-                      )}
-                      {clarificationForm.summary ? (
-                        <div className="basis-full text-xs leading-5 text-muted-foreground">{clarificationForm.summary}</div>
-                      ) : null}
-                    </div>
-                    {workflowCreationRetryNotice ? (
-                      <WorkflowCreationRetryCallout
-                        notice={workflowCreationRetryNotice}
-                        events={workflowCreationRetryEvents}
-                      />
-                    ) : null}
-                    {clarificationForm.knownFacts?.length ? (
-                      <div className="rounded-lg border bg-muted/20 p-3">
-                        <div className="text-xs font-medium">已确认信息</div>
-                        <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                          {clarificationForm.knownFacts.map((item) => (
-                            <div key={item}>- {item}</div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    {clarificationForm.missingFields?.length ? (
-                      <div className="rounded-lg border bg-muted/20 p-3">
-                        <div className="text-xs font-medium">待补全信息</div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {clarificationForm.missingFields.map((item) => (
-                            <Badge key={item} variant="outline">{item}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    <div className="space-y-4">
-                      {clarificationForm.questions.map((item, index) => (
-                        <div key={item.id} className="space-y-2 rounded-lg border p-3">
-                          {(() => {
-                            const options = getClarificationQuestionOptions(item);
-                            const selectionMode = item.selectionMode === 'multiple' ? 'multiple' : 'single';
-                            return (
-                              <>
-                          <Label htmlFor={`clarification-${item.id}`} className="text-sm">
-                            {index + 1}. {item.label}
-                            {item.required !== false ? <span className="text-destructive"> *</span> : null}
-                          </Label>
-                          <div className="text-xs leading-5 text-muted-foreground">{item.question}</div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {selectionMode === 'multiple' ? '可多选，按需要勾选所有适用项。' : '单选，请选择最接近当前需求的一项。'}
-                          </div>
-                          <div className="grid gap-2">
-                            {options.map((option) => {
-                              const selected = clarificationAnswers[item.id]?.optionIds?.includes(option.id) || false;
-                              return (
-                                <label
-                                  key={`${item.id}-${option.id}`}
-                                  className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-3 transition-colors ${
-                                    selected
-                                      ? 'border-primary bg-primary/5'
-                                      : 'border-border bg-background hover:bg-muted/40'
-                                  }`}
-                                >
-                                  {selectionMode === 'multiple' ? (
-                                    <Checkbox
-                                      checked={selected}
-                                      onCheckedChange={(checked) => setClarificationAnswers((prev) => {
-                                        const current = prev[item.id]?.optionIds || [];
-                                        const nextOptionIds = checked
-                                          ? [...new Set([...current, option.id])]
-                                          : current.filter((id) => id !== option.id);
-                                        return {
-                                          ...prev,
-                                          [item.id]: {
-                                            optionIds: nextOptionIds,
-                                            note: prev[item.id]?.note || '',
-                                          },
-                                        };
-                                      })}
-                                      className="mt-0.5"
-                                    />
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      className="mt-0.5"
-                                      onClick={() => setClarificationAnswers((prev) => ({
-                                        ...prev,
-                                        [item.id]: {
-                                          optionIds: [option.id],
-                                          note: prev[item.id]?.note || '',
-                                        },
-                                      }))}
-                                    >
-                                      <div className={`h-4 w-4 rounded-full border ${selected ? 'border-primary' : 'border-muted-foreground/40'}`}>
-                                        <div className={`m-[3px] h-2 w-2 rounded-full ${selected ? 'bg-primary' : 'bg-transparent'}`} />
-                                      </div>
-                                    </button>
-                                  )}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-2">
-                                      <div className="text-sm font-medium">{option.label}</div>
-                                      {option.recommended ? <Badge variant="secondary">推荐</Badge> : null}
-                                    </div>
-                                    {option.description ? (
-                                      <div className="mt-2 text-xs leading-5 text-muted-foreground">{option.description}</div>
-                                    ) : null}
-                                  </div>
-                                </label>
-                              );
-                            })}
-                          </div>
-                          <Textarea
-                            id={`clarification-${item.id}`}
-                            rows={4}
-                            value={clarificationAnswers[item.id]?.note || ''}
-                            placeholder={item.placeholder || '请输入你的回答'}
-                            onChange={(event) => setClarificationAnswers((prev) => ({
-                              ...prev,
-                              [item.id]: {
-                                optionIds: prev[item.id]?.optionIds || [],
-                                note: event.target.value,
-                              },
-                            }))}
-                          />
-                          <div className="text-[11px] text-muted-foreground">
-                            先选一个最接近的方案；如果需要补充边界、例外或更具体的要求，再在下方补充说明。
-                          </div>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      ))}
-                    </div>
-                    {shouldShowClarificationGenerationStatus ? (
-                      <div className="space-y-3 border-t pt-4">
-                        <WorkflowCreationProgressPanel
-                          state={workflowCreationProgressState}
-                          stage={workflowCreationProgressStage}
-                          activeStep={workflowCreationActiveStep}
-                          retryNotice={workflowCreationRetryNotice}
-                          retryEvents={workflowCreationRetryEvents}
-                        />
-                        {renderModalHistorySection({
-                          tailContent: (
-                            <>
-                              {currentThinking || currentStream || isGeneratingPlan ? (
-                                <ModalAiGenerationPanel
-                                  content={joinModalAiProcessContent(currentThinking, currentStream)}
-                                  isStreaming={isGeneratingPlan}
-                                  title="生成补充问答表"
-                                  description="AI 还在继续整理后续问题；已出现的问题可以先回答。"
-                                />
-                              ) : null}
-                            </>
-                          ),
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                  <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
-                  </>
-                ) : (
-                  <>
-                    <div className="flex h-full min-h-0 flex-col">
-                      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-4">
-                        <div className="min-h-full space-y-3 pb-12">
-                          <WorkflowCreationProgressPanel
-                            state={workflowCreationProgressState}
-                            stage={workflowCreationProgressStage}
-                            activeStep={workflowCreationActiveStep}
-                            retryNotice={workflowCreationRetryNotice}
-                            retryEvents={workflowCreationRetryEvents}
-                          />
-                          {renderModalHistorySection({
-                            tailContent: (
-                              <>
-                                {currentThinking || currentStream || isGeneratingPlan ? (
-                                  <ModalAiGenerationPanel
-                                    content={joinModalAiProcessContent(currentThinking, currentStream)}
-                                    isStreaming={isGeneratingPlan}
-                                    title="生成补充问答表"
-                                    description="AI 正在整理已知事实、缺失信息和需要确认的问题。"
-                                  />
-                                ) : null}
-                                {!aiMessages.length && !currentThinking && !currentStream ? (
-                                  <div className="h-full min-h-[14rem]" />
-                                ) : null}
-                              </>
-                            ),
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                    <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
-                  </>
-                )}
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-            {isGeneratingPlan ? (
-              <Button type="button" variant="outline" onClick={() => {
-                clarificationAbortRef.current = true;
-                interruptPlanningRun();
-                setAiPhase('waiting');
-                setPlanningStage('idle');
-                setWorkflowCreationActiveStep(null);
-                void persistDraftUiState({
-                  formStep: 2,
-                  planningStage: 'idle',
-                  clarificationForm,
-                  clarificationAnswers,
-                });
-              }}>
-                停止出题
-              </Button>
-            ) : (
-              <>
-                <Button type="button" variant="outline" onClick={() => void generateClarificationWithChatSession()}>
-                  重新提问
-                </Button>
-                <Button type="button" onClick={() => void handleSubmitClarificationAnswers()} disabled={!canSubmitClarificationAnswers}>
-                  {canSubmitClarificationAnswers ? '提交回答并生成计划' : '出题完成后可继续'}
-                </Button>
-              </>
-            )}
-          </div>
+              {renderClarificationResultPanel()}
+            </CreationWorkspaceShell>
           </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
@@ -5988,137 +6300,65 @@ export default function NewConfigModal({
           className={creationStageDialogClassName}
         >
           <ComboboxPortalProvider>
-          <div className="px-6 pt-6">
-            <CreationStageStepper currentStep={3} />
-          </div>
-          <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="ghost" size="icon" onClick={() => {
+            <CreationWorkspaceShell
+              currentStep={3}
+              title="计划生成"
+              subtitle="系统正在结合补充回答生成 requirements、design 和 tasks，完成后会进入确认阶段。"
+              icon="map"
+              iconClassName="text-amber-500"
+              statusLabel={isGeneratingPlan ? '生成中' : '可重试'}
+              statusTone={isGeneratingPlan ? 'amber' : 'muted'}
+              statusSpinning={isGeneratingPlan}
+              engineControls={creationEngineControls}
+              onBack={() => {
                 interruptPlanningRun();
                 setAiMessages([]);
                 setAiPhase('idle');
                 setPlanningStage('awaiting-answers');
                 setFormStep(2);
-              }} title="返回补充问答">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </Button>
-              <DialogTitle className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-amber-500">map</span>
-                计划生成
-                {isGeneratingPlan ? (
-                  <span className="inline-flex items-center gap-1 text-sm text-muted-foreground font-normal">
-                    <span className="animate-pulse text-amber-500">●</span> 生成中...
-                  </span>
-                ) : null}
-              </DialogTitle>
-            </div>
-            <div className="flex items-center gap-2">
-              <EngineModelSelect
-                engine={aiEngine}
-                model={aiModel}
-                onEngineChange={handleAiEngineChange}
-                onModelChange={handleAiModelChange}
-                className="w-56"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setCreationFullscreen((prev) => !prev)}
-                title={creationFullscreen ? '退出全屏' : '全屏'}
-              >
-                <span className="material-symbols-outlined">
-                  {creationFullscreen ? 'close_fullscreen' : 'open_in_full'}
-                </span>
-              </Button>
-              <Button type="button" variant="ghost" size="icon" onClick={handleClose}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-          </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-6">
-            <div className="flex-shrink-0 text-xs leading-5 text-muted-foreground">
-              系统正在结合你的补充回答生成正式计划制品。完成后会自动进入确认阶段。
-            </div>
-            <div className="mt-4 flex min-h-[32rem] flex-1 flex-col overflow-hidden rounded-xl border bg-background">
-              <div className="flex-shrink-0 overflow-hidden border-b bg-muted/10">
-                <div className="flex items-center justify-between gap-3 bg-background/70 px-4 py-2.5">
-                  <div className="flex items-center gap-2 text-xs font-medium">
-                    <span className="material-symbols-outlined text-sm text-amber-500">info</span>
-                    创建上下文
-                  </div>
-                  <CollapsePanelButton
-                    collapsed={creationContextCollapsed}
-                    onClick={() => setCreationContextCollapsed((prev) => !prev)}
-                    label="创建上下文"
-                  />
-                </div>
-                {!creationContextCollapsed ? (
-                  <div className="max-h-[22vh] overflow-auto px-4 py-3">
-                    <PlanningContextSnapshot
-                      workflowName={workflowNameValue}
-                      filename={filenameValue}
-                      workingDirectory={workingDirectoryValue}
-                      workspaceMode={workspaceModeValue}
-                      referenceWorkflow={effectiveReferenceWorkflowValue}
-                      description={descriptionValue}
-                      requirements={requirementsValue}
-                      clarificationForm={clarificationForm}
-                      clarificationAnswers={clarificationAnswers}
-                      showClarification
-                    />
-                  </div>
-                ) : null}
-              </div>
-              <div ref={streamContentRef} className="relative min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-4">
-                <div className="space-y-3 pb-16">
-                  <WorkflowCreationProgressPanel
-                    state={workflowCreationProgressState}
-                    stage={workflowCreationProgressStage}
-                    activeStep={workflowCreationActiveStep}
-                    retryNotice={workflowCreationRetryNotice}
-                    retryEvents={workflowCreationRetryEvents}
-                  />
-                  {renderModalHistorySection({
-                    tailContent: (
-                      <>
-                        {currentThinking || currentStream || isGeneratingPlan ? (
-                          <ModalAiGenerationPanel
-                            content={joinModalAiProcessContent(currentThinking, currentStream)}
-                            isStreaming={isGeneratingPlan}
-                            title="生成正式计划制品"
-                            description="AI 正在生成 requirements、design 和 tasks，并把机器可读草案写入结构化结果。"
-                          />
-                        ) : null}
-                      </>
-                    ),
-                  })}
-                </div>
-                <PlanningScrollToBottomButton show={showStreamScrollBtn} onClick={scrollPlanningStreamToBottom} />
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-            {isGeneratingPlan ? (
-              <Button type="button" variant="outline" onClick={() => {
-                interruptPlanningRun();
-                setAiPhase('waiting');
-                setPlanningStage('awaiting-answers');
-                setFormStep(2);
-              }}>
-                停止并返回问答
-              </Button>
-            ) : (
-              <>
-                <Button type="button" variant="outline" onClick={() => setFormStep(2)}>
-                  返回问答
+              }}
+              backTitle="返回补充问答"
+              fullscreen={creationFullscreen}
+              onToggleFullscreen={() => setCreationFullscreen((prev) => !prev)}
+              onClose={handleClose}
+              context={renderCreationContextPanel(true)}
+              contextCollapsed={creationContextCollapsed}
+              onToggleContext={() => setCreationContextCollapsed((prev) => !prev)}
+              activity={renderCreationActivityPanel({
+                title: '生成正式计划制品',
+                description: 'AI 正在生成 requirements、design 和 tasks，并把机器可读草案写入结构化结果。',
+                isStreaming: isGeneratingPlan,
+                emptyLabel: '计划生成过程会在这里出现。',
+              })}
+              activityCollapsed={creationActivityCollapsed}
+              onToggleActivity={() => setCreationActivityCollapsed((prev) => !prev)}
+              activityScrollRef={streamContentRef}
+              resultTitle="正式计划"
+              resultDescription="这里实时展示已经通过结构化解析的小点；右侧保留完整自然语言输出和修复记录。"
+              resultMeta={workflowCreationActiveStep ? <Badge variant="outline">正在处理：{workflowCreationActiveStep.title}</Badge> : null}
+              footerStatus="计划生成完成后会自动进入确认阶段。"
+              footerRight={isGeneratingPlan ? (
+                <Button type="button" variant="outline" onClick={() => {
+                  interruptPlanningRun();
+                  setAiPhase('waiting');
+                  setPlanningStage('awaiting-answers');
+                  setFormStep(2);
+                }}>
+                  停止并返回问答
                 </Button>
-                <Button type="button" variant="outline" onClick={() => void generatePlanWithChatSession()}>
-                  重试生成
-                </Button>
-              </>
-            )}
-          </div>
+              ) : (
+                <>
+                  <Button type="button" variant="outline" onClick={() => setFormStep(2)}>
+                    返回问答
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => void generatePlanWithChatSession()}>
+                    重试生成
+                  </Button>
+                </>
+              )}
+            >
+              {renderSpecPlanResultPanel()}
+            </CreationWorkspaceShell>
           </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
@@ -6134,153 +6374,86 @@ export default function NewConfigModal({
           className={creationStageDialogClassName}
         >
           <ComboboxPortalProvider>
-          <div className="px-6 pt-6">
-            <CreationStageStepper currentStep={4} />
-          </div>
-          <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="ghost" size="icon" onClick={handleBackToStep1} title="返回上一步">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </Button>
-              <DialogTitle className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-green-500">auto_awesome</span>
-                AI 工作流创建
-                {aiPhase === 'streaming' && (
-                  <span className="inline-flex items-center gap-1 text-sm text-muted-foreground font-normal">
-                    <span className="animate-pulse text-green-500">●</span> 生成中...
-                  </span>
-                )}
-                {aiPhase === 'waiting' && (
-                  <span className="inline-flex items-center gap-1 text-sm text-blue-500 font-normal">
-                    ● 等待回复
-                  </span>
-                )}
-                {aiPhase === 'done' && (
-                  <span className="inline-flex items-center gap-1 text-sm text-green-600 font-normal">
-                    ✓ 创建完成
-                  </span>
-                )}
-              </DialogTitle>
-            </div>
-            <div className="flex items-center gap-2">
-              <EngineModelSelect
-                engine={aiEngine}
-                model={aiModel}
-                onEngineChange={handleAiEngineChange}
-                onModelChange={handleAiModelChange}
-                className="w-56"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={() => setCreationFullscreen((prev) => !prev)}
-                title={creationFullscreen ? '退出全屏' : '全屏'}
-              >
-                <span className="material-symbols-outlined">
-                  {creationFullscreen ? 'close_fullscreen' : 'open_in_full'}
-                </span>
-              </Button>
-              <Button type="button" variant="ghost" size="icon" onClick={handleClose}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-          </div>
-
-          {/* Conversation area */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-4">
-            <div ref={streamContentRef} className="min-h-[28rem] flex-1 overflow-auto rounded-xl border bg-background px-4 py-4">
-              <div className="space-y-4 pb-4">
-                <WorkflowCreationProgressPanel
-                  state={workflowCreationProgressState}
-                  stage={workflowCreationProgressStage}
-                  activeStep={workflowCreationActiveStep}
-                  retryNotice={workflowCreationRetryNotice}
-                  retryEvents={workflowCreationRetryEvents}
-                />
-                {renderModalHistorySection({
-                  showUserMessages: true,
-                  tailContent: (
+            <CreationWorkspaceShell
+              currentStep={4}
+              title="AI 工作流创建"
+              subtitle="把已确认的计划整理成可保存的 workflow 配置草案，并在确认前完成校验预览。"
+              icon="auto_awesome"
+              iconClassName="text-green-500"
+              statusLabel={aiPhase === 'streaming' ? '生成中' : aiPhase === 'waiting' ? '等待确认' : aiPhase === 'done' ? '创建完成' : '准备中'}
+              statusTone={aiPhase === 'streaming' ? 'green' : aiPhase === 'waiting' ? 'blue' : aiPhase === 'done' ? 'emerald' : 'muted'}
+              statusSpinning={aiPhase === 'streaming'}
+              engineControls={creationEngineControls}
+              onBack={handleBackToStep1}
+              backTitle="返回上一步"
+              fullscreen={creationFullscreen}
+              onToggleFullscreen={() => setCreationFullscreen((prev) => !prev)}
+              onClose={handleClose}
+              context={renderCreationContextPanel(true)}
+              contextCollapsed={creationContextCollapsed}
+              onToggleContext={() => setCreationContextCollapsed((prev) => !prev)}
+              activity={renderCreationActivityPanel({
+                showUserMessages: true,
+                title: '生成 workflow 草案',
+                description: 'AI 正在生成可保存的 workflow 配置草案，结构化结果完成后会自动进入校验预览。',
+                isStreaming: aiPhase === 'streaming',
+                emptyLabel: 'workflow 草案生成过程会在这里出现。',
+              })}
+              activityCollapsed={creationActivityCollapsed}
+              onToggleActivity={() => setCreationActivityCollapsed((prev) => !prev)}
+              activityScrollRef={streamContentRef}
+              resultTitle="Workflow 草案"
+              resultDescription="结构预览、Agent 分配、校验信息和 YAML 都固定在这里，便于确认后写入配置。"
+              resultMeta={workflowDraftPreview?.validation ? (
+                <Badge variant={workflowDraftPreview.validation.ok ? 'default' : 'outline'}>
+                  {workflowDraftPreview.validation.ok ? '校验通过' : '待修正'}
+                </Badge>
+              ) : null}
+              footerStatus={aiPhase === 'waiting' && validatedWorkflowDraftConfig && !aiFilename ? `将写入 configs/${getValues('filename')}` : undefined}
+              footerRight={(
+                <>
+                  {aiPhase === 'streaming' ? (
+                    <Button type="button" variant="outline" onClick={stopWorkflowDraftGeneration}>
+                      <span className="material-symbols-outlined mr-1 text-sm">stop</span>
+                      停止生成
+                    </Button>
+                  ) : !aiFilename ? (
                     <>
-                      {currentThinking || currentStream || aiPhase === 'streaming' ? (
-                        <ModalAiGenerationPanel
-                          content={joinModalAiProcessContent(currentThinking, currentStream)}
-                          isStreaming={aiPhase === 'streaming'}
-                          title="生成 workflow 草案"
-                          description="AI 正在生成可保存的 workflow 配置草案，结构化结果完成后会自动进入校验预览。"
-                        />
-                      ) : null}
-                      <WorkflowDraftPreviewCard preview={workflowDraftPreview} />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void startAiStream(previewSession)}
+                        disabled={isSavingWorkflowDraft}
+                      >
+                        <span className="material-symbols-outlined mr-1 text-sm">refresh</span>
+                        重新生成
+                      </Button>
+                      <Button type="button" onClick={handleQuickConfirm} disabled={!canConfirmWorkflowDraft}>
+                        {isSavingWorkflowDraft ? '正在创建...' : canConfirmWorkflowDraft ? '确认创建' : '等待草案校验'}
+                      </Button>
                     </>
-                  ),
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Workflow draft status */}
-          {aiPhase === 'waiting' && (
-            <div className="px-6 pb-2 space-y-2">
-              {validatedWorkflowDraftConfig && !aiFilename && (
-                <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
-                  系统已校验 workflow 草案，点击“确认创建”后写入 configs/{getValues('filename')}。
-                </div>
-              )}
-              {workflowDraftValidation && !workflowDraftValidation.ok && (
-                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 space-y-1.5">
-                  <div>workflow 草案未通过系统校验。请查看下方校验信息并重新生成草案。</div>
-                  {Array.isArray(workflowDraftValidation?.issues) && workflowDraftValidation.issues.length > 0 ? (
-                    <div className="space-y-1">
-                      {workflowDraftValidation.issues.map((issue: any, index: number) => (
-                        <div key={`${issue.path?.join('.') || 'root'}-${index}`}>
-                          {index + 1}. {issue.path?.join('.') || '(root)'}: {issue.message}
-                        </div>
-                      ))}
-                    </div>
                   ) : null}
-                </div>
+                  {aiPhase === 'done' && aiFilename ? (
+                    <Button type="button" onClick={handleAiComplete}>
+                      <span className="material-symbols-outlined mr-1 text-sm">open_in_new</span>
+                      打开设计页面
+                    </Button>
+                  ) : null}
+                  <Button type="button" variant="outline" onClick={handleClose}>
+                    关闭
+                  </Button>
+                </>
               )}
-            </div>
-          )}
-
-          <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-            {aiPhase === 'streaming' ? (
-              <Button type="button" variant="outline" onClick={stopWorkflowDraftGeneration}>
-                <span className="material-symbols-outlined text-sm mr-1">stop</span>
-                停止生成
-              </Button>
-            ) : !aiFilename ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void startAiStream(previewSession)}
-                  disabled={isSavingWorkflowDraft}
-                >
-                  <span className="material-symbols-outlined text-sm mr-1">refresh</span>
-                  重新生成
-                </Button>
-                <Button type="button" onClick={handleQuickConfirm} disabled={!canConfirmWorkflowDraft}>
-                  {isSavingWorkflowDraft ? '正在创建...' : canConfirmWorkflowDraft ? '确认创建' : '等待草案校验'}
-                </Button>
-              </>
-            ) : null}
-            {aiPhase === 'done' && aiFilename && (
-              <Button type="button" onClick={handleAiComplete}>
-                <span className="material-symbols-outlined text-sm mr-1">open_in_new</span>
-                打开设计页面
-              </Button>
-            )}
-            <Button type="button" variant="outline" onClick={handleClose}>
-              关闭
-            </Button>
-          </div>
+            >
+              {renderWorkflowDraftResultPanel()}
+            </CreationWorkspaceShell>
           </ComboboxPortalProvider>
         </DialogContent>
       </Dialog>
     );
   }
 
+  // AI conversation view (post-plan confirmation for ai-guided mode)
   // PLACEHOLDER_RENDER_FORM
 
   if (formStep === 4 && previewSession) {

@@ -14,7 +14,7 @@ export async function runNodejsInstrumentation() {
   const workspaceRoot = getWorkspaceRoot();
   const skillsDir = await getRuntimeSkillsDirPath();
 
-  let engineConfigDir = '.claude';
+  let engineConfigDir = '.agents';
   try {
     const engineJson = getEngineConfigPath();
     if (existsSync(engineJson)) {

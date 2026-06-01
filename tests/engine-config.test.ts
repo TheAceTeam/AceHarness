@@ -3,34 +3,34 @@ import { getEngineConfigDir, getEngineSkillsSubdir } from '@/lib/engines/engine-
 import { resolveAgentSelection, resolveWorkflowAgentSelection } from '@/lib/agent/engine-selection';
 
 describe('engine config', () => {
-  test('getEngineConfigDir returns the correct workspace directory for each engine type', () => {
-    expect(getEngineConfigDir('claude-code')).toBe('.claude');
-    expect(getEngineConfigDir('claude-code-acp')).toBe('.claude');
-    expect(getEngineConfigDir('kiro-cli')).toBe('.kiro');
-    expect(getEngineConfigDir('opencode')).toBe('.opencode');
-    expect(getEngineConfigDir('codex')).toBe('.codex');
-    expect(getEngineConfigDir('cursor')).toBe('.cursor');
-    expect(getEngineConfigDir('trae-cli')).toBe('.trae');
-    expect(getEngineConfigDir('magic-cli')).toBe('.magic-cli');
+  test('getEngineConfigDir returns the shared .agents workspace directory for each engine type', () => {
+    expect(getEngineConfigDir('claude-code')).toBe('.agents');
+    expect(getEngineConfigDir('claude-code-acp')).toBe('.agents');
+    expect(getEngineConfigDir('kiro-cli')).toBe('.agents');
+    expect(getEngineConfigDir('opencode')).toBe('.agents');
+    expect(getEngineConfigDir('codex')).toBe('.agents');
+    expect(getEngineConfigDir('cursor')).toBe('.agents');
+    expect(getEngineConfigDir('trae-cli')).toBe('.agents');
+    expect(getEngineConfigDir('magic-cli')).toBe('.agents');
   });
 
-  test('getEngineConfigDir falls back to .claude for unknown engine types', () => {
-    expect(getEngineConfigDir('unknown-engine')).toBe('.claude');
-    expect(getEngineConfigDir('')).toBe('.claude');
+  test('getEngineConfigDir uses .agents for unknown engine types too', () => {
+    expect(getEngineConfigDir('unknown-engine')).toBe('.agents');
+    expect(getEngineConfigDir('')).toBe('.agents');
   });
 
-  test('getEngineSkillsSubdir appends /skills to the engine config directory', () => {
-    expect(getEngineSkillsSubdir('claude-code')).toBe('.claude/skills');
-    expect(getEngineSkillsSubdir('claude-code-acp')).toBe('.claude/skills');
-    expect(getEngineSkillsSubdir('kiro-cli')).toBe('.kiro/skills');
-    expect(getEngineSkillsSubdir('opencode')).toBe('.opencode/skills');
-    expect(getEngineSkillsSubdir('codex')).toBe('.codex/skills');
-    expect(getEngineSkillsSubdir('cursor')).toBe('.cursor/skills');
-    expect(getEngineSkillsSubdir('trae-cli')).toBe('.trae/skills');
+  test('getEngineSkillsSubdir appends /skills to the shared agent config directory', () => {
+    expect(getEngineSkillsSubdir('claude-code')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('claude-code-acp')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('kiro-cli')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('opencode')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('codex')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('cursor')).toBe('.agents/skills');
+    expect(getEngineSkillsSubdir('trae-cli')).toBe('.agents/skills');
   });
 
-  test('getEngineSkillsSubdir falls back correctly for unknown engine types', () => {
-    expect(getEngineSkillsSubdir('unknown')).toBe('.claude/skills');
+  test('getEngineSkillsSubdir uses .agents/skills for unknown engine types', () => {
+    expect(getEngineSkillsSubdir('unknown')).toBe('.agents/skills');
   });
 
 });

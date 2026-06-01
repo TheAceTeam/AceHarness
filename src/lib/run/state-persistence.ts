@@ -1,9 +1,10 @@
-import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, rename, rm } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
 import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValidation } from '@/lib/core/schemas';
+import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/summary-cache';
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
@@ -427,7 +428,21 @@ export async function saveRunState(state: PersistedRunState): Promise<void> {
     await mkdir(dir, { recursive: true });
   }
   const yamlContent = '# Auto-generated run state\n' + stringify(state);
-  await writeFile(stateFilePath(state.runId), yamlContent, 'utf-8');
+  const target = stateFilePath(state.runId);
+  const temp = resolve(dir, `state.yaml.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  await writeFile(temp, yamlContent, 'utf-8');
+  try {
+    await rename(temp, target);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
+  const summary = buildRunSummaryCacheFromState(state);
+  if (summary) {
+    await saveRunSummaryCache(summary).catch((error) => {
+      console.warn('[run-state] failed to update summary cache:', error);
+    });
+  }
 }
 
 export async function loadRunState(runId: string): Promise<PersistedRunState | null> {

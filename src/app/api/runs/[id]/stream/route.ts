@@ -30,13 +30,27 @@ export async function GET(
       let closed = false;
       /** Bytes already sent to client from the persisted stream file. */
       let lastFileSentLen = 0;
+      let filePoll: ReturnType<typeof setInterval> | null = null;
+      let checkDone: ReturnType<typeof setInterval> | null = null;
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      let onStream: ((evt: any) => void) | null = null;
+
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        if (onStream) processManager.off('stream', onStream);
+        if (checkDone) clearInterval(checkDone);
+        if (filePoll) clearInterval(filePoll);
+        if (heartbeat) clearInterval(heartbeat);
+        try { controller.close(); } catch {}
+      };
 
       const send = (event: string, data: any) => {
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
@@ -57,14 +71,14 @@ export async function GET(
       void flushPersistedStream();
 
       // Poll persisted stream file — SDK Plan / engines that only use saveStreamContent
-      const filePoll = setInterval(() => {
+      filePoll = setInterval(() => {
         void flushPersistedStream();
       }, 800);
 
       // Listen for live stream events. Text deltas are persisted by the workflow
       // manager and then emitted by file polling so offsets never mix process-local
       // stream length with the full persisted stream length.
-      const onStream = (evt: any) => {
+      onStream = (evt: any) => {
         if (closed) return;
         const proc = processManager.getProcessRaw?.(evt.id);
         if (proc?.runId !== id || proc.step !== step) return;
@@ -74,9 +88,10 @@ export async function GET(
       };
 
       processManager.on('stream', onStream);
+      heartbeat = setInterval(() => send('heartbeat', { timestamp: new Date().toISOString() }), 15000);
 
       // Done when: no running proc AND run state no longer running, OR a finished proc exists for this run
-      const checkDone = setInterval(() => {
+      checkDone = setInterval(() => {
         void (async () => {
           if (closed) return;
           const procs = processManager.getAllProcesses();
@@ -115,15 +130,6 @@ export async function GET(
           }
         })();
       }, 2000);
-
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        processManager.off('stream', onStream);
-        clearInterval(checkDone);
-        clearInterval(filePoll);
-        try { controller.close(); } catch {}
-      };
 
       request.signal.addEventListener('abort', cleanup);
       send('connected', { runId: id, step });

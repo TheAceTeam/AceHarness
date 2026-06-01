@@ -17,6 +17,7 @@ import {
   listMemoryEntries,
   type MemoryEntry,
 } from '@/lib/workflow/memory-store';
+import { compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
 
 export const dynamic = 'force-dynamic';
 
@@ -375,6 +376,47 @@ async function resolveWorkflowStatusPayload(configFile?: string | null, requeste
   return { status: 'idle' };
 }
 
+async function resolveWorkflowLiveStatusPayload(configFile?: string | null, requestedRunId?: string | null) {
+  if (configFile) {
+    const runningManager = workflowRegistry.getRunningManager(configFile);
+    const runningStatus = runningManager?.getStatus?.();
+    if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
+      return compactWorkflowStatusForLive(runningStatus, configFile);
+    }
+
+    if (requestedRunId) {
+      const runState = await loadRunState(requestedRunId);
+      if (runState && runState.configFile === configFile) {
+        return compactWorkflowStatusForLive({
+          ...runState,
+          runId: runState.runId,
+          currentConfigFile: runState.configFile,
+          currentPhase: runState.currentPhase || runState.currentState || null,
+          pendingHumanQuestion: runState.pendingHumanQuestionId
+            ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
+            : runState.pendingCheckpoint?.humanQuestion || null,
+        }, configFile);
+      }
+    }
+
+    const manager = await workflowRegistry.getManager(configFile);
+    return compactWorkflowStatusForLive(manager.getStatus(), configFile);
+  }
+
+  const running = workflowRegistry.getRunningManagers();
+  if (running.length > 0) {
+    return compactWorkflowStatusForLive(running[0].manager.getStatus(), running[0].configFile);
+  }
+
+  const all = workflowRegistry.getAllManagers();
+  if (all.length > 0) {
+    const entry = all[all.length - 1];
+    return compactWorkflowStatusForLive(entry.manager.getStatus(), entry.configFile);
+  }
+
+  return { status: 'idle' };
+}
+
 function createWorkflowStatusStream(request: NextRequest, configFile?: string | null, requestedRunId?: string | null) {
   const encoder = new TextEncoder();
   let closed = false;
@@ -392,6 +434,14 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
     'parallel-group-start', 'parallel-group-complete', 'circuit-breaker',
   ];
   const handlers = new Map<string, (data: any) => void>();
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (timer) clearInterval(timer);
+    for (const [type, handler] of handlers) {
+      workflowRegistry.off(type, handler);
+    }
+  };
 
   const stream = new ReadableStream({
     start(controller) {
@@ -400,14 +450,14 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         } catch {
-          closed = true;
+          cleanup();
         }
       };
 
       const sendStatus = async (reason: string, force = false) => {
         if (closed) return;
         try {
-          const status = await resolveWorkflowStatusPayload(configFile, requestedRunId);
+          const status: any = await resolveWorkflowLiveStatusPayload(configFile, requestedRunId);
           const signature = JSON.stringify({
             status: status?.status,
             runId: status?.runId,
@@ -460,12 +510,7 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
       }
 
       request.signal.addEventListener('abort', () => {
-        if (closed) return;
-        closed = true;
-        if (timer) clearInterval(timer);
-        for (const [type, handler] of handlers) {
-          workflowRegistry.off(type, handler);
-        }
+        cleanup();
         try {
           controller.close();
         } catch {}

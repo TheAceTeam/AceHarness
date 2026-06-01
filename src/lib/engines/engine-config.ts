@@ -1,37 +1,25 @@
 /**
- * Engine-aware configuration directory mapping.
- * Maps engine types to their workspace agent config directories.
+ * Shared ACE agent configuration directory.
+ * Supported engines discover the same `.agents` workspace metadata, so ACE keeps
+ * skills and agent-facing runtime files in one place instead of mirroring them
+ * under engine-specific directories.
  */
 
 import type { EngineType } from './engine-factory';
 
-const ENGINE_CONFIG_DIRS: Record<string, string> = {
-  'claude-code': '.claude',
-  'claude-code-acp': '.claude',
-  'kiro-cli': '.kiro',
-  'opencode': '.opencode',
-  'opencode-sdk': '.opencode',
-  'nga': '.opencode',
-  'nga-sdk': '.opencode',
-  'codegenie': '.opencode',
-  'codegenie-sdk': '.opencode',
-  'codex': '.codex',
-  'cursor': '.cursor',
-  'trae-cli': '.trae',
-  'magic-cli': '.magic-cli',
-};
+export const SHARED_AGENT_CONFIG_DIR = '.agents';
 
 /**
  * Get the workspace agent config directory for a given engine type.
- * e.g. 'kiro-cli' → '.kiro', 'opencode' → '.opencode'
+ * All supported engines share `.agents` for ACE-provided agent metadata.
  */
-export function getEngineConfigDir(engineType: EngineType | string): string {
-  return ENGINE_CONFIG_DIRS[engineType] || '.claude';
+export function getEngineConfigDir(_engineType: EngineType | string): string {
+  return SHARED_AGENT_CONFIG_DIR;
 }
 
 /**
  * Get the workspace skills subdirectory for a given engine type.
- * e.g. 'kiro-cli' → '.kiro/skills', 'opencode' → '.opencode/skills'
+ * e.g. 'codex' → '.agents/skills', 'opencode' → '.agents/skills'
  */
 export function getEngineSkillsSubdir(engineType: EngineType | string): string {
   return `${getEngineConfigDir(engineType)}/skills`;

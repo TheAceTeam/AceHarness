@@ -13,6 +13,7 @@ import ReactFlow, {
   Position,
   useReactFlow,
   ReactFlowProvider,
+  useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import type { StateMachineState, StateTransition, StateTransitionRecord } from '@/lib/core/schemas';
@@ -500,10 +501,28 @@ function StateMachineDiagramInner({
   const { setCenter, fitView: rfFitView } = useReactFlow();
   const initialFitDone = useRef(false);
   const fitViewRef = useRef(rfFitView);
+  const onStepClickRef = useRef(onStepClick);
+  const onForceTransitionRef = useRef(onForceTransition);
 
   useEffect(() => {
     fitViewRef.current = rfFitView;
   }, [rfFitView]);
+
+  useEffect(() => {
+    onStepClickRef.current = onStepClick;
+  }, [onStepClick]);
+
+  useEffect(() => {
+    onForceTransitionRef.current = onForceTransition;
+  }, [onForceTransition]);
+
+  const handleStepClick = useCallback((step: any) => {
+    onStepClickRef.current?.(step);
+  }, []);
+
+  const handleForceTransitionClick = useCallback((targetState: string) => {
+    onForceTransitionRef.current?.(targetState);
+  }, []);
 
   // 转换为 ReactFlow 节点
   const initialNodes: Node[] = useMemo(() => {
@@ -528,8 +547,8 @@ function StateMachineDiagramInner({
           currentStep,
           activeSteps,
           completedSteps,
-          onStepClick,
-          onForceTransition,
+          onStepClick: handleStepClick,
+          onForceTransition: handleForceTransitionClick,
           isRunning,
         },
       };
@@ -560,14 +579,32 @@ function StateMachineDiagramInner({
         currentStep,
         activeSteps,
         completedSteps,
-        onStepClick,
-        onForceTransition,
+        onStepClick: handleStepClick,
+        onForceTransition: handleForceTransitionClick,
         isRunning,
       },
     });
 
     return nodes;
-  }, [states, currentState, currentStep, activeSteps, completedSteps, onStepClick, onForceTransition, isRunning]);
+  }, [states, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+
+  useEffect(() => {
+    setNodes((previousNodes) => {
+      const previousById = new Map(previousNodes.map((node) => [node.id, node]));
+      const nextNodes = initialNodes.map((node) => {
+        const previous = previousById.get(node.id);
+        return {
+          ...node,
+          position: previous?.position || node.position,
+          selected: previous?.selected,
+          dragging: previous?.dragging,
+        };
+      });
+      return nextNodes;
+    });
+  }, [initialNodes, setNodes]);
 
   // 转换为 ReactFlow 边
   const initialEdges: Edge[] = useMemo(() => {
@@ -842,7 +879,7 @@ function StateMachineDiagramInner({
       initialFitDone.current = true;
       setTimeout(() => fitViewRef.current({ padding: 0.3, maxZoom: 1.2 }), 50);
     }
-  }, [initialNodes]);
+  }, []);
 
   const displayEdges = useMemo(() => {
     if (!hoveredNode || showAllEdges) {
@@ -875,7 +912,7 @@ function StateMachineDiagramInner({
   useEffect(() => {
     if (focusedState && focusedState !== prevFocusedState.current) {
       prevFocusedState.current = focusedState;
-      const targetNode = initialNodes.find(n => n.id === focusedState);
+      const targetNode = nodes.find(n => n.id === focusedState);
       if (targetNode) {
         setTimeout(() => {
           setCenter(targetNode.position.x, targetNode.position.y, {
@@ -886,7 +923,7 @@ function StateMachineDiagramInner({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedState, setCenter]);
+  }, [focusedState, setCenter, nodes]);
 
   const onNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
@@ -923,8 +960,9 @@ function StateMachineDiagramInner({
   return (
     <div className="w-full h-full bg-gray-50 dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-800">
       <ReactFlow
-        nodes={initialNodes}
+        nodes={nodes}
         edges={displayEdges}
+        onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         onNodeMouseEnter={onNodeMouseEnter}
         onNodeMouseLeave={onNodeMouseLeave}
@@ -933,9 +971,9 @@ function StateMachineDiagramInner({
         defaultViewport={{ x: 0, y: 0, zoom: 0.6 }}
         minZoom={0.2}
         maxZoom={1.5}
-        nodesDraggable={false}
+        nodesDraggable
         nodesConnectable={false}
-        elementsSelectable={false}
+        elementsSelectable
         attributionPosition="bottom-left"
       >
         <Controls />

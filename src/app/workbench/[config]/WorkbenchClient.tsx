@@ -9556,9 +9556,6 @@ export default function WorkbenchPage() {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <div className="text-sm font-semibold">编排设计</div>
-                        <div className="mt-1 text-xs text-muted-foreground">
-                          启动前检查已改为统一管理，不再分散在单个步骤弹窗里。
-                        </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Button type="button" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={handleOpenWorkflowOptimization}>
@@ -9574,7 +9571,7 @@ export default function WorkbenchPage() {
                         )}
                         <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-3 text-xs" onClick={() => setPreflightManagerOpen(true)}>
                           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fact_check</span>
-                          统一管理启动前检查
+                          启动前检查管理
                         </Button>
                       </div>
                     </div>
