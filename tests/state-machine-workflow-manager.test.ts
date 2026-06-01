@@ -82,6 +82,8 @@ vi.mock('@/lib/spec/persistence', () => ({
 vi.mock('@/lib/engines', () => ({
   createEngine: vi.fn(),
   getConfiguredEngine: vi.fn().mockResolvedValue('mock-engine'),
+  getLogicalEngineId: vi.fn((engine) => engine),
+  resolveRequestedEngineType: vi.fn((engine) => engine || 'mock-engine'),
 }));
 
 vi.mock('@/lib/engines/engine-config', () => ({
@@ -360,6 +362,46 @@ describe('engine-level failure detection', () => {
     expect(engine.calls[1].options.prompt).toContain('ENOENT');
   });
 
+  test('counts automatic recovery failures consecutively after a successful recovery response', async () => {
+    const engine = new MockEngine();
+    let manager: any;
+    engine.executeImpl = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: '',
+        error: "ENOENT: no such file or directory, open 'missing-a.cj'",
+        sessionId: 'same-session',
+      })
+      .mockImplementationOnce(async () => {
+        manager.queueLiveFeedback('继续补充验证');
+        return {
+          success: true,
+          output: 'Recovered first failure and continuing.',
+          sessionId: 'same-session',
+        };
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        output: '',
+        error: "ENOENT: no such file or directory, open 'missing-b.cj'",
+        sessionId: 'same-session',
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'pass\nRecovered second failure.',
+        sessionId: 'same-session',
+      });
+    manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls).toHaveLength(4);
+    expect(engine.calls[1].options.prompt).toContain('第 1/3 次');
+    expect(engine.calls[3].options.prompt).toContain('第 1/3 次');
+  });
+
   test('stops workflow after three failed automatic recoveries', async () => {
     const engine = new MockEngine();
     engine.executeImpl = vi.fn().mockResolvedValue({
@@ -512,6 +554,113 @@ describe('state machine resume', () => {
         runId: 'run-resume-001',
         workflowFrontendSessionId: 'workflow-agora-session-1',
       }),
+    ]));
+  });
+
+  test('resumes a failed state-machine run from the failed step instead of the first step', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              { name: 'first-step', agent: 'developer', task: 'Already completed', role: 'executor' },
+              { name: 'retry-step', agent: 'developer', task: 'Retry this step', role: 'executor' },
+              { name: 'final-step', agent: 'developer', task: 'Continue after retry', role: 'judge' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+            ],
+          },
+          {
+            name: '完成',
+            isFinal: true,
+            steps: [],
+            transitions: [],
+          },
+        ],
+      },
+    });
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-resume-failed-step',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'failed',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: null,
+      currentState: '设计',
+      currentPhase: '设计',
+      currentStep: null,
+      completedSteps: ['设计-first-step'],
+      failedSteps: [],
+      stepLogs: [
+        {
+          id: 'step-1',
+          stepName: '设计-first-step',
+          agent: 'developer',
+          status: 'completed',
+          output: 'first-step completed',
+          error: '',
+          costUsd: 0,
+          durationMs: 1,
+          timestamp: '2024-01-01T00:00:01.000Z',
+        },
+        {
+          id: 'step-2',
+          stepName: '设计-retry-step',
+          agent: 'developer',
+          status: 'failed',
+          output: '',
+          error: 'previous failure',
+          costUsd: 0,
+          durationMs: 1,
+          timestamp: '2024-01-01T00:00:02.000Z',
+        },
+      ],
+      agents: [{ name: 'developer', sessionId: null }],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Build a feature',
+      workflowFrontendSessionId: 'workflow-agora-session-2',
+      supervisorAgent: 'default-supervisor',
+      supervisorSessionId: null,
+      attachedAgentSessions: {},
+      stateHistory: [],
+      issueTracker: [],
+      transitionCount: 0,
+      globalContext: '',
+      phaseContexts: {},
+      workingDirectory: '/tmp/project',
+      qualityChecks: [],
+    } as any);
+
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => ({
+      success: true,
+      output: options.step === 'final-step'
+        ? '```json\n{"verdict":"pass"}\n```\nfinal complete'
+        : `${options.step} complete`,
+      sessionId: `session-${options.step}`,
+    });
+    const manager = await createManagerForTest(engine);
+    (manager as any).status = 'idle';
+    (manager as any).engineType = 'claude-code';
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+
+    await (manager as any).resume('run-resume-failed-step');
+
+    expect(engine.calls.map((call) => call.options.step)).toEqual(['retry-step', 'final-step']);
+    expect((manager as any).failedSteps).not.toContain('设计-retry-step');
+    expect((manager as any).completedSteps).toEqual(expect.arrayContaining([
+      '设计-retry-step',
+      '设计-final-step',
     ]));
   });
 });

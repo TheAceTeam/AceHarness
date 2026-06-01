@@ -5454,7 +5454,7 @@ export default function WorkbenchPage() {
         // Try stream file first (has chunk separators for visual separation)
         const streamContent = await streamApi.getStreamContent(rid, fileName);
         if (streamContent) {
-          const chunks = mergeAceSubtaskChunks(streamContent.split(CHUNK_SEP).filter(Boolean));
+          const chunks = mergeAceSubtaskChunks(splitStreamChunks(streamContent));
           if (chunks.length > 1) {
             setMarkdownModal({ title: fileName, chunks });
             return;
@@ -5485,7 +5485,7 @@ export default function WorkbenchPage() {
       try {
         const streamContent = await streamApi.getStreamContent(rid, fileName);
         if (streamContent) {
-          const chunks = mergeAceSubtaskChunks(streamContent.split(CHUNK_SEP).filter(Boolean));
+          const chunks = mergeAceSubtaskChunks(splitStreamChunks(streamContent));
           if (chunks.length > 1) {
             setMarkdownModal({ title: fileName, chunks });
             return;
@@ -5507,7 +5507,11 @@ export default function WorkbenchPage() {
 
   // Chunk separator used in persisted stream files
   const CHUNK_SEP = '\n\n<!-- chunk-boundary -->\n\n';
+  const CHUNK_BOUNDARY_REGEX = /\r?\n*\s*<!--\s*chunk-boundary\s*-->\s*\r?\n*/gi;
+  const CHUNK_BOUNDARY_SEARCH_REGEX = /\r?\n*\s*<!--\s*chunk-boundary\s*-->\s*\r?\n*/i;
   const CHUNK_WITH_TIME_REGEX = /^<!-- timestamp: (.+?) -->\n/;
+  const splitStreamChunks = (content: string): string[] =>
+    String(content || '').split(CHUNK_BOUNDARY_REGEX).filter(Boolean);
 
   /** Merge consecutive 🤖 sub-task <details> blocks into a single grouped block */
   const mergeSubtaskDetails = (text: string): string => {
@@ -5577,9 +5581,15 @@ export default function WorkbenchPage() {
     // Check for human feedback marker first
     const fbMatch = chunk.match(HUMAN_FEEDBACK_REGEX);
     if (fbMatch) {
+      const rawContent = chunk.substring(fbMatch[0].length);
+      const closeIndex = rawContent.search(/\n?<!--\s*\/human-feedback\s*-->\s*/i);
+      const boundaryIndex = rawContent.search(CHUNK_BOUNDARY_SEARCH_REGEX);
+      const contentEnd = [closeIndex, boundaryIndex]
+        .filter((index) => index >= 0)
+        .sort((a, b) => a - b)[0];
       return {
         timestamp: fbMatch[1],
-        content: chunk.substring(fbMatch[0].length),
+        content: contentEnd >= 0 ? rawContent.slice(0, contentEnd) : rawContent,
         isHumanFeedback: true,
       };
     }
@@ -5728,7 +5738,7 @@ export default function WorkbenchPage() {
             content = workflowProcesses.find((p: any) => p.runId === rid && p.step === stepKey)?.streamContent || '';
           }
           const stepChunks = content
-            ? content.split(CHUNK_SEP).filter(Boolean)
+            ? splitStreamChunks(content)
             : ['(等待输出...)'];
           return stepChunks.map((chunk) => `${title}\n\n${chunk}`);
         }));
@@ -5742,7 +5752,7 @@ export default function WorkbenchPage() {
           if (combined && combined !== liveStreamRawRef.current) {
             liveStreamRawRef.current = combined;
             liveStreamLenRef.current = combined.length;
-            const parts = combined.split(CHUNK_SEP);
+            const parts = combined.split(CHUNK_BOUNDARY_REGEX);
             const trailing = parts.pop() || '';
             setLiveStream([...parts.filter(Boolean), ...(trailing ? [trailing] : [])]);
           }
@@ -5780,7 +5790,7 @@ export default function WorkbenchPage() {
           liveStreamRawRef.current = sseRaw;
           liveStreamLenRef.current = sseRaw.length;
 
-          const parts = sseRaw.split(CHUNK_SEP);
+          const parts = sseRaw.split(CHUNK_BOUNDARY_REGEX);
           sseBuffer = parts.pop() || '';
           const rebuilt = [...parts.filter(Boolean), ...(sseBuffer ? [sseBuffer] : [])];
           setLiveStream(rebuilt);
@@ -5845,7 +5855,7 @@ export default function WorkbenchPage() {
 
           // Abnormal stream update (reset/overwrite/step mismatch): rebuild once from full content
           if (!isContinuous) {
-            const parts = content.split(CHUNK_SEP);
+            const parts = content.split(CHUNK_BOUNDARY_REGEX);
             const trailing = parts.pop() || '';
             const rebuilt = [...parts.filter(Boolean), ...(trailing ? [trailing] : [])];
             liveStreamRawRef.current = content;
@@ -5861,7 +5871,7 @@ export default function WorkbenchPage() {
               const next = [...prev];
               const oldTail = next.length > 0 ? next.pop() || '' : '';
               const merged = oldTail + delta;
-              const segs = merged.split(CHUNK_SEP);
+              const segs = merged.split(CHUNK_BOUNDARY_REGEX);
               const newTail = segs.pop() || '';
               const completed = segs.filter(Boolean);
               next.push(...completed);
@@ -6002,7 +6012,11 @@ export default function WorkbenchPage() {
       if (!c) return false;
       const parsedIt = parseChunk(c);
       if (parsedIt.isHumanFeedback) {
-        const embeddedMessages = parsedIt.content.trim().split('\n\n').map(f => f.trim()).filter(Boolean);
+        const embeddedContent = parsedIt.content.trim();
+        const embeddedMessages = [
+          embeddedContent,
+          ...embeddedContent.split('\n\n').map(f => f.trim()),
+        ].filter(Boolean);
         return !embeddedMessages.some((message) =>
           inlineFeedbacks.some((feedback) => feedback.message.trim() === message)
         );
@@ -9114,7 +9128,7 @@ export default function WorkbenchPage() {
                     const displayText = !fullStepOutput && raw.length > 2000
                       ? raw.substring(0, 2000) + '\n\n...(已截断)'
                       : raw;
-                    const chunks = displayText.split(CHUNK_SEP).filter(Boolean);
+                    const chunks = splitStreamChunks(displayText);
                     // Deduplicate TodoWrite: only keep the latest todo-list chunk
                     const TODO_MK2 = '<!-- todo-list-marker -->';
                     let lastTodo2 = -1;
@@ -9930,6 +9944,7 @@ export default function WorkbenchPage() {
                       if (parsed.isHumanFeedback) {
                         // Extract raw feedback content (without numbering)
                         const feedbackContent = parsed.content.trim();
+                        if (feedbackContent) streamFeedbackMessages.add(feedbackContent);
                         // Split by double newlines to handle multiple feedbacks
                         const feedbacks = feedbackContent.split('\n\n').map(f => f.trim()).filter(Boolean);
                         for (const fb of feedbacks) {

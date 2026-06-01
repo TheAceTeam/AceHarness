@@ -28,7 +28,7 @@ export async function GET(
   const stream = new ReadableStream({
     start(controller) {
       let closed = false;
-      /** Bytes already sent to client from persisted stream file (SDK Plan / non-processManager paths) */
+      /** Bytes already sent to client from the persisted stream file. */
       let lastFileSentLen = 0;
 
       const send = (event: string, data: any) => {
@@ -42,26 +42,18 @@ export async function GET(
 
       const flushPersistedStream = async () => {
         const c = await loadStreamContent(id, step);
-        if (!c || c.length <= lastFileSentLen) return;
+        if (!c) return;
+        if (c.length < lastFileSentLen) {
+          lastFileSentLen = 0;
+        }
+        if (c.length <= lastFileSentLen) return;
         send('delta', { content: c.slice(lastFileSentLen) });
         lastFileSentLen = c.length;
       };
 
-      // Send any already-accumulated content first — must match `step` (状态-步骤名)
-      const allProcs = processManager.getAllProcesses();
-      const existing =
-        allProcs.find(
-          (p: any) =>
-            p.runId === id && p.step === step && p.status === 'running' && p.streamContent,
-        ) ||
-        allProcs.find((p: any) => p.runId === id && p.step === step && p.streamContent);
-      if (existing?.streamContent) {
-        send('delta', { content: existing.streamContent });
-        // Track how much we already sent so flushPersistedStream won't re-send it
-        lastFileSentLen = existing.streamContent.length;
-      }
-
-      // Initial snapshot from disk (Claude SDK Plan writes here, no processManager stream)
+      // Initial snapshot from disk. The persisted stream is authoritative because it
+      // contains workflow chunk boundaries, human feedback markers, and resumed output
+      // in the correct order.
       void flushPersistedStream();
 
       // Poll persisted stream file — SDK Plan / engines that only use saveStreamContent
@@ -69,16 +61,13 @@ export async function GET(
         void flushPersistedStream();
       }, 800);
 
-      // Listen for live stream events
+      // Listen for live stream events. Text deltas are persisted by the workflow
+      // manager and then emitted by file polling so offsets never mix process-local
+      // stream length with the full persisted stream length.
       const onStream = (evt: any) => {
         if (closed) return;
         const proc = processManager.getProcessRaw?.(evt.id);
         if (proc?.runId !== id || proc.step !== step) return;
-        if (evt.delta) {
-          send('delta', { content: evt.delta });
-          // Keep lastFileSentLen in sync so flushPersistedStream won't re-send
-          lastFileSentLen += evt.delta.length;
-        }
         if (evt.thinking) {
           send('thinking', { content: evt.thinking });
         }

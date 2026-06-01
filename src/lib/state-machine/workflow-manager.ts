@@ -506,6 +506,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private activeConcurrencyGroups: ActiveConcurrencyGroup[] = [];
   private channelOutputsById: Map<string, ChannelOutputEntry[]> = new Map();
   private completedSteps: string[] = [];
+  private failedSteps: string[] = [];
+  private resumeStateName: string | null = null;
+  private resumeStepKey: string | null = null;
   private currentProcesses: PersistedProcessInfo[] = [];
   private currentSupervisorAgent: string = DEFAULT_SUPERVISOR_NAME;
   private latestSupervisorReview: {
@@ -1065,6 +1068,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       activeConcurrencyGroups: this.activeConcurrencyGroups,
       pendingLiveFeedback: toLiveFeedbackSnapshot(this.liveFeedback),
       completedSteps: this.completedSteps,
+      failedSteps: this.failedSteps,
       currentConfigFile: this.currentConfigFile,
       agents: this.agents,
       stateHistory: this.stateHistory,
@@ -1237,6 +1241,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.transitionCount = 0;
       this.selfTransitionCounts = new Map();
       this.completedSteps = [];
+      this.failedSteps = [];
+      this.resumeStateName = null;
+      this.resumeStepKey = null;
       this.activeStepKeys.clear();
       this.activeConcurrencyGroups = [];
       this.channelOutputsById.clear();
@@ -1438,9 +1445,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.issueTracker = (existingState.issueTracker || []) as Issue[];
         this.transitionCount = existingState.transitionCount || 0;
         this.completedSteps = existingState.completedSteps || [];
+        this.failedSteps = existingState.failedSteps || this.deriveFailedStepKeys(existingState.stepLogs || []);
         const validStates = new Set((workflowConfig.workflow.states || []).map((s) => s.name));
         const restoredState = existingState.currentState;
         this.currentState = restoredState && validStates.has(restoredState) ? restoredState : null;
+        this.currentStep = existingState.currentStep || this.currentStep;
         this.runStartTime = existingState.startTime;
         this.latestSupervisorReview = existingState.latestSupervisorReview || this.latestSupervisorReview;
         this.humanQuestions = existingState.humanQuestions || [];
@@ -1462,6 +1471,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       // === Switch to running ===
       this.status = 'running';
       this.currentStep = null;
+      this.resumeStateName = null;
+      this.resumeStepKey = null;
       this.emit('status', {
         status: 'running',
         message: '状态机工作流已启动',
@@ -1859,6 +1870,78 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.refreshCurrentStep();
   }
 
+  private getStateStepKey(stateName: string, stepName: string): string {
+    return `${stateName}-${stepName}`;
+  }
+
+  private getWorkflowStepKey(stateName: string, step: WorkflowStep): string {
+    return this.getStateStepKey(stateName, step.name);
+  }
+
+  private addFailedStep(stepKey: string): void {
+    if (!this.failedSteps.includes(stepKey)) {
+      this.failedSteps.push(stepKey);
+    }
+  }
+
+  private clearFailedStep(stepKey: string): void {
+    this.failedSteps = this.failedSteps.filter((item) => item !== stepKey);
+  }
+
+  private deriveFailedStepKeys(stepLogs: PersistedStepLog[] = []): string[] {
+    return Array.from(new Set(
+      stepLogs
+        .filter((log) => log.status === 'failed' && typeof log.stepName === 'string' && log.stepName.trim())
+        .map((log) => log.stepName)
+    ));
+  }
+
+  private getLatestStepLog(stepKey: string, status?: PersistedStepLog['status']): PersistedStepLog | null {
+    for (let i = this.stepLogs.length - 1; i >= 0; i--) {
+      const log = this.stepLogs[i];
+      if (log.stepName !== stepKey) continue;
+      if (status && log.status !== status) continue;
+      return log;
+    }
+    return null;
+  }
+
+  private getSegmentStepKeys(stateName: string, segment: StepSegment): string[] {
+    return segment.type === 'parallel'
+      ? segment.steps.map((step) => this.getWorkflowStepKey(stateName, step))
+      : [this.getWorkflowStepKey(stateName, segment.step)];
+  }
+
+  private getResumeStepKeyForRun(runState: PersistedRunState, config: StateMachineWorkflowConfig): string | null {
+    const stateName = runState.currentState;
+    if (!stateName || stateName === '__human_approval__') return null;
+    const state = config.workflow.states.find((item) => item.name === stateName);
+    if (!state) return null;
+    const validStepKeys = new Set(state.steps.map((step) => this.getWorkflowStepKey(state.name, step)));
+    if (validStepKeys.size === 0) return null;
+
+    const failedLog = [...(runState.stepLogs || [])]
+      .reverse()
+      .find((log) => log.status === 'failed' && validStepKeys.has(log.stepName));
+    if (failedLog) return failedLog.stepName;
+
+    const activeStep = (runState.activeSteps || []).find((stepKey) => validStepKeys.has(stepKey));
+    if (activeStep) return activeStep;
+
+    const currentStep = runState.currentStep || '';
+    return validStepKeys.has(currentStep) ? currentStep : null;
+  }
+
+  private collectSkippedStepOutput(step: WorkflowStep, stateName: string, stepOutputs: string[], issues: Issue[]): 'pass' | 'conditional_pass' | 'fail' | null {
+    const stepKey = this.getWorkflowStepKey(stateName, step);
+    const log = this.getLatestStepLog(stepKey, 'completed');
+    if (!log?.output) return null;
+    stepOutputs.push(log.output);
+    issues.push(...this.parseIssuesFromOutput(log.output, step, stateName));
+    if (step.role === 'judge') return this.parseVerdict(log.output);
+    return null;
+  }
+
   private upsertCurrentProcess(proc: PersistedProcessInfo): void {
     const idx = this.currentProcesses.findIndex((item) => item.id === proc.id);
     if (idx >= 0) this.currentProcesses[idx] = proc;
@@ -1935,7 +2018,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         activeConcurrencyGroups: this.activeConcurrencyGroups,
         pendingLiveFeedback: toLiveFeedbackSnapshot(this.liveFeedback),
         completedSteps: this.completedSteps,
-        failedSteps: [],
+        failedSteps: this.failedSteps,
         stepLogs: [...this.stepLogs],
         agents: this.agents.map(a => ({
           name: a.name,
@@ -3569,19 +3652,65 @@ try {
     let previousParallelSummary = '';
 
     const segments = groupStateStepsIntoSegments(state.steps);
+    const resumeStepKey = this.resumeStateName === state.name ? this.resumeStepKey : null;
+    let skippingUntilResumeStep = Boolean(resumeStepKey);
+    let executedSegmentInThisPass = false;
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       if (this.shouldStop) break;
       // Allow forced transition to interrupt mid-state
       if (this.pendingForceTransition) break;
 
+      const segmentStepKeys = this.getSegmentStepKeys(state.name, segment);
+      if (skippingUntilResumeStep) {
+        if (!resumeStepKey || !segmentStepKeys.includes(resumeStepKey)) {
+          this.emit('log', {
+            message: `恢复运行：跳过已完成步骤 ${segmentStepKeys.join(', ')}`,
+          });
+          if (segment.type === 'parallel') {
+            const skippedResults: Array<{ step: WorkflowStep; status: 'fulfilled' | 'rejected'; output?: string; error?: string }> = [];
+            for (const skippedStep of segment.steps) {
+              const key = this.getWorkflowStepKey(state.name, skippedStep);
+              const log = this.getLatestStepLog(key, 'completed');
+              if (log?.output) {
+                stepOutputs.push(log.output);
+                issues.push(...this.parseIssuesFromOutput(log.output, skippedStep, state.name));
+                skippedResults.push({ step: skippedStep, status: 'fulfilled', output: log.output });
+                if (skippedStep.role === 'judge') {
+                  const stepVerdict = this.parseVerdict(log.output);
+                  if (stepVerdict === 'fail') verdict = 'fail';
+                  else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+                }
+              }
+            }
+            if (skippedResults.length > 0) {
+              previousParallelSummary = this.summarizeParallelResults(segment.groupId, skippedResults);
+            }
+          } else {
+            const skippedVerdict = this.collectSkippedStepOutput(segment.step, state.name, stepOutputs, issues);
+            if (skippedVerdict === 'fail') verdict = 'fail';
+            else if (skippedVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+            previousParallelSummary = '';
+          }
+          continue;
+        }
+
+        this.emit('log', {
+          message: `恢复运行：从失败步骤 ${resumeStepKey} 继续`,
+        });
+        skippingUntilResumeStep = false;
+        this.resumeStateName = null;
+        this.resumeStepKey = null;
+      }
+
       // Delay between segments when using non-claude engines to avoid throttling
-      if (i > 0 && getLogicalEngineId(this.engineType) !== 'claude-code') {
+      if (executedSegmentInThisPass && getLogicalEngineId(this.engineType) !== 'claude-code') {
         await new Promise(r => setTimeout(r, 30000));
       }
 
       if (segment.type === 'parallel') {
         const parallelResult = await this.executeParallelSegment(segment, state, config, requirements);
+        executedSegmentInThisPass = true;
         stepOutputs.push(...parallelResult.outputs);
         issues.push(...parallelResult.issues);
         previousParallelSummary = parallelResult.summary;
@@ -3594,6 +3723,7 @@ try {
       const step = segment.step;
       try {
         const output = await this.executeStep(step, state, config, requirements, previousParallelSummary);
+        executedSegmentInThisPass = true;
         previousParallelSummary = '';
         stepOutputs.push(output);
 
@@ -3782,7 +3912,7 @@ try {
     }
 
     const stepId = randomUUID();
-    const stepKey = `${state.name}-${step.name}`;
+    const stepKey = this.getWorkflowStepKey(state.name, step);
     const beforeSnapshotId = await this.recordStepGitBefore({
       stepLogId: stepId,
       stepName: stepKey,
@@ -3792,6 +3922,8 @@ try {
 
     agent.status = 'running';
     agent.currentTask = step.name;
+    this.clearFailedStep(stepKey);
+    this.completedSteps = this.completedSteps.filter((item) => item !== stepKey);
     this.markStepActive(stepKey);
     this.markBoundSpecTasksForStep({
       step,
@@ -3877,6 +4009,7 @@ try {
       if (!this.completedSteps.includes(stepKey)) {
         this.completedSteps.push(stepKey);
       }
+      this.clearFailedStep(stepKey);
       this.removeCurrentProcess(stepId);
       this.markBoundSpecTasksForStep({
         step,
@@ -3986,6 +4119,8 @@ try {
 
       // Record failed step log
       const errorMsg = error.message || String(error);
+      this.addFailedStep(stepKey);
+      this.completedSteps = this.completedSteps.filter((item) => item !== stepKey);
       this.markBoundSpecTasksForStep({
         step,
         stateName: state.name,
@@ -4109,7 +4244,7 @@ try {
     config: StateMachineWorkflowConfig,
   ): string {
     const states = config.workflow?.states || [];
-    const currentStepKey = `${currentState.name}-${currentStep.name}`;
+    const currentStepKey = this.getWorkflowStepKey(currentState.name, currentStep);
     const lines: string[] = [
       '\n# 全局工作流路线与当前职责边界',
       '你可以看到完整工作流路线，用它来理解上下游分工，但不能把当前步骤的核心交付留给后续步骤。',
@@ -4124,11 +4259,13 @@ try {
       lines.push(`${stateMarker}状态: ${state.name}${state.isInitial ? ' (初始)' : ''}${state.isFinal ? ' (最终)' : ''}`);
       if (state.description) lines.push(`   状态目标: ${state.description}`);
       for (const step of state.steps || []) {
-        const stepKey = `${state.name}-${step.name}`;
+        const stepKey = this.getWorkflowStepKey(state.name, step);
         const marker = stepKey === currentStepKey ? '   * 当前步骤' : '   - 步骤';
         const agentName = getStepRuntimeAgentName(step);
         const status = this.completedSteps.includes(stepKey)
           ? '已完成'
+          : this.failedSteps.includes(stepKey)
+            ? '失败待恢复'
           : this.activeStepKeys.has(stepKey)
             ? '运行中'
             : '待执行';
@@ -4857,16 +4994,12 @@ try {
           level: 'warning',
           message: `步骤 "${streamStepName}" 出现可恢复错误，正在自动恢复 ${autoRecoveryAttempts}/${STEP_AUTO_RECOVERY_MAX_ATTEMPTS}: ${errorMsg}`,
         });
-        this.emit('feedback-injected', {
-          id: `auto-recovery-${recoveryTimestamp}`,
-          message: recoveryPrompt,
-          timestamp: recoveryTimestamp,
-          status: 'delivered',
-          automatic: true,
-        });
         continue;
       }
 
+      if (autoRecoveryAttempts > 0) {
+        autoRecoveryAttempts = 0;
+      }
       accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + (result.result || '');
       lastRoundOutput = result.result || '';
       accumulatedCost += result.cost_usd || 0;
@@ -5223,6 +5356,8 @@ try {
     this.issueTracker = (runState.issueTracker || []) as Issue[];
     this.transitionCount = runState.transitionCount || 0;
     this.completedSteps = runState.completedSteps || [];
+    this.failedSteps = runState.failedSteps || this.deriveFailedStepKeys(runState.stepLogs || []);
+    this.currentStep = runState.currentStep || null;
     this.stepLogs = runState.stepLogs || [];
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
@@ -5276,6 +5411,8 @@ try {
     this.interruptFlag = false;
     this.feedbackInterrupt = false;
     this.liveFeedback = [];
+    this.resumeStateName = null;
+    this.resumeStepKey = null;
 
     this.emit('status', {
       status: 'running',
@@ -5302,6 +5439,25 @@ try {
       workflowConfig.context.projectRoot = runState.workingDirectory;
     }
     this.currentWorkflowConfig = workflowConfig;
+    const resumeStepKey = this.getResumeStepKeyForRun(runState, workflowConfig);
+    if (resumeStepKey && this.currentState) {
+      this.resumeStateName = this.currentState;
+      this.resumeStepKey = resumeStepKey;
+      this.currentStep = resumeStepKey;
+      this.emit('status', {
+        status: 'running',
+        message: `恢复运行：将从步骤 ${resumeStepKey} 继续`,
+        runId: this.currentRunId,
+        startTime: this.runStartTime,
+        endTime: this.runEndTime,
+        currentPhase: this.currentState,
+        currentStep: this.currentStep,
+        currentConfigFile: this.currentConfigFile,
+        workingDirectory: this.getWorkingDirectory(),
+        workflowFrontendSessionId: this._frontendSessionId || null,
+      });
+      await this.persistState();
+    }
     this.workflowMcpServers = [];
     this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
 
