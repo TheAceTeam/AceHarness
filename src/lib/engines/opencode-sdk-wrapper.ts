@@ -30,6 +30,7 @@ let serverEnvFingerprint: string | null = null;
 let serverStarting: Promise<{ url: string; close: () => void }> | null = null;
 let serverStartingFingerprint: string | null = null;
 let clientInstance: OpenCodeHttpClient | null = null;
+let activeExecutions = 0;
 const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 20_000;
 const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
   /ECONNRESET/i,
@@ -211,6 +212,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
 
   async execute(options: EngineOptions): Promise<EngineResult> {
     const startTime = Date.now();
+    activeExecutions += 1;
     this.collectedOutput = '';
     this.streamedTranscript = '';
     this.abortController = new AbortController();
@@ -365,12 +367,22 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         sessionId: this.currentSessionId || undefined,
         metadata: ZERO_USAGE_METADATA,
       };
+    } finally {
+      activeExecutions = Math.max(0, activeExecutions - 1);
+      this.abortController = null;
     }
   }
 
   cancel(): void {
     this.abortController?.abort();
     this.abortController = null;
+  }
+
+  cleanup(): void {
+    this.cancel();
+    if (activeExecutions === 0) {
+      OpenCodeSdkEngineWrapper.shutdown();
+    }
   }
 
   /** Clean up the shared server (call on app shutdown) */

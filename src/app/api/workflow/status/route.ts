@@ -417,6 +417,7 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
             failedSteps: status?.failedSteps,
             activeSteps: status?.activeSteps,
             activeConcurrencyGroups: status?.activeConcurrencyGroups,
+            pendingLiveFeedback: status?.pendingLiveFeedback,
             pendingHumanQuestionId: status?.pendingHumanQuestionId,
             pendingHumanQuestion: status?.pendingHumanQuestion,
             specRevisionVote: status?.specRevisionVote,

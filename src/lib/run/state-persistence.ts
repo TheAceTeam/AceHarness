@@ -277,6 +277,15 @@ export interface PersistedRunState {
   agents: PersistedAgentState[];
   iterationStates: Record<string, PersistedIterationState>;
   processes: PersistedProcessInfo[];
+  /** Live feedback that has been sent by the user but not yet consumed by the running agent. */
+  pendingLiveFeedback?: Array<{
+    id: string;
+    message: string;
+    timestamp: string;
+    status?: 'queued' | 'interrupting' | 'delivered';
+    interrupt?: boolean;
+    automatic?: boolean;
+  }>;
   /** If set, the workflow was waiting at a checkpoint when it stopped */
   pendingCheckpoint?: {
     phase: string;

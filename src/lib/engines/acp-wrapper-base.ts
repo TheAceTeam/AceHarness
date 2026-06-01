@@ -139,6 +139,12 @@ class ACPSharedRunner {
     }
   }
 
+  disposeIfIdle(): boolean {
+    if (!this.isIdle()) return false;
+    this.dispose();
+    return true;
+  }
+
   execute(input: SharedRunnerExecuteInput): { promise: Promise<EngineResult>; cancel: () => void } {
     const cancelState: SharedRunnerCancelState = {
       cancelled: false,
@@ -501,6 +507,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   private static cleanupTimer: NodeJS.Timeout | null = null;
 
   private cancelCurrentExecution: (() => void) | null = null;
+  private currentRunner: ACPSharedRunner | null = null;
 
   abstract getName(): string;
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
@@ -509,6 +516,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   async execute(options: EngineOptions): Promise<EngineResult> {
     const diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
     const runner = this.getOrCreateSharedRunner(options, diagnosticLoggingEnabled);
+    this.currentRunner = runner;
     const { promise, cancel } = runner.execute({
       wrapper: this,
       options,
@@ -534,6 +542,15 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
 
   cleanup(): void {
     this.cancel();
+    const runner = this.currentRunner;
+    if (runner?.disposeIfIdle()) {
+      for (const key of runner.getKeys()) {
+        if (ACPWrapperBase.sharedRunners.get(key) === runner) {
+          ACPWrapperBase.sharedRunners.delete(key);
+        }
+      }
+      this.currentRunner = null;
+    }
   }
 
   static shutdownSharedRunners(): void {

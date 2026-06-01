@@ -4,7 +4,7 @@ import { workflowRegistry } from '@/lib/workflow/registry';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { message, interrupt, configFile } = body;
+    const { message, interrupt, configFile, clientId } = body;
 
     if (!message?.trim()) {
       return NextResponse.json(
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (interrupt) {
-      const ok = manager.interruptWithFeedback(message.trim());
+      const ok = manager.interruptWithFeedback(message.trim(), { id: typeof clientId === 'string' ? clientId : undefined });
       return NextResponse.json({
         success: true,
         interrupted: ok,
@@ -38,11 +38,12 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    manager.injectLiveFeedback(message.trim());
+    const interrupted = manager.injectLiveFeedback(message.trim(), { id: typeof clientId === 'string' ? clientId : undefined });
 
     return NextResponse.json({
       success: true,
-      message: '反馈已注入',
+      interrupted,
+      message: interrupted ? '反馈已发送，AI 正在接入' : '反馈已排队等待处理',
     });
   } catch (error: any) {
     return NextResponse.json(

@@ -1439,11 +1439,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async injectFeedback(message: string, interrupt?: boolean, configFile?: string): Promise<ApiResponse> {
+  async injectFeedback(message: string, interrupt?: boolean, configFile?: string, clientId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/inject-feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, interrupt, configFile }),
+      body: JSON.stringify({ message, interrupt, configFile, clientId }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));

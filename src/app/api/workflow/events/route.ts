@@ -61,6 +61,7 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
     currentState: status.currentState || null,
     currentPhase: status.currentPhase || null,
     currentStep: status.currentStep || null,
+    pendingLiveFeedback: Array.isArray(status.pendingLiveFeedback) ? status.pendingLiveFeedback : [],
     currentConfigFile: status.currentConfigFile || configFile,
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,
     supervisorAgent: status.supervisorAgent || null,

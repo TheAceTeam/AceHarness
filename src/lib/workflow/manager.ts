@@ -96,6 +96,12 @@ const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 
+interface LiveFeedbackOptions {
+  id?: string;
+  interrupt?: boolean;
+  automatic?: boolean;
+}
+
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -1365,7 +1371,8 @@ try {
     if (!this.currentRunId) return;
     this.runEndTime = new Date().toISOString();
 
-    // Cleanup copied skills from workspace
+    // Cleanup copied skills and engine processes from workspace/run execution
+    this.cleanupCurrentEngine();
     await this.cleanupWorkspaceSkills();
     await this.recordFinalGitSnapshot(status);
 
@@ -1391,6 +1398,22 @@ try {
       });
     }
     this.status = 'idle';
+  }
+
+  private cleanupCurrentEngine(): void {
+    const engine = this.currentEngine;
+    if (!engine) return;
+    try {
+      engine.cancel();
+    } catch {
+      // best-effort cleanup
+    }
+    try {
+      (engine as any).cleanup?.();
+    } catch {
+      // best-effort cleanup
+    }
+    this.currentEngine = null;
   }
 
   initializeAgents(workflowConfig: WorkflowConfig): void {
@@ -2413,7 +2436,7 @@ try {
       this.liveFeedback.push(AUTO_CONTINUE_FEEDBACK);
       this.interruptFlag = true;
       this.feedbackInterrupt = true;
-      this.emit('feedback-injected', { message: AUTO_CONTINUE_FEEDBACK, timestamp: new Date().toISOString(), automatic: true });
+      this.emit('feedback-injected', { message: AUTO_CONTINUE_FEEDBACK, timestamp: new Date().toISOString(), status: 'queued', automatic: true });
       processManager.killProcess(activeProcessId);
     }, STREAM_IDLE_CHECK_MS);
 
@@ -2464,6 +2487,7 @@ try {
             if (this.currentRunId) {
               saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
             }
+            this.emit('feedback-injected', { message: feedbackPrompt, timestamp: feedbackTimestamp, status: 'delivered' });
             currentSessionId = sessionId || undefined;
             currentPrompt = isFeedbackOnly
               ? `## 人工实时反馈\n用户在你执行过程中提供了补充反馈，请参考以下内容继续完成任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`
@@ -2516,6 +2540,7 @@ try {
           if (this.currentRunId) {
             saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
           }
+          this.emit('feedback-injected', { message: feedbackPrompt, timestamp: feedbackTimestamp, status: 'delivered' });
 
           // Resume the same session with feedback
           currentSessionId = sessionId;
@@ -2552,6 +2577,36 @@ try {
     }
   }
 
+  private buildWorkflowRoadmapContext(currentStep: WorkflowStep, workflowConfig: WorkflowConfig): string {
+    const lines: string[] = [
+      `## 全局工作流路线与当前职责边界`,
+      `你可以看到完整工作流路线，用它来理解上下游分工，但不能把当前步骤的核心交付留给后续步骤。`,
+      `当前步骤必须尽量完成其任务描述中可完成的分析、实现、验证或裁决；后续步骤只负责在你的明确产出基础上继续推进。`,
+      `如果发现某件事确实应由后续步骤处理，请在步骤结论中写清楚具体输入、文件、风险和最小动作，不要只笼统写“留给后续”。`,
+      ``,
+    ];
+    for (const phase of workflowConfig.workflow.phases || []) {
+      const phaseMarker = phase.name === this.currentPhase ? '=> ' : '   ';
+      lines.push(`${phaseMarker}阶段: ${phase.name}`);
+      const phaseDescription = typeof (phase as any).description === 'string' ? (phase as any).description : '';
+      if (phaseDescription) lines.push(`   阶段目标: ${phaseDescription}`);
+      for (const item of phase.steps || []) {
+        const isCurrent = item === currentStep || (item.name === currentStep.name && phase.name === this.currentPhase);
+        const status = this.completedStepNames.includes(item.name)
+          ? '已完成'
+          : isCurrent
+            ? '当前步骤'
+            : '待执行';
+        lines.push(`${isCurrent ? '   *' : '   -'} 步骤: ${item.name} [${status}]${item.agent ? ` / agent: ${item.agent}` : ''}${item.role ? ` / role: ${item.role}` : ''}`);
+        if (item.task) {
+          const compactTask = String(item.task).replace(/\s+/g, ' ').trim();
+          lines.push(`     任务: ${compactTask.slice(0, 220)}${compactTask.length > 220 ? '...' : ''}`);
+        }
+      }
+    }
+    return `${lines.join('\n')}\n\n`;
+  }
+
   async buildPrompt(
     step: WorkflowStep,
     workflowConfig: WorkflowConfig,
@@ -2560,6 +2615,7 @@ try {
     extraContext?: string
   ): Promise<string> {
     let prompt = `# 任务\n${step.task}\n\n`;
+    prompt += this.buildWorkflowRoadmapContext(step, workflowConfig);
 
     if (workflowConfig.context.requirements) {
       prompt += `## 需求背景\n${workflowConfig.context.requirements}\n\n`;
@@ -2793,9 +2849,18 @@ try {
     this.iterationFeedback = feedback;
   }
 
-  injectLiveFeedback(message: string): void {
-    const entry = { message, timestamp: new Date().toISOString() };
-    this.liveFeedback.push(message);
+  injectLiveFeedback(message: string, options: LiveFeedbackOptions = {}): boolean {
+    const entry = {
+      id: options.id,
+      message,
+      timestamp: new Date().toISOString(),
+      status: options.interrupt ? 'interrupting' : 'queued',
+      interrupt: !!options.interrupt,
+      automatic: options.automatic,
+    };
+    if (!this.liveFeedback.includes(message)) {
+      this.liveFeedback.push(message);
+    }
     this.emit('feedback-injected', entry);
 
     // Interrupt the running process so feedback is delivered immediately via resume
@@ -2809,8 +2874,11 @@ try {
       );
       if (running) {
         processManager.killProcess(running.id);
+        this.emit('feedback-injected', { ...entry, status: 'interrupting' });
+        return true;
       }
     }
+    return false;
   }
 
   /**
@@ -2829,12 +2897,15 @@ try {
    * Interrupt the currently running step and immediately resume with feedback.
    * Kills the current process and queues feedback so executeSingleAgent resumes.
    */
-  interruptWithFeedback(message: string): boolean {
+  interruptWithFeedback(message: string, options: LiveFeedbackOptions = {}): boolean {
     if (this.status !== 'running' || !this.currentStep) return false;
 
     // Queue the feedback
-    this.liveFeedback.push(message);
+    if (!this.liveFeedback.includes(message)) {
+      this.liveFeedback.push(message);
+    }
     this.interruptFlag = true;
+    this.feedbackInterrupt = false;
 
     // Find and kill the running process
     const allProcs = processManager.getAllProcesses();
@@ -2850,8 +2921,15 @@ try {
       level: 'warning',
       message: `步骤 "${this.currentStep}" 被打断，将立即处理反馈`,
     });
-    this.emit('feedback-injected', { message, timestamp: new Date().toISOString() });
-    return true;
+    this.emit('feedback-injected', {
+      id: options.id,
+      message,
+      timestamp: new Date().toISOString(),
+      status: running ? 'interrupting' : 'queued',
+      interrupt: true,
+      automatic: options.automatic,
+    });
+    return Boolean(running);
   }
 
   setContext(scope: 'global' | 'phase', context: string, phase?: string): void {
@@ -3451,6 +3529,13 @@ try {
       currentStep: this.currentStep,
       completedSteps: this.completedStepNames,
       failedSteps: this.failedStepNames,
+      pendingLiveFeedback: this.liveFeedback.map((message, index) => ({
+        id: `phase-feedback-${index}`,
+        message,
+        timestamp: new Date().toISOString(),
+        status: this.interruptFlag ? 'interrupting' : 'queued',
+        interrupt: this.interruptFlag,
+      })),
       stepLogs: this.stepLogs,
       qualityChecks: this.qualityChecks,
       workflow: this.currentWorkflow,

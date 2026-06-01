@@ -1451,11 +1451,127 @@ export default function WorkbenchPage() {
   const liveFeedbackEditorRef = useRef<RichTextEditorHandle>(null);
   const [liveFeedbackDraft, setLiveFeedbackDraft] = useState('');
   const [sendingFeedback, setSendingFeedback] = useState(false);
-  const [inlineFeedbacks, setInlineFeedbacks] = useState<{ message: string; timestamp: string; streamIndex: number }[]>([]);
+  type LiveFeedbackStatus = 'sending' | 'queued' | 'interrupting' | 'delivered' | 'failed';
+  type InlineFeedback = {
+    id: string;
+    message: string;
+    timestamp: string;
+    streamIndex: number;
+    mode: 'feedback' | 'interrupt';
+    status: LiveFeedbackStatus;
+    automatic?: boolean;
+    error?: string;
+  };
+  const [inlineFeedbacks, setInlineFeedbacks] = useState<InlineFeedback[]>([]);
+  const pendingLiveFeedbackRef = useRef<InlineFeedback[]>([]);
   const [liveStreamSource, setLiveStreamSource] = useState<{ stateName: string | null; stepName: string | null }>({
     stateName: null,
     stepName: null,
   });
+  const upsertInlineFeedback = useCallback((incoming: InlineFeedback) => {
+    if (incoming.status === 'queued' || incoming.status === 'interrupting' || incoming.status === 'sending') {
+      const index = pendingLiveFeedbackRef.current.findIndex((item) => item.id === incoming.id);
+      if (index >= 0) {
+        pendingLiveFeedbackRef.current = pendingLiveFeedbackRef.current.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, ...incoming } : item
+        );
+      } else {
+        pendingLiveFeedbackRef.current = [...pendingLiveFeedbackRef.current, incoming];
+      }
+    } else {
+      pendingLiveFeedbackRef.current = pendingLiveFeedbackRef.current.filter((item) => item.id !== incoming.id);
+    }
+    setInlineFeedbacks((prev) => {
+      const idIndex = incoming.id ? prev.findIndex((item) => item.id === incoming.id) : -1;
+      const recentMessageIndex = idIndex === -1
+        ? prev.findIndex((item) =>
+            item.message.trim() === incoming.message.trim()
+            && Math.abs(new Date(item.timestamp).getTime() - new Date(incoming.timestamp).getTime()) < 10_000
+          )
+        : -1;
+      const index = idIndex >= 0 ? idIndex : recentMessageIndex;
+      if (index === -1) return [...prev, incoming];
+      const next = [...prev];
+      const current = next[index];
+      next[index] = {
+        ...current,
+        ...incoming,
+        id: current.id || incoming.id,
+        timestamp: current.timestamp || incoming.timestamp,
+        streamIndex: Math.min(current.streamIndex, incoming.streamIndex),
+        mode: incoming.mode === 'interrupt' || current.mode === 'interrupt' ? 'interrupt' : 'feedback',
+        status: current.status === 'delivered' && incoming.status !== 'failed' ? current.status : incoming.status,
+        error: incoming.error,
+      };
+      return next;
+    });
+  }, []);
+  const markInlineFeedbacksDelivered = useCallback((payload: any) => {
+    const messages = Array.isArray(payload?.messages) && payload.messages.length > 0
+      ? payload.messages
+      : [{ id: payload?.id, message: payload?.message }];
+    const ids = new Set<string>([
+      ...(Array.isArray(payload?.ids) ? payload.ids : []),
+      ...messages.map((item: any) => item?.id).filter(Boolean),
+    ]);
+    const messageSet = new Set<string>();
+    for (const item of messages) {
+      const raw = String(item?.message || '').trim();
+      if (!raw) continue;
+      messageSet.add(raw);
+      for (const part of raw.split(/\n{2,}/).map((value) => value.trim()).filter(Boolean)) {
+        messageSet.add(part);
+      }
+      for (const line of raw.split('\n')) {
+        const numbered = line.trim().match(/^\d+\.\s+(.+)$/);
+        if (numbered?.[1]) messageSet.add(numbered[1].trim());
+      }
+    }
+    const deliveredIds = new Set(ids);
+    const deliveredMessages = new Set(messageSet);
+    pendingLiveFeedbackRef.current = pendingLiveFeedbackRef.current.filter((item) =>
+      !(deliveredIds.has(item.id) || deliveredMessages.has(item.message.trim()))
+    );
+    setInlineFeedbacks((prev) => {
+      const matchedMessageSet = new Set<string>();
+      const next = prev.map((item) => {
+        if ((item.id && ids.has(item.id)) || messageSet.has(item.message.trim())) {
+          matchedMessageSet.add(item.message.trim());
+          if (item.id) ids.delete(item.id);
+          messageSet.delete(item.message.trim());
+          for (const line of item.message.split('\n')) {
+            const numbered = line.trim().match(/^\d+\.\s+(.+)$/);
+            if (numbered?.[1]) messageSet.delete(numbered[1].trim());
+          }
+          return {
+            ...item,
+            status: 'delivered' as LiveFeedbackStatus,
+            mode: payload?.interrupt ? 'interrupt' : item.mode,
+            timestamp: item.timestamp || payload?.timestamp || new Date().toISOString(),
+          };
+        }
+        return item;
+      });
+      const additions: InlineFeedback[] = [];
+      const baseStreamIndex = next.reduce((max, item) => Math.max(max, item.streamIndex), 0);
+      for (const item of messages) {
+        const message = String(item?.message || '').trim();
+        if (!message || matchedMessageSet.has(message)) continue;
+        const id = String(item?.id || payload?.id || '');
+        if (id && next.some((feedback) => feedback.id === id)) continue;
+        additions.push({
+          id: id || `delivered-feedback-${payload?.timestamp || Date.now()}-${additions.length}`,
+          message,
+          timestamp: item?.timestamp || payload?.timestamp || new Date().toISOString(),
+          streamIndex: baseStreamIndex + additions.length + 1,
+          mode: payload?.interrupt || item?.interrupt ? 'interrupt' : 'feedback',
+          status: 'delivered',
+          automatic: payload?.automatic || item?.automatic,
+        });
+      }
+      return additions.length ? [...next, ...additions] : next;
+    });
+  }, []);
   const [showContextEditor, setShowContextEditor] = useState(false);
   const [contextEditorGlobalDraft, setContextEditorGlobalDraft] = useState('');
   const [contextEditorPhaseDrafts, setContextEditorPhaseDrafts] = useState<Record<string, string>>({});
@@ -3656,6 +3772,29 @@ export default function WorkbenchPage() {
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
       setActiveSteps(Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []);
       setActiveConcurrencyGroups(Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []);
+      const pendingLiveFeedback = Array.isArray((status as any).pendingLiveFeedback)
+        ? (status as any).pendingLiveFeedback
+        : [];
+      const restoredLiveFeedback: InlineFeedback[] = pendingLiveFeedback
+        .map((item: any, index: number) => {
+          const message = String(item?.message || '').trim();
+          if (!message) return null;
+          const statusValue = item?.status === 'interrupting' ? 'interrupting' : 'queued';
+          return {
+            id: String(item?.id || `restored-feedback-${index}`),
+            message,
+            timestamp: String(item?.timestamp || new Date().toISOString()),
+            streamIndex: liveStream.length + index,
+            mode: item?.interrupt || statusValue === 'interrupting' ? 'interrupt' : 'feedback',
+            status: statusValue as LiveFeedbackStatus,
+            automatic: Boolean(item?.automatic),
+          };
+        })
+        .filter(Boolean) as InlineFeedback[];
+      pendingLiveFeedbackRef.current = restoredLiveFeedback;
+      for (const feedback of restoredLiveFeedback) {
+        upsertInlineFeedback(feedback);
+      }
 
       // Restore workingDirectory
       if (status.workingDirectory) {
@@ -4518,16 +4657,24 @@ export default function WorkbenchPage() {
         break;
       case 'feedback-injected':
         addLog('system', 'info', `反馈已接收: ${event.data.message.substring(0, 50)}${event.data.message.length > 50 ? '...' : ''}`);
-        setInlineFeedbacks(prev => [...prev, {
-          message: event.data.message,
-          timestamp: event.data.timestamp,
-          streamIndex: liveStreamLenRef.current,
-        }]);
+        if (event.data.status === 'delivered') {
+          markInlineFeedbacksDelivered(event.data);
+        } else {
+          upsertInlineFeedback({
+            id: event.data.id || (Array.isArray(event.data.ids) ? event.data.ids[0] : '') || `server-feedback-${event.data.timestamp || Date.now()}`,
+            message: event.data.message,
+            timestamp: event.data.timestamp || new Date().toISOString(),
+            streamIndex: liveStream.length,
+            mode: event.data.interrupt ? 'interrupt' : 'feedback',
+            status: event.data.status === 'interrupting' ? 'interrupting' : 'queued',
+            automatic: event.data.automatic,
+          });
+        }
         break;
       case 'feedback-recalled':
         addLog('system', 'info', `反馈已撤回: ${event.data.message.substring(0, 50)}${event.data.message.length > 50 ? '...' : ''}`);
         setInlineFeedbacks(prev => {
-          const idx = prev.findIndex(f => f.message === event.data.message);
+          const idx = prev.findIndex(f => f.id === event.data.id || f.message === event.data.message);
           if (idx === -1) return prev;
           const next = [...prev];
           next.splice(idx, 1);
@@ -4563,7 +4710,7 @@ export default function WorkbenchPage() {
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         break;
     }
-  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload, applyWorkflowStatusSnapshot]);
+  }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload, applyWorkflowStatusSnapshot, liveStream.length, markInlineFeedbacksDelivered, upsertInlineFeedback]);
 
   // Keep a ref to the latest handleEvent so SSE callback never goes stale
   const handleEventRef = useRef(handleEvent);
@@ -5548,7 +5695,7 @@ export default function WorkbenchPage() {
     setLiveStreamVisibleCount(LIVE_STREAM_PAGE_SIZE);
     liveStreamUserScrolledUp.current = false;
     setLiveStreamScrollLocked(false);
-    setInlineFeedbacks([]);
+    setInlineFeedbacks(pendingLiveFeedbackRef.current);
     setLiveStream([]);
 
     // Close previous connection
@@ -5674,7 +5821,7 @@ export default function WorkbenchPage() {
           liveStreamLenRef.current = 0;
           liveStreamRawRef.current = '';
           setLiveStream([]);
-          setInlineFeedbacks([]);
+          setInlineFeedbacks(pendingLiveFeedbackRef.current);
         }
 
         let content: string | null = null;
@@ -5760,23 +5907,36 @@ export default function WorkbenchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLiveStream, liveStreamTarget.runId, liveStreamTarget.stepKey]);
 
-  const sendLiveFeedback = async (interrupt?: boolean) => {
-    const feedback = liveFeedbackEditorRef.current?.getMarkdown() || liveFeedbackDraft || liveStreamFeedbackRef.current?.value || '';
+  const sendLiveFeedback = async (interrupt?: boolean, existingFeedback?: InlineFeedback) => {
+    const feedback = existingFeedback?.message || liveFeedbackEditorRef.current?.getMarkdown() || liveFeedbackDraft || liveStreamFeedbackRef.current?.value || '';
     if (!feedback.trim() || sendingFeedback) return;
     setSendingFeedback(true);
+    const feedbackId = existingFeedback?.id || `live-feedback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = existingFeedback?.timestamp || new Date().toISOString();
     try {
-      // Add feedback to inline list immediately for display
-      const timestamp = new Date().toISOString();
-      setInlineFeedbacks(prev => [...prev, {
+      upsertInlineFeedback({
+        id: feedbackId,
         message: feedback.trim(),
         timestamp,
-        streamIndex: liveStream.length, // Insert after current chunks
-      }]);
+        streamIndex: existingFeedback?.streamIndex ?? liveStream.length,
+        mode: interrupt ? 'interrupt' : 'feedback',
+        status: interrupt ? 'interrupting' : 'sending',
+      });
       
-      const res = await workflowApi.injectFeedback(feedback.trim(), interrupt, configFile);
-      if (liveStreamFeedbackRef.current) liveStreamFeedbackRef.current.value = '';
-      setLiveFeedbackDraft('');
-      liveFeedbackEditorRef.current?.clear();
+      const res = await workflowApi.injectFeedback(feedback.trim(), interrupt, configFile, feedbackId);
+      upsertInlineFeedback({
+        id: feedbackId,
+        message: feedback.trim(),
+        timestamp,
+        streamIndex: existingFeedback?.streamIndex ?? liveStream.length,
+        mode: interrupt ? 'interrupt' : 'feedback',
+        status: res.interrupted ? 'interrupting' : 'queued',
+      });
+      if (!existingFeedback) {
+        if (liveStreamFeedbackRef.current) liveStreamFeedbackRef.current.value = '';
+        setLiveFeedbackDraft('');
+        liveFeedbackEditorRef.current?.clear();
+      }
       if (interrupt) {
         if (res.interrupted) {
           toast('success', '已打断当前执行，反馈将立即处理');
@@ -5786,8 +5946,15 @@ export default function WorkbenchPage() {
       }
     } catch (error: any) {
       toast('error', `发送反馈失败: ${error.message}`);
-      // Remove feedback from inline list if API call failed
-      setInlineFeedbacks(prev => prev.slice(0, -1));
+      upsertInlineFeedback({
+        id: feedbackId,
+        message: feedback.trim(),
+        timestamp,
+        streamIndex: existingFeedback?.streamIndex ?? liveStream.length,
+        mode: interrupt ? 'interrupt' : 'feedback',
+        status: 'failed',
+        error: error.message,
+      });
     }
     setSendingFeedback(false);
   };
@@ -5805,30 +5972,18 @@ export default function WorkbenchPage() {
       return <div className="py-8 text-center text-sm text-muted-foreground">(等待输出...)</div>;
     }
 
-    type Item = { type: 'chunk'; content: string; index: number } | { type: 'feedback'; message: string; timestamp: string };
+    type Item = { type: 'chunk'; content: string; index: number } | ({ type: 'feedback' } & InlineFeedback);
     const items: Item[] = [];
-    const streamFeedbackMessages = new Set<string>();
-    for (const chunk of liveStream) {
-      const parsed = parseChunk(chunk);
-      if (parsed.isHumanFeedback) {
-        const feedbacks = parsed.content.trim().split('\n\n').map(f => f.trim()).filter(Boolean);
-        for (const fb of feedbacks) streamFeedbackMessages.add(fb);
-      }
-    }
     let fbIdx = 0;
     for (let i = 0; i < liveStream.length; i++) {
       while (fbIdx < inlineFeedbacks.length && inlineFeedbacks[fbIdx].streamIndex <= i) {
-        if (!streamFeedbackMessages.has(inlineFeedbacks[fbIdx].message.trim())) {
-          items.push({ type: 'feedback', message: inlineFeedbacks[fbIdx].message, timestamp: inlineFeedbacks[fbIdx].timestamp });
-        }
+        items.push({ type: 'feedback', ...inlineFeedbacks[fbIdx] });
         fbIdx++;
       }
       items.push({ type: 'chunk', content: liveStream[i], index: i });
     }
     while (fbIdx < inlineFeedbacks.length) {
-      if (!streamFeedbackMessages.has(inlineFeedbacks[fbIdx].message.trim())) {
-        items.push({ type: 'feedback', message: inlineFeedbacks[fbIdx].message, timestamp: inlineFeedbacks[fbIdx].timestamp });
-      }
+      items.push({ type: 'feedback', ...inlineFeedbacks[fbIdx] });
       fbIdx++;
     }
 
@@ -5846,7 +6001,12 @@ export default function WorkbenchPage() {
       const c = (it as any).content as string;
       if (!c) return false;
       const parsedIt = parseChunk(c);
-      if (parsedIt.isHumanFeedback) return false;
+      if (parsedIt.isHumanFeedback) {
+        const embeddedMessages = parsedIt.content.trim().split('\n\n').map(f => f.trim()).filter(Boolean);
+        return !embeddedMessages.some((message) =>
+          inlineFeedbacks.some((feedback) => feedback.message.trim() === message)
+        );
+      }
       const stripped = c.replace(/\*\*🔧 .+?\*\*/g, '').replace(/<!--.*?-->/gs, '').trim();
       return stripped.length > 1;
     });
@@ -5884,14 +6044,37 @@ export default function WorkbenchPage() {
         )}
         {visibleItems.map((item, i) => {
           if (item.type === 'feedback') {
+            const statusMeta: Record<LiveFeedbackStatus, { label: string; className: string }> = {
+              sending: { label: '发送中', className: 'bg-muted text-muted-foreground' },
+              queued: { label: '已排队', className: 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200' },
+              interrupting: { label: item.mode === 'interrupt' ? '打断处理中' : '正在接入', className: 'bg-blue-100 text-blue-800 dark:bg-blue-950/50 dark:text-blue-200' },
+              delivered: { label: 'AI 已接入', className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200' },
+              failed: { label: '发送失败', className: 'bg-destructive/10 text-destructive' },
+            };
+            const meta = statusMeta[item.status] || statusMeta.queued;
             return (
               <div key={`fb-${i}`} className="group flex justify-end">
-                <div className="relative max-w-[86%] rounded-lg border border-primary/30 bg-primary/15 px-3 py-2">
-                  <div className="mb-0.5 flex items-center justify-end gap-1 text-right font-mono text-[10px] text-muted-foreground">
-                    {new Date(item.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                <div className={cn(
+                  'relative max-w-[86%] rounded-2xl border px-3 py-2 shadow-sm',
+                  item.mode === 'interrupt'
+                    ? 'border-destructive/30 bg-destructive/10'
+                    : 'border-primary/30 bg-primary/15'
+                )}>
+                  <div className="mb-1 flex flex-wrap items-center justify-end gap-1.5 text-right text-[10px] text-muted-foreground">
+                    <span className={cn('rounded-full px-2 py-0.5 font-medium', meta.className)}>{meta.label}</span>
+                    <span className="font-mono">{new Date(item.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    {isRunning && item.status === 'queued' && item.mode !== 'interrupt' && (
+                      <button
+                        onClick={() => sendLiveFeedback(true, item)}
+                        className="rounded-full px-1.5 py-0.5 text-primary opacity-0 transition-opacity hover:bg-primary/10 group-hover:opacity-100"
+                        title="转为打断并立即处理"
+                      >
+                        转打断
+                      </button>
+                    )}
                     {isRunning && (
                       <button
-                        onClick={() => recallFeedback(item.message)}
+                        onClick={() => recallFeedback(item.id || item.message)}
                         className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
                         title="撤回"
                       >
@@ -5899,7 +6082,8 @@ export default function WorkbenchPage() {
                       </button>
                     )}
                   </div>
-                  <div className="text-sm">{item.message}</div>
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">{item.message}</div>
+                  {item.error && <div className="mt-1 text-xs text-destructive">{item.error}</div>}
                 </div>
               </div>
             );
@@ -5908,12 +6092,15 @@ export default function WorkbenchPage() {
           if (parsed.isHumanFeedback) {
             return (
               <div key={`c-${i}`} className="flex justify-end">
-                <div className="max-w-[86%] rounded-lg border border-primary/30 bg-primary/15 px-3 py-2">
-                  {parsed.timestamp && (
-                    <div className="mb-0.5 text-right font-mono text-[10px] text-muted-foreground">
-                      {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </div>
-                  )}
+                <div className="max-w-[86%] rounded-2xl border border-primary/30 bg-primary/15 px-3 py-2 shadow-sm">
+                  <div className="mb-1 flex flex-wrap items-center justify-end gap-1.5 text-right text-[10px] text-muted-foreground">
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200">AI 已接入</span>
+                    {parsed.timestamp && (
+                      <span className="font-mono">
+                        {new Date(parsed.timestamp).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-sm">
                     <AceAwareMarkdown content={prepareChunkForDisplay(parsed.content)} isStreaming={isRunning} />
                   </div>

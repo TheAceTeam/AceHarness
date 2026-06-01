@@ -377,6 +377,87 @@ describe('engine-level failure detection', () => {
   });
 });
 
+describe('state machine live feedback', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('emits stable feedback lifecycle events when feedback interrupts a running step', async () => {
+    const { processManager } = await import('@/lib/core/process-manager');
+    vi.mocked(processManager.getAllProcesses).mockReturnValueOnce([
+      { id: 'proc-1', stepId: 'step-1', status: 'running' },
+    ] as any);
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentState = '设计';
+    (manager as any).currentProcesses = [{ id: 'proc-1', stepId: 'step-1' }];
+    const events: any[] = [];
+    manager.on('feedback-injected', (event) => events.push(event));
+
+    const interrupted = manager.injectLiveFeedback('请先确认 lexer/parser/runtime 是否都已完成', { id: 'fb-1' } as any);
+
+    expect(interrupted).toBe(true);
+    expect(processManager.killProcess).toHaveBeenCalledWith('proc-1');
+    expect(events.map((event) => event.status)).toEqual(['queued', 'interrupting']);
+    expect(events.every((event) => event.id === 'fb-1')).toBe(true);
+    expect((manager as any).liveFeedback).toHaveLength(1);
+    expect((manager as any).liveFeedback[0]).toMatchObject({
+      id: 'fb-1',
+      message: '请先确认 lexer/parser/runtime 是否都已完成',
+      interrupt: false,
+    });
+    expect(manager.getStatus().pendingLiveFeedback).toEqual([
+      expect.objectContaining({
+        id: 'fb-1',
+        message: '请先确认 lexer/parser/runtime 是否都已完成',
+        status: 'queued',
+      }),
+    ]);
+  });
+
+  test('promotes an existing queued feedback to interrupt without duplicating it', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).currentState = '设计';
+    (manager as any).currentProcesses = [];
+    const events: any[] = [];
+    manager.on('feedback-injected', (event) => events.push(event));
+
+    manager.injectLiveFeedback('优先处理这条反馈', { id: 'fb-promote' } as any);
+    const interrupted = manager.interruptWithFeedback('优先处理这条反馈', { id: 'fb-promote' } as any);
+
+    expect(interrupted).toBe(false);
+    expect((manager as any).liveFeedback).toHaveLength(1);
+    expect((manager as any).liveFeedback[0]).toMatchObject({
+      id: 'fb-promote',
+      message: '优先处理这条反馈',
+      interrupt: true,
+    });
+    expect(events.map((event) => event.status)).toEqual(['queued', 'interrupting']);
+  });
+
+  test('injects the global workflow route into each step context', async () => {
+    const { StateMachineWorkflowManager } = await import('@/lib/state-machine/workflow-manager');
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    (manager as any).currentRunId = '';
+    (manager as any).completedSteps = ['设计-design-step'];
+    const context = await (StateMachineWorkflowManager.prototype as any).buildStepContext.call(
+      manager,
+      config.workflow.states[1].steps[0],
+      config.workflow.states[1],
+      config,
+      'Build a feature',
+    );
+
+    expect(context).toContain('全局工作流路线与当前职责边界');
+    expect(context).toContain('不能把当前步骤的核心交付留给后续步骤');
+    expect(context).toContain('状态: 设计');
+    expect(context).toContain('状态: 实施');
+    expect(context).toContain('步骤: impl-step [待执行]');
+    expect(context).toContain('可能流向: 完成 / 设计');
+  });
+});
+
 describe('state machine resume', () => {
   test('restores workflow agora session id before emitting resume status', async () => {
     const { loadRunState } = await import('@/lib/run/state-persistence');

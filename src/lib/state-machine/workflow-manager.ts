@@ -122,6 +122,22 @@ const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
 const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 
+type LiveFeedbackStatus = 'queued' | 'interrupting' | 'delivered';
+
+interface LiveFeedbackEntry {
+  id: string;
+  message: string;
+  timestamp: string;
+  interrupt: boolean;
+  automatic?: boolean;
+}
+
+interface LiveFeedbackOptions {
+  id?: string;
+  interrupt?: boolean;
+  automatic?: boolean;
+}
+
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -147,6 +163,17 @@ function toPersistedTokenUsage(usage: EngineTokenUsage): TokenUsage {
     cacheCreationInputTokens: usage.cache_creation_input_tokens,
     cacheReadInputTokens: usage.cache_read_input_tokens,
   };
+}
+
+function toLiveFeedbackSnapshot(entries: LiveFeedbackEntry[]) {
+  return entries.map((entry) => ({
+    id: entry.id,
+    message: entry.message,
+    timestamp: entry.timestamp,
+    status: entry.interrupt ? 'interrupting' as const : 'queued' as const,
+    interrupt: entry.interrupt,
+    automatic: entry.automatic,
+  }));
 }
 
 function addTokenUsage(agent: AgentState, usage: TokenUsage): void {
@@ -1036,6 +1063,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       currentStep: this.currentStep,
       activeSteps: Array.from(this.activeStepKeys),
       activeConcurrencyGroups: this.activeConcurrencyGroups,
+      pendingLiveFeedback: toLiveFeedbackSnapshot(this.liveFeedback),
       completedSteps: this.completedSteps,
       currentConfigFile: this.currentConfigFile,
       agents: this.agents,
@@ -1500,6 +1528,22 @@ export class StateMachineWorkflowManager extends EventEmitter {
     await this.finalizeRun('stopped');
   }
 
+  private cleanupCurrentEngine(): void {
+    const engine = this.currentEngine;
+    if (!engine) return;
+    try {
+      engine.cancel();
+    } catch {
+      // best-effort cleanup
+    }
+    try {
+      (engine as any).cleanup?.();
+    } catch {
+      // best-effort cleanup
+    }
+    this.currentEngine = null;
+  }
+
   forceTransition(targetState: string, instruction?: string): void {
     if (this.status !== 'running') {
       throw new Error('工作流未在运行中');
@@ -1747,7 +1791,9 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.emit('log', { message: `Supervisor 结算输出失败: ${message}` });
     }
 
-    // Cleanup copied skills from workspace
+    // Cleanup copied skills and engine processes from workspace/run execution
+    this.cancelCurrentProcesses();
+    this.cleanupCurrentEngine();
     await this.cleanupWorkspaceSkills();
     await this.recordFinalGitSnapshot(status);
 
@@ -1824,7 +1870,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.currentProcesses = this.currentProcesses.filter((proc) => proc.id !== processId);
   }
 
-  private cancelCurrentProcesses(): void {
+  private cancelCurrentProcesses(): boolean {
     const processIds = new Set(this.currentProcesses.map((proc) => proc.id).filter(Boolean));
     const stepIds = new Set(this.currentProcesses.map((proc) => proc.stepId).filter(Boolean) as string[]);
     const running = processManager.getAllProcesses().filter((p: any) =>
@@ -1847,9 +1893,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
       }
     }
 
+    let cancelledViaEngine = false;
     if (running.length === 0 && this.currentEngine && this.currentProcesses.length > 0) {
       this.currentEngine.cancel();
+      cancelledViaEngine = true;
     }
+
+    return running.length > 0 || cancelledViaEngine;
   }
 
   private async persistState(finalStatus?: 'completed' | 'failed' | 'stopped'): Promise<void> {
@@ -1883,6 +1933,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
         currentStep: this.currentStep,
         activeSteps: Array.from(this.activeStepKeys),
         activeConcurrencyGroups: this.activeConcurrencyGroups,
+        pendingLiveFeedback: toLiveFeedbackSnapshot(this.liveFeedback),
         completedSteps: this.completedSteps,
         failedSteps: [],
         stepLogs: [...this.stepLogs],
@@ -4052,6 +4103,52 @@ try {
     return blocks.join('\n\n');
   }
 
+  private buildWorkflowRoadmapContext(
+    currentStep: WorkflowStep,
+    currentState: StateMachineState,
+    config: StateMachineWorkflowConfig,
+  ): string {
+    const states = config.workflow?.states || [];
+    const currentStepKey = `${currentState.name}-${currentStep.name}`;
+    const lines: string[] = [
+      '\n# 全局工作流路线与当前职责边界',
+      '你可以看到完整工作流路线，用它来理解上下游分工，但不能把当前步骤的核心交付留给后续步骤。',
+      '当前步骤必须尽量完成其任务描述中可完成的分析、实现、验证或裁决；后续步骤只负责在你的明确产出基础上继续推进。',
+      '如果发现某件事确实应由后续步骤处理，请在 <step-conclusion> 的“下一步所需上下文/下一步建议”中写清楚具体输入、文件、风险和最小动作，不要只笼统写“留给后续”。',
+      '',
+    ];
+
+    for (const state of states) {
+      if (state.name === '__human_approval__') continue;
+      const stateMarker = state.name === currentState.name ? '=> ' : '   ';
+      lines.push(`${stateMarker}状态: ${state.name}${state.isInitial ? ' (初始)' : ''}${state.isFinal ? ' (最终)' : ''}`);
+      if (state.description) lines.push(`   状态目标: ${state.description}`);
+      for (const step of state.steps || []) {
+        const stepKey = `${state.name}-${step.name}`;
+        const marker = stepKey === currentStepKey ? '   * 当前步骤' : '   - 步骤';
+        const agentName = getStepRuntimeAgentName(step);
+        const status = this.completedSteps.includes(stepKey)
+          ? '已完成'
+          : this.activeStepKeys.has(stepKey)
+            ? '运行中'
+            : '待执行';
+        lines.push(`${marker}: ${step.name} [${status}]${agentName ? ` / agent: ${agentName}` : ''}${step.role ? ` / role: ${step.role}` : ''}`);
+        if (step.task) {
+          const compactTask = String(step.task).replace(/\s+/g, ' ').trim();
+          lines.push(`     任务: ${compactTask.slice(0, 220)}${compactTask.length > 220 ? '...' : ''}`);
+        }
+      }
+      const transitions = (state.transitions || [])
+        .map((transition) => transition.to)
+        .filter(Boolean);
+      if (transitions.length > 0) {
+        lines.push(`   可能流向: ${Array.from(new Set(transitions)).join(' / ')}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
   private async buildStepContext(
     step: WorkflowStep,
     state: StateMachineState,
@@ -4068,6 +4165,7 @@ try {
 
     parts.push(`\n# 当前任务: ${step.name}`);
     parts.push(`任务描述: ${step.task}`);
+    parts.push(this.buildWorkflowRoadmapContext(step, state, config));
 
     if (requirements) {
       parts.push(`\n# 需求说明\n${requirements}`);
@@ -4241,7 +4339,7 @@ try {
     if (this.liveFeedback.length > 0) {
       parts.push(`\n# 实时反馈`);
       for (const feedback of this.liveFeedback) {
-        parts.push(`- ${feedback}`);
+        parts.push(`- ${feedback.message}`);
       }
     }
 
@@ -4562,10 +4660,9 @@ try {
       const proc = processManager.getProcess(currentProcessId);
       if (!proc || proc.status !== 'running') return;
       watchdogTriggeredForProcess = currentProcessId;
-      this.liveFeedback.push(AUTO_CONTINUE_FEEDBACK);
+      this.queueLiveFeedback(AUTO_CONTINUE_FEEDBACK, { automatic: true });
       this.interruptFlag = true;
       this.feedbackInterrupt = true;
-      this.emit('feedback-injected', { message: AUTO_CONTINUE_FEEDBACK, timestamp: new Date().toISOString(), automatic: true });
       this.cancelCurrentProcesses();
     }, STREAM_IDLE_CHECK_MS);
 
@@ -4626,8 +4723,7 @@ try {
           }
           const sessionId = proc?.sessionId;
 
-          const feedbackPrompt = this.liveFeedback.join('\n\n');
-          this.liveFeedback = [];
+          const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
           const feedbackTimestamp = new Date().toISOString();
           accumulatedStream += `\n\n<!-- chunk-boundary -->\n\n<!-- human-feedback: ${feedbackTimestamp} -->\n${feedbackPrompt}`;
           if (this.currentRunId) {
@@ -4658,10 +4754,7 @@ try {
             step: streamStepName,
             agent: runtimeAgentName,
           });
-          this.emit('feedback-injected', {
-            message: feedbackPrompt,
-            timestamp: feedbackTimestamp,
-          });
+          this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
           continue;
         }
         throw err;
@@ -4680,8 +4773,7 @@ try {
         const isFeedbackOnly = this.feedbackInterrupt;
         this.interruptFlag = false;
         this.feedbackInterrupt = false;
-        const feedbackPrompt = this.liveFeedback.join('\n\n');
-        this.liveFeedback = [];
+        const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
         const feedbackTimestamp = new Date().toISOString();
         accumulatedStream += `\n\n<!-- chunk-boundary -->\n\n<!-- human-feedback: ${feedbackTimestamp} -->\n${feedbackPrompt}`;
         if (this.currentRunId) {
@@ -4711,10 +4803,7 @@ try {
           step: streamStepName,
           agent: runtimeAgentName,
         });
-        this.emit('feedback-injected', {
-          message: feedbackPrompt,
-          timestamp: feedbackTimestamp,
-        });
+        this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
         continue;
       }
 
@@ -4769,8 +4858,10 @@ try {
           message: `步骤 "${streamStepName}" 出现可恢复错误，正在自动恢复 ${autoRecoveryAttempts}/${STEP_AUTO_RECOVERY_MAX_ATTEMPTS}: ${errorMsg}`,
         });
         this.emit('feedback-injected', {
+          id: `auto-recovery-${recoveryTimestamp}`,
           message: recoveryPrompt,
           timestamp: recoveryTimestamp,
+          status: 'delivered',
           automatic: true,
         });
         continue;
@@ -4791,8 +4882,7 @@ try {
 
       // Check for pending live feedback after completion
       if (this.liveFeedback.length > 0 && !this.shouldStop) {
-        const feedbackPrompt = this.liveFeedback.join('\n\n');
-        this.liveFeedback = [];
+        const { entries: feedbackEntries, prompt: feedbackPrompt } = this.consumeLiveFeedback();
         const sessionId = result.session_id;
         if (!sessionId) break;
 
@@ -4814,10 +4904,7 @@ try {
           stepId,
           startTime: new Date().toISOString(),
         });
-        this.emit('feedback-injected', {
-          message: feedbackPrompt,
-          timestamp: feedbackTimestamp,
-        });
+        this.emitLiveFeedbackStatus(feedbackEntries, 'delivered', feedbackTimestamp);
         continue;
       }
 
@@ -5372,7 +5459,7 @@ try {
   }
 
   // ========== Live feedback functionality ==========
-  private liveFeedback: string[] = [];
+  private liveFeedback: LiveFeedbackEntry[] = [];
   private interruptFlag = false;
   private feedbackInterrupt = false; // true = non-urgent feedback interrupt (softer prompt tone)
   private queuedApprovalAction: 'approve' | 'iterate' | null = null;
@@ -5415,44 +5502,106 @@ try {
     return this.status;
   }
 
-  injectLiveFeedback(message: string): void {
-    const entry = { message, timestamp: new Date().toISOString() };
-    this.liveFeedback.push(message);
-    this.emit('feedback-injected', entry);
+  private createLiveFeedbackEntry(message: string, options: LiveFeedbackOptions = {}): LiveFeedbackEntry {
+    return {
+      id: options.id || `feedback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      message,
+      timestamp: new Date().toISOString(),
+      interrupt: !!options.interrupt,
+      automatic: options.automatic,
+    };
+  }
+
+  private emitLiveFeedbackStatus(entries: LiveFeedbackEntry[], status: LiveFeedbackStatus, timestamp = new Date().toISOString()): void {
+    if (entries.length === 0) return;
+    this.emit('feedback-injected', {
+      id: entries.length === 1 ? entries[0].id : undefined,
+      ids: entries.map((entry) => entry.id),
+      message: entries.map((entry) => entry.message).join('\n\n'),
+      messages: entries.map((entry) => ({
+        id: entry.id,
+        message: entry.message,
+        timestamp: entry.timestamp,
+        interrupt: entry.interrupt,
+        automatic: entry.automatic,
+      })),
+      timestamp,
+      status,
+      interrupt: entries.some((entry) => entry.interrupt),
+      automatic: entries.every((entry) => entry.automatic),
+    });
+  }
+
+  private queueLiveFeedback(message: string, options: LiveFeedbackOptions = {}): LiveFeedbackEntry {
+    const existingIndex = options.id
+      ? this.liveFeedback.findIndex((entry) => entry.id === options.id)
+      : -1;
+    if (existingIndex >= 0) {
+      const current = this.liveFeedback[existingIndex];
+      const next = {
+        ...current,
+        message,
+        interrupt: current.interrupt || !!options.interrupt,
+        automatic: current.automatic || options.automatic,
+      };
+      this.liveFeedback[existingIndex] = next;
+      this.emitLiveFeedbackStatus([next], next.interrupt ? 'interrupting' : 'queued');
+      return next;
+    }
+    const entry = this.createLiveFeedbackEntry(message, options);
+    this.liveFeedback.push(entry);
+    this.emitLiveFeedbackStatus([entry], entry.interrupt ? 'interrupting' : 'queued', entry.timestamp);
+    return entry;
+  }
+
+  private consumeLiveFeedback(): { entries: LiveFeedbackEntry[]; prompt: string } {
+    const entries = this.liveFeedback;
+    this.liveFeedback = [];
+    return {
+      entries,
+      prompt: entries.map((entry) => entry.message).join('\n\n'),
+    };
+  }
+
+  injectLiveFeedback(message: string, options: LiveFeedbackOptions = {}): boolean {
+    this.queueLiveFeedback(message, { ...options, interrupt: false });
 
     // Interrupt the running processes so feedback is delivered immediately via resume
     if (this.status === 'running' && this.currentState) {
       this.interruptFlag = true;
       this.feedbackInterrupt = true; // non-urgent flag, different prompt tone
-      this.cancelCurrentProcesses();
+      const interrupted = this.cancelCurrentProcesses();
+      if (interrupted) {
+        const entry = this.liveFeedback.find((item) => item.id === options.id && item.message === message)
+          || this.liveFeedback.find((item) => item.message === message);
+        if (entry) this.emitLiveFeedbackStatus([entry], 'interrupting');
+      }
+      return interrupted;
     }
+    return false;
   }
 
   recallLiveFeedback(message: string): boolean {
-    const idx = this.liveFeedback.indexOf(message);
+    const idx = this.liveFeedback.findIndex((entry) => entry.message === message || entry.id === message);
     if (idx === -1) return false;
-    this.liveFeedback.splice(idx, 1);
-    this.emit('feedback-recalled', { message, timestamp: new Date().toISOString() });
+    const [entry] = this.liveFeedback.splice(idx, 1);
+    this.emit('feedback-recalled', { id: entry.id, message: entry.message, timestamp: new Date().toISOString() });
     return true;
   }
 
-  interruptWithFeedback(message: string): boolean {
+  interruptWithFeedback(message: string, options: LiveFeedbackOptions = {}): boolean {
     if (this.status !== 'running' || !this.currentState) {
       return false;
     }
 
-    // Queue the feedback
-    this.liveFeedback.push(message);
+    const entry = this.queueLiveFeedback(message, { ...options, interrupt: true });
     this.interruptFlag = true;
+    this.feedbackInterrupt = false;
 
     // Find and kill all running processes tracked by this manager
-    const hadProcess = this.currentProcesses.length > 0;
-    this.cancelCurrentProcesses();
-    if (hadProcess) {
-      this.emit('feedback-injected', { message, timestamp: new Date().toISOString() });
-      return true;
-    }
-    return false;
+    const interrupted = this.cancelCurrentProcesses();
+    if (interrupted) this.emitLiveFeedbackStatus([entry], 'interrupting');
+    return interrupted;
   }
 
   // ========== Force complete functionality ==========
