@@ -3,6 +3,7 @@ import {
   applyDesignOptimizationPatch,
   doesWorkflowPatchMatchTarget,
   extractDesignOptimizationSnapshot,
+  extractWorkflowPatchItemPayload,
   extractWorkflowPatchValue,
   type DesignOptimizationTarget,
   type WorkflowPatchPayload,
@@ -172,5 +173,25 @@ describe('design-ai-optimization', () => {
       name: 'Write',
       agent: 'writer',
     });
+  });
+
+  test('workflow patch parse errors include exact field values and fixes', () => {
+    const result = extractWorkflowPatchItemPayload([
+      '<result>',
+      JSON.stringify({
+        kind: 'workflow_patch_item',
+        data: {
+          scope: 'state',
+          workflowMode: 'state-machine',
+          patch: { step: { name: 'Wrong bucket' } },
+        },
+      }),
+      '</result>',
+    ].join('\n'), 'demo.yaml');
+
+    expect(result.payload).toBeNull();
+    expect(result.parseError).toContain('错误字段：data.patch.state');
+    expect(result.parseError).toContain('patch keys=step');
+    expect(result.parseError).toContain('修改方式');
   });
 });

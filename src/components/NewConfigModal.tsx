@@ -63,6 +63,7 @@ import {
   type WorkflowCreationItemKind,
   type WorkflowCreationItemResult,
   type WorkflowCreationState,
+  type WorkflowCreationItemValidationContext,
 } from '@/lib/ai/workflow-creation-items';
 import WorkspaceDirectoryPicker from './common/WorkspaceDirectoryPicker';
 import { useChat } from '@/contexts/ChatContext';
@@ -563,6 +564,30 @@ function buildWorkflowCreationItemRepairMessage(
   ].join('\n\n');
 }
 
+function formatErrorForRepair(error: any): string {
+  const lines: string[] = [];
+  const message = error?.message || (typeof error === 'string' ? error : '');
+  if (message) lines.push(`message: ${message}`);
+  if (error?.name) lines.push(`name: ${error.name}`);
+  if (error?.code) lines.push(`code: ${error.code}`);
+  if (error?.status) lines.push(`status: ${error.status}`);
+  if (error?.stack) lines.push(`stack:\n${String(error.stack)}`);
+  if (error?.data !== undefined) {
+    try {
+      lines.push(`data:\n${JSON.stringify(error.data, null, 2)}`);
+    } catch {
+      lines.push(`data: ${String(error.data)}`);
+    }
+  }
+  return lines.join('\n') || String(error || '未知错误');
+}
+
+function formatStreamPayloadPreview(payload: string, limit = 2000): string {
+  const text = String(payload || '').trim();
+  if (!text) return '<empty>';
+  return text.length > limit ? `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]` : text;
+}
+
 function mergeWorkflowDraftValidation(baseValidation: any, bindingValidation?: any) {
   if (!bindingValidation) return baseValidation;
   const baseIssues = Array.isArray(baseValidation?.issues) ? baseValidation.issues : [];
@@ -638,6 +663,8 @@ type WorkflowCreationRecommendations = {
   };
   recommendedAgents: string[];
   recommendedSupervisorAgent?: string;
+  availableStepAgents?: string[];
+  availableSupervisorAgents?: string[];
   relationshipHints: Array<{
     agent: string;
     counterpart: string;
@@ -1600,6 +1627,7 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
       '**自动编排决策**',
       recommendations.recommendedSupervisorAgent ? `- 指挥官: ${recommendations.recommendedSupervisorAgent}` : '',
       recommendations.recommendedAgents.length ? `- 推荐角色编队: ${recommendations.recommendedAgents.join('、')}` : '',
+      recommendations.availableStepAgents?.length ? `- 可用普通执行 Agent: ${recommendations.availableStepAgents.join('、')}` : '',
       '- 若未手动覆盖，生成 workflow 草案时应优先采用该编队，而不是回退到固定占位角色',
     ].filter(Boolean).join('\n'));
   }
@@ -1623,6 +1651,35 @@ function buildCreationRecommendationsPrompt(recommendations: WorkflowCreationRec
   }
 
   return sections.join('\n\n');
+}
+
+function buildWorkflowCreationValidationContext(
+  step: WorkflowCreationItemStep,
+  recommendations: WorkflowCreationRecommendations | null,
+  fallbackSupervisorAgent?: string,
+): WorkflowCreationItemValidationContext | undefined {
+  if (step.kind !== WORKFLOW_STATE_STEPS_KIND) return undefined;
+
+  const clean = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  const unique = (values: unknown[]) => Array.from(new Set(values.map(clean).filter(Boolean)));
+  const availableStepAgents = unique([
+    ...(recommendations?.availableStepAgents || []),
+    ...((recommendations?.availableStepAgents?.length ? [] : recommendations?.recommendedAgents || [])),
+  ]);
+  const supervisorAgents = unique([
+    fallbackSupervisorAgent,
+    recommendations?.recommendedSupervisorAgent,
+    recommendations?.referenceWorkflow?.supervisorAgent,
+    ...(recommendations?.availableSupervisorAgents || []),
+    'default-supervisor',
+    'supervisor',
+  ]);
+
+  return {
+    expectedStateName: step.name,
+    availableStepAgents,
+    supervisorAgents,
+  };
 }
 
 function cloneReferenceWorkflowConfig(referenceConfig: any, options: {
@@ -2305,7 +2362,6 @@ export default function NewConfigModal({
   );
   const [currentStream, setCurrentStream] = useState('');
   const [currentThinking, setCurrentThinking] = useState('');
-  const [userInput, setUserInput] = useState('');
   const [aiFilename, setAiFilename] = useState('');
   const [workflowDraftConfig, setWorkflowDraftConfig] = useState<any | null>(null);
   const [workflowDraftValidation, setWorkflowDraftValidation] = useState<any | null>(null);
@@ -2320,7 +2376,6 @@ export default function NewConfigModal({
   const [modalHistoryExpanded, setModalHistoryExpanded] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const chatIdRef = useRef<string | null>(null);
-  const userInputRef = useRef<HTMLInputElement>(null);
   const restoringSessionRef = useRef(false);
   const restoreGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoredPlanningSessionRef = useRef<string | null>(null);
@@ -2941,13 +2996,6 @@ export default function NewConfigModal({
     );
   }, [aiMessages, modalHistoryExpanded, renderModalAiMessage]);
 
-  // Focus input when waiting
-  useEffect(() => {
-    if (aiPhase === 'waiting' && userInputRef.current) {
-      userInputRef.current.focus();
-    }
-  }, [aiPhase]);
-
   const detachStreamSubscription = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -3026,7 +3074,6 @@ export default function NewConfigModal({
     interruptPlanningRun();
     setAiPhase('idle');
     setAiMessages([]);
-    setUserInput('');
     setAiFilename('');
     setWorkflowDraftConfig(null);
     setWorkflowDraftValidation(null);
@@ -3765,6 +3812,7 @@ export default function NewConfigModal({
     message: string;
     workingDirectory?: string;
     maxAttempts?: number;
+    validationContext?: WorkflowCreationItemValidationContext;
   }): Promise<{
     result: WorkflowCreationItemResult;
     finalContent: string;
@@ -3811,7 +3859,17 @@ export default function NewConfigModal({
 
       const startData = await startRes.json().catch(() => null);
       if (!startRes.ok || !startData?.chatId) {
-        throw new Error(startData?.error || `启动 ${input.step.title} 生成失败`);
+        throw new Error([
+          `启动小点「${input.step.title}」生成失败。`,
+          `HTTP status=${startRes.status} ${startRes.statusText || ''}`.trim(),
+          `engine=${aiEngineRef.current || '(empty)'}`,
+          `model=${aiModelRef.current || '(empty)'}`,
+          `frontendSessionId=${input.frontendSessionId}`,
+          `backendSessionId=${activeBackendSessionId || '(new session)'}`,
+          '服务端响应：',
+          formatStreamPayloadPreview(startData ? JSON.stringify(startData, null, 2) : '<non-json response>'),
+          '修改方式：根据上面的 HTTP 状态和服务端响应修正引擎、模型、会话或后端错误后，再重试当前小点；不要从头生成整个 workflow。',
+        ].join('\n'));
       }
 
       const chatId = startData.chatId;
@@ -3824,15 +3882,39 @@ export default function NewConfigModal({
         let thinkingAccumulated = '';
 
         es.addEventListener('delta', (event) => {
-          const data = JSON.parse(event.data);
-          accumulated += data.content || '';
-          setCurrentStream(accumulated);
+          try {
+            const data = JSON.parse(event.data);
+            accumulated += data.content || '';
+            setCurrentStream(accumulated);
+          } catch (error) {
+            es.close();
+            eventSourceRef.current = null;
+            chatIdRef.current = null;
+            reject(new Error([
+              `小点「${input.step.title}」解析 delta 事件失败。`,
+              formatErrorForRepair(error),
+              '原始 delta event.data：',
+              formatStreamPayloadPreview((event as MessageEvent).data),
+            ].join('\n')));
+          }
         });
 
         es.addEventListener('thinking', (event) => {
-          const data = JSON.parse(event.data);
-          thinkingAccumulated += data.content || '';
-          setCurrentThinking(thinkingAccumulated);
+          try {
+            const data = JSON.parse(event.data);
+            thinkingAccumulated += data.content || '';
+            setCurrentThinking(thinkingAccumulated);
+          } catch (error) {
+            es.close();
+            eventSourceRef.current = null;
+            chatIdRef.current = null;
+            reject(new Error([
+              `小点「${input.step.title}」解析 thinking 事件失败。`,
+              formatErrorForRepair(error),
+              '原始 thinking event.data：',
+              formatStreamPayloadPreview((event as MessageEvent).data),
+            ].join('\n')));
+          }
         });
 
         es.addEventListener('done', async (event) => {
@@ -3864,7 +3946,7 @@ export default function NewConfigModal({
             setCurrentStream('');
             setCurrentThinking('');
 
-            const extracted = extractWorkflowCreationItemResult(finalContent, input.step.kind);
+            const extracted = extractWorkflowCreationItemResult(finalContent, input.step.kind, input.validationContext);
             if (!extracted.ok) {
               if (attempt < maxAttempts) {
                 const nextAttempt = attempt + 1;
@@ -3902,17 +3984,39 @@ export default function NewConfigModal({
               backendSessionId: activeBackendSessionId,
             });
           } catch (error) {
-            reject(error);
+            reject(new Error([
+              `小点「${input.step.title}」处理 done 事件失败。`,
+              formatErrorForRepair(error),
+              '已接收正文片段：',
+              formatStreamPayloadPreview(accumulated),
+              '已接收 thinking 片段：',
+              formatStreamPayloadPreview(thinkingAccumulated),
+            ].join('\n')));
           }
         });
 
-        es.addEventListener('error', () => {
+        es.addEventListener('error', (event) => {
           es.close();
           eventSourceRef.current = null;
           chatIdRef.current = null;
           setCurrentStream('');
           setCurrentThinking('');
-          reject(new Error(`${input.step.title} 生成流中断`));
+          reject(new Error([
+            `小点「${input.step.title}」生成流中断。`,
+            `chatId=${chatId}`,
+            `backendSessionId=${activeBackendSessionId || '(new session)'}`,
+            `readyState=${es.readyState}`,
+            'EventSource error event：',
+            formatStreamPayloadPreview((event as MessageEvent).data || JSON.stringify({
+              type: event.type,
+              isTrusted: event.isTrusted,
+            })),
+            '已接收正文片段：',
+            formatStreamPayloadPreview(accumulated),
+            '已接收 thinking 片段：',
+            formatStreamPayloadPreview(thinkingAccumulated),
+            '修改方式：这不是结构化结果字段错误；应先根据连接中断信息、后端日志或引擎错误修复流式生成问题，然后重试当前小点。',
+          ].join('\n')));
         });
       });
     };
@@ -4269,7 +4373,7 @@ export default function NewConfigModal({
     if (stage === 'clarification') setPlanningStage('idle');
     if (stage === 'specPlanning') setPlanningStage('awaiting-answers');
     if (stage === 'workflowDraft') {
-      setWorkflowDraftContinueReason('后台生成的小点已恢复到历史记录；请点击继续生成，让系统基于当前上下文重新装配 workflow 草案。');
+      setWorkflowDraftContinueReason('后台生成的小点已恢复到历史记录；需要重新生成 workflow 草案时会基于当前上下文装配。');
     }
   }, [persistStageSessionBinding]);
 
@@ -4858,6 +4962,11 @@ export default function NewConfigModal({
           systemPrompt: buildWorkflowCreationItemSystemPrompt(step, baseContext),
           message: buildWorkflowCreationItemUserMessage(step, creationState),
           workingDirectory: values.workingDirectory,
+          validationContext: buildWorkflowCreationValidationContext(
+            step,
+            creationRecommendations,
+            recommendedSupervisorAgent,
+          ),
         });
         activeBackendSessionId = output.backendSessionId;
         creationState = applyWorkflowCreationItem(creationState, output.result);
@@ -5127,7 +5236,7 @@ export default function NewConfigModal({
       workflowDraftPreview,
     });
     if (!draftConfigToSave) {
-      toast('warning', '当前还没有已校验通过的 workflow 草案，请等待生成完成或点击“继续生成”修正。');
+      toast('warning', '当前还没有已校验通过的 workflow 草案，请等待生成完成或查看校验信息。');
       return true;
     }
 
@@ -5142,7 +5251,7 @@ export default function NewConfigModal({
     }));
     if (!validation?.ok) {
       setWorkflowDraftContinueReason(formatValidationIssuesForPrompt(validation));
-      toast('error', 'workflow 草案校验未通过，请点击“继续生成”让 AI 修正。');
+      toast('error', 'workflow 草案校验未通过，请查看校验信息并重新生成草案。');
       return true;
     }
 
@@ -5242,7 +5351,7 @@ export default function NewConfigModal({
       }
       setAiMessages(prev => [...prev, {
         role: 'ai',
-        content: `创建失败：${errorMsg}\n请检查错误；需要 AI 修正时点击“继续生成”。`,
+        content: `创建失败：${errorMsg}\n请检查错误信息后重新生成草案。`,
       }]);
       toast('error', errorMsg);
       return true;
@@ -5266,17 +5375,23 @@ export default function NewConfigModal({
     workflowMode,
   ]);
 
-  // Handle user reply in AI conversation
-  const handleUserReply = async () => {
-    const text = userInput.trim();
-    if (!text) return;
-    setAiMessages(prev => [...prev, { role: 'user', content: text }]);
-    setUserInput('');
-    await startAiStream(previewSession, text);
-  };
-
   const handleQuickConfirm = async () => {
     await createWorkflowFromValidatedDraft();
+  };
+
+  const stopWorkflowDraftGeneration = () => {
+    cleanupStream();
+    setAiPhase('waiting');
+    setIsGeneratingPlan(false);
+    setWorkflowCreationActiveStep(null);
+    if (currentThinking) {
+      setAiMessages(prev => [...prev, { role: 'thinking', content: currentThinking }]);
+    }
+    if (currentStream) {
+      setAiMessages(prev => [...prev, { role: 'ai', content: currentStream }]);
+    }
+    setCurrentThinking('');
+    setCurrentStream('');
   };
 
   const onSubmit = async (data: NewConfigForm) => {
@@ -6103,7 +6218,7 @@ export default function NewConfigModal({
             </div>
           </div>
 
-          {/* Input area for user replies */}
+          {/* Workflow draft status */}
           {aiPhase === 'waiting' && (
             <div className="px-6 pb-2 space-y-2">
               {validatedWorkflowDraftConfig && !aiFilename && (
@@ -6113,7 +6228,7 @@ export default function NewConfigModal({
               )}
               {workflowDraftValidation && !workflowDraftValidation.ok && (
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 space-y-1.5">
-                  <div>workflow 草案未通过系统校验。需要 AI 修正时，点击“继续生成”。</div>
+                  <div>workflow 草案未通过系统校验。请查看下方校验信息并重新生成草案。</div>
                   {Array.isArray(workflowDraftValidation?.issues) && workflowDraftValidation.issues.length > 0 ? (
                     <div className="space-y-1">
                       {workflowDraftValidation.issues.map((issue: any, index: number) => (
@@ -6125,54 +6240,40 @@ export default function NewConfigModal({
                   ) : null}
                 </div>
               )}
-              <div className="flex gap-2 flex-wrap">
-                <Button type="button" size="sm" variant="outline" onClick={handleQuickConfirm} disabled={!canConfirmWorkflowDraft}>
-                  {isSavingWorkflowDraft ? '正在创建...' : canConfirmWorkflowDraft ? '✓ 确认创建' : '等待草案校验'}
-                </Button>
-              </div>
-              <div className="flex gap-2">
-                <Input
-                  ref={userInputRef}
-                  value={userInput}
-                  onChange={(e) => setUserInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleUserReply(); } }}
-                  placeholder="输入回复..."
-                  className="flex-1"
-                />
-                <Button type="button" onClick={handleUserReply} disabled={!userInput.trim()}>
-                  发送
-                </Button>
-              </div>
             </div>
           )}
 
           <div className="flex gap-2 justify-end p-6 pt-4 border-t flex-shrink-0">
-            {aiPhase === 'streaming' && (
-              <Button type="button" variant="outline" onClick={() => {
-                cleanupStream();
-                setAiPhase('waiting');
-                if (currentThinking) {
-                  setAiMessages(prev => [...prev, { role: 'thinking', content: currentThinking }]);
-                }
-                if (currentStream) {
-                  setAiMessages(prev => [...prev, { role: 'ai', content: currentStream }]);
-                }
-                setCurrentThinking('');
-                setCurrentStream('');
-              }}>
+            {aiPhase === 'streaming' ? (
+              <Button type="button" variant="outline" onClick={stopWorkflowDraftGeneration}>
                 <span className="material-symbols-outlined text-sm mr-1">stop</span>
-                停止
+                停止生成
               </Button>
-            )}
-            <Button type="button" variant="outline" onClick={handleClose}>
-              关闭
-            </Button>
+            ) : !aiFilename ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void startAiStream(previewSession)}
+                  disabled={isSavingWorkflowDraft}
+                >
+                  <span className="material-symbols-outlined text-sm mr-1">refresh</span>
+                  重新生成
+                </Button>
+                <Button type="button" onClick={handleQuickConfirm} disabled={!canConfirmWorkflowDraft}>
+                  {isSavingWorkflowDraft ? '正在创建...' : canConfirmWorkflowDraft ? '确认创建' : '等待草案校验'}
+                </Button>
+              </>
+            ) : null}
             {aiPhase === 'done' && aiFilename && (
               <Button type="button" onClick={handleAiComplete}>
                 <span className="material-symbols-outlined text-sm mr-1">open_in_new</span>
                 打开设计页面
               </Button>
             )}
+            <Button type="button" variant="outline" onClick={handleClose}>
+              关闭
+            </Button>
           </div>
           </ComboboxPortalProvider>
         </DialogContent>

@@ -415,12 +415,54 @@ export function extractWorkflowPatchItemPayload(
       ? 'phase-based'
       : undefined;
   const patch = data.patch && typeof data.patch === 'object' ? data.patch : null;
-  if (!scope) return { payload: null, parseError: 'workflow_patch item 的 data.scope 必须是 workflow/state/step。' };
-  if (!workflowMode) return { payload: null, parseError: 'workflow_patch item 的 data.workflowMode 必须是 phase-based/state-machine。' };
-  if (!patch) return { payload: null, parseError: 'workflow_patch item 的 data.patch 必须是对象。' };
+  const dataKeys = Object.keys(data || {});
+  const describe = (value: unknown) => {
+    if (value === undefined) return '未提供';
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return `array(length=${value.length})`;
+    if (typeof value === 'object') return `object(keys=${Object.keys(value as Record<string, unknown>).join(', ') || 'none'})`;
+    return `${typeof value} ${JSON.stringify(value)}`;
+  };
+  if (!scope) {
+    return {
+      payload: null,
+      parseError: [
+        '错误字段：data.scope。',
+        `问题：workflow_patch item 的 data.scope 必须是 workflow/state/step，当前值为 ${describe(data.scope)}；data keys=${dataKeys.join(', ') || 'none'}。`,
+        '修改方式：按当前优化目标填写 "scope":"workflow"、"scope":"state" 或 "scope":"step"，并只返回该 scope 对应的 patch。',
+      ].join(''),
+    };
+  }
+  if (!workflowMode) {
+    return {
+      payload: null,
+      parseError: [
+        '错误字段：data.workflowMode。',
+        `问题：workflow_patch item 的 data.workflowMode 必须是 phase-based/state-machine，当前值为 ${describe(data.workflowMode)}。`,
+        '修改方式：按当前工作流模式填写 "workflowMode":"phase-based" 或 "workflowMode":"state-machine"。',
+      ].join(''),
+    };
+  }
+  if (!patch) {
+    return {
+      payload: null,
+      parseError: [
+        '错误字段：data.patch。',
+        `问题：workflow_patch item 的 data.patch 必须是对象，当前值为 ${describe(data.patch)}。`,
+        '修改方式：在 data.patch 中放入当前 scope 对应的完整对象，例如 {"patch":{"state":{...}}} 或 {"patch":{"step":{...}}}。',
+      ].join(''),
+    };
+  }
   const expectedKey = scope === 'workflow' ? 'workflow' : scope === 'state' ? 'state' : 'step';
   if (!patch[expectedKey] || typeof patch[expectedKey] !== 'object') {
-    return { payload: null, parseError: `workflow_patch item 的 data.patch.${expectedKey} 必须是对象。` };
+    return {
+      payload: null,
+      parseError: [
+        `错误字段：data.patch.${expectedKey}。`,
+        `问题：当前 scope="${scope}" 要求 data.patch.${expectedKey} 是对象；当前 patch keys=${Object.keys(patch).join(', ') || 'none'}，当前值为 ${describe(patch[expectedKey])}。`,
+        `修改方式：保留 scope="${scope}"，并把目标对象放到 data.patch.${expectedKey}；不要放到其他 key。`,
+      ].join(''),
+    };
   }
 
   return {

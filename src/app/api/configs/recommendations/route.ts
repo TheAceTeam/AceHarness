@@ -37,27 +37,49 @@ async function loadReferenceWorkflowConfig(filename: string): Promise<any | null
   }
 }
 
-async function listAvailableAgents(): Promise<Set<string>> {
+type AvailableAgentPool = {
+  allNames: Set<string>;
+  stepNames: Set<string>;
+  supervisorNames: Set<string>;
+};
+
+function isSupervisorAgentConfig(name: string, config: any): boolean {
+  const normalizedName = name.trim().toLowerCase();
+  return config?.roleType === 'supervisor'
+    || normalizedName === 'supervisor'
+    || normalizedName === DEFAULT_SUPERVISOR_NAME.toLowerCase();
+}
+
+async function listAvailableAgents(): Promise<AvailableAgentPool> {
+  const pool: AvailableAgentPool = {
+    allNames: new Set<string>(),
+    stepNames: new Set<string>(),
+    supervisorNames: new Set<string>(),
+  };
+
   try {
     const agentsDir = await getRuntimeAgentsDirPath();
     const files = await readdir(agentsDir);
     const yamlFiles = files.filter((file) => file.endsWith('.yaml') || file.endsWith('.yml'));
-    const names = new Set<string>();
 
     for (const file of yamlFiles) {
       try {
         const raw = await readFile(resolve(agentsDir, file), 'utf-8');
         const config = parse(raw);
-        const name = typeof config?.name === 'string' ? config.name.trim() : '';
-        if (name) names.add(name);
+        const fileName = file.replace(/\.(yaml|yml)$/i, '');
+        const name = typeof config?.name === 'string' && config.name.trim() ? config.name.trim() : fileName;
+        if (!name) continue;
+        pool.allNames.add(name);
+        if (isSupervisorAgentConfig(name, config)) pool.supervisorNames.add(name);
+        else pool.stepNames.add(name);
       } catch {
         // ignore malformed agent config
       }
     }
 
-    return names;
+    return pool;
   } catch {
-    return new Set<string>();
+    return pool;
   }
 }
 
@@ -145,17 +167,19 @@ export async function POST(request: NextRequest) {
           }));
       })
     )).flat();
-    const recommendedAgents = buildRecommendedAgents({
-      availableAgents,
-      referenceAgents,
-      relationshipHints,
-    });
+    const recommendedAgents = availableAgents.allNames.size > 0 && availableAgents.stepNames.size === 0
+      ? []
+      : buildRecommendedAgents({
+          availableAgents: availableAgents.stepNames,
+          referenceAgents,
+          relationshipHints,
+        });
     const recommendedSupervisorAgent = (() => {
       const supervisorAgent = collectReferenceSupervisorAgent(referenceConfig);
-      if (supervisorAgent && (availableAgents.size === 0 || availableAgents.has(supervisorAgent))) {
+      if (supervisorAgent && (availableAgents.allNames.size === 0 || availableAgents.supervisorNames.has(supervisorAgent))) {
         return supervisorAgent;
       }
-      return availableAgents.has(DEFAULT_SUPERVISOR_NAME) || availableAgents.size === 0
+      return availableAgents.supervisorNames.has(DEFAULT_SUPERVISOR_NAME) || availableAgents.allNames.size === 0
         ? DEFAULT_SUPERVISOR_NAME
         : undefined;
     })();
@@ -182,6 +206,8 @@ export async function POST(request: NextRequest) {
         } : null,
         recommendedAgents,
         recommendedSupervisorAgent,
+        availableStepAgents: [...availableAgents.stepNames],
+        availableSupervisorAgents: [...availableAgents.supervisorNames],
         relationshipHints: relationshipHints.slice(0, 8),
       },
     });

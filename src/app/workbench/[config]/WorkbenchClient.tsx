@@ -1552,6 +1552,7 @@ export default function WorkbenchPage() {
   const [specMergeError, setSpecMergeError] = useState<string | null>(null);
   const [specImporting, setSpecImporting] = useState(false);
   const liveStreamRef = useRef<EventSource | ReturnType<typeof setInterval> | null>(null);
+  const liveStreamRunRef = useRef<string>('');
   const liveStreamLenRef = useRef(0);
   const liveStreamRawRef = useRef('');
   const liveStreamStepRef = useRef<string>('');
@@ -3611,16 +3612,9 @@ export default function WorkbenchPage() {
     }, { configuredSteps: 0, totalCommands: 0 });
   }, [editingConfig?.workflow]);
 
-  const fetchCurrentStatus = async () => {
-    try {
-      const requestedRunId = startupExpectedRunIdRef.current
-        || runId
-        || selectedRun?.id
-        || (startupInProgressRef.current ? undefined : initialRunId)
-        || undefined;
-      const status = await workflowApi.getStatus(configFile, requestedRunId);
-      if (!status?.status) return;
-      if (!shouldApplyRuntimePayload(status)) return;
+  const applyWorkflowStatusPayload = (status: any, requestedRunId?: string) => {
+    if (!status?.status) return;
+    if (!shouldApplyRuntimePayload(status)) return;
       const smStatus = status as typeof status & {
         mode?: 'state-machine' | 'phase-based';
         currentState?: string | null;
@@ -3777,6 +3771,17 @@ export default function WorkbenchPage() {
       if (status.endTime) {
         setRunEndTime(status.endTime);
       }
+  };
+
+  const fetchCurrentStatus = async () => {
+    try {
+      const requestedRunId = startupExpectedRunIdRef.current
+        || runId
+        || selectedRun?.id
+        || (startupInProgressRef.current ? undefined : initialRunId)
+        || undefined;
+      const status = await workflowApi.getStatus(configFile, requestedRunId);
+      applyWorkflowStatusPayload(status, requestedRunId);
     } catch { /* server might not be ready */ }
   };
 
@@ -4040,9 +4045,6 @@ export default function WorkbenchPage() {
         setViewingHistoryRun(false);
         handleEventRef.current(event);
       });
-      eventSource.addEventListener('open', () => {
-        fetchCurrentStatus();
-      });
       return () => eventSource?.close();
     }
   }, [viewMode, viewingHistoryRun, initialRunId, runId]);
@@ -4103,32 +4105,44 @@ export default function WorkbenchPage() {
     }
   }, [runId, searchParams, updateUrl]);
 
-  // Smart polling: start at 5s, increase to 10s if stable
+  // Live status stream replaces periodic /api/workflow/status polling.
   useEffect(() => {
     if (viewMode !== 'run' || (!isRunning && workflowStatus !== 'waiting')) return;
-    let interval = 5000;
-    let stableCount = 0;
-    const poll = async () => {
-      await fetchCurrentStatus();
-      stableCount++;
-      if (stableCount > 3 && interval < 10000) {
-        clearInterval(timer);
-        interval = 10000;
-        timer = setInterval(poll, interval);
-      }
-    };
-    let timer = setInterval(poll, interval);
-    return () => clearInterval(timer);
-  }, [viewMode, isRunning, workflowStatus]);
+    const requestedRunId = startupExpectedRunIdRef.current
+      || runId
+      || selectedRun?.id
+      || (startupInProgressRef.current ? undefined : initialRunId)
+      || undefined;
+    const eventSource = workflowApi.connectStatusStream(
+      { configFile, runId: requestedRunId },
+      (status) => applyWorkflowStatusPayload(status, requestedRunId),
+    );
+    return () => eventSource.close();
+  }, [viewMode, isRunning, workflowStatus, configFile, initialRunId, runId, selectedRun?.id]);
 
   useEffect(() => {
     if (viewMode !== 'run') return;
-    void refreshWorkspaceChangeCount();
-    const timer = window.setInterval(() => {
-      void refreshWorkspaceChangeCount();
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [refreshWorkspaceChangeCount, viewMode]);
+    const targetWorkspace = String(currentRunWorkspacePath || '').trim();
+    if (!targetWorkspace) {
+      setWorkspaceChangeCount(0);
+      return;
+    }
+    let gotLiveSummary = false;
+    const eventSource = workspaceApi.connectGitBrowserSummaryStream(
+      targetWorkspace,
+      { commitLimit: 1 },
+      (summary) => {
+        gotLiveSummary = true;
+        setWorkspaceChangeCount(countGitWorkingTreeFiles(summary));
+      },
+      () => {
+        if (!gotLiveSummary) {
+          void refreshWorkspaceChangeCount();
+        }
+      },
+    );
+    return () => eventSource.close();
+  }, [currentRunWorkspacePath, refreshWorkspaceChangeCount, viewMode]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig) {
@@ -5507,6 +5521,24 @@ export default function WorkbenchPage() {
     };
   }, [currentPhase, selectedStep, workflowConfig]);
 
+  const liveStreamTarget = useMemo(() => {
+    const targetRunId = runId || selectedRun?.id || '';
+    const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
+    const runtimeStep = currentStep || (parallelActiveSteps.length === 1 ? parallelActiveSteps[0] : '');
+    const manualStep = isRunning ? '' : (selectedStep?.name || '');
+    const activeStep = runtimeStep || manualStep;
+    const isParallelLiveStream = Boolean(targetRunId && parallelActiveSteps.length > 1);
+    const stepKey = isParallelLiveStream ? parallelActiveSteps.join('|') : activeStep;
+
+    return {
+      runId: targetRunId,
+      activeStep,
+      parallelActiveSteps,
+      isParallelLiveStream,
+      stepKey,
+    };
+  }, [activeSteps, currentStep, isRunning, runId, selectedRun?.id, selectedStep?.name]);
+
   // --- Live stream via SSE (opencode) or polling fallback (claude-code) ---
   const startLiveStream = () => {
     setShowLiveStream(true);
@@ -5528,11 +5560,12 @@ export default function WorkbenchPage() {
       liveStreamRef.current = null;
     }
 
-    const rid = runId || selectedRun?.id;
-    const activeStep = currentStep || selectedStep?.name;
-    const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
-    const isParallelLiveStream = Boolean(rid && parallelActiveSteps.length > 1);
-    liveStreamStepRef.current = isParallelLiveStream ? parallelActiveSteps.join('|') : (activeStep || '');
+    const rid = liveStreamTarget.runId;
+    const activeStep = liveStreamTarget.activeStep;
+    const parallelActiveSteps = liveStreamTarget.parallelActiveSteps;
+    const isParallelLiveStream = liveStreamTarget.isParallelLiveStream;
+    liveStreamRunRef.current = rid;
+    liveStreamStepRef.current = liveStreamTarget.stepKey;
     setLiveStreamSource(isParallelLiveStream
       ? { stateName: currentPhase || '并发执行', stepName: `${parallelActiveSteps.length} 个步骤运行中` }
       : resolveLiveStreamSource(activeStep));
@@ -5633,9 +5666,11 @@ export default function WorkbenchPage() {
         }
 
         const runningProc = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
-        const curStep = runningProc?.step || currentStep || selectedStep?.name;
+        const latestActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
+        const curStep = runningProc?.step || currentStep || (latestActiveSteps.length === 1 ? latestActiveSteps[0] : '') || (!isRunning ? selectedStep?.name : '');
 
         if (curStep !== liveStreamStepRef.current) {
+          liveStreamRunRef.current = curRid || '';
           liveStreamStepRef.current = curStep;
           setLiveStreamSource(resolveLiveStreamSource(curStep));
           liveStreamLenRef.current = 0;
@@ -5704,19 +5739,28 @@ export default function WorkbenchPage() {
       else clearInterval(liveStreamRef.current);
       liveStreamRef.current = null;
     }
+    liveStreamRunRef.current = '';
+    liveStreamStepRef.current = '';
     liveStreamRawRef.current = '';
     setShowLiveStream(false);
     setLiveStreamFullscreen(false);
     setLiveStreamScrollLocked(false);
   };
 
-  // Auto-reconnect live stream when currentStep changes while modal is open
+  // Auto-reconnect live stream when the active run or step changes while the panel is open.
   useEffect(() => {
-    if (showLiveStream && currentStep) {
-      startLiveStream();
+    if (!showLiveStream) return;
+    if (!liveStreamTarget.runId && !liveStreamTarget.stepKey) return;
+    if (
+      liveStreamRef.current
+      && liveStreamRunRef.current === liveStreamTarget.runId
+      && liveStreamStepRef.current === liveStreamTarget.stepKey
+    ) {
+      return;
     }
+    startLiveStream();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStep, activeSteps.join('|')]);
+  }, [showLiveStream, liveStreamTarget.runId, liveStreamTarget.stepKey]);
 
   const sendLiveFeedback = async (interrupt?: boolean) => {
     const feedback = liveFeedbackEditorRef.current?.getMarkdown() || liveFeedbackDraft || liveStreamFeedbackRef.current?.value || '';
@@ -5923,6 +5967,15 @@ export default function WorkbenchPage() {
             </Badge>
           </div>
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 px-0"
+          onClick={startLiveStream}
+          title="刷新实时输出"
+        >
+          <span className="material-symbols-outlined text-base">refresh</span>
+        </Button>
         <Button
           variant="ghost"
           size="sm"

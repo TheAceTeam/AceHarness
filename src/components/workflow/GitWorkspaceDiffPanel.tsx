@@ -596,15 +596,36 @@ export function GitWorkspaceDiffPanel({
 
   useEffect(() => {
     if (!isRunning) return;
-    const timer = window.setInterval(() => {
-      if (topMode === "workflow" && runId) {
+    if (topMode === "workflow" && runId) {
+      const timer = window.setInterval(() => {
         void loadWorkflowDiff();
-      } else {
-        void loadSummary();
-      }
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [isRunning, loadSummary, loadWorkflowDiff, runId, topMode]);
+      }, 5000);
+      return () => window.clearInterval(timer);
+    }
+    const targetWorkspace = String(workspacePath || "").trim();
+    if (topMode !== "git" || !targetWorkspace) return;
+    const eventSource = workspaceApi.connectGitBrowserSummaryStream(
+      targetWorkspace,
+      { commitLimit: INITIAL_COMMIT_LIMIT },
+      (next) => {
+        setSummary((prev) => {
+          if (!prev || prev.commits.length <= next.commits.length) return next;
+          return {
+            ...next,
+            commits: prev.commits,
+            commitOffset: prev.commitOffset,
+            commitLimit: prev.commitLimit,
+            hasMoreCommits: prev.hasMoreCommits,
+          };
+        });
+        setError("");
+      },
+      (message) => {
+        setError(message || "获取 Git 浏览数据失败");
+      },
+    );
+    return () => eventSource.close();
+  }, [isRunning, loadWorkflowDiff, runId, topMode, workspacePath]);
 
   const handleLoadMoreCommits = useCallback(() => {
     if (!summary?.hasMoreCommits || loadingMoreCommits) return;

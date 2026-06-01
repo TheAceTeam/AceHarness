@@ -10,6 +10,8 @@ import {
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
 
+export const dynamic = 'force-dynamic';
+
 const execFileAsync = promisify(execFile);
 
 type GitFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
@@ -545,6 +547,92 @@ async function buildSummary(workspaceRoot: string, commitOffset = 0, commitLimit
   };
 }
 
+async function buildSummaryOrUnavailable(workspaceRoot: string, commitOffset = 0, commitLimit = 40) {
+  try {
+    return await buildSummary(workspaceRoot, commitOffset, commitLimit);
+  } catch (error: any) {
+    const message = String(error?.message || '');
+    if (message.includes('not a git repository') || message.includes('不是一个 git 仓库')) {
+      return {
+        available: false,
+        workspaceRoot: toPortablePath(workspaceRoot),
+        workingTree: {
+          unstaged: [],
+          staged: [],
+          untracked: [],
+        },
+        commits: [],
+        commitOffset,
+        commitLimit,
+        hasMoreCommits: false,
+        reason: '当前工作区不在 Git 仓库中',
+      };
+    }
+    throw error;
+  }
+}
+
+function createGitBrowserSummaryStream(
+  request: NextRequest,
+  workspaceRoot: string,
+  commitOffset = 0,
+  commitLimit = 40,
+) {
+  const encoder = new TextEncoder();
+  let closed = false;
+  let lastSignature = '';
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (event: any) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+
+      const sendSummary = async (reason: string, force = false) => {
+        if (closed) return;
+        try {
+          const summary = await buildSummaryOrUnavailable(workspaceRoot, commitOffset, commitLimit);
+          const signature = JSON.stringify(summary);
+          if (!force && signature === lastSignature) return;
+          lastSignature = signature;
+          send({ type: 'summary', reason, data: summary });
+        } catch (error: any) {
+          send({ type: 'error', reason, error: error?.message || '获取 Git 浏览数据失败' });
+        }
+      };
+
+      request.signal.addEventListener('abort', () => {
+        if (closed) return;
+        closed = true;
+        if (timer) clearInterval(timer);
+        try {
+          controller.close();
+        } catch {}
+      });
+
+      send({ type: 'connected', data: { workspaceRoot: toPortablePath(workspaceRoot), commitOffset, commitLimit } });
+      void sendSummary('initial', true);
+      timer = setInterval(() => {
+        void sendSummary('change-check');
+      }, 3000);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -554,6 +642,7 @@ export async function GET(request: NextRequest) {
     const file = searchParams.get('file');
     const commitOffset = Number(searchParams.get('commitOffset') || 0);
     const commitLimit = Number(searchParams.get('commitLimit') || 40);
+    const live = searchParams.get('live') === '1';
 
     if (!workspace) {
       return NextResponse.json({ error: '缺少 workspace 参数' }, { status: 400 });
@@ -562,6 +651,9 @@ export async function GET(request: NextRequest) {
     const workspaceRoot = await resolveWorkspaceRoot(workspace);
 
     try {
+      if (live && !commit && !scope && !file) {
+        return createGitBrowserSummaryStream(request, workspaceRoot, commitOffset, commitLimit);
+      }
       if (commit && file) {
         return await buildCommitFileDetail(workspaceRoot, commit, file);
       }
@@ -583,7 +675,7 @@ export async function GET(request: NextRequest) {
           files,
         });
       }
-      return NextResponse.json(await buildSummary(workspaceRoot, commitOffset, commitLimit));
+      return NextResponse.json(await buildSummaryOrUnavailable(workspaceRoot, commitOffset, commitLimit));
     } catch (error: any) {
       const message = String(error?.message || '');
       if (message.includes('not a git repository') || message.includes('不是一个 git 仓库')) {

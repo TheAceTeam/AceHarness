@@ -1,4 +1,4 @@
-import { extractStructuredResult } from '@/lib/ai/result-channel';
+import { extractJsonObject, extractStructuredResult, getResultSections } from '@/lib/ai/result-channel';
 import type { ClarificationFormResult, ClarificationQuestionItem, PlanDraftResult } from '@/lib/ai/result-normalizers';
 
 export const WORKFLOW_CLARIFICATION_SUMMARY_KIND = 'workflow_clarification_summary';
@@ -38,6 +38,12 @@ export type WorkflowCreationItemResult = {
 export type WorkflowCreationItemExtraction =
   | { ok: true; result: WorkflowCreationItemResult }
   | { ok: false; error: string };
+
+export interface WorkflowCreationItemValidationContext {
+  expectedStateName?: string;
+  availableStepAgents?: string[];
+  supervisorAgents?: string[];
+}
 
 export interface SpecRequirementItem {
   id: string;
@@ -152,6 +158,89 @@ function itemShapeHint(kind?: WorkflowCreationItemKind): string {
 
 function validationError(path: string, problem: string, fix: string): string {
   return `错误字段：${path}。问题：${problem}。修改方式：${fix}`;
+}
+
+function previewValue(value: unknown, limit = 180): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return String(value);
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function describeValue(value: unknown): string {
+  if (value === undefined) return '未提供';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array(length=${value.length}) ${previewValue(value)}`;
+  if (typeof value === 'object') return `object(keys=${Object.keys(value as Record<string, unknown>).join(', ') || 'none'}) ${previewValue(value)}`;
+  return `${typeof value} ${previewValue(value)}`;
+}
+
+function describeDataKeys(data: Record<string, any>): string {
+  const keys = Object.keys(data || {});
+  return keys.length ? keys.join(', ') : 'none';
+}
+
+function describeAliases(data: Record<string, any>, aliases: string[]): string {
+  return aliases.map((key) => `data.${key}=${describeValue(data?.[key])}`).join('；');
+}
+
+function requireStringField(data: Record<string, any>, aliases: string[], path: string, label: string, fix: string): string | null {
+  if (aliases.some((key) => cleanString(data?.[key]))) return null;
+  return validationError(path, `${label} 缺失或为空。当前字段状态：${describeAliases(data, aliases)}。当前 data keys=${describeDataKeys(data)}。`, fix);
+}
+
+function requireStringArrayField(data: Record<string, any>, aliases: string[], path: string, label: string, fix: string): string | null {
+  if (aliases.some((key) => stringArray(data?.[key]).length > 0)) return null;
+  return validationError(path, `${label} 缺失、不是数组或数组里没有有效字符串。当前字段状态：${describeAliases(data, aliases)}。`, fix);
+}
+
+function workflowCreationExtractionDiagnostic(markdown: string, expectedKind?: WorkflowCreationItemKind): string {
+  const expected = expectedKind || '当前要求的 kind';
+  const sections = getResultSections(markdown);
+  if (sections.length === 0) {
+    const hasOpenTag = /<result>/i.test(markdown);
+    const hasCloseTag = /<\/result>/i.test(markdown);
+    return [
+      `未检测到 ${expectedKind || 'workflow creation item'} 结果。`,
+      `检测结果：<result> 块数量=0；openTag=${hasOpenTag ? 'yes' : 'no'}；closeTag=${hasCloseTag ? 'yes' : 'no'}。`,
+      `修改方式：在回复末尾补发一个机器结果块，形如 ${itemShapeHint(expectedKind)}。`,
+      '<result> 内只能是一个裸 JSON 对象，不能包 Markdown 代码块；顶层 kind 必须等于当前要求的 kind，内容放在 data 对象里。',
+    ].join('\n');
+  }
+
+  const diagnostics = sections.map((section, index) => {
+    const parsed = extractJsonObject(section.content);
+    if (!parsed || typeof parsed !== 'object') {
+      return `第 ${index + 1} 个 <result>：JSON 解析失败或不是对象；内容片段=${previewValue(section.content, 500)}。`;
+    }
+    const kind = cleanString((parsed as any).kind);
+    return `第 ${index + 1} 个 <result>：kind=${kind || '(missing)'}；顶层 keys=${Object.keys(parsed).join(', ') || 'none'}。`;
+  }).join('\n');
+
+  return [
+    `未检测到符合要求的 ${expectedKind || 'workflow creation item'} 结果。`,
+    `期望 kind=${expected}，但已检测到的 <result> 块无法匹配：`,
+    diagnostics,
+    `修改方式：补发一个顶层 kind 精确为 "${expected}" 的结果块，形如 ${itemShapeHint(expectedKind)}；不要把说明文字、Markdown 代码块或其他 kind 混入 <result>。`,
+  ].join('\n');
+}
+
+function cleanStringSet(values: unknown[] | undefined): Set<string> {
+  return new Set((Array.isArray(values) ? values : [])
+    .map((value) => cleanString(value))
+    .filter(Boolean));
+}
+
+function formatAgentExamples(agents: Set<string>): string {
+  const examples = [...agents].slice(0, 8);
+  return examples.length ? examples.join('、') : 'developer、architect、tester 或你的业务 Agent';
+}
+
+function isSupervisorStepAgent(agent: string, supervisorAgents: Set<string>): boolean {
+  const normalized = agent.toLowerCase();
+  if (normalized === 'supervisor' || normalized === 'default-supervisor') return true;
+  return supervisorAgents.has(agent);
 }
 
 function stringArray(value: unknown, limit = 12): string[] {
@@ -460,17 +549,17 @@ function normalizeItem(raw: any): WorkflowCreationItemResult | null {
   return { kind, data: getPayload(raw) };
 }
 
-export function extractWorkflowCreationItemResult(markdown: string, expectedKind?: WorkflowCreationItemKind): WorkflowCreationItemExtraction {
+export function extractWorkflowCreationItemResult(
+  markdown: string,
+  expectedKind?: WorkflowCreationItemKind,
+  validationContext?: WorkflowCreationItemValidationContext,
+): WorkflowCreationItemExtraction {
   const parsed = extractStructuredResult<any>(markdown, (value: any): value is any => WORKFLOW_CREATION_ITEM_KINDS.has(cleanString(value?.kind)));
   const result = normalizeItem(parsed);
   if (!result) {
     return {
       ok: false,
-      error: [
-        `未检测到 ${expectedKind || 'workflow creation item'} 结果。`,
-        `修改方式：在回复末尾补发一个机器结果块，形如 ${itemShapeHint(expectedKind)}。`,
-        '<result> 内只能是一个裸 JSON 对象，不能包 Markdown 代码块；顶层 kind 必须等于当前要求的 kind，内容放在 data 对象里。',
-      ].join('\n'),
+      error: workflowCreationExtractionDiagnostic(markdown, expectedKind),
     };
   }
   if (expectedKind && result.kind !== expectedKind) {
@@ -482,46 +571,97 @@ export function extractWorkflowCreationItemResult(markdown: string, expectedKind
       ].join('\n'),
     };
   }
-  const validation = validateWorkflowCreationItem(result);
+  const validation = validateWorkflowCreationItem(result, validationContext);
   if (!validation.ok) return { ok: false, error: validation.errors.join('\n') };
   return { ok: true, result };
 }
 
-export function validateWorkflowCreationItem(result: WorkflowCreationItemResult): { ok: boolean; errors: string[] } {
+export function validateWorkflowCreationItem(
+  result: WorkflowCreationItemResult,
+  context: WorkflowCreationItemValidationContext = {},
+): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   const data = result.data || {};
   if (result.kind === WORKFLOW_CLARIFICATION_SUMMARY_KIND) {
-    if (!cleanString(data.summary || data.text)) errors.push(validationError('data.summary', 'summary 缺失或为空。', '在 data.summary 填入 1-2 句当前理解摘要。'));
+    const error = requireStringField(data, ['summary', 'text'], 'data.summary', 'summary', '在 data.summary 填入 1-2 句当前理解摘要。');
+    if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_CLARIFICATION_FACTS_KIND) {
-    if (stringArray(data.facts || data.knownFacts).length === 0) errors.push(validationError('data.facts', 'facts 缺失、不是数组或数组里没有有效字符串。', '把已确认事实写成字符串数组，例如 "facts":["事实 1","事实 2"]。'));
+    const error = requireStringArrayField(data, ['facts', 'knownFacts'], 'data.facts', 'facts', '把已确认事实写成字符串数组，例如 "facts":["事实 1","事实 2"]。');
+    if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_CLARIFICATION_GAPS_KIND) {
-    if (stringArray(data.gaps || data.missingFields).length === 0) errors.push(validationError('data.gaps', 'gaps 缺失、不是数组或数组里没有有效字符串。', '把待补信息写成字符串数组，并用 blocking/optional 标出优先级。'));
+    const error = requireStringArrayField(data, ['gaps', 'missingFields'], 'data.gaps', 'gaps', '把待补信息写成字符串数组，并用 blocking/optional 标出优先级。');
+    if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_CLARIFICATION_QUESTION_KIND) {
     const source = data.question && typeof data.question === 'object' ? data.question : data;
     if (!cleanString(source.question) && !cleanString(source.text)) {
-      errors.push(validationError('data.question', '澄清问题缺少 question 文本。', '在 data.question 写入具体问题，并说明这个答案会影响什么决策。'));
+      errors.push(validationError('data.question', `澄清问题缺少 question 文本。当前字段状态：question=${describeValue(source.question)}；text=${describeValue(source.text)}。当前 data keys=${describeDataKeys(source)}。`, '在 data.question 写入具体问题，并说明这个答案会影响什么决策。'));
     }
     if (!Array.isArray(source.options) || source.options.length < 2) {
-      errors.push(validationError('data.options', 'options 缺失、不是数组或少于 2 个选项。', '提供 2-4 个选项对象，每个选项包含 id、label、description。'));
+      errors.push(validationError('data.options', `options 缺失、不是数组或少于 2 个选项。当前 options=${describeValue(source.options)}。`, '提供 2-4 个选项对象，每个选项包含 id、label、description。'));
     }
     if (Array.isArray(source.options) && source.options.length >= 2 && !source.options.some((option: any) => option?.recommended === true)) {
-      errors.push(validationError('data.options', '没有选项设置 recommended=true。', '在最稳妥的默认选项上设置 "recommended":true。'));
+      errors.push(validationError('data.options', `没有选项设置 recommended=true。当前 options=${previewValue(source.options, 500)}。`, '在最稳妥的默认选项上设置 "recommended":true。'));
     }
   } else if (result.kind === SPEC_CODING_META_KIND) {
-    if (!cleanString(data.summary)) errors.push(validationError('data.summary', 'summary 缺失或为空。', '在 data.summary 写入计划摘要；goals、nonGoals、constraints 可用字符串数组补充。'));
+    const error = requireStringField(data, ['summary'], 'data.summary', 'summary', '在 data.summary 写入计划摘要；goals、nonGoals、constraints 可用字符串数组补充。');
+    if (error) errors.push(error);
   } else if (result.kind === SPEC_REQUIREMENT_KIND) {
-    if (!normalizeRequirement(data, 0)) errors.push(validationError('data', '需求小点缺少 title 或 userStory/description。', '补齐 id、title、userStory，并提供 acceptanceCriteria 字符串数组。'));
+    const source = data.requirement && typeof data.requirement === 'object' ? data.requirement : data;
+    const titleError = requireStringField(source, ['title', 'name'], 'data.title', '需求标题', '补齐 data.title，写成用户可读的需求标题。');
+    const storyError = requireStringField(source, ['userStory', 'story', 'description', 'detail'], 'data.userStory', '需求描述', '补齐 data.userStory 或 data.description，说明用户故事或需求细节。');
+    if (titleError) errors.push(titleError);
+    if (storyError) errors.push(storyError);
+    if (source.acceptanceCriteria !== undefined && stringArray(source.acceptanceCriteria || source.acceptance || source.criteria).length === 0) {
+      errors.push(validationError('data.acceptanceCriteria', `acceptanceCriteria 已提供但不是有效字符串数组。当前字段状态：${describeAliases(source, ['acceptanceCriteria', 'acceptance', 'criteria'])}。`, '删除无效值，或改成字符串数组，例如 "acceptanceCriteria":["WHEN 条件 THEN 结果。"]。'));
+    }
   } else if (result.kind === SPEC_DESIGN_KIND) {
-    if (!cleanString(data.overview)) errors.push(validationError('data.overview', 'overview 缺失或为空。', '写入设计概览；可同时补充 architecture、components、interfaces、assumptions 和 mermaid。'));
+    const error = requireStringField(data, ['overview'], 'data.overview', 'overview', '写入设计概览；可同时补充 architecture、components、interfaces、assumptions 和 mermaid。');
+    if (error) errors.push(error);
   } else if (result.kind === SPEC_DECISION_KIND) {
-    if (!normalizeDecision(data, 0)) errors.push(validationError('data', '设计决策缺少 topic 或 choice。', '补齐 id、topic、choice、reason，说明选择和理由。'));
+    const source = data.decision && typeof data.decision === 'object' ? data.decision : data;
+    const topicError = requireStringField(source, ['topic', 'title'], 'data.topic', '设计决策主题', '补齐 data.topic，说明本次要决定的事项。');
+    const choiceError = requireStringField(source, ['choice', 'decision'], 'data.choice', '设计决策选择', '补齐 data.choice，写明选择的方案。');
+    if (topicError) errors.push(topicError);
+    if (choiceError) errors.push(choiceError);
   } else if (result.kind === SPEC_TASK_KIND) {
-    if (!normalizeTask(data, 0)) errors.push(validationError('data.title', '任务小点缺少 title/name。', '补齐 id、title、requirementIds、actions、deliverables、validation。'));
+    const source = data.task && typeof data.task === 'object' ? data.task : data;
+    const error = requireStringField(source, ['title', 'name'], 'data.title', '任务标题', '补齐 id、title、requirementIds、actions、deliverables、validation。');
+    if (error) errors.push(error);
   } else if (result.kind === WORKFLOW_STATE_OUTLINE_KIND) {
-    if (normalizeOutlineStates(data).length < 2) errors.push(validationError('data.states', 'states 缺失或少于 2 个状态。', '按主要执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；需要非线性流转时可在状态上补 transitions。'));
+    const states = normalizeOutlineStates(data);
+    if (!Array.isArray(data.states)) {
+      errors.push(validationError('data.states', `states 缺失或不是数组。当前 states=${describeValue(data.states)}。当前 data keys=${describeDataKeys(data)}。`, '按主要执行顺序提供至少 2 个状态对象，并给最后一个状态设置 isFinal=true；需要非线性流转时可在状态上补 transitions。'));
+    } else if (states.length < 2) {
+      errors.push(validationError('data.states', `有效状态少于 2 个。当前 states.length=${data.states.length}，规范化后有效状态数=${states.length}，原始 states=${previewValue(data.states, 500)}。`, '提供至少 2 个状态对象，每个对象至少包含 name；最后一个状态设置 isFinal=true。'));
+    }
   } else if (result.kind === WORKFLOW_STATE_STEPS_KIND) {
-    if (!cleanString(data.stateName)) errors.push(validationError('data.stateName', 'stateName 缺失或为空。', '把 data.stateName 设置为系统当前要求的状态名，必须完全一致。'));
-    if (!Array.isArray(data.steps) || data.steps.length === 0) errors.push(validationError('data.steps', 'steps 缺失、不是数组或为空。', '提供 1-4 个步骤对象；并发只在同一 stateName 的 steps 内用相同 parallelGroup 表达。'));
+    const stateName = cleanString(data.stateName);
+    const expectedStateName = cleanString(context.expectedStateName);
+    if (!stateName) {
+      errors.push(validationError('data.stateName', 'stateName 缺失或为空。', '把 data.stateName 设置为系统当前要求的状态名，必须完全一致。'));
+    } else if (expectedStateName && stateName !== expectedStateName) {
+      errors.push(validationError('data.stateName', `stateName 应为 "${expectedStateName}"，实际为 "${stateName}"。`, `只补发当前状态 "${expectedStateName}" 的步骤，并把 data.stateName 改为 "${expectedStateName}"。`));
+    }
+    if (!Array.isArray(data.steps) || data.steps.length === 0) {
+      errors.push(validationError('data.steps', 'steps 缺失、不是数组或为空。', '提供 1-4 个步骤对象；并发只在同一 stateName 的 steps 内用相同 parallelGroup 表达。'));
+    } else {
+      const availableStepAgents = cleanStringSet(context.availableStepAgents);
+      const supervisorAgents = cleanStringSet(context.supervisorAgents);
+      data.steps.forEach((step: any, index: number) => {
+        const agent = cleanString(step?.agent);
+        if (!agent) {
+          errors.push(validationError(`data.steps[${index}].agent`, '步骤缺少 agent。', `从可用普通执行 Agent 中选择一个，例如 ${formatAgentExamples(availableStepAgents)}。`));
+          return;
+        }
+        if (isSupervisorStepAgent(agent, supervisorAgents)) {
+          errors.push(validationError(`data.steps[${index}].agent`, `步骤 Agent "${agent}" 是 supervisor/指挥官，不允许作为执行步骤 Agent。`, `改为普通执行 Agent，例如 ${formatAgentExamples(availableStepAgents)}。`));
+          return;
+        }
+        if (availableStepAgents.size > 0 && !availableStepAgents.has(agent)) {
+          errors.push(validationError(`data.steps[${index}].agent`, `步骤 Agent "${agent}" 不在可用普通执行 Agent 列表中。`, `必须从这些 Agent 中选择：${formatAgentExamples(availableStepAgents)}。`));
+        }
+      });
+    }
   } else if (result.kind === WORKFLOW_PATCH_ITEM_KIND) {
     if (!['workflow', 'state', 'step'].includes(data.scope)) errors.push(validationError('data.scope', 'scope 不是 workflow/state/step。', '根据当前优化目标把 scope 改为 workflow、state 或 step。'));
     if (!['phase-based', 'state-machine'].includes(data.workflowMode)) errors.push(validationError('data.workflowMode', 'workflowMode 不是 phase-based/state-machine。', '按当前工作流模式填写 phase-based 或 state-machine。'));

@@ -14,6 +14,7 @@ import {
   assembleWorkflowConfigFromItems,
   createEmptyWorkflowCreationState,
   extractWorkflowCreationItemResult,
+  validateWorkflowCreationItem,
 } from '@/lib/ai/workflow-creation-items';
 import { validateWorkflowDraft } from '@/lib/core/creator-validation';
 
@@ -68,6 +69,86 @@ describe('workflow creation item protocol', () => {
       kind: WORKFLOW_CLARIFICATION_SUMMARY_KIND,
       data: { summary: expect.stringContaining('串行推进') },
     });
+  });
+
+  test('rejects workflow state steps that use supervisor as a task agent', () => {
+    const validation = validateWorkflowCreationItem({
+      kind: WORKFLOW_STATE_STEPS_KIND,
+      data: {
+        stateName: '实现',
+        steps: [
+          { name: '协调实现', agent: 'supervisor', task: '安排执行计划' },
+        ],
+      },
+    }, {
+      expectedStateName: '实现',
+      availableStepAgents: ['architect', 'developer', 'tester'],
+      supervisorAgents: ['default-supervisor', 'chief-supervisor'],
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors.join('\n')).toContain('data.steps[0].agent');
+    expect(validation.errors.join('\n')).toContain('不允许作为执行步骤 Agent');
+  });
+
+  test('rejects workflow state steps with the wrong state or unavailable agent before assembly', () => {
+    const content = [
+      '<result>',
+      JSON.stringify({
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        data: {
+          stateName: '验证',
+          steps: [
+            { name: '实现', agent: 'unknown-agent', task: '完成实现' },
+          ],
+        },
+      }),
+      '</result>',
+    ].join('\n');
+
+    const extracted = extractWorkflowCreationItemResult(content, WORKFLOW_STATE_STEPS_KIND, {
+      expectedStateName: '实现',
+      availableStepAgents: ['developer'],
+      supervisorAgents: ['default-supervisor'],
+    });
+
+    expect(extracted.ok).toBe(false);
+    if (extracted.ok) return;
+    expect(extracted.error).toContain('stateName 应为 "实现"');
+    expect(extracted.error).toContain('不在可用普通执行 Agent 列表中');
+  });
+
+  test('reports malformed result blocks with parse diagnostics', () => {
+    const extracted = extractWorkflowCreationItemResult(
+      '<result>{"kind":"workflow_state_steps","data": </result>',
+      WORKFLOW_STATE_STEPS_KIND,
+    );
+
+    expect(extracted.ok).toBe(false);
+    if (extracted.ok) return;
+    expect(extracted.error).toContain('<result> 块无法匹配');
+    expect(extracted.error).toContain('JSON 解析失败');
+    expect(extracted.error).toContain('内容片段');
+    expect(extracted.error).toContain('修改方式');
+  });
+
+  test('reports spec requirement missing fields with exact aliases and current values', () => {
+    const validation = validateWorkflowCreationItem({
+      kind: SPEC_REQUIREMENT_KIND,
+      data: {
+        title: '',
+        acceptanceCriteria: 'done',
+      },
+    } as any);
+
+    expect(validation.ok).toBe(false);
+    const message = validation.errors.join('\n');
+    expect(message).toContain('错误字段：data.title');
+    expect(message).toContain('data.title=string');
+    expect(message).toContain('错误字段：data.userStory');
+    expect(message).toContain('data.description=未提供');
+    expect(message).toContain('错误字段：data.acceptanceCriteria');
+    expect(message).toContain('修改方式');
   });
 
   test('assembles a clarification form and plan draft from small items', () => {

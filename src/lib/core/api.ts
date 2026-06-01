@@ -1501,6 +1501,34 @@ export const workflowApi = {
     return response.json();
   },
 
+  connectStatusStream(
+    input: { configFile?: string; runId?: string },
+    onStatus: (status: WorkflowStatusResponse) => void,
+    onError?: (message: string) => void,
+  ): EventSource {
+    const search = new URLSearchParams();
+    search.set('live', '1');
+    if (input.configFile) search.set('configFile', input.configFile);
+    if (input.runId) search.set('runId', input.runId);
+    const eventSource = createSafeEventSource(`${API_BASE}/workflow/status?${search.toString()}`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type === 'status' && payload.data) {
+          onStatus(payload.data);
+        } else if (payload?.type === 'error') {
+          onError?.(payload.error || '获取状态失败');
+        }
+      } catch (error: any) {
+        onError?.(error?.message || '解析状态事件失败');
+      }
+    };
+
+    eventSource.onerror = () => {};
+    return eventSource;
+  },
+
   async listHumanQuestions(filters?: {
     status?: 'unanswered' | 'answered' | 'dismissed';
     runId?: string;
@@ -2586,6 +2614,35 @@ export const workspaceApi = {
       throw new Error(data.message || data.error || '获取 Git 浏览摘要失败');
     }
     return res.json();
+  },
+  connectGitBrowserSummaryStream(
+    workspace: string,
+    options: { commitOffset?: number; commitLimit?: number } | undefined,
+    onSummary: (summary: GitBrowserSummaryResponse) => void,
+    onError?: (message: string) => void,
+  ): EventSource {
+    const params = new URLSearchParams();
+    params.set('workspace', workspace);
+    params.set('live', '1');
+    if (options?.commitOffset != null) params.set('commitOffset', String(options.commitOffset));
+    if (options?.commitLimit != null) params.set('commitLimit', String(options.commitLimit));
+    const eventSource = createSafeEventSource(`${API_BASE}/workspace/git-browser?${params.toString()}`);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type === 'summary' && payload.data) {
+          onSummary(payload.data);
+        } else if (payload?.type === 'error') {
+          onError?.(payload.error || '获取 Git 浏览数据失败');
+        }
+      } catch (error: any) {
+        onError?.(error?.message || '解析 Git 浏览事件失败');
+      }
+    };
+
+    eventSource.onerror = () => {};
+    return eventSource;
   },
   async getGitBrowserScopeFiles(workspace: string, scope: GitBrowserScope): Promise<GitBrowserFileListResponse> {
     const params = new URLSearchParams();

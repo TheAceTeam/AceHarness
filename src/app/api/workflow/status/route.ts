@@ -18,6 +18,8 @@ import {
   type MemoryEntry,
 } from '@/lib/workflow/memory-store';
 
+export const dynamic = 'force-dynamic';
+
 type WorkflowStructureMapping = {
   mode: 'phase-based' | 'state-machine' | 'unknown';
   yamlSourceOfTruth: string[];
@@ -318,64 +320,169 @@ async function withCreationSession(status: any, requestedConfigFile?: string | n
   };
 }
 
+async function resolveWorkflowStatusPayload(configFile?: string | null, requestedRunId?: string | null) {
+  if (configFile) {
+    const runningManager = workflowRegistry.getRunningManager(configFile);
+    const runningStatus = runningManager?.getStatus?.();
+    if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
+      return withCreationSession(runningStatus, configFile);
+    }
+
+    if (requestedRunId) {
+      const runState = await loadRunState(requestedRunId);
+      if (runState && runState.configFile === configFile) {
+        const pendingHumanQuestion = runState.pendingHumanQuestionId
+          ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
+          : runState.pendingCheckpoint?.humanQuestion || null;
+        const pendingQuestionWithSession = pendingHumanQuestion
+          ? {
+              ...pendingHumanQuestion,
+              workflowFrontendSessionId: pendingHumanQuestion.workflowFrontendSessionId ?? runState.workflowFrontendSessionId ?? null,
+            }
+          : null;
+        const restoredStatus = {
+          ...runState,
+          runId: runState.runId,
+          currentConfigFile: runState.configFile,
+          currentPhase: runState.currentPhase || runState.currentState || null,
+          logs: [],
+          iterationStates: runState.iterationStates || {},
+          agents: runState.agents || [],
+          stepLogs: runState.stepLogs || [],
+          completedSteps: runState.completedSteps || [],
+          failedSteps: runState.failedSteps || [],
+          workingDirectory: runState.workingDirectory || null,
+          pendingHumanQuestion: pendingQuestionWithSession,
+        };
+        return withCreationSession(restoredStatus, configFile);
+      }
+    }
+
+    const manager = await workflowRegistry.getManager(configFile);
+    return withCreationSession(manager.getStatus(), configFile);
+  }
+
+  const running = workflowRegistry.getRunningManagers();
+  if (running.length > 0) {
+    return withCreationSession(running[0].manager.getStatus());
+  }
+
+  const all = workflowRegistry.getAllManagers();
+  if (all.length > 0) {
+    return withCreationSession(all[all.length - 1].manager.getStatus());
+  }
+
+  return { status: 'idle' };
+}
+
+function createWorkflowStatusStream(request: NextRequest, configFile?: string | null, requestedRunId?: string | null) {
+  const encoder = new TextEncoder();
+  let closed = false;
+  let lastSignature = '';
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const eventTypes = [
+    'status', 'phase', 'step', 'result', 'checkpoint', 'agents',
+    'iteration', 'iteration-complete', 'escalation', 'token-usage',
+    'feedback-injected', 'feedback-recalled', 'context-updated',
+    'route-decision', 'state-change', 'step-start', 'step-complete',
+    'transition', 'force-transition', 'transition-forced',
+    'human-approval-required', 'human-question-required',
+    'human-question-answered', 'human-question-updated',
+    'agent-flow', 'supervisor-review',
+  ];
+  const handlers = new Map<string, (data: any) => void>();
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = (event: any) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+
+      const sendStatus = async (reason: string, force = false) => {
+        if (closed) return;
+        try {
+          const status = await resolveWorkflowStatusPayload(configFile, requestedRunId);
+          const signature = JSON.stringify({
+            status: status?.status,
+            runId: status?.runId,
+            currentPhase: status?.currentPhase,
+            currentState: status?.currentState,
+            currentStep: status?.currentStep,
+            completedSteps: status?.completedSteps,
+            failedSteps: status?.failedSteps,
+            activeSteps: status?.activeSteps,
+            activeConcurrencyGroups: status?.activeConcurrencyGroups,
+            pendingHumanQuestionId: status?.pendingHumanQuestionId,
+            pendingHumanQuestion: status?.pendingHumanQuestion,
+            specRevisionVote: status?.specRevisionVote,
+            specRevisionVoteHistory: status?.specRevisionVoteHistory,
+            latestSupervisorReview: status?.latestSupervisorReview,
+            deltaMergeState: status?.deltaMergeState,
+            updatedAt: status?.updatedAt,
+          });
+          if (!force && signature === lastSignature) return;
+          lastSignature = signature;
+          send({ type: 'status', reason, data: status });
+        } catch (error: any) {
+          send({ type: 'error', reason, error: error?.message || '获取状态失败' });
+        }
+      };
+
+      for (const type of eventTypes) {
+        const handler = (payload: any) => {
+          const eventConfigFile = typeof payload?.__configFile === 'string' ? payload.__configFile : undefined;
+          if (configFile && eventConfigFile && eventConfigFile !== configFile) return;
+          void sendStatus(type);
+        };
+        handlers.set(type, handler);
+        workflowRegistry.on(type, handler);
+      }
+
+      request.signal.addEventListener('abort', () => {
+        if (closed) return;
+        closed = true;
+        if (timer) clearInterval(timer);
+        for (const [type, handler] of handlers) {
+          workflowRegistry.off(type, handler);
+        }
+        try {
+          controller.close();
+        } catch {}
+      });
+
+      send({ type: 'connected', data: { configFile: configFile || null, runId: requestedRunId || null } });
+      void sendStatus('initial', true);
+      timer = setInterval(() => {
+        void sendStatus('heartbeat');
+      }, 5000);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    },
+  });
+}
+
 export async function GET(request: NextRequest) {
   try {
     const configFile = request.nextUrl.searchParams.get('configFile');
     const requestedRunId = request.nextUrl.searchParams.get('runId');
+    const live = request.nextUrl.searchParams.get('live') === '1';
 
-    if (configFile) {
-      const runningManager = workflowRegistry.getRunningManager(configFile);
-      const runningStatus = runningManager?.getStatus?.();
-      if (runningStatus && (!requestedRunId || runningStatus.runId === requestedRunId)) {
-        return NextResponse.json(await withCreationSession(runningStatus, configFile));
-      }
-
-      if (requestedRunId) {
-        const runState = await loadRunState(requestedRunId);
-        if (runState && runState.configFile === configFile) {
-          const pendingHumanQuestion = runState.pendingHumanQuestionId
-            ? runState.humanQuestions?.find((question) => question.id === runState.pendingHumanQuestionId && question.status === 'unanswered') || null
-            : runState.pendingCheckpoint?.humanQuestion || null;
-          const pendingQuestionWithSession = pendingHumanQuestion
-            ? {
-                ...pendingHumanQuestion,
-                workflowFrontendSessionId: pendingHumanQuestion.workflowFrontendSessionId ?? runState.workflowFrontendSessionId ?? null,
-              }
-            : null;
-          const restoredStatus = {
-            ...runState,
-            runId: runState.runId,
-            currentConfigFile: runState.configFile,
-            currentPhase: runState.currentPhase || runState.currentState || null,
-            logs: [],
-            iterationStates: runState.iterationStates || {},
-            agents: runState.agents || [],
-            stepLogs: runState.stepLogs || [],
-            completedSteps: runState.completedSteps || [],
-            failedSteps: runState.failedSteps || [],
-            workingDirectory: runState.workingDirectory || null,
-            pendingHumanQuestion: pendingQuestionWithSession,
-          };
-          return NextResponse.json(await withCreationSession(restoredStatus, configFile));
-        }
-      }
-
-      const manager = await workflowRegistry.getManager(configFile);
-      return NextResponse.json(await withCreationSession(manager.getStatus(), configFile));
+    if (live) {
+      return createWorkflowStatusStream(request, configFile, requestedRunId);
     }
 
-    // No configFile — return first running manager's status, or first idle
-    const running = workflowRegistry.getRunningManagers();
-    if (running.length > 0) {
-      return NextResponse.json(await withCreationSession(running[0].manager.getStatus()));
-    }
-
-    const all = workflowRegistry.getAllManagers();
-    if (all.length > 0) {
-      return NextResponse.json(await withCreationSession(all[all.length - 1].manager.getStatus()));
-    }
-
-    return NextResponse.json({ status: 'idle' });
+    return NextResponse.json(await resolveWorkflowStatusPayload(configFile, requestedRunId));
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取状态失败', message: error.message },
