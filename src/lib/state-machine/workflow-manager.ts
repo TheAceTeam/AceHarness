@@ -52,7 +52,7 @@ import { compactEngineContextManually, executeEngineWithContextRecovery, resolve
 import { getRuntimeAgentsDirPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import { getWorkspaceRoot, getWorkspaceRunsDir } from '@/lib/core/app-paths';
-import { updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
+import { listChatSessions, updateChatSessionCreationBinding, updateChatSessionWorkflowBinding } from '@/lib/chat/persistence';
 import { appendWorkflowAgoraMessage, createWorkflowParticipants } from '@/lib/agora/workflow-topic';
 import {
   DEFAULT_SUPERVISOR_NAME,
@@ -120,6 +120,7 @@ const ZERO_ENGINE_USAGE: EngineTokenUsage = {
 const STREAM_IDLE_INTERRUPT_MS = 10 * 60 * 1000;
 const STREAM_IDLE_CHECK_MS = 30 * 1000;
 const AUTO_CONTINUE_FEEDBACK = '系统检测到当前步骤已连续 10 分钟没有新的流式输出。请继续当前任务，并在无法继续时明确说明当前阻塞点。';
+const STEP_AUTO_RECOVERY_MAX_ATTEMPTS = 3;
 
 function numberOrZero(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -379,15 +380,65 @@ function resolveJoinPolicy(segment: Extract<StepSegment, { type: 'parallel' }>, 
   return (stepPolicy || workflowPolicy || { mode: 'all' }) as RuntimeJoinPolicy;
 }
 
+function isStepToolFailure(message: string): boolean {
+  return /(?:ENOENT|ENOTDIR|EISDIR|EACCES|EPERM):/i.test(message)
+    || /no such file or directory/i.test(message)
+    || /file not found/i.test(message)
+    || /cannot find path/i.test(message)
+    || /找不到文件|文件不存在|路径不存在|没有那个文件或目录/.test(message)
+    || /permission denied/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
-  return /acp\s+connection\s+closed/i.test(message)
-    || /引擎执行失败/.test(message)
-    || /engine\s+.*failed/i.test(message)
-    || /apierror/i.test(message)
-    || /context window limit/i.test(message)
-    || /reached (its |the )?context window limit/i.test(message)
-    || /maximum context length/i.test(message)
-    || /prompt is too long/i.test(message);
+  const normalized = String(message || '');
+  if (!normalized.trim()) return false;
+  if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
+  if (isStepToolFailure(normalized)) return false;
+
+  return /acp\s+connection\s+closed/i.test(normalized)
+    || /apierror/i.test(normalized)
+    || /context window limit/i.test(normalized)
+    || /reached (its |the )?context window limit/i.test(normalized)
+    || /maximum context length/i.test(normalized)
+    || /prompt is too long/i.test(normalized)
+    || /SDK API retry limit/i.test(normalized)
+    || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
+    || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
+    || /failed to create .*process streams/i.test(normalized)
+    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized);
+}
+
+function isRecoverableStepExecutionError(message: string): boolean {
+  const normalized = String(message || '').trim();
+  return Boolean(normalized) && !isEngineLevelFailure(normalized);
+}
+
+function buildStepAutoRecoveryPrompt(input: {
+  stateName?: string | null;
+  stepName: string;
+  attempt: number;
+  maxAttempts: number;
+  error: string;
+}) {
+  return [
+    `## 系统自动恢复（第 ${input.attempt}/${input.maxAttempts} 次）`,
+    '',
+    '上一次执行当前步骤时出现了可恢复错误。不要停止任务，也不要从头重做整个工作流；请在当前会话中针对错误继续修正并完成本步骤。',
+    '',
+    `- 当前状态: ${input.stateName || '未指定'}`,
+    `- 当前步骤: ${input.stepName}`,
+    '',
+    '### 完整错误信息',
+    '```text',
+    input.error,
+    '```',
+    '',
+    '### 恢复要求',
+    '- 先根据错误定位原因；如果是文件或路径不存在，请重新检查 workspace、相对路径、文件名、大小写和生成位置。',
+    '- 不要假设失败路径一定存在；必要时先列目录或搜索相关文件，再继续。',
+    '- 如果某个文件确实不存在，请说明替代依据，并继续完成当前步骤能完成的部分。',
+    '- 最终仍需按当前步骤原始要求输出结论或交付物。',
+  ].join('\n');
 }
 
 export class StateMachineWorkflowManager extends EventEmitter {
@@ -523,6 +574,17 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return createWorkflowParticipants([...names], {
       coordinatorAgent: this.currentSupervisorAgent || DEFAULT_SUPERVISOR_NAME,
     });
+  }
+
+  private async resolveWorkflowFrontendSessionIdForRun(runState: PersistedRunState): Promise<string | null> {
+    const persisted = String(runState.workflowFrontendSessionId || '').trim();
+    if (persisted) return persisted;
+    const current = String(this._frontendSessionId || '').trim();
+    if (current) return current;
+
+    const sessions = await listChatSessions().catch(() => []);
+    const matched = sessions.find((session) => session.workflowBinding?.runId === runState.runId);
+    return matched?.id || null;
   }
   constructor() {
     super();
@@ -2726,29 +2788,22 @@ try {
         const resolvedSessionId = resolveRecoveredSessionId(result, options.resumeSessionId);
         const rawProc = processManager.getProcessRaw(processId);
         if (rawProc) {
-          rawProc.status = 'completed';
+          rawProc.status = result.success ? 'completed' : 'failed';
           rawProc.endTime = new Date();
           processManager.setProcessOutput(processId, result.output || fullStreamContent || rawProc.streamContent);
           rawProc.sessionId = resolvedSessionId || undefined;
-        }
-
-        // If engine reports failure, throw so the step is marked as failed
-        if (!result.success) {
-          const errorMsg = result.error || '引擎执行失败（无输出）';
-          if (rawProc) {
-            rawProc.status = 'failed';
-            processManager.setProcessError(processId, errorMsg);
+          if (!result.success) {
+            processManager.setProcessError(processId, result.error || result.output || '引擎执行失败（无输出）');
           }
-          throw new Error(`${this.engineType} 引擎执行失败: ${errorMsg}`);
         }
 
         const metadata = result.metadata;
         const usage = normalizeEngineUsage(metadata);
 
         return {
-          result: result.output,
+          result: result.success ? result.output : (result.error || result.output || '引擎执行失败（无输出）'),
           session_id: resolvedSessionId || '',
-          is_error: false,
+          is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
           duration_ms: metadataNumber(metadata, 'duration_ms', 'durationMs'),
           duration_api_ms: metadataNumber(metadata, 'duration_api_ms', 'durationApiMs'),
@@ -4461,6 +4516,7 @@ try {
     let accumulatedStream = '';
     let accumulatedCost = 0;
     let accumulatedDuration = 0;
+    let autoRecoveryAttempts = 0;
     const accumulatedTokenUsage: TokenUsage = toPersistedTokenUsage(ZERO_ENGINE_USAGE);
 
     // Use state-prefixed step name so frontend stream polling matches persisted stream files
@@ -4618,6 +4674,106 @@ try {
       }
       if (this.currentRunId) {
         saveStreamContent(this.currentRunId, streamStepName, accumulatedStream).catch(() => {});
+      }
+
+      if (result.is_error && this.interruptFlag && this.liveFeedback.length > 0 && !this.shouldStop) {
+        const isFeedbackOnly = this.feedbackInterrupt;
+        this.interruptFlag = false;
+        this.feedbackInterrupt = false;
+        const feedbackPrompt = this.liveFeedback.join('\n\n');
+        this.liveFeedback = [];
+        const feedbackTimestamp = new Date().toISOString();
+        accumulatedStream += `\n\n<!-- chunk-boundary -->\n\n<!-- human-feedback: ${feedbackTimestamp} -->\n${feedbackPrompt}`;
+        if (this.currentRunId) {
+          saveStreamContent(this.currentRunId, streamStepName, accumulatedStream).catch(() => {});
+        }
+        const sessionId = result.session_id || currentSessionId;
+        currentSessionId = sessionId || undefined;
+        currentPrompt = isFeedbackOnly
+          ? `## 人工实时反馈\n用户在你执行过程中提供了补充反馈，请参考以下内容继续完成任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`
+          : `## 人工实时反馈（紧急打断）\n用户紧急打断了当前执行，请立即处理以下反馈：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
+        if (!sessionId) {
+          currentPrompt = context + '\n\n' + currentPrompt;
+        }
+        currentProcessId = stepId || currentProcessId;
+        lastStreamAt = Date.now();
+        watchdogTriggeredForProcess = '';
+        this.upsertCurrentProcess({
+          pid: Date.now(),
+          id: currentProcessId,
+          agent: runtimeAgentName,
+          step: streamStepName,
+          stepId,
+          startTime: new Date().toISOString(),
+        });
+        this.emit('step-start', {
+          state: this.currentState,
+          step: streamStepName,
+          agent: runtimeAgentName,
+        });
+        this.emit('feedback-injected', {
+          message: feedbackPrompt,
+          timestamp: feedbackTimestamp,
+        });
+        continue;
+      }
+
+      if (result.is_error) {
+        const errorMsg = result.result || '引擎执行失败（无输出）';
+        if (!isRecoverableStepExecutionError(errorMsg)) {
+          throw new Error(errorMsg);
+        }
+
+        if (autoRecoveryAttempts >= STEP_AUTO_RECOVERY_MAX_ATTEMPTS) {
+          throw new Error(
+            `引擎连续失败，已停止工作流：步骤 "${streamStepName}" 自动恢复 ${STEP_AUTO_RECOVERY_MAX_ATTEMPTS} 次后仍失败。最后错误：${errorMsg}`
+          );
+        }
+
+        autoRecoveryAttempts += 1;
+        const recoveryPrompt = buildStepAutoRecoveryPrompt({
+          stateName: this.currentState,
+          stepName: step.name,
+          attempt: autoRecoveryAttempts,
+          maxAttempts: STEP_AUTO_RECOVERY_MAX_ATTEMPTS,
+          error: errorMsg,
+        });
+        const recoveryTimestamp = new Date().toISOString();
+        accumulatedStream += [
+          '\n\n<!-- chunk-boundary -->',
+          '',
+          `<!-- human-feedback: ${recoveryTimestamp} -->`,
+          recoveryPrompt,
+        ].join('\n');
+        if (this.currentRunId) {
+          saveStreamContent(this.currentRunId, streamStepName, accumulatedStream).catch(() => {});
+        }
+
+        const sessionId = result.session_id || currentSessionId;
+        currentSessionId = sessionId || undefined;
+        currentPrompt = sessionId ? recoveryPrompt : `${context}\n\n${recoveryPrompt}`;
+        currentProcessId = stepId || currentProcessId;
+        lastStreamAt = Date.now();
+        watchdogTriggeredForProcess = '';
+        this.upsertCurrentProcess({
+          pid: Date.now(),
+          id: currentProcessId,
+          agent: runtimeAgentName,
+          step: streamStepName,
+          stepId,
+          startTime: new Date().toISOString(),
+        });
+        this.emit('log', {
+          agent: runtimeAgentName,
+          level: 'warning',
+          message: `步骤 "${streamStepName}" 出现可恢复错误，正在自动恢复 ${autoRecoveryAttempts}/${STEP_AUTO_RECOVERY_MAX_ATTEMPTS}: ${errorMsg}`,
+        });
+        this.emit('feedback-injected', {
+          message: recoveryPrompt,
+          timestamp: recoveryTimestamp,
+          automatic: true,
+        });
+        continue;
       }
 
       accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + (result.result || '');
@@ -4964,6 +5120,8 @@ try {
     this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
     this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
     this._creationSessionId = runState.creationSessionId;
+    const restoredFrontendSessionId = await this.resolveWorkflowFrontendSessionIdForRun(runState);
+    this._frontendSessionId = restoredFrontendSessionId || undefined;
     this.currentRequirements = runState.requirements || '';
     this.currentState = runState.currentState || null;
     this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
@@ -5035,9 +5193,14 @@ try {
     this.emit('status', {
       status: 'running',
       message: '恢复运行中...',
+      runId: this.currentRunId,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
-      currentConfigFile: this.currentConfigFile
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      currentConfigFile: this.currentConfigFile,
+      workingDirectory: this.getWorkingDirectory(),
+      workflowFrontendSessionId: this._frontendSessionId || null,
     });
 
     // Persist state immediately after setting status to running
@@ -5181,9 +5344,11 @@ try {
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
+          runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.finalizeRun('completed');
       }
@@ -5194,9 +5359,11 @@ try {
         this.emit('status', {
           status: 'failed',
           message: error.message,
+          runId: this.currentRunId,
           startTime: this.runStartTime,
           endTime: this.runEndTime,
-          currentConfigFile: this.currentConfigFile
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.finalizeRun('failed');
       }

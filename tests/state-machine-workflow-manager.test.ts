@@ -315,6 +315,13 @@ describe('engine-level failure detection', () => {
     expect(isEngineLevelFailure('ApiError: the model has reached its context window limit')).toBe(true);
   });
 
+  test('does not treat AI file-read ENOENT as an engine-level failure', async () => {
+    const { isEngineLevelFailure } = await import('@/lib/state-machine/workflow-manager');
+    expect(isEngineLevelFailure(
+      "codex 引擎执行失败: ENOENT: no such file or directory, open 'C:\\Users\\Shawn\\Desktop\\jinja4cj\\opencode_glm5.1_ace\\src\\ast.cj'"
+    )).toBe(false);
+  });
+
   test('stops the workflow when an engine returns a context-window error as plain output', async () => {
     const engine = new MockEngine({
       success: true,
@@ -324,6 +331,107 @@ describe('engine-level failure detection', () => {
     const config = makeConfig();
 
     await expect((manager as any).executeStateMachine(config, 'Build a feature')).rejects.toThrow(/context window limit/i);
+  });
+
+  test('automatically resumes recoverable file-read failures in the same step conversation', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: '',
+        error: "ENOENT: no such file or directory, open 'C:\\Users\\Shawn\\Desktop\\jinja4cj\\opencode_glm5.1_ace\\src\\ast.cj'",
+        sessionId: 'same-session',
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'pass\nRecovered by searching the workspace and using the correct file path.',
+        sessionId: 'same-session',
+      });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(result.stepOutputs.join('\n')).toContain('Recovered by searching');
+    expect(engine.calls).toHaveLength(2);
+    expect(engine.calls[1].options.sessionId).toBe('same-session');
+    expect(engine.calls[1].options.prompt).toContain('系统自动恢复');
+    expect(engine.calls[1].options.prompt).toContain('ENOENT');
+  });
+
+  test('stops workflow after three failed automatic recoveries', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = vi.fn().mockResolvedValue({
+      success: false,
+      output: '',
+      error: "ENOENT: no such file or directory, open 'C:\\Users\\Shawn\\Desktop\\jinja4cj\\opencode_glm5.1_ace\\src\\ast.cj'",
+      sessionId: 'same-session',
+    });
+    const manager = await createManagerForTest(engine);
+    const config = makeConfig();
+
+    await expect((manager as any).executeState(config.workflow.states[0], config, 'Build a feature'))
+      .rejects.toThrow(/自动恢复 3 次后仍失败|引擎连续失败/);
+    expect(engine.calls).toHaveLength(4);
+  });
+});
+
+describe('state machine resume', () => {
+  test('restores workflow agora session id before emitting resume status', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-resume-001',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'stopped',
+      startTime: '2024-01-01T00:00:00.000Z',
+      currentState: '设计',
+      currentPhase: '设计',
+      currentStep: null,
+      completedSteps: [],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [{ name: 'developer', sessionId: 'agent-session-1' }],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Build a feature',
+      workflowFrontendSessionId: 'workflow-agora-session-1',
+      supervisorAgent: 'default-supervisor',
+      supervisorSessionId: null,
+      attachedAgentSessions: {},
+      stateHistory: [],
+      issueTracker: [],
+      transitionCount: 0,
+      globalContext: '',
+      phaseContexts: {},
+      workingDirectory: '/tmp/project',
+      qualityChecks: [],
+    } as any);
+    vi.mocked(parse).mockReturnValue(makeConfig());
+
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).status = 'idle';
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).executeStateMachine = vi.fn().mockResolvedValue(undefined);
+
+    const statusEvents: any[] = [];
+    manager.on('status', (event) => statusEvents.push(event));
+
+    await (manager as any).resume('run-resume-001');
+
+    expect((manager as any)._frontendSessionId).toBe('workflow-agora-session-1');
+    expect(statusEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: 'running',
+        runId: 'run-resume-001',
+        workflowFrontendSessionId: 'workflow-agora-session-1',
+      }),
+    ]));
   });
 });
 

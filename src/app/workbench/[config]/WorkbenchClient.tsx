@@ -4051,11 +4051,9 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     const modeFromUrl = (searchParams.get('mode') as ViewMode) || 'run';
-    if (modeFromUrl !== state.viewMode) {
+    const isViewingHistoricalRunDetail = viewingHistoryRun && state.viewMode === 'run';
+    if (!isViewingHistoricalRunDetail && modeFromUrl !== state.viewMode) {
       dispatch({ type: 'SET_VIEW_MODE', payload: modeFromUrl });
-    }
-    if (modeFromUrl !== 'history' && viewingHistoryRun) {
-      setViewingHistoryRun(false);
     }
   }, [dispatch, searchParams, state.viewMode, viewingHistoryRun]);
 

@@ -71,13 +71,30 @@ export function groupStateStepsIntoSegments(steps: WorkflowStep[]): StepSegment[
   return segments;
 }
 
+function isStepToolFailure(message: string): boolean {
+  return /(?:ENOENT|ENOTDIR|EISDIR|EACCES|EPERM):/i.test(message)
+    || /no such file or directory/i.test(message)
+    || /file not found/i.test(message)
+    || /cannot find path/i.test(message)
+    || /找不到文件|文件不存在|路径不存在|没有那个文件或目录/.test(message)
+    || /permission denied/i.test(message);
+}
+
 export function isEngineLevelFailure(message: string): boolean {
-  return /acp\s+connection\s+closed/i.test(message)
-    || /引擎执行失败/.test(message)
-    || /engine\s+.*failed/i.test(message)
-    || /apierror/i.test(message)
-    || /context window limit/i.test(message)
-    || /reached (its |the )?context window limit/i.test(message)
-    || /maximum context length/i.test(message)
-    || /prompt is too long/i.test(message);
+  const normalized = String(message || '');
+  if (!normalized.trim()) return false;
+  if (/引擎连续失败|自动恢复\s*\d+\s*次后仍失败/.test(normalized)) return true;
+  if (isStepToolFailure(normalized)) return false;
+
+  return /acp\s+connection\s+closed/i.test(normalized)
+    || /apierror/i.test(normalized)
+    || /context window limit/i.test(normalized)
+    || /reached (its |the )?context window limit/i.test(normalized)
+    || /maximum context length/i.test(normalized)
+    || /prompt is too long/i.test(normalized)
+    || /SDK API retry limit/i.test(normalized)
+    || /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE/i.test(normalized)
+    || /engine (?:not initialized|unavailable|connection .*failed|process .*failed|session .*failed)/i.test(normalized)
+    || /failed to create .*process streams/i.test(normalized)
+    || /引擎(?:未初始化|初始化失败|不可用|连接.*失败|连接.*断开|连续失败)/.test(normalized);
 }
