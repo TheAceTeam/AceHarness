@@ -2,20 +2,32 @@ import { describe, expect, test, vi, beforeEach } from 'vitest';
 
 vi.mock('@/lib/workflow/manager', () => ({
   WorkflowManager: class MockWorkflowManager {
+    private listeners = new Map<string, (data: any) => void>();
     getStatus() {
       return { status: 'idle' };
     }
-    on() {}
+    on(event: string, handler: (data: any) => void) {
+      this.listeners.set(event, handler);
+    }
+    emitForTest(event: string, data: any) {
+      this.listeners.get(event)?.(data);
+    }
     removeAllListeners() {}
   },
 }));
 
 vi.mock('@/lib/state-machine/workflow-manager', () => ({
   StateMachineWorkflowManager: class MockStateMachineWorkflowManager {
+    private listeners = new Map<string, (data: any) => void>();
     getStatus() {
       return { status: 'idle' };
     }
-    on() {}
+    on(event: string, handler: (data: any) => void) {
+      this.listeners.set(event, handler);
+    }
+    emitForTest(event: string, data: any) {
+      this.listeners.get(event)?.(data);
+    }
     removeAllListeners() {}
   },
 }));
@@ -64,5 +76,29 @@ describe('workflow registry', () => {
 
     const [firstManager, secondManager] = await Promise.all([first, second]);
     expect(firstManager).toBe(secondManager);
+  });
+
+  test('forwards state-machine parallel events with config identity', async () => {
+    const { readFile } = await import('fs/promises');
+    (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');
+
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const manager = await workflowRegistry.getManager('demo.yaml');
+    const received = new Promise<any>((resolve) => {
+      workflowRegistry.once('parallel-group-complete', resolve);
+    });
+
+    (manager as any).emitForTest('parallel-group-complete', {
+      state: '实现',
+      groupId: 'branch-a',
+      passed: true,
+    });
+
+    await expect(received).resolves.toMatchObject({
+      state: '实现',
+      groupId: 'branch-a',
+      passed: true,
+      __configFile: 'demo.yaml',
+    });
   });
 });

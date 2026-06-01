@@ -646,6 +646,38 @@ type DesignOptimizationCandidate = {
   bindingValidation: StepTaskBindingValidation | null;
 };
 
+function buildSpecCodingRuntimePayload(specCoding: any, source: 'run' | 'creation') {
+  const phases = Array.isArray(specCoding?.phases) ? specCoding.phases : [];
+  const tasks = Array.isArray(specCoding?.tasks) ? specCoding.tasks : [];
+  const assignments = Array.isArray(specCoding?.assignments) ? specCoding.assignments : [];
+  const checkpoints = Array.isArray(specCoding?.checkpoints) ? specCoding.checkpoints : [];
+  const revisions = Array.isArray(specCoding?.revisions) ? specCoding.revisions : [];
+  return {
+    specCodingSummary: {
+      id: specCoding?.id,
+      version: specCoding?.version,
+      status: specCoding?.status,
+      source,
+      summary: specCoding?.summary,
+      phaseCount: phases.length,
+      taskCount: tasks.length,
+      assignmentCount: assignments.length,
+      checkpointCount: checkpoints.length,
+      revisionCount: revisions.length,
+      progress: specCoding?.progress,
+      latestRevision: revisions.at(-1) || null,
+    },
+    specCodingDetails: {
+      phases,
+      tasks,
+      assignments,
+      checkpoints,
+      revisions,
+      artifacts: specCoding?.artifacts,
+    },
+  };
+}
+
 type SpecArtifactSnapshot = {
   version: number;
   summary: string;
@@ -3991,6 +4023,94 @@ export default function WorkbenchPage() {
 
   const applyWorkflowStatusSnapshot = useCallback((snapshot: any) => {
     if (!snapshot) return;
+    if (typeof snapshot.status === 'string' && snapshot.status) {
+      dispatch({ type: 'SET_WORKFLOW_STATUS', payload: snapshot.status });
+      setRunStatusReason(snapshot.statusReason || null);
+    }
+    if (snapshot.runId) {
+      dispatch({ type: 'SET_RUN_ID', payload: snapshot.runId });
+    }
+    if (snapshot.workflowFrontendSessionId !== undefined) {
+      setWorkflowFrontendSessionId(snapshot.workflowFrontendSessionId || null);
+    }
+    const statusIsActive = snapshot.status === 'running' || snapshot.status === 'preparing' || snapshot.status === 'waiting';
+    const nextPhase = typeof snapshot.currentPhase === 'string'
+      ? snapshot.currentPhase
+      : typeof snapshot.currentState === 'string'
+        ? snapshot.currentState
+        : undefined;
+    if (nextPhase !== undefined) {
+      dispatch({ type: 'SET_CURRENT_PHASE', payload: nextPhase });
+    } else if (snapshot.status && !statusIsActive) {
+      dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
+    }
+    if (typeof snapshot.currentStep === 'string') {
+      dispatch({ type: 'SET_CURRENT_STEP', payload: snapshot.currentStep });
+    } else if (snapshot.status && !statusIsActive) {
+      dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+    }
+    if (Array.isArray(snapshot.activeSteps)) {
+      setActiveSteps(snapshot.activeSteps);
+    }
+    if (Array.isArray(snapshot.activeConcurrencyGroups)) {
+      setActiveConcurrencyGroups(snapshot.activeConcurrencyGroups);
+    }
+    if (Array.isArray(snapshot.completedSteps)) {
+      dispatch({ type: 'SET_COMPLETED_STEPS', payload: snapshot.completedSteps });
+    }
+    if (Array.isArray(snapshot.failedSteps)) {
+      dispatch({ type: 'SET_FAILED_STEPS', payload: snapshot.failedSteps });
+    }
+    if (Array.isArray(snapshot.agents) && snapshot.agents.length > 0) {
+      dispatch({ type: 'SET_AGENTS', payload: snapshot.agents });
+    }
+    if (snapshot.workingDirectory) {
+      dispatch({ type: 'SET_WORKING_DIRECTORY', payload: snapshot.workingDirectory });
+    }
+    if (snapshot.globalContext !== undefined) {
+      dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: snapshot.globalContext });
+    }
+    if (snapshot.phaseContexts) {
+      dispatch({ type: 'SET_PHASE_CONTEXTS', payload: snapshot.phaseContexts });
+    }
+    if (Array.isArray(snapshot.stateHistory)) {
+      setSmStateHistory(snapshot.stateHistory);
+    }
+    if (Array.isArray(snapshot.issueTracker)) {
+      setSmIssueTracker(snapshot.issueTracker);
+    }
+    if (snapshot.transitionCount !== undefined) {
+      setSmTransitionCount(snapshot.transitionCount || 0);
+    }
+    if (Array.isArray(snapshot.supervisorFlow)) {
+      setSupervisorFlow(snapshot.supervisorFlow);
+    }
+    if (Array.isArray(snapshot.agentFlow)) {
+      setAgentFlow(snapshot.agentFlow);
+    }
+    if (snapshot.startTime) {
+      setRunStartTime(snapshot.startTime);
+    }
+    if (snapshot.endTime) {
+      setRunEndTime(snapshot.endTime);
+    }
+    if (Array.isArray(snapshot.qualityChecks)) {
+      setQualityChecks(snapshot.qualityChecks);
+    }
+    if (snapshot.runSpecCoding) {
+      const runSpecCodingPayload = buildSpecCodingRuntimePayload(snapshot.runSpecCoding, 'run');
+      setSpecCodingSummary(runSpecCodingPayload.specCodingSummary);
+      setSpecCodingDetails(runSpecCodingPayload.specCodingDetails);
+    }
+    if (snapshot.persistMode !== undefined) {
+      setPersistMode(snapshot.persistMode || undefined);
+    }
+    if (snapshot.deltaSpecMerged !== undefined) {
+      setDeltaSpecMerged(Boolean(snapshot.deltaSpecMerged));
+    }
+    if (snapshot.deltaMergeState !== undefined) {
+      setDeltaMergeState(snapshot.deltaMergeState || undefined);
+    }
     if (Object.prototype.hasOwnProperty.call(snapshot, 'specRevisionVote')) {
       setSpecRevisionVote(snapshot.specRevisionVote || null);
     }
@@ -4003,7 +4123,7 @@ export default function WorkbenchPage() {
     if (snapshot.pendingHumanQuestion !== undefined && snapshot.status === 'running') {
       setPendingHumanQuestionIfChanged(snapshot.pendingHumanQuestion || null);
     }
-  }, [setPendingHumanQuestionIfChanged]);
+  }, [dispatch, setPendingHumanQuestionIfChanged]);
 
   const clearHumanApprovalData = useCallback(() => {
     humanApprovalSignatureRef.current = null;
@@ -4244,7 +4364,7 @@ export default function WorkbenchPage() {
 
   // Live status stream replaces periodic /api/workflow/status polling.
   useEffect(() => {
-    if (viewMode !== 'run' || (!isRunning && workflowStatus !== 'waiting')) return;
+    if (viewMode !== 'run' || viewingHistoryRun) return;
     const requestedRunId = startupExpectedRunIdRef.current
       || runId
       || selectedRun?.id
@@ -4255,7 +4375,7 @@ export default function WorkbenchPage() {
       (status) => applyWorkflowStatusPayload(status, requestedRunId),
     );
     return () => eventSource.close();
-  }, [viewMode, isRunning, workflowStatus, configFile, initialRunId, runId, selectedRun?.id]);
+  }, [viewMode, viewingHistoryRun, configFile, initialRunId, runId, selectedRun?.id]);
 
   useEffect(() => {
     if (viewMode !== 'run') return;
@@ -4708,6 +4828,9 @@ export default function WorkbenchPage() {
       case 'supervisor-review':
         setLatestSupervisorReview(event.data);
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
+        break;
+      default:
+        applyWorkflowStatusSnapshot(event.data?.statusSnapshot);
         break;
     }
   }, [selectedAgent, addLog, currentPhase, pendingHumanQuestion?.id, setPendingHumanQuestionIfChanged, setHumanApprovalDataIfChanged, clearPendingHumanQuestion, clearHumanApprovalData, shouldApplyRuntimePayload, applyWorkflowStatusSnapshot, liveStream.length, markInlineFeedbacksDelivered, upsertInlineFeedback]);

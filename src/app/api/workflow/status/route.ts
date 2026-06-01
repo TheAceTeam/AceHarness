@@ -388,7 +388,8 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
     'transition', 'force-transition', 'transition-forced',
     'human-approval-required', 'human-question-required',
     'human-question-answered', 'human-question-updated',
-    'agent-flow', 'supervisor-review',
+    'agent-flow', 'supervisor-review', 'state-executing',
+    'parallel-group-start', 'parallel-group-complete', 'circuit-breaker',
   ];
   const handlers = new Map<string, (data: any) => void>();
 
@@ -417,6 +418,20 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
             failedSteps: status?.failedSteps,
             activeSteps: status?.activeSteps,
             activeConcurrencyGroups: status?.activeConcurrencyGroups,
+            agents: Array.isArray(status?.agents)
+              ? status.agents.map((agent: any) => ({
+                  name: agent?.name,
+                  status: agent?.status,
+                  currentTask: agent?.currentTask,
+                  completedTasks: agent?.completedTasks,
+                }))
+              : [],
+            stepLogCount: Array.isArray(status?.stepLogs) ? status.stepLogs.length : 0,
+            stateHistoryCount: Array.isArray(status?.stateHistory) ? status.stateHistory.length : 0,
+            transitionCount: status?.transitionCount,
+            issueCount: Array.isArray(status?.issueTracker) ? status.issueTracker.length : 0,
+            supervisorFlowCount: Array.isArray(status?.supervisorFlow) ? status.supervisorFlow.length : 0,
+            agentFlowCount: Array.isArray(status?.agentFlow) ? status.agentFlow.length : 0,
             pendingLiveFeedback: status?.pendingLiveFeedback,
             pendingHumanQuestionId: status?.pendingHumanQuestionId,
             pendingHumanQuestion: status?.pendingHumanQuestion,
@@ -459,6 +474,7 @@ function createWorkflowStatusStream(request: NextRequest, configFile?: string | 
       send({ type: 'connected', data: { configFile: configFile || null, runId: requestedRunId || null } });
       void sendStatus('initial', true);
       timer = setInterval(() => {
+        send({ type: 'heartbeat', data: { timestamp: Date.now() } });
         void sendStatus('heartbeat');
       }, 5000);
     },

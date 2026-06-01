@@ -61,6 +61,21 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
     currentState: status.currentState || null,
     currentPhase: status.currentPhase || null,
     currentStep: status.currentStep || null,
+    activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : [],
+    activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : [],
+    completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps : [],
+    failedSteps: Array.isArray(status.failedSteps) ? status.failedSteps : [],
+    agents: Array.isArray(status.agents) ? status.agents : [],
+    stateHistory: Array.isArray(status.stateHistory) ? status.stateHistory : [],
+    issueTracker: Array.isArray(status.issueTracker) ? status.issueTracker : [],
+    transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
+    startTime: status.startTime || null,
+    endTime: status.endTime || null,
+    workingDirectory: status.workingDirectory || null,
+    globalContext: status.globalContext,
+    phaseContexts: status.phaseContexts || {},
+    supervisorFlow: Array.isArray(status.supervisorFlow) ? status.supervisorFlow : [],
+    agentFlow: Array.isArray(status.agentFlow) ? status.agentFlow : [],
     pendingLiveFeedback: Array.isArray(status.pendingLiveFeedback) ? status.pendingLiveFeedback : [],
     currentConfigFile: status.currentConfigFile || configFile,
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,
@@ -72,7 +87,9 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
     specRevisionVote: status.specRevisionVote || null,
     specRevisionVoteHistory: Array.isArray(status.specRevisionVoteHistory) ? status.specRevisionVoteHistory : [],
     runSpecCoding: status.runSpecCoding || null,
+    qualityChecks: Array.isArray(status.qualityChecks) ? status.qualityChecks : [],
     persistMode: status.persistMode || null,
+    specRootDir: status.specRootDir || null,
     deltaSpecMerged: status.deltaSpecMerged || false,
     deltaMergeState: status.deltaMergeState || null,
   };
@@ -105,6 +122,7 @@ export async function GET(request: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       let closed = false;
+      let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
       const sendEvent = (data: any) => {
         if (closed) return;
         const message = `data: ${JSON.stringify(data)}\n\n`;
@@ -126,7 +144,8 @@ export async function GET(request: NextRequest) {
         'state-change', 'step-start', 'step-complete', 'transition',
         'force-transition', 'transition-forced', 'human-approval-required',
         'human-question-required', 'human-question-answered', 'human-question-updated',
-        'agent-flow', 'supervisor-review',
+        'agent-flow', 'supervisor-review', 'state-executing',
+        'parallel-group-start', 'parallel-group-complete', 'circuit-breaker',
       ];
 
       // Map SM events to frontend-compatible types
@@ -217,6 +236,7 @@ export async function GET(request: NextRequest) {
       request.signal.addEventListener('abort', () => {
         if (closed) return;
         closed = true;
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         for (const evt of eventTypes) {
           workflowRegistry.off(evt, handlers[evt]);
         }
@@ -228,6 +248,9 @@ export async function GET(request: NextRequest) {
       });
 
       sendEvent({ type: 'connected', data: { message: '已连接到事件流' } });
+      heartbeatTimer = setInterval(() => {
+        sendEvent({ type: 'heartbeat', data: { timestamp: Date.now() } });
+      }, 15000);
       const pendingHumanQuestions = await listPendingHumanQuestions().catch(() => []);
       sendEvent({
         type: 'snapshot',

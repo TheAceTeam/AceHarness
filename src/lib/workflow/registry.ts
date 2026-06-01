@@ -53,6 +53,8 @@ class WorkflowRegistry extends EventEmitter {
     'status', 'agents', 'escalation', 'token-usage',
     'feedback-injected', 'feedback-recalled',
     'route-decision', 'agent-flow', 'supervisor-review',
+    'state-executing', 'parallel-group-start', 'parallel-group-complete',
+    'circuit-breaker',
   ];
 
   /**
