@@ -16,11 +16,33 @@ const IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS = [
   /ECONNRESET/i,
   /child exited early code=1 signal=null; stderr tail:\s*<empty>/i,
 ];
+const DEFAULT_OPENCODE_STREAM_TIMEOUT_MS = 60 * 60 * 1000;
+const DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const MIN_OPENCODE_STREAM_TIMEOUT_MS = 1_000;
+const MAX_OPENCODE_STREAM_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 function isIgnorableOpenCodeSdkTailError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
   if (!message.trim()) return false;
   return IGNORABLE_OPENCODE_SDK_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function parseTimeoutEnv(value: string | undefined, fallback: number): number {
+  if (value == null || String(value).trim() === '') return fallback;
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(MAX_OPENCODE_STREAM_TIMEOUT_MS, Math.max(MIN_OPENCODE_STREAM_TIMEOUT_MS, parsed));
+}
+
+export function getOpenCodeStreamTimeoutConfig(explicitTimeoutMs?: number): { totalMs: number; idleMs: number } {
+  const totalMs = explicitTimeoutMs && Number.isFinite(explicitTimeoutMs)
+    ? Math.max(MIN_OPENCODE_STREAM_TIMEOUT_MS, explicitTimeoutMs)
+    : parseTimeoutEnv(process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_TIMEOUT_MS);
+  const idleMs = parseTimeoutEnv(process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENCODE_STREAM_IDLE_TIMEOUT_MS);
+  return {
+    totalMs,
+    idleMs: Math.min(totalMs, idleMs),
+  };
 }
 
 export type OpenCodeTextPart = {
@@ -76,6 +98,11 @@ export type OpenCodeHttpClient = {
   }) => Promise<{ data?: unknown; error?: unknown }>;
   config?: {
     get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+    providers?(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+  };
+  provider?: {
+    list?(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+    providers?(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
   };
   mcp?: {
     status(options?: {
@@ -123,6 +150,11 @@ export type OpenCodeHttpClient = {
       query?: { directory?: string; limit?: number };
     }) => Promise<{ data?: OpenCodeSessionMessage[]; error?: unknown }>;
   };
+};
+
+export type OpenCodeDiscoveredModel = {
+  modelId: string;
+  name: string;
 };
 
 export type OpenCodePromptBody = {
@@ -175,6 +207,109 @@ export function buildFullPrompt(options: Pick<EngineOptions, 'prompt' | 'systemP
 export function getSessionId(session: OpenCodeSessionCreateResponse | undefined): string | null {
   if (!session || typeof session !== 'object') return null;
   return typeof session.id === 'string' ? session.id : null;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function arrayFromUnknown(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>);
+  return [];
+}
+
+function addOpenCodeModel(
+  models: OpenCodeDiscoveredModel[],
+  seen: Set<string>,
+  providerId: unknown,
+  providerName: unknown,
+  modelKey: unknown,
+  modelValue: unknown,
+): void {
+  const provider = stringValue(providerId);
+  const modelRecord = modelValue && typeof modelValue === 'object' ? modelValue as Record<string, unknown> : null;
+  const model = stringValue(modelRecord?.id) || stringValue(modelRecord?.modelID) || stringValue(modelKey);
+  if (!provider || !model) return;
+  const modelId = `${provider}/${model}`;
+  if (seen.has(modelId)) return;
+  seen.add(modelId);
+  const displayProvider = stringValue(providerName) || provider;
+  const displayModel = stringValue(modelRecord?.name) || model;
+  models.push({ modelId, name: `${displayProvider}/${displayModel}` });
+}
+
+function addProviderModels(models: OpenCodeDiscoveredModel[], seen: Set<string>, provider: unknown, fallbackProviderId?: string): void {
+  if (!provider || typeof provider !== 'object') return;
+  const providerRecord = provider as Record<string, unknown>;
+  const providerId = stringValue(providerRecord.id) || stringValue(providerRecord.providerID) || fallbackProviderId || '';
+  const providerName = providerRecord.name;
+  const modelEntries = providerRecord.models && typeof providerRecord.models === 'object'
+    ? Object.entries(providerRecord.models as Record<string, unknown>)
+    : arrayFromUnknown(providerRecord.models).map((item) => [undefined, item] as const);
+  for (const [modelKey, modelValue] of modelEntries) {
+    addOpenCodeModel(models, seen, providerId, providerName, modelKey, modelValue);
+  }
+}
+
+export function normalizeOpenCodeModelsFromProviderSources(...sources: unknown[]): OpenCodeDiscoveredModel[] {
+  const models: OpenCodeDiscoveredModel[] = [];
+  const seen = new Set<string>();
+
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') continue;
+    const data = (source as Record<string, unknown>).data && typeof (source as Record<string, unknown>).data === 'object'
+      ? (source as Record<string, unknown>).data as Record<string, unknown>
+      : source as Record<string, unknown>;
+
+    for (const provider of arrayFromUnknown(data.providers)) {
+      addProviderModels(models, seen, provider);
+    }
+    for (const provider of arrayFromUnknown(data.all)) {
+      addProviderModels(models, seen, provider);
+    }
+    if (data.provider && typeof data.provider === 'object') {
+      for (const [providerId, provider] of Object.entries(data.provider as Record<string, unknown>)) {
+        addProviderModels(models, seen, provider, providerId);
+      }
+    }
+  }
+
+  return models;
+}
+
+export async function discoverOpenCodeModelsFromHttpClient(client: OpenCodeHttpClient): Promise<OpenCodeDiscoveredModel[]> {
+  const sources: unknown[] = [];
+  const errors: string[] = [];
+
+  const attempts: Array<[string, (() => Promise<{ data?: unknown; error?: unknown }>) | undefined]> = [
+    ['config.providers', client.config?.providers?.bind(client.config)],
+    ['provider.list', client.provider?.list?.bind(client.provider)],
+    ['provider.providers', client.provider?.providers?.bind(client.provider)],
+    ['config.get', client.config?.get?.bind(client.config)],
+  ];
+
+  for (const [name, fn] of attempts) {
+    if (!fn) continue;
+    try {
+      const result = await fn();
+      if (result?.error) {
+        errors.push(`${name}: ${formatError(result.error)}`);
+        continue;
+      }
+      sources.push(result);
+      const models = normalizeOpenCodeModelsFromProviderSources(...sources);
+      if (models.length > 0) return models;
+    } catch (error) {
+      errors.push(`${name}: ${formatError(error)}`);
+    }
+  }
+
+  const models = normalizeOpenCodeModelsFromProviderSources(...sources);
+  if (models.length > 0) return models;
+  throw new Error(errors.length > 0
+    ? `OpenCode HTTP model discovery failed: ${errors.join('; ')}`
+    : 'OpenCode HTTP model discovery APIs are unavailable');
 }
 
 export function extractOutput(data: OpenCodeSessionPromptResponse | undefined): string {
@@ -470,25 +605,44 @@ async function sendPromptStreaming(options: {
   let latestAssistantHasPendingStructuredParts = false;
   const repliedPermissionIds = new Set<string>();
 
-  const timeoutMs = Math.max(1_000, options.timeoutMs || 120_000);
+  const timeoutConfig = getOpenCodeStreamTimeoutConfig(options.timeoutMs);
+  let lastActivityAt = Date.now();
+  const touchActivity = () => {
+    lastActivityAt = Date.now();
+  };
   options.log?.({
     message: 'Streaming prompt start',
-    detail: `sessionId=${options.sessionId}, timeout=${timeoutMs}ms`,
+    detail: `sessionId=${options.sessionId}, timeout=${timeoutConfig.totalMs}ms, idleTimeout=${timeoutConfig.idleMs}ms`,
     metadata: {
       workingDirectory: options.workingDirectory,
       hasRawSse: Boolean(options.eventBaseUrl),
     },
     verbose: true,
   });
-  const timer = setTimeout(() => {
-    streamError = new Error(`[${options.engineName}] streaming prompt timed out after ${timeoutMs}ms`);
-    options.log?.({
-      level: 'error',
-      message: 'Streaming prompt timeout',
-      detail: `${timeoutMs}ms`,
-    });
-    abortController.abort();
-  }, timeoutMs);
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const elapsedMs = now - startedAt;
+    const idleMs = now - lastActivityAt;
+    if (elapsedMs >= timeoutConfig.totalMs) {
+      streamError = new Error(`[${options.engineName}] streaming prompt timed out after ${timeoutConfig.totalMs}ms`);
+      options.log?.({
+        level: 'error',
+        message: 'Streaming prompt timeout',
+        detail: `${timeoutConfig.totalMs}ms`,
+      });
+      abortController.abort();
+      return;
+    }
+    if (idleMs >= timeoutConfig.idleMs) {
+      streamError = new Error(`[${options.engineName}] streaming prompt idle timed out after ${timeoutConfig.idleMs}ms`);
+      options.log?.({
+        level: 'error',
+        message: 'Streaming prompt idle timeout',
+        detail: `${timeoutConfig.idleMs}ms`,
+      });
+      abortController.abort();
+    }
+  }, Math.min(30_000, Math.max(1_000, Math.floor(timeoutConfig.idleMs / 4))));
 
   try {
     const streamDone = options.eventBaseUrl
@@ -499,6 +653,7 @@ async function sendPromptStreaming(options: {
         signal: abortController.signal,
         onPayload: handlePayload,
         onConnected: (detail) => {
+          touchActivity();
           options.log?.({
             message: 'Raw SSE connected',
             detail,
@@ -528,6 +683,7 @@ async function sendPromptStreaming(options: {
         signal: abortController.signal,
         onPayload: handlePayload,
         onConnected: () => {
+          touchActivity();
           options.log?.({
             message: 'SDK SSE connected',
             detail: options.workingDirectory || '',
@@ -582,6 +738,7 @@ async function sendPromptStreaming(options: {
       throw new Error(formatError(promptResult.error));
     }
     promptAccepted = true;
+    touchActivity();
     options.log?.({
       message: 'promptAsync accepted',
       detail: `sessionId=${options.sessionId}`,
@@ -641,19 +798,21 @@ async function sendPromptStreaming(options: {
     }
     throw error;
   } finally {
-    clearTimeout(timer);
+    clearInterval(timer);
     options.signal?.removeEventListener('abort', onAbort);
     abortController.abort();
   }
 
   function emitTextDelta(delta: string): void {
     if (!delta) return;
+    touchActivity();
     output += delta;
     options.emit({ type: 'text', content: delta });
   }
 
   function emitReasoningDelta(delta: string): void {
     if (!delta) return;
+    touchActivity();
     options.emit({ type: 'thought', content: formatAceReasoning(delta) });
   }
 
@@ -687,6 +846,7 @@ async function sendPromptStreaming(options: {
       || snapshot !== latestAssistantTextSnapshot
       || hasPendingStructuredParts !== latestAssistantHasPendingStructuredParts
     ) {
+      touchActivity();
       latestAssistantPartsTouchedAtMs = Date.now() - startedAt;
       latestAssistantPartsSignature = signature;
       latestAssistantTextSnapshot = snapshot;
@@ -738,6 +898,7 @@ async function sendPromptStreaming(options: {
   function handlePartUpdated(part: OpenCodePart): void {
     if (!part?.id || !part.type) return;
     if (existingAssistantPartIds.has(part.id)) return;
+    touchActivity();
     partTypes.set(part.id, part.type);
     if (part.type === 'text' || part.type === 'reasoning') {
       const text = typeof part.text === 'string' ? part.text : '';
@@ -767,6 +928,7 @@ async function sendPromptStreaming(options: {
       if ((status === 'pending' || status === 'running') && !emittedStructuredPartStarts.has(part.id)) {
         emittedStructuredPartStarts.add(part.id);
         options.emit({ type: 'text', content: formatToolCall(part) });
+        touchActivity();
       }
       if ((status === 'completed' || status === 'error') && !emittedStructuredPartFinishes.has(part.id)) {
         if (!emittedStructuredPartStarts.has(part.id)) {
@@ -776,6 +938,7 @@ async function sendPromptStreaming(options: {
         emittedStructuredPartFinishes.add(part.id);
         const result = formatToolResult(part);
         if (result) options.emit({ type: 'text', content: result });
+        touchActivity();
       }
       return;
     }
@@ -784,6 +947,7 @@ async function sendPromptStreaming(options: {
       emittedStructuredPartStarts.add(part.id);
       const formatted = formatAgentOrSubtask(part);
       if (formatted) options.emit({ type: 'text', content: formatted });
+      touchActivity();
     }
   }
 
@@ -793,6 +957,7 @@ async function sendPromptStreaming(options: {
     if (!partID || typeof delta !== 'string' || properties?.field !== 'text') return;
     if (existingAssistantPartIds.has(partID)) return;
     if (ignoredTextParts.has(partID)) return;
+    touchActivity();
     const partType = partTypes.get(partID);
     if (partType !== 'text' && partType !== 'reasoning') {
       const current = pendingUnknownPartBuffers.get(partID) || '';
@@ -860,6 +1025,7 @@ async function sendPromptStreaming(options: {
     const replyKey = `${sessionID}:${permissionID}`;
     if (repliedPermissionIds.has(replyKey)) return;
     repliedPermissionIds.add(replyKey);
+    touchActivity();
 
     if (typeof options.client.postSessionIdPermissionsPermissionId !== 'function') {
       const error = new Error('OpenCode permission response API unavailable');
@@ -897,6 +1063,7 @@ async function sendPromptStreaming(options: {
 
   function handlePayload(payload: OpenCodeStreamEventPayload | undefined): void {
     if (!isCurrentSession(payload, options.sessionId)) return;
+    touchActivity();
 
     const type = payload?.type;
     const properties = payload?.properties;

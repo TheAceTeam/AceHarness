@@ -3,8 +3,97 @@ import { ACPEngine, getAcpModelDiscoveryTimeoutMs } from '@/lib/engines/acp-engi
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
 import { commandExists } from '@/lib/core/command-exists';
 import { resolveCursorAgentCommand } from '@/lib/engines/cursor-wrapper';
+import { discoverOpenCodeSdkModels } from '@/lib/engines/opencode-sdk-wrapper';
+import { getEngineConfigPath } from '@/lib/core/app-paths';
+import { isWindows } from '@/lib/core/runtime-platform';
+import {
+  getDefaultDriver,
+  normalizeDriverSelection,
+  resolveEffectiveEngine,
+  supportsDriverSelection,
+  type EngineDriver,
+} from '@/lib/engines/engine-selection';
+import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { spawn } from 'child_process';
 
 export const dynamic = 'force-dynamic';
+
+interface EngineConfig {
+  engine: string;
+  driver?: EngineDriver;
+  drivers?: Partial<Record<'claude-code' | 'opencode' | 'nga' | 'codegenie', EngineDriver>>;
+}
+
+async function readEngineConfig(): Promise<EngineConfig | null> {
+  const configPath = getEngineConfigPath();
+  if (!existsSync(configPath)) return null;
+  try {
+    return JSON.parse(await readFile(configPath, 'utf-8')) as EngineConfig;
+  } catch (error) {
+    console.warn('[engine/models] Failed to read engine config:', error);
+    return null;
+  }
+}
+
+function getConfiguredDriver(config: EngineConfig | null, engineType: string, requestedDriver: string | null): EngineDriver | undefined {
+  if (!supportsDriverSelection(engineType)) return undefined;
+  if (requestedDriver === 'sdk' || requestedDriver === 'stdio') {
+    return normalizeDriverSelection(engineType, requestedDriver);
+  }
+  const engineKey = engineType as 'claude-code' | 'opencode' | 'nga' | 'codegenie';
+  return normalizeDriverSelection(engineType, config?.drivers?.[engineKey] || config?.driver || getDefaultDriver(engineType));
+}
+
+function parseOpenCodeCliModels(output: string): Array<{ modelId: string; name: string }> {
+  const seen = new Set<string>();
+  const models: Array<{ modelId: string; name: string }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const modelId = line.trim();
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    models.push({ modelId, name: modelId });
+  }
+  return models;
+}
+
+function runOpenCodeModelsCli(command: string, cwd: string): Promise<Array<{ modelId: string; name: string }>> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, ['models'], {
+      cwd,
+      windowsHide: true,
+      shell: isWindows(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error('opencode models timed out after 15000ms'));
+    }, 15_000);
+
+    child.stdout.setEncoding('utf-8');
+    child.stderr.setEncoding('utf-8');
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(`opencode models exited with code ${code}: ${stderr.trim() || '<empty stderr>'}`));
+        return;
+      }
+      resolve(parseOpenCodeCliModels(stdout));
+    });
+  });
+}
 
 /**
  * GET /api/engine/models?engine=opencode
@@ -18,6 +107,9 @@ export async function GET(request: NextRequest) {
   if (!engineType) {
     return NextResponse.json({ error: 'engine parameter required' }, { status: 400 });
   }
+  const config = await readEngineConfig();
+  const driver = getConfiguredDriver(config, engineType, request.nextUrl.searchParams.get('driver'));
+  const effectiveEngine = resolveEffectiveEngine(engineType, driver) || engineType;
 
   if (engineType === 'claude-code') {
     try {
@@ -77,6 +169,34 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: `Unknown engine: ${engineType}` }, { status: 400 });
   }
 
+  if (engineType === 'opencode' && effectiveEngine === 'opencode-sdk') {
+    try {
+      const models = await discoverOpenCodeSdkModels();
+      return NextResponse.json({
+        engine: engineType,
+        driver,
+        source: 'sdk-http',
+        models,
+      });
+    } catch (error) {
+      console.error('[engine/models] Failed to discover opencode SDK models via HTTP API:', error);
+      try {
+        const models = await runOpenCodeModelsCli(command, process.cwd());
+        return NextResponse.json({
+          engine: engineType,
+          driver,
+          source: 'cli-fallback',
+          models,
+        });
+      } catch (fallbackError) {
+        console.error('[engine/models] OpenCode CLI fallback failed:', fallbackError);
+        return NextResponse.json({
+          error: `Failed to discover models: ${error instanceof Error ? error.message : String(error)}`,
+        }, { status: 500 });
+      }
+    }
+  }
+
   const engine = new ACPEngine({
     engineType,
     command,
@@ -104,9 +224,37 @@ export async function GET(request: NextRequest) {
     };
 
     const models = await Promise.race([discover(), timeout]);
+    const source = models.length > 0 ? 'acp' : 'empty';
+
+    if (engineType === 'opencode' && models.length === 0) {
+      try {
+        const httpModels = await discoverOpenCodeSdkModels();
+        return NextResponse.json({
+          engine: engineType,
+          driver,
+          source: 'sdk-http-fallback',
+          models: httpModels,
+        });
+      } catch (httpFallbackError) {
+        console.error('[engine/models] OpenCode ACP returned no models and HTTP fallback failed:', httpFallbackError);
+      }
+      try {
+        const cliModels = await runOpenCodeModelsCli(command, process.cwd());
+        return NextResponse.json({
+          engine: engineType,
+          driver,
+          source: 'cli-fallback',
+          models: cliModels,
+        });
+      } catch (fallbackError) {
+        console.error('[engine/models] OpenCode ACP returned no models and CLI fallback failed:', fallbackError);
+      }
+    }
 
     return NextResponse.json({
       engine: engineType,
+      driver,
+      source,
       models: models.map((m: any) => ({
         modelId: m.modelId,
         name: m.name,
@@ -114,6 +262,30 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error(`[engine/models] Failed to discover models for ${engineType}:`, error);
+    if (engineType === 'opencode') {
+      try {
+        const httpModels = await discoverOpenCodeSdkModels();
+        return NextResponse.json({
+          engine: engineType,
+          driver,
+          source: 'sdk-http-fallback',
+          models: httpModels,
+        });
+      } catch (httpFallbackError) {
+        console.error('[engine/models] OpenCode HTTP fallback failed:', httpFallbackError);
+      }
+      try {
+        const cliModels = await runOpenCodeModelsCli(command, process.cwd());
+        return NextResponse.json({
+          engine: engineType,
+          driver,
+          source: 'cli-fallback',
+          models: cliModels,
+        });
+      } catch (fallbackError) {
+        console.error('[engine/models] OpenCode CLI fallback failed:', fallbackError);
+      }
+    }
     return NextResponse.json({
       error: `Failed to discover models: ${error instanceof Error ? error.message : String(error)}`,
     }, { status: 500 });

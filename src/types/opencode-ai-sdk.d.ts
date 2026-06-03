@@ -51,6 +51,11 @@ declare module '@opencode-ai/sdk' {
   interface OpencodeClient {
     config?: {
       get(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+      providers(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+    };
+    provider?: {
+      list(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+      providers(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
     };
     event?: EventApi;
     session: SessionApi;

@@ -1,8 +1,118 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
-import { sendPromptWithOpenCodeHttp } from '@/lib/engines/opencode-http-adapter';
+import {
+  discoverOpenCodeModelsFromHttpClient,
+  getOpenCodeStreamTimeoutConfig,
+  normalizeOpenCodeModelsFromProviderSources,
+  sendPromptWithOpenCodeHttp,
+} from '@/lib/engines/opencode-http-adapter';
 
 describe('sendPromptWithOpenCodeHttp regressions', () => {
+  test('uses a long default total timeout with a separate idle timeout for streaming prompts', () => {
+    const originalTotal = process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
+    const originalIdle = process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+    try {
+      delete process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
+      delete process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+
+      expect(getOpenCodeStreamTimeoutConfig()).toEqual({
+        totalMs: 60 * 60 * 1000,
+        idleMs: 10 * 60 * 1000,
+      });
+
+      process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS = '7200000';
+      process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = '900000';
+      expect(getOpenCodeStreamTimeoutConfig()).toEqual({
+        totalMs: 7_200_000,
+        idleMs: 900_000,
+      });
+
+      expect(getOpenCodeStreamTimeoutConfig(120_000)).toEqual({
+        totalMs: 120_000,
+        idleMs: 120_000,
+      });
+    } finally {
+      if (originalTotal === undefined) {
+        delete process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS;
+      } else {
+        process.env.ACE_OPENCODE_STREAM_TIMEOUT_MS = originalTotal;
+      }
+      if (originalIdle === undefined) {
+        delete process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS;
+      } else {
+        process.env.ACE_OPENCODE_STREAM_IDLE_TIMEOUT_MS = originalIdle;
+      }
+    }
+  });
+
+  test('normalizes OpenCode provider model responses from new and config shapes', () => {
+    expect(normalizeOpenCodeModelsFromProviderSources(
+      {
+        data: {
+          providers: [
+            {
+              id: 'penguiapigpt',
+              name: 'Pengui-gpt',
+              models: {
+                'gpt-5.3-codex': { id: 'gpt-5.3-codex', name: 'gpt-5.3-codex' },
+              },
+            },
+          ],
+        },
+      },
+      {
+        data: {
+          provider: {
+            penguiapi: {
+              name: 'Pengui-Api',
+              models: {
+                'claude-sonnet-4-5': { name: 'claude-sonnet-4-6' },
+              },
+            },
+          },
+        },
+      },
+    )).toEqual([
+      { modelId: 'penguiapigpt/gpt-5.3-codex', name: 'Pengui-gpt/gpt-5.3-codex' },
+      { modelId: 'penguiapi/claude-sonnet-4-5', name: 'Pengui-Api/claude-sonnet-4-6' },
+    ]);
+  });
+
+  test('discovers OpenCode models through SDK HTTP provider APIs before config fallback', async () => {
+    const configProviders = vi.fn(async () => ({
+      data: {
+        providers: [
+          {
+            id: 'opencode',
+            name: 'OpenCode Zen',
+            models: {
+              'big-pickle': { name: 'Big Pickle' },
+            },
+          },
+        ],
+      },
+    }));
+    const providerList = vi.fn();
+    const configGet = vi.fn();
+
+    await expect(discoverOpenCodeModelsFromHttpClient({
+      config: {
+        providers: configProviders,
+        get: configGet,
+      },
+      provider: {
+        list: providerList,
+      },
+      session: {} as any,
+    })).resolves.toEqual([
+      { modelId: 'opencode/big-pickle', name: 'OpenCode Zen/Big Pickle' },
+    ]);
+
+    expect(configProviders).toHaveBeenCalledTimes(1);
+    expect(providerList).not.toHaveBeenCalled();
+    expect(configGet).not.toHaveBeenCalled();
+  });
+
   test('returns hydrated assistant output when the SSE stream errors after prompt acceptance', async () => {
     const emitted: EngineStreamEvent[] = [];
     const logs: Array<{ message: string; level?: string }> = [];

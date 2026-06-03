@@ -352,7 +352,10 @@ export default function EnginesPage() {
     setDetecting(true);
     setDetectingEngine(engineId);
     try {
-      const res = await fetch(`/api/engine/models?engine=${engineId}`);
+      const driver = getDriverForEngine(engineId);
+      const params = new URLSearchParams({ engine: engineId });
+      if (driver) params.set('driver', driver);
+      const res = await fetch(`/api/engine/models?${params.toString()}`);
       const data = await res.json();
       if (data.error) {
         toast('error', `检测失败: ${data.error}`);

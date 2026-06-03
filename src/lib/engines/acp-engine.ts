@@ -139,6 +139,109 @@ export interface ACPSendPromptResult {
   usage?: Usage | null;
 }
 
+export interface ACPModelInfo {
+  modelId: string;
+  name: string;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function addAcpModel(
+  models: ACPModelInfo[],
+  seen: Set<string>,
+  modelId: unknown,
+  name?: unknown,
+): void {
+  const id = stringValue(modelId);
+  if (!id || seen.has(id)) return;
+  seen.add(id);
+  models.push({ modelId: id, name: stringValue(name) || id });
+}
+
+function arrayFromUnknown(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value as Record<string, unknown>);
+  return [];
+}
+
+function looksLikeModelConfigOption(option: Record<string, unknown>): boolean {
+  const id = stringValue(option.id).toLowerCase();
+  if (id === 'model' || id === 'models' || id.endsWith('.model')) return true;
+  const label = [
+    option.name,
+    option.title,
+    option.label,
+    option.description,
+  ].map((value) => stringValue(value).toLowerCase()).filter(Boolean).join(' ');
+  return /\bmodels?\b/.test(label);
+}
+
+function extractModelsFromConfigOption(option: Record<string, unknown>, models: ACPModelInfo[], seen: Set<string>): void {
+  const choices = [
+    ...arrayFromUnknown(option.options),
+    ...arrayFromUnknown(option.choices),
+    ...arrayFromUnknown(option.items),
+    ...arrayFromUnknown(option.values),
+  ];
+
+  for (const choice of choices) {
+    if (typeof choice === 'string') {
+      addAcpModel(models, seen, choice);
+      continue;
+    }
+    if (!choice || typeof choice !== 'object') continue;
+    const item = choice as Record<string, unknown>;
+    addAcpModel(
+      models,
+      seen,
+      item.value ?? item.modelId ?? item.id ?? item.key,
+      item.name ?? item.label ?? item.title ?? item.description,
+    );
+  }
+}
+
+/**
+ * Normalize ACP model discovery across protocol/engine versions.
+ * Older engines expose `models.availableModels`; newer OpenCode exposes the
+ * model selector as a `configOptions` select option with `id: "model"`.
+ */
+export function normalizeAcpModelsFromSessionResult(result: unknown): ACPModelInfo[] {
+  const models: ACPModelInfo[] = [];
+  const seen = new Set<string>();
+  if (!result || typeof result !== 'object') return models;
+
+  const record = result as Record<string, unknown>;
+  const modelRecord = record.models && typeof record.models === 'object'
+    ? record.models as Record<string, unknown>
+    : null;
+
+  for (const item of arrayFromUnknown(modelRecord?.availableModels)) {
+    if (typeof item === 'string') {
+      addAcpModel(models, seen, item);
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    const model = item as Record<string, unknown>;
+    addAcpModel(
+      models,
+      seen,
+      model.modelId ?? model.value ?? model.id,
+      model.name ?? model.label ?? model.title,
+    );
+  }
+
+  for (const option of arrayFromUnknown(record.configOptions)) {
+    if (!option || typeof option !== 'object') continue;
+    const optionRecord = option as Record<string, unknown>;
+    if (!looksLikeModelConfigOption(optionRecord)) continue;
+    extractModelsFromConfigOption(optionRecord, models, seen);
+  }
+
+  return models;
+}
+
 interface ACPHistoryReplayCollector {
   sessionId: string;
   messageOrder: Array<{ key: string; role: 'user' | 'assistant' }>;
@@ -616,7 +719,7 @@ export class ACPEngine extends EventEmitter {
     }
     logAcpTiming(this.config.engineType, 'acp.4_newSession_rpc', tNewSess);
     this.sessionId = result.sessionId;
-    this.availableModels = (result.models?.availableModels as any[]) || [];
+    this.availableModels = normalizeAcpModelsFromSessionResult(result);
     console.log(`[${this.config.engineType}] session created: ${this.sessionId}`);
     console.log(
       `[${this.config.engineType}] available models (${this.availableModels.length}):`,
@@ -677,7 +780,8 @@ export class ACPEngine extends EventEmitter {
     }
     logAcpTiming(this.config.engineType, 'acp.4_session_load_rpc', tLoad, `sessionId=${sessionId}`);
     this.sessionId = sessionId;
-    this.availableModels = (result.models?.availableModels as any[]) || this.availableModels;
+    const models = normalizeAcpModelsFromSessionResult(result);
+    if (models.length > 0) this.availableModels = models;
     this.emit('session-resumed', {
       sessionId: this.sessionId,
       configOptions: result.configOptions,
@@ -794,7 +898,8 @@ export class ACPEngine extends EventEmitter {
       ]);
       await this.flushHistoryReplayNotifications();
       logAcpTiming(this.config.engineType, 'acp.7_session_replay_load_rpc', tReplay, `sessionId=${sessionId}`);
-      this.availableModels = (result.models?.availableModels as any[]) || this.availableModels;
+      const models = normalizeAcpModelsFromSessionResult(result);
+      if (models.length > 0) this.availableModels = models;
       const lastUserIndex = [...collector.messageOrder]
         .map((entry) => entry.role)
         .lastIndexOf('user');

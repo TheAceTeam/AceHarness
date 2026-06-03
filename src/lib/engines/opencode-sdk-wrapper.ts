@@ -18,8 +18,10 @@ import { normalizeEngineOutput } from './engine-output';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import {
   buildFullPrompt,
+  discoverOpenCodeModelsFromHttpClient,
   getSessionId,
   type OpenCodeHttpClient,
+  type OpenCodeDiscoveredModel,
   sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA,
 } from './opencode-http-adapter';
@@ -172,6 +174,11 @@ function parseProviderModel(modelId: string | undefined): { model: { providerID:
   const modelID = modelSegments.join('/');
   if (!providerID || !modelID) return null;
   return { model: { providerID, modelID }, ...(variant ? { variant } : {}) };
+}
+
+export async function discoverOpenCodeSdkModels(): Promise<OpenCodeDiscoveredModel[]> {
+  const { client } = await ensureServer();
+  return discoverOpenCodeModelsFromHttpClient(client);
 }
 
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
