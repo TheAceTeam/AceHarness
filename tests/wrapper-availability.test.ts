@@ -48,7 +48,7 @@ describe('wrapper availability in current environment', () => {
 
   test('cursor matches CLI discovery availability', async () => {
     const wrapper = new CursorEngineWrapper();
-    const expected = commandExists('agent', getCommonCliSearchPaths());
+    const expected = commandExists('cursor-agent', getCommonCliSearchPaths()) || commandExists('agent', getCommonCliSearchPaths());
     await expect(wrapper.isAvailable()).resolves.toBe(expected);
   });
 

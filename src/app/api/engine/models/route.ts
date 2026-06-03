@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ACPEngine, getAcpModelDiscoveryTimeoutMs } from '@/lib/engines/acp-engine';
 import { discoverClaudeCodeModels } from '@/lib/engines/claude-code-model-discovery';
 import { commandExists } from '@/lib/core/command-exists';
+import { resolveCursorAgentCommand } from '@/lib/engines/cursor-wrapper';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +67,7 @@ export async function GET(request: NextRequest) {
       '/usr/bin',
     ]) ? 'ngagent' : 'nga',
     'kiro-cli': 'kiro-cli',
-    'cursor': 'agent',
+    'cursor': resolveCursorAgentCommand(),
     'trae-cli': 'trae-cli',
     'codegenie': 'codegenie',
   };

@@ -2467,8 +2467,9 @@ function CreationWorkspaceShell({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               {onBack ? (
-                <Button type="button" variant="ghost" size="icon" onClick={onBack} title={backTitle} className="h-8 w-8 shrink-0">
+                <Button type="button" variant="ghost" size="sm" onClick={onBack} title={backTitle} className="h-8 shrink-0 gap-1.5 px-2">
                   <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+                  <span>上一步</span>
                 </Button>
               ) : null}
               <span className={cn('material-symbols-outlined text-[20px]', iconClassName)}>{icon}</span>
@@ -6534,8 +6535,9 @@ export default function NewConfigModal({
           >
             <div className="flex items-center justify-between p-6 pb-4 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="icon" onClick={() => setFormStep(3)} disabled={isRevisingPlan} title="返回计划生成">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setFormStep(3)} disabled={isRevisingPlan} title="返回计划生成" className="gap-1.5 px-2">
                   <span className="material-symbols-outlined">arrow_back</span>
+                  <span>上一步</span>
                 </Button>
                 <DialogTitle>确认计划</DialogTitle>
               </div>

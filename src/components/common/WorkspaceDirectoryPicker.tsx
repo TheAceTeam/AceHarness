@@ -105,6 +105,12 @@ function getPathSegments(pathValue: string): string[] {
   return normalizeSlashes(pathValue).split('/').filter(Boolean);
 }
 
+function joinRelativePath(parentPath: string, childName: string): string {
+  const parent = normalizeSlashes(parentPath || '').replace(/^\/+|\/+$/g, '');
+  const child = normalizeSlashes(childName || '').replace(/^\/+|\/+$/g, '');
+  return parent ? `${parent}/${child}` : child;
+}
+
 function deriveRootFromValue(defaultRoot: string, value: string): string {
   const normalizedValue = normalizeRoot(value || '');
   if (!normalizedValue) return defaultRoot;
@@ -224,6 +230,12 @@ export default function WorkspaceDirectoryPicker({
     return { root: defaultRoot, path: toRelative(defaultRoot, value || defaultRoot) };
   }, [defaultRoot, value]);
 
+  const createFolder = useCallback(async (parentPath: string, folderName: string) => {
+    const nextPath = joinRelativePath(parentPath, folderName);
+    await workspaceApi.manage(currentRootRef.current, 'create-folder', { path: nextPath });
+    return { root: currentRootRef.current, path: nextPath };
+  }, []);
+
   const handleChange = useCallback((relativePath: string) => {
     onChange(toAbsolute(currentRootRef.current, relativePath));
   }, [onChange]);
@@ -241,6 +253,7 @@ export default function WorkspaceDirectoryPicker({
       onResolvePath={resolveInputPath}
       onNavigateUp={navigateUp}
       onNavigateHome={navigateHome}
+      onCreateFolder={createFolder}
     />
   );
 }

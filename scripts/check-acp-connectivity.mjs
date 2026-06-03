@@ -189,7 +189,7 @@ function resolveEngineCommand(engine) {
     if (commandExistsLikeServer('ngagent')) return 'ngagent';
     return 'nga';
   }
-  if (engine === 'cursor') return 'agent';
+  if (engine === 'cursor') return commandExistsLikeServer('cursor-agent') ? 'cursor-agent' : 'agent';
   return engine;
 }
 

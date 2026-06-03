@@ -9,6 +9,7 @@ import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
 import { getModelOptions } from '@/lib/core/models';
 import { ACPEngine } from './lib/engines/acp-engine';
+import { isCursorAgentCommandAvailable, resolveCursorAgentCommand } from './lib/engines/cursor-wrapper';
 import {
   getWorkspaceDirectory,
   getEngineConfigPath,
@@ -592,7 +593,7 @@ async function detectEngines() {
       engine.id === 'claude-code' ? await moduleExists('@anthropic-ai/claude-agent-sdk')
         : engine.id === 'codex' ? (await moduleExists('@openai/codex-sdk')) || commandExists('codex')
           : engine.id === 'magic-cli' ? resolveMagicCliBinary() !== null
-            : commandExists(engine.id === 'cursor' ? 'agent' : engine.id),
+            : engine.id === 'cursor' ? isCursorAgentCommandAvailable() : commandExists(engine.id),
   })));
 
   return availability;
@@ -605,7 +606,7 @@ async function discoverAcpModels(engineType: EngineType): Promise<Array<{ value:
     nga: commandExists('ngagent') ? 'ngagent' : 'nga',
     codegenie: 'codegenie',
     'kiro-cli': 'kiro-cli',
-    cursor: 'agent',
+    cursor: resolveCursorAgentCommand(),
     'trae-cli': 'trae-cli',
   };
   const command = commandMap[engineType];

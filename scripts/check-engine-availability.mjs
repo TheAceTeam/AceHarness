@@ -154,7 +154,7 @@ const ENGINE_BINARIES = {
   opencode: ['opencode'],
   nga: null, // special
   codegenie: ['codegenie'],
-  cursor: ['agent'],
+  cursor: ['cursor-agent', 'agent'],
   'trae-cli': ['trae-cli'],
   'kiro-cli': ['kiro-cli'],
   codex: ['codex'],

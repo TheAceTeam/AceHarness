@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, ChevronRight, Folder, FolderOpen, HardDrive, House, Loader2, LocateFixed } from 'lucide-react';
+import { ArrowUp, ChevronRight, Folder, FolderOpen, FolderPlus, HardDrive, House, Loader2, LocateFixed } from 'lucide-react';
 import type { TreeNode } from '@/lib/core/api';
 import { cn } from '@/lib/core/utils';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -24,6 +24,7 @@ interface DirectoryTreePickerProps {
   onResolvePath?: (input: string) => Promise<PathResolution> | PathResolution;
   onNavigateUp?: (currentPath: string) => Promise<PathResolution> | PathResolution;
   onNavigateHome?: () => Promise<PathResolution> | PathResolution;
+  onCreateFolder?: (parentPath: string, folderName: string) => Promise<PathResolution> | PathResolution;
 }
 
 function normalizePickerPath(rawPath: string): string {
@@ -74,6 +75,7 @@ export default function DirectoryTreePicker({
   onResolvePath,
   onNavigateUp,
   onNavigateHome,
+  onCreateFolder,
 }: DirectoryTreePickerProps) {
   const [open, setOpen] = useState(false);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -84,6 +86,9 @@ export default function DirectoryTreePicker({
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
   const [pathInput, setPathInput] = useState(value);
   const [draftValue, setDraftValue] = useState(value);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>());
   const latestValueRef = useRef(value);
   const openRef = useRef(open);
@@ -177,6 +182,38 @@ export default function DirectoryTreePicker({
       setExpanded(new Set(['']));
     }
   }, [expandPath, refreshRoot]);
+
+  const handleCreateFolder = useCallback(async () => {
+    if (!onCreateFolder) return;
+    const folderName = newFolderName.trim();
+    if (!folderName) {
+      setCreateError('请输入文件夹名称');
+      return;
+    }
+    if (/[\\/]/.test(folderName)) {
+      setCreateError('文件夹名称不能包含路径分隔符');
+      return;
+    }
+    setCreatingFolder(true);
+    setCreateError(null);
+    try {
+      const resolved = await normalizeResolution(folderName, (name) => onCreateFolder(draftValue, name));
+      const normalizedPath = normalizePickerPath(resolved.path || '');
+      setDraftValue(normalizedPath);
+      setPathInput(resolved.root ? `${resolved.root}${normalizedPath ? `/${normalizedPath}` : ''}` : (resolved.path || ''));
+      setNewFolderName('');
+      await refreshRoot({ resetExpanded: true });
+      if (normalizedPath) {
+        await expandPath(normalizedPath);
+      } else {
+        setExpanded(new Set(['']));
+      }
+    } catch (error: any) {
+      setCreateError(error?.message || '创建文件夹失败');
+    } finally {
+      setCreatingFolder(false);
+    }
+  }, [draftValue, expandPath, newFolderName, onCreateFolder, refreshRoot]);
 
   useEffect(() => {
     void refreshRoot();
@@ -383,6 +420,42 @@ export default function DirectoryTreePicker({
                             {root}
                           </Button>
                         ))}
+                      </div>
+                    ) : null}
+                    {onCreateFolder ? (
+                      <div className="flex w-full flex-wrap items-start gap-2 pt-1">
+                        <div className="min-w-[240px] flex-1">
+                          <Input
+                            value={newFolderName}
+                            onChange={(event) => {
+                              setNewFolderName(event.target.value);
+                              if (createError) setCreateError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                void handleCreateFolder();
+                              }
+                            }}
+                            placeholder="在当前选中目录中新建文件夹"
+                            disabled={disabled || creatingFolder}
+                            className="h-9"
+                          />
+                          {createError ? <div className="mt-1 text-xs text-destructive">{createError}</div> : null}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={disabled || creatingFolder}
+                          onClick={() => void handleCreateFolder()}
+                        >
+                          {creatingFolder ? (
+                            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                          ) : (
+                            <FolderPlus className="mr-1 h-4 w-4" />
+                          )}
+                          新建文件夹
+                        </Button>
                       </div>
                     ) : null}
                   </div>

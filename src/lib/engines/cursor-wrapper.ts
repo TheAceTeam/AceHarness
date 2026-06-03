@@ -2,7 +2,7 @@
  * Cursor CLI Engine Wrapper
  *
  * Wraps ACPEngine to implement the Engine interface for Cursor Agent CLI.
- * The actual command is `agent acp` (not `cursor acp`).
+ * The actual command is `cursor-agent acp` or legacy `agent acp` (not `cursor acp`).
  *
  * Cursor ACP quirks vs OpenCode/Kiro:
  * - tool_call events always have empty rawInput {}
@@ -25,6 +25,17 @@ import {
   resolveAceToolName,
 } from '@/lib/chat/ace-process-formatters';
 
+export function resolveCursorAgentCommand(): string {
+  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+  if (commandExists('cursor-agent', searchPaths)) return 'cursor-agent';
+  return 'agent';
+}
+
+export function isCursorAgentCommandAvailable(): boolean {
+  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+  return commandExists('cursor-agent', searchPaths) || commandExists('agent', searchPaths);
+}
+
 export class CursorEngineWrapper extends ACPWrapperBase {
   /** Track active tool IDs so we can suppress their JSON output */
   private activeToolIds = new Set<string>();
@@ -45,7 +56,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   protected getACPConfig(options: EngineOptions): ACPEngineConfig {
     return {
       engineType: 'cursor',
-      command: 'agent',
+      command: resolveCursorAgentCommand(),
       workingDirectory: options.workingDirectory,
       agentName: options.agent,
       model: options.model,
@@ -55,7 +66,7 @@ export class CursorEngineWrapper extends ACPWrapperBase {
   }
 
   async isAvailable(): Promise<boolean> {
-    return commandExists('agent', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
+    return isCursorAgentCommandAvailable();
   }
 
   beforeExecute(_context: ACPExecutionContext, _options: EngineOptions): void {
