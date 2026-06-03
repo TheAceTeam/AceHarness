@@ -1082,6 +1082,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       agentFlow: this.agentFlow,
       stepLogs: this.stepLogs,
       workingDirectory: this.getWorkingDirectory(),
+      workspaceGit: this.workflowGit || undefined,
       supervisorAgent: this.currentSupervisorAgent,
       supervisorSessionId: supervisorAgent?.sessionId || null,
       workflowFrontendSessionId: this._frontendSessionId || null,
@@ -1416,9 +1417,11 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (this.shouldStop) return;
 
       const workflowGitWorkspacePath = this.getWorkingDirectory() || workflowConfig.context?.projectRoot;
-      if (workflowGitWorkspacePath) {
+      if (workflowGitWorkspacePath && workflowConfig.context?.gitBaselineEnabled !== false) {
         await reportPreparingProgress('准备中：建立 Git 基线...', '建立 Git 基线');
         await this.ensureWorkflowGitBaseline(workflowGitWorkspacePath);
+      } else if (workflowGitWorkspacePath) {
+        await this.disableWorkflowGitBaseline(workflowGitWorkspacePath);
       }
 
       // === Preparing phase: load agents, init engine, sync skills ===
@@ -2526,6 +2529,23 @@ export class StateMachineWorkflowManager extends EventEmitter {
       };
       await this.persistState();
     }
+  }
+
+  private async disableWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
+    if (!this.currentRunId || !workspacePath) return;
+    this.workflowGit = {
+      enabled: false,
+      runId: this.currentRunId,
+      workspacePath,
+      repoRoot: workspacePath,
+      wasGitRepository: false,
+      initializedRepository: false,
+      snapshots: [],
+      stepDiffs: [],
+      error: 'Git 基线已在工作流配置中关闭',
+      updatedAt: new Date().toISOString(),
+    };
+    await this.persistState();
   }
 
   private async recordStepGitBefore(input: {
@@ -5397,7 +5417,11 @@ try {
     // Initialize engine
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
     await this.resolveWorkflowMcpServers(workflowConfig);
-    await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    if (workflowConfig.context?.gitBaselineEnabled !== false) {
+      await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    } else {
+      await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    }
 
     // If resuming from __human_approval__, restore the approval wait flow
     if (this.currentState === '__human_approval__') {
@@ -5970,7 +5994,11 @@ try {
     }
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
     await this.resolveWorkflowMcpServers(workflowConfig);
-    await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    if (workflowConfig.context?.gitBaselineEnabled !== false) {
+      await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    } else {
+      await this.disableWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+    }
 
     try {
       await this.executeStateMachine(workflowConfig, runState.requirements);

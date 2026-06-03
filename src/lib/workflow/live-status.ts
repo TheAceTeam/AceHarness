@@ -153,6 +153,7 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     startTime: status.startTime || null,
     endTime: status.endTime || null,
     workingDirectory: status.workingDirectory || null,
+    workspaceGit: status.workspaceGit ? compactJsonValue(status.workspaceGit) : undefined,
     supervisorAgent: status.supervisorAgent || null,
     supervisorSessionId: status.supervisorSessionId || null,
     supervisorFlow: Array.isArray(status.supervisorFlow) ? status.supervisorFlow.slice(-FLOW_LIMIT).map(compactFlowRecord) : [],

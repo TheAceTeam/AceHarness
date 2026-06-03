@@ -1141,6 +1141,59 @@ export async function loadLatestCreationSessionByFilename(filename: string): Pro
   return sessions.find((session) => session.filename === filename) || null;
 }
 
+export function cloneCreationSessionForWorkflow(
+  session: CreationSession,
+  input: {
+    filename: string;
+    workflowName?: string;
+    createdBy?: string;
+    config?: WorkflowConfig | Record<string, any>;
+  }
+): CreationSession {
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const specCoding = normalizeSpecCodingDocument({
+    ...JSON.parse(JSON.stringify(session.specCoding)),
+    id: randomUUID(),
+    title: session.specCoding.title || input.workflowName || session.workflowName,
+    workflowName: input.workflowName || session.specCoding.workflowName || session.workflowName,
+    linkedConfigFilename: input.filename,
+    updatedAt: nowIso,
+  });
+  const generatedConfigSummary = input.config
+    ? {
+        mode: (input.config as any)?.workflow?.mode === 'state-machine' ? 'state-machine' as const : 'phase-based' as const,
+        phaseCount: Array.isArray((input.config as any)?.workflow?.phases) ? (input.config as any).workflow.phases.length : 0,
+        stateCount: Array.isArray((input.config as any)?.workflow?.states) ? (input.config as any).workflow.states.length : 0,
+        agentNames: [...new Set(
+          (Array.isArray((input.config as any)?.workflow?.phases)
+            ? (input.config as any).workflow.phases.flatMap((phase: any) => (phase.steps || []).map((step: any) => step.agent))
+            : Array.isArray((input.config as any)?.workflow?.states)
+              ? (input.config as any).workflow.states.flatMap((state: any) => (state.steps || []).map((step: any) => step.agent))
+              : [])
+            .filter(Boolean)
+        )] as string[],
+      }
+    : session.generatedConfigSummary;
+
+  return creationSessionSchema.parse({
+    ...JSON.parse(JSON.stringify(session)),
+    id: randomUUID(),
+    chatSessionId: undefined,
+    homeChatSessionId: undefined,
+    createdBy: input.createdBy || session.createdBy,
+    status: session.status === 'archived' ? 'config-generated' : session.status,
+    workflowName: input.workflowName || session.workflowName,
+    filename: input.filename,
+    specCoding,
+    generatedConfigSummary,
+    artifactSnapshots: [],
+    bindingValidation: undefined,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 export async function updateCreationSession(id: string, patch: Partial<CreationSession>): Promise<CreationSession | null> {
   const filePath = sessionPath(id);
   if (!existsSync(filePath)) return null;

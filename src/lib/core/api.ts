@@ -7,6 +7,7 @@ import type {
   DeltaMergeState,
   HumanQuestion,
   HumanQuestionAnswer,
+  WorkflowGitState,
   WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
 import { createSafeEventSource } from '@/lib/core/safe-event-source';
@@ -33,6 +34,74 @@ function authFetch(url: string, init?: RequestInit): Promise<Response> {
     }
     return res;
   });
+}
+
+const STREAM_FAILURE_THRESHOLD = 2;
+const STREAM_POLL_INTERVAL_MS = 5000;
+const streamFailureCounts = new Map<string, number>();
+
+function startPolling(task: () => Promise<void> | void, intervalMs = STREAM_POLL_INTERVAL_MS): () => void {
+  if (typeof window === 'undefined') return () => {};
+  let stopped = false;
+  let running = false;
+  const run = async () => {
+    if (stopped || running) return;
+    running = true;
+    try {
+      await task();
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  const timer = window.setInterval(() => {
+    void run();
+  }, intervalMs);
+  return () => {
+    stopped = true;
+    window.clearInterval(timer);
+  };
+}
+
+function attachStreamFallback(
+  eventSource: EventSource,
+  key: string,
+  startFallback: () => void | (() => void),
+): EventSource {
+  let fallbackCleanup: void | (() => void);
+  let fallbackStarted = false;
+  const rawClose = eventSource.close.bind(eventSource);
+  const markHealthy = () => {
+    streamFailureCounts.set(key, 0);
+  };
+  const markFailed = () => {
+    if (fallbackStarted) return;
+    const nextCount = (streamFailureCounts.get(key) || 0) + 1;
+    streamFailureCounts.set(key, nextCount);
+    if (nextCount < STREAM_FAILURE_THRESHOLD) return;
+    fallbackStarted = true;
+    rawClose();
+    fallbackCleanup = startFallback();
+  };
+
+  eventSource.addEventListener('open', markHealthy);
+  eventSource.addEventListener('message', markHealthy);
+  eventSource.addEventListener('error', markFailed);
+  eventSource.close = () => {
+    if (fallbackCleanup) fallbackCleanup();
+    rawClose();
+  };
+  return eventSource;
+}
+
+async function fetchWorkflowStatusSnapshot(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
+  const search = new URLSearchParams();
+  if (configFile) search.set('configFile', configFile);
+  if (runId) search.set('runId', runId);
+  const params = search.toString() ? `?${search.toString()}` : '';
+  const response = await authFetch(`${API_BASE}/workflow/status${params}`);
+  if (!response.ok) throw new Error('获取状态失败');
+  return response.json();
 }
 
 function normalizeValidationDetails(details: any): Array<{ path?: Array<string | number>; message?: string }> {
@@ -152,6 +221,7 @@ interface WorkflowStatusResponse {
   globalContext?: string;
   phaseContexts?: Record<string, string>;
   workingDirectory?: string | null;
+  workspaceGit?: WorkflowGitState | null;
   persistMode?: 'none' | 'repository';
   deltaSpecMerged?: boolean;
   deltaMergeState?: DeltaMergeState;
@@ -1492,13 +1562,7 @@ export const workflowApi = {
   },
 
   async getStatus(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
-    const search = new URLSearchParams();
-    if (configFile) search.set('configFile', configFile);
-    if (runId) search.set('runId', runId);
-    const params = search.toString() ? `?${search.toString()}` : '';
-    const response = await authFetch(`${API_BASE}/workflow/status${params}`);
-    if (!response.ok) throw new Error('获取状态失败');
-    return response.json();
+    return fetchWorkflowStatusSnapshot(configFile, runId);
   },
 
   connectStatusStream(
@@ -1526,7 +1590,17 @@ export const workflowApi = {
     };
 
     eventSource.onerror = () => {};
-    return eventSource;
+    return attachStreamFallback(
+      eventSource,
+      `workflow-status:${input.configFile || ''}:${input.runId || ''}`,
+      () => startPolling(async () => {
+        try {
+          onStatus(await fetchWorkflowStatusSnapshot(input.configFile, input.runId));
+        } catch (error: any) {
+          onError?.(error?.message || '获取状态失败');
+        }
+      }),
+    );
   },
 
   async listHumanQuestions(filters?: {
@@ -1695,7 +1769,24 @@ export const workflowApi = {
     // Keep this silent so blocked or proxied environments do not flood console noise.
     eventSource.onerror = () => {};
 
-    return eventSource;
+    return attachStreamFallback(
+      eventSource,
+      'workflow-events',
+      () => startPolling(async () => {
+        const status = await fetchWorkflowStatusSnapshot().catch(() => null);
+        if (!status) return;
+        const configFile = typeof status.currentConfigFile === 'string' ? status.currentConfigFile : '';
+        onMessage({
+          type: 'snapshot',
+          data: {
+            workflowStatuses: configFile ? { [configFile]: status } : {},
+            runStatusById: status.runId && status.status ? { [String(status.runId)]: String(status.status) } : {},
+            pendingHumanQuestions: status.pendingHumanQuestion ? [status.pendingHumanQuestion] : [],
+            chatStreams: [],
+          },
+        });
+      }),
+    );
   },
 };
 
@@ -2642,7 +2733,17 @@ export const workspaceApi = {
     };
 
     eventSource.onerror = () => {};
-    return eventSource;
+    return attachStreamFallback(
+      eventSource,
+      `git-browser-summary:${workspace}:${options?.commitOffset ?? 0}:${options?.commitLimit ?? 40}`,
+      () => startPolling(async () => {
+        try {
+          onSummary(await this.getGitBrowserSummary(workspace, options));
+        } catch (error: any) {
+          onError?.(error?.message || '获取 Git 浏览数据失败');
+        }
+      }),
+    );
   },
   async getGitBrowserScopeFiles(workspace: string, scope: GitBrowserScope): Promise<GitBrowserFileListResponse> {
     const params = new URLSearchParams();

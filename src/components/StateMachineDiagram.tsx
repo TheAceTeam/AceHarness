@@ -11,6 +11,10 @@ import ReactFlow, {
   NodeTypes,
   Handle,
   Position,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  EdgeProps,
   useReactFlow,
   ReactFlowProvider,
   useNodesState,
@@ -25,6 +29,70 @@ const EMPTY_ACTIVE_STEPS: string[] = [];
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
+const MUTED_EDGE_COLOR = '#cbd5e1';
+
+function compactEdgeLabel(label: string, maxLength = 38): string {
+  const normalized = label.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function StateTransitionEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style = {},
+  markerEnd,
+  label,
+  data,
+}: EdgeProps) {
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  const curveOffset = data?.curveOffset ?? 0;
+  const curveOffsetX = (-dy / length) * curveOffset;
+  const curveOffsetY = (dx / length) * curveOffset;
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX: sourceX + curveOffsetX,
+    sourceY: sourceY + curveOffsetY,
+    sourcePosition,
+    targetX: targetX + curveOffsetX,
+    targetY: targetY + curveOffsetY,
+    targetPosition,
+  });
+  const offset = data?.labelOffset ?? 22;
+  const offsetX = (-dy / length) * offset;
+  const offsetY = (dx / length) * offset;
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      {label ? (
+        <EdgeLabelRenderer>
+          <div
+            className="nodrag nopan pointer-events-none rounded bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ring-1 ring-white/80 dark:bg-gray-950/95"
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX + offsetX}px, ${labelY + offsetY}px)`,
+              maxWidth: 240,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: data?.labelColor || EXECUTED_EDGE_COLOR,
+              zIndex: data?.labelZIndex || 50,
+            }}
+          >
+            {label}
+          </div>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  );
+}
 
 // 格式化状态名称，将内部状态名转换为友好显示
 function formatStateName(name: string): string {
@@ -314,11 +382,15 @@ function StateNode({ data }: any) {
         ${isFinal ? 'ring-2 ring-red-400' : ''}
       `}
     >
-      {/* 添加四个方向的连接点 */}
+      {/* 每个方向同时支持 source/target，历史回退边可能从任意方向出入。 */}
       <Handle type="target" position={Position.Top} id="top" />
+      <Handle type="source" position={Position.Top} id="top" />
+      <Handle type="target" position={Position.Right} id="right" />
+      <Handle type="source" position={Position.Right} id="right" />
+      <Handle type="target" position={Position.Bottom} id="bottom" />
       <Handle type="target" position={Position.Left} id="left" />
       <Handle type="source" position={Position.Bottom} id="bottom" />
-      <Handle type="source" position={Position.Right} id="right" />
+      <Handle type="source" position={Position.Left} id="left" />
 
       <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-1.5">
@@ -438,6 +510,10 @@ function SupervisorNode({ data }: any) {
 const nodeTypes: NodeTypes = {
   stateNode: StateNode,
   supervisorNode: SupervisorNode,
+};
+
+const edgeTypes = {
+  stateTransition: StateTransitionEdge,
 };
 
 // 根据两个节点的相对位置计算最佳连接点
@@ -628,7 +704,53 @@ function StateMachineDiagramInner({
     nodePositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
 
     const executedTransitions = buildExecutedStateTransitions(stateHistory);
-    const executedTransitionOverlays = buildUniqueExecutedTransitions(stateHistory);
+    const executedKeys = new Set(executedTransitions.map((transition) => `${transition.from}->${transition.to}`));
+
+    const getHandles = (source: string, target: string) => {
+      const sourcePos = nodePositions.get(source);
+      const targetPos = nodePositions.get(target);
+      if (sourcePos && targetPos) {
+        return calculateHandlePositions(sourcePos, targetPos);
+      }
+      return { sourceHandle: 'right', targetHandle: 'left' };
+    };
+
+    // 历史实际发生的转移优先绘制为蓝线。不要依赖配置 transition，
+    // 否则同源同目标的多条配置边会被 from-to 去重吞掉实际线路。
+    for (let i = 0; i < executedTransitions.length; i++) {
+      const record = executedTransitions[i];
+      const edgeId = `history-${i}-${record.from}-${record.to}`;
+      const { sourceHandle, targetHandle } = getHandles(record.from, record.to);
+
+      edges.push({
+        id: edgeId,
+        source: record.from,
+        target: record.to,
+        sourceHandle,
+        targetHandle,
+        label: `${i + 1}. ${compactEdgeLabel(record.reason)}`,
+        type: 'stateTransition',
+        animated: true,
+        hidden: false,
+        style: {
+          stroke: EXECUTED_EDGE_COLOR,
+          strokeWidth: 3,
+        },
+        zIndex: 40,
+        data: {
+          labelColor: EXECUTED_EDGE_COLOR,
+          labelOffset: 26,
+          labelZIndex: 80,
+          curveOffset: 0,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 20,
+          height: 20,
+          color: EXECUTED_EDGE_COLOR,
+        },
+      });
+    }
 
     // 配置的状态转移边
     for (const state of states) {
@@ -636,20 +758,22 @@ function StateMachineDiagramInner({
         continue;
       }
 
-      for (const transition of state.transitions) {
-        const edgeId = `${state.name}-${transition.to}`;
+      for (let transitionIndex = 0; transitionIndex < state.transitions.length; transitionIndex += 1) {
+        const transition = state.transitions[transitionIndex];
+        const edgeKey = `${state.name}->${transition.to}`;
 
-        // 检查是否已经添加过这条边
-        if (edgeSet.has(edgeId)) {
+        // 已执行边已经由 stateHistory 画成蓝线，配置边只作为未执行背景路径。
+        if (executedKeys.has(edgeKey)) {
           continue;
         }
-        edgeSet.add(edgeId);
 
-        // 检查这条边是否在历史记录中
-        const historyIndex = executedTransitions.findIndex(
-          h => h.from === state.name && h.to === transition.to
-        );
-        const isInHistory = historyIndex !== -1;
+        const edgeId = `config-${state.name}-${transition.to}-${transitionIndex}`;
+
+        // 检查是否已经添加过这条边
+        if (edgeSet.has(edgeKey)) {
+          continue;
+        }
+        edgeSet.add(edgeKey);
 
         // 检查是否是当前状态的可用转移
         const isCurrentStateTransition = currentState === state.name;
@@ -659,14 +783,7 @@ function StateMachineDiagramInner({
         let edgeAnimated = false;
         let edgeHidden = false;
 
-        if (isInHistory) {
-          // 已执行的边：粗实线，高亮颜色，动画
-          edgeStyle = {
-            stroke: EXECUTED_EDGE_COLOR,
-            strokeWidth: 3,
-          };
-          edgeAnimated = true;
-        } else if (isCurrentStateTransition) {
+        if (isCurrentStateTransition) {
           // 当前状态可用的转移：中等粗细，正常颜色
           edgeStyle = {
             stroke: '#64748b',
@@ -675,26 +792,16 @@ function StateMachineDiagramInner({
         } else {
           // 其他未使用的转移：细虚线，半透明
           edgeStyle = {
-            stroke: '#94a3b8',
-            strokeWidth: 1.5,
-            strokeDasharray: '4,4',
-            opacity: 0.4,
+            stroke: MUTED_EDGE_COLOR,
+            strokeWidth: 1.25,
+            strokeDasharray: '4,5',
+            opacity: 0.35,
           };
           // 如果不显示所有边，隐藏这些边
           edgeHidden = !showAllEdges;
         }
 
-        // 计算连接点
-        const sourcePos = nodePositions.get(state.name);
-        const targetPos = nodePositions.get(transition.to);
-        let sourceHandle = 'right';
-        let targetHandle = 'left';
-
-        if (sourcePos && targetPos) {
-          const handles = calculateHandlePositions(sourcePos, targetPos);
-          sourceHandle = handles.sourceHandle;
-          targetHandle = handles.targetHandle;
-        }
+        const { sourceHandle, targetHandle } = getHandles(state.name, transition.to);
 
         edges.push({
           id: edgeId,
@@ -702,119 +809,26 @@ function StateMachineDiagramInner({
           target: transition.to,
           sourceHandle,
           targetHandle,
-          label: isInHistory
-            ? `${historyIndex + 1}. ${transition.label || getConditionLabel(transition)}`
-            : transition.label || getConditionLabel(transition),
-          type: 'default',
+          label: '',
+          type: 'stateTransition',
           animated: edgeAnimated,
           hidden: edgeHidden,
           style: edgeStyle,
+          zIndex: 1,
+          data: {
+            labelColor: '#64748b',
+            labelOffset: 18,
+            labelZIndex: 20,
+            curveOffset: 0,
+          },
           markerEnd: {
             type: MarkerType.ArrowClosed,
-            width: isInHistory ? 20 : 16,
-            height: isInHistory ? 20 : 16,
+            width: 16,
+            height: 16,
             color: edgeStyle.stroke,
           },
-          labelStyle: {
-            fontSize: isInHistory ? 11 : 9,
-            fontWeight: isInHistory ? 'bold' : 'normal',
-            fill: isInHistory ? '#3b82f6' : '#64748b',
-            opacity: isInHistory ? 1 : 0.7,
-          },
-          labelBgStyle: {
-            fill: '#ffffff',
-            fillOpacity: 0.9,
-          },
         });
       }
-    }
-
-    // 添加历史中实际发生但不在配置中的转移（如 __origin__ 或其他动态转移）
-    for (let i = 0; i < executedTransitions.length; i++) {
-      const record = executedTransitions[i];
-      const edgeId = `${record.from}-${record.to}`;
-
-      // 如果这条边不在配置的边中，添加它
-      if (!edges.find(e => e.id === edgeId)) {
-        // 计算连接点
-        const sourcePos = nodePositions.get(record.from);
-        const targetPos = nodePositions.get(record.to);
-        let sourceHandle = 'right';
-        let targetHandle = 'left';
-
-        if (sourcePos && targetPos) {
-          const handles = calculateHandlePositions(sourcePos, targetPos);
-          sourceHandle = handles.sourceHandle;
-          targetHandle = handles.targetHandle;
-        }
-
-        edges.push({
-          id: edgeId,
-          source: record.from,
-          target: record.to,
-          sourceHandle,
-          targetHandle,
-          label: `${i + 1}. ${record.reason}`,
-          type: 'default',
-          animated: true,
-            hidden: false,
-            style: {
-            stroke: EXECUTED_EDGE_COLOR,
-            strokeWidth: 3,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 20,
-            height: 20,
-            color: EXECUTED_EDGE_COLOR,
-          },
-          labelStyle: {
-            fontSize: 11,
-            fontWeight: 'bold',
-            fill: EXECUTED_EDGE_COLOR,
-          },
-          labelBgStyle: {
-            fill: '#ffffff',
-            fillOpacity: 0.9,
-          },
-        });
-      }
-    }
-
-    for (const overlay of executedTransitionOverlays) {
-      const sourcePos = nodePositions.get(overlay.from);
-      const targetPos = nodePositions.get(overlay.to);
-      let sourceHandle = 'right';
-      let targetHandle = 'left';
-
-      if (sourcePos && targetPos) {
-        const handles = calculateHandlePositions(sourcePos, targetPos);
-        sourceHandle = handles.sourceHandle;
-        targetHandle = handles.targetHandle;
-      }
-
-      edges.push({
-        id: `executed-${overlay.index}-${overlay.from}-${overlay.to}`,
-        source: overlay.from,
-        target: overlay.to,
-        sourceHandle,
-        targetHandle,
-        label: '',
-        type: 'default',
-        animated: true,
-        hidden: false,
-        style: {
-          stroke: EXECUTED_EDGE_COLOR,
-          strokeWidth: 3,
-          zIndex: 20,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 20,
-          height: 20,
-          color: EXECUTED_EDGE_COLOR,
-        },
-      });
     }
 
     // 添加从需要人工审查的状态到人工审查节点的连线
@@ -846,7 +860,7 @@ function StateMachineDiagramInner({
             sourceHandle,
             targetHandle,
             label: '需要人工审查',
-            type: 'default',
+            type: 'stateTransition',
             animated: false,
             hidden: !showAllEdges,
             style: {
@@ -860,15 +874,10 @@ function StateMachineDiagramInner({
               height: 16,
               color: '#f97316',
             },
-            labelStyle: {
-              fontSize: 9,
-              fontWeight: 'normal',
-              fill: '#f97316',
-              opacity: 0.8,
-            },
-            labelBgStyle: {
-              fill: '#ffffff',
-              fillOpacity: 0.9,
+            data: {
+              labelColor: '#f97316',
+              labelOffset: 18,
+              labelZIndex: 30,
             },
           });
         }
@@ -972,6 +981,7 @@ function StateMachineDiagramInner({
         onNodeMouseLeave={onNodeMouseLeave}
         onEdgeClick={onEdgeClick}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         defaultViewport={{ x: 0, y: 0, zoom: 0.6 }}
         minZoom={0.2}
         maxZoom={1.5}

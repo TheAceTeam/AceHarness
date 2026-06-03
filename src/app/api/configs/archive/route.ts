@@ -8,6 +8,11 @@ import { requireAuth } from '@/lib/auth/middleware';
 import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
 import { getRuntimeConfigsDirPath, unmarkConfigDeleted } from '@/lib/run/runtime-configs';
+import {
+  cloneCreationSessionForWorkflow,
+  loadLatestCreationSessionByFilename,
+  saveCreationSession,
+} from '@/lib/spec/coding-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +24,11 @@ type AuthUser = {
 type WorkflowImportCandidate = {
   filename: string;
   normalizedConfig: any;
+};
+
+type SpecCodingImportCandidate = {
+  filename: string;
+  session: any;
 };
 
 const RESERVED_CONFIG_DIRS = new Set(['agents', 'models', 'notebook', 'settings']);
@@ -99,6 +109,10 @@ async function zipWorkflowFiles(files: Array<{ filename: string; filePath: strin
   const zipfile = new ZipFile();
   for (const file of files) {
     zipfile.addFile(file.filePath, file.filename);
+    const session = await loadLatestCreationSessionByFilename(file.filename).catch(() => null);
+    if (session?.specCoding) {
+      zipfile.addBuffer(Buffer.from(stringify(session)), `spec-coding/${file.filename}`);
+    }
   }
 
   const chunks: Buffer[] = [];
@@ -112,16 +126,33 @@ async function zipWorkflowFiles(files: Array<{ filename: string; filePath: strin
   return Buffer.concat(chunks);
 }
 
-async function readWorkflowCandidatesFromZip(file: File): Promise<WorkflowImportCandidate[]> {
+async function readArchiveCandidatesFromZip(file: File): Promise<{
+  workflows: WorkflowImportCandidate[];
+  specSessions: SpecCodingImportCandidate[];
+}> {
   const buffer = Buffer.from(await file.arrayBuffer());
   const directory = await (unzipper as any).Open.buffer(buffer);
   const seen = new Set<string>();
   const candidates: WorkflowImportCandidate[] = [];
+  const specSessions: SpecCodingImportCandidate[] = [];
 
   for (const entry of directory.files || []) {
     if (entry.type !== 'File') continue;
     const rawPath = String(entry.path || '');
     if (!isYamlFilename(rawPath)) continue;
+    const normalizedRawPath = rawPath.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (normalizedRawPath.startsWith('spec-coding/')) {
+      const workflowPath = normalizeArchiveWorkflowPath(normalizedRawPath.slice('spec-coding/'.length));
+      const content = (await entry.buffer()).toString('utf-8');
+      let parsed: any;
+      try {
+        parsed = parse(content);
+      } catch (error: any) {
+        throw Object.assign(new Error(`SpecCoding YAML 解析失败: ${workflowPath}`), { status: 400, cause: error });
+      }
+      specSessions.push({ filename: workflowPath, session: parsed });
+      continue;
+    }
 
     const filename = normalizeArchiveWorkflowPath(rawPath);
     if (seen.has(filename)) {
@@ -147,7 +178,7 @@ async function readWorkflowCandidatesFromZip(file: File): Promise<WorkflowImport
     candidates.push({ filename, normalizedConfig: validation.normalized });
   }
 
-  return candidates;
+  return { workflows: candidates, specSessions };
 }
 
 export async function PUT(request: NextRequest) {
@@ -214,7 +245,7 @@ export async function POST(request: NextRequest) {
     }
 
     const configsDir = await getRuntimeConfigsDirPath();
-    const candidates = await readWorkflowCandidatesFromZip(file);
+    const { workflows: candidates, specSessions } = await readArchiveCandidatesFromZip(file);
     if (candidates.length === 0) {
       return NextResponse.json({ error: 'ZIP 中未找到 workflow YAML' }, { status: 400 });
     }
@@ -228,6 +259,7 @@ export async function POST(request: NextRequest) {
 
     const now = Date.now();
     const imported: string[] = [];
+    const specSessionByFilename = new Map(specSessions.map((item) => [item.filename, item.session]));
     for (const candidate of candidates) {
       const filePath = resolveInside(configsDir, candidate.filename);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -242,6 +274,16 @@ export async function POST(request: NextRequest) {
           sharedWithUserIds: [],
           createdAt: now,
         }, 'workflow');
+      }
+      const archivedSession = specSessionByFilename.get(candidate.filename);
+      if (archivedSession?.specCoding) {
+        const restoredSession = cloneCreationSessionForWorkflow(archivedSession, {
+          filename: candidate.filename,
+          workflowName: candidate.normalizedConfig?.workflow?.name || archivedSession.workflowName,
+          createdBy: (auth as AuthUser).id,
+          config: candidate.normalizedConfig,
+        });
+        await saveCreationSession(restoredSession);
       }
       imported.push(candidate.filename);
     }

@@ -102,6 +102,13 @@ async function listZipEntryPaths(buffer: Buffer): Promise<string[]> {
   return paths.sort();
 }
 
+async function readZipEntry(buffer: Buffer, entryPath: string): Promise<string> {
+  const directory = await (unzipper as any).Open.buffer(buffer);
+  const entry = (directory.files || []).find((item: { path: string }) => item.path.split(path.sep).join('/') === entryPath);
+  if (!entry) throw new Error(`Missing zip entry: ${entryPath}`);
+  return (await entry.buffer()).toString('utf8');
+}
+
 describe('/api/configs/archive', () => {
   test('exports selected workflow YAML files as a zip', async () => {
     await withIsolatedAceHome(async (aceHome) => {
@@ -169,6 +176,52 @@ describe('/api/configs/archive', () => {
       expect(response.status).toBe(200);
       const zipBuffer = Buffer.from(await response.arrayBuffer());
       await expect(listZipEntryPaths(zipBuffer)).resolves.toEqual(['portable.yaml']);
+    });
+  });
+
+  test('exports workflow SpecCoding as archive sidecar YAML', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token, user } = await createAuthToken();
+        const configsDir = path.join(aceHome, 'configs');
+        await mkdir(configsDir, { recursive: true });
+        const config = workflowConfig(workspace, 'Spec Export');
+        await writeFile(path.join(configsDir, 'spec-export.yaml'), stringify(config), 'utf8');
+
+        const { buildCreationSession, saveCreationSession } = await import('@/lib/spec/coding-store');
+        const session = buildCreationSession({
+          chatSessionId: 'chat-export',
+          createdBy: user.id,
+          filename: 'spec-export.yaml',
+          workflowName: 'Spec Export',
+          mode: 'phase-based',
+          workingDirectory: workspace,
+          workspaceMode: 'in-place',
+          requirements: 'Export the SpecCoding sidecar',
+          config,
+        });
+        session.specCoding.artifacts.requirements = '# Requirements\n\nPreserve this exported spec.';
+        await saveCreationSession(session);
+
+        const { PUT } = await import('@/app/api/configs/archive/route');
+        const response = await PUT(makeRequest('/api/configs/archive', {
+          method: 'PUT',
+          token,
+          json: { workflows: ['spec-export.yaml'] },
+        }));
+
+        expect(response.status).toBe(200);
+        const zipBuffer = Buffer.from(await response.arrayBuffer());
+        await expect(listZipEntryPaths(zipBuffer)).resolves.toEqual([
+          'spec-coding/spec-export.yaml',
+          'spec-export.yaml',
+        ]);
+
+        const sidecar = parse(await readZipEntry(zipBuffer, 'spec-coding/spec-export.yaml'));
+        expect(sidecar.filename).toBe('spec-export.yaml');
+        expect(sidecar.specCoding.linkedConfigFilename).toBe('spec-export.yaml');
+        expect(sidecar.specCoding.artifacts.requirements).toContain('Preserve this exported spec');
+      });
     });
   });
 
@@ -248,6 +301,57 @@ describe('/api/configs/archive', () => {
 
       const imported = parse(await readFile(path.join(aceHome, 'configs', 'portable.yaml'), 'utf8'));
       expect(imported.context.projectRoot).toBe('{project_root}');
+    });
+  });
+
+  test('imports workflow SpecCoding sidecar and binds it to imported workflow filename', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token, user } = await createAuthToken();
+        const config = workflowConfig(workspace, 'Spec Import');
+        const { buildCreationSession, loadLatestCreationSessionByFilename } = await import('@/lib/spec/coding-store');
+        const archivedSession = buildCreationSession({
+          chatSessionId: 'chat-import-source',
+          createdBy: 'source-user',
+          filename: 'spec-import.yaml',
+          workflowName: 'Spec Import',
+          mode: 'phase-based',
+          workingDirectory: workspace,
+          workspaceMode: 'in-place',
+          requirements: 'Import the SpecCoding sidecar',
+          config,
+        });
+        archivedSession.specCoding.artifacts.tasks = '# Tasks\n\n- [ ] Preserve imported task notes';
+
+        const archive = await createZip({
+          'spec-import.yaml': stringify(config),
+          'spec-coding/spec-import.yaml': stringify(archivedSession),
+        });
+        const formData = new FormData();
+        formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
+
+        const { POST } = await import('@/app/api/configs/archive/route');
+        const response = await POST(makeRequest('/api/configs/archive', {
+          method: 'POST',
+          token,
+          body: formData,
+        }));
+
+        expect(response.status).toBe(200);
+        const body = await responseJson<any>(response);
+        expect(body.imported).toEqual(['spec-import.yaml']);
+
+        const restored = await loadLatestCreationSessionByFilename('spec-import.yaml');
+        expect(restored).toBeTruthy();
+        expect(restored!.id).not.toBe(archivedSession.id);
+        expect(restored!.createdBy).toBe(user.id);
+        expect(restored!.filename).toBe('spec-import.yaml');
+        expect(restored!.specCoding.linkedConfigFilename).toBe('spec-import.yaml');
+        expect(restored!.specCoding.artifacts.tasks).toContain('Preserve imported task notes');
+
+        const imported = parse(await readFile(path.join(aceHome, 'configs', 'spec-import.yaml'), 'utf8'));
+        expect(imported.workflow.name).toBe('Spec Import');
+      });
     });
   });
 });

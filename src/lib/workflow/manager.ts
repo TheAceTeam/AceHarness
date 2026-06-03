@@ -1037,6 +1037,23 @@ try {
     }
   }
 
+  private async disableWorkflowGitBaseline(workspacePath?: string | null): Promise<void> {
+    if (!this.currentRunId || !workspacePath) return;
+    this.workflowGit = {
+      enabled: false,
+      runId: this.currentRunId,
+      workspacePath,
+      repoRoot: workspacePath,
+      wasGitRepository: false,
+      initializedRepository: false,
+      snapshots: [],
+      stepDiffs: [],
+      error: 'Git 基线已在工作流配置中关闭',
+      updatedAt: new Date().toISOString(),
+    };
+    await this.persistState();
+  }
+
   private async recordStepGitBefore(input: {
     stepLogId: string;
     stepName: string;
@@ -1286,9 +1303,11 @@ try {
       if (this.shouldStop) return;
 
       const workflowGitWorkspacePath = this.getWorkingDirectory() || workflowConfig.context.projectRoot;
-      if (workflowGitWorkspacePath) {
+      if (workflowGitWorkspacePath && workflowConfig.context.gitBaselineEnabled !== false) {
         await reportPreparingProgress('准备中：建立 Git 基线...', '建立 Git 基线');
         await this.ensureWorkflowGitBaseline(workflowGitWorkspacePath);
+      } else if (workflowGitWorkspacePath) {
+        await this.disableWorkflowGitBaseline(workflowGitWorkspacePath);
       }
 
       // === Preparing phase: load agents, init engine, sync skills ===
@@ -3183,7 +3202,11 @@ try {
     await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
     await this.resolveWorkflowMcpServers(workflowConfig);
 
-    await this.ensureWorkflowGitBaseline(workflowConfig.context.projectRoot || runState.workingDirectory);
+    if (workflowConfig.context.gitBaselineEnabled !== false) {
+      await this.ensureWorkflowGitBaseline(workflowConfig.context.projectRoot || runState.workingDirectory);
+    } else {
+      await this.disableWorkflowGitBaseline(workflowConfig.context.projectRoot || runState.workingDirectory);
+    }
 
     // Load agent configs
     this.agentConfigs = await this.loadAgentConfigs();
@@ -3541,6 +3564,7 @@ try {
       workflow: this.currentWorkflow,
       iterationStates: Object.fromEntries(this.iterationStates),
       workingDirectory: this.getWorkingDirectory(),
+      workspaceGit: this.workflowGit || undefined,
       workflowFrontendSessionId: this._frontendSessionId || null,
     };
   }

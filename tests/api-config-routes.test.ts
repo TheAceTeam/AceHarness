@@ -230,4 +230,66 @@ describe('config API routes', () => {
       });
     });
   });
+
+  test('config copy route preserves SpecCoding for the copied workflow', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token, user } = await createAuthToken();
+        const configsDir = path.join(aceHome, 'configs');
+        await mkdir(configsDir, { recursive: true });
+        const config = phaseConfig(workspace, {
+          workflow: { name: 'Copy Source' },
+          context: { requirements: 'Copy route must preserve SpecCoding' },
+        });
+        await writeFile(path.join(configsDir, 'copy-source.yaml'), stringify(config), 'utf8');
+
+        const { buildCreationSession, loadLatestCreationSessionByFilename, saveCreationSession } = await import('@/lib/spec/coding-store');
+        const sourceSession = buildCreationSession({
+          chatSessionId: 'chat-copy-source',
+          createdBy: user.id,
+          filename: 'copy-source.yaml',
+          workflowName: 'Copy Source',
+          mode: 'phase-based',
+          workingDirectory: workspace,
+          workspaceMode: 'in-place',
+          requirements: 'Copy route must preserve SpecCoding',
+          config,
+        });
+        sourceSession.specCoding.artifacts.design = '# Design\n\nKeep this copied design.';
+        await saveCreationSession(sourceSession);
+
+        const { POST } = await import('@/app/api/configs/[filename]/copy/route');
+        const response = await POST(makeRequest('/api/configs/copy-source.yaml/copy', {
+          method: 'POST',
+          token,
+          json: {
+            newFilename: 'copy-target.yaml',
+            workflowName: 'Copy Target',
+          },
+        }) as any, {
+          params: Promise.resolve({ filename: 'copy-source.yaml' }),
+        });
+
+        expect(response.status).toBe(200);
+        const body = await responseJson<any>(response);
+        expect(body.success).toBe(true);
+        expect(body.filename).toBe('copy-target.yaml');
+        expect(body.creationSessionId).toBeTruthy();
+
+        const copiedYaml = parse(await readFile(path.join(configsDir, 'copy-target.yaml'), 'utf8'));
+        expect(copiedYaml.workflow.name).toBe('Copy Target');
+
+        const copiedSession = await loadLatestCreationSessionByFilename('copy-target.yaml');
+        expect(copiedSession).toBeTruthy();
+        expect(copiedSession!.id).toBe(body.creationSessionId);
+        expect(copiedSession!.id).not.toBe(sourceSession.id);
+        expect(copiedSession!.filename).toBe('copy-target.yaml');
+        expect(copiedSession!.workflowName).toBe('Copy Target');
+        expect(copiedSession!.createdBy).toBe(user.id);
+        expect(copiedSession!.specCoding.linkedConfigFilename).toBe('copy-target.yaml');
+        expect(copiedSession!.specCoding.workflowName).toBe('Copy Target');
+        expect(copiedSession!.specCoding.artifacts.design).toContain('Keep this copied design');
+      });
+    });
+  });
 });

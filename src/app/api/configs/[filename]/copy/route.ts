@@ -7,6 +7,7 @@ import { requireAuth } from '@/lib/auth/middleware';
 import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
 import { ensureRuntimeConfigsSeeded, getRuntimeConfigsDirPath } from '@/lib/run/runtime-configs';
 import { loadUsers } from '@/lib/core/user-store';
+import { cloneCreationSessionForWorkflow, loadLatestCreationSessionByFilename, saveCreationSession } from '@/lib/spec/coding-store';
 
 function normalizeConfigFilename(filename: string): string {
   const normalized = filename.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -48,6 +49,18 @@ export async function POST(
     const config = parse(content);
     config.workflow.name = workflowName || (config.workflow.name + ' (副本)');
     await writeFile(destPath, stringify(config), 'utf-8');
+    const sourceSession = await loadLatestCreationSessionByFilename(filename).catch(() => null);
+    let creationSessionId: string | undefined;
+    if (sourceSession?.specCoding) {
+      const clonedSession = cloneCreationSessionForWorkflow(sourceSession, {
+        filename: newFilename,
+        workflowName: config.workflow.name,
+        createdBy: auth.id,
+        config,
+      });
+      await saveCreationSession(clonedSession);
+      creationSessionId = clonedSession.id;
+    }
     const users = await loadUsers();
     const allowedUserIds = new Set(users.filter((user) => user.status === 'active').map((user) => user.id));
     const normalizedVisibility = visibility === 'public' || visibility === 'shared' ? visibility : 'private';
@@ -61,7 +74,7 @@ export async function POST(
       createdAt: Date.now(),
     }, 'workflow');
 
-    return NextResponse.json({ success: true, filename: newFilename });
+    return NextResponse.json({ success: true, filename: newFilename, creationSessionId });
   } catch (error: any) {
     return NextResponse.json(
       { error: '复制配置失败', message: error.message },

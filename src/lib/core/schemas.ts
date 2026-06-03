@@ -196,6 +196,7 @@ export const contextConfigSchema = z.object({
   codebase: z.string().optional(),
   timeoutMinutes: z.number().min(1).optional(),
   engine: z.string().optional(), // 工作流级别引擎覆盖
+  gitBaselineEnabled: z.boolean().optional(), // 是否为运行建立 Git 基线和步骤快照，默认开启
   executionPolicy: workflowExecutionPolicySchema.optional(),
   skills: z.array(z.string()).optional(), // 启用的 skills 列表
   mcpServers: z.array(z.string()).optional(), // 启用的 MCP server 名称

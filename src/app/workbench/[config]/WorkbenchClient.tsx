@@ -1237,6 +1237,7 @@ export default function WorkbenchPage() {
   const [workspaceEditorLineNumber, setWorkspaceEditorLineNumber] = useState<number | null>(null);
   const [workspaceEditorColumn, setWorkspaceEditorColumn] = useState<number | null>(null);
   const [workspaceChangeCount, setWorkspaceChangeCount] = useState(0);
+  const [runtimeGitBaselineEnabled, setRuntimeGitBaselineEnabled] = useState(true);
   const [smIssueTracker, setSmIssueTracker] = useState<any[]>([]);
   const [smTransitionCount, setSmTransitionCount] = useState(0);
   const [runStartTime, setRunStartTime] = useState<string | null>(null);
@@ -1829,6 +1830,12 @@ export default function WorkbenchPage() {
     () => state.workingDirectory || resolvedProjectRoot || projectRoot || '',
     [projectRoot, resolvedProjectRoot, state.workingDirectory],
   );
+  const configGitBaselineEnabled = workflowConfig?.context?.gitBaselineEnabled !== false;
+  const effectiveGitBaselineEnabled = configGitBaselineEnabled && runtimeGitBaselineEnabled;
+
+  useEffect(() => {
+    setRuntimeGitBaselineEnabled(workflowConfig?.context?.gitBaselineEnabled !== false);
+  }, [workflowConfig?.context?.gitBaselineEnabled]);
 
   const handleRunWorkbenchTabChange = useCallback((tab: RunWorkbenchTab) => {
     setRunWorkbenchTab(tab);
@@ -1838,9 +1845,15 @@ export default function WorkbenchPage() {
     });
   }, [updateUrl]);
 
+  useEffect(() => {
+    if (runWorkbenchTab === 'changes' && (!currentRunWorkspacePath || !effectiveGitBaselineEnabled)) {
+      handleRunWorkbenchTabChange('execution');
+    }
+  }, [currentRunWorkspacePath, effectiveGitBaselineEnabled, handleRunWorkbenchTabChange, runWorkbenchTab]);
+
   const refreshWorkspaceChangeCount = useCallback(async () => {
     const targetWorkspace = String(currentRunWorkspacePath || '').trim();
-    if (!targetWorkspace) {
+    if (!targetWorkspace || !effectiveGitBaselineEnabled) {
       setWorkspaceChangeCount(0);
       return;
     }
@@ -1850,7 +1863,7 @@ export default function WorkbenchPage() {
     } catch {
       setWorkspaceChangeCount(0);
     }
-  }, [currentRunWorkspacePath]);
+  }, [currentRunWorkspacePath, effectiveGitBaselineEnabled]);
 
   useEffect(() => {
     setRuntimeAgentDraft((prev) => ({
@@ -3849,6 +3862,11 @@ export default function WorkbenchPage() {
       setSpecRevisionVote((status as any).specRevisionVote || null);
       setSpecRevisionVoteHistory(Array.isArray((status as any).specRevisionVoteHistory) ? (status as any).specRevisionVoteHistory : []);
       setRehearsalInfo((status as any).rehearsal || null);
+      if ((status as any).workspaceGit) {
+        setRuntimeGitBaselineEnabled((status as any).workspaceGit.enabled !== false);
+      } else {
+        setRuntimeGitBaselineEnabled(workflowConfig?.context?.gitBaselineEnabled !== false);
+      }
       if ((status as any).agentFlow) {
         setAgentFlow((status as any).agentFlow);
       }
@@ -4069,6 +4087,9 @@ export default function WorkbenchPage() {
     if (snapshot.workingDirectory) {
       dispatch({ type: 'SET_WORKING_DIRECTORY', payload: snapshot.workingDirectory });
     }
+    if (snapshot.workspaceGit) {
+      setRuntimeGitBaselineEnabled(snapshot.workspaceGit.enabled !== false);
+    }
     if (snapshot.globalContext !== undefined) {
       dispatch({ type: 'SET_GLOBAL_CONTEXT', payload: snapshot.globalContext });
     }
@@ -4159,13 +4180,14 @@ export default function WorkbenchPage() {
     setSpecRevisionVote(null);
     setSpecRevisionVoteHistory([]);
     setRehearsalInfo(null);
+    setRuntimeGitBaselineEnabled(workflowConfig?.context?.gitBaselineEnabled !== false);
     dispatch({ type: 'SET_SELECTED_STEP', payload: null });
     dispatch({ type: 'SET_SHOW_CHECKPOINT', payload: false });
     dispatch({ type: 'SET_CHECKPOINT_MESSAGE', payload: '' });
     dispatch({ type: 'SET_CHECKPOINT_IS_ITERATIVE', payload: false });
     clearPendingHumanQuestion();
     clearHumanApprovalData();
-  }, [clearHumanApprovalData, clearPendingHumanQuestion, dispatch]);
+  }, [clearHumanApprovalData, clearPendingHumanQuestion, dispatch, workflowConfig?.context?.gitBaselineEnabled]);
 
   const minimizeHumanApprovalDialog = useCallback(() => {
     if (!humanApprovalData && !pendingHumanQuestion) return;
@@ -4382,7 +4404,7 @@ export default function WorkbenchPage() {
   useEffect(() => {
     if (viewMode !== 'run') return;
     const targetWorkspace = String(currentRunWorkspacePath || '').trim();
-    if (!targetWorkspace) {
+    if (!targetWorkspace || !effectiveGitBaselineEnabled) {
       setWorkspaceChangeCount(0);
       return;
     }
@@ -4401,7 +4423,7 @@ export default function WorkbenchPage() {
       },
     );
     return () => eventSource.close();
-  }, [currentRunWorkspacePath, refreshWorkspaceChangeCount, viewMode]);
+  }, [currentRunWorkspacePath, effectiveGitBaselineEnabled, refreshWorkspaceChangeCount, viewMode]);
 
   useEffect(() => {
     if (isDesignMode && workflowConfig) {
@@ -8818,8 +8840,57 @@ export default function WorkbenchPage() {
                     </div>
                   </div>
                 </TabsContent>
-{isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4"><div><h4 className="text-sm font-semibold mb-4">高级配置</h4>
-          </div></TabsContent>}
+{isDesignMode && <TabsContent value="config" className="mt-0 overflow-y-auto h-full p-4">
+                  <div className="mx-auto max-w-3xl space-y-4">
+                    <div>
+                      <h4 className="text-sm font-semibold">高级配置</h4>
+                      <p className="mt-1 text-xs text-muted-foreground">这些设置会保存到当前 workflow YAML，并影响后续运行。</p>
+                    </div>
+                    <div className="rounded-xl border border-border/60 bg-background/80 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <span className="material-symbols-outlined text-base">history</span>
+                            Git 基线与变更追踪
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                            开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
+                          </p>
+                          <div className="mt-3 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                            YAML 字段：<code>context.gitBaselineEnabled</code>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                          <Switch
+                            checked={(editingConfig?.context?.gitBaselineEnabled ?? workflowConfig?.context?.gitBaselineEnabled) !== false}
+                            onCheckedChange={(checked) => {
+                              const baseConfig = editingConfig || workflowConfig;
+                              if (!baseConfig) return;
+                              dispatch({
+                                type: 'SET_EDITING_CONFIG',
+                                payload: {
+                                  ...baseConfig,
+                                  context: {
+                                    ...(baseConfig.context || {}),
+                                    gitBaselineEnabled: checked ? undefined : false,
+                                  },
+                                },
+                              });
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            {(editingConfig?.context?.gitBaselineEnabled ?? workflowConfig?.context?.gitBaselineEnabled) === false ? '关闭' : '开启'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button size="sm" className="h-8 text-xs" onClick={() => void saveConfig()} disabled={saving || !workflowConfig}>
+                        {saving ? '保存中...' : '保存高级配置'}
+                      </Button>
+                    </div>
+                  </div>
+                </TabsContent>}
                 </div>
               </Tabs>
                 </ResizablePanel>
@@ -8851,7 +8922,7 @@ export default function WorkbenchPage() {
                           title: '变更',
                           subtitle: 'Git 工作树 / 差异浏览',
                           icon: 'history',
-                          disabled: !currentRunWorkspacePath,
+                          disabled: !currentRunWorkspacePath || !effectiveGitBaselineEnabled,
                         },
                       ].map((tab) => {
                         const active = runWorkbenchTab === tab.key;
@@ -8872,7 +8943,7 @@ export default function WorkbenchPage() {
                             <div className="flex items-center gap-1.5 text-sm font-semibold leading-none">
                               <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{tab.icon}</span>
                               <span>{tab.title}</span>
-                              {tab.key === 'changes' ? (
+                              {tab.key === 'changes' && effectiveGitBaselineEnabled ? (
                                 <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
                                   {workspaceChangeCount > 99 ? '99+' : workspaceChangeCount}
                                 </span>
@@ -9020,7 +9091,7 @@ export default function WorkbenchPage() {
                     </div>
                   ) : (
                     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/20 p-4">
-                      {currentRunWorkspacePath ? (
+                      {currentRunWorkspacePath && effectiveGitBaselineEnabled ? (
                         <GitWorkspaceDiffPanel
                           workspacePath={currentRunWorkspacePath}
                           runId={runId || selectedRun?.id || null}
@@ -9029,7 +9100,7 @@ export default function WorkbenchPage() {
                         />
                       ) : (
                         <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border/70 bg-background/70 p-6 text-center text-sm text-muted-foreground">
-                          当前运行还没有可用的 Git 工作区。
+                          {currentRunWorkspacePath ? '当前工作流已关闭 Git 基线与变更追踪。' : '当前运行还没有可用的 Git 工作区。'}
                         </div>
                       )}
                     </div>
