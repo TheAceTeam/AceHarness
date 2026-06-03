@@ -5334,85 +5334,7 @@ try {
       throw new Error('该运行记录不是状态机工作流');
     }
 
-    // Restore state
-    this.currentRunId = runId;
-    this.currentConfigFile = runState.configFile;
-    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
-    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
-    this._creationSessionId = runState.creationSessionId;
-    const restoredFrontendSessionId = await this.resolveWorkflowFrontendSessionIdForRun(runState);
-    this._frontendSessionId = restoredFrontendSessionId || undefined;
-    this.currentRequirements = runState.requirements || '';
-    this.currentState = runState.currentState || null;
-    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
-    this.latestSupervisorReview = runState.latestSupervisorReview || null;
-    this.humanQuestions = runState.humanQuestions || [];
-    this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
-    this.humanAnswersContext = runState.humanAnswersContext || [];
-    this.specRevisionVote = runState.specRevisionVote || null;
-    this.specRevisionVoteHistory = runState.specRevisionVoteHistory || [];
-    this.specRevisionVoteTail = Promise.resolve();
-    this.stateHistory = runState.stateHistory || [];
-    this.issueTracker = (runState.issueTracker || []) as Issue[];
-    this.transitionCount = runState.transitionCount || 0;
-    this.completedSteps = runState.completedSteps || [];
-    this.failedSteps = runState.failedSteps || this.deriveFailedStepKeys(runState.stepLogs || []);
-    this.currentStep = runState.currentStep || null;
-    this.stepLogs = runState.stepLogs || [];
-    this.qualityChecks = runState.qualityChecks || [];
-    this.runStartTime = runState.startTime || null;
-    this.globalContext = runState.globalContext || '';
-    this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
-    this.isolatedDir = runState.workingDirectory || null;
-    this.currentProjectRoot = runState.workingDirectory || null;
-    this.workflowGit = runState.workspaceGit || null;
-    this.currentRunSpecCoding = runState.runSpecCoding
-      ? normalizeSpecCodingDocument(runState.runSpecCoding)
-      : null;
-    this.currentSpecRootDir = runState.specRootDir || null;
-    this.bindingValidation = runState.bindingValidation;
-    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
-    this.stepTaskBindingsByStepKey = new Map(
-      this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
-    );
-    this.deltaSpecMerged = runState.deltaSpecMerged || false;
-    this.deltaMergeState = runState.deltaMergeState;
-    this.workflowName = runState.workflowName || '';
-    // 持久化模式：如果 runSpecCoding 为空（未存入 YAML），从 delta 目录读取
-    if (!this.currentRunSpecCoding && runState.persistMode === 'repository') {
-      const workingDir = runState.workingDirectory;
-      if (workingDir) {
-        const specRootDir = getSpecRootDir(workingDir, runState.runSpecCoding?.specRoot);
-        const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, runId).catch(() => null);
-        if (deltaSpec) {
-          this.currentRunSpecCoding = deltaSpec;
-        }
-      }
-    }
-
-    this.humanQuestionWaiters.clear();
-
-    // Restore self-transition counts from state history
-    this.selfTransitionCounts = new Map();
-    for (const record of this.stateHistory) {
-      if (record.from === record.to) {
-        const currentCount = this.selfTransitionCounts.get(record.from) || 0;
-        this.selfTransitionCounts.set(record.from, currentCount + 1);
-      }
-    }
-
-    this.status = 'running';
-    this.shouldStop = false;
-
-    // Clear stale in-memory flags from previous run to prevent ghost transitions
-    this.pendingForceTransition = null;
-    this.pendingForceInstruction = null;
-    this.pendingApprovalInfo = null;
-    this.interruptFlag = false;
-    this.feedbackInterrupt = false;
-    this.liveFeedback = [];
-    this.resumeStateName = null;
-    this.resumeStepKey = null;
+    await this.restoreRunStateForContinuation(runState);
 
     this.emit('status', {
       status: 'running',
@@ -5612,6 +5534,87 @@ try {
       }
       throw error;
     }
+  }
+
+  private async restoreRunStateForContinuation(runState: PersistedRunState, targetState?: string): Promise<void> {
+    this.currentRunId = runState.runId;
+    this.currentConfigFile = runState.configFile;
+    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
+    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
+    this._creationSessionId = runState.creationSessionId;
+    const restoredFrontendSessionId = await this.resolveWorkflowFrontendSessionIdForRun(runState);
+    this._frontendSessionId = restoredFrontendSessionId || undefined;
+    this.currentRequirements = runState.requirements || '';
+    this.currentState = targetState || runState.currentState || null;
+    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
+    this.latestSupervisorReview = runState.latestSupervisorReview || null;
+    this.humanQuestions = runState.humanQuestions || [];
+    this.pendingHumanQuestionId = runState.pendingHumanQuestionId || runState.pendingCheckpoint?.humanQuestionId || null;
+    this.humanAnswersContext = runState.humanAnswersContext || [];
+    this.specRevisionVote = runState.specRevisionVote || null;
+    this.specRevisionVoteHistory = runState.specRevisionVoteHistory || [];
+    this.specRevisionVoteTail = Promise.resolve();
+    this.stateHistory = runState.stateHistory || [];
+    this.issueTracker = (runState.issueTracker || []) as Issue[];
+    this.transitionCount = runState.transitionCount || 0;
+    this.completedSteps = runState.completedSteps || [];
+    this.failedSteps = runState.failedSteps || this.deriveFailedStepKeys(runState.stepLogs || []);
+    this.currentStep = targetState ? null : (runState.currentStep || null);
+    this.activeStepKeys.clear();
+    this.activeConcurrencyGroups = [];
+    this.stepLogs = runState.stepLogs || [];
+    this.qualityChecks = runState.qualityChecks || [];
+    this.runStartTime = runState.startTime || null;
+    this.runEndTime = null;
+    this.globalContext = runState.globalContext || '';
+    this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
+    this.isolatedDir = runState.workingDirectory || null;
+    this.currentProjectRoot = runState.workingDirectory || null;
+    this.workflowGit = runState.workspaceGit || null;
+    this.currentRunSpecCoding = runState.runSpecCoding
+      ? normalizeSpecCodingDocument(runState.runSpecCoding)
+      : null;
+    this.currentSpecRootDir = runState.specRootDir || null;
+    this.bindingValidation = runState.bindingValidation;
+    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
+    this.stepTaskBindingsByStepKey = new Map(
+      this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
+    );
+    this.deltaSpecMerged = runState.deltaSpecMerged || false;
+    this.deltaMergeState = runState.deltaMergeState;
+    this.workflowName = runState.workflowName || '';
+    if (!this.currentRunSpecCoding && runState.persistMode === 'repository') {
+      const workingDir = runState.workingDirectory;
+      if (workingDir) {
+        const specRootDir = getSpecRootDir(workingDir, runState.runSpecCoding?.specRoot);
+        const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, runState.runId).catch(() => null);
+        if (deltaSpec) {
+          this.currentRunSpecCoding = deltaSpec;
+        }
+      }
+    }
+
+    this.humanQuestionWaiters.clear();
+    this.selfTransitionCounts = new Map();
+    for (const record of this.stateHistory) {
+      if (record.from === record.to) {
+        const currentCount = this.selfTransitionCounts.get(record.from) || 0;
+        this.selfTransitionCounts.set(record.from, currentCount + 1);
+      }
+    }
+
+    this.status = 'running';
+    this.statusReason = null;
+    this.shouldStop = false;
+    this.pendingForceTransition = null;
+    this.pendingForceInstruction = null;
+    this.pendingApprovalInfo = null;
+    this.interruptFlag = false;
+    this.feedbackInterrupt = false;
+    this.liveFeedback = [];
+    this.resumeStateName = null;
+    this.resumeStepKey = null;
+    this.currentProcesses = [];
   }
 
   // ========== Live feedback functionality ==========
@@ -5814,64 +5817,18 @@ try {
     }
 
     // Find the state in history
-    const stateIndex = this.stateHistory.findIndex(h => h.to === stateName);
+    const persistedHistory = (runState.stateHistory || []) as StateTransitionRecord[];
+    const stateIndex = persistedHistory.findIndex(h => h.to === stateName);
     if (stateIndex === -1) {
       throw new Error(`找不到状态: ${stateName}`);
     }
 
     // Restore state up to that point
-    this.currentRunId = runId;
-    this.currentConfigFile = runState.configFile;
-    this._createdBy = runState.runOwnerId || runState.createdBy || this._createdBy;
-    this._createdByName = runState.runOwnerName || runState.createdByName || this._createdByName;
-    this._creationSessionId = runState.creationSessionId;
-    this.currentRequirements = runState.requirements || '';
-    this.currentState = stateName;
-    this.currentSupervisorAgent = runState.supervisorAgent || DEFAULT_SUPERVISOR_NAME;
-    this.latestSupervisorReview = runState.latestSupervisorReview || null;
-    this.stateHistory = runState.stateHistory?.slice(0, stateIndex + 1) || [];
-    this.issueTracker = (runState.issueTracker || []) as Issue[];
-    this.transitionCount = stateIndex + 1;
-    this.completedSteps = runState.completedSteps || [];
-    this.stepLogs = runState.stepLogs || [];
-    this.qualityChecks = runState.qualityChecks || [];
-    this.runStartTime = runState.startTime || null;
-    this.globalContext = runState.globalContext || '';
-    this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
-    this.currentRunSpecCoding = runState.runSpecCoding
-      ? normalizeSpecCodingDocument(runState.runSpecCoding)
-      : null;
-    this.currentSpecRootDir = runState.specRootDir || null;
-    this.bindingValidation = runState.bindingValidation;
-    this.stepTaskBindingsSnapshot = runState.stepTaskBindingsSnapshot || [];
-    this.stepTaskBindingsByStepKey = new Map(
-      this.stepTaskBindingsSnapshot.map((binding) => [binding.stepKey, binding])
-    );
-    this.deltaSpecMerged = runState.deltaSpecMerged || false;
-    this.deltaMergeState = runState.deltaMergeState;
-    this.workflowName = runState.workflowName || '';
-    // 持久化模式：如果 runSpecCoding 为空（未存入 YAML），从 delta 目录读取
-    if (!this.currentRunSpecCoding && runState.persistMode === 'repository') {
-      const workingDir = runState.workingDirectory;
-      if (workingDir) {
-        const specRootDir = getSpecRootDir(workingDir, runState.runSpecCoding?.specRoot);
-        const deltaSpec = await readDeltaSpec(specRootDir, this.workflowName, runId).catch(() => null);
-        if (deltaSpec) {
-          this.currentRunSpecCoding = deltaSpec;
-        }
-      }
-    }
-    this.deltaSpecMerged = runState.deltaSpecMerged || false;
-    this.status = 'running';
-    this.shouldStop = false;
-
-    // Clear stale in-memory flags from previous run to prevent ghost transitions
-    this.pendingForceTransition = null;
-    this.pendingForceInstruction = null;
-    this.pendingApprovalInfo = null;
-    this.interruptFlag = false;
-    this.feedbackInterrupt = false;
-    this.liveFeedback = [];
+    await this.restoreRunStateForContinuation({
+      ...runState,
+      stateHistory: persistedHistory.slice(0, stateIndex + 1),
+      transitionCount: stateIndex + 1,
+    }, stateName);
 
     this.emit('status', {
       status: 'running',
@@ -5929,6 +5886,120 @@ try {
           startTime: this.runStartTime,
           endTime: this.runEndTime,
           currentConfigFile: this.currentConfigFile
+        });
+        await this.finalizeRun('failed');
+      }
+      throw error;
+    }
+  }
+
+  async forceJumpToState(runId: string, targetState: string, instruction?: string): Promise<void> {
+    if (this.status === 'running') {
+      throw new Error('已有工作流正在运行');
+    }
+
+    const runState = await loadRunState(runId);
+    if (!runState) {
+      throw new Error(`找不到运行记录: ${runId}`);
+    }
+    if (runState.mode !== 'state-machine') {
+      throw new Error('该运行记录不是状态机工作流');
+    }
+
+    const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
+    const configContent = await readFile(configPath, 'utf-8');
+    const workflowConfig = parse(configContent) as StateMachineWorkflowConfig;
+    const target = workflowConfig.workflow.states.find((state) => state.name === targetState);
+    if (!target) {
+      throw new Error(`找不到目标状态: ${targetState}`);
+    }
+    if (runState.workingDirectory) {
+      workflowConfig.context.projectRoot = runState.workingDirectory;
+    }
+
+    await this.restoreRunStateForContinuation(runState, targetState);
+    this.currentWorkflowConfig = workflowConfig;
+    this.currentProjectRoot = runState.workingDirectory || workflowConfig.context?.projectRoot || null;
+    this.currentSupervisorAgent = runState.supervisorAgent || resolveWorkflowSupervisorAgent(workflowConfig);
+    this.stateHistory.push({
+      from: runState.currentState || runState.currentPhase || runState.status || 'completed',
+      to: targetState,
+      reason: instruction
+        ? `强制恢复跳转到 ${targetState}，附加指令: ${instruction}`
+        : `强制恢复跳转到 ${targetState}`,
+      issues: [],
+      timestamp: new Date().toISOString(),
+    });
+    this.transitionCount++;
+    this.emit('force-transition', {
+      from: runState.currentState || runState.currentPhase || runState.status,
+      targetState,
+      instruction,
+      runId,
+    });
+    this.emit('transition-forced', {
+      from: runState.currentState || runState.currentPhase || runState.status,
+      to: targetState,
+      instruction,
+      runId,
+    });
+
+    this.emit('status', {
+      status: 'running',
+      message: `从已结束运行强制跳转到状态 ${targetState} 并恢复执行...`,
+      runId: this.currentRunId,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      currentPhase: this.currentState,
+      currentStep: this.currentStep,
+      currentConfigFile: this.currentConfigFile,
+      workingDirectory: this.getWorkingDirectory(),
+      workflowFrontendSessionId: this._frontendSessionId || null,
+    });
+    await this.persistState();
+
+    this.workflowMcpServers = [];
+    await this.loadAgentConfigs();
+    this.ensureSupervisorAgentExists(workflowConfig);
+    this.initializeAgents(workflowConfig);
+    for (const persistedAgent of runState.agents || []) {
+      const agent = this.agents.find((item) => item.name === persistedAgent.name);
+      if (agent && persistedAgent.sessionId) {
+        agent.sessionId = persistedAgent.sessionId;
+      }
+    }
+    await this.initializeEngine(resolveWorkflowExecutionPolicy(workflowConfig.context).defaultEngine || workflowConfig.context?.engine);
+    await this.resolveWorkflowMcpServers(workflowConfig);
+    await this.ensureWorkflowGitBaseline(workflowConfig.context?.projectRoot || runState.workingDirectory);
+
+    try {
+      await this.executeStateMachine(workflowConfig, runState.requirements);
+
+      if (!this.shouldStop) {
+        this.status = 'completed';
+        this.emit('status', {
+          status: 'completed',
+          message: '工作流执行完成',
+          runId: this.currentRunId,
+          startTime: this.runStartTime,
+          endTime: this.runEndTime,
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
+        });
+        await this.finalizeRun('completed');
+      }
+    } catch (error: any) {
+      if (!this.shouldStop) {
+        this.status = 'failed';
+        this.statusReason = error.message || String(error);
+        this.emit('status', {
+          status: 'failed',
+          message: error.message,
+          runId: this.currentRunId,
+          startTime: this.runStartTime,
+          endTime: this.runEndTime,
+          currentConfigFile: this.currentConfigFile,
+          workflowFrontendSessionId: this._frontendSessionId || null,
         });
         await this.finalizeRun('failed');
       }

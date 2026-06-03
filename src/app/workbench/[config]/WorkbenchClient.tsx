@@ -3313,6 +3313,8 @@ export default function WorkbenchPage() {
   }, [agents, configuredWorkflowAgents]);
 
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
+  const canForceTransition = Boolean(runId || initialRunId || selectedRun?.id) && workflowConfig?.workflow?.mode === 'state-machine';
+  const forceTransitionActionLabel = isRunning ? '强制跳转' : '强制恢复';
   const forceCompletableStep = workflowStatus === 'running' ? (currentStep || activeSteps[0] || '') : '';
   const canForceCompleteStep = workflowStatus === 'running' && Boolean(forceCompletableStep);
   const canStartWorkflow = isRunMode && !starting && (!isRunning || workspaceMode === 'isolated-copy');
@@ -8898,6 +8900,7 @@ export default function WorkbenchPage() {
                                 completedSteps={completedSteps}
                                 stateHistory={smStateHistory}
                                 isRunning={isRunning}
+                                allowForceTransition={canForceTransition}
                                 onStateClick={selectStateDetails}
                                 onStepClick={(step) => selectStep(step)}
                                 onForceTransition={handleForceTransition}
@@ -8917,6 +8920,7 @@ export default function WorkbenchPage() {
                                   maxTransitions={workflowConfig.workflow.maxTransitions || 50}
                                   status={workflowStatus as any}
                                   isRunning={isRunning}
+                                  allowForceTransition={canForceTransition}
                                   focusedState={focusedState}
                                   startTime={runStartTime}
                                   endTime={runEndTime}
@@ -11237,10 +11241,10 @@ export default function WorkbenchPage() {
             <div className="p-5 border-b">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <span className="material-symbols-outlined text-orange-500">alt_route</span>
-                强制跳转到: {forceTransitionModal.targetState}
+                {forceTransitionActionLabel}到: {forceTransitionModal.targetState}
               </h3>
               <p className="text-sm text-muted-foreground mt-1">
-                可选：为 AI 提供跳转指令
+                {isRunning ? '可选：为 AI 提供跳转指令' : '该运行会从已结束状态恢复为执行中，并从目标状态继续执行。可选填写恢复指令。'}
               </p>
             </div>
 
@@ -11253,7 +11257,7 @@ export default function WorkbenchPage() {
                 className="w-full"
               />
               <p className="text-xs text-muted-foreground mt-2">
-                此指令将被添加到 AI 的 prompt 中，帮助 AI 更好地理解你的意图
+                此指令会记录到状态跳转历史中，帮助后续审计恢复原因
               </p>
             </div>
 
@@ -11261,7 +11265,7 @@ export default function WorkbenchPage() {
               <Button variant="secondary" onClick={() => setForceTransitionModal(null)}>取消</Button>
               <Button onClick={executeForceTransition}>
                 <span className="material-symbols-outlined text-sm mr-1">check</span>
-                确认跳转
+                {isRunning ? '确认跳转' : '确认恢复'}
               </Button>
             </div>
           </div>

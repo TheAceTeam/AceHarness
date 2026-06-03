@@ -16,6 +16,7 @@ export function isStateMachineManagerLike(manager: AnyWorkflowManager | null | u
   return Boolean(
     manager
     && typeof (manager as StateMachineWorkflowManager).forceTransition === 'function'
+    && typeof (manager as StateMachineWorkflowManager).forceJumpToState === 'function'
     && typeof (manager as StateMachineWorkflowManager).setQueuedApprovalAction === 'function'
     && typeof (manager as StateMachineWorkflowManager).resume === 'function'
     && typeof (manager as StateMachineWorkflowManager).getHumanQuestions === 'function'

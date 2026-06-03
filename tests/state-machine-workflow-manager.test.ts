@@ -663,6 +663,76 @@ describe('state machine resume', () => {
       '设计-final-step',
     ]));
   });
+
+  test('force jumps a completed run to a target state and resumes execution', async () => {
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    const { parse } = await import('yaml');
+    const config = makeConfig();
+    vi.mocked(parse).mockReturnValue(config);
+    vi.mocked(loadRunState).mockResolvedValueOnce({
+      runId: 'run-completed-force-jump',
+      configFile: 'test.yaml',
+      mode: 'state-machine',
+      status: 'completed',
+      startTime: '2024-01-01T00:00:00.000Z',
+      endTime: '2024-01-01T00:10:00.000Z',
+      currentState: '完成',
+      currentPhase: '完成',
+      currentStep: null,
+      completedSteps: ['设计-design-step', '实施-impl-step'],
+      failedSteps: [],
+      stepLogs: [],
+      agents: [{ name: 'developer', sessionId: 'agent-session-existing' }],
+      iterationStates: {},
+      processes: [],
+      requirements: 'Build a feature',
+      workflowFrontendSessionId: 'workflow-agora-session-completed',
+      supervisorAgent: 'default-supervisor',
+      supervisorSessionId: null,
+      attachedAgentSessions: {},
+      stateHistory: [
+        { from: '设计', to: '实施', reason: 'pass', issues: [], timestamp: '2024-01-01T00:01:00.000Z' },
+        { from: '实施', to: '完成', reason: 'pass', issues: [], timestamp: '2024-01-01T00:05:00.000Z' },
+      ],
+      issueTracker: [],
+      transitionCount: 2,
+      globalContext: '',
+      phaseContexts: {},
+      workingDirectory: '/tmp/project',
+      qualityChecks: [],
+    } as any);
+
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => ({
+      success: true,
+      output: options.step === 'impl-step'
+        ? '```json\n{"verdict":"pass"}\n```\nimplementation rerun complete'
+        : `${options.step} complete`,
+      sessionId: `session-${options.step}`,
+    });
+    const manager = await createManagerForTest(engine);
+    (manager as any).status = 'idle';
+    (manager as any).engineType = 'claude-code';
+    (manager as any).loadAgentConfigs = vi.fn().mockResolvedValue(undefined);
+    (manager as any).ensureWorkflowGitBaseline = vi.fn().mockResolvedValue(undefined);
+    (manager as any).initializeEngine = vi.fn().mockResolvedValue(undefined);
+    (manager as any).resolveWorkflowMcpServers = vi.fn().mockResolvedValue(undefined);
+    (manager as any).finalizeRun = vi.fn().mockResolvedValue(undefined);
+
+    await (manager as any).forceJumpToState('run-completed-force-jump', '实施', '重新验证实现');
+
+    expect(engine.calls.map((call) => call.options.step)).toEqual(['impl-step']);
+    expect((manager as any).stateHistory).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: '完成',
+        to: '实施',
+        reason: expect.stringContaining('重新验证实现'),
+      }),
+    ]));
+    expect((manager as any).currentRunId).toBe('run-completed-force-jump');
+    expect((manager as any).currentState).toBe('完成');
+    expect((manager as any).runEndTime).toBeNull();
+  });
 });
 
 // ============================================================

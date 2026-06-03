@@ -98,6 +98,7 @@ interface StateMachineExecutionViewProps {
   maxTransitions: number;
   status: 'idle' | 'running' | 'completed' | 'failed' | 'waiting' | 'stopped';
   isRunning?: boolean;
+  allowForceTransition?: boolean;
   focusedState?: string | null;
   startTime?: string | null;
   endTime?: string | null;
@@ -186,6 +187,7 @@ export default function StateMachineExecutionView({
   maxTransitions,
   status,
   isRunning = false,
+  allowForceTransition = isRunning,
   focusedState,
   startTime,
   endTime,
@@ -689,6 +691,7 @@ export default function StateMachineExecutionView({
             completedSteps={completedSteps}
             stateHistory={stateHistory}
             isRunning={isRunning}
+            allowForceTransition={allowForceTransition}
             focusedState={focusedState}
             supervisorFlow={supervisorFlow}
             onStateClick={onStateClick}

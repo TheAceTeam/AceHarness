@@ -115,6 +115,7 @@ interface StateMachineDiagramProps {
   completedSteps?: string[];
   stateHistory?: StateTransitionRecord[];
   isRunning?: boolean;
+  allowForceTransition?: boolean;
   focusedState?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
 }
@@ -269,7 +270,7 @@ function buildStateDiagramStepGroups(steps: any[]) {
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, onStepClick, onForceTransition, isRunning } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, onStepClick, onForceTransition, isRunning, allowForceTransition } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
@@ -377,7 +378,7 @@ function StateNode({ data }: any) {
       </div>
 
       {/* 人工审查节点：当前状态时显示可选跳转目标 */}
-      {isHumanCheckpoint && isCurrent && isRunning && onForceTransition && (
+      {isHumanCheckpoint && isCurrent && allowForceTransition && onForceTransition && (
         <div className="mt-1.5 space-y-0.5">
           <div className="text-[10px] text-amber-700 dark:text-amber-300 font-semibold mb-0.5">人工审查待处理，请明确选择下一步：</div>
           {state.transitions && state.transitions.length > 0 ? (
@@ -398,12 +399,12 @@ function StateNode({ data }: any) {
       )}
 
       {/* 强制跳转按钮（仅在运行中且非当前状态时显示，非人工审查节点） */}
-      {isRunning && !isCurrent && !isHumanCheckpoint && onForceTransition && (
+      {allowForceTransition && !isCurrent && !isHumanCheckpoint && onForceTransition && (
         <button
           onClick={(e) => { e.stopPropagation(); onForceTransition(state.name); }}
           className="mt-1.5 w-full text-[10px] px-1.5 py-0.5 rounded border border-orange-300 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/30 transition-colors"
         >
-          强制跳转到此
+          {isRunning ? '强制跳转到此' : '强制恢复到此'}
         </button>
       )}
     </div>
@@ -493,6 +494,7 @@ function StateMachineDiagramInner({
   completedSteps = EMPTY_COMPLETED_STEPS,
   stateHistory = EMPTY_STATE_HISTORY,
   isRunning = false,
+  allowForceTransition = isRunning,
   focusedState,
   supervisorFlow = EMPTY_SUPERVISOR_FLOW,
 }: StateMachineDiagramProps) {
@@ -550,6 +552,7 @@ function StateMachineDiagramInner({
           onStepClick: handleStepClick,
           onForceTransition: handleForceTransitionClick,
           isRunning,
+          allowForceTransition,
         },
       };
     });
@@ -582,11 +585,12 @@ function StateMachineDiagramInner({
         onStepClick: handleStepClick,
         onForceTransition: handleForceTransitionClick,
         isRunning,
+        allowForceTransition,
       },
     });
 
     return nodes;
-  }, [states, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning]);
+  }, [states, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 

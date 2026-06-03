@@ -37,16 +37,18 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ success: true, message: `已请求强制跳转到: ${targetState}` });
       }
 
-      manager.setQueuedApprovalAction('approve');
-      setTimeout(() => {
-        try {
-          manager.forceTransition(targetState, instruction);
-        } catch {
-          // ignore late transition race; resume path will surface failures via status/logs
-        }
-      }, 500);
-      manager.resume(runId).catch(() => {});
-      return NextResponse.json({ success: true, message: `正在恢复并跳转到: ${targetState}` });
+      if (currentStatus.status === 'running' && currentStatus.runId === runId) {
+        manager.forceTransition(targetState, instruction);
+        return NextResponse.json({ success: true, message: `已请求强制跳转到: ${targetState}` });
+      }
+      if (currentStatus.status === 'running' && currentStatus.runId !== runId) {
+        return NextResponse.json({ error: '该配置已有其他运行正在执行，无法强制恢复目标运行' }, { status: 409 });
+      }
+
+      manager.forceJumpToState(runId, targetState, instruction).catch((error) => {
+        console.error('[workflow/force-transition] force jump failed:', error);
+      });
+      return NextResponse.json({ success: true, message: `正在强制恢复并跳转到: ${targetState}` });
     }
 
     const manager = workflowRegistry.getRunningManager(configFile);
