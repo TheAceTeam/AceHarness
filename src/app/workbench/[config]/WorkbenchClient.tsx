@@ -9788,6 +9788,42 @@ export default function WorkbenchPage() {
                           <p className="text-xs text-muted-foreground mt-1.5">默认推荐直接在工作目录执行；只有需要隔离原工程时再创建副本</p>
                         </div>
 
+                        <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                              <Label className="text-sm font-medium">Git 基线与变更追踪</Label>
+                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
+                              </p>
+                              <div className="mt-2 text-xs text-muted-foreground">
+                                YAML 字段：<code>context.gitBaselineEnabled</code>
+                              </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2">
+                              <Switch
+                                checked={(editingConfig?.context?.gitBaselineEnabled ?? workflowConfig?.context?.gitBaselineEnabled) !== false}
+                                onCheckedChange={(checked) => {
+                                  const baseConfig = editingConfig || workflowConfig;
+                                  if (!baseConfig) return;
+                                  dispatch({
+                                    type: 'SET_EDITING_CONFIG',
+                                    payload: {
+                                      ...baseConfig,
+                                      context: {
+                                        ...(baseConfig.context || {}),
+                                        gitBaselineEnabled: checked ? undefined : false,
+                                      },
+                                    },
+                                  });
+                                }}
+                              />
+                              <span className="text-xs text-muted-foreground">
+                                {(editingConfig?.context?.gitBaselineEnabled ?? workflowConfig?.context?.gitBaselineEnabled) === false ? '关闭' : '开启'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
                         <div>
                           <Label className="text-sm font-medium">工作流描述</Label>
                           <Textarea
