@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
-import { loadRunState } from '@/lib/run/state-persistence';
+import { loadRunState, type PersistedRunState } from '@/lib/run/state-persistence';
+import { getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { readFile } from 'fs/promises';
+import { parse } from 'yaml';
+
+async function validateStateMachineTarget(runState: PersistedRunState, targetState: string): Promise<NextResponse | null> {
+  const configPath = await getRuntimeWorkflowConfigPath(runState.configFile);
+  const configContent = await readFile(configPath, 'utf-8');
+  const workflowConfig = parse(configContent);
+  if (workflowConfig?.workflow?.mode !== 'state-machine') {
+    return NextResponse.json({ error: '目标运行不是状态机工作流' }, { status: 400 });
+  }
+  const states = Array.isArray(workflowConfig.workflow.states) ? workflowConfig.workflow.states : [];
+  if (!states.some((state: any) => state?.name === targetState)) {
+    return NextResponse.json({ error: `找不到目标状态: ${targetState}` }, { status: 400 });
+  }
+  return null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,6 +31,8 @@ export async function POST(request: NextRequest) {
       if (!runState) {
         return NextResponse.json({ error: `找不到运行记录: ${runId}` }, { status: 404 });
       }
+      const targetValidationError = await validateStateMachineTarget(runState, targetState);
+      if (targetValidationError) return targetValidationError;
 
       const manager = await workflowRegistry.getManagerByRunId(runId) || await workflowRegistry.getManager(runState.configFile);
       if (!isStateMachineManagerLike(manager)) {

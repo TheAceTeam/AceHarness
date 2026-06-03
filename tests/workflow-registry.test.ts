@@ -29,6 +29,13 @@ vi.mock('@/lib/state-machine/workflow-manager', () => ({
       this.listeners.get(event)?.(data);
     }
     removeAllListeners() {}
+    forceTransition() {}
+    forceJumpToState() {}
+    setQueuedApprovalAction() {}
+    resume() {}
+    getHumanQuestions() { return []; }
+    createHumanQuestion() {}
+    answerHumanQuestion() {}
   },
 }));
 
@@ -100,5 +107,25 @@ describe('workflow registry', () => {
       passed: true,
       __configFile: 'demo.yaml',
     });
+  });
+
+  test('recreates stale state-machine managers that lack force jump support', async () => {
+    const { readFile } = await import('fs/promises');
+    const { loadRunState } = await import('@/lib/run/state-persistence');
+    (readFile as any).mockResolvedValue('workflow:\n  mode: state-machine\n');
+    (loadRunState as any).mockResolvedValue({
+      runId: 'run-stale-sm',
+      configFile: 'demo.yaml',
+      mode: 'state-machine',
+    });
+
+    const { workflowRegistry } = await import('@/lib/workflow/registry');
+    const staleManager = await workflowRegistry.getManager('demo.yaml');
+    (staleManager as any).forceJumpToState = undefined;
+
+    const manager = await workflowRegistry.getManagerByRunId('run-stale-sm');
+
+    expect(manager).not.toBe(staleManager);
+    expect(typeof (manager as any).forceJumpToState).toBe('function');
   });
 });

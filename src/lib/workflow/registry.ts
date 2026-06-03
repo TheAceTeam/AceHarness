@@ -70,7 +70,7 @@ class WorkflowRegistry extends EventEmitter {
     const expectedIsStateMachine = await this.detectStateMachine(configFile);
     const existing = this.managers.get(configFile);
     if (existing) {
-      if (existing.isStateMachine === expectedIsStateMachine) {
+      if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {
         return existing.manager;
       }
       this.managers.delete(configFile);
@@ -109,12 +109,14 @@ class WorkflowRegistry extends EventEmitter {
 
   async getManagerByRunId(runId: string): Promise<AnyWorkflowManager | null> {
     const runState = await loadRunState(runId);
-    const expectedIsStateMachine = runState?.mode === 'state-machine';
+    const expectedIsStateMachine = runState
+      ? await this.detectStateMachineRun(runState)
+      : false;
 
     for (const [, entry] of this.managers) {
       const s = entry.manager.getStatus();
       if (s.runId !== runId) continue;
-      if (runState && entry.isStateMachine !== expectedIsStateMachine) {
+      if (runState && (entry.isStateMachine !== expectedIsStateMachine || !this.managerMatchesMode(entry.manager, expectedIsStateMachine))) {
         this.managers.delete(entry.configFile);
         entry.manager.removeAllListeners();
         break;
@@ -125,7 +127,7 @@ class WorkflowRegistry extends EventEmitter {
     if (!runState?.configFile) return null;
     const existing = this.managers.get(runState.configFile);
     if (existing) {
-      if (existing.isStateMachine === expectedIsStateMachine) {
+      if (existing.isStateMachine === expectedIsStateMachine && this.managerMatchesMode(existing.manager, expectedIsStateMachine)) {
         return existing.manager;
       }
       this.managers.delete(runState.configFile);
@@ -178,6 +180,17 @@ class WorkflowRegistry extends EventEmitter {
       const config = parse(content);
       return config.workflow?.mode === 'state-machine';
     } catch { return false; }
+  }
+
+  private async detectStateMachineRun(runState: { configFile?: string; mode?: string; currentState?: string | null; stateHistory?: unknown[] }): Promise<boolean> {
+    if (runState.mode === 'state-machine') return true;
+    if (runState.mode === 'phase-based') return false;
+    if (runState.currentState || (Array.isArray(runState.stateHistory) && runState.stateHistory.length > 0)) return true;
+    return runState.configFile ? this.detectStateMachine(runState.configFile) : false;
+  }
+
+  private managerMatchesMode(manager: AnyWorkflowManager, isStateMachine: boolean): boolean {
+    return isStateMachine ? isStateMachineManagerLike(manager) : !isStateMachineManagerLike(manager);
   }
 }
 
