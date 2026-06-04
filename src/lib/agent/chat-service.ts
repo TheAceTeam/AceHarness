@@ -93,6 +93,7 @@ export interface PreparedAgentChat {
   model: string;
   prompt: string;
   sessionReuseKey: string;
+  userId: string;
   isTemporaryWerewolf: boolean;
   isTemporaryAgora: boolean;
   agoraExpectedResultType?: 'speech' | 'summary' | 'vote';
@@ -268,6 +269,7 @@ async function executeWerewolfTurnWithResultEnforcement(input: {
       sessionId: latestSessionId,
       appendSystemPrompt: false,
       mcpServers: input.prepared.roleConfig.mcpServers,
+      userId: input.prepared.userId,
     }, {
       onContextReset: () => {
         latestSessionId = undefined;
@@ -313,6 +315,7 @@ async function executeAgoraTurnWithResultEnforcement(input: {
       sessionId: latestSessionId,
       appendSystemPrompt: false,
       mcpServers: input.prepared.roleConfig.mcpServers,
+      userId: input.prepared.userId,
     }, {
       onContextReset: () => {
         latestSessionId = undefined;
@@ -603,6 +606,7 @@ export async function executeAgentChat(input: ExecuteAgentChatInput): Promise<Ex
         sessionId: prepared.resumeSessionId || undefined,
         appendSystemPrompt: Boolean(prepared.resumeSessionId),
         mcpServers: prepared.roleConfig.mcpServers,
+        userId: prepared.userId,
       });
 
   if (!result.success && !result.output && result.error) {
@@ -709,7 +713,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   await ensureEngineRuntimeSkillsAvailable(effectiveEngine, workingDirectory);
 
   const sessionReuseKey = `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`;
-  const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey);
+  const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey, input.userContext.id);
   if (!engine) {
     const temporaryLabel = input.temporaryRoleConfig ? '临时 Agent' : '业务 Agent';
     throw new Error(`Agent 对话引擎不可用：${effectiveEngine}${effectiveModel ? ` / ${effectiveModel}` : ''}（${temporaryLabel}：${effectiveRoleConfig.name}）`);
@@ -771,6 +775,7 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
     model: effectiveModel,
     prompt,
     sessionReuseKey,
+    userId: input.userContext.id,
     isTemporaryWerewolf,
     isTemporaryAgora,
     agoraExpectedResultType,

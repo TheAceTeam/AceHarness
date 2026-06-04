@@ -1,4 +1,7 @@
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { withTempDir } from './helpers/module-helpers';
 
 vi.mock('@/lib/chat/settings', () => ({
   loadChatSettings: vi.fn().mockResolvedValue({
@@ -44,7 +47,8 @@ vi.mock('@/lib/run/runtime-skills', () => ({
 }));
 
 vi.mock('@/lib/core/directory-links', () => ({
-  ensureDirectoryLinkSync: vi.fn(),
+  createDirectoryLinkSync: vi.fn(),
+  isLinkedDirectoryTarget: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('@/lib/engines/engine-config', () => ({
@@ -67,12 +71,12 @@ describe('chat-request-options', () => {
 
     expect(buildDashboardSystemPrompt).toHaveBeenCalledWith(
       ['aceharness-chat-card', 'aceharness-workflow-creator'],
-      { personalDir: undefined }
+      { personalDir: undefined, workingDirectory: '/persisted/workdir' }
     );
     expect(result.enabledSkills).toEqual(['aceharness-chat-card']);
     expect(result.resolvedWorkingDirectory).toBe('/persisted/workdir');
     expect(result.systemPrompt).toContain('dashboard prompt');
-    expect(result.systemPrompt).toContain('当前工作目录(用户语义目录): /persisted/workdir');
+    expect(result.systemPrompt).not.toContain('## 运行目录信息');
   });
 
   test('resume dashboard chat uses lightweight requested skills reminder instead of rebuilding full prompt', async () => {
@@ -90,5 +94,35 @@ describe('chat-request-options', () => {
     expect(buildDashboardSystemPrompt).not.toHaveBeenCalled();
     expect(result.enabledSkills).toEqual(['aceharness-chat-card']);
     expect(result.systemPrompt).toContain('当前启用的 Skills: aceharness-chat-card');
+    expect(result.systemPrompt).toContain('API 查询结果');
+    expect(result.systemPrompt).toContain('"kind":"card"');
+  });
+
+  test('links only selected runtime skills and keeps aceharness skills eligible', async () => {
+    await withTempDir('aceharness-chat-skills-', async (base) => {
+      const runtimeSkills = path.join(base, 'runtime-skills');
+      const workDir = path.join(base, 'work');
+      await mkdir(path.join(runtimeSkills, 'aceharness-chat-card'), { recursive: true });
+      await mkdir(path.join(runtimeSkills, 'global-skill'), { recursive: true });
+      await mkdir(path.join(runtimeSkills, 'unselected-skill'), { recursive: true });
+      await mkdir(workDir, { recursive: true });
+
+      const runtime = await import('@/lib/run/runtime-skills');
+      const links = await import('@/lib/core/directory-links');
+      vi.mocked(runtime.getRuntimeSkillsDirPath).mockResolvedValue(runtimeSkills);
+
+      const { ensureEngineRuntimeSkillsAvailable } = await import('@/lib/chat/request-options');
+      await ensureEngineRuntimeSkillsAvailable('codex', workDir, ['aceharness-chat-card', 'global-skill']);
+
+      expect(links.createDirectoryLinkSync).toHaveBeenCalledWith(
+        path.join(runtimeSkills, 'aceharness-chat-card'),
+        path.join(workDir, '.engine', 'skills', 'aceharness-chat-card'),
+      );
+      expect(links.createDirectoryLinkSync).toHaveBeenCalledWith(
+        path.join(runtimeSkills, 'global-skill'),
+        path.join(workDir, '.engine', 'skills', 'global-skill'),
+      );
+      expect(vi.mocked(links.createDirectoryLinkSync).mock.calls.some((call) => String(call[1]).includes('unselected-skill'))).toBe(false);
+    });
   });
 });

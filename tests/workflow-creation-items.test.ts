@@ -257,6 +257,48 @@ describe('workflow creation item protocol', () => {
     expect(validation.ok).toBe(true);
   });
 
+  test('assembles direct workflow without spec task bindings when spec planning is skipped', () => {
+    const state = applyItems([
+      {
+        kind: WORKFLOW_STATE_OUTLINE_KIND,
+        data: {
+          states: [
+            { name: '分析需求', description: '理解用户输入', isInitial: true },
+            { name: '执行业务任务', description: '按需求完成业务处理' },
+            { name: '完成', description: '汇总交付', isFinal: true },
+          ],
+        },
+      },
+      {
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        data: {
+          stateName: '分析需求',
+          steps: [{ name: '读取需求', agent: 'architect', task: '分析用户提出的实际业务需求' }],
+        },
+      },
+      {
+        kind: WORKFLOW_STATE_STEPS_KIND,
+        data: {
+          stateName: '执行业务任务',
+          steps: [{ name: '完成任务', agent: 'developer', task: '直接完成用户要求的业务任务' }],
+        },
+      },
+    ]);
+
+    const config = assembleForTest(state, {
+      workflowName: '直接业务工作流',
+      requirements: '直接完成用户的业务需求，不创建 Spec',
+      includeSpecTaskBindings: false,
+      specCoding: undefined,
+    });
+
+    const steps = config.workflow.states.flatMap((item: any) => item.steps || []);
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.every((step: any) => step.specTaskBinding === undefined)).toBe(true);
+    expect(steps.map((step: any) => step.task).join('\n')).toContain('业务');
+    expect(validateWorkflowDraft(config, { mode: 'portable' }).ok).toBe(true);
+  });
+
   test('preserves explicit state-machine transition targets from outline and state-step items', () => {
     const state = applyItems([
       {

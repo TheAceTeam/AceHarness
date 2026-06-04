@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -35,6 +35,15 @@ interface EnvVarRow extends EnvVar {
 interface EnvVarError {
   key?: string;
 }
+
+const AI_ENV_PRESETS = [
+  { key: 'ANTHROPIC_API_KEY', description: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
+  { key: 'ANTHROPIC_BASE_URL', description: 'Anthropic 自定义 API 地址，用于代理或自建网关。' },
+  { key: 'OPENAI_API_KEY', description: 'OpenAI API 密钥，Codex/OpenAI 兼容调用会读取。' },
+  { key: 'OPENAI_BASE_URL', description: 'OpenAI 兼容 API 地址，Codex 会显式传给 SDK。' },
+];
+
+const AI_ENV_DESCRIPTION_BY_KEY = new Map(AI_ENV_PRESETS.map((item) => [item.key, item.description]));
 
 interface EmailNotificationForm {
   enabled: boolean;
@@ -179,9 +188,7 @@ export default function SystemSettingsContent() {
     value: item.value,
     enabled: item.enabled,
     required: item.key.trim() === 'CANGJIE_HOME',
-    description: item.key.trim() === 'CANGJIE_HOME'
-      ? '仓颉 SDK 根目录，Markdown/编辑器运行仓颉代码时会读取此变量。'
-      : undefined,
+    description: AI_ENV_DESCRIPTION_BY_KEY.get(item.key.trim()),
     maskValue: /(TOKEN|SECRET|PASSWORD|KEY)/iu.test(item.key.trim()),
     disableValueEdit: managedHomeActive && item.key.trim() === 'CANGJIE_HOME',
     keyError: varErrors[index]?.key,
@@ -299,6 +306,15 @@ export default function SystemSettingsContent() {
   const addRow = () => {
     setVars((prev) => {
       const next = [...prev, createEnvVarRow()];
+      syncVarErrors(next);
+      return next;
+    });
+  };
+
+  const addPresetEnvVar = (key: string) => {
+    setVars((prev) => {
+      if (prev.some((item) => item.key.trim() === key)) return prev;
+      const next = [...prev, createEnvVarRow({ key })];
       syncVarErrors(next);
       return next;
     });
@@ -865,17 +881,15 @@ export default function SystemSettingsContent() {
         <section className="rounded-xl border bg-card p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold">环境变量说明</h2>
-            <p className="mt-1 text-sm text-muted-foreground">这些变量会影响仓颉运行环境与相关能力。</p>
+            <p className="mt-1 text-sm text-muted-foreground">这些变量会影响 Claude、Codex 与 OpenAI/Anthropic 兼容网关调用。</p>
           </div>
           <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm text-muted-foreground">
-            <code className="font-mono text-primary">CANGJIE_HOME</code>
-            <span>仓颉 SDK 根目录（Markdown/编辑器运行仓颉代码必需）</span>
-            <code className="font-mono text-primary">CANGJIE_MAGIC_PATH</code>
-            <span>仓颉 Magic 项目路径</span>
-            <code className="font-mono text-primary">OPENSSL_PATH</code>
-            <span>OpenSSL 动态库路径</span>
-            <code className="font-mono text-primary">CANGJIE_STDX_PATH</code>
-            <span>stdx 动态库路径</span>
+            {AI_ENV_PRESETS.map((preset) => (
+              <Fragment key={preset.key}>
+                <code className="font-mono text-primary">{preset.key}</code>
+                <span>{preset.description}</span>
+              </Fragment>
+            ))}
           </div>
         </section>
 
@@ -899,19 +913,43 @@ export default function SystemSettingsContent() {
           {envLoading ? (
             <div className="py-6 text-center text-sm text-muted-foreground">环境变量加载中...</div>
           ) : (
-            <EnvironmentVariables
-              items={environmentVariableItems}
-              disabled={envSaving}
-              onAdd={addRow}
-              onRemove={removeVar}
-              onChange={(index, patch) => updateVar(index, {
-                ...(patch.key !== undefined ? { key: patch.key } : {}),
-                ...(patch.value !== undefined ? { value: patch.value } : {}),
-                ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-              })}
-              onCopy={copyEnvVar}
-              emptyMessage="暂无环境变量"
-            />
+            <div className="space-y-4">
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
+                <div className="flex flex-wrap gap-2">
+                  {AI_ENV_PRESETS.map((preset) => {
+                    const exists = displayVars.some((item) => item.key.trim() === preset.key);
+                    return (
+                      <Button
+                        key={preset.key}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 font-mono text-xs"
+                        onClick={() => addPresetEnvVar(preset.key)}
+                        disabled={envSaving || exists}
+                        title={preset.description}
+                      >
+                        {preset.key}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+              <EnvironmentVariables
+                items={environmentVariableItems}
+                disabled={envSaving}
+                onAdd={addRow}
+                onRemove={removeVar}
+                onChange={(index, patch) => updateVar(index, {
+                  ...(patch.key !== undefined ? { key: patch.key } : {}),
+                  ...(patch.value !== undefined ? { value: patch.value } : {}),
+                  ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+                })}
+                onCopy={copyEnvVar}
+                emptyMessage="暂无环境变量"
+              />
+            </div>
           )}
         </section>
       </div>

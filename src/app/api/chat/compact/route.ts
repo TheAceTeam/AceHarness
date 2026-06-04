@@ -139,6 +139,7 @@ export async function POST(request: NextRequest) {
         allowedTools: prepared.roleConfig.allowedTools,
         sessionId: prepared.resumeSessionId || undefined,
         mcpServers: prepared.roleConfig.mcpServers,
+        userId: prepared.userId,
       }, {
         buildCompactSource: () => compactSource,
         compactInstructions: 'This is a manual user-triggered /compact command. Focus on preserving enough state for future chat turns; do not invent completed work.',
@@ -155,6 +156,7 @@ export async function POST(request: NextRequest) {
         forceNewSession: true,
         appendSystemPrompt: false,
         mcpServers: prepared.roleConfig.mcpServers,
+        userId: prepared.userId,
       }), () => prepared.engine.cancel());
 
       if (!result.success && !result.sessionId) {
@@ -174,7 +176,7 @@ export async function POST(request: NextRequest) {
 
     const useModel = typeof body?.model === 'string' ? body.model : (session.model || '');
     const engineType = await resolveRequestedEngineType(typeof body?.engine === 'string' ? body.engine : session.engine);
-    const { systemPrompt, enabledMcpServers } = await buildChatRequestContext({
+    const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
       mode: 'dashboard',
       frontendSessionId,
       workingDirectory: typeof body?.workingDirectory === 'string' ? body.workingDirectory : undefined,
@@ -182,7 +184,7 @@ export async function POST(request: NextRequest) {
       requestedMcpServers: body?.mcpServers as RequestedMcpServersInput,
       personalDir: user.personalDir,
     });
-    await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot());
+    await ensureEngineRuntimeSkillsAvailable(engineType, getWorkspaceRoot(), runtimeSkillNames);
     const engine = await createEngine(engineType);
     if (!engine) {
       return NextResponse.json({ error: '引擎不可用，请检查配置' }, { status: 500 });
@@ -198,6 +200,7 @@ export async function POST(request: NextRequest) {
       workingDirectory: getWorkspaceRoot(),
       sessionId: requestedBackendSessionId,
       mcpServers: enabledMcpServers,
+      userId: user.id,
     }, {
       buildCompactSource: () => compactSource,
       compactInstructions: 'This is a manual user-triggered /compact command. Preserve user intent, tool/action results, files, errors, and pending tasks for future chat turns.',
@@ -214,6 +217,7 @@ export async function POST(request: NextRequest) {
       forceNewSession: true,
       appendSystemPrompt: false,
       mcpServers: enabledMcpServers,
+      userId: user.id,
     }), () => engine.cancel());
 
     if (!result.success && !result.sessionId) {

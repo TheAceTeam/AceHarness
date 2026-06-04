@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { dirname, resolve, join } from 'path';
 import { execSync } from 'child_process';
 import { getInstallPath, getWorkspaceCacheFile, getWorkspaceSkillPath, getWorkspaceSkillsDir, getWorkspaceRoot } from '@/lib/core/app-paths';
+import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
 
 const INSTALL_SKILLS_DIR = getInstallPath('skills');
 let seedPromise: Promise<void> | null = null;
@@ -11,20 +12,30 @@ let runtimeSkillsSeeded = false;
 /** Dependencies required by aceharness-* skills scripts */
 const SKILL_DEPS = ['yaml', 'zod'];
 
-async function copyMissingRecursive(src: string, dst: string): Promise<void> {
+async function linkMissingBundledEntry(src: string, dst: string): Promise<void> {
+  if (existsSync(dst)) return;
+
   const srcStat = await stat(src);
   if (srcStat.isDirectory()) {
-    await mkdir(dst, { recursive: true });
-    const entries = await readdir(src, { withFileTypes: true });
-    for (const entry of entries) {
-      await copyMissingRecursive(resolve(src, entry.name), resolve(dst, entry.name));
+    await mkdir(dirname(dst), { recursive: true });
+    try {
+      createDirectoryLinkSync(src, dst);
+    } catch (error) {
+      console.warn(`[runtime-skills] Failed to link bundled skill ${src} -> ${dst}:`, error);
     }
     return;
   }
 
-  if (existsSync(dst)) return;
   await mkdir(dirname(dst), { recursive: true });
   await cp(src, dst, { force: false });
+}
+
+async function linkMissingBundledSkills(srcDir: string, dstDir: string): Promise<void> {
+  await mkdir(dstDir, { recursive: true });
+  const entries = await readdir(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    await linkMissingBundledEntry(resolve(srcDir, entry.name), resolve(dstDir, entry.name));
+  }
 }
 
 /**
@@ -78,15 +89,7 @@ export async function ensureRuntimeSkillsSeeded(): Promise<void> {
       return;
     }
 
-    if (!existsSync(runtimeSkillsDir)) {
-      await mkdir(dirname(runtimeSkillsDir), { recursive: true });
-      await cp(INSTALL_SKILLS_DIR, runtimeSkillsDir, { recursive: true, force: false });
-      await ensureSkillDeps();
-      runtimeSkillsSeeded = true;
-      return;
-    }
-
-    await copyMissingRecursive(INSTALL_SKILLS_DIR, runtimeSkillsDir);
+    await linkMissingBundledSkills(INSTALL_SKILLS_DIR, runtimeSkillsDir);
     await ensureSkillDeps();
     runtimeSkillsSeeded = true;
   })().finally(() => {
@@ -128,7 +131,20 @@ export async function syncInstalledSkillsToRuntime(skillNames: string[]): Promis
     }
 
     const dest = join(runtimeSkillsDir, skillName);
-    await cp(src, dest, { recursive: true, force: true });
+    if (existsSync(dest)) {
+      synced.push(skillName);
+      continue;
+    }
+
+    try {
+      createDirectoryLinkSync(src, dest);
+    } catch (error) {
+      console.warn(`[runtime-skills] Failed to link installed skill ${skillName}:`, error);
+    }
+    if (!existsSync(dest) || !isLinkedDirectoryTarget(dest, src)) {
+      missing.push(skillName);
+      continue;
+    }
     synced.push(skillName);
   }
 

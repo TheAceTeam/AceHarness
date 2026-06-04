@@ -6,8 +6,6 @@ import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { getDefaultDriver, normalizeDriverSelection, supportsDriverSelection, type EngineDriver } from '@/lib/engines/engine-factory';
 import { normalizeEngineRuntime, type CangjieRuntimeConfig, type EngineRuntime } from '@/lib/engines/cangjie-runtime-config';
 import { getEngineConfigPath, getWorkspaceRoot } from '@/lib/core/app-paths';
-import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
-import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 
 const ENGINE_CONFIG_FILE = getEngineConfigPath();
 
@@ -131,32 +129,16 @@ export async function POST(request: Request) {
 
     await fs.writeFile(ENGINE_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
 
-    // Create engine config dir and symlink skills
+    // Create the shared engine config dir. Skills are linked per chat request
+    // based on the enabled skill list, not as a full runtime directory mirror.
     try {
       const engineConfigDir = getEngineConfigDir(engine);
       const configDir = path.join(getWorkspaceRoot(), engineConfigDir);
-      const skillsDir = await getRuntimeSkillsDirPath();
       if (!existsSync(configDir)) {
         mkdirSync(configDir, { recursive: true });
       }
-      const skillsLink = path.join(configDir, 'skills');
-      if (existsSync(skillsDir)) {
-        const linkResult = ensureDirectoryLinkSync(skillsDir, skillsLink);
-        if (linkResult === 'created') {
-          console.log(`[Engine] Linked ${engineConfigDir}/skills -> skills/`);
-        } else if (linkResult === 'skipped' && !existsSync(skillsLink)) {
-          // Link failed or target mismatch — fall back to copy
-          try {
-            const { cpSync } = await import('fs');
-            cpSync(skillsDir, skillsLink, { recursive: true, force: true });
-            console.log(`[Engine] Copied ${engineConfigDir}/skills (symlink fallback)`);
-          } catch (copyErr) {
-            console.warn('[Engine] Failed to copy skills:', copyErr);
-          }
-        }
-      }
     } catch (e) {
-      console.warn('[Engine] Failed to setup skills symlink:', e);
+      console.warn('[Engine] Failed to setup engine config directory:', e);
     }
 
     return NextResponse.json({

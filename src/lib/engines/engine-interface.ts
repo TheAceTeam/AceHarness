@@ -24,6 +24,8 @@ export interface EngineOptions {
   agents?: Record<string, any>;
   /** Frontend session tracking */
   frontendSessionId?: string;
+  /** Authenticated user id for user-scoped credentials/env vars. */
+  userId?: string;
   /** Enable high-detail wrapper/transport lifecycle logs for diagnostics only. */
   diagnosticLogging?: boolean;
 }

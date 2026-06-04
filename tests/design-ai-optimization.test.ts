@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   applyDesignOptimizationPatch,
+  buildDesignOptimizationPrompt,
   doesWorkflowPatchMatchTarget,
   extractDesignOptimizationSnapshot,
   extractWorkflowPatchItemPayload,
@@ -193,5 +194,32 @@ describe('design-ai-optimization', () => {
     expect(result.parseError).toContain('错误字段：data.patch.state');
     expect(result.parseError).toContain('patch keys=step');
     expect(result.parseError).toContain('修改方式');
+  });
+
+  test('builds an optimization prompt without requiring spec artifacts', () => {
+    const prompt = buildDesignOptimizationPrompt({
+      target: {
+        scope: 'workflow',
+        workflowMode: 'state-machine',
+        workflowName: 'direct-workflow',
+      },
+      workflowName: 'direct-workflow',
+      configFile: 'direct-workflow.yaml',
+      instruction: '把流程改成先分析再执行再验证',
+      currentConfig: {
+        workflow: {
+          name: 'direct-workflow',
+          mode: 'state-machine',
+          states: [{ name: '执行', steps: [{ name: '处理', agent: 'developer', task: '处理需求' }] }],
+        },
+      },
+      currentSpecArtifacts: { requirements: '', design: '', tasks: '' },
+      requirements: '直接根据用户需求处理业务任务',
+    });
+
+    expect(prompt).toContain('当前没有 Spec 制品');
+    expect(prompt).toContain('不要新增 specTaskBinding');
+    expect(prompt).toContain('workflow_patch_item');
+    expect(prompt).not.toContain('当前 requirements.md');
   });
 });

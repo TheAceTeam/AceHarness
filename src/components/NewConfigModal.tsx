@@ -2145,7 +2145,8 @@ function WorkflowCreationProgressPanel({
   );
   const workflowStepStateNames = Object.keys(state.workflow.stateSteps);
   const hasWorkflow = Boolean(state.workflow.outline.length || workflowStepStateNames.length);
-  if (!hasClarification && !hasSpec && !hasWorkflow) return null;
+  const hasProgressSignal = Boolean(activeStep || retryNotice || retryEvents.length);
+  if (!hasClarification && !hasSpec && !hasWorkflow && !hasProgressSignal) return null;
 
   const title = stage === 'workflowDraft'
     ? '已确认 Workflow 结构'
@@ -2172,6 +2173,19 @@ function WorkflowCreationProgressPanel({
       {retryNotice ? (
         <div className="mb-3">
           <WorkflowCreationRetryCallout notice={retryNotice} events={retryEvents} />
+        </div>
+      ) : null}
+
+      {!hasClarification && !hasSpec && !hasWorkflow && activeStep ? (
+        <div className="rounded-lg border bg-background/75 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+            <span className="font-medium">{activeStep.title}</span>
+            <Badge variant="outline">{activeStep.kind}</Badge>
+          </div>
+          <div className="mt-2 text-xs leading-5 text-muted-foreground">
+            正在等待 AI 输出当前小点的结构化结果；解析通过后会立即填充到这里。
+          </div>
         </div>
       ) : null}
 
@@ -5093,6 +5107,7 @@ export default function NewConfigModal({
     const reqs = values.requirements || values.description || '';
     const activePreviewSession = sourceSession || previewSession;
     const specCoding = activePreviewSession?.specCoding || {};
+    const hasConfirmedSpecCoding = Boolean(specPlanningEnabled && specCoding?.id);
     const artifacts = specCoding.artifacts || {};
     const targetFrontendSessionId = await ensurePlanningChatSession();
 
@@ -5177,6 +5192,9 @@ export default function NewConfigModal({
       `工作区模式：${values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place'}`,
       `需求描述：${reqs}`,
       values.description ? `补充说明：${values.description}` : '',
+      !hasConfirmedSpecCoding
+        ? '创建模式：跳过 Spec，直接根据上面的需求内容编排可执行 workflow。不要创建“生成/修订 Spec”的工作流，除非用户需求本身就是管理 Spec。'
+        : '',
       instruction ? `用户本轮补充或修复要求：\n${instruction}` : '',
       referenceContext,
       specContext,
@@ -5185,7 +5203,9 @@ export default function NewConfigModal({
       'Workflow 装配规则：状态按主要执行顺序组织；如果审查、返工、失败恢复或提前收口需要不同目标，请在 transitions 中明确 pass / conditional_pass / fail 的目标状态。并发只允许出现在同一个状态的 steps 内，用相同 parallelGroup 表达。',
       `Supervisor "${creationRecommendations?.recommendedSupervisorAgent || recommendedSupervisorAgent}" 只用于 workflow.supervisor 的调度、审阅和检查点建议，不作为任何 state.steps 或 phase.steps 的执行 agent；步骤 agent 必须选择普通执行角色。`,
       '每个非终态状态都应该有 1-4 个步骤；如果需要红蓝审查或多角色协作，把这些并行或协作步骤放在同一个状态中。',
-      '如果提供了 SpecCoding 任务，specTaskBinding.taskIds 必须优先使用当前 tasks 中真实存在的叶子任务 id。',
+      hasConfirmedSpecCoding
+        ? '如果提供了 SpecCoding 任务，specTaskBinding.taskIds 必须优先使用当前 tasks 中真实存在的叶子任务 id。'
+        : '当前没有 SpecCoding 任务；不要输出 specTaskBinding，不要把状态或步骤设计成创建 Spec 文档。',
     ].filter(Boolean).join('\n\n');
 
     try {
@@ -5218,7 +5238,9 @@ export default function NewConfigModal({
             `只为状态 "${outlineState.name}" 生成 steps。data.stateName 必须完全等于 "${outlineState.name}"。`,
             '每个步骤包含 name、agent、task；如果需要并发，只能给同一状态内的多个步骤设置相同 parallelGroup。',
             '不要描述跨状态并发，不要创建下一状态的步骤；但可以在 data.transitions 中补充当前状态的 pass/conditional_pass/fail 流转目标。',
-            '如果可用，给每个步骤补上 specTaskBinding.taskIds、requirementIds、artifactKeys。',
+            hasConfirmedSpecCoding
+              ? '必须给每个步骤补上 specTaskBinding.taskIds、requirementIds、artifactKeys，只能引用当前 SpecCoding tasks 中真实存在的叶子任务。'
+              : '不要输出 specTaskBinding、taskIds、requirementIds 或 artifactKeys；步骤 task 必须直接围绕用户需求本身，不要创建“生成/修订 Spec”的步骤。',
           ].join('\n'),
         };
         const output = await runWorkflowCreationItemStream({
@@ -5247,7 +5269,8 @@ export default function NewConfigModal({
           workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
           recommendedAgents: creationRecommendations?.recommendedAgents,
           recommendedSupervisorAgent: creationRecommendations?.recommendedSupervisorAgent,
-          specCoding,
+          specCoding: hasConfirmedSpecCoding ? specCoding : undefined,
+          includeSpecTaskBindings: hasConfirmedSpecCoding,
         });
         setWorkflowDraftConfig(partialConfig);
         setWorkflowDraftPreview({
@@ -5268,7 +5291,8 @@ export default function NewConfigModal({
         workspaceMode: values.workspaceMode === 'isolated-copy' ? 'isolated-copy' : 'in-place',
         recommendedAgents: creationRecommendations?.recommendedAgents,
         recommendedSupervisorAgent: creationRecommendations?.recommendedSupervisorAgent,
-        specCoding,
+        specCoding: hasConfirmedSpecCoding ? specCoding : undefined,
+        includeSpecTaskBindings: hasConfirmedSpecCoding,
       });
       const validation = await validateWorkflowDraftConfig(config);
       const normalizedConfig = validation?.normalized || config;
@@ -5304,7 +5328,7 @@ export default function NewConfigModal({
       setCurrentStream('');
       setCurrentThinking('');
     }
-  }, [backendSessionId, creationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, toast, validateWorkflowDraftConfig]);
+  }, [backendSessionId, creationRecommendations, ensurePlanningChatSession, getValues, interruptPlanningRun, persistStageSessionBinding, previewSession, recommendedSupervisorAgent, referenceConfig, runWorkflowCreationItemStream, specPlanningEnabled, toast, validateWorkflowDraftConfig]);
 
   // Re-trigger AI stream after engine/model change
   useEffect(() => {

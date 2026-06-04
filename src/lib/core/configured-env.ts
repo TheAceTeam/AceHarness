@@ -2,6 +2,9 @@ import { delimiter } from 'path';
 import { buildEnvObject, loadEnvVars, loadEnvVarsSync } from '@/lib/core/env-manager';
 
 type EnvInput = Record<string, string | undefined>;
+type ConfiguredEnvOptions = {
+  userId?: string;
+};
 
 function normalizeEnv(baseEnv: EnvInput): NodeJS.ProcessEnv {
   const env: Record<string, string> = {};
@@ -25,17 +28,21 @@ function applyOverrides(target: NodeJS.ProcessEnv, overrides?: EnvInput): NodeJS
   return target;
 }
 
-export async function loadConfiguredEnvObject(): Promise<Record<string, string>> {
+export async function loadConfiguredEnvObject(options?: ConfiguredEnvOptions): Promise<Record<string, string>> {
   try {
-    return buildEnvObject(await loadEnvVars({ scope: 'system' }));
+    return buildEnvObject(await loadEnvVars(
+      options?.userId ? { scope: 'merged', userId: options.userId } : { scope: 'system' },
+    ));
   } catch {
     return {};
   }
 }
 
-export function loadConfiguredEnvObjectSync(): Record<string, string> {
+export function loadConfiguredEnvObjectSync(options?: ConfiguredEnvOptions): Record<string, string> {
   try {
-    return buildEnvObject(loadEnvVarsSync({ scope: 'system' }));
+    return buildEnvObject(loadEnvVarsSync(
+      options?.userId ? { scope: 'merged', userId: options.userId } : { scope: 'system' },
+    ));
   } catch {
     return {};
   }
@@ -44,18 +51,20 @@ export function loadConfiguredEnvObjectSync(): Record<string, string> {
 export async function buildConfiguredProcessEnv(
   overrides?: EnvInput,
   baseEnv: EnvInput = process.env as EnvInput,
+  options?: ConfiguredEnvOptions,
 ): Promise<NodeJS.ProcessEnv> {
   const env = normalizeEnv(baseEnv);
-  Object.assign(env, await loadConfiguredEnvObject());
+  Object.assign(env, await loadConfiguredEnvObject(options));
   return applyOverrides(env, overrides);
 }
 
 export function buildConfiguredProcessEnvSync(
   overrides?: EnvInput,
   baseEnv: EnvInput = process.env as EnvInput,
+  options?: ConfiguredEnvOptions,
 ): NodeJS.ProcessEnv {
   const env = normalizeEnv(baseEnv);
-  Object.assign(env, loadConfiguredEnvObjectSync());
+  Object.assign(env, loadConfiguredEnvObjectSync(options));
   return applyOverrides(env, overrides);
 }
 

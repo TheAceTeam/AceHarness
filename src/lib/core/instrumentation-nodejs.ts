@@ -8,11 +8,8 @@ export async function runNodejsInstrumentation() {
   const { join } = await import('path');
   const { getEngineConfigDir } = await import('@/lib/engines/engine-config');
   const { getEngineConfigPath, getWorkspaceRoot } = await import('./app-paths');
-  const { ensureDirectoryLinkSync } = await import('./directory-links');
-  const { getRuntimeSkillsDirPath } = await import('@/lib/run/runtime-skills');
 
   const workspaceRoot = getWorkspaceRoot();
-  const skillsDir = await getRuntimeSkillsDirPath();
 
   let engineConfigDir = '.agents';
   try {
@@ -31,11 +28,6 @@ export async function runNodejsInstrumentation() {
     if (!existsSync(configDir)) {
       mkdirSync(configDir, { recursive: true });
       console.log(`[ACEHarness] Created ${engineConfigDir}/`);
-    }
-
-    const skillsLink = join(configDir, 'skills');
-    if (existsSync(skillsDir) && ensureDirectoryLinkSync(skillsDir, skillsLink) === 'created') {
-      console.log(`[ACEHarness] Linked ${engineConfigDir}/skills -> ${skillsDir}`);
     }
   } catch (error) {
     console.error(`[ACEHarness] Failed to setup ${engineConfigDir}:`, error);

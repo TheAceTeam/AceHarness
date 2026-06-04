@@ -129,6 +129,7 @@ export interface WorkflowCreationAssemblyInput {
   recommendedAgents?: string[];
   recommendedSupervisorAgent?: string;
   specCoding?: any;
+  includeSpecTaskBindings?: boolean;
 }
 
 export const WORKFLOW_CREATION_ITEM_KINDS = new Set<string>([
@@ -1046,6 +1047,7 @@ function normalizeWorkflowStep(input: any, fallback: {
   agent: string;
   taskId: string;
   requirementId: string;
+  includeSpecTaskBinding?: boolean;
 }) {
   const name = cleanString(input?.name) || cleanString(input?.title) || `步骤 ${fallback.index + 1}`;
   const rawBinding = input?.specTaskBinding && typeof input.specTaskBinding === 'object' ? input.specTaskBinding : {};
@@ -1054,14 +1056,16 @@ function normalizeWorkflowStep(input: any, fallback: {
     cleanString(rawBinding.taskId),
     ...stringArray(input?.taskIds, 6),
   ]).filter(Boolean);
-  return {
+  const normalized: Record<string, any> = {
     id: cleanString(input?.id) || `${slug(fallback.stateName, 'state')}-${fallback.index + 1}`,
     name,
     agent: cleanString(input?.agent) || fallback.agent,
     role: ['attacker', 'defender', 'judge'].includes(input?.role) ? input.role : undefined,
     task: cleanString(input?.task) || cleanString(input?.prompt) || `${name}，并产出可审查结果。`,
     parallelGroup: cleanString(input?.parallelGroup || input?.groupId) || undefined,
-    specTaskBinding: {
+  };
+  if (fallback.includeSpecTaskBinding !== false) {
+    normalized.specTaskBinding = {
       taskId: taskIds[0] || fallback.taskId,
       taskIds: taskIds.length ? taskIds : [fallback.taskId],
       requirementIds: uniqueStrings([
@@ -1076,8 +1080,9 @@ function normalizeWorkflowStep(input: any, fallback: {
         'design',
         'tasks',
       ]),
-    },
-  };
+    };
+  }
+  return normalized;
 }
 
 function pickWorkflowTaskAgent(agents: string[], index: number, supervisorAgent?: string): string {
@@ -1257,6 +1262,7 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
         { name: '完成', description: '工作流完成。', isFinal: true },
       ]);
   const leafTaskIds = flattenSpecTaskIds(input.specCoding);
+  const includeSpecTaskBindings = input.includeSpecTaskBindings !== false && leafTaskIds.length > 0;
   const plannedTasks = ensureSpecTasks(state, ensureSpecRequirements(state, input));
   const fallbackTaskIds = plannedTasks.map((task) => task.id);
   const taskIds = leafTaskIds.length ? leafTaskIds : fallbackTaskIds;
@@ -1268,25 +1274,28 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
 
   const states = outline.map((outlineState, stateIndex) => {
     if (outlineState.isFinal) {
+      const finalStep: Record<string, any> = {
+        id: `${slug(outlineState.name, 'final')}-summary`,
+        name: '汇总结果',
+        agent: pickWorkflowTaskAgent(agents, globalStepIndex, supervisorAgent),
+        role: 'judge',
+        task: '汇总本次工作流的执行结果、验证证据和剩余风险。',
+      };
+      if (includeSpecTaskBindings) {
+        finalStep.specTaskBinding = {
+          taskId: checkpointTaskId,
+          taskIds: [checkpointTaskId],
+          requirementIds: ['R1'],
+          artifactKeys: ['requirements', 'design', 'tasks'],
+        };
+      }
       return {
         name: outlineState.name,
         description: outlineState.description || '工作流完成。',
         isInitial: stateIndex === 0,
         isFinal: true,
         maxSelfTransitions: 3,
-        steps: [{
-          id: `${slug(outlineState.name, 'final')}-summary`,
-          name: '汇总结果',
-          agent: pickWorkflowTaskAgent(agents, globalStepIndex, supervisorAgent),
-          role: 'judge',
-          task: '汇总本次工作流的执行结果、验证证据和剩余风险。',
-          specTaskBinding: {
-            taskId: checkpointTaskId,
-            taskIds: [checkpointTaskId],
-            requirementIds: ['R1'],
-            artifactKeys: ['requirements', 'design', 'tasks'],
-          },
-        }],
+        steps: [finalStep],
         transitions: [],
       };
     }
@@ -1308,6 +1317,7 @@ export function assembleWorkflowConfigFromItems(state: WorkflowCreationState, in
         agent: fallbackAgent,
         taskId,
         requirementId,
+        includeSpecTaskBinding: includeSpecTaskBindings,
       });
       globalStepIndex += 1;
       return normalized;

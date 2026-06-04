@@ -13,12 +13,23 @@ import { validateWorkflowDraft } from '../src/lib/core/creator-validation';
 
 describe('Workflow creation pipeline', () => {
   it('keeps dashboard chat on the modal handoff instead of the old full draft protocol', async () => {
-    const systemPrompt = await buildDashboardSystemPrompt();
+    const systemPrompt = await buildDashboardSystemPrompt([], {
+      personalDir: '/personal/work',
+      workingDirectory: '/current/work',
+    });
 
     expect(systemPrompt).toContain('home_sidebar');
     expect(systemPrompt).toContain('shouldOpenModal:true');
     expect(systemPrompt).toContain('workflow_state_steps');
+    expect(systemPrompt).toContain('API 查询类 action 执行后');
+    expect(systemPrompt).toContain('config.list');
+    expect(systemPrompt).toContain('kind="card"');
     expect(systemPrompt).not.toContain('workflow_draft');
+    expect(systemPrompt).toContain('个人用户工作目录: /personal/work');
+    expect(systemPrompt).toContain('当前工作目录: /current/work');
+    expect(systemPrompt.match(/当前工作目录:/g)).toHaveLength(1);
+    expect(systemPrompt.match(/AI 运行目录/g)).toHaveLength(1);
+    expect(systemPrompt.match(/Skills 运行目录/g)).toHaveLength(1);
   });
 
   it('extracts and applies the current workflow item protocol', () => {

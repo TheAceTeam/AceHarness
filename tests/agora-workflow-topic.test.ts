@@ -1,12 +1,28 @@
-import { describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import {
+  appendWorkflowAgoraMessage,
   createWorkflowAgoraWorkbenchState,
   createWorkflowCreationGuest,
   createWorkflowParticipants,
   extractWorkflowParticipantNames,
 } from '@/lib/agora/workflow-topic';
 
+const persistenceMocks = vi.hoisted(() => ({
+  loadChatSession: vi.fn(),
+  saveChatSession: vi.fn(),
+}));
+
+vi.mock('@/lib/chat/persistence', () => ({
+  loadChatSession: persistenceMocks.loadChatSession,
+  saveChatSession: persistenceMocks.saveChatSession,
+}));
+
 describe('workflow agora topic helpers', () => {
+  beforeEach(() => {
+    persistenceMocks.loadChatSession.mockReset();
+    persistenceMocks.saveChatSession.mockReset().mockResolvedValue(undefined);
+  });
+
   test('extracts supervisor and workflow step agents without duplicates', () => {
     const names = extractWorkflowParticipantNames({
       workflow: {
@@ -57,5 +73,47 @@ describe('workflow agora topic helpers', () => {
     expect(guest?.participant.engine).toBe('codex');
     expect(guest?.participant.model).toBe('gpt-5.4');
     expect(guest?.agentSessions).toEqual({ 'workflow-creation-creation-1': 'backend-session-1' });
+  });
+
+  test('appends spec revision vote events into the agora conversation stream', async () => {
+    const session: any = {
+      id: 'chat-1',
+      title: '示例工作流',
+      messages: [],
+      sessionWorkbenchState: createWorkflowAgoraWorkbenchState({
+        title: '示例工作流 · 协作议题',
+        participants: createWorkflowParticipants(['Supervisor', '工程师']),
+      }),
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    persistenceMocks.loadChatSession.mockResolvedValue(session);
+
+    await appendWorkflowAgoraMessage({
+      sessionId: 'chat-1',
+      type: 'spec-revision-vote',
+      title: '状态完成后 Spec 修订表决',
+      body: '是否需要基于本次结论修订 Run Spec Coding？\n参与 Agent: 工程师',
+      speakerName: 'Supervisor',
+      dedupeKey: 'vote-start-1',
+      createdAt: 200,
+    });
+    await appendWorkflowAgoraMessage({
+      sessionId: 'chat-1',
+      type: 'spec-revision-vote-result',
+      title: 'Spec 修订表决完成：建议修订',
+      body: '票数: 修订 1 / 保持 0 / 暂缓 0\nSupervisor 决定应用修订。',
+      speakerName: 'Supervisor',
+      dedupeKey: 'vote-result-1',
+      createdAt: 201,
+    });
+
+    const roomMessages = session.sessionWorkbenchState.collaborationRoom.messages;
+    expect(roomMessages.map((message: any) => message.chatroom?.kind)).toEqual(['vote', 'vote-result']);
+    expect(roomMessages[0].content).toContain('我发起一次 Spec 修订表决');
+    expect(roomMessages[1].content).toContain('Spec 修订表决完成：建议修订');
+    expect(roomMessages[1].content).toContain('票数: 修订 1 / 保持 0 / 暂缓 0');
+    expect(session.messages.map((message: any) => message.cards?.[0]?.actionLabel)).toEqual(['投票', '票决']);
+    expect(persistenceMocks.saveChatSession).toHaveBeenCalledTimes(2);
   });
 });

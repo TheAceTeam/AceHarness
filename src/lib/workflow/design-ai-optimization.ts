@@ -67,7 +67,7 @@ type BuildDesignOptimizationPromptInput = {
   configFile: string;
   instruction: string;
   currentConfig: UnifiedWorkflowConfig | Record<string, any>;
-  currentSpecArtifacts: {
+  currentSpecArtifacts?: {
     requirements: string;
     design: string;
     tasks: string;
@@ -157,7 +157,7 @@ export function getDesignOptimizationDialogTitle(target: DesignOptimizationTarge
 
 export function getDesignOptimizationScopeHint(target: DesignOptimizationTarget): string {
   if (target.scope === 'workflow') {
-    return '基于最新 Spec 生成 workflow 级 patch，只替换 workflow 本体，先看 diff，再应用。';
+    return '基于当前配置、需求和可用上下文生成 workflow 级 patch，只替换 workflow 本体，先看 diff，再应用。';
   }
   if (target.scope === 'state') {
     return '只生成当前状态的 patch，允许调整状态描述、内部步骤和转移，不直接改动其他状态。';
@@ -290,12 +290,16 @@ export function applyDesignOptimizationPatch(
   return patchStepIntoConfig(base, patchValue, target);
 }
 
-function buildScopeRules(target: DesignOptimizationTarget): string[] {
+function buildScopeRules(target: DesignOptimizationTarget, hasSpecArtifacts: boolean): string[] {
   if (target.scope === 'workflow') {
     return [
-      '- 允许根据最新 Spec 调整阶段/状态、步骤拆分、Agent 分工、状态转移与 specTaskBinding。',
+      hasSpecArtifacts
+        ? '- 允许根据当前 Spec 和需求调整阶段/状态、步骤拆分、Agent 分工、状态转移与 specTaskBinding。'
+        : '- 允许根据当前需求和 workflow 配置调整阶段/状态、步骤拆分、Agent 分工与状态转移；禁止新增 specTaskBinding。',
       '- patch.workflow 是新的 workflow 对象；context.projectRoot、workspaceMode、executionPolicy、skills、mcpServers 等运行时设置由系统保留。',
-      '- 保留已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或最新 Spec 明确冲突。',
+      hasSpecArtifacts
+        ? '- 保留已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或最新 Spec 明确冲突。'
+        : '- 保留已有的 preCommands、并发分组、人工审查和 supervisor 配置，除非用户要求或当前需求明确冲突。',
     ];
   }
   if (target.scope === 'state') {
@@ -309,7 +313,9 @@ function buildScopeRules(target: DesignOptimizationTarget): string[] {
   return [
     `- 优化 ${target.containerType === 'state' ? '状态' : '阶段'} "${target.containerName}" 内的步骤 "${target.stepName}"。`,
     `- 保持该步骤在容器中的位置不变。`,
-    '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel 与 specTaskBinding。',
+    hasSpecArtifacts
+      ? '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel 与 specTaskBinding。'
+      : '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel；禁止新增 specTaskBinding。',
     '- patch.step 是这个步骤对象；其他步骤、容器内容和 workflow mode 由系统保持原样。',
   ];
 }
@@ -326,8 +332,16 @@ function buildPatchSchemaHint(target: DesignOptimizationTarget, configFile: stri
 export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationPromptInput): string {
   const targetSnapshot = extractDesignOptimizationSnapshot(input.currentConfig, input.target);
   const workflowMode = getWorkflowMode(input.currentConfig);
+  const specArtifacts = input.currentSpecArtifacts || { requirements: '', design: '', tasks: '' };
+  const hasSpecArtifacts = Boolean(
+    specArtifacts.requirements?.trim()
+    || specArtifacts.design?.trim()
+    || specArtifacts.tasks?.trim()
+  );
   const lines = [
-    '请基于当前最新 Spec 和当前工作流配置，生成一版工作流优化候选。',
+    hasSpecArtifacts
+      ? '请基于当前最新 Spec、用户需求和当前工作流配置，生成一版工作流优化候选。'
+      : '请基于用户需求、当前工作流配置、可用 Agent 和 Skills，生成一版工作流优化候选。',
     '你只生成候选 patch，不要声称已经保存；系统会先展示 diff，由用户确认后再应用。',
     `最终必须返回 kind="${WORKFLOW_PATCH_ITEM_KIND}" 的小 JSON。`,
     '',
@@ -338,8 +352,10 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
     input.requirements ? `原始需求：${input.requirements}` : '',
     '',
     '范围规则：',
-    ...buildScopeRules(input.target),
-    '- 如果需要引用 spec 任务，specTaskBinding.taskIds 只能使用下面列出的真实 task id。',
+    ...buildScopeRules(input.target, hasSpecArtifacts),
+    hasSpecArtifacts
+      ? '- 如果需要引用 spec 任务，specTaskBinding.taskIds 只能使用下面列出的真实 task id。'
+      : '- 当前没有 Spec 制品；不要新增 specTaskBinding，也不要把优化目标改成“创建/修订 Spec”。',
     '- 保持现有主语言、术语和重要命名风格一致。',
     '',
     '用户优化要求：',
@@ -355,21 +371,32 @@ export function buildDesignOptimizationPrompt(input: BuildDesignOptimizationProm
     stringifyForPrompt(input.currentConfig, 24000),
     '```',
     '',
-    '当前 requirements.md：',
-    '```markdown',
-    truncateForPrompt(input.currentSpecArtifacts.requirements, 12000),
-    '```',
-    '',
-    '当前 design.md：',
-    '```markdown',
-    truncateForPrompt(input.currentSpecArtifacts.design, 12000),
-    '```',
-    '',
-    '当前 tasks.md：',
-    '```markdown',
-    truncateForPrompt(input.currentSpecArtifacts.tasks, 12000),
-    '```',
   ];
+
+  if (hasSpecArtifacts) {
+    lines.push(
+      '',
+      '当前 requirements.md：',
+      '```markdown',
+      truncateForPrompt(specArtifacts.requirements, 12000),
+      '```',
+      '',
+      '当前 design.md：',
+      '```markdown',
+      truncateForPrompt(specArtifacts.design, 12000),
+      '```',
+      '',
+      '当前 tasks.md：',
+      '```markdown',
+      truncateForPrompt(specArtifacts.tasks, 12000),
+      '```',
+    );
+  } else {
+    lines.push(
+      '',
+      'Spec 制品：当前工作流未绑定 Spec；优化必须直接围绕现有 workflow 和用户需求。',
+    );
+  }
 
   if (input.availableAgents && input.availableAgents.length > 0) {
     lines.push('', '可用 Agent：', formatAgentList(input.availableAgents));

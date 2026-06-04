@@ -190,6 +190,21 @@ const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 type RunWorkbenchTab = 'execution' | 'workspace' | 'changes';
 
+function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName: string | null | undefined): boolean {
+  const key = String(stepKey || '').trim();
+  const name = String(stepName || '').trim();
+  if (!key || !name) return false;
+  const baseName = name.replace(/-迭代\d+$/, '');
+  return (
+    key === name
+    || key === baseName
+    || key.startsWith(`${name}-迭代`)
+    || key.startsWith(`${baseName}-迭代`)
+    || key.endsWith(`-${name}`)
+    || key.endsWith(`-${baseName}`)
+  );
+}
+
 function countGitWorkingTreeFiles(summary?: GitBrowserSummaryResponse | null): number {
   if (!summary?.available) return 0;
   const changed = new Set<string>();
@@ -1497,6 +1512,8 @@ export default function WorkbenchPage() {
   };
   const [inlineFeedbacks, setInlineFeedbacks] = useState<InlineFeedback[]>([]);
   const pendingLiveFeedbackRef = useRef<InlineFeedback[]>([]);
+  const [liveStreamStepSelection, setLiveStreamStepSelection] = useState('');
+  const lastLiveStreamSelectedStepNameRef = useRef<string | null>(null);
   const [liveStreamSource, setLiveStreamSource] = useState<{ stateName: string | null; stepName: string | null }>({
     stateName: null,
     stepName: null,
@@ -2938,10 +2955,6 @@ export default function WorkbenchPage() {
       toast('error', '当前没有可优化的工作流草稿');
       return;
     }
-    if (!currentSpecArtifacts.requirements.trim() && !currentSpecArtifacts.design.trim() && !currentSpecArtifacts.tasks.trim()) {
-      toast('error', '当前没有可用的 Spec 内容，暂时无法进行 AI 优化');
-      return;
-    }
     const model = workflowDefaultModel || globalDefaultModel;
     const selectedEngine = engine || globalEngine;
     if (!model || !selectedEngine) {
@@ -3328,7 +3341,11 @@ export default function WorkbenchPage() {
   const isRunning = workflowStatus === 'running' || workflowStatus === 'preparing';
   const canForceTransition = Boolean(runId || initialRunId || selectedRun?.id) && workflowConfig?.workflow?.mode === 'state-machine';
   const forceTransitionActionLabel = isRunning ? '强制跳转' : '强制恢复';
-  const forceCompletableStep = workflowStatus === 'running' ? (currentStep || activeSteps[0] || '') : '';
+  const forceCompletableStep = workflowStatus === 'running'
+    ? activeSteps.length > 1
+      ? activeSteps.find((stepName) => workflowStepKeyMatchesName(stepName, selectedStep?.name)) || ''
+      : (currentStep || activeSteps[0] || '')
+    : '';
   const canForceCompleteStep = workflowStatus === 'running' && Boolean(forceCompletableStep);
   const canStartWorkflow = isRunMode && !starting && (!isRunning || workspaceMode === 'isolated-copy');
   const preparingProgress = useMemo(() => {
@@ -5826,20 +5843,42 @@ export default function WorkbenchPage() {
   const liveStreamTarget = useMemo(() => {
     const targetRunId = runId || selectedRun?.id || '';
     const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
-    const runtimeStep = currentStep || (parallelActiveSteps.length === 1 ? parallelActiveSteps[0] : '');
+    const selectedParallelStep = parallelActiveSteps.length > 1
+      ? parallelActiveSteps.find((stepName) => stepName === liveStreamStepSelection)
+        || parallelActiveSteps.find((stepName) => workflowStepKeyMatchesName(stepName, selectedStep?.name))
+        || parallelActiveSteps[0]
+        || ''
+      : '';
+    const runtimeStep = selectedParallelStep || currentStep || (parallelActiveSteps.length === 1 ? parallelActiveSteps[0] : '');
     const manualStep = isRunning ? '' : (selectedStep?.name || '');
     const activeStep = runtimeStep || manualStep;
-    const isParallelLiveStream = Boolean(targetRunId && parallelActiveSteps.length > 1);
-    const stepKey = isParallelLiveStream ? parallelActiveSteps.join('|') : activeStep;
 
     return {
       runId: targetRunId,
       activeStep,
       parallelActiveSteps,
-      isParallelLiveStream,
-      stepKey,
+      stepKey: activeStep,
     };
-  }, [activeSteps, currentStep, isRunning, runId, selectedRun?.id, selectedStep?.name]);
+  }, [activeSteps, currentStep, isRunning, liveStreamStepSelection, runId, selectedRun?.id, selectedStep?.name]);
+
+  useEffect(() => {
+    const parallelActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
+    const selectedStepName = selectedStep?.name || '';
+    const selectedStepChanged = lastLiveStreamSelectedStepNameRef.current !== selectedStepName;
+    lastLiveStreamSelectedStepNameRef.current = selectedStepName;
+    if (parallelActiveSteps.length <= 1) {
+      if (liveStreamStepSelection) setLiveStreamStepSelection('');
+      return;
+    }
+    const selectedMatch = parallelActiveSteps.find((stepName) => workflowStepKeyMatchesName(stepName, selectedStep?.name));
+    if (selectedStepChanged && selectedMatch && selectedMatch !== liveStreamStepSelection) {
+      setLiveStreamStepSelection(selectedMatch);
+      return;
+    }
+    if (!parallelActiveSteps.includes(liveStreamStepSelection)) {
+      setLiveStreamStepSelection(parallelActiveSteps[0] || '');
+    }
+  }, [activeSteps, liveStreamStepSelection, selectedStep?.name]);
 
   // --- Live stream via SSE (opencode) or polling fallback (claude-code) ---
   const startLiveStream = () => {
@@ -5864,54 +5903,9 @@ export default function WorkbenchPage() {
 
     const rid = liveStreamTarget.runId;
     const activeStep = liveStreamTarget.activeStep;
-    const parallelActiveSteps = liveStreamTarget.parallelActiveSteps;
-    const isParallelLiveStream = liveStreamTarget.isParallelLiveStream;
     liveStreamRunRef.current = rid;
     liveStreamStepRef.current = liveStreamTarget.stepKey;
-    setLiveStreamSource(isParallelLiveStream
-      ? { stateName: currentPhase || '并发执行', stepName: `${parallelActiveSteps.length} 个步骤运行中` }
-      : resolveLiveStreamSource(activeStep));
-
-    if (rid && parallelActiveSteps.length > 1) {
-      const buildCombinedParallelStream = async () => {
-        const { processes } = await processApi.list();
-        const workflowProcesses = processes.filter((p: any) => !(p.agent === 'chat' && p.step === 'chat'));
-
-        const groupedChunks = await Promise.all(parallelActiveSteps.map(async (stepKey) => {
-          const source = resolveLiveStreamSource(stepKey);
-          const title = `**${source.stateName || '并发步骤'} / ${source.stepName || stepKey}**`;
-          let content = await streamApi.getStreamContent(rid, stepKey).catch(() => '');
-          if (!content) {
-            content = workflowProcesses.find((p: any) => p.runId === rid && p.step === stepKey)?.streamContent || '';
-          }
-          const stepChunks = content
-            ? splitStreamChunks(content)
-            : ['(等待输出...)'];
-          return stepChunks.map((chunk) => `${title}\n\n${chunk}`);
-        }));
-
-        return groupedChunks.flat().join(CHUNK_SEP);
-      };
-
-      const pollParallelStreams = async () => {
-        try {
-          const combined = await buildCombinedParallelStream();
-          if (combined && combined !== liveStreamRawRef.current) {
-            liveStreamRawRef.current = combined;
-            liveStreamLenRef.current = combined.length;
-            const parts = combined.split(CHUNK_BOUNDARY_REGEX);
-            const trailing = parts.pop() || '';
-            setLiveStream([...parts.filter(Boolean), ...(trailing ? [trailing] : [])]);
-          }
-        } catch (e) {
-          console.error('[LiveStream] parallel polling error:', e);
-        }
-      };
-
-      void pollParallelStreams();
-      liveStreamRef.current = setInterval(pollParallelStreams, 2000);
-      return;
-    }
+    setLiveStreamSource(resolveLiveStreamSource(activeStep));
 
     // Try SSE live stream if we have runId + step
     if (rid && activeStep) {
@@ -5969,7 +5963,8 @@ export default function WorkbenchPage() {
 
         const runningProc = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
         const latestActiveSteps = Array.from(new Set(activeSteps.filter(Boolean)));
-        const curStep = runningProc?.step || currentStep || (latestActiveSteps.length === 1 ? latestActiveSteps[0] : '') || (!isRunning ? selectedStep?.name : '');
+        const preferredLiveStep = latestActiveSteps.length > 1 ? liveStreamTarget.activeStep : '';
+        const curStep = preferredLiveStep || runningProc?.step || currentStep || (latestActiveSteps.length === 1 ? latestActiveSteps[0] : '') || (!isRunning ? selectedStep?.name : '');
 
         if (curStep !== liveStreamStepRef.current) {
           liveStreamRunRef.current = curRid || '';
@@ -5986,7 +5981,8 @@ export default function WorkbenchPage() {
           content = await streamApi.getStreamContent(curRid, curStep);
         }
         if (!content) {
-          const running = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
+          const running = workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid && (!curStep || p.step === curStep))
+            || workflowProcesses.find((p: any) => p.status === 'running' && p.runId === curRid);
           content = running?.streamContent || workflowProcesses
             .filter((p: any) => p.runId === curRid)
             .sort((a: any, b: any) =>
@@ -6312,6 +6308,32 @@ export default function WorkbenchPage() {
               <span className="truncate">{liveStreamSource.stepName || '未定位'}</span>
             </Badge>
           </div>
+          {liveStreamTarget.parallelActiveSteps.length > 1 ? (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="shrink-0 text-[11px] text-muted-foreground">并发步骤</span>
+              <Select
+                value={liveStreamTarget.activeStep || liveStreamStepSelection || liveStreamTarget.parallelActiveSteps[0] || ''}
+                onValueChange={(value) => setLiveStreamStepSelection(value)}
+              >
+                <SelectTrigger className="h-8 min-w-0 flex-1 text-xs">
+                  <SelectValue placeholder="选择实时输出步骤" />
+                </SelectTrigger>
+                <SelectContent>
+                  {liveStreamTarget.parallelActiveSteps.map((stepKey) => {
+                    const source = resolveLiveStreamSource(stepKey);
+                    const label = [source.stateName ? formatStateName(source.stateName) : '', source.stepName || stepKey]
+                      .filter(Boolean)
+                      .join(' / ');
+                    return (
+                      <SelectItem key={stepKey} value={stepKey} className="text-xs">
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
         </div>
         <Button
           variant="ghost"

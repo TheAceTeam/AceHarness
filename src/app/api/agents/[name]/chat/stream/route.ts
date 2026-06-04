@@ -136,6 +136,7 @@ export async function POST(
           sessionId: prepared.resumeSessionId || undefined,
           appendSystemPrompt: Boolean(prepared.resumeSessionId),
           mcpServers: prepared.roleConfig.mcpServers,
+          userId: prepared.userId,
         }, {
           onContextReset: () => {
             agentStreamEvents.emit(streamId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });
@@ -173,6 +174,7 @@ export async function POST(
           sessionId: latestSessionId,
           appendSystemPrompt: false,
           mcpServers: prepared.roleConfig.mcpServers,
+          userId: prepared.userId,
         }, {
           onContextReset: () => {
             latestSessionId = undefined;

@@ -1,16 +1,16 @@
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import { loadChatSettings, type ChatSettings } from '@/lib/chat/settings';
 import { buildDashboardSystemPrompt } from '@/lib/chat/system-prompt';
-import { getRepoRoot, getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/core/app-paths';
+import { getWorkspaceDataFile, getWorkspaceRoot } from '@/lib/core/app-paths';
 import { loadChatSession } from '@/lib/chat/persistence';
 import { loadCreationSession } from '@/lib/spec/coding-store';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { getEngineConfigDir } from '@/lib/engines/engine-config';
 import { resolveMcpServersByNames, type ManagedMcpServer } from '@/lib/mcp/registry';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
-import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
+import { createDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
 
 const DEFAULT_PROMPT = '你是一个 AI 助手，简洁回答问题。';
 const SESSIONS_DIR = getWorkspaceDataFile('chat-sessions');
@@ -109,19 +109,6 @@ export async function resolveChatRequestedMcpServers(options: {
     : '';
   const resolvedWorkingDirectory = requestedWorkingDirectory || chatSettings.workingDirectory || getWorkspaceRoot();
   return resolveEnabledMcpServers(chatSettings, options.requestedMcpServers, resolvedWorkingDirectory);
-}
-
-function buildRuntimeEnvPrompt(resolvedWorkingDirectory: string): string {
-  const engineRuntimeDirectory = getWorkspaceRoot();
-  return [
-    '## 运行目录信息',
-    `ACEFlow 安装目录: ${getRepoRoot()}`,
-    `系统数据保存目录: ${engineRuntimeDirectory}`,
-    '系统数据保存目录中包含 ACEHarness 的全局安装技能、工作流与对话的历史记录、Agent 配置等运行时数据。',
-    `当前工作目录(用户语义目录): ${resolvedWorkingDirectory}`,
-    `AI 运行目录(实际 cwd): ${engineRuntimeDirectory}`,
-    '执行文件读写/命令时，请优先基于“当前工作目录(用户语义目录)”使用绝对路径。',
-  ].join('\n');
 }
 
 async function buildBoundSessionContext(frontendSessionId?: string): Promise<string> {
@@ -230,6 +217,7 @@ export async function buildChatRequestContext(options: {
   resolvedWorkingDirectory: string;
   chatSettings: ChatSettings | null;
   enabledSkills: string[];
+  runtimeSkillNames: string[];
   enabledMcpServers: ManagedMcpServer[];
 }> {
   const {
@@ -254,45 +242,73 @@ export async function buildChatRequestContext(options: {
     : [];
 
   let systemPrompt = '';
+  let runtimeSkillNames: string[] = [];
   if (mode === 'dashboard') {
     if (isResume) {
       systemPrompt = enabledSkills.length > 0
-        ? `当前启用的 Skills: ${enabledSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`
+        ? [
+          `当前启用的 Skills: ${enabledSkills.join(', ')}。需要时查阅 skills/{skill-name}/SKILL.md。`,
+          enabledSkills.includes('aceharness-chat-card')
+            ? '当用户查看/列出/统计 workflow、Agent、模型、运行记录、状态或其他 API 查询结果时，优先在回复末尾输出 `<result>{"kind":"card","payload":{...}}</result>`；列表优先用 table，不要只用纯文本复述长列表。'
+            : '',
+        ].filter(Boolean).join('\n')
         : '';
+      runtimeSkillNames = [...enabledSkills];
     } else {
       const mergedSkills = [...enabledSkills];
       for (const skillName of REQUIRED_DASHBOARD_SKILLS) {
         if (!mergedSkills.includes(skillName)) mergedSkills.push(skillName);
       }
-      systemPrompt = await buildDashboardSystemPrompt(mergedSkills, { personalDir });
+      runtimeSkillNames = [...mergedSkills];
+      systemPrompt = await buildDashboardSystemPrompt(mergedSkills, {
+        personalDir,
+        workingDirectory: resolvedWorkingDirectory,
+      });
     }
   } else if (!isResume) {
     systemPrompt = DEFAULT_PROMPT;
   }
 
-  const runtimeEnvPrompt = buildRuntimeEnvPrompt(resolvedWorkingDirectory);
   const boundSessionPrompt = await buildBoundSessionContext(frontendSessionId);
   const extraPrompt = typeof extraSystemPrompt === 'string' ? extraSystemPrompt.trim() : '';
 
-  systemPrompt = `${systemPrompt}\n\n${runtimeEnvPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${extraPrompt ? `\n\n${extraPrompt}` : ''}`.trim();
+  systemPrompt = `${systemPrompt}${boundSessionPrompt ? `\n\n${boundSessionPrompt}` : ''}${extraPrompt ? `\n\n${extraPrompt}` : ''}`.trim();
 
   return {
     systemPrompt,
     resolvedWorkingDirectory,
     chatSettings,
     enabledSkills,
+    runtimeSkillNames,
     enabledMcpServers,
   };
 }
 
-export async function ensureEngineRuntimeSkillsAvailable(engineType: string, workDir: string): Promise<void> {
+export async function ensureEngineRuntimeSkillsAvailable(engineType: string, workDir: string, skillNames?: string[]): Promise<void> {
   try {
     const engineConfigDir = getEngineConfigDir(engineType);
     const configDir = resolve(workDir, engineConfigDir);
     const skillsDir = await getRuntimeSkillsDirPath();
     if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-    const skillsLink = resolve(configDir, 'skills');
-    if (existsSync(skillsDir)) ensureDirectoryLinkSync(skillsDir, skillsLink);
+    if (!existsSync(skillsDir)) return;
+
+    const selectedSkills = Array.from(new Set((skillNames || [])
+      .map((name) => String(name || '').trim())
+      .filter(Boolean)));
+    if (selectedSkills.length === 0) return;
+
+    const workspaceSkillsDir = resolve(configDir, 'skills');
+    if (isLinkedDirectoryTarget(workspaceSkillsDir, skillsDir)) {
+      rmSync(workspaceSkillsDir, { recursive: true, force: true });
+    }
+    if (!existsSync(workspaceSkillsDir)) mkdirSync(workspaceSkillsDir, { recursive: true });
+
+    for (const skillName of selectedSkills) {
+      const src = resolve(skillsDir, skillName);
+      const dst = resolve(workspaceSkillsDir, skillName);
+      if (!existsSync(src) || existsSync(dst)) continue;
+      createDirectoryLinkSync(src, dst);
+    }
   } catch {
     // ignore sync failures; engine can still run without the link in some setups
   }

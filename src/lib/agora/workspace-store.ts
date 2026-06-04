@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
@@ -108,11 +108,8 @@ async function ensureWorkspaceSkillsLink(dir: string) {
   try {
     const linkResult = ensureDirectoryLinkSync(skillsDir, skillsLink);
     if (linkResult !== 'skipped' || existsSync(skillsLink)) return;
-  } catch {
-    // Fall through to copy fallback.
-  }
-  if (!existsSync(skillsLink)) {
-    await cp(skillsDir, skillsLink, { recursive: true, force: true }).catch(() => {});
+  } catch (error) {
+    console.warn('[Agora] Failed to link workspace skills:', error);
   }
 }
 

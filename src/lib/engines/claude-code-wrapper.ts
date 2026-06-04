@@ -184,8 +184,22 @@ function extractThinkingFromStreamEvent(ev: unknown): string {
   return '';
 }
 
-function buildCleanEnv(): Record<string, string | undefined> {
-  const env: Record<string, string | undefined> = buildConfiguredProcessEnvSync();
+function buildCleanEnv(userId?: string): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = buildConfiguredProcessEnvSync(
+    undefined,
+    process.env,
+    userId ? { userId } : undefined,
+  );
+  const apiKey = String(env.ANTHROPIC_API_KEY || '').trim();
+  const baseUrl = String(env.ANTHROPIC_BASE_URL || env.CLAUDE_CODE_BASE_URL || env.CLAUDE_CODE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+  if (apiKey) {
+    env.ANTHROPIC_API_KEY = apiKey;
+  }
+  if (baseUrl) {
+    env.ANTHROPIC_BASE_URL = baseUrl;
+    env.CLAUDE_CODE_BASE_URL = baseUrl;
+    env.CLAUDE_CODE_API_BASE_URL = baseUrl;
+  }
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   delete env.CLAUDE_CODE_SESSION;
@@ -362,7 +376,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
         : options.prompt;
 
       // Build env
-      const spawnEnv = buildCleanEnv();
+      const spawnEnv = buildCleanEnv(options.userId);
       if (!spawnEnv.CLAUDE_CODE_MAX_RETRIES) {
         spawnEnv.CLAUDE_CODE_MAX_RETRIES = String(MAX_API_RETRY_ATTEMPTS);
       }

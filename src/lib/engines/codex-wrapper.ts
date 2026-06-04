@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { createRequire } from 'module';
+import { createHash } from 'crypto';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
@@ -101,7 +102,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private codexInstance: any = null;
   private _abortController: AbortController | null = null;
   private lastBlockWasTool = false;
-  private lastMcpSignature = '';
+  private lastClientSignature = '';
 
   private getThreadOptions(options: EngineOptions) {
     return {
@@ -196,12 +197,20 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   }
 
   private async createCodexClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<any> {
-    const clientEnv = buildConfiguredProcessEnvSync();
+    const clientEnv = buildConfiguredProcessEnvSync(
+      undefined,
+      process.env,
+      options.userId ? { userId: options.userId } : undefined,
+    );
     const mcpServers = options.mcpServers?.length
       ? toCodexMcpServers(options.mcpServers as any)
       : undefined;
+    const apiKey = String(clientEnv.OPENAI_API_KEY || '').trim();
+    const baseUrl = String(clientEnv.OPENAI_BASE_URL || '').trim().replace(/\/+$/, '');
     const codexOptions = {
       ...(codexPathOverride ? { codexPathOverride } : {}),
+      ...(apiKey ? { apiKey } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
       ...(mcpServers && Object.keys(mcpServers).length > 0 ? { config: { mcp_servers: mcpServers } } : {}),
       env: clientEnv,
     };
@@ -209,12 +218,32 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     return new Codex(codexOptions);
   }
 
+  private getClientSignature(options: EngineOptions, codexPathOverride?: string | null): string {
+    const env = buildConfiguredProcessEnvSync(
+      undefined,
+      process.env,
+      options.userId ? { userId: options.userId } : undefined,
+    );
+    const credentialSignature = createHash('sha256')
+      .update([
+        env.OPENAI_API_KEY || '',
+        env.OPENAI_BASE_URL || '',
+      ].join('\0'))
+      .digest('hex');
+    return JSON.stringify({
+      userId: options.userId || '',
+      codexPathOverride: codexPathOverride || '',
+      mcpServers: options.mcpServers || [],
+      credentialSignature,
+    });
+  }
+
   private async runWithClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<EngineResult> {
-    const mcpSignature = JSON.stringify(options.mcpServers || []);
-    if (!this.codexInstance || codexPathOverride || this.lastMcpSignature !== mcpSignature) {
+    const clientSignature = this.getClientSignature(options, codexPathOverride);
+    if (!this.codexInstance || codexPathOverride || this.lastClientSignature !== clientSignature) {
       this.codexInstance = await this.createCodexClient(Codex, options, codexPathOverride);
       this.currentThread = null;
-      this.lastMcpSignature = mcpSignature;
+      this.lastClientSignature = clientSignature;
     }
 
     // Create or reuse thread

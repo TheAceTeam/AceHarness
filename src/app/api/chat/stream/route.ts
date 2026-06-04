@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
     const useModel = model || '';
 
     const isResume = !!sessionId;
-    const { systemPrompt, enabledMcpServers } = await buildChatRequestContext({
+    const { systemPrompt, runtimeSkillNames, enabledMcpServers } = await buildChatRequestContext({
       mode,
       sessionId,
       frontendSessionId,
@@ -214,7 +214,7 @@ export async function POST(request: NextRequest) {
     if (!validResumeSid && streamRecoveryKey) {
       validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
     }
-    const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId);
+    const engine = await getOrCreateEngine(configuredEngine, streamRecoveryKey || frontendSessionId, auth.id);
     const shouldTrackLiveSession = Boolean(frontendSessionId && !streamScope);
     const existingSession = shouldTrackLiveSession
       ? await loadChatSession(frontendSessionId).catch(() => null)
@@ -246,7 +246,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure engine config dir + skills symlink exists in working directory
     if (engine) {
-      await ensureEngineRuntimeSkillsAvailable(configuredEngine, engineRuntimeDirectory);
+      await ensureEngineRuntimeSkillsAvailable(configuredEngine, engineRuntimeDirectory, runtimeSkillNames);
     }
 
     if (engine && isAceTimingDebug()) {
@@ -350,6 +350,7 @@ export async function POST(request: NextRequest) {
         sessionId: validResumeSid,
         appendSystemPrompt: !!validResumeSid && !!systemPrompt,
         mcpServers: enabledMcpServers,
+        userId: auth.id,
       }, {
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });

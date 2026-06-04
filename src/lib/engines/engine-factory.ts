@@ -250,14 +250,16 @@ setInterval(() => {
  * Get or create an engine instance for a session.
  * When sessionKey is provided, engines are pooled and reused across messages.
  */
-export async function getOrCreateEngine(type?: EngineType, sessionKey?: string): Promise<Engine | null> {
+export async function getOrCreateEngine(type?: EngineType, sessionKey?: string, userId?: string): Promise<Engine | null> {
   const requestedType = type || await getConfiguredEngine();
   const engineType = type && !supportsDriverSelection(type)
     ? type
     : await resolveRequestedEngineType(requestedType);
   const logicalEngineType = getLogicalEngineId(engineType) || engineType;
   const shouldPoolWrapper = Boolean(sessionKey) && !ACP_SHARED_PROCESS_ENGINE_TYPES.has(engineType);
-  const pooledSessionKey = shouldPoolWrapper ? `${logicalEngineType}:${sessionKey}` : undefined;
+  const pooledSessionKey = shouldPoolWrapper
+    ? `${logicalEngineType}:${userId || 'anonymous'}:${sessionKey}`
+    : undefined;
   if (shouldPoolWrapper) {
     const cached = enginePool.get(pooledSessionKey!);
     if (cached) {

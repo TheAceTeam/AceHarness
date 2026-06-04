@@ -16,6 +16,13 @@ interface EnvVarError {
   key?: string;
 }
 
+const USER_AI_ENV_PRESETS = [
+  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
+  { key: 'ANTHROPIC_BASE_URL', label: 'Anthropic 自定义 API 地址，用于代理或自建网关。' },
+  { key: 'OPENAI_API_KEY', label: 'OpenAI API 密钥，Codex/OpenAI 兼容调用会读取。' },
+  { key: 'OPENAI_BASE_URL', label: 'OpenAI 兼容 API 地址，Codex 会显式传给 SDK。' },
+];
+
 function validateEnvVars(vars: EnvVar[]) {
   const errors: EnvVarError[] = vars.map(() => ({}));
   const keyPattern = /^[A-Z_][A-Z0-9_]*$/;
@@ -101,6 +108,16 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
     setErrors((prev) => [...prev, {}]);
   };
 
+  const addPreset = (key: string) => {
+    const exists = vars.some((item) => item.key.trim() === key);
+    if (exists) return;
+    setVars((prev) => {
+      if (prev.some((item) => item.key.trim() === key)) return prev;
+      return [...prev, { key, value: '', enabled: true }];
+    });
+    setErrors((prev) => [...prev, {}]);
+  };
+
   const removeVar = (index: number) => {
     setVars((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
     setErrors((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
@@ -148,6 +165,35 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
               {submitError ? (
                 <div className="text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1.5">{submitError}</div>
               ) : null}
+
+              <div className="rounded-md border bg-muted/20 px-3 py-2">
+                <div className="mb-2 text-xs font-medium text-muted-foreground">常用 AI 凭据</div>
+                <div className="flex flex-wrap gap-2">
+                  {USER_AI_ENV_PRESETS.map((preset) => {
+                    const exists = displayVars.some((item) => item.key.trim() === preset.key);
+                    return (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        onClick={() => addPreset(preset.key)}
+                        disabled={exists}
+                        title={preset.label}
+                        className="rounded border bg-background px-2 py-1 text-xs font-mono text-foreground hover:bg-muted disabled:cursor-default disabled:opacity-50"
+                      >
+                        {preset.key}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 grid gap-1 text-xs text-muted-foreground">
+                  {USER_AI_ENV_PRESETS.map((preset) => (
+                    <div key={`${preset.key}-hint`} className="grid grid-cols-[auto_1fr] gap-2">
+                      <code className="font-mono text-primary">{preset.key}</code>
+                      <span>{preset.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               <div className="grid grid-cols-[1fr_1fr_48px_32px] gap-2 text-xs text-muted-foreground font-medium px-1">
                 <span>Key</span>

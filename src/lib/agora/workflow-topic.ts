@@ -351,7 +351,38 @@ function pickWorkflowSpeech(input: { type: string; title: string; body?: string;
   if (input.type === 'state-review') {
     return body ? `这轮我过了一遍，先记下这些：\n${body}` : input.title;
   }
+  if (input.type === 'spec-revision-vote') {
+    return body
+      ? `我发起一次 Spec 修订表决：${input.title}\n${body}`
+      : `我发起一次 Spec 修订表决：${input.title}`;
+  }
+  if (input.type === 'spec-revision-vote-result') {
+    return body
+      ? `Spec 修订表决完成：${input.title.replace(/^Spec 修订表决完成[:：]\s*/, '')}\n${body}`
+      : input.title;
+  }
   return [input.title, body].filter(Boolean).join('\n');
+}
+
+function getWorkflowAgoraMessageKind(input: {
+  type: string;
+  speakerType?: CollaborationRoomMessage['speakerType'];
+}): NonNullable<CollaborationRoomMessage['chatroom']>['kind'] {
+  if (input.speakerType === 'human') return 'agent';
+  if (input.type === 'human-question') return 'system';
+  if (input.type === 'spec-revision-vote') return 'vote';
+  if (input.type === 'spec-revision-vote-result') return 'vote-result';
+  return 'agent';
+}
+
+function getWorkflowAgoraActionLabel(input: {
+  type: string;
+  speakerType: CollaborationRoomMessage['speakerType'];
+}): string {
+  if (input.speakerType === 'human') return '你';
+  if (input.type === 'spec-revision-vote') return '投票';
+  if (input.type === 'spec-revision-vote-result') return '票决';
+  return '工作流';
 }
 
 function pickWorkflowOpeningLine(participant: CollaborationChatroomParticipant): string {
@@ -542,9 +573,10 @@ export async function appendWorkflowAgoraMessage(input: {
     createdAt: now,
     status: 'done',
     chatroom: {
-      kind: input.speakerType === 'human'
-        ? 'agent'
-        : input.type === 'human-question' ? 'system' : 'agent',
+      kind: getWorkflowAgoraMessageKind({
+        type: input.type,
+        speakerType: input.speakerType,
+      }),
       mode: room.chatroom?.settings.responseMode || 'mention-driven',
     },
   };
@@ -564,7 +596,10 @@ export async function appendWorkflowAgoraMessage(input: {
         type: 'collaboration_speech',
         speakerName: message.speakerName,
         speakerType: message.speakerType,
-        actionLabel: '工作流',
+        actionLabel: getWorkflowAgoraActionLabel({
+          type: input.type,
+          speakerType: message.speakerType,
+        }),
       }],
     });
   }

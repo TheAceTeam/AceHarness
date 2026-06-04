@@ -92,7 +92,7 @@ describe('agora workspace store', () => {
     });
   });
 
-  test('copies runtime skills as a fallback when linking fails', async () => {
+  test('does not copy runtime skills when linking fails', async () => {
     await withTempDir('aceharness-agora-store-', async (base) => {
       const aceHome = path.join(base, 'home');
       const skillsDir = path.join(base, 'runtime-skills');
@@ -101,9 +101,8 @@ describe('agora workspace store', () => {
       const store = await loadWorkspaceStore({ aceHome, skillsDir, linkThrows: true });
 
       const result = await store.ensureAgoraWorkspace({ sessionId: 'skills-copy' });
-      const copiedSkill = path.join(result.workspacePath, 'skills', 'fallback-skill', 'SKILL.md');
 
-      expect(await readFile(copiedSkill, 'utf-8')).toBe('fallback');
+      expect(existsSync(path.join(result.workspacePath, 'skills'))).toBe(false);
       expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
     });
   });

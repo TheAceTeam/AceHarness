@@ -88,6 +88,7 @@ async function generateAiMergedSpec(input: {
   workingDirectory: string;
   runId: string;
   workflowName: string;
+  userId?: string;
 }): Promise<{ content: string; summary: string } | null> {
   try {
     const engine = await createEngine();
@@ -105,6 +106,7 @@ async function generateAiMergedSpec(input: {
       allowedTools: [],
       timeoutMs: 120_000,
       runId: input.runId,
+      userId: input.userId,
     });
 
     if (!result.success || !result.output.trim()) return null;
@@ -158,6 +160,7 @@ async function previewMerge(runId: string, configFile?: string) {
       workingDirectory,
       runId,
       workflowName,
+      userId: runState.runOwnerId || runState.createdBy,
     });
     const structural = aiMerge ? null : await buildStructuralMergedMasterSpec(specRootDir, workflowName, runId);
     const mergedContent = aiMerge?.content || structural;

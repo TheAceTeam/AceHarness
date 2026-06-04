@@ -185,6 +185,7 @@ export async function POST(request: NextRequest) {
       systemPrompt,
       model: '',
       workingDirectory: process.cwd(),
+      userId: auth.id,
     });
     engine.cancel();
 
