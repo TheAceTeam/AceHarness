@@ -4493,7 +4493,14 @@ try {
       parts.push(`\n# 项目路径\n${config.context.projectRoot}`);
     }
 
-    // Add system-managed step conclusion protocol only for state final steps.
+    const conclusionScope = isLastStepInState
+      ? `当前步骤是状态 "${state.name}" 的最后一个步骤。`
+      : `当前步骤不是状态 "${state.name}" 的最后一个步骤。`;
+    const resultGuidance = isLastStepInState
+      ? '- 当前状态最终完成了什么，或给出了什么 pass / conditional_pass / fail 判断。'
+      : '- 当前步骤完成了什么；不要输出 pass / conditional_pass / fail 流程裁决。';
+
+    // Add system-managed step conclusion protocol for every step.
     if (this.currentRunId) {
       const outputPath = `${join(getWorkspaceRunsDir(), this.currentRunId, 'outputs')}/`;
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -4505,40 +4512,38 @@ try {
         '以上规则仅适用于系统要求的“步骤成果详细总结”归档文件。',
         '除步骤成果详细总结外，其他正式产物文件（例如代码、设计文档、API 文档、说明文档、脚本、配置等）应严格按照用户要求、任务要求和项目目录约定写入；如果用户要求产出到工作目录，就写入工作目录，不要写入该归档目录。',
       ].join('\n'));
-      if (isLastStepInState) {
-        parts.push([
-          '\n# 状态收尾结论归档协议',
-          `当前步骤是状态 "${state.name}" 的最后一个步骤。`,
-          '步骤成果详细总结与步骤结论是两种不同输出。',
-          '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论只需要放在回复末尾的 <step-conclusion> 中。',
-          '最终收尾时，如还需输出流程裁决 JSON，顺序必须是：裁决 JSON -> <step-conclusion>。',
-          '请在回复末尾单独输出 <step-conclusion>，里面只写可被下一状态或后续 agent 直接复用的步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
-          '步骤结论必须自包含：下一步 agent 不读完整对话时，也能知道本状态做了什么、改了哪里、验证到什么程度、还剩什么风险。',
-          '建议结构:',
-          '<step-conclusion>',
-          '## 结果 / 裁决',
-          '- 当前状态最终完成了什么，或给出了什么 pass / conditional_pass / fail 判断。',
-          '## 下一步所需上下文',
-          '- 后续 agent 必须继承的事实、决策、约束、假设和用户确认点。',
-          '## 涉及对象',
-          '- 读取、修改或重点审查过的文件、符号、配置项、API、状态字段或制品路径。',
-          '## 验证状态',
-          '- 已运行的命令、人工检查或替代证据；如果未验证，说明原因和影响。',
-          '## 未决问题 / 风险',
-          '- 仍阻塞、待确认、兼容风险、失败路径或需要 owner/Supervisor 决策的事项；没有则写“无”。',
-          '## 下一步建议',
-          '- 建议下一个 agent 直接执行的最小动作，避免泛泛而谈。',
-          '</step-conclusion>',
-        ].join('\n'));
-      }
     }
 
     // Add structured JSON output requirement only for state final decision steps.
     if (isLastStepInState && (step.role === 'attacker' || step.role === 'judge')) {
-      const conclusionOrder = isLastStepInState
-        ? '如果本轮还要输出 <step-conclusion>，该 JSON 块必须放在它之前。'
-        : '本步骤不是状态最后一步时，不要求输出 <step-conclusion>。';
-      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；${conclusionOrder}\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+      parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
+    }
+
+    if (this.currentRunId) {
+      parts.push([
+        '\n# 步骤结论归档协议',
+        conclusionScope,
+        '步骤成果详细总结与步骤结论是两种不同输出。',
+        '步骤成果详细总结请按时间戳前缀命名写入 outputs 目录；步骤结论必须放在回复末尾的 <step-conclusion> 中。',
+        '如果本步骤还需输出流程裁决 JSON，顺序必须是：裁决 JSON -> <step-conclusion>。',
+        '请在回复末尾单独输出 <step-conclusion>，里面只写可被下一状态或后续 agent 直接复用的步骤结论，不要包含完整过程日志、命令回显、长篇原始证据或重复上下文。',
+        '步骤结论必须自包含：下一步 agent 不读完整对话时，也能知道本步骤做了什么、改了哪里、验证到什么程度、还剩什么风险。',
+        '建议结构:',
+        '<step-conclusion>',
+        '## 结果 / 裁决',
+        resultGuidance,
+        '## 下一步所需上下文',
+        '- 后续 agent 必须继承的事实、决策、约束、假设和用户确认点。',
+        '## 涉及对象',
+        '- 读取、修改或重点审查过的文件、符号、配置项、API、状态字段或制品路径。',
+        '## 验证状态',
+        '- 已运行的命令、人工检查或替代证据；如果未验证，说明原因和影响。',
+        '## 未决问题 / 风险',
+        '- 仍阻塞、待确认、兼容风险、失败路径或需要 owner/Supervisor 决策的事项；没有则写“无”。',
+        '## 下一步建议',
+        '- 建议下一个 agent 直接执行的最小动作，避免泛泛而谈。',
+        '</step-conclusion>',
+      ].join('\n'));
     }
 
     // Add workflow-level and step-level skills

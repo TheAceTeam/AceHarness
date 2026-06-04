@@ -822,6 +822,47 @@ describe('state machine execution flow', () => {
     expect(result.verdict).toBe('pass');
   });
 
+  test('step context requires conclusions for every step but verdict JSON only for final decision step', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).buildStepContext = Object.getPrototypeOf(manager).buildStepContext.bind(manager);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '实施',
+            isInitial: true,
+            steps: [
+              { name: 'defend-step', agent: 'developer', task: 'Implement defense', role: 'defender' },
+              { name: 'intermediate-review', agent: 'developer', task: 'Review intermediate result', role: 'judge' },
+              { name: 'final-verdict', agent: 'developer', task: 'Decide transition', role: 'judge' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+              { condition: { verdict: 'fail' }, to: '实施', priority: 2 },
+            ],
+          },
+          { name: '完成', isFinal: true, steps: [], transitions: [] },
+        ],
+      },
+    });
+    const state = config.workflow.states[0];
+
+    const defenderPrompt = await (manager as any).buildStepContext(state.steps[0], state, config, 'Build a feature');
+    const intermediateJudgePrompt = await (manager as any).buildStepContext(state.steps[1], state, config, 'Build a feature');
+    const finalJudgePrompt = await (manager as any).buildStepContext(state.steps[2], state, config, 'Build a feature');
+
+    expect(defenderPrompt).toContain('# 步骤结论归档协议');
+    expect(defenderPrompt).toContain('<step-conclusion>');
+    expect(defenderPrompt).not.toContain('# 结构化输出要求');
+    expect(intermediateJudgePrompt).toContain('# 步骤结论归档协议');
+    expect(intermediateJudgePrompt).toContain('<step-conclusion>');
+    expect(intermediateJudgePrompt).not.toContain('# 结构化输出要求');
+    expect(finalJudgePrompt).toContain('# 步骤结论归档协议');
+    expect(finalJudgePrompt).toContain('# 结构化输出要求');
+    expect(finalJudgePrompt.indexOf('# 结构化输出要求')).toBeLessThan(finalJudgePrompt.indexOf('<step-conclusion>'));
+  });
+
   test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {
     const engine = new MockEngine({ success: true, output: 'Step completed by base role' });
     const manager = await createManagerForTest(engine);
