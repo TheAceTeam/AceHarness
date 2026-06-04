@@ -136,8 +136,24 @@ export default function FlowDiagram({
   failedSteps = [], iterationStates = {}, onSelectStep, onSelectPhase, onSelectCheckpoint, pendingCheckpointPhase,
 }: FlowDiagramProps) {
   const getAgentTeam = useCallback((agentName: string) => {
-    return agents?.find((a) => a.name === agentName)?.team || 'red';
+    return agents?.find((a) => a.name === agentName)?.team;
   }, [agents]);
+
+  const getTeamColor = useCallback((agentName: string) => {
+    const team = getAgentTeam(agentName);
+    if (team === 'blue') return 'hsl(var(--flow-attacker))';
+    if (team === 'judge') return 'hsl(var(--flow-judge))';
+    if (team === 'red') return 'hsl(var(--flow-defender))';
+    return 'hsl(var(--flow-node-border))';
+  }, [getAgentTeam]);
+
+  const renderTeamIcon = useCallback((agentName: string) => {
+    const team = getAgentTeam(agentName);
+    if (team === 'blue') return <IconAttacker />;
+    if (team === 'judge') return <IconJudge />;
+    if (team === 'red') return <IconDefender />;
+    return null;
+  }, [getAgentTeam]);
 
   const getStepStatus = useCallback((step: Step) => {
     if (failedSteps?.includes(step.name)) return 'failed';
@@ -466,6 +482,8 @@ export default function FlowDiagram({
                 ? (failedSteps?.includes(iterStep.name) ? 'failed' : 'completed')
                 : getStepStatus(iterStep);
               const team = getAgentTeam(step.agent);
+              const teamClass = team ? (styles as Record<string, string | undefined>)[team] || '' : '';
+              const teamIcon = renderTeamIcon(step.agent);
               const stepX = colX + stepIdxInGroup * (stepNodeW + parallelGap);
               const displayName = step.name + roundSuffix;
 
@@ -477,11 +495,11 @@ export default function FlowDiagram({
                 targetPosition: Position.Top,
                 data: {
                   label: (
-                    <div className={`${styles.stepNode} ${styles[status]} ${styles[team]} ${status === 'running' ? styles.pulseGlow : ''}`}>
+                    <div className={`${styles.stepNode} ${styles[status]} ${teamClass} ${status === 'running' ? styles.pulseGlow : ''}`}>
                       <div className={styles.stepHeader}>
-                        {step.role ? (
-                          <span className={`${styles.roleBadgeWrap} ${styles[step.role]}`}>
-                            {step.role === 'attacker' ? <IconAttacker /> : step.role === 'judge' ? <IconJudge /> : <IconDefender />}
+                        {teamIcon ? (
+                          <span className={styles.roleBadgeWrap}>
+                            {teamIcon}
                           </span>
                         ) : (
                           <span className={styles.stepNumber}>{group.startIndex + stepIdxInGroup + 1}</span>
@@ -516,7 +534,7 @@ export default function FlowDiagram({
                 group.steps.forEach((step, stepIdxInGroup) => {
                   const stepId = `step-${pi}-${group.startIndex + stepIdxInGroup}${idSuffix}`;
                   const status = round < rounds - 1 ? 'completed' : getStepStatus(step);
-                  const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+                  const roleColor = getTeamColor(step.agent);
                   edges.push({
                     id: `${prevStepId}-${stepId}`,
                     source: prevStepId,
@@ -538,7 +556,9 @@ export default function FlowDiagram({
               ? (failedSteps?.includes(iterStep.name) ? 'failed' : 'completed')
               : getStepStatus(iterStep);
             const team = getAgentTeam(step.agent);
-            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+            const teamClass = team ? (styles as Record<string, string | undefined>)[team] || '' : '';
+            const teamIcon = renderTeamIcon(step.agent);
+            const roleColor = getTeamColor(step.agent);
             const displayName = step.name + roundSuffix;
 
             nodes.push({
@@ -549,11 +569,11 @@ export default function FlowDiagram({
               targetPosition: Position.Top,
               data: {
                 label: (
-                  <div className={`${styles.stepNode} ${styles[status]} ${styles[team]} ${status === 'running' ? styles.pulseGlow : ''}`}>
+                  <div className={`${styles.stepNode} ${styles[status]} ${teamClass} ${status === 'running' ? styles.pulseGlow : ''}`}>
                     <div className={styles.stepHeader}>
-                      {step.role ? (
-                        <span className={`${styles.roleBadgeWrap} ${styles[step.role]}`}>
-                          {step.role === 'attacker' ? <IconAttacker /> : step.role === 'judge' ? <IconJudge /> : <IconDefender />}
+                      {teamIcon ? (
+                        <span className={styles.roleBadgeWrap}>
+                          {teamIcon}
                         </span>
                       ) : (
                         <span className={styles.stepNumber}>{group.startIndex + 1}</span>
@@ -645,7 +665,7 @@ export default function FlowDiagram({
     });
 
     return { nodes, edges };
-  }, [workflow, currentPhase, currentStep, completedSteps, failedSteps, agents, getAgentTeam, getStepStatus, iterationStates, pendingCheckpointPhase]);
+  }, [workflow, currentPhase, currentStep, completedSteps, failedSteps, agents, getAgentTeam, getTeamColor, renderTeamIcon, getStepStatus, iterationStates, pendingCheckpointPhase]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

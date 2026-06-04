@@ -47,8 +47,14 @@ interface Workflow {
   phases: Phase[];
 }
 
+interface Agent {
+  name: string;
+  team?: string | null;
+}
+
 interface DesignFlowDiagramProps {
   workflow: Workflow;
+  agents?: Agent[];
   onUpdateWorkflow: (workflow: Workflow) => void;
   onSelectNode: (type: 'phase' | 'step', phaseIndex: number, stepIndex?: number) => void;
   onAddPhase: (afterIndex: number) => void;
@@ -62,10 +68,30 @@ interface DesignFlowDiagramProps {
 }
 
 export default function DesignFlowDiagram({
-  workflow, onUpdateWorkflow, onSelectNode,
+  workflow, agents = [], onUpdateWorkflow, onSelectNode,
   onAddPhase, onAddStep, onAddStepAt, onDeletePhase, onDeleteStep,
   onMoveStep, onToggleParallel, onUngroup,
 }: DesignFlowDiagramProps) {
+  const getAgentTeam = useCallback((agentName: string) => {
+    return agents.find((agent) => agent?.name === agentName)?.team || undefined;
+  }, [agents]);
+
+  const getTeamColor = useCallback((agentName: string) => {
+    const team = getAgentTeam(agentName);
+    if (team === 'blue') return 'hsl(var(--flow-attacker))';
+    if (team === 'judge') return 'hsl(var(--flow-judge))';
+    if (team === 'red') return 'hsl(var(--flow-defender))';
+    return 'hsl(var(--flow-node-border))';
+  }, [getAgentTeam]);
+
+  const getTeamIcon = useCallback((agentName: string) => {
+    const team = getAgentTeam(agentName);
+    if (team === 'blue') return 'swords';
+    if (team === 'judge') return 'balance';
+    if (team === 'red') return 'shield';
+    return '';
+  }, [getAgentTeam]);
+
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
@@ -347,7 +373,8 @@ export default function DesignFlowDiagram({
             const stepId = `step-${pi}-${si}`;
             groupStepIds.push(stepId);
             const stepX = startX + idx * (stepNodeW + horizontalGap);
-            const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+            const roleColor = getTeamColor(step.agent);
+            const roleIcon = getTeamIcon(step.agent);
 
             nodes.push({
               id: stepId,
@@ -359,9 +386,9 @@ export default function DesignFlowDiagram({
                 label: (
                   <div className={styles.stepNode}>
                     <div className={styles.stepHeader}>
-                      {step.role ? (
+                      {roleIcon ? (
                         <span className={styles.roleBadge}>
-                          {step.role === 'attacker' ? <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swords</span> : step.role === 'judge' ? <span className="material-symbols-outlined" style={{ fontSize: 14 }}>balance</span> : <span className="material-symbols-outlined" style={{ fontSize: 14 }}>shield</span>}
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{roleIcon}</span>
                         </span>
                       ) : (
                         <span className={styles.stepNumber}>{si + 1}</span>
@@ -403,7 +430,7 @@ export default function DesignFlowDiagram({
             previousStepIds.forEach((prevId) => {
               groupStepIds.forEach((currId) => {
                 const step = phase.steps[parseInt(currId.split('-')[2])];
-                const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+                const roleColor = getTeamColor(step.agent);
                 edges.push({
                   id: `${prevId}-${currId}`,
                   source: prevId, target: currId,
@@ -424,7 +451,8 @@ export default function DesignFlowDiagram({
           const si = stepI;
           const stepId = `step-${pi}-${si}`;
           const stepY = stepsStartY + currentRowIndex * (stepNodeH + stepGap);
-          const roleColor = step.role === 'attacker' ? 'hsl(var(--flow-attacker))' : step.role === 'judge' ? 'hsl(var(--flow-judge))' : 'hsl(var(--flow-defender))';
+          const roleColor = getTeamColor(step.agent);
+          const roleIcon = getTeamIcon(step.agent);
           const canMoveUp = si > 0;
           const canMoveDown = si < phase.steps.length - 1;
           // Can merge with next step if next step exists and is also sequential (or same group)
@@ -441,9 +469,9 @@ export default function DesignFlowDiagram({
               label: (
                 <div className={styles.stepNode}>
                   <div className={styles.stepHeader}>
-                    {step.role ? (
+                    {roleIcon ? (
                       <span className={styles.roleBadge}>
-                        {step.role === 'attacker' ? <span className="material-symbols-outlined" style={{ fontSize: 14 }}>swords</span> : step.role === 'judge' ? <span className="material-symbols-outlined" style={{ fontSize: 14 }}>balance</span> : <span className="material-symbols-outlined" style={{ fontSize: 14 }}>shield</span>}
+                        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{roleIcon}</span>
                       </span>
                     ) : (
                       <span className={styles.stepNumber}>{si + 1}</span>
@@ -639,7 +667,7 @@ export default function DesignFlowDiagram({
     }
 
     return { nodes, edges };
-  }, [workflow, onSelectNode, onAddPhase, onAddStep, onAddStepAt, onDeletePhase, onDeleteStep, onMoveStep, onToggleParallel, onUngroup]);
+  }, [workflow, getTeamColor, getTeamIcon, onSelectNode, onAddPhase, onAddStep, onAddStepAt, onDeletePhase, onDeleteStep, onMoveStep, onToggleParallel, onUngroup]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);

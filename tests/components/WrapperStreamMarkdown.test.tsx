@@ -566,11 +566,38 @@ describe('Wrapper stream markdown rendering', () => {
   });
 
   test('claude-code hides sdk thinking token accounting messages', async () => {
-    const { content, rawContent } = await buildClaudeRenderedMessage([
+    const { content, rawContent, view } = await buildClaudeRenderedMessage([
       {
         type: 'system',
         subtype: 'thinking_tokens',
         message: 'thinking_tokens: 1024',
+      },
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: {
+            type: 'thinking_delta',
+            thinking: 'First thought. ',
+          },
+        },
+      },
+      {
+        type: 'system',
+        subtype: 'usage',
+        message: '[SDK] thinking_tokens',
+      },
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: {
+            type: 'thinking_delta',
+            thinking: 'Second thought.',
+          },
+        },
       },
       {
         type: 'stream_event',
@@ -594,6 +621,11 @@ describe('Wrapper stream markdown rendering', () => {
     expect(content).toBe('Done.');
     expect(rawContent.includes('[SDK] thinking_tokens')).toBe(false);
     expect(rawContent.includes('thinking_tokens: 1024')).toBe(false);
+    await openAllDetails(view.container);
+    expect(view.container.querySelectorAll('[data-testid="ace-reasoning"]')).toHaveLength(1);
+    const reasoningText = view.container.querySelector('[data-testid="ace-reasoning-content"]')?.textContent || '';
+    expect(reasoningText).toContain('First thought.');
+    expect(reasoningText).toContain('Second thought.');
   });
 
   test('claude wrapper malformed spec revision result is repaired and parsed', async () => {

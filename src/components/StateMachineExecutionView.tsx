@@ -85,6 +85,10 @@ interface ActiveConcurrencyGroupView {
 interface StateMachineExecutionViewProps {
   // 配置数据
   states: StateMachineState[];
+  agents?: Array<{
+    name: string;
+    team?: AgentTeam;
+  }>;
 
   // 运行时数据
   currentState: string | null;
@@ -176,6 +180,7 @@ interface StateMachineExecutionViewProps {
 
 export default function StateMachineExecutionView({
   states,
+  agents = [],
   currentState,
   currentStep,
   activeSteps = [],
@@ -685,6 +690,7 @@ export default function StateMachineExecutionView({
         <TabsContent value="trace" className="min-h-0 flex-1 overflow-hidden">
           <StateMachineDiagram
             states={states}
+            agents={agents}
             currentState={currentState}
             currentStep={currentStep}
             activeSteps={activeSteps}

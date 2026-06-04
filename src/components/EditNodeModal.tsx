@@ -327,15 +327,13 @@ export default function EditNodeModal({
       }
       onSave(phaseData);
     } else {
-      const selectedRole = roles.find((r) => r.name === formData.agent);
-      const teamToRole: Record<string, string> = { blue: 'attacker', red: 'defender', judge: 'judge' };
       const stepData: any = {
         name: formData.name,
         agent: formData.agent,
         task: formData.task,
       };
-      if (selectedRole && teamToRole[selectedRole.team]) {
-        stepData.role = teamToRole[selectedRole.team];
+      if (data?.role === 'attacker' || data?.role === 'defender' || data?.role === 'judge') {
+        stepData.role = data.role;
       }
       if (formData.constraints) {
         stepData.constraints = formData.constraints

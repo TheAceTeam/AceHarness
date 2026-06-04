@@ -8659,9 +8659,9 @@ export default function WorkbenchPage() {
                           const phaseAgents = phase.steps 
                             ? phase.steps.map((s: any) => {
                                 const role = agentConfigs.find((r: any) => r.name === s.agent);
-                                return { name: s.agent, team: role?.team || 'red', role: s.role };
+                                return { name: s.agent, team: role?.team, role: s.role };
                               })
-                            : [{ name: phase.agent, team: 'red', role: undefined }];
+                            : [{ name: phase.agent, team: agentConfigs.find((r: any) => r.name === phase.agent)?.team, role: undefined }];
                           const iterState = iterationStates[phase.name];
                           const isActive = currentPhase === phase.name;
                           const hasRunningStep = (phase.steps || []).some((step: any) => isStepRunningInNode(step, phase.name));
@@ -8721,8 +8721,8 @@ export default function WorkbenchPage() {
                             </div>
                             <div className="flex flex-wrap gap-1">
                               {phaseAgents.map((a: any, i: number) => (
-                                <Badge key={i} variant="outline" className={`text-[10px] ${a.team === 'blue' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : a.team === 'red' ? 'bg-red-500/20 text-red-400 border-red-500/30' : a.team === 'judge' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' : ''}`}>
-                                  <span className="material-symbols-outlined" style={{ fontSize: 10 }}>{a.role === 'attacker' ? 'swords' : a.role === 'judge' ? 'gavel' : 'shield'}</span> {a.name}
+                                <Badge key={i} variant="outline" className={`text-[10px] ${a.team === 'blue' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : a.team === 'red' ? 'bg-red-500/20 text-red-400 border-red-500/30' : a.team === 'judge' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' : 'bg-muted/40 text-muted-foreground border-border'}`}>
+                                  <span className="material-symbols-outlined" style={{ fontSize: 10 }}>{a.team === 'blue' ? 'swords' : a.team === 'judge' ? 'gavel' : a.team === 'red' ? 'shield' : 'radio_button_unchecked'}</span> {a.name}
                                 </Badge>
                               ))}
                             </div>
@@ -8987,6 +8987,7 @@ export default function WorkbenchPage() {
                             isDesignMode ? (
                               <StateMachineDiagram
                                 states={workflowConfig.workflow.states || []}
+                                agents={agentConfigs}
                                 currentState={currentPhase}
                                 currentStep={currentStep}
                                 activeSteps={activeSteps}
@@ -9002,6 +9003,7 @@ export default function WorkbenchPage() {
                               <div className="h-full p-4">
                                 <StateMachineExecutionView
                                   states={workflowConfig.workflow.states || []}
+                                  agents={agentConfigs}
                                   currentState={currentPhase}
                                   currentStep={currentStep}
                                   activeSteps={activeSteps}
@@ -9206,7 +9208,7 @@ export default function WorkbenchPage() {
                 <div className="bg-muted border-b p-3.5">
                   <div className="flex items-center gap-2 mb-2.5">
                     <span className="material-symbols-outlined text-base">
-                      {selectedStep.role === 'attacker' ? 'swords' : selectedStep.role === 'judge' ? 'gavel' : 'shield'}
+                      {selectedRoleConfig?.team === 'blue' ? 'swords' : selectedRoleConfig?.team === 'judge' ? 'gavel' : selectedRoleConfig?.team === 'red' ? 'shield' : 'radio_button_unchecked'}
                     </span>
                     <span className="text-sm font-semibold flex-1">{selectedStep.name}</span>
                     {isCurrentStepRunning ? (
@@ -9220,7 +9222,7 @@ export default function WorkbenchPage() {
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{selectedStep.agent}</Badge>
                     )}
                     {selectedRoleConfig && (
-                      <Badge className={selectedRoleConfig.team === 'blue' ? 'bg-blue-500/20 text-blue-400' : selectedRoleConfig.team === 'red' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400'}>{selectedRoleConfig.team}</Badge>
+                      <Badge className={selectedRoleConfig.team === 'blue' ? 'bg-blue-500/20 text-blue-400' : selectedRoleConfig.team === 'red' ? 'bg-red-500/20 text-red-400' : selectedRoleConfig.team === 'judge' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-muted text-muted-foreground'}>{selectedRoleConfig.team}</Badge>
                     )}
                   </div>
                   <div className="mb-2.5">

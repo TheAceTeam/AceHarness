@@ -342,12 +342,15 @@ function SortableStepRow({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
 
-  const roleIcon = step.role === 'attacker' ? 'swords' : step.role === 'judge' ? 'gavel' : 'shield';
-  const roleColor = step.role === 'attacker'
+  const agentTeam = findAgentConfig(availableAgents, step.agent || '')?.team;
+  const roleIcon = agentTeam === 'blue' ? 'swords' : agentTeam === 'judge' ? 'gavel' : agentTeam === 'red' ? 'shield' : 'radio_button_unchecked';
+  const roleColor = agentTeam === 'blue'
     ? 'bg-blue-500/10 text-blue-600 border-blue-200 dark:border-blue-800'
-    : step.role === 'judge'
+    : agentTeam === 'judge'
     ? 'bg-yellow-500/10 text-yellow-600 border-yellow-200 dark:border-yellow-800'
-    : 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800';
+    : agentTeam === 'red'
+    ? 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800'
+    : 'bg-muted/40 text-muted-foreground border-border';
   const specTaskIds = getStepSpecTaskIds(step);
   const specTaskLabel = specTaskIds.length > 1 ? `Spec ${specTaskIds.length}` : specTaskIds[0] || 'Spec 任务';
 
@@ -1548,6 +1551,7 @@ export default function StateMachineDesignPanel({
             {states.length > 0 ? (
               <StateMachineDiagram
                 states={states}
+                agents={availableAgents}
                 focusedState={selectedStateName}
                 onStateClick={(stateName) => {
                   if (states.some((state) => state.name === stateName)) {

@@ -184,6 +184,18 @@ function extractThinkingFromStreamEvent(ev: unknown): string {
   return '';
 }
 
+function isIgnorableClaudeSystemMessage(sys: { subtype?: string; message?: string }): boolean {
+  const subtype = String(sys.subtype || '').trim().toLowerCase();
+  const message = String(sys.message || '').trim().toLowerCase();
+  const combined = `${subtype}\n${message}`;
+  return subtype === 'task_started'
+    || subtype === 'task_progress'
+    || subtype === 'task_notification'
+    || subtype === 'thinking_tokens'
+    || /\bthinking[_\s-]?tokens?\b/.test(combined)
+    || /\bthinking\s+token\s+accounting\b/.test(combined);
+}
+
 function buildCleanEnv(userId?: string): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = buildConfiguredProcessEnvSync(
     undefined,
@@ -537,16 +549,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
               seenSystemSubtypes.add(st);
             }
           }
-          if (sys.subtype === 'task_started') {
-            continue;
-          }
-          if (sys.subtype === 'task_progress') {
-            continue;
-          }
-          if (sys.subtype === 'task_notification') {
-            continue;
-          }
-          if (sys.subtype === 'thinking_tokens') {
+          if (isIgnorableClaudeSystemMessage(sys)) {
             continue;
           }
           let info = '';

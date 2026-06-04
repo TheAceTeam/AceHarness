@@ -173,6 +173,7 @@ const EMPTY_SUPERVISOR_FLOW: SupervisorFlowRecord[] = [];
 
 interface StateMachineDiagramProps {
   states: StateMachineState[];
+  agents?: Array<{ name: string; team?: string | null }>;
   onStateClick?: (stateName: string) => void;
   onStepClick?: (step: any) => void;
   onTransitionClick?: (from: string, to: string) => void;
@@ -337,8 +338,20 @@ function buildStateDiagramStepGroups(steps: any[]) {
   return groups;
 }
 
+function getStateDiagramAgentTeam(agents: Array<{ name: string; team?: string | null }> | undefined, agentName: string | undefined) {
+  if (!agentName) return undefined;
+  return agents?.find((agent) => agent?.name === agentName)?.team || undefined;
+}
+
+function getStateDiagramTeamIcon(team: string | null | undefined) {
+  if (team === 'blue') return 'swords';
+  if (team === 'judge') return 'gavel';
+  if (team === 'red') return 'shield';
+  return 'radio_button_unchecked';
+}
+
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, onStepClick, onForceTransition, isRunning, allowForceTransition } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, agents, onStepClick, onForceTransition, isRunning, allowForceTransition } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
   const getStepStatus = (step: any) => {
@@ -349,6 +362,7 @@ function StateNode({ data }: any) {
   };
   const renderStepPill = (step: any, idx: number, compact = false) => {
     const { isDone, isRunningStep } = getStepStatus(step);
+    const agentTeam = getStateDiagramAgentTeam(agents, step?.agent);
     return (
       <div
         key={`${step.name}-${idx}`}
@@ -360,7 +374,7 @@ function StateNode({ data }: any) {
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
-          {isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : step.role === 'attacker' ? 'swords' : step.role === 'judge' ? 'gavel' : 'shield'}
+          {isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramTeamIcon(agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
       </div>
@@ -560,6 +574,7 @@ function calculateHandlePositions(
 // 内部组件，使用 useReactFlow
 function StateMachineDiagramInner({
   states,
+  agents,
   onStateClick,
   onStepClick,
   onTransitionClick,
@@ -625,6 +640,7 @@ function StateMachineDiagramInner({
           currentStep,
           activeSteps,
           completedSteps,
+          agents,
           onStepClick: handleStepClick,
           onForceTransition: handleForceTransitionClick,
           isRunning,
@@ -658,6 +674,7 @@ function StateMachineDiagramInner({
         currentStep,
         activeSteps,
         completedSteps,
+        agents,
         onStepClick: handleStepClick,
         onForceTransition: handleForceTransitionClick,
         isRunning,
@@ -666,7 +683,7 @@ function StateMachineDiagramInner({
     });
 
     return nodes;
-  }, [states, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 
