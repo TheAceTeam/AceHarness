@@ -219,6 +219,7 @@ export class NgaEngineWrapper extends ACPWrapperBase {
       args: [],
       skipNgaDisableUpdate: resolved.skipDisableUpdate,
       env: resolved.env,
+      userId: options.userId,
       diagnosticLogging,
     };
   }

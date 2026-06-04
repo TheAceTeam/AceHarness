@@ -1969,13 +1969,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return validStepKeys.has(currentStep) ? currentStep : null;
   }
 
-  private collectSkippedStepOutput(step: WorkflowStep, stateName: string, stepOutputs: string[], issues: Issue[]): 'pass' | 'conditional_pass' | 'fail' | null {
+  private collectSkippedStepOutput(step: WorkflowStep, stateName: string, stepOutputs: string[], issues: Issue[], useVerdict = true): 'pass' | 'conditional_pass' | 'fail' | null {
     const stepKey = this.getWorkflowStepKey(stateName, step);
     const log = this.getLatestStepLog(stepKey, 'completed');
     if (!log?.output) return null;
     stepOutputs.push(log.output);
     issues.push(...this.parseIssuesFromOutput(log.output, step, stateName));
-    if (step.role === 'judge') return this.parseVerdict(log.output);
+    if (useVerdict && step.role === 'judge') return this.parseVerdict(log.output);
     return null;
   }
 
@@ -2989,8 +2989,9 @@ try {
         const metadata = result.metadata;
         const usage = normalizeEngineUsage(metadata);
 
+        const fallbackOutput = result.output || fullStreamContent || rawProc?.streamContent || '';
         return {
-          result: result.success ? result.output : (result.error || result.output || '引擎执行失败（无输出）'),
+          result: result.success ? fallbackOutput : (result.error || fallbackOutput || '引擎执行失败（无输出）'),
           session_id: resolvedSessionId || '',
           is_error: !result.success,
           cost_usd: metadataNumber(metadata, 'cost_usd', 'costUsd'),
@@ -3589,7 +3590,8 @@ try {
     segment: Extract<StepSegment, { type: 'parallel' }>,
     state: StateMachineState,
     config: StateMachineWorkflowConfig,
-    requirements?: string
+    requirements?: string,
+    useVerdict = true
   ): Promise<{ outputs: string[]; issues: Issue[]; verdict: 'pass' | 'conditional_pass' | 'fail'; summary: string; failed: boolean }> {
     const joinPolicy = resolveJoinPolicy(segment, config);
     const groupState: ActiveConcurrencyGroup = {
@@ -3652,11 +3654,13 @@ try {
       ? this.parseIssuesFromOutput(item.output || '', item.step, state.name)
       : []);
     let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
-    for (const item of results) {
-      if (item.status === 'fulfilled' && item.step.role === 'judge') {
-        const stepVerdict = this.parseVerdict(item.output || '');
-        if (stepVerdict === 'fail') verdict = 'fail';
-        else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+    if (useVerdict) {
+      for (const item of results) {
+        if (item.status === 'fulfilled' && item.step.role === 'judge') {
+          const stepVerdict = this.parseVerdict(item.output || '');
+          if (stepVerdict === 'fail') verdict = 'fail';
+          else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
+        }
       }
     }
     if (!joinResult.passed) verdict = 'fail';
@@ -3712,6 +3716,7 @@ try {
     let executedSegmentInThisPass = false;
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
+      const useSegmentVerdict = i === segments.length - 1;
       if (this.shouldStop) break;
       // Allow forced transition to interrupt mid-state
       if (this.pendingForceTransition) break;
@@ -3731,7 +3736,7 @@ try {
                 stepOutputs.push(log.output);
                 issues.push(...this.parseIssuesFromOutput(log.output, skippedStep, state.name));
                 skippedResults.push({ step: skippedStep, status: 'fulfilled', output: log.output });
-                if (skippedStep.role === 'judge') {
+                if (useSegmentVerdict && skippedStep.role === 'judge') {
                   const stepVerdict = this.parseVerdict(log.output);
                   if (stepVerdict === 'fail') verdict = 'fail';
                   else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
@@ -3742,7 +3747,7 @@ try {
               previousParallelSummary = this.summarizeParallelResults(segment.groupId, skippedResults);
             }
           } else {
-            const skippedVerdict = this.collectSkippedStepOutput(segment.step, state.name, stepOutputs, issues);
+            const skippedVerdict = this.collectSkippedStepOutput(segment.step, state.name, stepOutputs, issues, useSegmentVerdict);
             if (skippedVerdict === 'fail') verdict = 'fail';
             else if (skippedVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
             previousParallelSummary = '';
@@ -3764,7 +3769,7 @@ try {
       }
 
       if (segment.type === 'parallel') {
-        const parallelResult = await this.executeParallelSegment(segment, state, config, requirements);
+        const parallelResult = await this.executeParallelSegment(segment, state, config, requirements, useSegmentVerdict);
         executedSegmentInThisPass = true;
         stepOutputs.push(...parallelResult.outputs);
         issues.push(...parallelResult.issues);
@@ -3787,7 +3792,7 @@ try {
         issues.push(...stepIssues);
 
         // Update verdict based on step role
-        if (step.role === 'judge') {
+        if (useSegmentVerdict && step.role === 'judge') {
           const stepVerdict = this.parseVerdict(output);
           if (stepVerdict === 'fail') verdict = 'fail';
           else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
@@ -4528,8 +4533,8 @@ try {
       }
     }
 
-    // Add structured JSON output requirement for attacker/judge roles
-    if (step.role === 'attacker' || step.role === 'judge') {
+    // Add structured JSON output requirement only for state final decision steps.
+    if (isLastStepInState && (step.role === 'attacker' || step.role === 'judge')) {
       const conclusionOrder = isLastStepInState
         ? '如果本轮还要输出 <step-conclusion>，该 JSON 块必须放在它之前。'
         : '本步骤不是状态最后一步时，不要求输出 <step-conclusion>。';

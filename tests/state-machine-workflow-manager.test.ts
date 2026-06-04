@@ -757,6 +757,71 @@ describe('state machine execution flow', () => {
     expect(result.stepOutputs[0]).toContain('Step completed');
   });
 
+  test('step execution falls back to streamed output when engine result output is empty', async () => {
+    const engine = new MockEngine({ success: true, output: '' });
+    engine.executeImpl = async () => {
+      engine.emitStream('```json\n{"verdict":"pass","summary":"streamed pass"}\n```');
+      return { success: true, output: '' };
+    };
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig();
+    const state = config.workflow.states[0];
+
+    const result = await (manager as any).executeState(state, config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(result.stepOutputs[0]).toContain('streamed pass');
+  });
+
+  test('non-final defender and judge steps execute without requiring verdict JSON', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      if (options.step === 'defend-step') {
+        return { success: true, output: 'Defense implementation completed without verdict JSON' };
+      }
+      if (options.step === 'intermediate-review') {
+        return { success: true, output: '检查失败项已修复，继续下一步，不输出 verdict JSON' };
+      }
+      return { success: true, output: '```json\n{"verdict":"pass","summary":"final judge passed"}\n```' };
+    };
+    const manager = await createManagerForTest(engine);
+    (manager as any).engineType = 'claude-code';
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '实施',
+            isInitial: true,
+            steps: [
+              { name: 'defend-step', agent: 'developer', task: 'Implement defense', role: 'defender' },
+              { name: 'intermediate-review', agent: 'developer', task: 'Review intermediate result', role: 'judge' },
+              { name: 'final-verdict', agent: 'developer', task: 'Decide transition', role: 'judge' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+              { condition: { verdict: 'fail' }, to: '实施', priority: 2 },
+            ],
+          },
+          { name: '完成', isFinal: true, steps: [], transitions: [] },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(engine.calls.map((call) => call.options.step)).toEqual([
+      'defend-step',
+      'intermediate-review',
+      'final-verdict',
+    ]);
+    expect(result.stepOutputs).toHaveLength(3);
+    expect(result.stepOutputs[0]).toContain('Defense implementation completed');
+    expect(result.stepOutputs[1]).toContain('不输出 verdict JSON');
+    expect(result.verdict).toBe('pass');
+  });
+
   test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {
     const engine = new MockEngine({ success: true, output: 'Step completed by base role' });
     const manager = await createManagerForTest(engine);

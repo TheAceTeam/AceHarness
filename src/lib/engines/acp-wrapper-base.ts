@@ -590,6 +590,7 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected getEngineConfig(options: EngineOptions, diagnosticLoggingEnabled: boolean): ACPEngineConfig {
     return {
       ...this.getACPConfig(options),
+      userId: options.userId,
       diagnosticLogging: diagnosticLoggingEnabled,
     };
   }

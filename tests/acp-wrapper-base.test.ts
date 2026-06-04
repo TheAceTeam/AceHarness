@@ -69,6 +69,7 @@ vi.mock('@/lib/engines/acp-engine', async () => {
         workingDirectory: config.workingDirectory,
         args: config.args || [],
         env: config.env || {},
+        userId: config.userId || '',
         diagnosticLogging: Boolean(config.diagnosticLogging),
       }),
     logAcpTiming: vi.fn(),
@@ -225,6 +226,45 @@ describe('ACPWrapperBase shared runner', () => {
     expect(secondResult.output).toContain('second chunk');
     expect(firstChunks.join('')).toContain('first chunk');
     expect(secondChunks.join('')).toBe('second chunk');
+    ACPWrapperBase.shutdownSharedRunners();
+  });
+
+  test('does not reuse one ACP process across different user ids', async () => {
+    const { ACPWrapperBase } = await import('@/lib/engines/acp-wrapper-base');
+
+    class TestAcpWrapper extends ACPWrapperBase {
+      getName(): string {
+        return 'test-acp';
+      }
+
+      protected getACPConfig(options: EngineOptions) {
+        return {
+          engineType: 'kiro-cli' as const,
+          command: 'test-acp',
+          workingDirectory: options.workingDirectory,
+          args: [],
+        };
+      }
+
+      async isAvailable(): Promise<boolean> {
+        return true;
+      }
+    }
+
+    const first = new TestAcpWrapper();
+    const second = new TestAcpWrapper();
+
+    await first.execute({
+      ...BASE_OPTIONS,
+      userId: 'user-a',
+    });
+    await second.execute({
+      ...BASE_OPTIONS,
+      userId: 'user-b',
+    });
+
+    expect(acpMockState.instances).toHaveLength(2);
+    expect(acpMockState.instances.map((instance) => instance.config.userId)).toEqual(['user-a', 'user-b']);
     ACPWrapperBase.shutdownSharedRunners();
   });
 });

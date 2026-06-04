@@ -53,6 +53,8 @@ export interface ACPEngineConfig {
   promptField?: string;
   /** Environment variables */
   env?: Record<string, string>;
+  /** Authenticated user id for user-scoped credentials/env vars. */
+  userId?: string;
   /** MCP server configs for the current session */
   mcpServers?: ManagedMcpServer[];
   /** Enable detailed lifecycle logs for diagnostics. */
@@ -297,6 +299,7 @@ export function buildAcpProcessReuseKey(config: ACPEngineConfig): string {
     workingDirectory: config.workingDirectory,
     args: buildAcpCommandArgs(config),
     env: config.env || {},
+    userId: config.userId || '',
     diagnosticLogging: Boolean(config.diagnosticLogging),
   });
 }
@@ -436,7 +439,11 @@ export class ACPEngine extends EventEmitter {
     const args = this.buildCommandArgs();
     const commonCliPaths = getCommonCliSearchPaths();
     const resolvedCommand = findCommand(this.config.command, commonCliPaths) ?? this.config.command;
-    const baseEnv = buildConfiguredProcessEnvSync(this.config.env);
+    const baseEnv = buildConfiguredProcessEnvSync(
+      this.config.env,
+      process.env,
+      this.config.userId ? { userId: this.config.userId } : undefined,
+    );
     const envPath = [
       baseEnv.PATH || baseEnv.Path || '',
       ...getWindowsSystemPaths(),

@@ -269,6 +269,82 @@ function topModelIds(models, limit = 20) {
   return (models || []).slice(0, limit).map((m) => m.modelId || m.name || '<unknown>');
 }
 
+function stringValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function addModel(models, seen, modelId, name) {
+  const id = stringValue(modelId);
+  if (!id || seen.has(id)) return;
+  seen.add(id);
+  models.push({ modelId: id, name: stringValue(name) || id });
+}
+
+function arrayFromUnknown(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return Object.values(value);
+  return [];
+}
+
+function looksLikeModelConfigOption(option) {
+  const id = stringValue(option?.id).toLowerCase();
+  if (id === 'model' || id === 'models' || id.endsWith('.model')) return true;
+  const label = [
+    option?.name,
+    option?.title,
+    option?.label,
+    option?.description,
+  ].map((value) => stringValue(value).toLowerCase()).filter(Boolean).join(' ');
+  return /\bmodels?\b/.test(label);
+}
+
+function extractModelsFromConfigOption(option, models, seen) {
+  const choices = [
+    ...arrayFromUnknown(option.options),
+    ...arrayFromUnknown(option.choices),
+    ...arrayFromUnknown(option.items),
+    ...arrayFromUnknown(option.values),
+  ];
+
+  for (const choice of choices) {
+    if (typeof choice === 'string') {
+      addModel(models, seen, choice);
+      continue;
+    }
+    if (!choice || typeof choice !== 'object') continue;
+    addModel(
+      models,
+      seen,
+      choice.value ?? choice.modelId ?? choice.id ?? choice.key,
+      choice.name ?? choice.label ?? choice.title ?? choice.description,
+    );
+  }
+}
+
+function normalizeModelsFromSessionResult(result) {
+  const models = [];
+  const seen = new Set();
+  if (!result || typeof result !== 'object') return models;
+
+  const modelRecord = result.models && typeof result.models === 'object' ? result.models : null;
+  for (const item of arrayFromUnknown(modelRecord?.availableModels)) {
+    if (typeof item === 'string') {
+      addModel(models, seen, item);
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    addModel(models, seen, item.modelId ?? item.value ?? item.id, item.name ?? item.label ?? item.title);
+  }
+
+  for (const option of arrayFromUnknown(result.configOptions)) {
+    if (!option || typeof option !== 'object') continue;
+    if (!looksLikeModelConfigOption(option)) continue;
+    extractModelsFromConfigOption(option, models, seen);
+  }
+
+  return models;
+}
+
 function pickModel(modelInput, availableModels) {
   if (!modelInput) return '';
   const list = availableModels || [];
@@ -488,7 +564,7 @@ async function run() {
       () => ({ lastStderr }),
     );
     const sessionId = sess.sessionId;
-    const availableModels = sess.models?.availableModels || [];
+    const availableModels = normalizeModelsFromSessionResult(sess);
     report.availableModels = topModelIds(availableModels, 40);
     pushPhase('newSession', 'ok', {
       sessionId,
