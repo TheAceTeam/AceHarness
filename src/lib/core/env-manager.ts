@@ -99,7 +99,7 @@ export async function saveEnvVars(vars: EnvVar[], options?: { scope?: 'system' |
 export function buildEnvObject(vars: EnvVar[]): Record<string, string> {
   const env: Record<string, string> = {};
   for (const v of vars) {
-    if (v.enabled && v.key) {
+    if (v.enabled && v.key && String(v.value || '').trim()) {
       env[v.key] = v.value;
     }
   }

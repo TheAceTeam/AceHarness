@@ -11,8 +11,8 @@ import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/l
 import { requireAuth } from '@/lib/auth/middleware';
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAuth(request);
-  if (auth instanceof NextResponse) return auth;
+  const authResult = await requireAuth(request);
+  const auth = authResult instanceof NextResponse ? null : authResult;
 
   try {
     const {
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
       requestedMcpServers: mcpServers as RequestedMcpServersInput,
-      personalDir: auth.personalDir,
+      personalDir: auth?.personalDir,
     });
 
     const engineType = await resolveRequestedEngineType(requestedEngine);
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
         workingDirectory: getWorkspaceRoot(),
         sessionId: sessionId || undefined,
         mcpServers: enabledMcpServers,
-        userId: auth.id,
+        userId: auth?.id,
     });
 
     return NextResponse.json({

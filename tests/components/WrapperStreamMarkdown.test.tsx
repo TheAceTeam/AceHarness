@@ -565,6 +565,37 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
+  test('claude-code hides sdk thinking token accounting messages', async () => {
+    const { content, rawContent } = await buildClaudeRenderedMessage([
+      {
+        type: 'system',
+        subtype: 'thinking_tokens',
+        message: 'thinking_tokens: 1024',
+      },
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_delta',
+          index: 0,
+          delta: {
+            type: 'text_delta',
+            text: 'Done.',
+          },
+        },
+      },
+      {
+        type: 'result',
+        subtype: 'success',
+        result: 'Done.',
+        session_id: 'session-1',
+      },
+    ]);
+
+    expect(content).toBe('Done.');
+    expect(rawContent.includes('[SDK] thinking_tokens')).toBe(false);
+    expect(rawContent.includes('thinking_tokens: 1024')).toBe(false);
+  });
+
   test('claude wrapper malformed spec revision result is repaired and parsed', async () => {
     const { content } = await buildClaudeRenderedMessage([
       {
@@ -1924,6 +1955,43 @@ describe('Wrapper stream markdown rendering', () => {
     expect(text).toContain('workflow-helper');
     expect(text).toContain('Workflow Helper');
     expect(text).toContain('designing workflows');
+  });
+
+  test('shell command reading SKILL.md is rendered as a skill document', async () => {
+    const command = '/bin/bash -lc "sed -n \'1,220p\' /root/.aceharness/skills/aceharness-workflow-creator/SKILL.md"';
+    const raw = [
+      formatAceToolCall({
+        toolName: 'read',
+        toolId: 'shell-skill-1',
+        rawInput: { command },
+      }),
+      formatAceToolResult({
+        toolName: 'read',
+        toolId: 'shell-skill-1',
+        rawOutput: {
+          command,
+          output: '# Workflow Creator\n\nUse this when creating workflows.',
+          exitCode: 0,
+        },
+      }),
+    ].join('\n');
+
+    const parsed = extractAceProcessBlocks(raw);
+    expect(parsed.blocks).toHaveLength(2);
+    for (const block of parsed.blocks) {
+      if (block.meta.kind === 'tool-call' || block.meta.kind === 'tool-result') {
+        expect(block.meta.toolName).toBe('skill');
+      }
+    }
+
+    const view = renderWrapperStream([{ type: 'text', content: raw }]);
+    await openAllDetails(view.container);
+
+    const text = view.container.textContent || '';
+    expect(screen.getAllByText('技能文档').length).toBeGreaterThan(0);
+    expect(text).toContain('aceharness-workflow-creator');
+    expect(text).toContain('Workflow Creator');
+    expect(text).toContain('creating workflows');
   });
 
   test('ace-process stream groups consecutive tool cards into a task container', async () => {

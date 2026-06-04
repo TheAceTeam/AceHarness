@@ -60,6 +60,12 @@ function readStoredAuthUser(): AuthViewer | null {
   return null;
 }
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const token = localStorage.getItem('auth-token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant' | 'error';
@@ -124,7 +130,7 @@ export default function ChatModal() {
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ message: trimmed, model, engine: effectiveEngine, sessionId }),
       });
       const data = await res.json();

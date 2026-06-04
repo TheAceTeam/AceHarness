@@ -546,6 +546,9 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
           if (sys.subtype === 'task_notification') {
             continue;
           }
+          if (sys.subtype === 'thinking_tokens') {
+            continue;
+          }
           let info = '';
           if (sys.subtype === 'api_retry') {
             const retry = msg as { attempt?: number; retry_delay_ms?: number; message?: string };

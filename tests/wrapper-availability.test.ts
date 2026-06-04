@@ -21,6 +21,15 @@ async function hasModule(moduleName: string): Promise<boolean> {
 }
 
 describe('wrapper availability in current environment', () => {
+  test('enabled empty environment variables are treated as unset', () => {
+    expect(buildEnvObject([
+      { key: 'OPENAI_API_KEY', value: '', enabled: true },
+      { key: 'OPENAI_BASE_URL', value: '   ', enabled: true },
+      { key: 'ANTHROPIC_API_KEY', value: 'sk-test', enabled: true },
+      { key: 'DISABLED_VALUE', value: 'present', enabled: false },
+    ])).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+  });
+
   test('claude-code matches SDK availability', async () => {
     const wrapper = new ClaudeCodeEngineWrapper();
     const expected = await hasModule('@anthropic-ai/claude-agent-sdk');

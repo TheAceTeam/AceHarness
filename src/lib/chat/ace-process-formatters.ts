@@ -320,10 +320,11 @@ function extractTaggedToolValue(text: string, tag: string): string {
 }
 
 function extractToolPath(raw: unknown): string {
-  if (typeof raw === 'string') return extractTaggedToolValue(raw, 'path');
+  if (typeof raw === 'string') return extractTaggedToolValue(raw, 'path') || extractSkillMdPathFromCommand(raw);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return '';
   const obj = raw as UnknownRecord;
   return normalizeFilePath(obj)
+    || (typeof obj.command === 'string' ? extractSkillMdPathFromCommand(obj.command) : '')
     || extractTaggedToolValue(typeof obj.output === 'string' ? obj.output : '', 'path')
     || extractTaggedToolValue(typeof obj.content === 'string' ? obj.content : '', 'path')
     || extractTaggedToolValue(typeof obj.text === 'string' ? obj.text : '', 'path')
@@ -331,12 +332,20 @@ function extractToolPath(raw: unknown): string {
 }
 
 function getSkillReadInfo(toolName: string, raw: unknown): null | { filePath: string; name: string } {
-  if (toolName !== 'read') return null;
+  if (!['read', 'bash', 'cmd', 'powershell'].includes(toolName)) return null;
   const filePath = extractToolPath(raw).trim();
   if (!/(^|[/\\])SKILL\.md$/i.test(filePath)) return null;
   const parts = filePath.replace(/\\/g, '/').split('/').filter(Boolean);
   const name = parts.length >= 2 ? parts[parts.length - 2] : '';
   return { filePath, name };
+}
+
+function extractSkillMdPathFromCommand(command: string): string {
+  const text = String(command || '');
+  if (!/SKILL\.md/i.test(text)) return '';
+  const match = text.match(/"([^"]*[/\\]SKILL\.md)"|'([^']*[/\\]SKILL\.md)'|`([^`]*[/\\]SKILL\.md)`|([^\s"'`;&|<>]+[/\\]SKILL\.md)/i);
+  const raw = String(match?.[1] || match?.[2] || match?.[3] || match?.[4] || '').trim();
+  return raw.replace(/[),\]]+$/g, '');
 }
 
 function extractExitCode(raw: UnknownRecord): number | undefined {

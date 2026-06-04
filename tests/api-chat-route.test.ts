@@ -10,6 +10,7 @@ const routeMocks = vi.hoisted(() => ({
   executeEngineWithContextRecovery: vi.fn(),
   resolveRecoveredSessionId: vi.fn(),
   getWorkspaceRoot: vi.fn(),
+  requireAuth: vi.fn(),
 }));
 
 vi.mock('@/lib/engines/engine-factory', () => ({
@@ -31,6 +32,10 @@ vi.mock('@/lib/core/app-paths', () => ({
   getWorkspaceRoot: routeMocks.getWorkspaceRoot,
 }));
 
+vi.mock('@/lib/auth/middleware', () => ({
+  requireAuth: routeMocks.requireAuth,
+}));
+
 describe('/api/chat route', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,6 +46,7 @@ describe('/api/chat route', () => {
     routeMocks.ensureEngineRuntimeSkillsAvailable.mockResolvedValue(undefined);
     routeMocks.resolveRecoveredSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);
     routeMocks.getWorkspaceRoot.mockReturnValue('/tmp/workspace');
+    routeMocks.requireAuth.mockResolvedValue(new Response(JSON.stringify({ error: '未登录或登录已过期' }), { status: 401 }));
   });
 
   afterEach(() => {
