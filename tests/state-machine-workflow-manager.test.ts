@@ -11,6 +11,8 @@ vi.mock('@/lib/run/state-persistence', () => ({
   saveRunState: vi.fn().mockResolvedValue(undefined),
   saveProcessOutput: vi.fn().mockResolvedValue(undefined),
   saveStreamContent: vi.fn().mockResolvedValue(undefined),
+  appendStreamContent: vi.fn().mockResolvedValue(undefined),
+  appendFeedbackToStream: vi.fn().mockResolvedValue(undefined),
   loadRunState: vi.fn().mockResolvedValue(null),
   loadStepOutputs: vi.fn().mockResolvedValue({}),
 }));

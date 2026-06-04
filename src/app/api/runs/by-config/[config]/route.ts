@@ -11,6 +11,10 @@ export async function GET(
     const config = (await params).config;
     const configFile = decodeURIComponent(config);
     const runs = await listRunsByConfig(configFile);
+    const shouldRepair = request.nextUrl.searchParams.get('repair') === '1';
+    if (!shouldRepair) {
+      return NextResponse.json({ runs });
+    }
 
     // Repair stale "running/preparing" runs in history:
     // if run is not active in memory and has no alive processes, mark it stopped.

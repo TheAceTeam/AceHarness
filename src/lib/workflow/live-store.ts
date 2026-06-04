@@ -41,6 +41,8 @@ let snapshot = INITIAL_STATE;
 let eventSource: EventSource | null = null;
 let closeTimer: number | null = null;
 let initialHydrationPromise: Promise<void> | null = null;
+const eventLogSeqByRunId = new Map<string, number>();
+const eventLogInflightByRunId = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
 
 function emitChange() {
@@ -112,6 +114,75 @@ function applyWorkflowStatus(nextState: WorkflowLiveStateSnapshot, statusSnapsho
   };
 }
 
+function applyWorkflowEventLogRecord(record: { runId: string; type: string; seq: number; payload: any }) {
+  const payload = record.payload || {};
+  if (record.type === 'run.state.saved') {
+    updateSnapshot((current) => {
+      const nextRunStatusById = {
+        ...current.runStatusById,
+        [record.runId]: String(payload.status || current.runStatusById[record.runId] || 'unknown'),
+      };
+      const configFile = typeof payload.configFile === 'string' ? payload.configFile : '';
+      const nextWorkflowStatusByConfig = configFile
+        ? {
+            ...current.workflowStatusByConfig,
+            [configFile]: {
+              ...(current.workflowStatusByConfig[configFile] || {}),
+              runId: record.runId,
+              configFile,
+              currentConfigFile: configFile,
+              status: payload.status,
+              currentPhase: payload.currentPhase,
+              currentStep: payload.currentStep,
+            },
+          }
+        : current.workflowStatusByConfig;
+      return {
+        ...current,
+        runStatusById: nextRunStatusById,
+        workflowStatusByConfig: nextWorkflowStatusByConfig,
+        lastEventAt: Date.now(),
+      };
+    });
+    return;
+  }
+
+  if (
+    record.type === 'workflow.human-question-required'
+    || record.type === 'workflow.human-question-updated'
+    || record.type === 'workflow.human-question-answered'
+  ) {
+    const question = payload.question || payload.pendingHumanQuestion;
+    if (!question) return;
+    updateSnapshot((current) => ({
+      ...current,
+      pendingHumanQuestions: mergeQuestion(current.pendingHumanQuestions, question),
+      lastEventAt: Date.now(),
+    }));
+  }
+}
+
+function hydrateEventLog(runId: string) {
+  if (typeof window === 'undefined' || !runId) return;
+  if (eventLogInflightByRunId.has(runId)) return;
+  const afterSeq = eventLogSeqByRunId.get(runId) || 0;
+  const promise = workflowApi.getEventLog(runId, { afterSeq, limit: 500 })
+    .then((result) => {
+      for (const event of result.events || []) {
+        applyWorkflowEventLogRecord(event);
+        eventLogSeqByRunId.set(runId, Math.max(eventLogSeqByRunId.get(runId) || 0, event.seq));
+      }
+      if (typeof result.nextSeq === 'number') {
+        eventLogSeqByRunId.set(runId, Math.max(eventLogSeqByRunId.get(runId) || 0, result.nextSeq));
+      }
+    })
+    .catch(() => {})
+    .finally(() => {
+      eventLogInflightByRunId.delete(runId);
+    });
+  eventLogInflightByRunId.set(runId, promise);
+}
+
 function handleWorkflowEvent(event: any) {
   const type = String(event?.type || '');
   const data = event?.data || {};
@@ -140,6 +211,11 @@ function handleWorkflowEvent(event: any) {
       chatStreamsBySessionId: nextChatStreamsBySessionId,
       lastEventAt: Date.now(),
     }));
+    for (const runId of Object.keys(nextRunStatusById)) {
+      if (ACTIVE_WORKFLOW_STATUSES.has(String(nextRunStatusById[runId] || ''))) {
+        hydrateEventLog(runId);
+      }
+    }
     return;
   }
 
@@ -195,6 +271,7 @@ function handleWorkflowEvent(event: any) {
   }
 
   if (data?.statusSnapshot) {
+    const snapshotRunId = data.statusSnapshot?.runId ? String(data.statusSnapshot.runId) : '';
     updateSnapshot((current) => {
       const next = applyWorkflowStatus(current, data.statusSnapshot);
       const statusQuestions = Array.isArray(data.statusSnapshot?.humanQuestions)
@@ -218,6 +295,7 @@ function handleWorkflowEvent(event: any) {
         lastEventAt: Date.now(),
       };
     });
+    if (snapshotRunId) hydrateEventLog(snapshotRunId);
   }
 
   if (type === 'human-question-required' || type === 'human-question-updated' || type === 'human-question-answered') {
@@ -260,16 +338,22 @@ function ensureInitialHydration() {
     workflowApi.listHumanQuestions({ status: 'unanswered', limit: 100 }).catch(() => ({ questions: [] as HumanQuestion[] })),
     runsApi.listAll().catch(() => ({ runs: [] as Array<{ id: string; status: string }> })),
   ]).then(([questionsResult, runsResult]) => {
+    const runs = runsResult.runs || [];
     updateSnapshot((current) => ({
       ...current,
       pendingHumanQuestions: current.pendingHumanQuestions.length > 0
         ? current.pendingHumanQuestions
         : sortQuestions(questionsResult.questions || []),
       runStatusById: {
-        ...Object.fromEntries((runsResult.runs || []).map((run) => [run.id, run.status])),
+        ...Object.fromEntries(runs.map((run) => [run.id, run.status])),
         ...current.runStatusById,
       },
     }));
+    for (const run of runs) {
+      if (ACTIVE_WORKFLOW_STATUSES.has(String(run.status || ''))) {
+        hydrateEventLog(run.id);
+      }
+    }
   }).finally(() => {
     initialHydrationPromise = null;
   });

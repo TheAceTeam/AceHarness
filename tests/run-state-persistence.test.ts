@@ -130,6 +130,35 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('saveRunState serializes writes for the same run', async () => {
+    await withIsolatedAceHome(async () => {
+      const { saveRunState, loadRunState } = await loadPersistence();
+      const runId = 'run-serialized-state-writes';
+      const first = minimalRunState({
+        runId,
+        status: 'running',
+        currentStep: 'First Step',
+      });
+      const second = minimalRunState({
+        runId,
+        status: 'completed',
+        currentStep: 'Second Step',
+        completedSteps: ['Second Step'],
+        endTime: new Date().toISOString(),
+      });
+
+      await Promise.all([
+        saveRunState(first),
+        saveRunState(second),
+      ]);
+
+      const loaded = await loadRunState(runId);
+      expect(loaded?.status).toBe('completed');
+      expect(loaded?.currentStep).toBe('Second Step');
+      expect(loaded?.completedSteps).toEqual(['Second Step']);
+    });
+  });
+
   test('saveRunState writes compact summary cache for history lists', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       const { saveRunState } = await loadPersistence();
@@ -181,6 +210,128 @@ describe('run-state-persistence', () => {
         completedSteps: 1,
         totalTokens: 215,
       });
+    });
+  });
+
+  test('saveRunState externalizes checkpoint and human question step outputs, then hydrates them on load', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, loadRunState } = await loadPersistence();
+      const largeOutputA = 'A'.repeat(20_000);
+      const largeOutputB = 'B'.repeat(15_000);
+      const state = minimalRunState({
+        runId: 'run-externalized-step-outputs',
+        mode: 'state-machine' as const,
+        currentState: '__human_approval__',
+        pendingHumanQuestionId: 'question-1',
+        pendingCheckpoint: {
+          phase: '__human_approval__',
+          checkpoint: 'human-approval',
+          message: 'Please approve',
+          isIterativePhase: false,
+          humanQuestionId: 'question-1',
+          suggestedNextState: 'Done',
+          availableStates: ['Done'],
+          result: {
+            verdict: 'pass',
+            summary: 'ready',
+            issues: [],
+            stepOutputs: [largeOutputA, largeOutputB],
+          },
+          humanQuestion: {
+            id: 'question-1',
+            runId: 'run-externalized-step-outputs',
+            configFile: 'test-workflow.yaml',
+            status: 'unanswered',
+            kind: 'approval',
+            title: 'Approve',
+            message: 'Approve transition',
+            createdAt: new Date().toISOString(),
+            answerSchema: { type: 'approval-transition' },
+            result: {
+              verdict: 'pass',
+              summary: 'nested',
+              issues: [],
+              stepOutputs: [largeOutputB],
+            },
+          },
+        },
+        humanQuestions: [{
+          id: 'question-1',
+          runId: 'run-externalized-step-outputs',
+          configFile: 'test-workflow.yaml',
+          status: 'unanswered',
+          kind: 'approval',
+          title: 'Approve',
+          message: 'Approve transition',
+          createdAt: new Date().toISOString(),
+          answerSchema: { type: 'approval-transition' },
+          result: {
+            verdict: 'pass',
+            summary: 'question',
+            issues: [],
+            stepOutputs: [largeOutputA],
+          },
+        }],
+      });
+
+      await saveRunState(state);
+
+      const statePath = resolve(aceHome, 'runs', state.runId, 'state.yaml');
+      const rawState = await readFile(statePath, 'utf-8');
+      expect(rawState).toContain('stepOutputRef');
+      expect(rawState).toContain('stepOutputCount');
+      expect(rawState).not.toContain(largeOutputA);
+      expect(rawState).not.toContain(largeOutputB);
+
+      const checkpointDir = resolve(aceHome, 'runs', state.runId, 'checkpoints');
+      expect(existsSync(checkpointDir)).toBe(true);
+
+      const loaded = await loadRunState(state.runId);
+      expect(loaded?.pendingCheckpoint?.result?.stepOutputs).toEqual([largeOutputA, largeOutputB]);
+      expect(loaded?.pendingCheckpoint?.humanQuestion?.result?.stepOutputs).toEqual([largeOutputB]);
+      expect(loaded?.humanQuestions?.[0]?.result?.stepOutputs).toEqual([largeOutputA]);
+    });
+  });
+
+  test('saveRunState externalizes step log output, then hydrates it on load', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, loadRunState, saveProcessOutput, listOutputFiles } = await loadPersistence();
+      const largeOutput = `# Result\n\n${'large persisted step output\n'.repeat(2000)}`;
+      const state = minimalRunState({
+        runId: 'run-externalized-step-log-output',
+        stepLogs: [{
+          id: 'log-1',
+          stepName: 'Implementation/Step',
+          agent: 'developer',
+          status: 'completed',
+          output: largeOutput,
+          error: '',
+          costUsd: 0.25,
+          durationMs: 1234,
+          timestamp: new Date().toISOString(),
+        }],
+      });
+
+      await saveRunState(state);
+
+      const statePath = resolve(aceHome, 'runs', state.runId, 'state.yaml');
+      const rawState = await readFile(statePath, 'utf-8');
+      expect(rawState).toContain('outputRef: outputs/step-logs/');
+      expect(rawState).toContain('outputBytes:');
+      expect(rawState).not.toContain('large persisted step output');
+
+      const loaded = await loadRunState(state.runId);
+      expect(loaded?.stepLogs[0].output).toBe(largeOutput);
+      expect(loaded?.stepLogs[0].outputRef).toContain('outputs/step-logs/');
+
+      const compactLoaded = await loadRunState(state.runId, { hydrateLargeOutputs: false });
+      expect(compactLoaded?.stepLogs[0].output).toBe('');
+      expect(compactLoaded?.stepLogs[0].outputRef).toContain('outputs/step-logs/');
+      expect(compactLoaded?.stepLogs[0].outputBytes).toBe(Buffer.byteLength(largeOutput, 'utf-8'));
+
+      await saveProcessOutput(state.runId, 'Visible Output', 'visible');
+      const files = await listOutputFiles(state.runId);
+      expect(files.map((file) => file.filename)).toEqual(['Visible_Output.md']);
     });
   });
 
@@ -266,6 +417,63 @@ describe('run-state-persistence', () => {
 
       const loaded = await loadStreamContent(state.runId, 'Build Step');
       expect(loaded).toBe(streamContent);
+    });
+  });
+
+  test('saveStreamContent appends stream deltas and records chunk files', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, saveStreamContent, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-deltas' });
+      await saveRunState(state);
+
+      await saveStreamContent(state.runId, 'Build Step', 'part-1');
+      await saveStreamContent(state.runId, 'Build Step', 'part-1\npart-2');
+
+      const loaded = await loadStreamContent(state.runId, 'Build Step');
+      expect(loaded).toBe('part-1\npart-2');
+
+      const chunkPath = resolve(aceHome, 'runs', state.runId, 'streams', 'Build_Step.chunks.jsonl');
+      const chunks = (await readFile(chunkPath, 'utf-8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      expect(chunks).toHaveLength(2);
+      expect(chunks.map((chunk) => chunk.text)).toEqual(['part-1', '\npart-2']);
+      expect(chunks.map((chunk) => chunk.offset)).toEqual([0, 6]);
+    });
+  });
+
+  test('saveStreamContent rewrites stream file when content shrinks', async () => {
+    await withIsolatedAceHome(async () => {
+      const { saveRunState, saveStreamContent, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-rewrite' });
+      await saveRunState(state);
+
+      await saveStreamContent(state.runId, 'Build Step', 'long content');
+      await saveStreamContent(state.runId, 'Build Step', 'short');
+
+      expect(await loadStreamContent(state.runId, 'Build Step')).toBe('short');
+    });
+  });
+
+  test('appendStreamContent appends chunks without requiring full stream content', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { saveRunState, appendStreamContent, appendFeedbackToStream, loadStreamContent } = await loadPersistence();
+      const state = minimalRunState({ runId: 'run-stream-append-only' });
+      await saveRunState(state);
+
+      await appendStreamContent(state.runId, 'Build Step', 'first');
+      await appendFeedbackToStream(state.runId, 'Build Step', 'please continue');
+      await appendStreamContent(state.runId, 'Build Step', '\nsecond');
+
+      const loaded = await loadStreamContent(state.runId, 'Build Step');
+      expect(loaded).toContain('first');
+      expect(loaded).toContain('please continue');
+      expect(loaded).toContain('\nsecond');
+      expect(loaded!.indexOf('first')).toBeLessThan(loaded!.indexOf('please continue'));
+      expect(loaded!.indexOf('please continue')).toBeLessThan(loaded!.indexOf('\nsecond'));
+
+      const chunkPath = resolve(aceHome, 'runs', state.runId, 'streams', 'Build_Step.chunks.jsonl');
+      const chunks = (await readFile(chunkPath, 'utf-8')).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+      expect(chunks.map((chunk) => chunk.text)).toEqual(['first', '\nsecond']);
+      expect(chunks[1].offset).toBeGreaterThan(chunks[0].offset);
     });
   });
 

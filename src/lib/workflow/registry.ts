@@ -9,6 +9,7 @@ import { readFile } from 'fs/promises';
 import { parse } from 'yaml';
 import { loadRunState } from '@/lib/run/state-persistence';
 import { ensureRuntimeConfigsSeeded, getBundledWorkflowConfigPath, getRuntimeWorkflowConfigPath } from '@/lib/run/runtime-configs';
+import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
 export type AnyWorkflowManager = WorkflowManager | StateMachineWorkflowManager;
 
@@ -30,6 +31,29 @@ interface ManagerEntry {
   manager: AnyWorkflowManager;
   isStateMachine: boolean;
   createdAt: number;
+}
+
+function compactRegistryEventPayload(input: any): any {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const result: any = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (key === 'output' || key === 'fullOutput' || key === 'streamContent') {
+      result[`${key}Size`] = typeof value === 'string' ? value.length : 0;
+      continue;
+    }
+    if (key === 'result' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const nested: any = { ...(value as any) };
+      if (Array.isArray(nested.stepOutputs)) {
+        nested.stepOutputCount = nested.stepOutputs.length;
+        nested.stepOutputBytes = nested.stepOutputs.reduce((sum: number, item: any) => sum + (typeof item === 'string' ? item.length : 0), 0);
+        nested.stepOutputs = [];
+      }
+      result[key] = nested;
+      continue;
+    }
+    result[key] = value;
+  }
+  return result;
 }
 
 class WorkflowRegistry extends EventEmitter {
@@ -101,7 +125,17 @@ class WorkflowRegistry extends EventEmitter {
     const events = resolvedIsSM ? WorkflowRegistry.SM_EVENTS : WorkflowRegistry.PHASE_EVENTS;
     for (const evt of events) {
       manager.on(evt, (data: any) => {
-        this.emit(evt, { ...data, __configFile: configFile });
+        const tagged = { ...data, __configFile: configFile };
+        this.emit(evt, tagged);
+        const runId = typeof data?.runId === 'string' && data.runId
+          ? data.runId
+          : manager.getStatus().runId;
+        if (runId) {
+          getWorkflowEventStore().append(runId, `workflow.${evt}`, {
+            configFile,
+            ...compactRegistryEventPayload(data),
+          }).catch(() => {});
+        }
       });
     }
     return manager;

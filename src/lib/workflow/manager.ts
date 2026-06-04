@@ -5,7 +5,7 @@
 
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
-import { readFile, readdir, stat, mkdir, cp, rm, copyFile, writeFile } from 'fs/promises';
+import { readFile, readdir, stat, mkdir, rm, copyFile, writeFile } from 'fs/promises';
 import { resolve, join, dirname } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { cpus } from 'os';
@@ -16,9 +16,10 @@ import type { EngineJsonResult, EngineResultMetadata, EngineTokenUsage } from '@
 import { createRun, updateRun } from '@/lib/run/store';
 import type { RunRecord } from '@/lib/run/store';
 import {
-  saveRunState, saveProcessOutput, saveStreamContent, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
+  saveRunState, saveProcessOutput, saveStreamContent, appendStreamContent, appendFeedbackToStream, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
   type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck, type WorkflowGitState,
 } from '@/lib/run/state-persistence';
+import { compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
 import { isWindows } from '@/lib/core/runtime-platform';
@@ -179,6 +180,24 @@ function hasMeaningfulAiOutput(...parts: Array<string | null | undefined>): bool
   return parts.some((part) => typeof part === 'string' && stripNonAiStreamArtifacts(part).length > 0);
 }
 
+function isAceHarnessSkillName(skillName: string): boolean {
+  return skillName.toLowerCase().startsWith('aceharness-');
+}
+
+function promptContentKey(value: string | null | undefined): string {
+  const text = String(value || '');
+  return `${text.length}:${text.slice(0, 120)}:${text.slice(-120)}`;
+}
+
+type AgentPromptMemo = {
+  roadmapKey?: string;
+  requirementsKey?: string;
+  globalContextKey?: string;
+  phaseContextKeys: Record<string, string>;
+  skillRulesShown?: boolean;
+  skillContentSeen: Set<string>;
+};
+
 function buildAgentCompactSourceFromStepLogs(
   stepLogs: PersistedStepLog[],
   agentName: string,
@@ -265,6 +284,8 @@ export class WorkflowManager extends EventEmitter {
   private workflowMcpServers: ManagedMcpServer[] = [];
   /** Skills copied to workspace that need cleanup on finish */
   private copiedSkills: { dir: string; names: string[]; indexCopied: boolean; dirExistedBefore: boolean } | null = null;
+  /** Per-agent prompt memory for omitting unchanged repeated context within one run session. */
+  private promptMemos: Map<string, AgentPromptMemo> = new Map();
   /** Current engine instance (Kiro CLI, Codex, etc.) */
   private currentEngine: Engine | null = null;
   /** Current engine type */
@@ -287,6 +308,23 @@ export class WorkflowManager extends EventEmitter {
       : [];
     const baseDirectory = this.getWorkingDirectory() || workflowConfig.context?.projectRoot || this.resolveProjectRootPath();
     this.workflowMcpServers = await resolveMcpServersByNames(names, baseDirectory);
+  }
+
+  private getAgentPromptMemo(agentName: string): AgentPromptMemo {
+    const key = agentName || 'default';
+    let memo = this.promptMemos.get(key);
+    if (!memo) {
+      memo = { phaseContextKeys: {}, skillContentSeen: new Set<string>() };
+      this.promptMemos.set(key, memo);
+    }
+    return memo;
+  }
+
+  private isPhaseLastStep(step: WorkflowStep, workflowConfig: WorkflowConfig): boolean {
+    const phase = (workflowConfig.workflow.phases || []).find((item) => item.name === this.currentPhase);
+    const steps = phase?.steps || [];
+    const index = steps.findIndex((item) => item === step || item.name === step.name);
+    return index >= 0 && index === steps.length - 1;
   }
 
   private getEffectiveMcpServers(roleConfig?: RoleConfig | null): ManagedMcpServer[] {
@@ -512,17 +550,19 @@ export class WorkflowManager extends EventEmitter {
       }
     }
     if (needed.size === 0) {
-      // 没有指定 skills，symlink 整个 skills 目录（像 chat 一样）
-      if (!existsSync(workspaceSkillsDir)) {
+      // 没有指定 skills 时，只逐项链接非 ACEHarness 内置 skill，避免镜像整棵目录。
+      await mkdir(workspaceSkillsDir, { recursive: true });
+      const entries = await readdir(serverSkillsDir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || isAceHarnessSkillName(entry.name)) continue;
+        const src = resolve(serverSkillsDir, entry.name);
+        const dst = resolve(workspaceSkillsDir, entry.name);
+        if (existsSync(dst)) continue;
         try {
-          createDirectoryLinkSync(serverSkillsDir, workspaceSkillsDir);
-        } catch {
-          try {
-            await cp(serverSkillsDir, workspaceSkillsDir, { recursive: true, force: true });
-            console.log(`[WF-Skills] 已复制整个 skills 目录 → ${workspaceSkillsDir}`);
-          } catch (e2) {
-            console.warn('[WF-Skills] 同步 skills 目录失败:', e2);
-          }
+          createDirectoryLinkSync(src, dst);
+          console.log(`[WF-Skills] 已链接 skill "${entry.name}" → ${dst}`);
+        } catch (error) {
+          console.warn(`[WF-Skills] 链接 skill "${entry.name}" 失败:`, error);
         }
       }
       return;
@@ -533,6 +573,7 @@ export class WorkflowManager extends EventEmitter {
 
     const linkedNames: string[] = [];
     for (const skillName of needed) {
+      if (isAceHarnessSkillName(skillName)) continue;
       const src = resolve(serverSkillsDir, skillName);
       const dst = resolve(workspaceSkillsDir, skillName);
       if (!existsSync(src)) continue;
@@ -541,15 +582,8 @@ export class WorkflowManager extends EventEmitter {
         createDirectoryLinkSync(src, dst);
         linkedNames.push(skillName);
         console.log(`[WF-Skills] 已链接 skill "${skillName}" → ${dst}`);
-      } catch (e) {
-        // Fallback to copy if symlink fails (e.g. cross-device)
-        try {
-          await cp(src, dst, { recursive: true, force: true });
-          linkedNames.push(skillName);
-          console.log(`[WF-Skills] 已复制 skill "${skillName}" → ${dst}`);
-        } catch (e2) {
-          console.warn(`[WF-Skills] 同步 skill "${skillName}" 失败:`, e2);
-        }
+      } catch (error) {
+        console.warn(`[WF-Skills] 链接 skill "${skillName}" 失败:`, error);
       }
     }
 
@@ -887,6 +921,7 @@ try {
         appendSystemPrompt: options.appendSystemPrompt,
         runId: options.runId,
         mcpServers: options.mcpServers,
+        userId: this._createdBy,
       }, {
         onContextReset: (event) => {
           this.emit('log', {
@@ -2055,13 +2090,15 @@ try {
         status: 'completed',
         beforeSnapshotId,
       });
+      const compactLogOutput = compactRuntimeOutputPreview(displayOutput);
       // Record step log
       this.stepLogs.push({
         id: stepId,
         stepName: step.name,
         agent: step.agent,
         status: 'completed',
-        output: displayOutput,
+        output: compactLogOutput.output,
+        outputBytes: compactLogOutput.outputBytes,
         error: '',
         costUsd: jsonResult.cost_usd || 0,
         durationMs: jsonResult.duration_ms || 0,
@@ -2079,7 +2116,8 @@ try {
         step: step.name,
         agent: step.agent,
         output: displayOutput.substring(0, 500) + (displayOutput.length > 500 ? '...' : ''),
-        fullOutput: displayOutput,
+        outputBytes: compactLogOutput.outputBytes,
+        outputTruncated: compactLogOutput.truncated,
         role: step.role,
         costUsd: jsonResult.cost_usd,
         sessionId: jsonResult.session_id,
@@ -2126,6 +2164,7 @@ try {
         this.currentStep = null;
 
         const displayOutput = this.deriveStepDisplayOutput(resultText) || resultText;
+        const compactLogOutput = compactRuntimeOutputPreview(displayOutput);
 
         const afterSnapshotId = await this.recordStepGitAfter({
           stepLogId: stepId,
@@ -2140,7 +2179,8 @@ try {
           stepName: step.name,
           agent: step.agent,
           status: 'completed',
-          output: displayOutput,
+          output: compactLogOutput.output,
+          outputBytes: compactLogOutput.outputBytes,
           error: '',
           costUsd: 0,
           durationMs: 0,
@@ -2158,7 +2198,8 @@ try {
           step: step.name,
           agent: step.agent,
           output: displayOutput.substring(0, 500) + (displayOutput.length > 500 ? '...' : ''),
-          fullOutput: displayOutput,
+          outputBytes: compactLogOutput.outputBytes,
+          outputTruncated: compactLogOutput.truncated,
           role: step.role,
           costUsd: 0,
           numTurns: 0,
@@ -2427,9 +2468,32 @@ try {
     // Set up stream content flushing to disk (with chunk separators)
     let lastFlush = 0;
     let activeProcessId = processId;
-    let accumulatedStream = ''; // Accumulate stream content across feedback rounds
+    let accumulatedStreamPreview = '';
+    let streamHasMeaningfulOutput = false;
+    let currentProcessStreamLength = 0;
     let lastStreamAt = Date.now();
     let watchdogTriggeredForProcess = '';
+    const appendStreamPreview = (text: string) => {
+      if (!text) return;
+      streamHasMeaningfulOutput = streamHasMeaningfulOutput || hasMeaningfulAiOutput(text);
+      accumulatedStreamPreview = compactRuntimeOutputPreview(
+        accumulatedStreamPreview
+          ? `${accumulatedStreamPreview}\n\n<!-- chunk-boundary -->\n\n${text}`
+          : text
+      ).output;
+    };
+    const flushProcessStream = (content?: string | null) => {
+      if (!this.currentRunId || !content || content.length < currentProcessStreamLength) return;
+      const delta = content.slice(currentProcessStreamLength);
+      if (!delta) return;
+      currentProcessStreamLength = content.length;
+      appendStreamPreview(delta);
+      appendStreamContent(this.currentRunId, step.name, delta).catch(() => {});
+    };
+    const appendFeedbackMarker = (feedbackPrompt: string) => {
+      if (!this.currentRunId) return;
+      appendFeedbackToStream(this.currentRunId, step.name, feedbackPrompt).catch(() => {});
+    };
     const streamHandler = (data: { id: string; step: string; total: string }) => {
       if (data.id !== activeProcessId) return;
       const now = Date.now();
@@ -2438,10 +2502,7 @@ try {
       // Flush to disk every 3 seconds
       if (this.currentRunId && now - lastFlush > 3000) {
         lastFlush = now;
-        const fullStream = accumulatedStream
-          ? accumulatedStream + '\n\n<!-- chunk-boundary -->\n\n' + data.total
-          : data.total;
-        saveStreamContent(this.currentRunId, step.name, fullStream).catch(() => {});
+        flushProcessStream(data.total);
       }
     };
     processManager.on('stream', streamHandler);
@@ -2495,17 +2556,14 @@ try {
             this.feedbackInterrupt = false;
             const proc = processManager.getProcess(currentProcessId);
             if (proc?.streamContent) {
-              accumulatedStream += (accumulatedStream ? '\n\n<!-- chunk-boundary -->\n\n' : '') + proc.streamContent;
+              flushProcessStream(proc.streamContent);
             }
             const sessionId = proc?.sessionId;
 
             const feedbackPrompt = this.liveFeedback.join('\n\n');
             this.liveFeedback = [];
             const feedbackTimestamp = new Date().toISOString();
-            accumulatedStream += `\n\n<!-- chunk-boundary -->\n\n<!-- human-feedback: ${feedbackTimestamp} -->\n${feedbackPrompt}`;
-            if (this.currentRunId) {
-              saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
-            }
+            appendFeedbackMarker(feedbackPrompt);
             this.emit('feedback-injected', { message: feedbackPrompt, timestamp: feedbackTimestamp, status: 'delivered' });
             currentSessionId = sessionId || undefined;
             currentPrompt = isFeedbackOnly
@@ -2516,6 +2574,7 @@ try {
             }
             currentProcessId = `${step.agent}-${step.name}-interrupt-${Date.now()}`;
             activeProcessId = currentProcessId;
+            currentProcessStreamLength = 0;
             lastStreamAt = Date.now();
             watchdogTriggeredForProcess = '';
             this.emit('step', {
@@ -2535,11 +2594,7 @@ try {
         // Accumulate stream content from this round
         const proc = processManager.getProcess(currentProcessId);
         if (proc?.streamContent) {
-          accumulatedStream += (accumulatedStream ? '\n\n<!-- chunk-boundary -->\n\n' : '') + proc.streamContent;
-        }
-        // Save the full accumulated stream
-        if (this.currentRunId) {
-          saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
+          flushProcessStream(proc.streamContent);
         }
 
         lastResult = result;
@@ -2555,10 +2610,7 @@ try {
 
           // Append feedback marker to accumulated stream so it shows inline
           const feedbackTimestamp = new Date().toISOString();
-          accumulatedStream += `\n\n<!-- chunk-boundary -->\n\n<!-- human-feedback: ${feedbackTimestamp} -->\n${feedbackPrompt}`;
-          if (this.currentRunId) {
-            saveStreamContent(this.currentRunId, step.name, accumulatedStream).catch(() => {});
-          }
+          appendFeedbackMarker(feedbackPrompt);
           this.emit('feedback-injected', { message: feedbackPrompt, timestamp: feedbackTimestamp, status: 'delivered' });
 
           // Resume the same session with feedback
@@ -2566,6 +2618,7 @@ try {
           currentPrompt = `## 人工实时反馈\n以下是用户在你执行过程中提供的反馈意见，请基于这些反馈继续处理当前任务：\n\n${feedbackPrompt}\n\n请根据以上反馈继续完成任务。`;
           currentProcessId = `${step.agent}-${step.name}-feedback-${Date.now()}`;
           activeProcessId = currentProcessId;
+          currentProcessStreamLength = 0;
           lastStreamAt = Date.now();
           watchdogTriggeredForProcess = '';
 
@@ -2581,14 +2634,14 @@ try {
         break;
       }
 
-      if (!hasMeaningfulAiOutput(accumulatedOutput, accumulatedStream)) {
+      if (!hasMeaningfulAiOutput(accumulatedOutput) && !streamHasMeaningfulOutput) {
         throw new Error(`AI 服务中断：步骤 "${step.name}" 未产生任何输出`);
       }
 
       // Return result with accumulated output from all rounds
       return {
         ...lastResult!,
-        result: this.selectPreferredAgentOutput(accumulatedOutput, accumulatedStream),
+        result: this.selectPreferredAgentOutput(accumulatedOutput, accumulatedStreamPreview),
       };
     } finally {
       clearInterval(idleWatchdog);
@@ -2633,23 +2686,44 @@ try {
     previousOutputs?: Record<string, string>,
     extraContext?: string
   ): Promise<string> {
+    const memo = this.getAgentPromptMemo(step.agent || roleConfig.name || 'default');
+    const phaseName = this.currentPhase || '当前阶段';
+    const isLastStepInPhase = this.isPhaseLastStep(step, workflowConfig);
     let prompt = `# 任务\n${step.task}\n\n`;
-    prompt += this.buildWorkflowRoadmapContext(step, workflowConfig);
+    const roadmapKey = `${this.currentPhase || ''}:${workflowConfig.workflow.phases?.map((phase) => `${phase.name}:${(phase.steps || []).map((item) => item.name).join('|')}`).join('>')}`;
+    if (memo.roadmapKey !== roadmapKey) {
+      prompt += this.buildWorkflowRoadmapContext(step, workflowConfig);
+      memo.roadmapKey = roadmapKey;
+    } else {
+      prompt += `## 工作流定位\n当前阶段: ${phaseName}\n当前步骤: ${step.name}\n上下游路线未变；继续按当前步骤任务推进，不要把本步骤核心交付留给后续步骤。\n\n`;
+    }
 
     if (workflowConfig.context.requirements) {
-      prompt += `## 需求背景\n${workflowConfig.context.requirements}\n\n`;
+      const requirementsKey = promptContentKey(workflowConfig.context.requirements);
+      if (memo.requirementsKey !== requirementsKey) {
+        prompt += `## 需求背景\n${workflowConfig.context.requirements}\n\n`;
+        memo.requirementsKey = requirementsKey;
+      }
     }
 
     // Inject global context
     if (this.globalContext) {
-      prompt += `## 全局上下文\n${this.globalContext}\n\n`;
+      const globalContextKey = promptContentKey(this.globalContext);
+      if (memo.globalContextKey !== globalContextKey) {
+        prompt += `## 全局上下文\n${this.globalContext}\n\n`;
+        memo.globalContextKey = globalContextKey;
+      }
     }
 
     // Inject phase-specific context
     if (this.currentPhase) {
       const phaseCtx = this.phaseContexts.get(this.currentPhase);
       if (phaseCtx) {
-        prompt += `## 阶段上下文（${this.currentPhase}）\n${phaseCtx}\n\n`;
+        const phaseContextKey = promptContentKey(phaseCtx);
+        if (memo.phaseContextKeys[this.currentPhase] !== phaseContextKey) {
+          prompt += `## 阶段上下文（${this.currentPhase}）\n${phaseCtx}\n\n`;
+          memo.phaseContextKeys[this.currentPhase] = phaseContextKey;
+        }
       }
     }
 
@@ -2669,55 +2743,40 @@ try {
       }
     }
 
-    // Collect all skills: workspace + workflow + step-level, then merge and deduplicate
+    // Collect workflow + step-level skills. Step skills are evaluated every step.
     const allSkillNames = new Set<string>();
-
-    // 1. Workspace skills (already loaded and tracked)
-    this.workspaceSkillNames.forEach(name => allSkillNames.add(name));
-
-    // 2. Workflow-level skills (from context.skills)
     if (workflowConfig.context.skills) {
       workflowConfig.context.skills.forEach(name => allSkillNames.add(name));
     }
-
-    // 3. Step-level skills (from step.skills)
     if (step.skills) {
       step.skills.forEach(name => allSkillNames.add(name));
     }
 
-    // Load all skills content
     if (allSkillNames.size > 0) {
       prompt += `## 必须使用的 Skills\n\n`;
-      prompt += `⚠️ **重要提醒：以下 Skills 是本步骤/项目的核心工具，你必须严格遵循以下原则：**\n\n`;
-      prompt += `1. **优先阅读 Skills**：在执行任何任务前，请务必仔细阅读下方所有 Skills 的说明文档\n`;
-      prompt += `2. **使用 Skills 中的命令**：直接使用 Skills 中提供的命令格式和参数，**严禁**自行猜测命令或随意修改参数\n`;
-      prompt += `3. **Skills 包含最佳实践**：每个 Skill 都经过验证，代表了该领域的最佳实践，偏离 Skill 指导可能导致错误或性能问题\n`;
-      prompt += `4. **遇到问题先查 Skills**：如果遇到构建、测试、部署等问题，请首先检查是否有对应的 Skill 可用\n\n`;
-      prompt += `### 如何使用 Skills\n\n`;
       const skillsAbsPath = await getRuntimeSkillsDirPath();
-      prompt += `- **Skills 目录绝对路径**: \`${skillsAbsPath}/\`\n`;
-      prompt += `- **阅读 SKILL.md**：每个 Skill 目录下的 SKILL.md 包含完整使用说明，例如 \`${skillsAbsPath}/build-cangjie/SKILL.md\`\n`;
-      prompt += `- **查看 REFERENCE.md**：如需更多参数说明，参考同目录下的 REFERENCE.md\n`;
-      prompt += `- **复制粘贴命令**：直接使用 Skill 中给出的示例命令，确保参数格式正确\n\n`;
-
-      // Load and inject workspace skills content first (already cached)
-      if (this.workspaceSkills) {
-        prompt += this.workspaceSkills;
+      if (!memo.skillRulesShown) {
+        prompt += `以下 Skills 是本步骤/工作流声明的工具。首次使用某个 Skill 前，必须先读取其 SKILL.md，按其中命令和约束执行；不要自行猜测命令参数。\n\n`;
+        prompt += `Skills 目录绝对路径: \`${skillsAbsPath}/\`\n\n`;
+        memo.skillRulesShown = true;
       }
+      prompt += [...allSkillNames].map((name) => {
+        const source = step.skills?.includes(name) ? 'step.skills' : 'workflow.context.skills';
+        return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
+      }).join('\n') + '\n\n';
 
-      // Load workflow-level and step-level skills that are not in workspace
-      const additionalSkills = [...allSkillNames].filter(
-        name => !this.workspaceSkillNames.has(name)
-      );
+      const newSkillNames = [...allSkillNames].filter((name) => !memo.skillContentSeen.has(name));
 
-      if (additionalSkills.length > 0) {
+      if (newSkillNames.length > 0) {
         const additionalSkillsContent = await this.loadStepSkills(
-          additionalSkills,
+          newSkillNames,
           workflowConfig.context.projectRoot || ''
         );
         if (additionalSkillsContent) {
+          prompt += `以下是本 agent 首次遇到的 Skill 说明；后续重复步骤只会给路径引用。\n\n`;
           prompt += additionalSkillsContent;
         }
+        newSkillNames.forEach((name) => memo.skillContentSeen.add(name));
       }
     }
 
@@ -2787,6 +2846,12 @@ try {
       prompt += `- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n`;
       prompt += `- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n`;
       prompt += `- 这类非阻塞问题只能放进补充建议，不要写成正式阻塞项。\n\n`;
+    }
+
+    if (isLastStepInPhase) {
+      prompt += `## 阶段收尾结论要求\n`;
+      prompt += `当前步骤是阶段 "${phaseName}" 的最后一个步骤。请在回复末尾输出 <step-conclusion>，只写可被下一阶段或后续 agent 直接复用的结论，包含：结果/裁决、下一步所需上下文、涉及对象、验证状态、未决风险、下一步建议。\n`;
+      prompt += `如果本轮还需要输出 verdict JSON，顺序必须是：verdict JSON -> <step-conclusion>。\n\n`;
     }
 
     // Inject human iteration feedback as check items

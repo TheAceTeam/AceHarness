@@ -179,6 +179,29 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
   };
 }
 
+export function compactWorkflowStatusDeltaForLive(status: any, configFile?: string | null) {
+  if (!status) return { status: 'idle' };
+  return {
+    status: status.status || '',
+    statusReason: truncateLiveText(status.statusReason || null, 1000),
+    runId: status.runId || null,
+    currentConfigFile: status.currentConfigFile || configFile || null,
+    workflowFrontendSessionId: status.workflowFrontendSessionId || null,
+    currentState: status.currentState || null,
+    currentPhase: status.currentPhase || status.currentState || null,
+    currentStep: status.currentStep || null,
+    activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : [],
+    activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : [],
+    completedStepCount: Array.isArray(status.completedSteps) ? status.completedSteps.length : 0,
+    failedStepCount: Array.isArray(status.failedSteps) ? status.failedSteps.length : 0,
+    transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
+    pendingHumanQuestionId: status.pendingHumanQuestionId || null,
+    pendingHumanQuestion: compactHumanQuestion(status.pendingHumanQuestion),
+    startTime: status.startTime || null,
+    endTime: status.endTime || null,
+  };
+}
+
 export function compactWorkflowEventPayloadForLive(payload: any) {
   if (!payload || typeof payload !== 'object') return payload;
   const compact = compactJsonValue(payload) as Record<string, unknown>;

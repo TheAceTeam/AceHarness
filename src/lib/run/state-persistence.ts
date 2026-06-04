@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile, readdir, rename, rm } from 'fs/promises';
+import { appendFile, mkdir, writeFile, readFile, readdir, rename, rm } from 'fs/promises';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stringify, parse } from 'yaml';
@@ -6,8 +6,12 @@ import { getWorkspaceRunsDir } from '@/lib/core/app-paths';
 import type { SpecCodingDocument, StepTaskBindingSnapshot, StepTaskBindingValidation } from '@/lib/core/schemas';
 import { buildRunSummaryCacheFromState, saveRunSummaryCache } from '@/lib/run/summary-cache';
 import { normalizeSpecCodingDocument } from '@/lib/spec/coding-store';
+import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
 const RUNS_DIR = getWorkspaceRunsDir();
+const streamPersistedLengths = new Map<string, number>();
+const runStateWriteQueues = new Map<string, Promise<void>>();
+const streamWriteQueues = new Map<string, Promise<void>>();
 
 /** Separator used to delimit output chunks in persisted stream files */
 export const STREAM_CHUNK_SEPARATOR = '\n\n<!-- chunk-boundary -->\n\n';
@@ -64,6 +68,8 @@ export interface PersistedStepLog {
   agent: string;
   status: 'completed' | 'failed';
   output: string;
+  outputRef?: string;
+  outputBytes?: number;
   error: string;
   costUsd: number;
   durationMs: number;
@@ -410,6 +416,10 @@ export interface PersistedRunState {
   } | null;
 }
 
+export interface LoadRunStateOptions {
+  hydrateLargeOutputs?: boolean;
+}
+
 function runDir(runId: string): string {
   return resolve(RUNS_DIR, runId);
 }
@@ -422,12 +432,212 @@ function outputsDir(runId: string): string {
   return resolve(runDir(runId), 'outputs');
 }
 
-export async function saveRunState(state: PersistedRunState): Promise<void> {
+function checkpointsDir(runId: string): string {
+  return resolve(runDir(runId), 'checkpoints');
+}
+
+function stepLogOutputsDir(runId: string): string {
+  return resolve(outputsDir(runId), 'step-logs');
+}
+
+function streamDir(runId: string): string {
+  return resolve(runDir(runId), 'streams');
+}
+
+function safeStepFileName(stepName: string): string {
+  return stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+}
+
+function streamQueueKey(runId: string, stepName: string): string {
+  return `${runId}:${safeStepFileName(stepName)}`;
+}
+
+function countStringBytes(items: string[]): number {
+  return items.reduce((sum, item) => sum + Buffer.byteLength(item, 'utf-8'), 0);
+}
+
+async function externalizeStepOutputs(
+  runId: string,
+  key: string,
+  result: any
+): Promise<any> {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const stepOutputs = Array.isArray(result.stepOutputs)
+    ? result.stepOutputs.filter((item: any): item is string => typeof item === 'string')
+    : [];
+  if (stepOutputs.length === 0) return result;
+
+  const dir = checkpointsDir(runId);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const safeName = safeStepFileName(key || 'checkpoint');
+  const filename = `${safeName}.step-outputs.json`;
+  await writeFile(resolve(dir, filename), `${JSON.stringify(stepOutputs)}\n`, 'utf-8');
+  return {
+    ...result,
+    stepOutputs: [],
+    stepOutputRef: `checkpoints/${filename}`,
+    stepOutputCount: stepOutputs.length,
+    stepOutputBytes: countStringBytes(stepOutputs),
+  };
+}
+
+async function hydrateStepOutputs(runId: string, result: any): Promise<any> {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  if (Array.isArray(result.stepOutputs) && result.stepOutputs.length > 0) return result;
+  if (typeof result.stepOutputRef !== 'string' || !result.stepOutputRef) return result;
+  try {
+    const content = await readFile(resolve(runDir(runId), result.stepOutputRef), 'utf-8');
+    const stepOutputs = JSON.parse(content);
+    if (!Array.isArray(stepOutputs)) return result;
+    return { ...result, stepOutputs };
+  } catch {
+    return result;
+  }
+}
+
+async function compactHumanQuestionForState(runId: string, question: any): Promise<any> {
+  if (!question || typeof question !== 'object' || Array.isArray(question)) return question;
+  return {
+    ...question,
+    result: await externalizeStepOutputs(runId, `human-question-${question.id || 'unknown'}`, question.result),
+  };
+}
+
+async function hydrateHumanQuestion(runId: string, question: any): Promise<any> {
+  if (!question || typeof question !== 'object' || Array.isArray(question)) return question;
+  return {
+    ...question,
+    result: await hydrateStepOutputs(runId, question.result),
+  };
+}
+
+async function externalizeStepLogOutput(runId: string, log: PersistedStepLog): Promise<PersistedStepLog> {
+  if (!log || typeof log !== 'object') return log;
+  if (typeof log.output !== 'string' || log.output.length === 0) return log;
+
+  const dir = stepLogOutputsDir(runId);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const safeStep = safeStepFileName(log.stepName || 'step');
+  const safeId = safeStepFileName(log.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const filename = `${safeStep}-${safeId}.md`;
+  await writeFile(resolve(dir, filename), log.output, 'utf-8');
+
+  return {
+    ...log,
+    output: '',
+    outputRef: `outputs/step-logs/${filename}`,
+    outputBytes: Buffer.byteLength(log.output, 'utf-8'),
+  };
+}
+
+async function hydrateStepLogOutput(runId: string, log: PersistedStepLog): Promise<PersistedStepLog> {
+  if (!log || typeof log !== 'object') return log;
+  if (typeof log.output === 'string' && log.output.length > 0) return log;
+  if (typeof log.outputRef !== 'string' || !log.outputRef) return log;
+  try {
+    const output = await readFile(resolve(runDir(runId), log.outputRef), 'utf-8');
+    return { ...log, output };
+  } catch {
+    return log;
+  }
+}
+
+async function compactStateForYaml(state: PersistedRunState): Promise<PersistedRunState> {
+  const pendingCheckpoint = state.pendingCheckpoint
+    ? {
+        ...state.pendingCheckpoint,
+        result: await externalizeStepOutputs(
+          state.runId,
+          `pending-checkpoint-${state.pendingCheckpoint.humanQuestionId || state.pendingHumanQuestionId || 'unknown'}`,
+          state.pendingCheckpoint.result
+        ),
+        humanQuestion: state.pendingCheckpoint.humanQuestion
+          ? {
+              ...state.pendingCheckpoint.humanQuestion,
+              result: await externalizeStepOutputs(
+                state.runId,
+                `pending-checkpoint-human-question-${state.pendingCheckpoint.humanQuestion.id || state.pendingCheckpoint.humanQuestionId || 'unknown'}`,
+                state.pendingCheckpoint.humanQuestion.result
+              ),
+            }
+          : state.pendingCheckpoint.humanQuestion,
+      }
+    : state.pendingCheckpoint;
+  const humanQuestions = Array.isArray(state.humanQuestions)
+    ? await Promise.all(state.humanQuestions.map((question) => compactHumanQuestionForState(state.runId, question)))
+    : state.humanQuestions;
+  const stepLogs = Array.isArray(state.stepLogs)
+    ? await Promise.all(state.stepLogs.map((log) => externalizeStepLogOutput(state.runId, log)))
+    : state.stepLogs;
+  return {
+    ...state,
+    stepLogs,
+    pendingCheckpoint,
+    humanQuestions,
+  };
+}
+
+async function hydrateExternalizedState(
+  state: PersistedRunState,
+  options: LoadRunStateOptions = {}
+): Promise<PersistedRunState> {
+  const hydrateLargeOutputs = options.hydrateLargeOutputs !== false;
+  if (!hydrateLargeOutputs) return state;
+  const pendingCheckpoint = state.pendingCheckpoint
+    ? {
+        ...state.pendingCheckpoint,
+        result: await hydrateStepOutputs(state.runId, state.pendingCheckpoint.result),
+        humanQuestion: await hydrateHumanQuestion(state.runId, state.pendingCheckpoint.humanQuestion),
+      }
+    : state.pendingCheckpoint;
+  const humanQuestions = Array.isArray(state.humanQuestions)
+    ? await Promise.all(state.humanQuestions.map((question) => hydrateHumanQuestion(state.runId, question)))
+    : state.humanQuestions;
+  const stepLogs = Array.isArray(state.stepLogs)
+    ? await Promise.all(state.stepLogs.map((log) => hydrateStepLogOutput(state.runId, log)))
+    : state.stepLogs;
+  return {
+    ...state,
+    stepLogs,
+    pendingCheckpoint,
+    humanQuestions,
+  };
+}
+
+function buildRunSnapshotFromState(state: PersistedRunState, summary: ReturnType<typeof buildRunSummaryCacheFromState>) {
+  return {
+    runId: state.runId,
+    configFile: state.configFile,
+    workflowName: state.workflowName,
+    status: state.status,
+    statusReason: state.statusReason,
+    startTime: state.startTime,
+    endTime: state.endTime,
+    currentPhase: state.currentPhase,
+    currentState: state.currentState,
+    currentStep: state.currentStep,
+    mode: state.mode,
+    activeSteps: state.activeSteps || [],
+    activeConcurrencyGroups: state.activeConcurrencyGroups || [],
+    completedSteps: state.completedSteps || [],
+    failedSteps: state.failedSteps || [],
+    pendingHumanQuestionId: state.pendingHumanQuestionId,
+    workingDirectory: state.workingDirectory,
+    supervisorAgent: state.supervisorAgent,
+    workflowFrontendSessionId: state.workflowFrontendSessionId,
+    transitionCount: state.transitionCount,
+    summary,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function writeRunStateNow(state: PersistedRunState): Promise<void> {
   const dir = runDir(state.runId);
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  const yamlContent = '# Auto-generated run state\n' + stringify(state);
+  const persistedState = await compactStateForYaml(state);
+  const yamlContent = '# Auto-generated run state\n' + stringify(persistedState);
   const target = stateFilePath(state.runId);
   const temp = resolve(dir, `state.yaml.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await writeFile(temp, yamlContent, 'utf-8');
@@ -443,16 +653,53 @@ export async function saveRunState(state: PersistedRunState): Promise<void> {
       console.warn('[run-state] failed to update summary cache:', error);
     });
   }
+  const snapshot = buildRunSnapshotFromState(state, summary);
+  const store = getWorkflowEventStore();
+  const event = await store.append(state.runId, 'run.state.saved', {
+    configFile: state.configFile,
+    status: state.status,
+    currentPhase: state.currentPhase || state.currentState || null,
+    currentStep: state.currentStep || null,
+    completedStepCount: Array.isArray(state.completedSteps) ? state.completedSteps.length : 0,
+    failedStepCount: Array.isArray(state.failedSteps) ? state.failedSteps.length : 0,
+    stepLogCount: Array.isArray(state.stepLogs) ? state.stepLogs.length : 0,
+    stateHistoryCount: Array.isArray(state.stateHistory) ? state.stateHistory.length : 0,
+    snapshotRef: 'workflow_snapshots',
+  }).catch((error) => {
+    console.warn('[run-state] failed to append workflow event:', error);
+    return null;
+  });
+  await store.saveSnapshot(state.runId, snapshot, { seq: event?.seq }).catch((error) => {
+    console.warn('[run-state] failed to save workflow snapshot:', error);
+  });
 }
 
-export async function loadRunState(runId: string): Promise<PersistedRunState | null> {
+export async function saveRunState(state: PersistedRunState): Promise<void> {
+  const previous = runStateWriteQueues.get(state.runId) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => writeRunStateNow(state));
+  runStateWriteQueues.set(state.runId, next);
+  try {
+    await next;
+  } finally {
+    if (runStateWriteQueues.get(state.runId) === next) {
+      runStateWriteQueues.delete(state.runId);
+    }
+  }
+}
+
+export async function loadRunState(
+  runId: string,
+  options: LoadRunStateOptions = {}
+): Promise<PersistedRunState | null> {
   try {
     const content = await readFile(stateFilePath(runId), 'utf-8');
     const state = parse(content) as PersistedRunState;
     if (state?.runSpecCoding) {
       state.runSpecCoding = normalizeSpecCodingDocument(state.runSpecCoding);
     }
-    return state;
+    return hydrateExternalizedState(state, options);
   } catch {
     return null;
   }
@@ -467,9 +714,14 @@ export async function saveProcessOutput(
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
-  const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+  const safeName = safeStepFileName(stepName);
   const filepath = resolve(dir, `${safeName}.md`);
   await writeFile(filepath, output, 'utf-8');
+  await getWorkflowEventStore().append(runId, 'step.output.saved', {
+    stepName,
+    outputRef: `outputs/${safeName}.md`,
+    bytes: Buffer.byteLength(output, 'utf-8'),
+  }).catch(() => {});
   return filepath;
 }
 
@@ -507,6 +759,7 @@ export async function listOutputFiles(runId: string): Promise<{ stepName: string
   for (const file of files) {
     try {
       const fileStat = await stat(resolve(dir, file));
+      if (!fileStat.isFile()) continue;
       const stepName = file.replace(/\.(md|txt)$/, '');
       results.push({ stepName, filename: file, size: fileStat.size });
     } catch { /* skip */ }
@@ -539,15 +792,112 @@ export function isProcessAlive(pid: number): boolean {
 }
 
 /** Save live stream content for a running step */
+async function writeStreamContentNow(
+  runId: string,
+  stepName: string,
+  content: string
+): Promise<void> {
+  const dir = streamDir(runId);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const safeName = safeStepFileName(stepName);
+  const key = `${runId}:${safeName}`;
+  const previousLength = streamPersistedLengths.get(key) || 0;
+  const nextLength = content.length;
+  if (nextLength >= previousLength) {
+    const delta = content.slice(previousLength);
+    if (delta) {
+      await appendFile(resolve(dir, `${safeName}.stream.md`), delta, 'utf-8');
+      const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
+      const chunk = {
+        ts: new Date().toISOString(),
+        offset: previousLength,
+        text: delta,
+      };
+      await appendFile(chunkFile, `${JSON.stringify(chunk)}\n`, 'utf-8').catch(() => {});
+      await getWorkflowEventStore().append(runId, 'stream.chunk', {
+        stepName,
+        streamRef: `streams/${safeName}.chunks.jsonl`,
+        offset: previousLength,
+        bytes: Buffer.byteLength(delta, 'utf-8'),
+      }).catch(() => {});
+    }
+  } else {
+    await writeFile(resolve(dir, `${safeName}.stream.md`), content, 'utf-8');
+    await getWorkflowEventStore().append(runId, 'stream.rewritten', {
+      stepName,
+      streamRef: `streams/${safeName}.stream.md`,
+      bytes: Buffer.byteLength(content, 'utf-8'),
+    }).catch(() => {});
+  }
+  streamPersistedLengths.set(key, nextLength);
+}
+
+async function appendStreamContentNow(
+  runId: string,
+  stepName: string,
+  chunkText: string
+): Promise<void> {
+  if (!chunkText) return;
+  const dir = streamDir(runId);
+  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+  const safeName = safeStepFileName(stepName);
+  const key = `${runId}:${safeName}`;
+  const previousLength = streamPersistedLengths.get(key) || 0;
+  await appendFile(resolve(dir, `${safeName}.stream.md`), chunkText, 'utf-8');
+  const chunkFile = resolve(dir, `${safeName}.chunks.jsonl`);
+  const chunk = {
+    ts: new Date().toISOString(),
+    offset: previousLength,
+    text: chunkText,
+  };
+  await appendFile(chunkFile, `${JSON.stringify(chunk)}\n`, 'utf-8').catch(() => {});
+  await getWorkflowEventStore().append(runId, 'stream.chunk', {
+    stepName,
+    streamRef: `streams/${safeName}.chunks.jsonl`,
+    offset: previousLength,
+    bytes: Buffer.byteLength(chunkText, 'utf-8'),
+  }).catch(() => {});
+  streamPersistedLengths.set(key, previousLength + chunkText.length);
+}
+
 export async function saveStreamContent(
   runId: string,
   stepName: string,
   content: string
 ): Promise<void> {
-  const dir = resolve(runDir(runId), 'streams');
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-  const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-  await writeFile(resolve(dir, `${safeName}.stream.md`), content, 'utf-8');
+  const key = streamQueueKey(runId, stepName);
+  const previous = streamWriteQueues.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => writeStreamContentNow(runId, stepName, content));
+  streamWriteQueues.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (streamWriteQueues.get(key) === next) {
+      streamWriteQueues.delete(key);
+    }
+  }
+}
+
+export async function appendStreamContent(
+  runId: string,
+  stepName: string,
+  chunkText: string
+): Promise<void> {
+  const key = streamQueueKey(runId, stepName);
+  const previous = streamWriteQueues.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => appendStreamContentNow(runId, stepName, chunkText));
+  streamWriteQueues.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (streamWriteQueues.get(key) === next) {
+      streamWriteQueues.delete(key);
+    }
+  }
 }
 
 /** Append a human feedback marker to the stream file for the current step */
@@ -556,18 +906,38 @@ export async function appendFeedbackToStream(
   stepName: string,
   message: string
 ): Promise<void> {
-  const dir = resolve(runDir(runId), 'streams');
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-  const safeName = stepName.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-  const filepath = resolve(dir, `${safeName}.stream.md`);
-  const timestamp = new Date().toISOString();
-  const feedbackChunk = `${STREAM_CHUNK_SEPARATOR}<!-- human-feedback: ${timestamp} -->\n${message}`;
+  const key = streamQueueKey(runId, stepName);
+  const previous = streamWriteQueues.get(key) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      const dir = streamDir(runId);
+      if (!existsSync(dir)) await mkdir(dir, { recursive: true });
+      const safeName = safeStepFileName(stepName);
+      const filepath = resolve(dir, `${safeName}.stream.md`);
+      const timestamp = new Date().toISOString();
+      const feedbackChunk = `${STREAM_CHUNK_SEPARATOR}<!-- human-feedback: ${timestamp} -->\n${message}`;
+      try {
+        await appendFile(filepath, feedbackChunk, 'utf-8');
+      } catch {
+        // File may not exist yet — write it
+        await writeFile(filepath, feedbackChunk, 'utf-8');
+      }
+      await getWorkflowEventStore().append(runId, 'stream.feedback', {
+        stepName,
+        streamRef: `streams/${safeName}.stream.md`,
+        bytes: Buffer.byteLength(feedbackChunk, 'utf-8'),
+      }).catch(() => {});
+      const lengthKey = `${runId}:${safeName}`;
+      streamPersistedLengths.set(lengthKey, (streamPersistedLengths.get(lengthKey) || 0) + feedbackChunk.length);
+    });
+  streamWriteQueues.set(key, next);
   try {
-    const { appendFile } = await import('fs/promises');
-    await appendFile(filepath, feedbackChunk, 'utf-8');
-  } catch {
-    // File may not exist yet — write it
-    await writeFile(filepath, feedbackChunk, 'utf-8');
+    await next;
+  } finally {
+    if (streamWriteQueues.get(key) === next) {
+      streamWriteQueues.delete(key);
+    }
   }
 }
 

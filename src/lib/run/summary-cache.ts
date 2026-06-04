@@ -395,7 +395,11 @@ export async function listRunSummaryCaches(): Promise<RunSummaryCache[]> {
   const summaries = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-      .map((entry) => ensureRunSummaryCache(entry.name))
+      .map(async (entry) => {
+        const cached = await loadRunSummaryCache(entry.name);
+        if (cached) return cached;
+        return ensureRunSummaryCache(entry.name);
+      })
   );
   return summaries.filter(Boolean) as RunSummaryCache[];
 }

@@ -1247,8 +1247,9 @@ export const runsApi = {
     return response.json();
   },
 
-  async getRunDetail(id: string): Promise<any> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/detail`);
+  async getRunDetail(id: string, options: { includeFull?: boolean } = {}): Promise<any> {
+    const suffix = options.includeFull ? '?include=full' : '';
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/detail${suffix}`);
     if (!response.ok) throw new Error('获取运行详情失败');
     return response.json();
   },
@@ -1563,6 +1564,19 @@ export const workflowApi = {
 
   async getStatus(configFile?: string, runId?: string): Promise<WorkflowStatusResponse> {
     return fetchWorkflowStatusSnapshot(configFile, runId);
+  },
+
+  async getEventLog(runId: string, options: { afterSeq?: number; limit?: number } = {}): Promise<{
+    runId: string;
+    events: Array<{ seq: number; runId: string; type: string; timestamp: string; payload: any }>;
+    nextSeq: number;
+  }> {
+    const search = new URLSearchParams({ runId });
+    if (options.afterSeq !== undefined) search.set('afterSeq', String(options.afterSeq));
+    if (options.limit !== undefined) search.set('limit', String(options.limit));
+    const response = await authFetch(`${API_BASE}/workflow/event-log?${search.toString()}`);
+    if (!response.ok) throw new Error('获取工作流事件失败');
+    return response.json();
   },
 
   connectStatusStream(

@@ -6,7 +6,11 @@ import { chatSessionEvents, type ChatSessionEvent } from '@/lib/chat/persistence
 import { engineStreamStateEvents, listPublicEngineStreams, type EngineStreamStateEvent } from '@/lib/chat/stream-state';
 import { loadRunState, type HumanQuestion } from '@/lib/run/state-persistence';
 import { isStateMachineManagerLike, workflowRegistry } from '@/lib/workflow/registry';
-import { compactWorkflowEventPayloadForLive, compactWorkflowStatusForLive } from '@/lib/workflow/live-status';
+import {
+  compactWorkflowEventPayloadForLive,
+  compactWorkflowStatusDeltaForLive,
+  compactWorkflowStatusForLive,
+} from '@/lib/workflow/live-status';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +39,7 @@ async function listPendingHumanQuestions(): Promise<HumanQuestion[]> {
   const entries = await readdir(runsDir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const state = await loadRunState(entry.name).catch(() => null);
+    const state = await loadRunState(entry.name, { hydrateLargeOutputs: false }).catch(() => null);
     if (!state?.humanQuestions?.length) continue;
     if (INACTIVE_RUN_STATUSES.has(state.status)) continue;
     for (const question of state.humanQuestions) {
@@ -56,6 +60,14 @@ function getWorkflowStatusSnapshot(configFile?: string | null): any | null {
   const status = entry?.manager?.getStatus?.();
   if (!status) return null;
   return compactWorkflowStatusForLive(status, configFile);
+}
+
+function getWorkflowStatusDelta(configFile?: string | null): any | null {
+  if (!configFile) return null;
+  const entry = workflowRegistry.getAllManagers().find((item) => item.configFile === configFile);
+  const status = entry?.manager?.getStatus?.();
+  if (!status) return null;
+  return compactWorkflowStatusDeltaForLive(status, configFile);
 }
 
 function buildLiveSnapshot(workflowStatusesFallback: Record<string, any> = {}) {
@@ -136,7 +148,7 @@ export async function GET(request: NextRequest) {
           const compactRest = compactWorkflowEventPayloadForLive(rest) as any;
           const mappedType = smTypeMap[evt];
           const configFile = typeof __configFile === 'string' ? __configFile : undefined;
-          const statusSnapshot = getWorkflowStatusSnapshot(configFile);
+          const statusSnapshot = getWorkflowStatusDelta(configFile);
           if (configFile && statusSnapshot) {
             workflowStatusesFallback[configFile] = statusSnapshot;
           }
