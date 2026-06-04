@@ -311,6 +311,12 @@ describe('parseVerdict', () => {
     expect(parseVerdict('')).toBe('fail');
     expect(parseVerdict('   ')).toBe('fail');
   });
+
+  test('parses verdict from step conclusion when JSON is missing', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const parseVerdict = (manager as any).parseVerdict.bind(manager);
+    expect(parseVerdict('<step-conclusion>\n## 结果 / 裁决\n- 当前状态最终裁定为 fail。\n</step-conclusion>')).toBe('fail');
+  });
 });
 
 describe('engine-level failure detection', () => {
@@ -348,7 +354,7 @@ describe('engine-level failure detection', () => {
       })
       .mockResolvedValueOnce({
         success: true,
-        output: 'pass\nRecovered by searching the workspace and using the correct file path.',
+        output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"recovered"}\n```\nRecovered by searching the workspace and using the correct file path.',
         sessionId: 'same-session',
       });
     const manager = await createManagerForTest(engine);
@@ -390,7 +396,7 @@ describe('engine-level failure detection', () => {
       })
       .mockResolvedValueOnce({
         success: true,
-        output: 'pass\nRecovered second failure.',
+        output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"recovered"}\n```\nRecovered second failure.',
         sessionId: 'same-session',
       });
     manager = await createManagerForTest(engine);
@@ -861,6 +867,57 @@ describe('state machine execution flow', () => {
     expect(finalJudgePrompt).toContain('# 步骤结论归档协议');
     expect(finalJudgePrompt).toContain('# 结构化输出要求');
     expect(finalJudgePrompt.indexOf('# 结构化输出要求')).toBeLessThan(finalJudgePrompt.indexOf('<step-conclusion>'));
+  });
+
+  test('final defender step is prompted to repair missing verdict JSON and archives conclusion', async () => {
+    const persistence = await import('@/lib/run/state-persistence');
+    const saveProcessOutputMock = vi.mocked(persistence.saveProcessOutput);
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      if (engine.calls.length === 1) {
+        return {
+          success: true,
+          output: '<step-conclusion>\n## 结果 / 裁决\n- 实现完成，但本轮漏掉 verdict JSON。\n</step-conclusion>',
+        };
+      }
+      expect(options.prompt).toContain('缺少最终裁决 JSON');
+      return {
+        success: true,
+        output: '```json\n{"verdict":"pass","remaining_issues":0,"summary":"final pass"}\n```\n<step-conclusion>\n## 结果 / 裁决\n- 当前状态最终裁定为 pass。\n</step-conclusion>',
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    (manager as any).engineType = 'claude-code';
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '实施',
+            isInitial: true,
+            steps: [
+              { name: 'final-defender', agent: 'developer', task: 'Implement and decide', role: 'defender' },
+            ],
+            transitions: [
+              { condition: { verdict: 'pass' }, to: '完成', priority: 1 },
+              { condition: { verdict: 'fail' }, to: '实施', priority: 2 },
+            ],
+          },
+          { name: '完成', isFinal: true, steps: [], transitions: [] },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(engine.calls).toHaveLength(2);
+    expect(result.verdict).toBe('pass');
+    expect(saveProcessOutputMock).toHaveBeenCalledWith(
+      'test-run-001',
+      '实施-final-defender',
+      expect.stringContaining('当前状态最终裁定为 pass')
+    );
+    expect(saveProcessOutputMock.mock.calls.at(-1)?.[2]).not.toContain('漏掉 verdict JSON');
   });
 
   test('serial steps ignore agentInstanceId so synthetic parallel agents are not started', async () => {

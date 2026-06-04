@@ -622,6 +622,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
     return index >= 0 && index === steps.length - 1;
   }
 
+  private shouldRequireFinalVerdict(step: WorkflowStep, state: StateMachineState): boolean {
+    return this.isStateLastStep(step, state) && !step.parallelGroup;
+  }
+
   private getWorkflowAgoraAgentSessions(): Record<string, string> {
     return Object.fromEntries(
       this.agents
@@ -1975,7 +1979,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     if (!log?.output) return null;
     stepOutputs.push(log.output);
     issues.push(...this.parseIssuesFromOutput(log.output, step, stateName));
-    if (useVerdict && step.role === 'judge') return this.parseVerdict(log.output);
+    if (useVerdict) return this.parseVerdict(log.output);
     return null;
   }
 
@@ -3656,7 +3660,7 @@ try {
     let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
     if (useVerdict) {
       for (const item of results) {
-        if (item.status === 'fulfilled' && item.step.role === 'judge') {
+        if (item.status === 'fulfilled') {
           const stepVerdict = this.parseVerdict(item.output || '');
           if (stepVerdict === 'fail') verdict = 'fail';
           else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
@@ -3736,7 +3740,7 @@ try {
                 stepOutputs.push(log.output);
                 issues.push(...this.parseIssuesFromOutput(log.output, skippedStep, state.name));
                 skippedResults.push({ step: skippedStep, status: 'fulfilled', output: log.output });
-                if (useSegmentVerdict && skippedStep.role === 'judge') {
+                if (useSegmentVerdict) {
                   const stepVerdict = this.parseVerdict(log.output);
                   if (stepVerdict === 'fail') verdict = 'fail';
                   else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
@@ -3792,7 +3796,7 @@ try {
         issues.push(...stepIssues);
 
         // Update verdict based on step role
-        if (useSegmentVerdict && step.role === 'judge') {
+        if (useSegmentVerdict) {
           const stepVerdict = this.parseVerdict(output);
           if (stepVerdict === 'fail') verdict = 'fail';
           else if (stepVerdict === 'conditional_pass' && verdict === 'pass') {
@@ -4049,8 +4053,22 @@ try {
       const context = await this.buildStepContext(step, state, config, requirements, extraContext);
 
       // Execute step (reuse existing process manager logic)
-      const stepResult = await this.runAgentStep(step, context, config, stepId);
-      const output = stepResult.output;
+      let stepResult = await this.runAgentStep(step, context, config, stepId);
+      let output = stepResult.output;
+      if (this.shouldRequireFinalVerdict(step, state) && !this.hasRequiredVerdictJson(output)) {
+        const repairContext = this.buildMissingFinalVerdictPrompt(context, output, state, step);
+        const repairResult = await this.runAgentStep(step, repairContext, config, stepId);
+        output = [output, repairResult.output].filter(Boolean).join('\n\n---\n\n');
+        stepResult = {
+          ...stepResult,
+          output,
+          lastRoundOutput: repairResult.lastRoundOutput || repairResult.output,
+          costUsd: stepResult.costUsd + repairResult.costUsd,
+          durationMs: stepResult.durationMs + repairResult.durationMs,
+          sessionId: repairResult.sessionId || stepResult.sessionId,
+          tokenUsage: this.mergeTokenUsage(stepResult.tokenUsage, repairResult.tokenUsage),
+        };
+      }
       if (isEngineLevelFailure(output)) {
         throw new Error(output.trim() || '引擎返回致命错误输出');
       }
@@ -4158,7 +4176,7 @@ try {
       // Save output to file system
       if (this.currentRunId) {
         const stepFileName = stepKey;
-        await saveProcessOutput(this.currentRunId, stepFileName, output || conclusion).catch(() => {});
+        await saveProcessOutput(this.currentRunId, stepFileName, conclusion || output).catch(() => {});
       }
 
       if (step.channelIds?.length) {
@@ -4302,6 +4320,46 @@ try {
     return blocks.join('\n\n');
   }
 
+  private mergeTokenUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+    return {
+      inputTokens: (a.inputTokens || 0) + (b.inputTokens || 0),
+      outputTokens: (a.outputTokens || 0) + (b.outputTokens || 0),
+      cacheCreationInputTokens: (a.cacheCreationInputTokens || 0) + (b.cacheCreationInputTokens || 0),
+      cacheReadInputTokens: (a.cacheReadInputTokens || 0) + (b.cacheReadInputTokens || 0),
+    };
+  }
+
+  private hasRequiredVerdictJson(output: string): boolean {
+    const parsed = this.extractJsonObject(output);
+    return Boolean(parsed && ['pass', 'conditional_pass', 'fail'].includes(parsed.verdict));
+  }
+
+  private buildMissingFinalVerdictPrompt(
+    originalContext: string,
+    previousOutput: string,
+    state: StateMachineState,
+    step: WorkflowStep,
+  ): string {
+    const previous = compactRuntimeOutputPreview(previousOutput || '', 8000).output;
+    return [
+      originalContext,
+      '\n# 系统补充要求：缺少最终裁决 JSON',
+      `你刚才完成了状态 "${state.name}" 的最后步骤 "${step.name}"，但回复中没有包含可解析的最终裁决 JSON。`,
+      '不要重新执行任务，不要重复完整过程，只基于你刚才的结果补交最终裁决。',
+      '必须先输出以下 JSON 块（用 ```json 包裹），且 verdict 只能是 pass、conditional_pass、fail 三者之一：',
+      '```json',
+      '{',
+      '  "verdict": "pass | conditional_pass | fail",',
+      '  "remaining_issues": 0,',
+      '  "summary": "一句话总结"',
+      '}',
+      '```',
+      '随后必须输出 <step-conclusion>，用于步骤归档和后续步骤复用。',
+      '\n# 你上一轮输出',
+      previous || '[上一轮没有可用输出]',
+    ].join('\n');
+  }
+
   private buildWorkflowRoadmapContext(
     currentStep: WorkflowStep,
     currentState: StateMachineState,
@@ -4361,6 +4419,7 @@ try {
     const runtimeAgentName = getStepRuntimeAgentName(step);
     const memo = this.getAgentPromptMemo(runtimeAgentName || step.agent || 'default');
     const isLastStepInState = this.isStateLastStep(step, state);
+    const requiresFinalVerdict = this.shouldRequireFinalVerdict(step, state);
 
     parts.push(`# 当前状态: ${state.name}`);
     if (state.description) {
@@ -4514,8 +4573,8 @@ try {
       ].join('\n'));
     }
 
-    // Add structured JSON output requirement only for state final decision steps.
-    if (isLastStepInState && (step.role === 'attacker' || step.role === 'judge')) {
+    // Add structured JSON output requirement for every state final decision step.
+    if (requiresFinalVerdict) {
       parts.push(`\n# 结构化输出要求\n请输出以下 JSON 块（用 \`\`\`json 包裹），用于自动化流程判断；该 JSON 块必须放在 <step-conclusion> 之前。\n\n\`\`\`json\n{\n  "verdict": "pass | conditional_pass | fail",\n  "remaining_issues": 0,\n  "summary": "一句话总结"\n}\n\`\`\`\n\n字段说明：\n- \`verdict\`: \`"pass"\` 表示无问题可通过，\`"conditional_pass"\` 表示有条件通过（存在需修复的问题但方向正确），\`"fail"\` 表示存在严重问题需要重做\n- \`remaining_issues\`: 剩余未解决的问题数量（整数）\n- \`summary\`: 一句话总结你的评估结论\n\n# 裁决边界约束\n- 正式 verdict 只评估当前阶段/当前检查点的核心审查目标。\n- 只有会影响当前检查点是否通过的问题，才能计入 \`remaining_issues\`，并影响 \`pass / conditional_pass / fail\`。\n- 像附加文件命名、时间戳前缀、补充总结归档格式、展示文案、非核心输出排版这类低优先级问题，如果不影响当前检查点核心目标，不能计入 \`remaining_issues\`，也不能单独导致 \`conditional_pass\` 或 \`fail\`。\n- 这类非阻塞问题只能写进状态收尾结论的“后续建议”或普通补充观察，不要放进“结论”主项，不要渲染成阻塞项。`);
     }
 
@@ -5194,8 +5253,9 @@ try {
       return target;
     }
 
-    // Check if judge suggested a next_state in JSON output
-    const aiSuggestedState = this.parseNextStateFromOutputs(result.stepOutputs, config);
+    // Check if judge suggested a next_state in JSON output. A fail verdict must
+    // follow configured fail transitions instead of being overridden by next_state.
+    const aiSuggestedState = result.verdict === 'fail' ? null : this.parseNextStateFromOutputs(result.stepOutputs, config);
     if (aiSuggestedState) {
       return aiSuggestedState;
     }
@@ -5390,10 +5450,28 @@ try {
       return parsed.verdict;
     }
 
+    const conclusion = extractTaggedBlock(output, 'step-conclusion');
+    const conclusionVerdict = conclusion ? this.parseVerdictFromConclusion(conclusion) : null;
+    if (conclusionVerdict) {
+      return conclusionVerdict;
+    }
+
     // Fallback: check for keywords
-    if (/\b(pass|通过|成功)\b/i.test(output)) return 'pass';
     if (/\b(fail|失败|不通过)\b/i.test(output)) return 'fail';
+    if (/\b(pass|通过|成功)\b/i.test(output)) return 'pass';
     return 'conditional_pass';
+  }
+
+  private parseVerdictFromConclusion(conclusion: string): 'pass' | 'conditional_pass' | 'fail' | null {
+    const text = conclusion.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const verdictPattern = /(?:verdict|裁定|裁决|结果|结论|判断)\s*(?:为|是|:|：|=)?\s*`?\s*(conditional_pass|fail|pass|有条件通过|失败|不通过|通过|成功)\s*`?/i;
+    const match = text.match(verdictPattern);
+    if (!match) return null;
+    const raw = match[1].toLowerCase();
+    if (raw === 'fail' || raw === '失败' || raw === '不通过') return 'fail';
+    if (raw === 'conditional_pass' || raw === '有条件通过') return 'conditional_pass';
+    if (raw === 'pass' || raw === '通过' || raw === '成功') return 'pass';
+    return null;
   }
 
   private getTransitionReason(result: StateExecutionResult): string {
