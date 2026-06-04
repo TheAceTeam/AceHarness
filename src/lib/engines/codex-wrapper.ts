@@ -103,6 +103,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private _abortController: AbortController | null = null;
   private lastBlockWasTool = false;
   private lastClientSignature = '';
+  private clientSignatureChangedForRun = false;
 
   private getThreadOptions(options: EngineOptions) {
     return {
@@ -207,11 +208,25 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       : undefined;
     const apiKey = String(clientEnv.OPENAI_API_KEY || '').trim();
     const baseUrl = String(clientEnv.OPENAI_BASE_URL || '').trim().replace(/\/+$/, '');
+    const config = {
+      ...(baseUrl ? {
+        model_provider: 'aceharness_openai_env',
+        model_providers: {
+          aceharness_openai_env: {
+            name: 'ACEHarness OpenAI',
+            base_url: baseUrl,
+            wire_api: 'responses',
+            requires_openai_auth: true,
+          },
+        },
+      } : {}),
+      ...(mcpServers && Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
+    };
     const codexOptions = {
       ...(codexPathOverride ? { codexPathOverride } : {}),
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      ...(mcpServers && Object.keys(mcpServers).length > 0 ? { config: { mcp_servers: mcpServers } } : {}),
+      ...(Object.keys(config).length > 0 ? { config } : {}),
       env: clientEnv,
     };
 
@@ -241,16 +256,19 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private async runWithClient(Codex: any, options: EngineOptions, codexPathOverride?: string | null): Promise<EngineResult> {
     const clientSignature = this.getClientSignature(options, codexPathOverride);
     if (!this.codexInstance || codexPathOverride || this.lastClientSignature !== clientSignature) {
+      this.clientSignatureChangedForRun = Boolean(this.codexInstance);
       this.codexInstance = await this.createCodexClient(Codex, options, codexPathOverride);
       this.currentThread = null;
       this.lastClientSignature = clientSignature;
+    } else {
+      this.clientSignatureChangedForRun = false;
     }
 
     // Create or reuse thread
     if (options.forceNewSession && !options.sessionId) {
       this.currentThread = null;
     }
-    if (options.sessionId) {
+    if (options.sessionId && !this.clientSignatureChangedForRun) {
       this.currentThread = this.codexInstance.resumeThread(
         options.sessionId,
         this.getThreadOptions(options),

@@ -160,7 +160,7 @@ describe('chat stream flow', () => {
 
     expect(response.status).toBe(200);
     const json = await responseJson(response);
-    expect(getOrCreateEngine).toHaveBeenCalledWith('mock-engine', 'front-1:workflow-planning');
+    expect(getOrCreateEngine).toHaveBeenCalledWith('mock-engine', 'front-1:workflow-planning', 'user-1');
     expect(registerEngineStream).toHaveBeenCalledWith(json.chatId, 'front-1:workflow-planning', 'mock-engine', '');
     expect(processManager.registerActiveStream).toHaveBeenCalledWith('front-1:workflow-planning', json.chatId);
   });

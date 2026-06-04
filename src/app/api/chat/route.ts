@@ -8,8 +8,12 @@ import {
   type RequestedSkillsInput,
 } from '@/lib/chat/request-options';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
+import { requireAuth } from '@/lib/auth/middleware';
 
 export async function POST(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const {
       message,
@@ -37,6 +41,7 @@ export async function POST(request: NextRequest) {
       extraSystemPrompt,
       requestedSkills: skills as RequestedSkillsInput,
       requestedMcpServers: mcpServers as RequestedMcpServersInput,
+      personalDir: auth.personalDir,
     });
 
     const engineType = await resolveRequestedEngineType(requestedEngine);
@@ -62,6 +67,7 @@ export async function POST(request: NextRequest) {
         workingDirectory: getWorkspaceRoot(),
         sessionId: sessionId || undefined,
         mcpServers: enabledMcpServers,
+        userId: auth.id,
     });
 
     return NextResponse.json({
