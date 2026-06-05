@@ -216,7 +216,10 @@ function normalizePayload(raw: unknown): AceProcessPayload | null {
 }
 
 export function wrapAceProcessBlock<T extends AceProcessPayload>(kind: T['kind'], payload: Omit<T, 'kind' | 'body'>, body = ''): string {
-  return `\n<ace-process>${JSON.stringify({ ...payload, kind, body })}</ace-process>\n`;
+  const serializedPayload = JSON.stringify({ ...payload, kind, body })
+    .replace(/<ace-process>/g, '\\u003cace-process\\u003e')
+    .replace(/<\/ace-process>/g, '\\u003c/ace-process\\u003e');
+  return `\n<ace-process>${serializedPayload}</ace-process>\n`;
 }
 
 type AceProcessRawSpan = {
@@ -326,6 +329,17 @@ export function stripAceProcessBlocks(content: string, replacement = ''): string
   }
   result += source.slice(cursor);
   return result;
+}
+
+export function getStreamingAceProcessReadyContent(content: string): string {
+  const source = String(content || '');
+  const lastOpen = source.lastIndexOf(ACE_PROCESS_OPEN_TAG);
+  if (lastOpen < 0) return source;
+
+  const lastClose = source.lastIndexOf(ACE_PROCESS_CLOSE_TAG);
+  if (lastClose > lastOpen) return source;
+
+  return source.slice(0, lastOpen);
 }
 
 export function extractAceProcessBlocks(content: string): {

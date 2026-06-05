@@ -33,7 +33,7 @@ import {
   type WorkflowSpecRevisionVoteChoice,
   type WorkflowSpecRevisionVoteRecord,
 } from '@/lib/run/state-persistence';
-import { compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
+import { appendRuntimeOutputPreview, compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
 import {
   appendWorkflowExperience,
   buildWorkflowExperiencePromptBlock,
@@ -4938,11 +4938,7 @@ try {
     const appendStreamPreview = (text: string) => {
       if (!text) return;
       streamHasMeaningfulOutput = streamHasMeaningfulOutput || hasMeaningfulAiOutput(text);
-      accumulatedStreamPreview = compactRuntimeOutputPreview(
-        accumulatedStreamPreview
-          ? `${accumulatedStreamPreview}\n\n<!-- chunk-boundary -->\n\n${text}`
-          : text
-      ).output;
+      accumulatedStreamPreview = appendRuntimeOutputPreview(accumulatedStreamPreview, text).output;
     };
 
     const flushProcessStream = (content?: string | null) => {

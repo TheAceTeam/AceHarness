@@ -50,6 +50,43 @@ function StateTransitionEdge({
   label,
   data,
 }: EdgeProps) {
+  if (data?.isSelfLoop) {
+    const loopSize = data?.loopSize ?? 120;
+    const edgePath = [
+      `M ${sourceX},${sourceY}`,
+      `C ${sourceX + loopSize},${sourceY}`,
+      `${sourceX + loopSize},${targetY - loopSize}`,
+      `${targetX},${targetY}`,
+    ].join(' ');
+    const labelX = sourceX + loopSize * 0.78;
+    const labelY = Math.min(sourceY, targetY) - loopSize * 0.55;
+
+    return (
+      <>
+        <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+        {label ? (
+          <EdgeLabelRenderer>
+            <div
+              className="nodrag nopan pointer-events-none rounded bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ring-1 ring-white/80 dark:bg-gray-950/95"
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+                maxWidth: 240,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                color: data?.labelColor || EXECUTED_EDGE_COLOR,
+                zIndex: data?.labelZIndex || 50,
+              }}
+            >
+              {label}
+            </div>
+          </EdgeLabelRenderer>
+        ) : null}
+      </>
+    );
+  }
+
   const dx = targetX - sourceX;
   const dy = targetY - sourceY;
   const length = Math.max(1, Math.hypot(dx, dy));
@@ -537,6 +574,9 @@ function calculateHandlePositions(
 ): { sourceHandle: string; targetHandle: string } {
   const dx = targetPos.x - sourcePos.x;
   const dy = targetPos.y - sourcePos.y;
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+    return { sourceHandle: 'right', targetHandle: 'top' };
+  }
 
   // 计算角度，判断主要方向
   const angle = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -569,6 +609,14 @@ function calculateHandlePositions(
   }
 
   return { sourceHandle, targetHandle };
+}
+
+function getNodeCenterPosition(node: Node | undefined, fallback?: { x: number; y: number }) {
+  const position = node?.position || fallback || { x: 0, y: 0 };
+  return {
+    x: position.x + (node?.width || 260) / 2,
+    y: position.y + (node?.height || 150) / 2,
+  };
 }
 
 // 内部组件，使用 useReactFlow
@@ -708,28 +756,32 @@ function StateMachineDiagramInner({
     const edges: Edge[] = [];
     const edgeSet = new Set<string>(); // 用于去重
 
-    // 获取节点位置映射
-    const nodePositions = calculateNodeLayout(states, true);
-
-    // 始终添加人工审查节点的位置（在最下方）
-    const avgX = states.length > 0
-      ? Array.from(nodePositions.values()).reduce((sum, pos) => sum + pos.x, 0) / nodePositions.size
-      : 500;
-    const maxY = states.length > 0
-      ? Math.max(...Array.from(nodePositions.values()).map(pos => pos.y))
-      : 200;
-    nodePositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
+    const nodesById = new Map(nodes.map((node) => [node.id, node]));
+    const fallbackPositions = calculateNodeLayout(states, true);
+    const humanApprovalNode = nodesById.get('__human_approval__');
+    if (!humanApprovalNode) {
+      const avgX = states.length > 0
+        ? Array.from(fallbackPositions.values()).reduce((sum, pos) => sum + pos.x, 0) / fallbackPositions.size
+        : 500;
+      const maxY = states.length > 0
+        ? Math.max(...Array.from(fallbackPositions.values()).map(pos => pos.y))
+        : 200;
+      fallbackPositions.set('__human_approval__', { x: avgX, y: maxY + 300 });
+    }
 
     const executedTransitions = buildExecutedStateTransitions(stateHistory);
     const executedKeys = new Set(executedTransitions.map((transition) => `${transition.from}->${transition.to}`));
 
     const getHandles = (source: string, target: string) => {
-      const sourcePos = nodePositions.get(source);
-      const targetPos = nodePositions.get(target);
-      if (sourcePos && targetPos) {
-        return calculateHandlePositions(sourcePos, targetPos);
+      if (source === target) {
+        return { sourceHandle: 'right', targetHandle: 'top' };
       }
-      return { sourceHandle: 'right', targetHandle: 'left' };
+      const sourceNode = nodesById.get(source);
+      const targetNode = nodesById.get(target);
+      return calculateHandlePositions(
+        getNodeCenterPosition(sourceNode, fallbackPositions.get(source)),
+        getNodeCenterPosition(targetNode, fallbackPositions.get(target)),
+      );
     };
 
     // 历史实际发生的转移优先绘制为蓝线。不要依赖配置 transition，
@@ -738,6 +790,7 @@ function StateMachineDiagramInner({
       const record = executedTransitions[i];
       const edgeId = `history-${i}-${record.from}-${record.to}`;
       const { sourceHandle, targetHandle } = getHandles(record.from, record.to);
+      const isSelfLoop = record.from === record.to;
 
       edges.push({
         id: edgeId,
@@ -759,6 +812,8 @@ function StateMachineDiagramInner({
           labelOffset: 26,
           labelZIndex: 80,
           curveOffset: 0,
+          isSelfLoop,
+          loopSize: 125,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -819,6 +874,7 @@ function StateMachineDiagramInner({
         }
 
         const { sourceHandle, targetHandle } = getHandles(state.name, transition.to);
+        const isSelfLoop = state.name === transition.to;
 
         edges.push({
           id: edgeId,
@@ -837,6 +893,8 @@ function StateMachineDiagramInner({
             labelOffset: 18,
             labelZIndex: 20,
             curveOffset: 0,
+            isSelfLoop,
+            loopSize: 105,
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
@@ -859,16 +917,17 @@ function StateMachineDiagramInner({
           edgeSet.add(edgeId);
 
           // 计算连接点
-          const sourcePos = nodePositions.get(state.name);
-          const targetPos = nodePositions.get('__human_approval__');
+          const sourceNode = nodesById.get(state.name);
+          const targetNode = nodesById.get('__human_approval__');
           let sourceHandle = 'bottom'; // 默认从下方连接到人工审查节点
           let targetHandle = 'top';
 
-          if (sourcePos && targetPos) {
-            const handles = calculateHandlePositions(sourcePos, targetPos);
-            sourceHandle = handles.sourceHandle;
-            targetHandle = handles.targetHandle;
-          }
+          const handles = calculateHandlePositions(
+            getNodeCenterPosition(sourceNode, fallbackPositions.get(state.name)),
+            getNodeCenterPosition(targetNode, fallbackPositions.get('__human_approval__')),
+          );
+          sourceHandle = handles.sourceHandle;
+          targetHandle = handles.targetHandle;
 
           edges.push({
             id: edgeId,
@@ -902,7 +961,7 @@ function StateMachineDiagramInner({
     }
 
     return edges;
-  }, [states, stateHistory, currentState, showAllEdges]);
+  }, [states, stateHistory, currentState, showAllEdges, nodes]);
 
   useEffect(() => {
     if (!initialFitDone.current) {

@@ -23,6 +23,7 @@ import { CodeBlock } from '@/components/ai-elements/code-block';
 import { BookOpenIcon, ChevronDownIcon, MessageSquareQuote, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
+  getStreamingAceProcessReadyContent,
   type AceProcessBlock,
   type AceSubtaskResultPayload,
   type AceSubtaskStartPayload,
@@ -1558,7 +1559,11 @@ function renderToolEntryCard(
 }
 
 export function WrapperProcessBlocks({ content, isStreaming = false }: { content: string; isStreaming?: boolean }) {
-  const { timelineItems } = useMemo(() => buildProcessTimelineState(content, isStreaming), [content, isStreaming]);
+  const readyContent = useMemo(
+    () => (isStreaming ? getStreamingAceProcessReadyContent(content) : String(content || '')),
+    [content, isStreaming],
+  );
+  const { timelineItems } = useMemo(() => buildProcessTimelineState(readyContent, isStreaming), [readyContent, isStreaming]);
   const renderItems = useMemo(() => groupTimelineItems(timelineItems), [timelineItems]);
   const lastReasoningIndex = useMemo(
     () => renderItems.reduce((lastIndex, item, index) => (item.kind === 'reasoning' ? index : lastIndex), -1),

@@ -5,7 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ChatMessage from '@/components/chat/ChatMessage';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
-import { extractAceProcessBlocks, mergeAceSubtaskChunks, mergeFinalRawStreamContent, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
+import { extractAceProcessBlocks, getStreamingAceProcessReadyContent, mergeAceSubtaskChunks, mergeFinalRawStreamContent, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { sendPromptWithOpenCodeHttp } from '@/lib/engines/opencode-http-adapter';
 import { normalizeEngineOutput } from '@/lib/engines/engine-output';
 import type { EngineStreamEvent } from '@/lib/engines/engine-interface';
@@ -3471,6 +3471,52 @@ describe('Wrapper stream markdown rendering', () => {
       expect(parsed.blocks[0].meta.output).toContain('<result>');
     }
     expect(parsed.cleanText).toContain('Visible text');
+    expect(parsed.cleanText).not.toContain('<ace-process>');
+  });
+
+  test('ace-process serialization does not emit raw nested protocol tags inside tool output', () => {
+    const nestedToolOutput = [
+      '读取 skill 后继续执行。',
+      '<ace-process>{"kind":"tool-call","toolName":"grep","title":"搜索内容","pattern":"ICE"}</ace-process>',
+      'grep 完成。',
+    ].join('\n');
+    const raw = wrapAceProcessBlock('tool-result', {
+      toolName: 'read',
+      title: '📖 读取文件',
+      output: nestedToolOutput,
+    }, '');
+
+    expect((raw.match(/<ace-process>/g) || [])).toHaveLength(1);
+    expect((raw.match(/<\/ace-process>/g) || [])).toHaveLength(1);
+    expect(raw).toContain('\\u003cace-process\\u003e');
+
+    const parsed = extractAceProcessBlocks(raw);
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-result');
+    if (parsed.blocks[0].meta.kind === 'tool-result') {
+      expect(parsed.blocks[0].meta.output).toContain('<ace-process>');
+      expect(parsed.blocks[0].meta.output).toContain('toolName":"grep');
+    }
+  });
+
+  test('streaming ace-process framing withholds incomplete protocol frames until closed', () => {
+    const incomplete = [
+      '准备读取文件。',
+      '<ace-process>{"kind":"tool-call","toolName":"read","title":"读取文件","toolId":"tool-1"',
+    ].join('\n\n');
+
+    const readyIncomplete = getStreamingAceProcessReadyContent(incomplete);
+    expect(readyIncomplete).toBe('准备读取文件。\n\n');
+    expect(readyIncomplete).not.toContain('<ace-process>');
+
+    const complete = `${incomplete}}</ace-process>\n继续分析。`;
+    const readyComplete = getStreamingAceProcessReadyContent(complete);
+    const parsed = extractAceProcessBlocks(readyComplete);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.blocks[0].kind).toBe('tool-call');
+    expect(parsed.cleanText).toContain('准备读取文件。');
+    expect(parsed.cleanText).toContain('继续分析。');
     expect(parsed.cleanText).not.toContain('<ace-process>');
   });
 

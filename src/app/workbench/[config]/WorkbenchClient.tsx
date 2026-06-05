@@ -59,7 +59,7 @@ import { Shimmer } from '@/components/ai-elements/shimmer';
 import WorkflowSupervisorAgoraPanel from '@/components/workflow/WorkflowSupervisorAgoraPanel';
 import { resolveWorkflowAgentSelection, resolveWorkflowExecutionPolicy } from '@/lib/agent/engine-selection';
 import { compileStepTaskBindings, type StepTaskBindingValidation } from '@/lib/spec/task-binding';
-import { mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
+import { getStreamingAceProcessReadyContent, mergeAceSubtaskChunkItems, mergeAceSubtaskChunks } from '@/lib/chat/ai-process-blocks';
 import {
   diagnoseExtractionFailure,
   extractStructuredResultPayload,
@@ -661,6 +661,14 @@ type DesignOptimizationCandidate = {
   bindingValidation: StepTaskBindingValidation | null;
 };
 
+type DesignOptimizationMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  status?: 'streaming' | 'completed' | 'failed';
+};
+
 function buildSpecCodingRuntimePayload(specCoding: any, source: 'run' | 'creation') {
   const phases = Array.isArray(specCoding?.phases) ? specCoding.phases : [];
   const tasks = Array.isArray(specCoding?.tasks) ? specCoding.tasks : [];
@@ -738,7 +746,9 @@ function AceAwareMarkdown({
   isStreaming?: boolean;
   className?: string;
 }) {
-  const prepared = String(content || '');
+  const prepared = isStreaming
+    ? getStreamingAceProcessReadyContent(content)
+    : String(content || '');
   if (prepared.includes('<ace-process>')) {
     return (
       <div className={className}>
@@ -1668,6 +1678,8 @@ export default function WorkbenchPage() {
   const [designOptimizationGenerating, setDesignOptimizationGenerating] = useState(false);
   const [designOptimizationStream, setDesignOptimizationStream] = useState('');
   const [designOptimizationCandidate, setDesignOptimizationCandidate] = useState<DesignOptimizationCandidate | null>(null);
+  const [designOptimizationMessages, setDesignOptimizationMessages] = useState<DesignOptimizationMessage[]>([]);
+  const [designOptimizationSessionId, setDesignOptimizationSessionId] = useState<string | null>(null);
 
   const refreshDesignPickerOptions = useCallback(async () => {
     try {
@@ -2891,6 +2903,8 @@ export default function WorkbenchPage() {
     setDesignOptimizationGenerating(false);
     setDesignOptimizationStream('');
     setDesignOptimizationCandidate(null);
+    setDesignOptimizationMessages([]);
+    setDesignOptimizationSessionId(null);
   }, [buildDefaultDesignOptimizationInstruction]);
   const handleOpenWorkflowOptimization = useCallback(() => {
     const sourceConfig = editingConfig || workflowConfig;
@@ -2977,36 +2991,61 @@ export default function WorkbenchPage() {
       return;
     }
 
+    const now = new Date().toISOString();
+    const userMessageId = `design-opt-user-${Date.now()}`;
+    const assistantMessageId = `design-opt-assistant-${Date.now()}`;
     setDesignOptimizationGenerating(true);
     setDesignOptimizationStream('');
-    setDesignOptimizationCandidate(null);
+    if (!designOptimizationSessionId) {
+      setDesignOptimizationCandidate(null);
+    }
+    setDesignOptimizationMessages((messages) => [
+      ...messages,
+      {
+        id: userMessageId,
+        role: 'user',
+        content: instruction,
+        createdAt: now,
+        status: 'completed',
+      },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        createdAt: now,
+        status: 'streaming',
+      },
+    ]);
 
     try {
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
-          message: buildDesignOptimizationPrompt({
-            target,
-            workflowName: sourceConfig.workflow.name || creationSessionSummary?.workflowName || configFile,
-            configFile,
-            instruction,
-            currentConfig: sourceConfig,
-            currentSpecArtifacts,
-            requirements,
-            availableAgents: agentConfigs.map((agent: any) => ({
-              name: agent?.name,
-              team: agent?.team,
-              roleType: agent?.roleType,
-              description: agent?.description,
-              capabilities: Array.isArray(agent?.capabilities) ? agent.capabilities : [],
-            })),
-            availableSkills,
-            specTasks: designOptimizationSpecTaskOptions,
-          }),
+          message: designOptimizationSessionId
+            ? instruction
+            : buildDesignOptimizationPrompt({
+                target,
+                workflowName: sourceConfig.workflow.name || creationSessionSummary?.workflowName || configFile,
+                configFile,
+                instruction,
+                currentConfig: sourceConfig,
+                currentSpecArtifacts,
+                requirements,
+                availableAgents: agentConfigs.map((agent: any) => ({
+                  name: agent?.name,
+                  team: agent?.team,
+                  roleType: agent?.roleType,
+                  description: agent?.description,
+                  capabilities: Array.isArray(agent?.capabilities) ? agent.capabilities : [],
+                })),
+                availableSkills,
+                specTasks: designOptimizationSpecTaskOptions,
+              }),
           displayMessage: `${getDesignOptimizationDialogTitle(target)}：${instruction.slice(0, 80)}`,
           model,
           engine: selectedEngine,
+          sessionId: designOptimizationSessionId || undefined,
           frontendSessionId: `design-opt-${configFile}-${target.scope}`,
           streamScope: 'workbench-design-optimization',
           mode: 'dashboard',
@@ -3024,22 +3063,38 @@ export default function WorkbenchPage() {
         let accumulated = '';
         let thinkingAccumulated = '';
         let settled = false;
+        const updateAssistantMessage = (content: string, status: DesignOptimizationMessage['status']) => {
+          setDesignOptimizationMessages((messages) => messages.map((message) => (
+            message.id === assistantMessageId
+              ? { ...message, content, status }
+              : message
+          )));
+        };
         const fail = (message: string) => {
           if (settled) return;
           settled = true;
           es.close();
+          updateAssistantMessage(accumulated || thinkingAccumulated || message, 'failed');
           reject(new Error(message));
         };
         es.addEventListener('delta', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
           accumulated += String(data.content || '');
           setDesignOptimizationStream(accumulated);
+          updateAssistantMessage(accumulated, 'streaming');
         });
         es.addEventListener('thinking', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
           thinkingAccumulated += String(data.content || '');
           if (!accumulated) {
             setDesignOptimizationStream(thinkingAccumulated);
+            updateAssistantMessage(thinkingAccumulated, 'streaming');
+          }
+        });
+        es.addEventListener('session', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          if (data.sessionId) {
+            setDesignOptimizationSessionId(String(data.sessionId));
           }
         });
         es.addEventListener('done', (event) => {
@@ -3047,11 +3102,17 @@ export default function WorkbenchPage() {
           settled = true;
           const data = JSON.parse((event as MessageEvent).data || '{}');
           es.close();
+          if (data.sessionId) {
+            setDesignOptimizationSessionId(String(data.sessionId));
+          }
           if (data.isError) {
+            updateAssistantMessage(data.error || data.result || accumulated || 'AI 工作流优化失败', 'failed');
             reject(new Error(data.error || data.result || accumulated || 'AI 工作流优化失败'));
             return;
           }
-          resolve(String(data.result || accumulated || ''));
+          const finalText = String(data.result || accumulated || '');
+          updateAssistantMessage(finalText, 'completed');
+          resolve(finalText);
         });
         es.addEventListener('engine_error', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
@@ -3085,7 +3146,7 @@ export default function WorkbenchPage() {
       const candidateSnapshot = extractDesignOptimizationSnapshot(candidateConfig, target);
       const patchValue = extractWorkflowPatchValue(payload, target);
       setDesignOptimizationCandidate({
-        summary: payload.summary?.trim() || `${getDesignOptimizationTargetLabel(target)} 优化候选`,
+        summary: payload.summary?.trim() || `${getDesignOptimizationTargetLabel(target)} ${designOptimizationSessionId ? '调整候选' : '优化候选'}`,
         createdAt: new Date().toISOString(),
         rawOutput: finalContent,
         filename: payload.filename,
@@ -3101,8 +3162,13 @@ export default function WorkbenchPage() {
           : null,
         bindingValidation: bindingResult?.validation || null,
       });
-      toast('success', 'AI 已生成优化候选，请检查 diff 后应用');
+      toast('success', designOptimizationSessionId ? 'AI 已调整候选，请检查 diff 后应用' : 'AI 已生成优化候选，请检查 diff 后应用');
     } catch (error: any) {
+      setDesignOptimizationMessages((messages) => messages.map((message) => (
+        message.id === assistantMessageId && message.status === 'streaming'
+          ? { ...message, content: message.content || error?.message || 'AI 工作流优化失败', status: 'failed' }
+          : message
+      )));
       toast('error', error?.message || 'AI 工作流优化失败');
     } finally {
       setDesignOptimizationGenerating(false);
@@ -3114,6 +3180,7 @@ export default function WorkbenchPage() {
     creationSessionSummary?.workflowName,
     currentSpecArtifacts,
     designOptimizationInstruction,
+    designOptimizationSessionId,
     designOptimizationSpecTaskOptions,
     designOptimizationTarget,
     editingConfig,
@@ -10471,6 +10538,8 @@ export default function WorkbenchPage() {
           setDesignOptimizationGenerating(false);
           setDesignOptimizationCandidate(null);
           setDesignOptimizationStream('');
+          setDesignOptimizationMessages([]);
+          setDesignOptimizationSessionId(null);
         }
       }}>
         <DialogContent className="max-w-5xl w-[94vw] h-[86vh] overflow-hidden p-0">
@@ -10492,37 +10561,101 @@ export default function WorkbenchPage() {
                   </Badge>
                 </div>
               </div>
-              <div className="min-w-0 flex-1 overflow-auto px-6 py-5">
-                <div className="min-w-0 space-y-4">
-                  <div className="min-w-0 overflow-hidden rounded-xl border bg-background/80 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-hidden lg:grid-cols-[minmax(0,0.92fr)_minmax(420px,1.08fr)]">
+                <div className="flex min-h-0 min-w-0 flex-col border-b bg-muted/10 lg:border-b-0 lg:border-r">
+                  <div className="shrink-0 border-b px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium">优化要求</div>
+                        <div className="text-sm font-medium">对话调整候选</div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          生成的是 `workflow_patch` 候选，系统会先做作用域校验、配置校验和 Spec 绑定检查。
+                          首轮会创建修订 session；后续直接续聊并替换当前候选。
                         </div>
                       </div>
                       {designOptimizationGenerating ? (
                         <Badge variant="secondary" className="text-[10px]">生成中</Badge>
+                      ) : designOptimizationSessionId ? (
+                        <Badge variant="outline" className="text-[10px]">多轮</Badge>
                       ) : null}
                     </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                  </div>
+
+                  <div className="home-chat-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                    <div className="space-y-4">
+                      {designOptimizationMessages.length ? (
+                        designOptimizationMessages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={cn(
+                              'group flex min-w-0',
+                              message.role === 'user' ? 'justify-end' : 'items-start gap-2'
+                            )}
+                          >
+                            {message.role === 'assistant' ? <RobotLogo size={28} className="mt-1 shrink-0" /> : null}
+                            <div className={cn('min-w-0 space-y-1', message.role === 'user' ? 'max-w-[86%]' : 'max-w-[92%]')}>
+                              <div
+                                className={cn(
+                                  'min-w-0 rounded-2xl px-4 py-2.5 text-sm shadow-sm',
+                                  message.role === 'user'
+                                    ? 'home-chat-bubble home-chat-bubble-user rounded-tr-sm text-primary-foreground'
+                                    : 'home-chat-bubble home-chat-bubble-assistant rounded-tl-sm',
+                                  message.status === 'failed' ? 'border border-red-500/30 bg-red-500/8 text-red-700 dark:text-red-300' : ''
+                                )}
+                              >
+                                <div className="mb-1 flex items-center justify-between gap-2 text-[10px] opacity-70">
+                                  <span>{message.role === 'user' ? '你' : 'AI'}</span>
+                                  {message.status === 'streaming' ? <span>生成中</span> : null}
+                                  {message.status === 'failed' ? <span>失败</span> : null}
+                                </div>
+                                {message.content.trim() ? (
+                                  <div className={`${styles.markdownContent} min-w-0 break-words text-sm [overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap`}>
+                                    <AceAwareMarkdown content={message.content} isStreaming={message.status === 'streaming'} />
+                                  </div>
+                                ) : (
+                                  <div className="text-xs text-muted-foreground">等待 AI 输出...</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex h-full min-h-[260px] flex-col items-center justify-center text-center text-sm text-muted-foreground">
+                          <RobotLogo size={56} className="mb-3" />
+                          <div className="font-medium text-foreground">描述你想怎么修订工作流</div>
+                          <div className="mt-1 max-w-sm text-xs leading-5">
+                            AI 会生成 workflow_patch 候选；你可以继续追问调整，右侧始终展示基线和当前候选的差异。
+                          </div>
+                        </div>
+                      )}
+                      {designOptimizationGenerating ? (
+                        <div className={styles.thinkingBot} aria-live="polite">
+                          <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
+                          <Shimmer as="span" className={styles.thinkingText}>AI 正在修订工作流</Shimmer>
+                          <span className={styles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 border-t bg-background px-4 py-3">
+                    <div className="home-chat-composer relative overflow-hidden rounded-[22px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
                       <Textarea
                         value={designOptimizationInstruction}
                         onChange={(event) => setDesignOptimizationInstruction(event.target.value)}
-                        rows={4}
-                        className="min-h-[96px] resize-y text-xs leading-5"
-                        placeholder="例如：根据最新 spec 优化该步骤的 agent 选择和提示词，并确保 spec task 绑定完整"
+                        rows={3}
+                        className="min-h-[92px] resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 shadow-none focus-visible:ring-0"
+                        placeholder={designOptimizationSessionId ? '继续说明要怎么调整当前候选...' : '例如：根据最新 spec 优化该步骤的 agent 选择和提示词，并确保 spec task 绑定完整'}
                         disabled={designOptimizationGenerating}
                       />
-                      <div className="flex items-end justify-end gap-2">
+                      <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
                         <Button
                           type="button"
-                          variant="outline"
-                          className="h-9 text-xs"
+                          variant="ghost"
+                          className="h-8 text-xs"
                           onClick={() => {
                             setDesignOptimizationCandidate(null);
                             setDesignOptimizationStream('');
+                            setDesignOptimizationMessages([]);
+                            setDesignOptimizationSessionId(null);
                             setDesignOptimizationInstruction(buildDefaultDesignOptimizationInstruction(designOptimizationTarget));
                           }}
                           disabled={designOptimizationGenerating}
@@ -10531,166 +10664,176 @@ export default function WorkbenchPage() {
                         </Button>
                         <Button
                           type="button"
-                          className="h-9 text-xs"
+                          className="h-8 text-xs"
                           onClick={() => void handleGenerateDesignOptimization()}
                           disabled={designOptimizationGenerating || !designOptimizationInstruction.trim()}
                         >
                           {designOptimizationGenerating ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
-                          生成候选
+                          {designOptimizationSessionId ? '发送调整' : '生成候选'}
                         </Button>
                       </div>
                     </div>
-                    {designOptimizationStream.trim() ? (
-                      <details className="mt-3 min-w-0 overflow-hidden rounded-lg border bg-muted/20 p-3 text-xs">
-                        <summary className="cursor-pointer text-muted-foreground">
-                          {designOptimizationGenerating ? '正在接收 AI 输出' : '查看最近一次 AI 输出'}
-                        </summary>
-                        <div className={`${styles.markdownContent} mt-3 max-h-56 min-w-0 overflow-auto break-words text-xs [overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap`}>
-                          <AceAwareMarkdown content={designOptimizationStream} isStreaming={designOptimizationGenerating} />
+                  </div>
+                </div>
+
+                <div className="flex min-h-0 min-w-0 flex-col bg-background">
+                  <div className="shrink-0 border-b px-4 py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium">基线 / 当前候选 Diff</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {designOptimizationCandidate
+                            ? `${new Date(designOptimizationCandidate.createdAt).toLocaleString()} · 先看差异，再应用到当前草稿`
+                            : `等待 AI 生成 ${getDesignOptimizationTargetLabel(designOptimizationTarget)} 的候选版本`}
                         </div>
-                      </details>
-                    ) : null}
+                      </div>
+                      {designOptimizationCandidate ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-xs"
+                            onClick={handleDiscardDesignOptimizationCandidate}
+                          >
+                            放弃候选
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-8 text-xs"
+                            onClick={handleApplyDesignOptimizationCandidate}
+                            disabled={
+                              designOptimizationValidationErrors.length > 0
+                              || (designOptimizationCandidate.bindingValidation?.errors.length || 0) > 0
+                            }
+                          >
+                            应用候选
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
 
-                  {designOptimizationCandidate ? (
-                    <div className="min-w-0 space-y-4">
-                      <div className="min-w-0 overflow-hidden rounded-xl border border-primary/25 bg-primary/5 p-4">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0 space-y-1">
-                            <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                              <Badge variant="secondary" className="text-[10px]">AI 候选</Badge>
-                              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{designOptimizationCandidate.summary}</span>
+                  <div className="min-h-0 flex-1 overflow-auto p-4">
+                    {designOptimizationCandidate ? (
+                      <div className="min-w-0 space-y-4">
+                        <div className="min-w-0 rounded-lg border border-primary/25 bg-primary/5 p-3">
+                          <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                            <Badge variant="secondary" className="text-[10px]">AI 候选</Badge>
+                            <span className="min-w-0 break-words [overflow-wrap:anywhere]">{designOptimizationCandidate.summary}</span>
+                          </div>
+                        </div>
+
+                        <div className="grid min-w-0 grid-cols-2 gap-2 xl:grid-cols-4">
+                          <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">配置错误</div>
+                            <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationValidationErrors.length}</div>
+                          </div>
+                          <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">配置警告</div>
+                            <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationValidationWarnings.length}</div>
+                          </div>
+                          <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">绑定错误</div>
+                            <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationCandidate.bindingValidation?.errors.length || 0}</div>
+                          </div>
+                          <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                            <div className="text-[10px] text-muted-foreground">绑定警告</div>
+                            <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationCandidate.bindingValidation?.warnings.length || 0}</div>
+                          </div>
+                        </div>
+
+                        {designOptimizationValidationErrors.length > 0 ? (
+                          <div className="rounded-lg border border-red-500/30 bg-red-500/8 p-3">
+                            <div className="text-sm font-medium text-red-600">配置校验错误</div>
+                            <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                              {designOptimizationValidationErrors.map((issue, index) => (
+                                <div key={`design-opt-validation-error-${index}`}>
+                                  {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知错误'}
+                                </div>
+                              ))}
                             </div>
-                            <div className="text-[11px] text-muted-foreground">
-                              {new Date(designOptimizationCandidate.createdAt).toLocaleString()} · 先看差异，再应用到当前草稿
+                          </div>
+                        ) : null}
+
+                        {designOptimizationValidationWarnings.length > 0 ? (
+                          <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3">
+                            <div className="text-sm font-medium text-amber-700 dark:text-amber-300">配置校验警告</div>
+                            <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                              {designOptimizationValidationWarnings.map((issue, index) => (
+                                <div key={`design-opt-validation-warning-${index}`}>
+                                  {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知提示'}
+                                </div>
+                              ))}
                             </div>
                           </div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 text-xs"
-                              onClick={handleDiscardDesignOptimizationCandidate}
-                            >
-                              放弃候选
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              className="h-8 text-xs"
-                              onClick={handleApplyDesignOptimizationCandidate}
-                              disabled={
-                                designOptimizationValidationErrors.length > 0
-                                || (designOptimizationCandidate.bindingValidation?.errors.length || 0) > 0
-                              }
-                            >
-                              应用候选
-                            </Button>
+                        ) : null}
+
+                        {designOptimizationCandidate.bindingValidation?.errors.length ? (
+                          <div className="rounded-lg border border-red-500/30 bg-red-500/8 p-3">
+                            <div className="text-sm font-medium text-red-600">Spec 绑定错误</div>
+                            <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                              {designOptimizationCandidate.bindingValidation.errors.map((message, index) => (
+                                <div key={`design-opt-binding-error-${index}`}>{message}</div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {designOptimizationCandidate.bindingValidation?.warnings.length ? (
+                          <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3">
+                            <div className="text-sm font-medium text-amber-700 dark:text-amber-300">Spec 绑定警告</div>
+                            <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                              {designOptimizationCandidate.bindingValidation.warnings.map((message, index) => (
+                                <div key={`design-opt-binding-warning-${index}`}>{message}</div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <div className="min-w-0 overflow-hidden rounded-lg border">
+                          <div className="border-b px-4 py-3">
+                            <div className="text-sm font-medium">候选差异</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              当前展示的是 {getDesignOptimizationTargetLabel(designOptimizationTarget)} 的前后 JSON 对比。
+                            </div>
+                          </div>
+                          <div className="max-h-[54vh] min-w-0 overflow-auto p-4 font-mono text-xs leading-6">
+                            {designOptimizationDiffRows.length ? (
+                              designOptimizationDiffRows.map((row, index) => (
+                                <div
+                                  key={`${row.type}-${index}`}
+                                  className={
+                                    row.type === 'add'
+                                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                                      : row.type === 'remove'
+                                        ? 'bg-red-500/10 text-red-700 dark:text-red-300'
+                                        : 'text-muted-foreground'
+                                  }
+                                >
+                                  <span className="mr-2 inline-block w-4 text-center align-top">
+                                    {row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' '}
+                                  </span>
+                                  <span className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{row.text || ' '}</span>
+                                </div>
+                              ))
+                            ) : (
+                              <div className="text-muted-foreground">没有差异。</div>
+                            )}
                           </div>
                         </div>
                       </div>
-
-                      <div className="grid min-w-0 gap-3 md:grid-cols-4">
-                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
-                          <div className="text-[10px] text-muted-foreground">配置错误</div>
-                          <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationValidationErrors.length}</div>
-                        </div>
-                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
-                          <div className="text-[10px] text-muted-foreground">配置警告</div>
-                          <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationValidationWarnings.length}</div>
-                        </div>
-                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
-                          <div className="text-[10px] text-muted-foreground">绑定错误</div>
-                          <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationCandidate.bindingValidation?.errors.length || 0}</div>
-                        </div>
-                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
-                          <div className="text-[10px] text-muted-foreground">绑定警告</div>
-                          <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationCandidate.bindingValidation?.warnings.length || 0}</div>
+                    ) : (
+                      <div className="flex h-full min-h-[360px] flex-col items-center justify-center rounded-lg border border-dashed bg-muted/10 p-8 text-center">
+                        <span className="material-symbols-outlined mb-3 text-3xl text-muted-foreground">difference</span>
+                        <div className="text-sm font-medium">右侧将展示基线和最终候选的 diff</div>
+                        <div className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+                          左侧发送第一条修订要求后，AI 生成的候选会出现在这里。后续多轮调整会替换当前候选。
                         </div>
                       </div>
-
-                      {designOptimizationValidationErrors.length > 0 ? (
-                        <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
-                          <div className="text-sm font-medium text-red-600">配置校验错误</div>
-                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
-                            {designOptimizationValidationErrors.map((issue, index) => (
-                              <div key={`design-opt-validation-error-${index}`}>
-                                {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知错误'}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {designOptimizationValidationWarnings.length > 0 ? (
-                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
-                          <div className="text-sm font-medium text-amber-700 dark:text-amber-300">配置校验警告</div>
-                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
-                            {designOptimizationValidationWarnings.map((issue, index) => (
-                              <div key={`design-opt-validation-warning-${index}`}>
-                                {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知提示'}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {designOptimizationCandidate.bindingValidation?.errors.length ? (
-                        <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
-                          <div className="text-sm font-medium text-red-600">Spec 绑定错误</div>
-                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
-                            {designOptimizationCandidate.bindingValidation.errors.map((message, index) => (
-                              <div key={`design-opt-binding-error-${index}`}>{message}</div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {designOptimizationCandidate.bindingValidation?.warnings.length ? (
-                        <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
-                          <div className="text-sm font-medium text-amber-700 dark:text-amber-300">Spec 绑定警告</div>
-                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
-                            {designOptimizationCandidate.bindingValidation.warnings.map((message, index) => (
-                              <div key={`design-opt-binding-warning-${index}`}>{message}</div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <div className="min-w-0 overflow-hidden rounded-xl border">
-                        <div className="border-b px-4 py-3">
-                          <div className="text-sm font-medium">候选差异</div>
-                          <div className="mt-1 text-[11px] text-muted-foreground">
-                            当前展示的是 {getDesignOptimizationTargetLabel(designOptimizationTarget)} 的前后 JSON 对比。
-                          </div>
-                        </div>
-                        <div className="max-h-[46vh] min-w-0 overflow-auto p-4 font-mono text-xs leading-6">
-                          {designOptimizationDiffRows.length ? (
-                            designOptimizationDiffRows.map((row, index) => (
-                              <div
-                                key={`${row.type}-${index}`}
-                                className={
-                                  row.type === 'add'
-                                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                    : row.type === 'remove'
-                                      ? 'bg-red-500/10 text-red-700 dark:text-red-300'
-                                      : 'text-muted-foreground'
-                                }
-                              >
-                                <span className="mr-2 inline-block w-4 text-center align-top">
-                                  {row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' '}
-                                </span>
-                                <span className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{row.text || ' '}</span>
-                              </div>
-                            ))
-                          ) : (
-                            <div className="text-muted-foreground">没有差异。</div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

@@ -15,3 +15,13 @@ export function compactRuntimeOutputPreview(
     truncated: true,
   };
 }
+
+export function appendRuntimeOutputPreview(
+  currentPreview: string,
+  delta: string,
+  limit = DEFAULT_RUNTIME_OUTPUT_PREVIEW_LIMIT
+): { output: string; outputBytes: number; truncated: boolean } {
+  const current = typeof currentPreview === 'string' ? currentPreview : '';
+  const nextDelta = typeof delta === 'string' ? delta : '';
+  return compactRuntimeOutputPreview(`${current}${nextDelta}`, limit);
+}

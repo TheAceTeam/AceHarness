@@ -19,7 +19,7 @@ import {
   saveRunState, saveProcessOutput, saveStreamContent, appendStreamContent, appendFeedbackToStream, loadStreamContent, loadStepOutputs, loadRunState, findRunningRuns, isProcessAlive,
   type PersistedRunState, type PersistedProcessInfo, type PersistedStepLog, type PersistedQualityCheck, type WorkflowGitState,
 } from '@/lib/run/state-persistence';
-import { compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
+import { appendRuntimeOutputPreview, compactRuntimeOutputPreview } from '@/lib/run/output-compaction';
 import type { WorkflowConfig, WorkflowPhase, WorkflowStep, RoleConfig, IterationConfig } from '@/lib/core/schemas';
 import { formatTimestamp } from '@/lib/core/utils';
 import { isWindows } from '@/lib/core/runtime-platform';
@@ -2476,11 +2476,7 @@ try {
     const appendStreamPreview = (text: string) => {
       if (!text) return;
       streamHasMeaningfulOutput = streamHasMeaningfulOutput || hasMeaningfulAiOutput(text);
-      accumulatedStreamPreview = compactRuntimeOutputPreview(
-        accumulatedStreamPreview
-          ? `${accumulatedStreamPreview}\n\n<!-- chunk-boundary -->\n\n${text}`
-          : text
-      ).output;
+      accumulatedStreamPreview = appendRuntimeOutputPreview(accumulatedStreamPreview, text).output;
     };
     const flushProcessStream = (content?: string | null) => {
       if (!this.currentRunId || !content || content.length < currentProcessStreamLength) return;
