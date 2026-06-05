@@ -60,7 +60,7 @@ const ComboboxInput = React.forwardRef<
     {displayValue ? (
       <div
         className={cn(
-          'pointer-events-none absolute inset-y-0 right-8 flex items-center text-inherit text-foreground peer-focus:hidden',
+          'pointer-events-none absolute inset-y-0 right-8 flex items-center text-inherit text-foreground',
           leading ? 'left-8 pl-2' : 'left-0 px-3'
         )}
       >
@@ -315,7 +315,7 @@ function SingleCombobox({
         placeholder={selectedDisplayValue ? '' : placeholder}
         className={triggerClassName}
         leading={triggerIcon}
-        displayValue={!open && !inputValue ? selectedDisplayValue : null}
+        displayValue={!inputValue ? selectedDisplayValue : null}
       />
       <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
