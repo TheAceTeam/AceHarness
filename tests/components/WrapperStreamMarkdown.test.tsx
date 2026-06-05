@@ -3455,7 +3455,7 @@ describe('Wrapper stream markdown rendering', () => {
     expect(parsed.cleanText).not.toContain('<think>');
   });
 
-  test('ace-process extraction survives literal closing tags inside tool output strings', () => {
+  test('ace-process extraction neutralizes literal closing tags inside tool output strings', () => {
     const embeddedSource = `const sample = '<ace-process>{"kind":"tool-result","output":"<result>{\\"kind\\":\\"plan_draft\\",\\"payload\\":{\\"summary\\":\\"模板示例\\"}}</result>"}</ace-process>';`;
     const raw = [
       wrapAceProcessBlock('tool-result', { toolName: 'read', title: '📖 读取文件', output: embeddedSource }, ''),
@@ -3467,14 +3467,14 @@ describe('Wrapper stream markdown rendering', () => {
     expect(parsed.blocks).toHaveLength(1);
     expect(parsed.blocks[0].kind).toBe('tool-result');
     if (parsed.blocks[0].meta.kind === 'tool-result') {
-      expect(parsed.blocks[0].meta.output).toContain(`</ace-process>'`);
+      expect(parsed.blocks[0].meta.output).toContain(`[/ace-process]'`);
       expect(parsed.blocks[0].meta.output).toContain('<result>');
     }
     expect(parsed.cleanText).toContain('Visible text');
     expect(parsed.cleanText).not.toContain('<ace-process>');
   });
 
-  test('ace-process serialization does not emit raw nested protocol tags inside tool output', () => {
+  test('ace-process serialization neutralizes nested protocol tags inside tool output', () => {
     const nestedToolOutput = [
       '读取 skill 后继续执行。',
       '<ace-process>{"kind":"tool-call","toolName":"grep","title":"搜索内容","pattern":"ICE"}</ace-process>',
@@ -3488,15 +3488,81 @@ describe('Wrapper stream markdown rendering', () => {
 
     expect((raw.match(/<ace-process>/g) || [])).toHaveLength(1);
     expect((raw.match(/<\/ace-process>/g) || [])).toHaveLength(1);
-    expect(raw).toContain('\\u003cace-process\\u003e');
+    expect(raw).not.toContain('\\u003cace-process\\u003e');
+    expect(raw).toContain('[ace-process]');
 
     const parsed = extractAceProcessBlocks(raw);
     expect(parsed.blocks).toHaveLength(1);
     expect(parsed.blocks[0].kind).toBe('tool-result');
     if (parsed.blocks[0].meta.kind === 'tool-result') {
-      expect(parsed.blocks[0].meta.output).toContain('<ace-process>');
+      expect(parsed.blocks[0].meta.output).toContain('[ace-process]');
       expect(parsed.blocks[0].meta.output).toContain('toolName":"grep');
     }
+  });
+
+  test('ace-process extraction normalizes beta 63 unicode-escaped nested tags', () => {
+    const nestedToolOutput = [
+      '读取 skill 后继续执行。',
+      '<ace-process>{"kind":"tool-call","toolName":"grep","title":"搜索内容","pattern":"ICE"}</ace-process>',
+      'grep 完成。',
+    ].join('\n');
+    const legacyPayload = JSON.stringify({
+      toolName: 'read',
+      title: '📖 读取文件',
+      output: nestedToolOutput,
+      kind: 'tool-result',
+      body: '',
+    })
+      .replace(/<ace-process>/g, '\\u003cace-process\\u003e')
+      .replace(/<\/ace-process>/g, '\\u003c/ace-process\\u003e');
+    const raw = `<ace-process>${legacyPayload}</ace-process>\nVisible text`;
+
+    const parsed = extractAceProcessBlocks(raw);
+
+    expect(parsed.blocks).toHaveLength(1);
+    expect(parsed.cleanText).toBe('Visible text');
+    if (parsed.blocks[0].meta.kind === 'tool-result') {
+      expect(parsed.blocks[0].meta.output).toContain('[ace-process]');
+      expect(parsed.blocks[0].meta.output).not.toContain('<ace-process>');
+      expect(parsed.blocks[0].meta.output).not.toContain('\\u003cace-process');
+    }
+  });
+
+  test('workbench-style streaming output keeps nested protocol text inside the tool card', async () => {
+    const nestedOutput = [
+      '我会先读取对应的缩减流程 Skill。',
+      '<ace-process>{"toolName":"grep","title":"🔍 搜索内容","pattern":"casePath","kind":"tool-call","body":""}</ace-process>',
+      'grep 完成。',
+    ].join('\n');
+    const view = renderWrapperStream([
+      { type: 'text', content: '开始建立基线。\n' },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-call',
+          { toolId: 'read-skill', toolName: 'read', title: '📖 读取文件', filePath: '/root/.aceharness/skills/reducer/SKILL.md' },
+          '',
+        ),
+      },
+      {
+        type: 'text',
+        content: wrapAceProcessBlock(
+          'tool-result',
+          { toolId: 'read-skill', toolName: 'read', title: '📖 读取文件', output: nestedOutput },
+          '',
+        ),
+      },
+      { type: 'text', content: '\n已读取，继续下一步。' },
+    ], { isStreaming: true });
+
+    await openAllDetails(view.container);
+
+    expect(view.container.querySelector('[data-testid="ace-tool-card"]')?.getAttribute('data-tool-name')).toBe('read');
+    expect(view.container.textContent || '').toContain('开始建立基线。');
+    expect(view.container.textContent || '').toContain('已读取，继续下一步。');
+    expect(view.container.textContent || '').toContain('[ace-process]');
+    expect(view.container.textContent || '').not.toContain('\\u003cace-process');
+    expectNoProtocolLeak(view.container);
   });
 
   test('streaming ace-process framing withholds incomplete protocol frames until closed', () => {

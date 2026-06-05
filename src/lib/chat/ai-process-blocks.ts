@@ -96,6 +96,31 @@ export interface AceProcessBlock<T extends AceProcessPayload = AceProcessPayload
 const ACE_PROCESS_OPEN_TAG = '<ace-process>';
 const ACE_PROCESS_CLOSE_TAG = '</ace-process>';
 export const ACE_CHUNK_BOUNDARY = '\n\n<!-- chunk-boundary -->\n\n';
+
+function neutralizeNestedAceProcessDelimiters(text: string): string {
+  return String(text || '')
+    .replace(/<ace-process>/g, '[ace-process]')
+    .replace(/<\/ace-process>/g, '[/ace-process]');
+}
+
+function neutralizePayloadStrings<T>(value: T): T {
+  if (typeof value === 'string') {
+    return neutralizeNestedAceProcessDelimiters(value) as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => neutralizePayloadStrings(item)) as T;
+  }
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(source)) {
+      normalized[key] = neutralizePayloadStrings(item);
+    }
+    return normalized as T;
+  }
+  return value;
+}
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -139,7 +164,8 @@ function asFileChanges(value: unknown): AceFileChange[] | undefined {
   });
 }
 
-function normalizePayload(raw: unknown): AceProcessPayload | null {
+function normalizePayload(rawInput: unknown): AceProcessPayload | null {
+  const raw = neutralizePayloadStrings(rawInput);
   if (!isObjectRecord(raw)) return null;
   const kind = asString(raw.kind);
   const body = asString(raw.body) || '';
@@ -216,9 +242,7 @@ function normalizePayload(raw: unknown): AceProcessPayload | null {
 }
 
 export function wrapAceProcessBlock<T extends AceProcessPayload>(kind: T['kind'], payload: Omit<T, 'kind' | 'body'>, body = ''): string {
-  const serializedPayload = JSON.stringify({ ...payload, kind, body })
-    .replace(/<ace-process>/g, '\\u003cace-process\\u003e')
-    .replace(/<\/ace-process>/g, '\\u003c/ace-process\\u003e');
+  const serializedPayload = JSON.stringify(neutralizePayloadStrings({ ...payload, kind, body }));
   return `\n<ace-process>${serializedPayload}</ace-process>\n`;
 }
 
@@ -311,6 +335,23 @@ function findAceProcessRawSpans(content: string): AceProcessRawSpan[] {
   return spans;
 }
 
+function findNextAceProcessCandidateStart(source: string, fromIndex: number): number {
+  let cursor = Math.max(0, fromIndex);
+  while (cursor < source.length) {
+    const start = source.indexOf(ACE_PROCESS_OPEN_TAG, cursor);
+    if (start < 0) return -1;
+
+    let payloadStart = start + ACE_PROCESS_OPEN_TAG.length;
+    while (payloadStart < source.length && /\s/.test(source[payloadStart] || '')) {
+      payloadStart += 1;
+    }
+
+    if (source[payloadStart] === '{') return start;
+    cursor = start + ACE_PROCESS_OPEN_TAG.length;
+  }
+  return -1;
+}
+
 export function getAceProcessRanges(content: string): Array<[number, number]> {
   return findAceProcessRawSpans(content).map((span) => [span.start, span.end]);
 }
@@ -333,13 +374,29 @@ export function stripAceProcessBlocks(content: string, replacement = ''): string
 
 export function getStreamingAceProcessReadyContent(content: string): string {
   const source = String(content || '');
-  const lastOpen = source.lastIndexOf(ACE_PROCESS_OPEN_TAG);
-  if (lastOpen < 0) return source;
+  const spans = findAceProcessRawSpans(source);
+  const searchFrom = spans.length > 0 ? spans[spans.length - 1].end : 0;
+  const nextOpen = findNextAceProcessCandidateStart(source, searchFrom);
+  return nextOpen >= 0 ? source.slice(0, nextOpen) : source;
+}
 
-  const lastClose = source.lastIndexOf(ACE_PROCESS_CLOSE_TAG);
-  if (lastClose > lastOpen) return source;
+export function rewriteFirstAceProcessBlockPayload(
+  content: string,
+  rewrite: (payload: Record<string, unknown>) => Record<string, unknown>,
+): string {
+  const source = String(content || '');
+  const span = findAceProcessRawSpans(source)[0];
+  if (!span) return source;
 
-  return source.slice(0, lastOpen);
+  try {
+    const payload = JSON.parse(span.payloadJson);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return source;
+    const nextPayload = rewrite(payload as Record<string, unknown>);
+    if (!nextPayload || typeof nextPayload !== 'object' || Array.isArray(nextPayload)) return source;
+    return `${source.slice(0, span.start)}${ACE_PROCESS_OPEN_TAG}${JSON.stringify(nextPayload)}${ACE_PROCESS_CLOSE_TAG}${source.slice(span.end)}`;
+  } catch {
+    return source;
+  }
 }
 
 export function extractAceProcessBlocks(content: string): {

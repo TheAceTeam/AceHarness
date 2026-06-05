@@ -1,4 +1,4 @@
-import { wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
+import { rewriteFirstAceProcessBlockPayload, wrapAceProcessBlock } from '@/lib/chat/ai-process-blocks';
 import { repairWindowsMojibake } from '@/lib/core/mojibake-repair';
 
 type UnknownRecord = Record<string, unknown>;
@@ -165,17 +165,7 @@ export function formatAceSubtaskResult(params: {
 
 export function appendToolIdToAceBlock(block: string, toolId?: string): string {
   if (!toolId) return block;
-  return block.replace(
-    /<ace-process>([\s\S]*?)<\/ace-process>/,
-    (raw, payloadJson) => {
-      try {
-        const payload = JSON.parse(payloadJson);
-        return `<ace-process>${JSON.stringify({ ...payload, toolId })}</ace-process>`;
-      } catch {
-        return raw;
-      }
-    },
-  );
+  return rewriteFirstAceProcessBlockPayload(block, (payload) => ({ ...payload, toolId }));
 }
 
 export function resolveAceToolName(titleOrName: string, rawInput?: UnknownRecord): string {

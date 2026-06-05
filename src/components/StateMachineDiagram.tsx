@@ -29,12 +29,80 @@ const EMPTY_ACTIVE_STEPS: string[] = [];
 const EMPTY_COMPLETED_STEPS: string[] = [];
 const EMPTY_STATE_HISTORY: StateTransitionRecord[] = [];
 const EXECUTED_EDGE_COLOR = '#2563eb';
-const MUTED_EDGE_COLOR = '#cbd5e1';
+const CONFIG_EDGE_COLOR = '#64748b';
+const MUTED_EDGE_COLOR = CONFIG_EDGE_COLOR;
+const MUTED_EDGE_MARKER_COLOR = '#94a3b8';
+const HUMAN_APPROVAL_EDGE_COLOR = '#f97316';
 
 function compactEdgeLabel(label: string, maxLength = 38): string {
   const normalized = label.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function getVerdictEdgeLabel(verdict: string | undefined): string {
+  if (verdict === 'pass') return '通过';
+  if (verdict === 'conditional_pass') return '有条件';
+  if (verdict === 'fail') return '失败';
+  return '';
+}
+
+type TransitionEdgeLabelPart = {
+  verdict?: string;
+  verdictLabel?: string;
+  text: string;
+};
+
+function getTransitionRuleLabelPart(transition: StateTransition): TransitionEdgeLabelPart {
+  const verdict = transition.condition?.verdict;
+  const verdictLabel = getVerdictEdgeLabel(verdict);
+  const condition = getConditionLabel(transition);
+  const detail = String(transition.label || (condition !== '默认' ? condition : '') || transition.to || '').trim();
+  return {
+    verdict,
+    verdictLabel,
+    text: compactEdgeLabel(detail || condition || '默认', 30),
+  };
+}
+
+function getTransitionPathLabelParts(transitions: StateTransition[]): TransitionEdgeLabelPart[] {
+  const seen = new Set<string>();
+  const labels: TransitionEdgeLabelPart[] = [];
+  for (const transition of transitions) {
+    const label = getTransitionRuleLabelPart(transition);
+    const signature = `${label.verdict || ''}:${label.text}`;
+    if (!label.text || seen.has(signature)) continue;
+    seen.add(signature);
+    labels.push(label);
+  }
+  return labels.slice(0, 3);
+}
+
+function getVerdictLabelClass(verdict: string | undefined): string {
+  if (verdict === 'pass') return 'text-emerald-700 dark:text-emerald-300';
+  if (verdict === 'conditional_pass') return 'text-amber-700 dark:text-amber-300';
+  if (verdict === 'fail') return 'text-red-700 dark:text-red-300';
+  return 'text-slate-600 dark:text-slate-300';
+}
+
+function TransitionEdgeLabel({ label, defaultColor }: { label: unknown; defaultColor: string }) {
+  const parts = Array.isArray(label) ? label as TransitionEdgeLabelPart[] : [];
+  if (!parts.length) {
+    return <span style={{ color: defaultColor }}>{String(label || '')}</span>;
+  }
+
+  return (
+    <span className="flex max-w-[300px] flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 text-center">
+      {parts.map((part, index) => (
+        <span key={`${part.verdict || 'default'}-${part.text}-${index}`} className="inline-flex items-center gap-1">
+          {part.verdictLabel ? (
+            <span className={`font-semibold ${getVerdictLabelClass(part.verdict)}`}>{part.verdictLabel}</span>
+          ) : null}
+          <span className="font-medium text-slate-600 dark:text-slate-300">{part.text}</span>
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function StateTransitionEdge({
@@ -79,7 +147,7 @@ function StateTransitionEdge({
                 zIndex: data?.labelZIndex || 50,
               }}
             >
-              {label}
+              <TransitionEdgeLabel label={data?.labelParts || label} defaultColor={data?.labelColor || EXECUTED_EDGE_COLOR} />
             </div>
           </EdgeLabelRenderer>
         ) : null}
@@ -90,20 +158,43 @@ function StateTransitionEdge({
   const dx = targetX - sourceX;
   const dy = targetY - sourceY;
   const length = Math.max(1, Math.hypot(dx, dy));
-  const curveOffset = data?.curveOffset ?? 0;
-  const curveOffsetX = (-dy / length) * curveOffset;
-  const curveOffsetY = (dx / length) * curveOffset;
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX: sourceX + curveOffsetX,
-    sourceY: sourceY + curveOffsetY,
-    sourcePosition,
-    targetX: targetX + curveOffsetX,
-    targetY: targetY + curveOffsetY,
-    targetPosition,
-  });
+  const curveOffset = Number(data?.curveOffset ?? 0);
+  const derivedOffsetX = (-dy / length) * curveOffset;
+  const derivedOffsetY = (dx / length) * curveOffset;
+  const rawOffsetX = Number(data?.curveOffsetX ?? Number.NaN);
+  const rawOffsetY = Number(data?.curveOffsetY ?? Number.NaN);
+  const curveOffsetX = Number.isFinite(rawOffsetX) ? rawOffsetX : derivedOffsetX;
+  const curveOffsetY = Number.isFinite(rawOffsetY) ? rawOffsetY : derivedOffsetY;
   const offset = data?.labelOffset ?? 22;
-  const offsetX = (-dy / length) * offset;
-  const offsetY = (dx / length) * offset;
+  const hasAvoidanceOffset = Math.abs(curveOffsetX) > 0.5 || Math.abs(curveOffsetY) > 0.5;
+  let edgePath: string;
+  let labelX: number;
+  let labelY: number;
+
+  if (hasAvoidanceOffset) {
+    edgePath = [
+      `M ${sourceX},${sourceY}`,
+      `C ${sourceX + curveOffsetX},${sourceY + curveOffsetY}`,
+      `${targetX + curveOffsetX},${targetY + curveOffsetY}`,
+      `${targetX},${targetY}`,
+    ].join(' ');
+    labelX = (sourceX + targetX) / 2 + curveOffsetX;
+    labelY = (sourceY + targetY) / 2 + curveOffsetY;
+  } else {
+    const path = getBezierPath({
+      sourceX,
+      sourceY,
+      sourcePosition,
+      targetX,
+      targetY,
+      targetPosition,
+    });
+    edgePath = path[0];
+    const offsetX = (-dy / length) * offset;
+    const offsetY = (dx / length) * offset;
+    labelX = path[1] + offsetX;
+    labelY = path[2] + offsetY;
+  }
 
   return (
     <>
@@ -114,7 +205,7 @@ function StateTransitionEdge({
             className="nodrag nopan pointer-events-none rounded bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ring-1 ring-white/80 dark:bg-gray-950/95"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${labelX + offsetX}px, ${labelY + offsetY}px)`,
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               maxWidth: 240,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -122,9 +213,9 @@ function StateTransitionEdge({
               color: data?.labelColor || EXECUTED_EDGE_COLOR,
               zIndex: data?.labelZIndex || 50,
             }}
-          >
-            {label}
-          </div>
+            >
+              <TransitionEdgeLabel label={data?.labelParts || label} defaultColor={data?.labelColor || EXECUTED_EDGE_COLOR} />
+            </div>
         </EdgeLabelRenderer>
       ) : null}
     </>
@@ -619,6 +710,154 @@ function getNodeCenterPosition(node: Node | undefined, fallback?: { x: number; y
   };
 }
 
+type NodeBounds = {
+  id: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  centerX: number;
+  centerY: number;
+};
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getNodeBounds(node: Node | undefined, fallback?: { x: number; y: number }): NodeBounds | null {
+  if (!node && !fallback) return null;
+  const position = node?.position || fallback || { x: 0, y: 0 };
+  const width = node?.width || 300;
+  const height = node?.height || 170;
+  return {
+    id: node?.id || '',
+    left: position.x,
+    right: position.x + width,
+    top: position.y,
+    bottom: position.y + height,
+    centerX: position.x + width / 2,
+    centerY: position.y + height / 2,
+  };
+}
+
+function expandBounds(bounds: NodeBounds, padding: number): NodeBounds {
+  return {
+    ...bounds,
+    left: bounds.left - padding,
+    right: bounds.right + padding,
+    top: bounds.top - padding,
+    bottom: bounds.bottom + padding,
+  };
+}
+
+function getHandlePoint(bounds: NodeBounds, handle: string | null | undefined): { x: number; y: number } {
+  switch (handle) {
+    case 'top':
+      return { x: bounds.centerX, y: bounds.top };
+    case 'right':
+      return { x: bounds.right, y: bounds.centerY };
+    case 'bottom':
+      return { x: bounds.centerX, y: bounds.bottom };
+    case 'left':
+      return { x: bounds.left, y: bounds.centerY };
+    default:
+      return { x: bounds.centerX, y: bounds.centerY };
+  }
+}
+
+function segmentIntersectsBounds(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  bounds: NodeBounds,
+): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const tests = [
+    { p: -dx, q: start.x - bounds.left },
+    { p: dx, q: bounds.right - start.x },
+    { p: -dy, q: start.y - bounds.top },
+    { p: dy, q: bounds.bottom - start.y },
+  ];
+
+  for (const { p, q } of tests) {
+    if (Math.abs(p) < 0.0001) {
+      if (q < 0) return false;
+      continue;
+    }
+    const ratio = q / p;
+    if (p < 0) {
+      if (ratio > t1) return false;
+      if (ratio > t0) t0 = ratio;
+    } else {
+      if (ratio < t0) return false;
+      if (ratio < t1) t1 = ratio;
+    }
+  }
+
+  return true;
+}
+
+function ensureOffsetMagnitude(value: number, minMagnitude: number): number {
+  if (Math.abs(value) >= minMagnitude) return value;
+  return value < 0 ? -minMagnitude : minMagnitude;
+}
+
+function calculateEdgeAvoidanceOffset(params: {
+  source: string;
+  target: string;
+  sourceHandle: string;
+  targetHandle: string;
+  nodesById: Map<string, Node>;
+  fallbackPositions: Map<string, { x: number; y: number }>;
+}): { x: number; y: number } {
+  if (params.source === params.target) return { x: 0, y: 0 };
+
+  const sourceBounds = getNodeBounds(params.nodesById.get(params.source), params.fallbackPositions.get(params.source));
+  const targetBounds = getNodeBounds(params.nodesById.get(params.target), params.fallbackPositions.get(params.target));
+  if (!sourceBounds || !targetBounds) return { x: 0, y: 0 };
+
+  const start = getHandlePoint(sourceBounds, params.sourceHandle);
+  const end = getHandlePoint(targetBounds, params.targetHandle);
+  const blockers: NodeBounds[] = [];
+  for (const node of params.nodesById.values()) {
+    if (node.id === params.source || node.id === params.target) continue;
+    const bounds = getNodeBounds(node, params.fallbackPositions.get(node.id));
+    if (!bounds) continue;
+    const expanded = expandBounds(bounds, 18);
+    if (segmentIntersectsBounds(start, end, expanded)) {
+      blockers.push(expanded);
+    }
+  }
+
+  if (!blockers.length) return { x: 0, y: 0 };
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const margin = 44;
+  const minMagnitude = 110;
+  const maxMagnitude = 300;
+
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    const leftOffset = Math.min(...blockers.map((bounds) => bounds.left - start.x - margin));
+    const rightOffset = Math.max(...blockers.map((bounds) => bounds.right - start.x + margin));
+    const chosen = Math.abs(leftOffset) <= Math.abs(rightOffset) ? leftOffset : rightOffset;
+    return {
+      x: clampNumber(ensureOffsetMagnitude(chosen, minMagnitude), -maxMagnitude, maxMagnitude),
+      y: 0,
+    };
+  }
+
+  const topOffset = Math.min(...blockers.map((bounds) => bounds.top - start.y - margin));
+  const bottomOffset = Math.max(...blockers.map((bounds) => bounds.bottom - start.y + margin));
+  const chosen = Math.abs(topOffset) <= Math.abs(bottomOffset) ? topOffset : bottomOffset;
+  return {
+    x: 0,
+    y: clampNumber(ensureOffsetMagnitude(chosen, minMagnitude), -maxMagnitude, maxMagnitude),
+  };
+}
+
 // 内部组件，使用 useReactFlow
 function StateMachineDiagramInner({
   states,
@@ -791,6 +1030,14 @@ function StateMachineDiagramInner({
       const edgeId = `history-${i}-${record.from}-${record.to}`;
       const { sourceHandle, targetHandle } = getHandles(record.from, record.to);
       const isSelfLoop = record.from === record.to;
+      const avoidanceOffset = calculateEdgeAvoidanceOffset({
+        source: record.from,
+        target: record.to,
+        sourceHandle,
+        targetHandle,
+        nodesById,
+        fallbackPositions,
+      });
 
       edges.push({
         id: edgeId,
@@ -806,12 +1053,14 @@ function StateMachineDiagramInner({
           stroke: EXECUTED_EDGE_COLOR,
           strokeWidth: 3,
         },
-        zIndex: 40,
+        zIndex: 1,
         data: {
           labelColor: EXECUTED_EDGE_COLOR,
           labelOffset: 26,
           labelZIndex: 80,
           curveOffset: 0,
+          curveOffsetX: avoidanceOffset.x,
+          curveOffsetY: avoidanceOffset.y,
           isSelfLoop,
           loopSize: 125,
         },
@@ -858,16 +1107,16 @@ function StateMachineDiagramInner({
         if (isCurrentStateTransition) {
           // 当前状态可用的转移：中等粗细，正常颜色
           edgeStyle = {
-            stroke: '#64748b',
+            stroke: CONFIG_EDGE_COLOR,
             strokeWidth: 2,
           };
         } else {
           // 其他未使用的转移：细虚线，半透明
           edgeStyle = {
             stroke: MUTED_EDGE_COLOR,
-            strokeWidth: 1.25,
+            strokeWidth: 1.5,
             strokeDasharray: '4,5',
-            opacity: 0.35,
+            opacity: 0.6,
           };
           // 如果不显示所有边，隐藏这些边
           edgeHidden = !showAllEdges;
@@ -875,6 +1124,15 @@ function StateMachineDiagramInner({
 
         const { sourceHandle, targetHandle } = getHandles(state.name, transition.to);
         const isSelfLoop = state.name === transition.to;
+        const siblingTransitions = state.transitions.filter((item: StateTransition) => item.to === transition.to);
+        const avoidanceOffset = calculateEdgeAvoidanceOffset({
+          source: state.name,
+          target: transition.to,
+          sourceHandle,
+          targetHandle,
+          nodesById,
+          fallbackPositions,
+        });
 
         edges.push({
           id: edgeId,
@@ -882,17 +1140,20 @@ function StateMachineDiagramInner({
           target: transition.to,
           sourceHandle,
           targetHandle,
-          label: '',
+          label: 'transition',
           type: 'stateTransition',
           animated: edgeAnimated,
           hidden: edgeHidden,
           style: edgeStyle,
-          zIndex: 1,
+          zIndex: 0,
           data: {
-            labelColor: '#64748b',
+            labelColor: CONFIG_EDGE_COLOR,
+            labelParts: getTransitionPathLabelParts(siblingTransitions),
             labelOffset: 18,
             labelZIndex: 20,
             curveOffset: 0,
+            curveOffsetX: avoidanceOffset.x,
+            curveOffsetY: avoidanceOffset.y,
             isSelfLoop,
             loopSize: 105,
           },
@@ -900,7 +1161,7 @@ function StateMachineDiagramInner({
             type: MarkerType.ArrowClosed,
             width: 16,
             height: 16,
-            color: edgeStyle.stroke,
+            color: isCurrentStateTransition ? CONFIG_EDGE_COLOR : MUTED_EDGE_MARKER_COLOR,
           },
         });
       }
@@ -940,7 +1201,7 @@ function StateMachineDiagramInner({
             animated: false,
             hidden: !showAllEdges,
             style: {
-              stroke: '#f97316',
+              stroke: HUMAN_APPROVAL_EDGE_COLOR,
               strokeWidth: 2,
               strokeDasharray: '5,5',
             },
@@ -948,10 +1209,10 @@ function StateMachineDiagramInner({
               type: MarkerType.ArrowClosed,
               width: 16,
               height: 16,
-              color: '#f97316',
+              color: HUMAN_APPROVAL_EDGE_COLOR,
             },
             data: {
-              labelColor: '#f97316',
+              labelColor: HUMAN_APPROVAL_EDGE_COLOR,
               labelOffset: 18,
               labelZIndex: 30,
             },
