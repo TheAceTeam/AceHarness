@@ -116,6 +116,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private lastBlockWasTool = false;
   private lastClientSignature = '';
   private clientSignatureChangedForRun = false;
+  private pendingCommandExecutions: string[] = [];
 
   private getThreadOptions(options: EngineOptions) {
     return {
@@ -164,10 +165,12 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
     if (clearOutput) this.collectedOutput = '';
     this.lastBlockWasTool = false;
     this.lastAgentMessageSnapshot = '';
+    this.pendingCommandExecutions = [];
   }
 
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
+    this.pendingCommandExecutions.push(cmd);
     const toolName = inferCommandToolName(cmd);
     return formatAceToolCall({
       toolName,
@@ -179,10 +182,15 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
   private formatCommandResult(output: string, exitCode?: number, command?: string): string {
     const resultText = repairWindowsMojibake((output || '').trim());
     if (!resultText && exitCode == null) return '';
-    const toolName = inferCommandToolName(command || '');
+    const cmd = command || this.pendingCommandExecutions.shift() || '';
+    if (command) {
+      const matchingIndex = this.pendingCommandExecutions.indexOf(command);
+      if (matchingIndex >= 0) this.pendingCommandExecutions.splice(matchingIndex, 1);
+    }
+    const toolName = inferCommandToolName(cmd);
     return formatAceToolResult({
       toolName,
-      rawOutput: { output: resultText, exitCode: exitCode ?? 0 },
+      rawOutput: { output: resultText, exitCode: exitCode ?? 0, command: cmd },
       title: getAceToolTitle(toolName),
     });
   }

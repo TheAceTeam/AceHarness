@@ -436,6 +436,49 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
+  test('codex pairs SKILL.md command execution with a skill result when completion omits command', async () => {
+    const { content, view } = await buildCodexRenderedMessage([
+      {
+        type: 'item.started',
+        item: {
+          type: 'command_execution',
+          command: 'sed -n "1,220p" /root/.codex/skills/workflow-helper/SKILL.md',
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          type: 'command_execution',
+          aggregated_output: '# Workflow Helper\n\nUse this when creating workflows.',
+          exit_code: 0,
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          type: 'agent_message',
+          text: 'Done.',
+        },
+      },
+      { type: 'turn.completed' },
+    ]);
+
+    const parsed = extractAceProcessBlocks(content);
+    const processBlocks = parsed.blocks.filter((block) => block.meta.kind === 'tool-call' || block.meta.kind === 'tool-result');
+    expect(processBlocks).toHaveLength(2);
+    expect(processBlocks.every((block) => (block.meta as any).toolName === 'skill')).toBe(true);
+
+    await openAllDetails(view.container);
+    const summary = getProcessUiSummary(view.container);
+    expect(summary.tools).toEqual(['skill']);
+    const toolCards = getToolCards(view.container);
+    expect(toolCards).toHaveLength(1);
+    expect(toolCards[0].state).toBe('output-available');
+    expect(toolCards[0].text).toContain('workflow-helper');
+    expect(toolCards[0].text).toContain('Workflow Helper');
+    expectNoProtocolLeak(view.container);
+  });
+
   test('codex renders bare result card output without leaking raw json', async () => {
     const { content } = await buildCodexRenderedMessage([
       {

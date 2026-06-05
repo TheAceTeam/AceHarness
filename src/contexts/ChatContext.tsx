@@ -21,6 +21,26 @@ function normalizeBackendSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function appendRequestFailureNotice(message: ChatMessage, errorMessage: string, fallbackContent = '', fallbackRawContent = ''): ChatMessage {
+  const notice = `请求失败：${errorMessage || '请求失败'}`;
+  const appendNotice = (value: string) => {
+    const base = String(value || '').trimEnd();
+    if (!base) return notice;
+    if (base.includes(notice)) return base;
+    return `${base}\n\n${notice}`;
+  };
+  const baseContent = message.content || fallbackContent;
+  const baseRawContent = message.rawContent || fallbackRawContent || baseContent;
+  const content = appendNotice(baseContent);
+  const rawContent = appendNotice(baseRawContent);
+  return {
+    ...message,
+    role: 'error',
+    content,
+    rawContent: rawContent !== content ? rawContent : undefined,
+  };
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'error';
@@ -2244,17 +2264,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             }
             if (data.isError) {
               const failedBackendSessionId = hasOwnKey(data, 'sessionId') ? normalizeBackendSessionId(data.sessionId) : undefined;
-              const partial = String(data.result || accumulated || '').trim();
               const message = String(data.error || '请求失败，请稍后重试');
-              const content = partial
-                ? `请求失败：${message}\n\n已返回部分内容：\n${partial}`
-                : `请求失败：${message}`;
+              const partialRawContent = buildFinalRawContent(accumulatedRawStream, accumulated, String(data.result || ''));
+              const partialContent = normalizeAssistantDisplay(partialRawContent, false).visibleText
+                || parseActions(partialRawContent).text
+                || String(data.result || accumulated || '');
               void applyToTargetSession(s => ({
                 ...s,
                 backendSessionId: failedBackendSessionId || s.backendSessionId,
                 updatedAt: Date.now(),
                 messages: s.messages.map(m => m.id === assistantMsgId
-                  ? { ...m, role: 'error' as const, content }
+                  ? appendRequestFailureNotice(m, message, partialContent, partialRawContent)
                   : m),
               }));
               setLoading(false);
@@ -2307,7 +2327,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               backendSessionId: failedBackendSessionId || s.backendSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
-                ? { ...m, role: 'error' as const, content: `请求失败：${message}` }
+                ? appendRequestFailureNotice(m, message, accumulated, accumulatedRawStream)
                 : m),
             }));
             es.close();
@@ -2331,7 +2351,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               backendSessionId: failedBackendSessionId || s.backendSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
-                ? { ...m, role: 'error' as const, content: `请求失败：${message}` }
+                ? appendRequestFailureNotice(m, message, accumulated, accumulatedRawStream)
                 : m),
             }));
             es.close();

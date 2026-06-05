@@ -291,6 +291,114 @@ describe('ChatProvider', () => {
     });
   });
 
+  test('preserves streamed assistant content when a dashboard stream reports engine_error', async () => {
+    sessionStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, 'sess-1');
+    const eventSources: Array<EventTarget & { close: () => void }> = [];
+    class MockEventSource extends EventTarget {
+      url: string;
+      constructor(url: string) {
+        super();
+        this.url = url;
+        eventSources.push(this);
+      }
+      close() {}
+    }
+    vi.stubGlobal('EventSource', MockEventSource);
+    vi.stubGlobal('fetch', vi.fn((async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      if (url === '/api/engine') {
+        return jsonResponse({ engine: 'claude-code', defaultModel: 'claude-sonnet-4-20250514' });
+      }
+      if (url === '/api/chat/settings') {
+        return jsonResponse({ skills: {}, discoveredSkills: [], workingDirectory: '/tmp/project' });
+      }
+      if (url === '/api/chat/sessions') {
+        if (method === 'POST') {
+          const body = JSON.parse(String(init?.body || '{}'));
+          sessionStore[body.id] = body;
+          sessionSummaries = [
+            {
+              id: body.id,
+              title: body.title,
+              model: body.model,
+              createdAt: body.createdAt,
+              updatedAt: body.updatedAt,
+              messageCount: body.messages.length,
+              lastMessage: body.messages.at(-1)?.content,
+            },
+            ...sessionSummaries.filter((item) => item.id !== body.id),
+          ];
+          return jsonResponse({});
+        }
+        return jsonResponse({ sessions: sessionSummaries });
+      }
+      if (url.startsWith('/api/chat/sessions/')) {
+        const sessionId = decodeURIComponent(url.split('/api/chat/sessions/')[1] || '');
+        if (method === 'PUT') {
+          const body = JSON.parse(String(init?.body || '{}'));
+          sessionStore[sessionId] = body;
+          sessionSummaries = sessionSummaries.map((item) => item.id === sessionId ? {
+            ...item,
+            title: body.title,
+            updatedAt: body.updatedAt,
+            messageCount: body.messages.length,
+            lastMessage: body.messages.at(-1)?.content,
+          } : item);
+          return jsonResponse({});
+        }
+        return jsonResponse({ session: sessionStore[sessionId] || null }, Boolean(sessionStore[sessionId]));
+      }
+      if (url.startsWith('/api/chat/stream?checkActive=')) {
+        return jsonResponse({ active: false });
+      }
+      if (url === '/api/chat/stream' && method === 'POST') {
+        return jsonResponse({ chatId: 'chat-429' });
+      }
+      return jsonResponse({});
+    }) as typeof fetch));
+
+    render(
+      <ChatProvider>
+        <StreamingProbe />
+      </ChatProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stream-active-session').textContent).toBe('sess-1');
+    });
+
+    fireEvent.click(screen.getByText('send-hello'));
+
+    await waitFor(() => {
+      expect(eventSources.length).toBeGreaterThan(0);
+    });
+
+    const source = eventSources[0];
+    act(() => {
+      source.dispatchEvent(new MessageEvent('connected', { data: '{}' }));
+      source.dispatchEvent(new MessageEvent('delta', { data: JSON.stringify({ content: '已经生成的内容' }) }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stream-messages').textContent).toContain('已经生成的内容');
+    });
+
+    act(() => {
+      source.dispatchEvent(new MessageEvent('engine_error', {
+        data: JSON.stringify({
+          message: 'exceeded retry limit, last status: 429 Too Many Requests, request id: req_relay_098e0e64',
+        }),
+      }));
+    });
+
+    await waitFor(() => {
+      const text = screen.getByTestId('stream-messages').textContent || '';
+      expect(text).toContain('已经生成的内容');
+      expect(text).toContain('请求失败：exceeded retry limit, last status: 429 Too Many Requests');
+    });
+  });
+
   test('deleting the active agora topic does not fall back to a normal conversation', async () => {
     sessionSummaries = [
       {
