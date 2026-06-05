@@ -105,6 +105,18 @@ ACE_HOST=0.0.0.0 ACE_PORT=3000 npm start
 
 Open `http://127.0.0.1:3000` after startup. After entering the console, use Onboarding to learn the complete usage path and module guide. In PowerShell production mode, set `$env:ACE_HOST` and `$env:ACE_PORT` before running `npm start`.
 
+Global ACE Service commands:
+
+```bash
+ace              # Start ACE Service
+ace start        # Start ACE Service explicitly
+ace service      # Inspect and stop managed ACE instances
+ace update       # Update to the npm latest version
+ace update beta  # Update to a specific npm tag or version, such as beta / release / 1.0.0-beta.66
+```
+
+When `ace update` finds managed ACE instances still running, interactive terminals can stop them before updating, continue without stopping them, or cancel the update. Scripts can use `ace update --stop-running` to stop running instances first, or `ace update --force` to keep installing while they run; those services use the new version after restart.
+
 ---
 
 ## Core Mechanisms
@@ -263,6 +275,8 @@ CLI commands come from `src/cli.ts`.
 ace                # Start ACEHarness
 ace start          # Start ACEHarness
 ace service        # Inspect and stop ACE services
+ace update         # Update to the npm latest version
+ace update beta    # Update to a specific npm tag or version
 ace reset --force  # Reset local ACE configuration
 ace --help         # Show help
 ```

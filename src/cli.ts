@@ -1,9 +1,18 @@
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
+import {
+  ACE_PACKAGE_NAME,
+  DEFAULT_UPDATE_TARGET,
+  buildNpmPackageSpec,
+  fetchNpmPackageVersion,
+  installNpmPackageGlobally,
+  normalizeUpdateTarget,
+  resolveNpmCommand,
+} from '@/lib/core/self-update';
 import { resolveBinary as resolveMagicCliBinary } from './lib/engines/magic-cli-wrapper';
 import { isMacOS, isWindows } from '@/lib/core/runtime-platform';
 import { parse, stringify } from 'yaml';
@@ -124,6 +133,25 @@ interface CliMessages {
   serviceModeBackground: string;
   serviceModeDaemon: string;
   serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => string;
+  updateChecking: (spec: string) => string;
+  updateCurrentVersion: (version: string) => string;
+  updateTargetVersion: (target: string, version: string) => string;
+  updateAlreadyCurrent: string;
+  updateDryRun: (spec: string) => string;
+  updateRunningHeader: string;
+  updateRunningPrompt: string;
+  updateRunningStop: string;
+  updateRunningContinue: string;
+  updateRunningCancel: string;
+  updateRunningBlocked: string;
+  updateContinuingWithRunning: string;
+  updateStoppingServices: string;
+  updateStoppedServices: string;
+  updateStopFailed: string;
+  updateInstalling: (spec: string) => string;
+  updateDone: (version: string) => string;
+  updateRestartNeeded: string;
+  updateFailed: (message: string) => string;
   yes: string;
   no: string;
   skip: string;
@@ -178,6 +206,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace              启动 ACEHarness',
       '  ace start        启动 ACEHarness',
       '  ace service      查看并停止 ACE 进程',
+      '  ace update [tag|version] 从 npm 更新 ACEHarness',
       '  ace reset --force 重置本地 ACE 配置',
       '  ace --help       查看帮助',
     ].join('\n'),
@@ -225,6 +254,25 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     serviceModeBackground: '后台',
     serviceModeDaemon: '守护',
     serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
+    updateChecking: (spec: string) => `[ACE] 正在检查更新：${spec}`,
+    updateCurrentVersion: (version: string) => `[ACE] 当前版本：${version}`,
+    updateTargetVersion: (target: string, version: string) => `[ACE] 目标 ${target} 版本：${version}`,
+    updateAlreadyCurrent: '[ACE] 当前已经是目标版本。如需重新安装，请使用 `ace update --force`。',
+    updateDryRun: (spec: string) => `[ACE] dry-run：将执行 npm install -g ${spec}`,
+    updateRunningHeader: '[ACE] 检测到运行中的 ACE 实例：',
+    updateRunningPrompt: '升级前如何处理这些运行中的实例？',
+    updateRunningStop: '停止后升级',
+    updateRunningContinue: '继续升级但不停止',
+    updateRunningCancel: '取消升级',
+    updateRunningBlocked: '[ACE] 检测到运行中的 ACE 实例。非交互模式请使用 `--stop-running` 停止后升级，或使用 `--force` 继续升级但不停止。',
+    updateContinuingWithRunning: '[ACE] 将在 ACE 实例仍运行时继续升级；这些实例需要重启后才会使用新版本。',
+    updateStoppingServices: '[ACE] 正在停止运行中的 ACE 实例...',
+    updateStoppedServices: '[ACE] 运行中的 ACE 实例已停止。',
+    updateStopFailed: '[ACE] 部分 ACE 实例未能停止，请先运行 `ace service` 手动处理。',
+    updateInstalling: (spec: string) => `[ACE] 正在安装：${spec}`,
+    updateDone: (version: string) => `[ACE] 更新完成：${version}`,
+    updateRestartNeeded: '[ACE] 如需继续使用，请重新运行 `ace` 启动服务。',
+    updateFailed: (message: string) => `[ACE] 更新失败：${message}`,
     yes: '是',
     no: '否',
     skip: '跳过',
@@ -248,6 +296,7 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
       '  ace               Start ACEHarness',
       '  ace start         Start ACEHarness',
       '  ace service       Inspect and stop ACE processes',
+      '  ace update [tag|version] Update ACEHarness from npm',
       '  ace reset --force Reset local ACE state',
       '  ace --help        Show help',
     ].join('\n'),
@@ -295,6 +344,25 @@ const CLI_MESSAGES: Record<Locale, CliMessages> = {
     serviceModeBackground: 'background',
     serviceModeDaemon: 'daemon',
     serviceEntry: (state: AceServiceState, modeLabel: string, status: string) => `${state.serviceId} | ${state.url} | ${modeLabel} | daemon ${state.daemonPid ?? '-'} | server ${state.serverPid ?? '-'} | ${status}`,
+    updateChecking: (spec: string) => `[ACE] Checking update: ${spec}`,
+    updateCurrentVersion: (version: string) => `[ACE] Current version: ${version}`,
+    updateTargetVersion: (target: string, version: string) => `[ACE] Target ${target} version: ${version}`,
+    updateAlreadyCurrent: '[ACE] Already on the target version. Use `ace update --force` to reinstall it.',
+    updateDryRun: (spec: string) => `[ACE] dry-run: would run npm install -g ${spec}`,
+    updateRunningHeader: '[ACE] Running ACE instances detected:',
+    updateRunningPrompt: 'How should these running instances be handled before update?',
+    updateRunningStop: 'Stop then update',
+    updateRunningContinue: 'Update without stopping',
+    updateRunningCancel: 'Cancel update',
+    updateRunningBlocked: '[ACE] Running ACE instances detected. In non-interactive mode, use `--stop-running` to stop them before updating, or `--force` to update without stopping.',
+    updateContinuingWithRunning: '[ACE] Continuing while ACE instances are still running. Restart them to use the new version.',
+    updateStoppingServices: '[ACE] Stopping running ACE instances...',
+    updateStoppedServices: '[ACE] Running ACE instances stopped.',
+    updateStopFailed: '[ACE] Some ACE instances did not stop. Run `ace service` and handle them manually.',
+    updateInstalling: (spec: string) => `[ACE] Installing: ${spec}`,
+    updateDone: (version: string) => `[ACE] Update complete: ${version}`,
+    updateRestartNeeded: '[ACE] Run `ace` again to start the service.',
+    updateFailed: (message: string) => `[ACE] Update failed: ${message}`,
     yes: 'yes',
     no: 'no',
     skip: 'skip',
@@ -325,23 +393,38 @@ function resolveCliLocale(): Locale {
   return normalizeLocale(process.env.ACE_LOCALE || process.env.LANG || process.env.LC_ALL);
 }
 
-type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | '__run-server' | '__daemon';
+type CliCommand = '' | 'start' | 'reset' | 'help' | 'servive' | 'service' | 'update' | '__run-server' | '__daemon';
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
   const help = args.includes('--help') || args.includes('-h');
   const positionals = args.filter((arg) => !arg.startsWith('-'));
   const command = help ? 'help' : (positionals[0] || '');
-  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', '__run-server', '__daemon']);
+  const validCommands = new Set<CliCommand>(['', 'start', 'reset', 'help', 'servive', 'service', 'update', '__run-server', '__daemon']);
   const commandIsValid = validCommands.has(command as CliCommand);
   const allowedOptions = command === 'reset'
     ? new Set(['--force', '--help', '-h'])
-    : new Set(['--help', '-h', '--service-id']);
+    : command === 'update'
+      ? new Set(['--force', '--yes', '-y', '--dry-run', '--stop-running', '--tag', '--version', '--target', '--help', '-h'])
+      : new Set(['--help', '-h', '--service-id', '-V', '--verbose']);
   const unknownOption = args.find((arg) => arg.startsWith('-') && !allowedOptions.has(arg));
   const serviceIdIndex = args.findIndex((arg) => arg === '--service-id');
+  const getOptionValue = (names: string[]) => {
+    for (const name of names) {
+      const index = args.findIndex((arg) => arg === name);
+      const value = index >= 0 ? args[index + 1] || '' : '';
+      if (value && !value.startsWith('-')) return value;
+    }
+    return '';
+  };
+  const updateTarget = getOptionValue(['--target', '--tag', '--version']) || positionals[1] || '';
   return {
     command: command as CliCommand | string,
     force: args.includes('--force'),
+    yes: args.includes('--yes') || args.includes('-y'),
+    dryRun: args.includes('--dry-run'),
+    stopRunning: args.includes('--stop-running'),
+    updateTarget,
     verbose: args.includes('-V') || args.includes('--verbose'),
     serviceId: serviceIdIndex >= 0 ? args[serviceIdIndex + 1] || '' : '',
     unknownCommand: commandIsValid ? '' : command,
@@ -351,6 +434,15 @@ function parseArgs(argv: string[]) {
 
 function printUsage(locale = resolveCliLocale(), stream: NodeJS.WriteStream = process.stdout) {
   stream.write(`${getLocaleMessages(locale).usage}\n`);
+}
+
+function getCurrentAcePackageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(getRepoRoot(), 'package.json'), 'utf-8')) as { version?: unknown };
+    return typeof pkg.version === 'string' && pkg.version.trim() ? pkg.version.trim() : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function getServiceStateFile(serviceId: string): string {
@@ -1022,6 +1114,19 @@ function isServiceRunning(state: AceServiceState): boolean {
   return isPidRunning(state.daemonPid) || isPidRunning(state.serverPid);
 }
 
+async function listLiveServiceStates(): Promise<AceServiceState[]> {
+  const states = await listServiceStates();
+  const liveStates: AceServiceState[] = [];
+  for (const state of states) {
+    if (isServiceRunning(state)) {
+      liveStates.push(state);
+    } else {
+      await clearServiceState(state.serviceId);
+    }
+  }
+  return liveStates;
+}
+
 function getServiceTargetPids(state: AceServiceState): number[] {
   const seen = new Set<number>();
   const pids = [state.daemonPid, state.serverPid]
@@ -1087,6 +1192,129 @@ async function waitForServiceStop(state: AceServiceState, timeoutMs = 4000): Pro
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return !isPidRunning(state.daemonPid) && !isPidRunning(state.serverPid);
+}
+
+function printServiceStates(locale: Locale, states: AceServiceState[]): void {
+  const messages = getLocaleMessages(locale);
+  for (const state of states) {
+    const status = isServiceRunning(state) ? messages.serviceStatusRunning : messages.serviceStatusStopped;
+    console.log(`  ${messages.serviceEntry(state, formatServiceMode(locale, state.mode), status)}`);
+  }
+}
+
+async function stopLiveServicesForUpdate(states: AceServiceState[], locale: Locale): Promise<void> {
+  const messages = getLocaleMessages(locale);
+  console.log(messages.updateStoppingServices);
+  let allStopped = true;
+
+  for (const state of states) {
+    await requestServiceStop(state.serviceId);
+    await stopServiceProcesses(state);
+    const stopped = await waitForServiceStop(state, isWindows() ? 7000 : 5000);
+    if (stopped) {
+      await clearServiceState(state.serviceId);
+    } else {
+      allStopped = false;
+    }
+  }
+
+  if (!allStopped) {
+    throw new Error(messages.updateStopFailed);
+  }
+  console.log(messages.updateStoppedServices);
+}
+
+async function handleRunningServicesBeforeUpdate(
+  states: AceServiceState[],
+  locale: Locale,
+  options: { force: boolean; yes: boolean; stopRunning: boolean; dryRun: boolean },
+): Promise<void> {
+  if (states.length === 0) return;
+  const messages = getLocaleMessages(locale);
+
+  console.log(messages.updateRunningHeader);
+  printServiceStates(locale, states);
+
+  if (options.dryRun) return;
+  if (options.stopRunning) {
+    await stopLiveServicesForUpdate(states, locale);
+    return;
+  }
+  if (options.force) {
+    console.log(messages.updateContinuingWithRunning);
+    return;
+  }
+  if (options.yes || !process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(messages.updateRunningBlocked);
+  }
+
+  const answer = await prompt({
+    type: 'select',
+    name: 'action',
+    message: messages.updateRunningPrompt,
+    choices: [
+      { title: messages.updateRunningStop, value: 'stop' },
+      { title: messages.updateRunningContinue, value: 'continue' },
+      { title: messages.updateRunningCancel, value: 'cancel' },
+    ],
+    initial: 0,
+  }, getPromptOptions(locale));
+
+  if (answer.action === 'stop') {
+    await stopLiveServicesForUpdate(states, locale);
+    return;
+  }
+  if (answer.action === 'continue') {
+    console.log(messages.updateContinuingWithRunning);
+    return;
+  }
+
+  throw new Error(messages.updateRunningCancel);
+}
+
+async function updateCommand(
+  locale: Locale,
+  options: { updateTarget: string; force: boolean; yes: boolean; dryRun: boolean; stopRunning: boolean },
+): Promise<void> {
+  const messages = getLocaleMessages(locale);
+  const target = normalizeUpdateTarget(options.updateTarget || DEFAULT_UPDATE_TARGET);
+  const npmCommand = resolveNpmCommand(process.env.ACE_UPDATE_NPM_COMMAND);
+  const packageSpec = buildNpmPackageSpec(ACE_PACKAGE_NAME, target);
+  const currentVersion = getCurrentAcePackageVersion();
+
+  console.log(messages.updateChecking(packageSpec));
+  const targetVersion = await fetchNpmPackageVersion({
+    packageName: ACE_PACKAGE_NAME,
+    target,
+    npmCommand,
+  });
+
+  console.log(messages.updateCurrentVersion(currentVersion));
+  console.log(messages.updateTargetVersion(target, targetVersion));
+
+  if (currentVersion !== 'unknown' && targetVersion === currentVersion && !options.force) {
+    console.log(messages.updateAlreadyCurrent);
+    return;
+  }
+
+  const liveStates = await listLiveServiceStates();
+  await handleRunningServicesBeforeUpdate(liveStates, locale, options);
+
+  if (options.dryRun) {
+    console.log(messages.updateDryRun(packageSpec));
+    return;
+  }
+
+  console.log(messages.updateInstalling(packageSpec));
+  await installNpmPackageGlobally({
+    packageName: ACE_PACKAGE_NAME,
+    target,
+    npmCommand,
+  });
+  console.log(messages.updateDone(targetVersion));
+  if (liveStates.length > 0 && (options.stopRunning || !options.force)) {
+    console.log(messages.updateRestartNeeded);
+  }
 }
 
 function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boolean): ChildProcess {
@@ -1210,15 +1438,7 @@ async function startManagedBackground(settings: SystemSettings): Promise<void> {
 async function serviceCommand(locale: Locale): Promise<void> {
   const messages = getLocaleMessages(locale);
   while (true) {
-    const states = await listServiceStates();
-    const liveStates: AceServiceState[] = [];
-    for (const state of states) {
-      if (isServiceRunning(state)) {
-        liveStates.push(state);
-      } else {
-        await clearServiceState(state.serviceId);
-      }
-    }
+    const liveStates = await listLiveServiceStates();
 
     if (liveStates.length === 0) {
       console.log(messages.serviceEmpty);
@@ -1311,7 +1531,7 @@ async function start(interactive: boolean) {
 }
 
 async function main() {
-  const { command, force, serviceId, unknownCommand, unknownOption } = parseArgs(process.argv);
+  const { command, force, yes, dryRun, stopRunning, updateTarget, serviceId, unknownCommand, unknownOption } = parseArgs(process.argv);
   const locale = resolveCliLocale();
   const messages = getLocaleMessages(locale);
 
@@ -1335,6 +1555,16 @@ async function main() {
   }
   if (command === 'servive' || command === 'service') {
     await serviceCommand(locale);
+    return;
+  }
+  if (command === 'update') {
+    try {
+      await updateCommand(locale, { updateTarget, force, yes, dryRun, stopRunning });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(message.startsWith('[ACE]') ? message : messages.updateFailed(message));
+      process.exit(1);
+    }
     return;
   }
   if (command === '__run-server') {

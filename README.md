@@ -113,9 +113,11 @@ ACE Service 的全局 CLI 用法：
 ace              # 启动 ACE Service
 ace start        # 显式启动 ACE Service
 ace service      # 查看并停止当前受管的 ACE 实例
+ace update       # 更新到 npm latest 版本
+ace update beta  # 更新到指定 npm tag 或版本号，例如 beta / release / 1.0.0-beta.66
 ```
 
-启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。
+启动向导支持直接开启后台运行；如同时启用守护进程，ACE 会以 daemon 模式托管后台服务，并在异常退出后自动拉起。执行 `ace update` 时会检查这些受管的 ACE 实例；交互模式下可选择停止后更新、继续更新但不停止，或取消更新。脚本中可用 `ace update --stop-running` 先停止运行中的实例，或用 `ace update --force` 在实例仍运行时继续安装，运行中的服务重启后才会使用新版本。
 
 ---
 
@@ -273,6 +275,8 @@ CLI 命令来源：`src/cli.ts`。
 ace                # 启动 ACEHarness
 ace start          # 启动 ACEHarness
 ace service        # 查看并停止 ACE 服务
+ace update         # 更新到 npm latest 版本
+ace update beta    # 更新到指定 npm tag 或版本号
 ace reset --force  # 重置本地 ACE 配置
 ace --help         # 查看帮助
 ```
