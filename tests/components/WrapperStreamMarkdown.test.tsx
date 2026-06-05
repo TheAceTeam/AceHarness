@@ -732,6 +732,67 @@ describe('Wrapper stream markdown rendering', () => {
     });
   });
 
+  test('codex wrapper retries missing file ENOENT without failing the conversation', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/core/command-exists', () => ({
+      findCommand: vi.fn(() => '/usr/local/bin/codex'),
+      commandExists: vi.fn(() => true),
+      getCommonCliSearchPaths: vi.fn(() => []),
+    }));
+    const runs: any[][] = [
+      [
+        {
+          type: 'turn.failed',
+          error: {
+            message: "请求失败：ENOENT: no such file or directory, open '/tmp/missing.cj'",
+          },
+        },
+      ],
+      [
+        {
+          type: 'item.completed',
+          item: {
+            type: 'agent_message',
+            text: '继续完成。',
+          },
+        },
+        { type: 'turn.completed' },
+      ],
+    ];
+    let runCount = 0;
+    vi.doMock('@openai/codex-sdk', () => ({
+      Codex: class MockCodex {
+        startThread() {
+          return {
+            id: `thread-${runCount + 1}`,
+            runStreamed: async () => ({
+              events: createAsyncIterable(runs[Math.min(runCount++, runs.length - 1)]),
+            }),
+          };
+        }
+        resumeThread() {
+          return this.startThread();
+        }
+      },
+    }));
+
+    const { CodexEngineWrapper } = await import('@/lib/engines/codex-wrapper');
+    const wrapper = new CodexEngineWrapper();
+    const errorEvents: string[] = [];
+    wrapper.on('stream', (event: any) => {
+      if (event?.type === 'error') errorEvents.push(String(event.content || ''));
+    });
+    const result = await wrapper.execute({
+      prompt: 'test',
+      workingDirectory: process.cwd(),
+    } as any);
+
+    expect(runCount).toBe(2);
+    expect(result.success).toBe(true);
+    expect(result.output).toBe('继续完成。');
+    expect(errorEvents).toEqual([]);
+  });
+
   test('claude wrapper plan draft result parses after streaming completes', async () => {
     const finalContent = [
       '下面是计划草案。',

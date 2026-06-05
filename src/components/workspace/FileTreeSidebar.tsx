@@ -154,6 +154,7 @@ const TreeContext = React.createContext<{
   requestNotebookCreate: (type: "file" | "folder", dir: string) => void
   requestNotebookSetIcon: (path: string, currentIcon?: string) => void
   requestNotebookClearIcon: (path: string) => void
+  copyAbsolutePath: (path: string) => Promise<void>
   pasteIntoDirectory: (dir: string) => Promise<void>
   toast: (type: "success" | "error" | "info" | "warning", message: string) => void
   confirm: (options: {
@@ -182,6 +183,34 @@ function getParentDir(filePath: string): string {
 function normalizeTreePath(filePath: string | null | undefined): string | null {
   if (!filePath) return null
   return filePath.replace(/\\/g, "/")
+}
+
+function buildWorkspaceAbsolutePath(workspacePath: string, relativePath: string): string {
+  const root = workspacePath.trim()
+  const normalizedRelative = (normalizeTreePath(relativePath) || "").replace(/^\/+/, "")
+  if (!normalizedRelative) return root
+  if (!root) return normalizedRelative
+  const separator = root.includes("\\") ? "\\" : "/"
+  const trimmedRoot = root.replace(/[\\/]+$/, "")
+  const pathPart = normalizedRelative.replace(/\//g, separator)
+  return `${trimmedRoot}${separator}${pathPart}`
+}
+
+async function writeTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement("textarea")
+  textarea.value = text
+  textarea.setAttribute("readonly", "")
+  textarea.style.position = "fixed"
+  textarea.style.left = "-9999px"
+  document.body.appendChild(textarea)
+  textarea.select()
+  const ok = document.execCommand("copy")
+  document.body.removeChild(textarea)
+  if (!ok) throw new Error("clipboard copy failed")
 }
 
 function getClipboardEntries(clipboard: ClipboardItem | null): Array<{ path: string; type: "file" | "directory" }> {
@@ -649,6 +678,7 @@ function TreeFileItem({
     requestCopyBetween,
     requestNotebookSetIcon,
     requestNotebookClearIcon,
+    copyAbsolutePath,
     toast,
     confirm,
     onDownload,
@@ -814,6 +844,7 @@ function TreeFileItem({
           {mode === "notebook" && !nodeReadOnly && <ContextMenuSeparator />}
           {!nodeReadOnly && <ContextMenuItem onClick={() => setRenamingPath(node.path)}><Pencil className="h-3.5 w-3.5 mr-2" />重命名</ContextMenuItem>}
           {!nodeReadOnly && <ContextMenuItem onClick={() => setClipboard({ path: node.path, type: "file", action: "copy" })}><Copy className="h-3.5 w-3.5 mr-2" />复制</ContextMenuItem>}
+          {mode === "default" && <ContextMenuItem onClick={() => { void copyAbsolutePath(node.path) }}><Copy className="h-3.5 w-3.5 mr-2" />复制绝对路径</ContextMenuItem>}
           {!nodeReadOnly && <ContextMenuItem onClick={() => setClipboard({ path: node.path, type: "file", action: "cut" })}><Scissors className="h-3.5 w-3.5 mr-2" />剪切</ContextMenuItem>}
           {mode === "notebook" && !nodeReadOnly && (
             <ContextMenuItem onClick={() => requestCopyBetween({ path: node.path, type: "file", name: node.name })}>
@@ -1399,6 +1430,7 @@ function TreeDirItem({
     requestNotebookCreate,
     requestNotebookSetIcon,
     requestNotebookClearIcon,
+    copyAbsolutePath,
     toast,
     confirm,
     onUpload,
@@ -1647,6 +1679,7 @@ function TreeDirItem({
             {mode === "notebook" && !nodeReadOnly && <ContextMenuSeparator />}
             {!nodeReadOnly && <ContextMenuItem onClick={() => setRenamingPath(node.path)}><Pencil className="h-3.5 w-3.5 mr-2" />重命名</ContextMenuItem>}
             {!nodeReadOnly && <ContextMenuItem onClick={() => setClipboard({ path: node.path, type: "directory", action: "copy" })}><Copy className="h-3.5 w-3.5 mr-2" />复制</ContextMenuItem>}
+            {mode === "default" && <ContextMenuItem onClick={() => { void copyAbsolutePath(node.path) }}><Copy className="h-3.5 w-3.5 mr-2" />复制绝对路径</ContextMenuItem>}
             {!nodeReadOnly && <ContextMenuItem onClick={() => setClipboard({ path: node.path, type: "directory", action: "cut" })}><Scissors className="h-3.5 w-3.5 mr-2" />剪切</ContextMenuItem>}
             {mode === "notebook" && !nodeReadOnly && (
               <ContextMenuItem onClick={() => requestCopyBetween({ path: node.path, type: "directory", name: node.name })}>
@@ -1864,6 +1897,17 @@ export function FileTreeSidebar({
       throw error
     } finally {
       setDownloading(false)
+    }
+  }, [mode, toast, workspacePath])
+
+  const copyAbsolutePath = React.useCallback(async (targetPath: string) => {
+    if (mode !== "default") return
+    const absolutePath = buildWorkspaceAbsolutePath(workspacePath, targetPath)
+    try {
+      await writeTextToClipboard(absolutePath)
+      toast("success", "已复制绝对路径")
+    } catch {
+      toast("error", "复制绝对路径失败")
     }
   }, [mode, toast, workspacePath])
 
@@ -2270,7 +2314,7 @@ export function FileTreeSidebar({
   const isCreatingAtRoot = creatingIn?.dir === ""
 
   return (
-    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
+    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
       <div className="flex flex-col h-full bg-card">
         <input
           ref={fileInputRef}
@@ -2544,6 +2588,7 @@ export function FileTreeSidebar({
                 <ContextMenuSeparator />
                 <ContextMenuItem onClick={() => requestUpload("", false)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件</ContextMenuItem>
                 <ContextMenuItem onClick={() => requestUpload("", true)}><Upload className="h-3.5 w-3.5 mr-2" />上传文件夹</ContextMenuItem>
+                <ContextMenuItem onClick={() => { void copyAbsolutePath("") }}><Copy className="h-3.5 w-3.5 mr-2" />复制工作区路径</ContextMenuItem>
                 <ContextMenuItem onClick={() => { void handleDownload("") }}><Download className="h-3.5 w-3.5 mr-2" />下载根目录</ContextMenuItem>
               </>
             )}

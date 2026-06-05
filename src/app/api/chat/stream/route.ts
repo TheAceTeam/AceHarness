@@ -469,11 +469,13 @@ export async function POST(request: NextRequest) {
             if (!currentAssistant) return session;
             const message = String(error?.message || '请求失败');
             const partial = String(currentAssistant.content || '').trim();
+            const failedBackendSessionId = getEngineStream(chatId)?.backendSessionId || proc?.sessionId || validResumeSid || session.backendSessionId;
             const errorContent = partial
               ? `请求失败：${message}\n\n已返回部分内容：\n${partial}`
               : `请求失败：${message}`;
             return {
               ...session,
+              backendSessionId: failedBackendSessionId,
               updatedAt: Date.now(),
               messages: updateMessageById(session.messages, liveAssistantMessageId, (item) => ({
                 ...item,
@@ -605,7 +607,8 @@ export async function GET(request: NextRequest) {
         } else if (evt.type === 'thinking') {
           send('thinking', { content: evt.content });
         } else if (evt.type === 'engine_error') {
-          send('engine_error', { message: evt.content || '执行失败' });
+          const state = getEngineStream(chatId);
+          send('engine_error', { message: evt.content || '执行失败', sessionId: state?.backendSessionId || null });
         }
       };
 
@@ -630,7 +633,8 @@ export async function GET(request: NextRequest) {
           });
         })
         .catch((err: any) => {
-          send('failed', { message: err.message || '执行失败' });
+          const state = getEngineStream(chatId);
+          send('failed', { message: err.message || '执行失败', sessionId: state?.backendSessionId || null });
         })
         .finally(() => {
           cleanup();

@@ -97,6 +97,18 @@ function isSpawnableCodexOverride(candidate: string | null | undefined): candida
   return lower.endsWith('.exe') || lower.endsWith('.com');
 }
 
+function isRecoverableMissingFileError(error: unknown): boolean {
+  const message = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : String((error as any)?.message || error || '');
+  if (!message) return false;
+  return /\bENOENT\b/i.test(message)
+    && /no such file or directory/i.test(message)
+    && /\bopen\b/i.test(message);
+}
+
 export class CodexEngineWrapper extends EventEmitter implements Engine {
   private currentThread: any = null;
   private codexInstance: any = null;
@@ -147,6 +159,12 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
   private collectedOutput = '';
   private lastAgentMessageSnapshot = '';
+
+  private resetRunState(clearOutput = true): void {
+    if (clearOutput) this.collectedOutput = '';
+    this.lastBlockWasTool = false;
+    this.lastAgentMessageSnapshot = '';
+  }
 
   private formatCommandExecution(command: string): string {
     const cmd = command || '';
@@ -395,10 +413,12 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         }
         case 'turn.failed': {
           const errMsg = (event as any).error?.message || 'Unknown error';
-          this.emit('stream', {
-            type: 'error',
-            content: errMsg,
-          } as EngineStreamEvent);
+          if (!isRecoverableMissingFileError(errMsg)) {
+            this.emit('stream', {
+              type: 'error',
+              content: errMsg,
+            } as EngineStreamEvent);
+          }
           return {
             success: false,
             output: normalizeEngineOutput(this.collectedOutput),
@@ -419,13 +439,31 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
 
   async execute(options: EngineOptions): Promise<EngineResult> {
     this._abortController = new AbortController();
-    this.collectedOutput = '';
-    this.lastBlockWasTool = false;
-    this.lastAgentMessageSnapshot = '';
+    this.resetRunState();
     try {
       const { Codex } = await runtimeImport<typeof import('@openai/codex-sdk')>('@openai/codex-sdk');
       try {
-        return await this.runWithClient(Codex, options);
+        const firstResult = await this.runWithClient(Codex, options);
+        if (!firstResult.success && isRecoverableMissingFileError(firstResult.error)) {
+          this.emit('stream', {
+            type: 'text',
+            content: '\n\n检测到 Codex 读取的文件已不存在，已自动重试一次。\n\n',
+          } as EngineStreamEvent);
+          this.currentThread = null;
+          this.resetRunState();
+          const retryResult = await this.runWithClient(Codex, { ...options, forceNewSession: true });
+          if (!retryResult.success && isRecoverableMissingFileError(retryResult.error)) {
+            const output = normalizeEngineOutput(retryResult.output || this.collectedOutput || '');
+            return {
+              success: true,
+              output,
+              sessionId: this.currentThread?.id,
+              metadata: retryResult.metadata || ZERO_USAGE_METADATA,
+            };
+          }
+          return retryResult;
+        }
+        return firstResult;
       } catch (primaryError: any) {
         if (primaryError?.name === 'AbortError' || this._abortController?.signal.aborted) {
           throw primaryError;
@@ -434,9 +472,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         if (!fallbackPath) throw primaryError;
         this.codexInstance = null;
         this.currentThread = null;
-        this.collectedOutput = '';
-        this.lastBlockWasTool = false;
-        this.lastAgentMessageSnapshot = '';
+        this.resetRunState();
         return await this.runWithClient(Codex, options, fallbackPath);
       }
     } catch (error: any) {
@@ -450,6 +486,14 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
         };
       }
       const errMsg = error.message || String(error);
+      if (isRecoverableMissingFileError(errMsg)) {
+        return {
+          success: true,
+          output: normalizeEngineOutput(this.collectedOutput || ''),
+          sessionId: this.currentThread?.id,
+          metadata: ZERO_USAGE_METADATA,
+        };
+      }
       this.emit('stream', {
         type: 'text',
         content: `\n\n❌ Codex 错误: ${errMsg}\n`,

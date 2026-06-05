@@ -2243,6 +2243,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               void applyToTargetSession(s => ({ ...s, backendSessionId: nextBackendSessionId }));
             }
             if (data.isError) {
+              const failedBackendSessionId = hasOwnKey(data, 'sessionId') ? normalizeBackendSessionId(data.sessionId) : undefined;
               const partial = String(data.result || accumulated || '').trim();
               const message = String(data.error || '请求失败，请稍后重试');
               const content = partial
@@ -2250,6 +2251,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 : `请求失败：${message}`;
               void applyToTargetSession(s => ({
                 ...s,
+                backendSessionId: failedBackendSessionId || s.backendSessionId,
                 updatedAt: Date.now(),
                 messages: s.messages.map(m => m.id === assistantMsgId
                   ? { ...m, role: 'error' as const, content }
@@ -2299,8 +2301,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             const data = JSON.parse(e.data || '{}');
             const message = String(data?.message || '执行失败，请稍后重试');
+            const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
             void applyToTargetSession(s => ({
               ...s,
+              backendSessionId: failedBackendSessionId || s.backendSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
                 ? { ...m, role: 'error' as const, content: `请求失败：${message}` }
@@ -2321,8 +2325,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             if (inactivityTimer) clearTimeout(inactivityTimer);
             const data = JSON.parse(e.data || '{}');
             const message = String(data?.message || '执行失败，请稍后重试');
+            const failedBackendSessionId = normalizeBackendSessionId(data?.sessionId);
             void applyToTargetSession(s => ({
               ...s,
+              backendSessionId: failedBackendSessionId || s.backendSessionId,
               updatedAt: Date.now(),
               messages: s.messages.map(m => m.id === assistantMsgId
                 ? { ...m, role: 'error' as const, content: `请求失败：${message}` }
@@ -2533,8 +2539,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const msg = session.messages.find(m => m.id === messageId);
     if (!msg || msg.role !== 'error') return;
 
-    if (!msg.content.includes('超时') && !msg.content.includes('timeout')) return;
-
     // If engine has changed since the error, the old backendSessionId is invalid
     const backendSid = session.backendSessionId;
     const sessionEngine = session.engine || globalEngineRef.current || '';
@@ -2592,10 +2596,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             } : m),
           }));
           // The reconnection logic would be handled by the SSE connection below
+        } else {
+          await sendMessageRef.current?.('继续', { targetSessionId: session.id });
         }
       }
     } catch (err) {
       console.error('Continue from timeout failed:', err);
+      await sendMessageRef.current?.('继续', { targetSessionId: session.id });
     } finally {
       setLoading(false);
     }
