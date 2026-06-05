@@ -239,7 +239,9 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
           enableReviewPanel: data?.enableReviewPanel || false,
-          skills: data?.skills || roles.find((role) => role.name === data?.agent)?.skills || [],
+          skills: Array.isArray(roles.find((role) => role.name === data?.agent)?.skills)
+            ? roles.find((role) => role.name === data?.agent)?.skills
+            : (Array.isArray(data?.skills) ? data.skills : []),
           specTaskId: [
             ...((data?.specTaskBinding?.taskIds || []) as string[]),
             data?.specTaskBinding?.taskId,
@@ -253,6 +255,7 @@ export default function EditNodeModal({
   const iterationEnabled = watch('iterationEnabled');
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
   const selectedAgent = roles.find((role) => role.name === selectedAgentName);
+  const selectedSkillNames = Array.isArray(watch('skills')) ? watch('skills') as string[] : [];
   const selectedSpecTaskIds = inputToList(watch('specTaskId'));
   const selectedSpecTaskDetails = useMemo(
     () => specTasks.filter((task) => selectedSpecTaskIds.includes(task.id)),
@@ -273,12 +276,24 @@ export default function EditNodeModal({
     label: task.id,
     description: [task.title, task.phaseTitle, ...(task.ownerAgents || []).slice(0, 2)].filter(Boolean).join(' · '),
   }));
+  const skillOptions = useMemo(() => {
+    const byName = new Map<string, SkillOption>();
+    for (const skill of availableSkills) {
+      byName.set(skill.name, skill);
+    }
+    for (const skillName of selectedSkillNames) {
+      if (!byName.has(skillName)) {
+        byName.set(skillName, { name: skillName, description: 'Agent 配置中已选择的 Skill' });
+      }
+    }
+    return Array.from(byName.values());
+  }, [availableSkills, selectedSkillNames]);
 
   useEffect(() => {
     if (isPhase || !selectedAgentName) return;
     const agentSkills = selectedAgent?.skills;
     const legacyStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
-    setValue('skills', Array.isArray(agentSkills) && agentSkills.length > 0 ? agentSkills : legacyStepSkills);
+    setValue('skills', Array.isArray(agentSkills) ? agentSkills : legacyStepSkills);
   }, [data?.agent, data?.skills, isPhase, selectedAgent?.skills, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {
@@ -307,7 +322,9 @@ export default function EditNodeModal({
         constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
         preCommands: Array.isArray(source.preCommands) ? source.preCommands.join('\n') : '',
         enableReviewPanel: source.enableReviewPanel || false,
-        skills: source.skills || [],
+        skills: Array.isArray(roles.find((role) => role.name === source.agent)?.skills)
+          ? roles.find((role) => role.name === source.agent)?.skills
+          : (Array.isArray(source.skills) ? source.skills : []),
         specTaskId: '',
         requirementIds: '',
         artifactKeys: '',
@@ -610,7 +627,7 @@ export default function EditNodeModal({
                       />
                     </div>
 
-                    {availableSkills.length > 0 && (
+                    {skillOptions.length > 0 && (
                       <div className="space-y-2">
                         <Label>Agent Skills</Label>
                         <p className="text-xs leading-5 text-muted-foreground">
@@ -619,7 +636,7 @@ export default function EditNodeModal({
                         <MultiCombobox
                           value={watch('skills') || []}
                           onValueChange={(v) => setValue('skills', v)}
-                          options={availableSkills.map(skill => ({
+                          options={skillOptions.map(skill => ({
                             value: skill.name,
                             label: skill.name,
                             description: skill.description,

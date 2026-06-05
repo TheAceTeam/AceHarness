@@ -21,6 +21,7 @@ interface AgentHeroCardProps {
     tags?: string[];
     description?: string;
     capabilities?: string[];
+    skills?: string[];
     alwaysAvailableForChat?: boolean;
   };
   selected?: boolean;
@@ -40,7 +41,8 @@ export function AgentHeroCard({ agent, selected, compact = false, className, onC
   });
   const tags = (agent.tags || []).slice(0, compact ? 2 : 2);
   const capabilities = (agent.capabilities || []).slice(0, compact ? 2 : 2);
-  const compactChips = compact ? [...tags, ...capabilities].slice(0, 3) : [];
+  const skills = (agent.skills || []).slice(0, compact ? 3 : 5);
+  const compactChips = compact ? [...skills, ...tags, ...capabilities].slice(0, 4) : [];
 
   return (
     <div
@@ -129,9 +131,26 @@ export function AgentHeroCard({ agent, selected, compact = false, className, onC
           ) : null
         ) : (
           <div className="mt-2 grid gap-2">
+            {skills.length > 0 ? (
+            <div>
+              <div className="text-[9px] uppercase tracking-[0.18em] text-muted-foreground">Skills</div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {skills.map((skill, index) => (
+                  <Badge key={`${skill}-${index}`} variant="secondary" className="h-5 border-primary/20 bg-primary/10 px-1.5 py-0 text-[10px] text-primary">
+                    {skill}
+                  </Badge>
+                ))}
+                {(agent.skills || []).length > skills.length ? (
+                  <Badge variant="secondary" className="h-5 border-border/60 bg-muted/40 px-1.5 py-0 text-[10px] text-muted-foreground">
+                    +{(agent.skills || []).length - skills.length}
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+            ) : null}
             {tags.length > 0 ? (
             <div>
-              <div className="text-[9px] uppercase tracking-[0.18em] text-white/35">标签</div>
+              <div className="text-[9px] uppercase tracking-[0.18em] text-muted-foreground">标签</div>
               <div className="mt-1 flex flex-wrap gap-1">
                 {tags.map((tag, index) => (
                   <Badge key={`${tag}-${index}`} variant="secondary" className="h-5 border-border/60 bg-muted/40 px-1.5 py-0 text-[10px] text-muted-foreground">

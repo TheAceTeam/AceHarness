@@ -814,7 +814,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                             </Badge>
                           </div>
                         </div>
-                        <div className="relative mt-4 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(250px,1fr))]">
+                        <div className="relative mt-4 grid justify-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),320px))]">
                           {groupedAgents[team].map(agent => {
                             const isSelected = selectedAgentNames.includes(agent.name);
                             return (

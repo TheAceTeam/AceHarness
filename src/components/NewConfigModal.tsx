@@ -1397,6 +1397,26 @@ function getClarificationQuestionOptions(item: ClarificationQuestionItem): Array
   ];
 }
 
+function getClarificationNoteSuggestions(item: ClarificationQuestionItem): string[] {
+  const candidates = [
+    item.placeholder,
+    ...getClarificationQuestionOptions(item)
+      .filter((option) => option.recommended)
+      .flatMap((option) => [option.description, option.label]),
+  ];
+  const seen = new Set<string>();
+  return candidates
+    .map((value) => String(value || '').trim())
+    .filter((value) => value && value !== '请输入你的回答')
+    .filter((value) => {
+      const key = value.replace(/\s+/g, ' ');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 3);
+}
+
 function buildClarificationAnswerContext(
   questions: ClarificationQuestionItem[],
   answers: Record<string, ClarificationAnswerValue>
@@ -6071,6 +6091,7 @@ export default function NewConfigModal({
             <div key={item.id} className="space-y-3 rounded-lg border bg-background p-4">
               {(() => {
                 const options = getClarificationQuestionOptions(item);
+                const noteSuggestions = getClarificationNoteSuggestions(item);
                 const selectionMode = item.selectionMode === 'multiple' ? 'multiple' : 'single';
                 return (
                   <>
@@ -6156,6 +6177,34 @@ export default function NewConfigModal({
                         },
                       }))}
                     />
+                    {noteSuggestions.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-muted-foreground">推荐补充</span>
+                        {noteSuggestions.map((suggestion) => (
+                          <button
+                            key={`${item.id}-${suggestion}`}
+                            type="button"
+                            className="max-w-full truncate rounded-full border bg-muted/40 px-2.5 py-1 text-left text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/10 hover:text-primary"
+                            title={suggestion}
+                            onClick={() => setClarificationAnswers((prev) => {
+                              const current = prev[item.id]?.note?.trim() || '';
+                              const nextNote = current
+                                ? (current.includes(suggestion) ? current : `${current}\n${suggestion}`)
+                                : suggestion;
+                              return {
+                                ...prev,
+                                [item.id]: {
+                                  optionIds: prev[item.id]?.optionIds || [],
+                                  note: nextNote,
+                                },
+                              };
+                            })}
+                          >
+                            {suggestion}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     <div className="text-[11px] leading-5 text-muted-foreground">
                       先选一个最接近的方案；如果需要补充边界、例外或更具体的要求，再在下方补充说明。
                     </div>
