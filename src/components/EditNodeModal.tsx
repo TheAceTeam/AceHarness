@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -65,6 +65,7 @@ interface RoleOption {
   tags?: string[];
   description?: string;
   capabilities?: string[];
+  skills?: string[];
   alwaysAvailableForChat?: boolean;
 }
 
@@ -186,6 +187,7 @@ interface EditNodeModalProps {
   initialSection?: 'spec';
   onClose: () => void;
   onSave: (data: any) => void;
+  onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
   onDelete?: () => void;
 }
 
@@ -202,6 +204,7 @@ export default function EditNodeModal({
   initialSection,
   onClose,
   onSave,
+  onAgentSkillsChange,
   onDelete,
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
@@ -236,7 +239,7 @@ export default function EditNodeModal({
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
           enableReviewPanel: data?.enableReviewPanel || false,
-          skills: data?.skills || [],
+          skills: data?.skills || roles.find((role) => role.name === data?.agent)?.skills || [],
           specTaskId: [
             ...((data?.specTaskBinding?.taskIds || []) as string[]),
             data?.specTaskBinding?.taskId,
@@ -270,6 +273,13 @@ export default function EditNodeModal({
     label: task.id,
     description: [task.title, task.phaseTitle, ...(task.ownerAgents || []).slice(0, 2)].filter(Boolean).join(' · '),
   }));
+
+  useEffect(() => {
+    if (isPhase || !selectedAgentName) return;
+    const agentSkills = selectedAgent?.skills;
+    const legacyStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
+    setValue('skills', Array.isArray(agentSkills) && agentSkills.length > 0 ? agentSkills : legacyStepSkills);
+  }, [data?.agent, data?.skills, isPhase, selectedAgent?.skills, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
@@ -305,7 +315,7 @@ export default function EditNodeModal({
     }
   };
 
-  const onSubmit = (formData: any) => {
+  const onSubmit = async (formData: any) => {
     if (isPhase) {
       const phaseData: any = { name: formData.name };
       if (formData.checkpointEnabled) {
@@ -346,8 +356,13 @@ export default function EditNodeModal({
       if (formData.enableReviewPanel !== undefined) {
         stepData.enableReviewPanel = formData.enableReviewPanel;
       }
-      if (formData.skills && formData.skills.length > 0) {
-        stepData.skills = formData.skills;
+      if (onAgentSkillsChange && formData.agent) {
+        try {
+          await onAgentSkillsChange(formData.agent, Array.isArray(formData.skills) ? formData.skills : []);
+        } catch (error: any) {
+          alert(error?.message || '保存 Agent Skills 失败');
+          return;
+        }
       }
 
       if (data?.parallelGroup) stepData.parallelGroup = data.parallelGroup;
@@ -597,7 +612,10 @@ export default function EditNodeModal({
 
                     {availableSkills.length > 0 && (
                       <div className="space-y-2">
-                        <Label>Skills</Label>
+                        <Label>Agent Skills</Label>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          保存后写入所选 Agent 配置；工作流步骤本身不再保存独立 Skills。
+                        </p>
                         <MultiCombobox
                           value={watch('skills') || []}
                           onValueChange={(v) => setValue('skills', v)}

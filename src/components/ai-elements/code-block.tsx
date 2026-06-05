@@ -358,6 +358,7 @@ export const CodeBlockContainer = ({
       "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
       className
     )}
+    data-ace-code-block="true"
     data-language={language}
     style={{
       containIntrinsicSize: "auto 200px",

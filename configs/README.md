@@ -114,7 +114,7 @@
 
 1. **角色分配**: 合理使用 defender/attacker/judge 角色，确保代码质量
 2. **人工审批**: 在关键节点设置 `requireHumanApproval: true`
-3. **技能配置**: 为每个步骤配置合适的技能 (skills)
+3. **技能配置**: 工作流通用技能写在 `context.skills`，角色专属技能写在 Agent 配置的 `skills`
 4. **超时设置**: 根据任务复杂度设置合理的 `timeoutMinutes`
 5. **状态转换**: 明确定义转换条件 (verdict: pass/conditional_pass/fail)
 6. **输出规范**: 要求 agent 输出结构化的 JSON 结果
@@ -142,7 +142,6 @@ workflow:
           agent: agent名称
           role: defender/attacker/judge
           task: 任务描述
-          skills: [技能列表]
       transitions:
         - to: 目标状态
           condition:
@@ -157,7 +156,6 @@ workflow:
           agent: agent名称
           role: defender/attacker/judge
           task: 任务描述
-          skills: [技能列表]
       checkpoint:
         name: 检查点名称
         message: 检查点消息
@@ -175,6 +173,8 @@ context:
   timeoutMinutes: 超时时间（分钟）
   skills: [全局技能列表]
 ```
+
+步骤级 `skills` 已废弃。需要让某个步骤使用特定 skill 时，请修改该步骤绑定的 Agent 的 `skills` 字段；工作台步骤编辑弹窗中的 Agent Skills 也会直接写回 Agent 配置。
 
 ## 更多信息
 

@@ -120,7 +120,7 @@ export const workflowStepSchema = z.object({
   channelIds: z.array(z.string()).optional(),
   specTaskBinding: specTaskBindingSchema.optional(),
   enableReviewPanel: z.boolean().optional(), // 是否启用会审模式
-  skills: z.array(z.string()).optional(), // 步骤级别的 skills
+  skills: z.array(z.string()).optional(), // 兼容旧配置：步骤级 skills 已废弃，新配置写入 Agent.skills
 });
 
 // 检查点 Schema
@@ -154,6 +154,7 @@ export const roleConfigSchema = z.object({
   systemPrompt: z.string().min(1, '系统提示不能为空'),
   iterationPrompt: z.string().optional(),
   constraints: z.array(z.string()).optional(),
+  skills: z.array(z.string()).optional(), // Agent 默认可用的 skills
   allowedTools: z.array(z.string()).optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),

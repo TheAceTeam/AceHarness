@@ -44,6 +44,7 @@ interface AgentConfig {
   iterationPrompt?: string;
   capabilities?: string[];
   constraints?: string[];
+  skills?: string[];
   description?: string;
   alwaysAvailableForChat?: boolean;
 }
@@ -158,8 +159,9 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
         roleType: 'normal',
         engineModels: {},
         activeEngine: '',
-        tags: [],
+      tags: [],
       capabilities: [],
+      skills: [],
       systemPrompt: '',
     });
     setIsNewAgent(true);
@@ -175,6 +177,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
       activeEngine: agent.activeEngine || '',
       tags: agent.tags || [],
       capabilities: agent.capabilities || [],
+      skills: agent.skills || [],
       systemPrompt: agent.systemPrompt || '',
     });
     setIsNewAgent(true);

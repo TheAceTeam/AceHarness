@@ -821,7 +821,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   }
 
   /**
-   * Load step-level and workflow-level skills, returning formatted prompt content
+   * Load agent-level and workflow-level skills, returning formatted prompt content
    */
   private async loadAdditionalSkills(skillNames: string[], projectRoot: string): Promise<string> {
     const unique = [...new Set(skillNames)].filter(n => !this.workspaceSkillNames.has(n));
@@ -834,7 +834,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
     if (loaded.length === 0) return '';
 
-    let result = `### 步骤/工作流指定 Skills\n\n`;
+    let result = `### Agent/工作流指定 Skills\n\n`;
     for (const skill of loaded) {
       result += `#### ${skill.name}\n\n${skill.content}\n\n---\n\n`;
     }
@@ -854,12 +854,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
     if (!existsSync(serverSkillsDir)) return;
 
-    // Collect all skill names needed: context.skills + all step.skills
+    // Collect all skill names needed: context.skills + agent.skills
     const needed = new Set<string>();
     if (config.context?.skills) config.context.skills.forEach(s => needed.add(s));
-    for (const state of config.workflow.states) {
-      for (const step of state.steps) {
-        if (step.skills) step.skills.forEach(s => needed.add(s));
+    for (const roleConfig of this.agentConfigs || []) {
+      if (Array.isArray((roleConfig as any).skills)) {
+        (roleConfig as any).skills.forEach((s: string) => needed.add(s));
       }
     }
     if (needed.size === 0) {
@@ -4605,15 +4605,17 @@ try {
       ].join('\n'));
     }
 
-    // Add workflow-level and step-level skills
+    // Add workflow-level and current Agent skills. Step-level skills are deprecated.
+    const promptRoleConfig = this.agentConfigs.find((r) => r.name === step.agent)
+      || config.roles?.find((r) => r.name === step.agent);
     const allSkillNames: string[] = [];
     if (config.context?.skills) allSkillNames.push(...config.context.skills);
-    if (step.skills) allSkillNames.push(...step.skills);
+    if (Array.isArray((promptRoleConfig as any)?.skills)) allSkillNames.push(...(promptRoleConfig as any).skills);
     if (allSkillNames.length > 0 && config.context?.projectRoot) {
       const skillsAbsPath = await getRuntimeSkillsDirPath();
       const uniqueSkillNames = [...new Set(allSkillNames)];
       const skillLines = uniqueSkillNames.map((name) => {
-        const source = step.skills?.includes(name) ? 'step.skills' : 'workflow.context.skills';
+        const source = (promptRoleConfig as any)?.skills?.includes(name) ? 'agent.skills' : 'workflow.context.skills';
         return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
       }).join('\n');
       const rules = memo.skillRulesShown

@@ -235,6 +235,21 @@ describe('validateAgentDraft', () => {
     expect(result.ok).toBe(true);
   });
 
+  test('agent draft accepts skills as agent-level runtime configuration', () => {
+    const result = validateAgentDraft({
+      name: 'test-agent',
+      team: 'red',
+      activeEngine: '',
+      engineModels: {},
+      capabilities: ['code'],
+      systemPrompt: 'You are a test agent.',
+      skills: ['aceharness-spec-coding', 'vitest'],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.normalized?.skills).toEqual(['aceharness-spec-coding', 'vitest']);
+  });
+
   test('black-gold team with normal roleType is an error', () => {
     const result = validateAgentDraft({
       name: 'test-agent',

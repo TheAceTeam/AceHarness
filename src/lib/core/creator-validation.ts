@@ -108,6 +108,7 @@ export function buildDefaultAgentDraft(input?: Partial<any>) {
     description: typeof input?.description === 'string' ? input.description : '示例 Agent',
     keywords: Array.isArray(input?.keywords) ? input.keywords : ['示例'],
     tags: Array.isArray(input?.tags) ? input.tags : ['AI创建'],
+    skills: Array.isArray(input?.skills) ? input.skills : [],
   };
 }
 

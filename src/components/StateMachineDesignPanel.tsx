@@ -43,6 +43,7 @@ interface StateMachineDesignPanelProps {
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
   onOptimizeState?: (stateIndex: number) => void;
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
+  onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
 }
 
 type StepGroup = {
@@ -916,6 +917,7 @@ export default function StateMachineDesignPanel({
   specTasks = [],
   onOptimizeState,
   onOptimizeStep,
+  onAgentSkillsChange,
 }: StateMachineDesignPanelProps) {
   const [selectedStateName, setSelectedStateName] = useState<string | null>(
     states.length > 0 ? states[0].name : null
@@ -1027,7 +1029,6 @@ export default function StateMachineDesignPanel({
       task: data.task,
       role: data.role,
       constraints: normalizedConstraints,
-      skills: data.skills,
       enableReviewPanel: data.enableReviewPanel,
       parallelGroup: data.parallelGroup,
       concurrency: data.concurrency,
@@ -1581,7 +1582,6 @@ export default function StateMachineDesignPanel({
             task: '',
             role: 'defender',
             constraints: '',
-            skills: [],
             parallelGroup: '',
             concurrency: undefined,
             agentInstanceId: '',
@@ -1597,6 +1597,7 @@ export default function StateMachineDesignPanel({
           existingSteps={selectedState?.steps ?? []}
           onClose={() => setEditingStep(null)}
           onSave={handleSaveStep}
+          onAgentSkillsChange={onAgentSkillsChange}
           onDelete={editingStep.isNew ? undefined : () => handleDeleteStep(editingStep.index)}
         />
       )}

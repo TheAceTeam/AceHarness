@@ -162,7 +162,7 @@ export function getDesignOptimizationScopeHint(target: DesignOptimizationTarget)
   if (target.scope === 'state') {
     return '只生成当前状态的 patch，允许调整状态描述、内部步骤和转移，不直接改动其他状态。';
   }
-  return '只生成当前步骤的 patch，允许优化 agent、任务、约束、skills 与 spec 绑定，不直接改动其他节点。';
+  return '只生成当前步骤的 patch，允许优化 agent、任务、约束与 spec 绑定，不直接改动其他节点；步骤不再保存 skills，技能归属 Agent 配置。';
 }
 
 export function extractDesignOptimizationSnapshot(
@@ -306,7 +306,7 @@ function buildScopeRules(target: DesignOptimizationTarget, hasSpecArtifacts: boo
     return [
       `- 优化状态 "${target.stateName}"。`,
       `- 保持状态名称 "${target.stateName}" 不变。`,
-      '- 可以调整该状态的描述、内部步骤、skills、Agent 选择、人工审查、最大自循环次数和转移规则。',
+      '- 可以调整该状态的描述、内部步骤、Agent 选择、人工审查、最大自循环次数和转移规则；不要在步骤对象中写 skills。',
       '- patch.state 是这个状态对象；workflow mode、其他状态顺序、context 和运行时设置由系统保持原样。',
     ];
   }
@@ -314,8 +314,8 @@ function buildScopeRules(target: DesignOptimizationTarget, hasSpecArtifacts: boo
     `- 优化 ${target.containerType === 'state' ? '状态' : '阶段'} "${target.containerName}" 内的步骤 "${target.stepName}"。`,
     `- 保持该步骤在容器中的位置不变。`,
     hasSpecArtifacts
-      ? '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel 与 specTaskBinding。'
-      : '- 可以调整步骤的 agent、task、constraints、skills、enableReviewPanel；禁止新增 specTaskBinding。',
+      ? '- 可以调整步骤的 agent、task、constraints、enableReviewPanel 与 specTaskBinding；不要在步骤对象中写 skills，技能归属 Agent 配置。'
+      : '- 可以调整步骤的 agent、task、constraints、enableReviewPanel；禁止新增 specTaskBinding；不要在步骤对象中写 skills，技能归属 Agent 配置。',
     '- patch.step 是这个步骤对象；其他步骤、容器内容和 workflow mode 由系统保持原样。',
   ];
 }

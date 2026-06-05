@@ -468,7 +468,7 @@ export class WorkflowManager extends EventEmitter {
   }
 
   /**
-   * Load multiple step-level skills, merging duplicates and returning formatted content
+   * Load additional agent/workflow skills, merging duplicates and returning formatted content
    */
   private async loadStepSkills(skillNames: string[], projectRoot: string): Promise<string> {
     const uniqueSkills = [...new Set(skillNames)].filter(
@@ -487,8 +487,8 @@ export class WorkflowManager extends EventEmitter {
 
     if (loadedSkills.length === 0) return '';
 
-    let result = `### 步骤指定 Skills\n\n`;
-    result += `此步骤特别要求使用以下 Skills：\n\n`;
+    let result = `### Agent 指定 Skills\n\n`;
+    result += `当前 Agent 要求使用以下 Skills：\n\n`;
 
     for (const skill of loadedSkills) {
       result += `#### ${skill.name}\n\n`;
@@ -544,9 +544,9 @@ export class WorkflowManager extends EventEmitter {
 
     const needed = new Set<string>();
     if (config.context?.skills) config.context.skills.forEach((s: string) => needed.add(s));
-    for (const phase of config.workflow?.phases || []) {
-      for (const step of phase.steps || []) {
-        if (step.skills) step.skills.forEach((s: string) => needed.add(s));
+    for (const roleConfig of this.agentConfigs || []) {
+      if (Array.isArray((roleConfig as any).skills)) {
+        (roleConfig as any).skills.forEach((s: string) => needed.add(s));
       }
     }
     if (needed.size === 0) {
@@ -2743,13 +2743,13 @@ try {
       }
     }
 
-    // Collect workflow + step-level skills. Step skills are evaluated every step.
+    // Collect workflow-level skills and current Agent skills. Step-level skills are deprecated.
     const allSkillNames = new Set<string>();
     if (workflowConfig.context.skills) {
       workflowConfig.context.skills.forEach(name => allSkillNames.add(name));
     }
-    if (step.skills) {
-      step.skills.forEach(name => allSkillNames.add(name));
+    if (Array.isArray((roleConfig as any).skills)) {
+      (roleConfig as any).skills.forEach((name: string) => allSkillNames.add(name));
     }
 
     if (allSkillNames.size > 0) {
@@ -2761,7 +2761,7 @@ try {
         memo.skillRulesShown = true;
       }
       prompt += [...allSkillNames].map((name) => {
-        const source = step.skills?.includes(name) ? 'step.skills' : 'workflow.context.skills';
+        const source = (roleConfig as any).skills?.includes(name) ? 'agent.skills' : 'workflow.context.skills';
         return `- ${name} (${source}): \`${skillsAbsPath}/${name}/SKILL.md\``;
       }).join('\n') + '\n\n';
 

@@ -11,7 +11,7 @@ import SpriteAvatar from '@/components/SpriteAvatar';
 import { ModelSelect } from '@/components/ModelSelect';
 import { EngineSelect } from '@/components/EngineSelect';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
-import { SingleCombobox } from '@/components/ui/combobox';
+import { MultiCombobox, SingleCombobox } from '@/components/ui/combobox';
 import { agentApi } from '@/lib/core/api';
 import {
   createDeterministicAvatarConfig,
@@ -48,6 +48,7 @@ interface AgentConfig {
   iterationPrompt?: string;
   capabilities?: string[];
   constraints?: string[];
+  skills?: string[];
   reviewPanel?: ReviewPanel;
   keywords?: string[];
   description?: string;
@@ -82,6 +83,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       roleType: agent.roleType || 'normal',
     }),
     alwaysAvailableForChat: agent.alwaysAvailableForChat ?? false,
+    skills: agent.skills || [],
   };
   const [formData, setFormData] = useState<AgentConfig>(normalizedAgent);
   const [newTag, setNewTag] = useState('');
@@ -92,6 +94,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
   const [refreshingAvatar, setRefreshingAvatar] = useState(false);
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const [availableSkills, setAvailableSkills] = useState<Array<{ name: string; description?: string }>>([]);
 
   useEffect(() => {
     fetch('/api/engine')
@@ -99,6 +102,14 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
       .then((data) => {
         setGlobalEngine(data.engine || '');
         setGlobalDefaultModel(data.model || '');
+      })
+      .catch(() => {});
+    fetch('/api/skills')
+      .then((res) => res.json())
+      .then((data) => {
+        setAvailableSkills(Array.isArray(data.skills)
+          ? data.skills.map((skill: any) => ({ name: skill.name, description: skill.description || '' }))
+          : []);
       })
       .catch(() => {});
   }, []);
@@ -426,6 +437,23 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
             <Label>系统提示词</Label>
             <Textarea value={formData.systemPrompt || ''} onChange={(e) => setFormData({ ...formData, systemPrompt: e.target.value })} rows={6} placeholder="定义 Agent 的角色和行为..." />
           </div>
+
+          {availableSkills.length > 0 ? (
+            <div>
+              <Label>Agent Skills</Label>
+              <p className="mb-2 text-xs text-muted-foreground">该 Agent 在工作流步骤中默认可用的 Skills。</p>
+              <MultiCombobox
+                value={formData.skills || []}
+                onValueChange={(skills) => setFormData({ ...formData, skills })}
+                options={availableSkills.map((skill) => ({
+                  value: skill.name,
+                  label: skill.name,
+                  description: skill.description || '',
+                }))}
+                placeholder="选择 Agent Skills..."
+              />
+            </div>
+          ) : null}
 
           <div>
             <Label>

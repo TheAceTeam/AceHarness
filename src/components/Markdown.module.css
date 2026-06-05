@@ -67,6 +67,25 @@
   font-size: 13px;
 }
 
+.markdownContent :global([data-ace-code-block]) {
+  margin: 1em 0;
+}
+
+.markdownContent :global([data-ace-code-block]) pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 1rem;
+}
+
+.markdownContent :global([data-ace-code-block]) code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+}
+
 .markdownContent blockquote {
   border-left: 3px solid hsl(var(--primary));
   margin: 1em 0;

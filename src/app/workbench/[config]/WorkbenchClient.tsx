@@ -1736,6 +1736,21 @@ export default function WorkbenchPage() {
     globalContext, phaseContexts,
   } = state;
   const latestRunIdRef = useRef<string | null>(runId || null);
+
+  const handleAgentSkillsChange = useCallback(async (agentName: string, skills: string[]) => {
+    const agent = agentConfigs.find((item: any) => item?.name === agentName);
+    if (!agent) {
+      toast('error', `找不到 Agent: ${agentName}`);
+      throw new Error(`找不到 Agent: ${agentName}`);
+    }
+    const nextSkills = Array.from(new Set(skills.map((item) => String(item || '').trim()).filter(Boolean)));
+    const nextAgent = { ...agent, skills: nextSkills };
+    await agentApi.saveAgent(agentName, nextAgent);
+    const nextAgents = agentConfigs.map((item: any) => item?.name === agentName ? nextAgent : item);
+    dispatch({ type: 'SET_AGENTS_CONFIG', payload: nextAgents });
+    toast('success', `已更新 ${agentName} 的 Agent Skills`);
+  }, [agentConfigs, dispatch, toast]);
+
   useEffect(() => {
     latestRunIdRef.current = runId || null;
     if (runId && startupExpectedRunIdRef.current) {
@@ -9690,6 +9705,7 @@ export default function WorkbenchPage() {
                         specTasks={designOptimizationSpecTaskOptions}
                         onOptimizeState={handleOptimizeStateMachineState}
                         onOptimizeStep={handleOptimizeStateMachineStep}
+                        onAgentSkillsChange={handleAgentSkillsChange}
                       />
                     ) : (
                       <DesignPanel workflow={editingConfig.workflow}
@@ -10462,12 +10478,12 @@ export default function WorkbenchPage() {
             {designOptimizationTarget ? getDesignOptimizationDialogTitle(designOptimizationTarget) : 'AI 工作流优化'}
           </DialogTitle>
           {designOptimizationTarget ? (
-            <div className="flex h-full flex-col">
-              <div className="border-b px-6 py-4">
+            <div className="flex h-full min-w-0 flex-col overflow-hidden">
+              <div className="min-w-0 border-b px-6 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-base font-semibold">{getDesignOptimizationDialogTitle(designOptimizationTarget)}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
+                    <div className="mt-1 break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
                       {getDesignOptimizationTargetLabel(designOptimizationTarget)} · {getDesignOptimizationScopeHint(designOptimizationTarget)}
                     </div>
                   </div>
@@ -10476,9 +10492,9 @@ export default function WorkbenchPage() {
                   </Badge>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto px-6 py-5">
-                <div className="space-y-4">
-                  <div className="rounded-xl border bg-background/80 p-4">
+              <div className="min-w-0 flex-1 overflow-auto px-6 py-5">
+                <div className="min-w-0 space-y-4">
+                  <div className="min-w-0 overflow-hidden rounded-xl border bg-background/80 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-medium">优化要求</div>
@@ -10525,11 +10541,11 @@ export default function WorkbenchPage() {
                       </div>
                     </div>
                     {designOptimizationStream.trim() ? (
-                      <details className="mt-3 rounded-lg border bg-muted/20 p-3 text-xs">
+                      <details className="mt-3 min-w-0 overflow-hidden rounded-lg border bg-muted/20 p-3 text-xs">
                         <summary className="cursor-pointer text-muted-foreground">
                           {designOptimizationGenerating ? '正在接收 AI 输出' : '查看最近一次 AI 输出'}
                         </summary>
-                        <div className={`${styles.markdownContent} mt-3 max-h-56 overflow-auto text-xs`}>
+                        <div className={`${styles.markdownContent} mt-3 max-h-56 min-w-0 overflow-auto break-words text-xs [overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap`}>
                           <AceAwareMarkdown content={designOptimizationStream} isStreaming={designOptimizationGenerating} />
                         </div>
                       </details>
@@ -10537,13 +10553,13 @@ export default function WorkbenchPage() {
                   </div>
 
                   {designOptimizationCandidate ? (
-                    <div className="space-y-4">
-                      <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+                    <div className="min-w-0 space-y-4">
+                      <div className="min-w-0 overflow-hidden rounded-xl border border-primary/25 bg-primary/5 p-4">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0 space-y-1">
                             <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
                               <Badge variant="secondary" className="text-[10px]">AI 候选</Badge>
-                              <span>{designOptimizationCandidate.summary}</span>
+                              <span className="min-w-0 break-words [overflow-wrap:anywhere]">{designOptimizationCandidate.summary}</span>
                             </div>
                             <div className="text-[11px] text-muted-foreground">
                               {new Date(designOptimizationCandidate.createdAt).toLocaleString()} · 先看差异，再应用到当前草稿
@@ -10575,20 +10591,20 @@ export default function WorkbenchPage() {
                         </div>
                       </div>
 
-                      <div className="grid gap-3 md:grid-cols-4">
-                        <div className="rounded-xl border bg-muted/20 p-3">
+                      <div className="grid min-w-0 gap-3 md:grid-cols-4">
+                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
                           <div className="text-[10px] text-muted-foreground">配置错误</div>
                           <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationValidationErrors.length}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/20 p-3">
+                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
                           <div className="text-[10px] text-muted-foreground">配置警告</div>
                           <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationValidationWarnings.length}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/20 p-3">
+                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
                           <div className="text-[10px] text-muted-foreground">绑定错误</div>
                           <div className="mt-1 text-lg font-semibold text-red-600">{designOptimizationCandidate.bindingValidation?.errors.length || 0}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/20 p-3">
+                        <div className="min-w-0 rounded-xl border bg-muted/20 p-3">
                           <div className="text-[10px] text-muted-foreground">绑定警告</div>
                           <div className="mt-1 text-lg font-semibold text-amber-600">{designOptimizationCandidate.bindingValidation?.warnings.length || 0}</div>
                         </div>
@@ -10597,7 +10613,7 @@ export default function WorkbenchPage() {
                       {designOptimizationValidationErrors.length > 0 ? (
                         <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
                           <div className="text-sm font-medium text-red-600">配置校验错误</div>
-                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
                             {designOptimizationValidationErrors.map((issue, index) => (
                               <div key={`design-opt-validation-error-${index}`}>
                                 {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知错误'}
@@ -10610,7 +10626,7 @@ export default function WorkbenchPage() {
                       {designOptimizationValidationWarnings.length > 0 ? (
                         <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
                           <div className="text-sm font-medium text-amber-700 dark:text-amber-300">配置校验警告</div>
-                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
                             {designOptimizationValidationWarnings.map((issue, index) => (
                               <div key={`design-opt-validation-warning-${index}`}>
                                 {issue.path?.length ? `${issue.path.join('.')}：` : ''}{issue.message || '未知提示'}
@@ -10623,7 +10639,7 @@ export default function WorkbenchPage() {
                       {designOptimizationCandidate.bindingValidation?.errors.length ? (
                         <div className="rounded-xl border border-red-500/30 bg-red-500/8 p-4">
                           <div className="text-sm font-medium text-red-600">Spec 绑定错误</div>
-                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
                             {designOptimizationCandidate.bindingValidation.errors.map((message, index) => (
                               <div key={`design-opt-binding-error-${index}`}>{message}</div>
                             ))}
@@ -10634,7 +10650,7 @@ export default function WorkbenchPage() {
                       {designOptimizationCandidate.bindingValidation?.warnings.length ? (
                         <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4">
                           <div className="text-sm font-medium text-amber-700 dark:text-amber-300">Spec 绑定警告</div>
-                          <div className="mt-2 space-y-1 text-xs leading-5 text-muted-foreground">
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
                             {designOptimizationCandidate.bindingValidation.warnings.map((message, index) => (
                               <div key={`design-opt-binding-warning-${index}`}>{message}</div>
                             ))}
@@ -10642,14 +10658,14 @@ export default function WorkbenchPage() {
                         </div>
                       ) : null}
 
-                      <div className="rounded-xl border overflow-hidden">
+                      <div className="min-w-0 overflow-hidden rounded-xl border">
                         <div className="border-b px-4 py-3">
                           <div className="text-sm font-medium">候选差异</div>
                           <div className="mt-1 text-[11px] text-muted-foreground">
                             当前展示的是 {getDesignOptimizationTargetLabel(designOptimizationTarget)} 的前后 JSON 对比。
                           </div>
                         </div>
-                        <div className="max-h-[46vh] overflow-auto p-4 font-mono text-xs leading-6">
+                        <div className="max-h-[46vh] min-w-0 overflow-auto p-4 font-mono text-xs leading-6">
                           {designOptimizationDiffRows.length ? (
                             designOptimizationDiffRows.map((row, index) => (
                               <div
@@ -10662,10 +10678,10 @@ export default function WorkbenchPage() {
                                       : 'text-muted-foreground'
                                 }
                               >
-                                <span className="mr-2 inline-block w-4 text-center">
+                                <span className="mr-2 inline-block w-4 text-center align-top">
                                   {row.type === 'add' ? '+' : row.type === 'remove' ? '-' : ' '}
                                 </span>
-                                <span className="whitespace-pre-wrap break-words">{row.text || ' '}</span>
+                                <span className="whitespace-pre-wrap break-all [overflow-wrap:anywhere]">{row.text || ' '}</span>
                               </div>
                             ))
                           ) : (
