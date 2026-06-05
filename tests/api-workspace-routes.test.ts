@@ -133,6 +133,7 @@ describe('workspace API routes', () => {
 
     await withTempWorkspace(async ({ workspace, base }) => {
       await writeFile(path.join(workspace, 'report.txt'), 'download me');
+      await writeFile(path.join(workspace, '用例报告.txt'), 'utf8 name');
       await writeFile(path.join(base, 'secret.txt'), 'secret');
       await createFileSymlink(path.join(base, 'secret.txt'), path.join(workspace, 'secret-link.txt'));
 
@@ -140,8 +141,15 @@ describe('workspace API routes', () => {
       const response = await download.GET(makeRequest(`/api/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent('report.txt')}`));
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toBe('application/octet-stream');
-      expect(response.headers.get('content-disposition')).toBe('attachment; filename="report.txt"');
+      expect(response.headers.get('content-disposition')).toBe('attachment; filename="report.txt"; filename*=UTF-8\'\'report.txt');
       await expect(response.text()).resolves.toBe('download me');
+
+      const utf8Response = await download.GET(makeRequest(`/api/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent('用例报告.txt')}`));
+      expect(utf8Response.status).toBe(200);
+      expect(utf8Response.headers.get('content-disposition')).toBe(
+        'attachment; filename="____.txt"; filename*=UTF-8\'\'%E7%94%A8%E4%BE%8B%E6%8A%A5%E5%91%8A.txt'
+      );
+      await expect(utf8Response.text()).resolves.toBe('utf8 name');
 
       await assertErrorResponse(
         await download.GET(makeRequest(`/api/workspace/download?workspace=${encodeURIComponent(workspace)}&path=${encodeURIComponent('secret-link.txt')}`)),

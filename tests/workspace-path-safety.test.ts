@@ -8,6 +8,7 @@ import {
   WorkspacePathError,
   assertNoSymlinkEscape,
   assertSafeRelativePath,
+  buildDownloadContentDisposition,
   isInsidePath,
   resolveCreatableInsideWorkspace,
   resolveExistingInsideWorkspace,
@@ -124,5 +125,11 @@ describe('workspace path safety', () => {
     expect(sanitizeDownloadName('bad\r\nname".txt')).toBe('bad__name_.txt');
     expect(sanitizeDownloadName('\u0000')).toBe('download');
     expect(sanitizeDownloadName('')).toBe('download');
+  });
+
+  test('buildDownloadContentDisposition keeps headers ASCII while preserving UTF-8 names', () => {
+    const header = buildDownloadContentDisposition('用例报告.txt');
+    expect(header).toBe('attachment; filename="____.txt"; filename*=UTF-8\'\'%E7%94%A8%E4%BE%8B%E6%8A%A5%E5%91%8A.txt');
+    expect([...header].every((char) => char.charCodeAt(0) <= 127)).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import {
   WORKSPACE_ARCHIVE_FILE_COUNT_LIMIT,
   WORKSPACE_ARCHIVE_TOTAL_SIZE_LIMIT,
   WorkspacePathError,
+  buildDownloadContentDisposition,
   isInsidePath,
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
@@ -101,7 +102,7 @@ export async function GET(request: NextRequest) {
         headers: {
           'Content-Type': 'application/octet-stream',
           'Content-Length': String(stat.size),
-          'Content-Disposition': `attachment; filename="${filename}"`,
+          'Content-Disposition': buildDownloadContentDisposition(filename),
           'X-Content-Type-Options': 'nosniff',
         },
       });
@@ -114,7 +115,7 @@ export async function GET(request: NextRequest) {
         headers: {
           'Content-Type': 'application/zip',
           'Content-Length': String(buffer.length),
-          'Content-Disposition': `attachment; filename="${folderName}.zip"`,
+          'Content-Disposition': buildDownloadContentDisposition(`${folderName}.zip`),
           'X-Content-Type-Options': 'nosniff',
         },
       });
