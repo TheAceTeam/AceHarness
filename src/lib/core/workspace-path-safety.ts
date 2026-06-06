@@ -108,6 +108,7 @@ export async function resolveExistingInsideWorkspace(root: string, relPath: stri
     realPath = await fs.realpath(lexicalPath);
   } catch (error: any) {
     if (error?.code === 'ENOENT') throw new WorkspacePathError('路径不存在', 404);
+    if (error?.code === 'EBADF' || error?.code === 'ENOTDIR') throw new WorkspacePathError('路径不合法', 400);
     throw error;
   }
 
