@@ -93,7 +93,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
         try {
           children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, context);
         } catch (error: any) {
-          if (!['EPERM', 'EACCES', 'ENOENT'].includes(error?.code)) {
+          if (!['EPERM', 'EACCES', 'ENOENT', 'EBADF', 'ENOTDIR'].includes(error?.code)) {
             throw error;
           }
           children = [];
