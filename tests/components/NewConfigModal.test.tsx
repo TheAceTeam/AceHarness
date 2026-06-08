@@ -178,7 +178,9 @@ import NewConfigModal, {
   getDisplayContentForAiStream,
   parseWorkflowRepairReasonForDisplay,
   resolveValidatedWorkflowDraftConfig,
+  resolveWorkflowCreationItemAttempt,
 } from '@/components/NewConfigModal';
+import { SPEC_REQUIREMENT_KIND } from '@/lib/ai/workflow-creation-items';
 
 type FetchCall = {
   url: string;
@@ -1190,5 +1192,49 @@ describe('NewConfigModal AI process rendering helpers', () => {
         validation: { ok: true, issues: [] },
       },
     })).toBe(previewConfig);
+  });
+
+  test('workflow item attempt retries malformed output before accepting the item', () => {
+    const step = {
+      kind: SPEC_REQUIREMENT_KIND,
+      name: 'requirement-1',
+      title: '需求小点',
+      guidance: '生成一条可归档的需求。',
+    } as const;
+
+    const retry = resolveWorkflowCreationItemAttempt({
+      finalContent: '这轮只有说明文字，没有结构化 result。',
+      step,
+      attempt: 0,
+      maxAttempts: 3,
+    });
+
+    expect(retry.status).toBe('retry');
+    if (retry.status !== 'retry') return;
+    expect(retry.nextAttempt).toBe(1);
+    expect(retry.repairPrompt).toContain('只补发当前小点');
+    expect(retry.repairPrompt).toContain('上一轮输出');
+
+    const accepted = resolveWorkflowCreationItemAttempt({
+      finalContent: [
+        '<result>',
+        JSON.stringify({
+          kind: SPEC_REQUIREMENT_KIND,
+          data: {
+            title: '保留已发送消息',
+            userStory: '用户希望请求失败时已经发送的内容不会被清空。',
+          },
+        }),
+        '</result>',
+      ].join('\n'),
+      step,
+      attempt: 1,
+      maxAttempts: 3,
+    });
+
+    expect(accepted.status).toBe('accepted');
+    if (accepted.status !== 'accepted') return;
+    expect(accepted.result.kind).toBe(SPEC_REQUIREMENT_KIND);
+    expect(accepted.result.data.title).toBe('保留已发送消息');
   });
 });

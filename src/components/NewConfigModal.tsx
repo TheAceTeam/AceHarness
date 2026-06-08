@@ -182,31 +182,6 @@ function isModalAiRepairDiagnosticMessage(message: ModalAiMessage): message is E
   return message.role === 'repair-diagnostic';
 }
 
-function createRepairDiagnosticMessage({
-  stage,
-  kind,
-  title,
-  failedOutput,
-  repairPrompt,
-  attempt,
-  maxAttempts,
-  reason,
-}: Omit<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>, 'role' | 'content'>): ModalAiMessage {
-  const label = title || REPAIR_DIAGNOSTIC_KIND_LABELS[kind];
-  return {
-    role: 'repair-diagnostic',
-    stage,
-    kind,
-    title,
-    failedOutput,
-    repairPrompt,
-    attempt,
-    maxAttempts,
-    reason,
-    content: `${label}未通过，正在自动修复（${attempt}/${maxAttempts}）`,
-  };
-}
-
 type WorkflowRepairReasonDisplay = {
   field: string;
   problem: string;
@@ -318,6 +293,22 @@ type WorkflowCreationItemStep = {
   title: string;
   guidance: string;
 };
+
+export type WorkflowCreationItemAttemptDecision =
+  | {
+      status: 'accepted';
+      result: WorkflowCreationItemResult;
+    }
+  | {
+      status: 'retry';
+      reason: string;
+      repairPrompt: string;
+      nextAttempt: number;
+    }
+  | {
+      status: 'failed';
+      reason: string;
+    };
 
 type WorkflowCreationActiveStep = {
   stage: CreationStageKey;
@@ -564,6 +555,43 @@ function buildWorkflowCreationItemRepairMessage(
     previousOutput.slice(0, 6000),
     '```',
   ].join('\n\n');
+}
+
+export function resolveWorkflowCreationItemAttempt({
+  finalContent,
+  step,
+  attempt,
+  maxAttempts,
+  validationContext,
+}: {
+  finalContent: string;
+  step: WorkflowCreationItemStep;
+  attempt: number;
+  maxAttempts: number;
+  validationContext?: WorkflowCreationItemValidationContext;
+}): WorkflowCreationItemAttemptDecision {
+  const extracted = extractWorkflowCreationItemResult(finalContent, step.kind, validationContext);
+  if (extracted.ok) {
+    return {
+      status: 'accepted',
+      result: extracted.result,
+    };
+  }
+
+  if (attempt < maxAttempts) {
+    const nextAttempt = attempt + 1;
+    return {
+      status: 'retry',
+      reason: extracted.error,
+      repairPrompt: buildWorkflowCreationItemRepairMessage(step, finalContent, extracted.error),
+      nextAttempt,
+    };
+  }
+
+  return {
+    status: 'failed',
+    reason: extracted.error,
+  };
 }
 
 function formatErrorForRepair(error: any): string {
@@ -2711,10 +2739,6 @@ export default function NewConfigModal({
   const backendSessionEngineRef = useRef(inheritEngine);
   const backendSessionModelRef = useRef(inheritModel);
 
-  const appendRepairDiagnosticMessage = useCallback((diagnostic: Omit<Extract<ModalAiMessage, { role: 'repair-diagnostic' }>, 'role' | 'content'>) => {
-    setAiMessages((prev) => [...prev, createRepairDiagnosticMessage(diagnostic)]);
-  }, []);
-
   const resolveFormStepFromSession = useCallback((session: any): 1 | 2 | 3 | 4 | 5 => {
     if (session.mode === 'ai-guided' && session.status === 'confirmed') {
       return 5;
@@ -4237,6 +4261,35 @@ export default function NewConfigModal({
               backendSessionId: activeBackendSessionId,
             });
 
+            const decision = resolveWorkflowCreationItemAttempt({
+              finalContent,
+              step: input.step,
+              attempt,
+              maxAttempts,
+              validationContext: input.validationContext,
+            });
+            if (decision.status === 'retry') {
+              setCurrentStream('');
+              setCurrentThinking('');
+              setWorkflowCreationRetryNotice({
+                stage: input.stage,
+                kind: input.step.kind,
+                title: input.step.title,
+                attempt: decision.nextAttempt,
+                maxAttempts,
+                reason: decision.reason,
+              });
+              const repaired = await runAttempt(decision.repairPrompt, decision.nextAttempt);
+              resolve(repaired);
+              return;
+            }
+            if (decision.status === 'failed') {
+              setCurrentStream('');
+              setCurrentThinking('');
+              reject(new Error(`${input.step.title} 连续 ${maxAttempts} 次后仍未返回合法结果：${decision.reason}`));
+              return;
+            }
+
             setAiMessages((prev) => {
               const next = [...prev];
               if (thinkingAccumulated) next.push({ role: 'thinking', content: thinkingAccumulated });
@@ -4246,41 +4299,9 @@ export default function NewConfigModal({
             await appendPlanningAssistantMessage(input.frontendSessionId, finalContent, activeBackendSessionId);
             setCurrentStream('');
             setCurrentThinking('');
-
-            const extracted = extractWorkflowCreationItemResult(finalContent, input.step.kind, input.validationContext);
-            if (!extracted.ok) {
-              if (attempt < maxAttempts) {
-                const nextAttempt = attempt + 1;
-                const repairPrompt = buildWorkflowCreationItemRepairMessage(input.step, finalContent, extracted.error);
-                setWorkflowCreationRetryNotice({
-                  stage: input.stage,
-                  kind: input.step.kind,
-                  title: input.step.title,
-                  attempt: nextAttempt,
-                  maxAttempts,
-                  reason: extracted.error,
-                });
-                appendRepairDiagnosticMessage({
-                  stage: input.stage,
-                  kind: input.step.kind,
-                  title: input.step.title,
-                  failedOutput: finalContent,
-                  repairPrompt,
-                  attempt: nextAttempt,
-                  maxAttempts,
-                  reason: extracted.error,
-                });
-                const repaired = await runAttempt(repairPrompt, nextAttempt);
-                resolve(repaired);
-                return;
-              }
-              reject(new Error(`${input.step.title} 连续 ${maxAttempts} 次后仍未返回合法结果：${extracted.error}`));
-              return;
-            }
-
             setWorkflowCreationRetryNotice(null);
             resolve({
-              result: extracted.result,
+              result: decision.result,
               finalContent,
               backendSessionId: activeBackendSessionId,
             });
@@ -4323,7 +4344,7 @@ export default function NewConfigModal({
     };
 
     return runAttempt(input.message, 0);
-  }, [appendPlanningAssistantMessage, appendRepairDiagnosticMessage, getValues, persistStageSessionBinding]);
+  }, [appendPlanningAssistantMessage, getValues, persistStageSessionBinding]);
 
   const generateClarificationWithChatSession = useCallback(async () => {
     const values = getValues();
