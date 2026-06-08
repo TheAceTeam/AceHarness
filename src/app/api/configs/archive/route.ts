@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { existsSync } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import unzipper from 'unzipper';
@@ -7,7 +8,8 @@ import { parse, stringify } from 'yaml';
 import { requireAuth } from '@/lib/auth/middleware';
 import { canAccessConfigMeta, getConfigMeta, setConfigMeta } from '@/lib/config/metadata';
 import { formatValidationIssuesForResponse, validateWorkflowDraft } from '@/lib/core/creator-validation';
-import { getRuntimeConfigsDirPath, unmarkConfigDeleted } from '@/lib/run/runtime-configs';
+import { getRuntimeAgentsDirPath, getRuntimeConfigsDirPath, unmarkConfigDeleted } from '@/lib/run/runtime-configs';
+import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 import {
   cloneCreationSessionForWorkflow,
   loadLatestCreationSessionByFilename,
@@ -24,6 +26,7 @@ type AuthUser = {
 type WorkflowImportCandidate = {
   filename: string;
   normalizedConfig: any;
+  audit: WorkflowImportAudit;
 };
 
 type SpecCodingImportCandidate = {
@@ -31,7 +34,28 @@ type SpecCodingImportCandidate = {
   session: any;
 };
 
+type RemovedReference = {
+  filename: string;
+  name: string;
+  path: string;
+};
+
+type PathReminder = {
+  filename: string;
+  location: string;
+  value: string;
+};
+
+type WorkflowImportAudit = {
+  pathReminders: PathReminder[];
+  removedSkills: RemovedReference[];
+  removedAgentDefinitions: RemovedReference[];
+  removedAgentOverrides: RemovedReference[];
+  unsupportedAgentRefs: RemovedReference[];
+};
+
 const RESERVED_CONFIG_DIRS = new Set(['agents', 'models', 'notebook', 'settings']);
+const COMMON_ABSOLUTE_PATH_PATTERN = /(?:[A-Za-z]:\\[^\s`'"，。；;,)\]\}]+|\/(?:Users|home|root|mnt|var|tmp|opt|workspace|repo|repos|data)\/[^\s`'"，。；;,)\]\}]+)/g;
 
 function isYamlFilename(filename: string): boolean {
   return /\.ya?ml$/i.test(filename);
@@ -126,7 +150,11 @@ async function zipWorkflowFiles(files: Array<{ filename: string; filePath: strin
   return Buffer.concat(chunks);
 }
 
-async function readArchiveCandidatesFromZip(file: File): Promise<{
+async function readArchiveCandidatesFromZip(
+  file: File,
+  availableAgents: Set<string>,
+  availableSkills: Set<string>
+): Promise<{
   workflows: WorkflowImportCandidate[];
   specSessions: SpecCodingImportCandidate[];
 }> {
@@ -175,10 +203,179 @@ async function readArchiveCandidatesFromZip(file: File): Promise<{
       });
     }
 
-    candidates.push({ filename, normalizedConfig: validation.normalized });
+    const audit = auditAndSanitizeImportedWorkflow(filename, validation.normalized, availableAgents, availableSkills);
+    candidates.push({ filename, normalizedConfig: validation.normalized, audit });
   }
 
   return { workflows: candidates, specSessions };
+}
+
+function emptyImportAudit(): WorkflowImportAudit {
+  return {
+    pathReminders: [],
+    removedSkills: [],
+    removedAgentDefinitions: [],
+    removedAgentOverrides: [],
+    unsupportedAgentRefs: [],
+  };
+}
+
+async function listRuntimeAgentNames(): Promise<Set<string>> {
+  const agentsDir = await getRuntimeAgentsDirPath();
+  const files = await fs.readdir(agentsDir).catch(() => []);
+  return new Set(
+    files
+      .filter((file) => /\.ya?ml$/i.test(file))
+      .map((file) => file.replace(/\.(yaml|yml)$/i, ''))
+      .filter(Boolean)
+  );
+}
+
+async function listRuntimeSkillNames(): Promise<Set<string>> {
+  const skillsDir = await getRuntimeSkillsDirPath();
+  const entries = await fs.readdir(skillsDir, { withFileTypes: true }).catch(() => []);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+    if (existsSync(skillFile)) names.push(entry.name);
+  }
+  return new Set(names);
+}
+
+function sanitizeSkillList(
+  value: unknown,
+  availableSkills: Set<string>,
+  filename: string,
+  location: string,
+  audit: WorkflowImportAudit
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const name = typeof item === 'string' ? item.trim() : '';
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    if (!availableSkills.has(name)) {
+      audit.removedSkills.push({ filename, name, path: location });
+      continue;
+    }
+    result.push(name);
+  }
+  return result;
+}
+
+function scanPathReminders(filename: string, location: string, text: unknown, audit: WorkflowImportAudit) {
+  if (typeof text !== 'string' || !text.trim()) return;
+  const matches = text.match(COMMON_ABSOLUTE_PATH_PATTERN) || [];
+  const seen = new Set(audit.pathReminders.map((item) => `${item.location}:${item.value}`));
+  for (const raw of matches) {
+    const value = raw.trim();
+    if (!value || existsSync(value) || seen.has(`${location}:${value}`)) continue;
+    audit.pathReminders.push({ filename, location, value });
+    seen.add(`${location}:${value}`);
+  }
+}
+
+function looksLikeMachinePath(value: string) {
+  return /^[A-Za-z]:\\/.test(value) || /^\/(?:Users|home|root|mnt|var|tmp|opt|workspace|repo|repos|data)\//.test(value);
+}
+
+function getWorkflowNodes(config: any): any[] {
+  const workflow = config?.workflow || {};
+  if (workflow.mode === 'state-machine' || Array.isArray(workflow.states)) return workflow.states || [];
+  return workflow.phases || [];
+}
+
+function getWorkflowNodePath(config: any, nodeIndex: number) {
+  const workflow = config?.workflow || {};
+  return workflow.mode === 'state-machine' || Array.isArray(workflow.states)
+    ? `workflow.states.${nodeIndex}`
+    : `workflow.phases.${nodeIndex}`;
+}
+
+function auditAndSanitizeImportedWorkflow(
+  filename: string,
+  config: any,
+  availableAgents: Set<string>,
+  availableSkills: Set<string>
+): WorkflowImportAudit {
+  const audit = emptyImportAudit();
+
+  if (config?.context) {
+    const nextSkills = sanitizeSkillList(config.context.skills, availableSkills, filename, 'context.skills', audit);
+    if (nextSkills) config.context.skills = nextSkills;
+    scanPathReminders(filename, 'context.requirements', config.context.requirements, audit);
+    if (
+      typeof config.context.projectRoot === 'string'
+      && looksLikeMachinePath(config.context.projectRoot.trim())
+      && !existsSync(config.context.projectRoot.trim())
+    ) {
+      audit.pathReminders.push({ filename, location: 'context.projectRoot', value: config.context.projectRoot.trim() });
+    }
+  }
+
+  if (Array.isArray(config?.roles)) {
+    const keptRoles: any[] = [];
+    config.roles.forEach((role: any, index: number) => {
+      const name = typeof role?.name === 'string' ? role.name.trim() : '';
+      if (!name || !availableAgents.has(name)) {
+        if (name) audit.removedAgentDefinitions.push({ filename, name, path: `roles.${index}` });
+        return;
+      }
+      const nextSkills = sanitizeSkillList(role.skills, availableSkills, filename, `roles.${index}.skills`, audit);
+      if (nextSkills) role.skills = nextSkills;
+      keptRoles.push(role);
+    });
+    config.roles = keptRoles;
+  }
+
+  const overrides = config?.context?.executionPolicy?.agentOverrides;
+  if (overrides && typeof overrides === 'object') {
+    for (const name of Object.keys(overrides)) {
+      if (!availableAgents.has(name)) {
+        delete overrides[name];
+        audit.removedAgentOverrides.push({ filename, name, path: `context.executionPolicy.agentOverrides.${name}` });
+      }
+    }
+  }
+
+  const supervisorAgent = typeof config?.workflow?.supervisor?.agent === 'string'
+    ? config.workflow.supervisor.agent.trim()
+    : '';
+  if (supervisorAgent && !availableAgents.has(supervisorAgent)) {
+    audit.unsupportedAgentRefs.push({ filename, name: supervisorAgent, path: 'workflow.supervisor.agent' });
+  }
+
+  const nodes = getWorkflowNodes(config);
+  nodes.forEach((node, nodeIndex) => {
+    const nodePath = getWorkflowNodePath(config, nodeIndex);
+    if (typeof node?.agent === 'string' && node.agent.trim() && !availableAgents.has(node.agent.trim())) {
+      audit.unsupportedAgentRefs.push({ filename, name: node.agent.trim(), path: `${nodePath}.agent` });
+    }
+    (node?.steps || []).forEach((step: any, stepIndex: number) => {
+      const stepPath = `${nodePath}.steps.${stepIndex}`;
+      if (typeof step?.agent === 'string' && step.agent.trim() && !availableAgents.has(step.agent.trim())) {
+        audit.unsupportedAgentRefs.push({ filename, name: step.agent.trim(), path: `${stepPath}.agent` });
+      }
+      const nextSkills = sanitizeSkillList(step?.skills, availableSkills, filename, `${stepPath}.skills`, audit);
+      if (nextSkills) step.skills = nextSkills;
+      scanPathReminders(filename, `${stepPath}.task`, step?.task, audit);
+    });
+  });
+
+  return audit;
+}
+
+function mergeImportAudits(audits: WorkflowImportAudit[]): WorkflowImportAudit {
+  return audits.reduce((acc, audit) => ({
+    pathReminders: [...acc.pathReminders, ...audit.pathReminders],
+    removedSkills: [...acc.removedSkills, ...audit.removedSkills],
+    removedAgentDefinitions: [...acc.removedAgentDefinitions, ...audit.removedAgentDefinitions],
+    removedAgentOverrides: [...acc.removedAgentOverrides, ...audit.removedAgentOverrides],
+    unsupportedAgentRefs: [...acc.unsupportedAgentRefs, ...audit.unsupportedAgentRefs],
+  }), emptyImportAudit());
 }
 
 export async function PUT(request: NextRequest) {
@@ -245,7 +442,11 @@ export async function POST(request: NextRequest) {
     }
 
     const configsDir = await getRuntimeConfigsDirPath();
-    const { workflows: candidates, specSessions } = await readArchiveCandidatesFromZip(file);
+    const [availableAgents, availableSkills] = await Promise.all([
+      listRuntimeAgentNames(),
+      listRuntimeSkillNames(),
+    ]);
+    const { workflows: candidates, specSessions } = await readArchiveCandidatesFromZip(file, availableAgents, availableSkills);
     if (candidates.length === 0) {
       return NextResponse.json({ error: 'ZIP 中未找到 workflow YAML' }, { status: 400 });
     }
@@ -291,6 +492,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       imported,
+      audit: mergeImportAudits(candidates.map((candidate) => candidate.audit)),
       message: `导入了 ${imported.length} 个工作流`,
     });
   } catch (error: any) {

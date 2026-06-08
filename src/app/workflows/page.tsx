@@ -40,6 +40,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/core/utils';
 
@@ -112,6 +113,55 @@ type CreationDraftSession = {
   };
 };
 
+type ImportAuditItem = {
+  filename: string;
+  name?: string;
+  path?: string;
+  location?: string;
+  value?: string;
+};
+
+type WorkflowImportNotice = {
+  imported: string[];
+  audit?: {
+    pathReminders?: ImportAuditItem[];
+    removedSkills?: ImportAuditItem[];
+    removedAgentDefinitions?: ImportAuditItem[];
+    removedAgentOverrides?: ImportAuditItem[];
+    unsupportedAgentRefs?: ImportAuditItem[];
+  };
+};
+
+function countImportAuditItems(notice: WorkflowImportNotice | null | undefined) {
+  const audit = notice?.audit || {};
+  return {
+    pathReminders: audit.pathReminders?.length || 0,
+    removedSkills: audit.removedSkills?.length || 0,
+    removedAgentDefinitions: audit.removedAgentDefinitions?.length || 0,
+    removedAgentOverrides: audit.removedAgentOverrides?.length || 0,
+    unsupportedAgentRefs: audit.unsupportedAgentRefs?.length || 0,
+  };
+}
+
+function ImportAuditList({ items, emptyText }: { items?: ImportAuditItem[]; emptyText: string }) {
+  if (!items?.length) {
+    return <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-2 text-xs text-muted-foreground">{emptyText}</div>;
+  }
+  return (
+    <div className="max-h-36 overflow-auto rounded-lg border">
+      {items.map((item, index) => (
+        <div key={`${item.filename}-${item.path || item.location}-${item.name || item.value}-${index}`} className="border-b px-3 py-2 text-xs last:border-b-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[10px]">{item.filename}</Badge>
+            <span className="font-medium">{item.name || item.value}</span>
+          </div>
+          <div className="mt-1 break-all text-[11px] text-muted-foreground">{item.path || item.location}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function WorkflowsPage() {
   const router = useRouter();
   const { toast } = useToast();
@@ -155,6 +205,7 @@ export default function WorkflowsPage() {
   const [shareableUsersLoading, setShareableUsersLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [archiveImporting, setArchiveImporting] = useState(false);
+  const [workflowImportNotice, setWorkflowImportNotice] = useState<WorkflowImportNotice | null>(null);
   const [archiveExporting, setArchiveExporting] = useState(false);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -395,6 +446,10 @@ export default function WorkflowsPage() {
     try {
       const result = await configApi.importConfigZip(file);
       toast('success', result.message || `已导入 ${result.imported?.length || 0} 个工作流`);
+      setWorkflowImportNotice({
+        imported: result.imported || [],
+        audit: result.audit,
+      });
       setSelectedWorkflows(new Set());
       await loadWorkflows();
     } catch (error: any) {
@@ -611,6 +666,10 @@ export default function WorkflowsPage() {
         ? 'bg-violet-500/10 text-violet-700 dark:text-violet-300'
         : 'bg-slate-500/10 text-slate-700 dark:text-slate-300'
   );
+  const importAuditCounts = countImportAuditItems(workflowImportNotice);
+  const importAutoRemovedCount = importAuditCounts.removedSkills
+    + importAuditCounts.removedAgentDefinitions
+    + importAuditCounts.removedAgentOverrides;
   const renderCopyMenu = (workflow: WorkflowConfig) => (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1519,6 +1578,82 @@ export default function WorkflowsPage() {
               把示例消息放入输入框
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!workflowImportNotice} onOpenChange={(open) => { if (!open) setWorkflowImportNotice(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>导入工作流提醒</DialogTitle>
+            <DialogDescription>
+              已导入 {workflowImportNotice?.imported.length || 0} 个工作流。运行前请检查下面这些迁移相关事项。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <div className="text-sm font-medium">1. 检查需求和步骤任务里的本机路径</div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                导入包可能来自另一台机器。请检查 workflow 的需求说明、工作目录和每个步骤的任务描述里是否包含旧机器路径，例如用户目录、仓库路径、临时目录或脚本路径。
+              </p>
+              <div className="mt-3">
+                <ImportAuditList
+                  items={workflowImportNotice?.audit?.pathReminders}
+                  emptyText="未扫描到明显不存在的绝对路径；仍建议检查需求和步骤任务描述。"
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl border bg-muted/20 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium">2. 不支持的 Skills / Agent 清理</div>
+                <Badge variant={importAutoRemovedCount > 0 ? 'secondary' : 'outline'} className="text-[10px]">
+                  已自动移除 {importAutoRemovedCount} 项
+                </Badge>
+              </div>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                导入时已按本机可用的 Skill 和 Agent 配置做清理。下面列出的项在本机不可用，已经从可安全清理的位置移除。
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div>
+                  <div className="mb-1.5 text-xs font-medium">已移除 Skills</div>
+                  <ImportAuditList
+                    items={workflowImportNotice?.audit?.removedSkills}
+                    emptyText="没有移除 Skill。"
+                  />
+                </div>
+                <div>
+                  <div className="mb-1.5 text-xs font-medium">已移除 Agent 配置/覆盖</div>
+                  <ImportAuditList
+                    items={[
+                      ...(workflowImportNotice?.audit?.removedAgentDefinitions || []),
+                      ...(workflowImportNotice?.audit?.removedAgentOverrides || []),
+                    ]}
+                    emptyText="没有移除 Agent 配置或执行覆盖。"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {importAuditCounts.unsupportedAgentRefs > 0 ? (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">
+                <div className="text-sm font-medium text-amber-800 dark:text-amber-200">需要手动替换的 Agent 引用</div>
+                <p className="mt-1 text-xs leading-5 text-amber-800/80 dark:text-amber-100/80">
+                  这些字段是执行身份，系统不能直接删除，否则会破坏步骤结构。请在设计页把它们替换成本机存在的 Agent。
+                </p>
+                <div className="mt-3">
+                  <ImportAuditList
+                    items={workflowImportNotice?.audit?.unsupportedAgentRefs}
+                    emptyText="没有需要手动替换的 Agent 引用。"
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setWorkflowImportNotice(null)}>知道了</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

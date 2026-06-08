@@ -840,7 +840,16 @@ export const configApi = {
     return response.blob();
   },
 
-  async importConfigZip(file: File): Promise<ApiResponse & { imported: string[] }> {
+  async importConfigZip(file: File): Promise<ApiResponse & {
+    imported: string[];
+    audit?: {
+      pathReminders?: Array<{ filename: string; location: string; value: string }>;
+      removedSkills?: Array<{ filename: string; name: string; path: string }>;
+      removedAgentDefinitions?: Array<{ filename: string; name: string; path: string }>;
+      removedAgentOverrides?: Array<{ filename: string; name: string; path: string }>;
+      unsupportedAgentRefs?: Array<{ filename: string; name: string; path: string }>;
+    };
+  }> {
     const formData = new FormData();
     formData.append('file', file);
     const response = await authFetch(`${API_BASE}/configs/archive`, {

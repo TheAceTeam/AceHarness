@@ -304,6 +304,71 @@ describe('/api/configs/archive', () => {
     });
   });
 
+  test('audits imported workflows and removes unsupported portable skills and inline agents', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      const { token } = await createAuthToken();
+      await mkdir(path.join(aceHome, 'skills', 'known-skill'), { recursive: true });
+      await writeFile(path.join(aceHome, 'skills', 'known-skill', 'SKILL.md'), '---\nname: known-skill\n---\n', 'utf8');
+
+      const config = portableWorkflowConfig('Audited Import') as any;
+      config.context.projectRoot = '/root/not-this-machine/project';
+      config.context.requirements = 'Use /root/not-this-machine/spec.md as the source requirement.';
+      config.context.skills = ['known-skill', 'missing-skill'];
+      config.context.executionPolicy = {
+        agentOverrides: {
+          'ghost-agent': { enabled: true, model: 'external-model' },
+        },
+      };
+      config.roles = [
+        {
+          name: 'ghost-role',
+          team: 'blue',
+          roleType: 'normal',
+          engineModels: {},
+          activeEngine: '',
+          capabilities: ['external'],
+          systemPrompt: 'external role',
+          skills: ['missing-skill'],
+        },
+      ];
+      config.workflow.phases[0].steps[0].agent = 'ghost-agent';
+      config.workflow.phases[0].steps[0].task = 'Read /root/not-this-machine/input.txt before running.';
+      config.workflow.phases[0].steps[0].skills = ['known-skill', 'missing-step-skill'];
+
+      const archive = await createZip({
+        'audited.yaml': stringify(config),
+      });
+      const formData = new FormData();
+      formData.append('file', new File([new Uint8Array(archive)], 'workflows.zip', { type: 'application/zip' }));
+
+      const { POST } = await import('@/app/api/configs/archive/route');
+      const response = await POST(makeRequest('/api/configs/archive', {
+        method: 'POST',
+        token,
+        body: formData,
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await responseJson<any>(response);
+      expect(body.imported).toEqual(['audited.yaml']);
+      expect(body.audit.removedSkills.map((item: any) => item.name).sort()).toEqual(['missing-skill', 'missing-step-skill']);
+      expect(body.audit.removedAgentDefinitions.map((item: any) => item.name)).toEqual(['ghost-role']);
+      expect(body.audit.removedAgentOverrides.map((item: any) => item.name)).toEqual(['ghost-agent']);
+      expect(body.audit.unsupportedAgentRefs.map((item: any) => item.name)).toContain('ghost-agent');
+      expect(body.audit.pathReminders.map((item: any) => item.value)).toEqual(expect.arrayContaining([
+        '/root/not-this-machine/project',
+        '/root/not-this-machine/spec.md',
+        '/root/not-this-machine/input.txt',
+      ]));
+
+      const imported = parse(await readFile(path.join(aceHome, 'configs', 'audited.yaml'), 'utf8'));
+      expect(imported.context.skills).toEqual(['known-skill']);
+      expect(imported.workflow.phases[0].steps[0].skills).toEqual(['known-skill']);
+      expect(imported.roles).toEqual([]);
+      expect(imported.context.executionPolicy.agentOverrides).toEqual({});
+    });
+  });
+
   test('imports workflow SpecCoding sidecar and binds it to imported workflow filename', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {

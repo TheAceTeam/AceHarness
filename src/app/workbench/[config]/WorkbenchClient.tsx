@@ -8729,7 +8729,7 @@ export default function WorkbenchPage() {
                           </div>
                           <div className="rounded-xl border bg-muted/20 p-3">
                             <div className="text-[10px] text-muted-foreground">Agent</div>
-                            <div className="mt-1 text-base font-semibold">{agentConfigs.length}</div>
+                            <div className="mt-1 text-base font-semibold">{orderedWorkflowAgents.length}</div>
                           </div>
                         </div>
                       </div>
@@ -9653,7 +9653,7 @@ export default function WorkbenchPage() {
                         </div>
                         <div className="rounded-xl border bg-muted/20 p-3">
                           <div className="text-[10px] text-muted-foreground">Agent</div>
-                          <div className="mt-1 text-lg font-semibold">{agentConfigs.length}</div>
+                          <div className="mt-1 text-lg font-semibold">{workflowAgentNames.length}</div>
                         </div>
                       </div>
                     </div>
