@@ -889,7 +889,7 @@ export function CollaborationRoomSurface({
       ) : null}
 
       {!hideComposer ? (
-        <div className={cn(isChannel ? 'shrink-0 border-t bg-background px-5 py-3' : 'border-t px-4 py-4', composerClassName)}>
+        <div className={cn(isChannel ? 'relative z-30 shrink-0 overflow-visible border-t bg-background px-5 py-3' : 'relative z-30 overflow-visible border-t px-4 py-4', composerClassName)}>
           <div className={cn(isChannel ? 'space-y-2' : 'grid gap-3')}>
           {customControls ?? (composerMode && onComposerModeChange && typeof autoSummarize === 'boolean' && onAutoSummarizeChange ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -960,7 +960,7 @@ export function CollaborationRoomSurface({
                     setActiveMentionIndex((index) => (index - 1 + mentionOptions.length) % mentionOptions.length);
                     return;
                   }
-                  if (event.key === 'Enter' || event.key === 'Tab') {
+                  if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
                     event.preventDefault();
                     insertMentionName(mentionOptions[activeMentionIndex] || mentionOptions[0]);
                     return;
@@ -973,15 +973,21 @@ export function CollaborationRoomSurface({
                 }
                 onTextareaKeyDown?.(event);
                 if (event.defaultPrevented) return;
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                const isComposing = Boolean((event.nativeEvent as any)?.isComposing);
+                const shouldSubmit =
+                  event.key === 'Enter'
+                  && !event.shiftKey
+                  && !isComposing
+                  && (isChannel || event.metaKey || event.ctrlKey);
+                if (shouldSubmit) {
                   event.preventDefault();
-                  void onSubmit();
+                  if (!submitDisabled) void onSubmit();
                 }
               }}
             />
             {composerOverlay}
             {showMentionMenu ? (
-              <div className="absolute bottom-[calc(100%+8px)] left-6 z-[120] w-64 overflow-hidden rounded-xl border bg-popover p-1 text-popover-foreground shadow-xl">
+              <div className="absolute bottom-[calc(100%+8px)] left-6 z-[200] max-h-64 w-[min(22rem,calc(100%-3rem))] overflow-y-auto rounded-xl border bg-popover p-1 text-popover-foreground shadow-xl">
                 {mentionOptions.map((name, index) => (
                   <button
                     key={name}
@@ -998,6 +1004,7 @@ export function CollaborationRoomSurface({
                       seed={name}
                       category={name === '全员' ? 'plants-nature' : 'agent-default'}
                       alt={name}
+                      aria-hidden="true"
                       fallback={getInitials(name)}
                       className="h-6 w-6 ring-1 ring-border/60"
                       fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"

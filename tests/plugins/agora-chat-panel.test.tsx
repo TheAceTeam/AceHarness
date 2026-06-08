@@ -285,6 +285,86 @@ describe('built-in agora chat panel', () => {
     expect(textarea.value).toBe('@Agent-Alpha ');
   });
 
+  test('channel composer sends with Enter and keeps Shift+Enter as newline', async () => {
+    const user = userEvent.setup();
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+    const onSubmit = vi.fn();
+
+    function Harness() {
+      const [draft, setDraft] = React.useState('');
+      return (
+        <CollaborationRoomSurface
+          messages={[]}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSubmit={onSubmit}
+          submitLabel="发送"
+          placeholder="在工作流协作里发言"
+          mentionTargets={['Agent-Alpha']}
+          onInsertMention={(value) => setDraft((prev) => `${prev}${value}`)}
+          inputRef={inputRef}
+          bottomRef={bottomRef}
+          getSpeakerAvatarSrc={() => ''}
+          getInitials={(name) => name.slice(0, 1)}
+          getMessageKindLabel={() => '议场发言'}
+          variant="channel"
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const textarea = screen.getByPlaceholderText('在工作流协作里发言') as HTMLTextAreaElement;
+    await user.type(textarea, '第一行');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    await user.type(textarea, '第二行');
+    expect(textarea.value).toBe('第一行\n第二行');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  test('channel composer shows a dropdown mention menu and inserts the selected target', async () => {
+    const user = userEvent.setup();
+    const inputRef = React.createRef<HTMLTextAreaElement>();
+    const bottomRef = React.createRef<HTMLDivElement>();
+
+    function Harness() {
+      const [draft, setDraft] = React.useState('');
+      return (
+        <CollaborationRoomSurface
+          messages={[]}
+          draft={draft}
+          onDraftChange={setDraft}
+          onSubmit={() => {}}
+          submitLabel="发送"
+          placeholder="在工作流协作里发言"
+          mentionTargets={['Agent-Alpha', 'Agent-Beta']}
+          onInsertMention={(value) => setDraft((prev) => `${prev}${value}`)}
+          inputRef={inputRef}
+          bottomRef={bottomRef}
+          getSpeakerAvatarSrc={() => ''}
+          getInitials={(name) => name.slice(0, 1)}
+          getMessageKindLabel={() => '议场发言'}
+          variant="channel"
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    const textarea = screen.getByPlaceholderText('在工作流协作里发言') as HTMLTextAreaElement;
+    await user.type(textarea, '@A');
+
+    const option = await screen.findByRole('button', { name: '@Agent-Alpha' });
+    expect(option).toBeInTheDocument();
+    await user.click(option);
+
+    expect(textarea.value).toBe('@Agent-Alpha ');
+  });
+
   test('pending room message renders reasoning and collapsed result-generation panel from raw stream content', async () => {
     const user = userEvent.setup();
     const inputRef = React.createRef<HTMLTextAreaElement>();

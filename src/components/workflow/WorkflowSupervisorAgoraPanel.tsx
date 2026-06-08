@@ -54,6 +54,8 @@ function buildWorkflowRoster(initialGuests: WorkflowSupervisorAgoraPanelProps['i
     .map((guest) => ({
       ...guest,
       name: String(guest.name || '').trim(),
+      engine: String(guest.engine || '').trim(),
+      model: String(guest.model || '').trim(),
     }))
     .filter((guest) => {
       if (!guest.name || names.has(guest.name)) return false;
@@ -66,11 +68,22 @@ function buildWorkflowRoster(initialGuests: WorkflowSupervisorAgoraPanelProps['i
       sourceType: 'agent' as const,
       sourceAgent: guest.sourceAgent || guest.name,
       runtimeAgentName: guest.runtimeAgentName || guest.name,
-      useDefaultModel: true,
-      engine: guest.engine || '',
-      model: guest.model || '',
+      useDefaultModel: !(guest.engine || guest.model),
+      engine: guest.engine,
+      model: guest.model,
       createdAt: Date.now(),
     }));
+}
+
+function getRosterRuntimeKey(guest: Pick<CollaborationChatroomParticipant, 'id' | 'name' | 'runtimeAgentName' | 'useDefaultModel' | 'engine' | 'model'>): string {
+  return [
+    guest.id,
+    guest.name,
+    guest.runtimeAgentName || '',
+    guest.useDefaultModel === false ? 'explicit' : 'default',
+    guest.engine || '',
+    guest.model || '',
+  ].join(':');
 }
 
 function buildWorkflowPanelRoster(
@@ -121,7 +134,7 @@ export default function WorkflowSupervisorAgoraPanel({
     ...agentSessionIds,
     ...(supervisorAgent && supervisorSessionId ? { [supervisorAgent]: supervisorSessionId } : {}),
   }), [agentSessionIds, supervisorAgent, supervisorSessionId]);
-  const rosterKey = useMemo(() => roster.map((guest) => `${guest.name}:${guest.runtimeAgentName || ''}`).join('|'), [roster]);
+  const rosterKey = useMemo(() => roster.map(getRosterRuntimeKey).join('|'), [roster]);
   const sessionMapKey = useMemo(() => JSON.stringify(sessionMap), [sessionMap]);
   const topic = title?.trim() || '工作流协作议题';
 
@@ -138,7 +151,7 @@ export default function WorkflowSupervisorAgoraPanel({
         const nextRoster = buildWorkflowPanelRoster(existingRoster, roster);
         const participantNames = nextRoster.map((guest) => guest.name).filter(Boolean);
         const sessionsChanged = JSON.stringify(base.agentSessions || {}) !== JSON.stringify(nextSessions);
-        const rosterChanged = JSON.stringify(nextRoster.map((guest) => `${guest.id}:${guest.name}:${guest.runtimeAgentName || ''}`)) !== JSON.stringify(existingRoster.map((guest) => `${guest.id}:${guest.name}:${guest.runtimeAgentName || ''}`));
+        const rosterChanged = JSON.stringify(nextRoster.map(getRosterRuntimeKey)) !== JSON.stringify(existingRoster.map(getRosterRuntimeKey));
         const workspaceChanged = Boolean(workspacePath && currentChatroom.settings?.workspacePath !== workspacePath);
         if (!sessionsChanged && !rosterChanged && !workspaceChanged && currentChatroom.topic) return prev || {};
         return {

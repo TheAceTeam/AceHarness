@@ -3397,6 +3397,7 @@ export default function WorkbenchPage() {
       return {
         name,
         team: roleConfig?.team || (name === (supervisorFromWorkflow || supervisorFromRoles) ? 'black-gold' : 'blue'),
+        engine: selection?.effectiveEngine || '',
         model: selection?.effectiveModel || '',
         status: 'waiting' as const,
         currentTask: null,
@@ -3415,7 +3416,16 @@ export default function WorkbenchPage() {
   const displayWorkflowAgents = useMemo(() => {
     const runtimeByName = new Map(agents.map((agent) => [agent.name, agent]));
     const configuredNames = new Set(configuredWorkflowAgents.map((agent) => agent.name));
-    const configuredWithRuntime = configuredWorkflowAgents.map((agent) => runtimeByName.get(agent.name) || agent);
+    const configuredWithRuntime = configuredWorkflowAgents.map((agent) => {
+      const runtimeAgent = runtimeByName.get(agent.name);
+      if (!runtimeAgent) return agent;
+      return {
+        ...agent,
+        ...runtimeAgent,
+        engine: agent.engine || (runtimeAgent as any).engine || '',
+        model: agent.model || (runtimeAgent as any).model || '',
+      };
+    });
     const runtimeRemainder = agents.filter((agent) => !configuredNames.has(agent.name));
     return [...configuredWithRuntime, ...runtimeRemainder];
   }, [agents, configuredWorkflowAgents]);
@@ -3597,6 +3607,8 @@ export default function WorkbenchPage() {
       team?: any;
       roleType?: any;
       avatar?: any;
+      engine?: string;
+      model?: string;
     }> = [];
 
     const pushAgent = (name?: string | null, fallback?: { team?: any; roleType?: any }) => {
@@ -3610,6 +3622,8 @@ export default function WorkbenchPage() {
         team: roleConfig?.team || runtimeAgent?.team || fallback?.team || 'blue',
         roleType: roleConfig?.roleType || fallback?.roleType || 'normal',
         avatar: roleConfig?.avatar,
+        engine: String((runtimeAgent as any)?.engine || '').trim(),
+        model: String((runtimeAgent as any)?.model || '').trim(),
       });
     };
 
@@ -3626,6 +3640,8 @@ export default function WorkbenchPage() {
       name: agent.name,
       sourceAgent: agent.name,
       runtimeAgentName: agent.name,
+      engine: agent.engine || '',
+      model: agent.model || '',
     }))
   ), [supervisorFormationAgents]);
   const workflowAgoraAgentSessionIds = useMemo(() => {
