@@ -17,6 +17,7 @@ process.stderr.write = ((chunk, ...args) => {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  serverExternalPackages: ['node-cron'],
 
   // 开发服务器配置
   devIndicators: {

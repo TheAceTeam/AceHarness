@@ -54,4 +54,11 @@ export async function runNodejsInstrumentation() {
   } catch (error) {
     console.error('[ACEHarness] WeChat bridge restore setup failed:', error);
   }
+
+  try {
+    const { scheduler } = await import('@/lib/core/scheduler');
+    await scheduler.init();
+  } catch (error) {
+    console.error('[ACEHarness] Scheduler restore failed:', error);
+  }
 }

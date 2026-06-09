@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { scheduler } from '@/lib/core/scheduler';
+import { requireAuth } from '@/lib/auth/middleware';
+import { assertScheduleWorkflowConfig } from '@/lib/core/schedule-validation';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireAuth(_req);
+  if (user instanceof NextResponse) return user;
+
   try {
     await scheduler.init();
     const { id } = await params;
@@ -14,10 +19,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireAuth(req);
+  if (user instanceof NextResponse) return user;
+
   try {
     await scheduler.init();
     const { id } = await params;
     const body = await req.json();
+    if (body?.configFile) {
+      await assertScheduleWorkflowConfig(body.configFile);
+    }
     const job = await scheduler.updateJob(id, body);
     return NextResponse.json({ job });
   } catch (err: any) {
@@ -26,6 +37,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const user = await requireAuth(_req);
+  if (user instanceof NextResponse) return user;
+
   try {
     await scheduler.init();
     const { id } = await params;

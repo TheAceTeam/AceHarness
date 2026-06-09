@@ -58,15 +58,31 @@ export default function SchedulesPanel({ configFile }: { configFile?: string }) 
   const [formEnabled, setFormEnabled] = useState(true);
 
   const loadJobs = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const [schedData, cfgData] = await Promise.all([scheduleApi.list(), configApi.listAllConfigs()]);
-      let allJobs = schedData.jobs || [];
-      if (configFile) allJobs = allJobs.filter(j => j.configFile === configFile);
-      setJobs(allJobs);
-      setConfigs((cfgData.configs || []).map((c: any) => ({ filename: c.filename, name: c.name })));
-    } catch { toast('error', t('schedules.messages.loadFailed')); }
-    setLoading(false);
+      const [schedResult, cfgResult] = await Promise.allSettled([scheduleApi.list(), configApi.listAllConfigs()]);
+
+      if (cfgResult.status === 'fulfilled') {
+        setConfigs((cfgResult.value.configs || []).map((c: any) => ({ filename: c.filename, name: c.name })));
+      } else {
+        setConfigs([]);
+      }
+
+      if (schedResult.status === 'fulfilled') {
+        let allJobs = schedResult.value.jobs || [];
+        if (configFile) allJobs = allJobs.filter(j => j.configFile === configFile);
+        setJobs(allJobs);
+      } else {
+        setJobs([]);
+      }
+
+      if (schedResult.status === 'rejected' || cfgResult.status === 'rejected') {
+        const error = schedResult.status === 'rejected' ? schedResult.reason : cfgResult.status === 'rejected' ? cfgResult.reason : null;
+        toast('error', error?.message || t('schedules.messages.loadFailed'));
+      }
+    } finally {
+      setLoading(false);
+    }
   }, [configFile, t, toast]);
 
   useEffect(() => { loadJobs(); }, [loadJobs]);

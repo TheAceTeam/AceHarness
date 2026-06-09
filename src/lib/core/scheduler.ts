@@ -9,6 +9,25 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { parse, stringify } from 'yaml';
 import { randomUUID } from 'crypto';
 import { getWorkspaceDataDir, getWorkspaceDataFile } from '@/lib/core/app-paths';
+import { getUserById, loadUsers, storeToken } from '@/lib/core/user-store';
+
+export interface ScheduleRunUser {
+  id: string;
+  username?: string;
+  email?: string;
+  role?: 'admin' | 'user';
+  personalDir?: string;
+}
+
+export interface ScheduleExecutionOptions {
+  baseUrl?: string;
+}
+
+export interface ScheduleExecutionResult {
+  runId?: string;
+  status: 'started' | 'failed' | 'error';
+  error?: string;
+}
 
 export interface ScheduleJob {
   id: string;
@@ -22,7 +41,10 @@ export interface ScheduleJob {
   lastRunId?: string;
   lastRunTime?: string;
   lastRunStatus?: string;
+  lastRunError?: string;
   nextRunTime?: string;
+  createdBy?: string;
+  createdByName?: string;
   createdAt: string;
   runHistory: { runId: string; time: string; status: string }[];
 }
@@ -30,7 +52,7 @@ export interface ScheduleJob {
 const DATA_DIR = getWorkspaceDataDir();
 const SCHEDULES_FILE = getWorkspaceDataFile('schedules.yaml');
 
-class SchedulerService extends EventEmitter {
+export class SchedulerService extends EventEmitter {
   private jobs: Map<string, ScheduleJob> = new Map();
   private cronTasks: Map<string, ReturnType<typeof cron.schedule>> = new Map();
   private initialized = false;
@@ -110,29 +132,45 @@ class SchedulerService extends EventEmitter {
     return this.jobs.get(id);
   }
 
-  async triggerNow(id: string): Promise<{ runId?: string }> {
+  async triggerNow(
+    id: string,
+    runAsUser?: ScheduleRunUser,
+    options?: ScheduleExecutionOptions
+  ): Promise<ScheduleExecutionResult> {
     const job = this.jobs.get(id);
     if (!job) throw new Error(`Job ${id} not found`);
-    return this._executeJob(job);
+    return this._executeJob(job, runAsUser, options);
   }
 
   // --- Internal ---
 
-  private async _executeJob(job: ScheduleJob): Promise<{ runId?: string }> {
+  private async _executeJob(
+    job: ScheduleJob,
+    runAsUser?: ScheduleRunUser,
+    options?: ScheduleExecutionOptions
+  ): Promise<ScheduleExecutionResult> {
     try {
       this.emit('job-executing', { id: job.id, configFile: job.configFile });
-      const res = await fetch(`http://localhost:${process.env.PORT || 3000}/api/workflow/start`, {
+      const user = await this._resolveRunUser(job, runAsUser);
+      const token = randomUUID();
+      storeToken(token, user.id);
+      const res = await fetch(`${this._getInternalBaseUrl(options?.baseUrl)}/api/workflow/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ configFile: job.configFile }),
       });
-      const data = await res.json();
-      const runId = data.runId || `run-${Date.now()}`;
+      const data = await this._readJsonResponse(res);
+      const runId = data.runId || (res.ok ? `run-${Date.now()}` : '');
       const now = new Date().toISOString();
       const status = res.ok ? 'started' : 'failed';
+      const error = res.ok ? undefined : (data.error || data.message || `工作流启动接口返回 ${res.status}`);
       job.lastRunId = runId;
       job.lastRunTime = now;
       job.lastRunStatus = status;
+      job.lastRunError = error;
       job.runHistory.push({ runId, time: now, status });
       // Keep last 50 entries
       if (job.runHistory.length > 50) job.runHistory = job.runHistory.slice(-50);
@@ -140,16 +178,17 @@ class SchedulerService extends EventEmitter {
         job.nextRunTime = this._getNextRunTime(job.cronExpression);
       }
       await this._persist();
-      this.emit('job-executed', { id: job.id, runId, status });
-      return { runId };
+      this.emit('job-executed', { id: job.id, runId, status, error });
+      return { runId: runId || undefined, status, error };
     } catch (err: any) {
       const now = new Date().toISOString();
       job.lastRunTime = now;
       job.lastRunStatus = 'error';
+      job.lastRunError = err?.message || String(err);
       job.runHistory.push({ runId: '', time: now, status: 'error' });
       await this._persist();
-      this.emit('job-error', { id: job.id, error: err.message });
-      return {};
+      this.emit('job-error', { id: job.id, error: job.lastRunError });
+      return { status: 'error', error: job.lastRunError };
     }
   }
 
@@ -157,9 +196,57 @@ class SchedulerService extends EventEmitter {
     if (!job.cronExpression || !cron.validate(job.cronExpression)) return;
     this._unscheduleJob(job.id);
     const task = cron.schedule(job.cronExpression, () => {
-      this._executeJob(job);
+      void this._executeJob(job);
     });
     this.cronTasks.set(job.id, task);
+  }
+
+  private async _resolveRunUser(job: ScheduleJob, runAsUser?: ScheduleRunUser): Promise<ScheduleRunUser> {
+    if (runAsUser?.id) return runAsUser;
+
+    if (job.createdBy) {
+      const user = await getUserById(job.createdBy);
+      if (user?.status === 'active') {
+        return {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          personalDir: user.personalDir,
+        };
+      }
+    }
+
+    const fallback = (await loadUsers()).find((user) => user.status === 'active');
+    if (fallback) {
+      return {
+        id: fallback.id,
+        username: fallback.username,
+        email: fallback.email,
+        role: fallback.role,
+        personalDir: fallback.personalDir,
+      };
+    }
+
+    throw new Error('定时任务缺少可用执行用户，无法启动工作流');
+  }
+
+  private _getInternalBaseUrl(baseUrl?: string): string {
+    const raw = baseUrl?.trim()
+      || process.env.ACE_INTERNAL_BASE_URL?.trim()
+      || process.env.NEXT_PUBLIC_APP_URL?.trim()
+      || `http://127.0.0.1:${process.env.PORT || process.env.ACE_PORT || 3000}`;
+    return raw.replace(/\/+$/, '');
+  }
+
+  private async _readJsonResponse(response: Response): Promise<any> {
+    const text = await response.text().catch(() => '');
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { message: text };
+    }
   }
 
   private _unscheduleJob(id: string) {
@@ -284,5 +371,3 @@ class SchedulerService extends EventEmitter {
 }
 
 export const scheduler = new SchedulerService();
-// Auto-init on import
-scheduler.init().catch(console.error);
