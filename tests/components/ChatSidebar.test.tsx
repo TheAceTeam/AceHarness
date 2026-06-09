@@ -13,6 +13,7 @@ const mockToggleSkill = vi.fn();
 const mockSetSkillsEnabled = vi.fn();
 const mockListHumanQuestions = vi.fn(async () => ({ questions: [] }));
 const mockListRuns = vi.fn(async () => ({ runs: [] as { id: string; status: string }[] }));
+const mockGetEventLog = vi.fn(async () => ({ events: [], nextSeq: 0 }));
 
 let mockSessions: any[] = [
   { id: 'sess-1', title: 'Session One', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 5 },
@@ -46,6 +47,7 @@ vi.mock('@/contexts/ChatContext', () => ({
 vi.mock('@/lib/core/api', () => ({
   workflowApi: {
     listHumanQuestions: () => mockListHumanQuestions(),
+    getEventLog: (runId: string, options?: any) => mockGetEventLog(runId, options),
   },
   runsApi: {
     listAll: () => mockListRuns(),
@@ -91,6 +93,7 @@ describe('ChatSidebar', () => {
     mockDiscoveredSkills = [];
     mockListHumanQuestions.mockResolvedValue({ questions: [] });
     mockListRuns.mockResolvedValue({ runs: [] });
+    mockGetEventLog.mockResolvedValue({ events: [], nextSeq: 0 });
   });
 
   test('renders session list', () => {
