@@ -85,6 +85,65 @@ describe('run-state-persistence', () => {
     });
   });
 
+  test('saveRunState stores workflow agora session bindings in the event snapshot', async () => {
+    await withIsolatedAceHome(async () => {
+      const { saveRunState } = await loadPersistence();
+      const { getWorkflowEventStore } = await import('@/lib/workflow/event-store');
+
+      const state = minimalRunState({
+        runId: 'run-agora-bindings-snapshot',
+        supervisorAgent: 'default-supervisor',
+        supervisorSessionId: 'supervisor-session-1',
+        attachedAgentSessions: {
+          'default-supervisor': 'supervisor-session-1',
+          developer: 'developer-session-1',
+        },
+        workflowFrontendSessionId: 'workflow-frontend-session-1',
+        agents: [
+          {
+            name: 'default-supervisor',
+            team: 'black-gold',
+            model: 'supervisor-model',
+            status: 'running',
+            completedTasks: 0,
+            tokenUsage: { inputTokens: 10, outputTokens: 5 },
+            costUsd: 0,
+            sessionId: 'supervisor-session-1',
+            iterationCount: 0,
+            summary: '',
+          },
+          {
+            name: 'developer',
+            team: 'blue',
+            model: 'developer-model',
+            status: 'waiting',
+            completedTasks: 1,
+            tokenUsage: { inputTokens: 20, outputTokens: 15 },
+            costUsd: 0.01,
+            sessionId: 'developer-session-1',
+            iterationCount: 0,
+            summary: 'ready',
+          },
+        ],
+      });
+
+      await saveRunState(state);
+
+      const snapshot = await getWorkflowEventStore().getSnapshot(state.runId);
+      expect(snapshot?.snapshot.workflowFrontendSessionId).toBe('workflow-frontend-session-1');
+      expect(snapshot?.snapshot.supervisorAgent).toBe('default-supervisor');
+      expect(snapshot?.snapshot.supervisorSessionId).toBe('supervisor-session-1');
+      expect(snapshot?.snapshot.attachedAgentSessions).toEqual({
+        'default-supervisor': 'supervisor-session-1',
+        developer: 'developer-session-1',
+      });
+      expect(snapshot?.snapshot.agents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'default-supervisor', sessionId: 'supervisor-session-1' }),
+        expect.objectContaining({ name: 'developer', sessionId: 'developer-session-1' }),
+      ]));
+    });
+  });
+
   test('loadRunState returns null for nonexistent run', async () => {
     await withIsolatedAceHome(async () => {
       const { loadRunState } = await loadPersistence();

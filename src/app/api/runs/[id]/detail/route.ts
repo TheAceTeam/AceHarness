@@ -104,6 +104,123 @@ function compactRunDetail(state: any, finalReview: any) {
   return compact;
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function normalizeSessionMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [agent, sessionId] of Object.entries(value)) {
+    const name = agent.trim();
+    const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (name && normalizedSessionId) result[name] = normalizedSessionId;
+  }
+  return result;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function hasAgentSessionIds(agents: unknown): boolean {
+  return Array.isArray(agents) && agents.some((agent) => nonEmptyString(agent?.sessionId));
+}
+
+function shouldBackfillRunSnapshot(snapshot: any): boolean {
+  if (!isRecord(snapshot)) return false;
+  const attachedAgentSessions = normalizeSessionMap(snapshot.attachedAgentSessions);
+  return (
+    snapshot.workflowFrontendSessionId === undefined
+    || snapshot.supervisorSessionId === undefined
+    || snapshot.attachedAgentSessions === undefined
+    || Object.keys(attachedAgentSessions).length === 0
+    || !Array.isArray(snapshot.agents)
+    || !hasAgentSessionIds(snapshot.agents)
+  );
+}
+
+function mergeAgentsWithSessionIds(
+  snapshotAgents: unknown,
+  stateAgents: unknown,
+  sessionMap: Record<string, string>,
+  supervisorAgent: string | null,
+  supervisorSessionId: string | null,
+) {
+  const stateAgentByName = new Map<string, any>();
+  if (Array.isArray(stateAgents)) {
+    for (const agent of stateAgents) {
+      const name = nonEmptyString(agent?.name);
+      if (name) stateAgentByName.set(name, agent);
+    }
+  }
+
+  const sourceAgents = Array.isArray(snapshotAgents) && snapshotAgents.length > 0
+    ? snapshotAgents
+    : Array.isArray(stateAgents)
+      ? stateAgents
+      : [];
+  const merged = sourceAgents.map((agent: any) => {
+    const name = nonEmptyString(agent?.name);
+    const stateAgent = name ? stateAgentByName.get(name) : null;
+    const sessionId = nonEmptyString(agent?.sessionId)
+      || nonEmptyString(stateAgent?.sessionId)
+      || (name ? nonEmptyString(sessionMap[name]) : null)
+      || (name && supervisorAgent === name ? supervisorSessionId : null)
+      || null;
+    return {
+      ...agent,
+      sessionId,
+    };
+  });
+
+  const existingNames = new Set(merged.map((agent: any) => nonEmptyString(agent?.name)).filter(Boolean));
+  for (const [agentName, sessionId] of Object.entries(sessionMap)) {
+    if (existingNames.has(agentName)) continue;
+    const stateAgent = stateAgentByName.get(agentName);
+    merged.push({
+      ...(stateAgent || {}),
+      name: agentName,
+      sessionId,
+    });
+  }
+  return merged;
+}
+
+function mergeSnapshotWithRunState(snapshot: any, state: any, finalReview: any) {
+  const compactState = compactRunDetail(state, finalReview);
+  const snapshotSessions = normalizeSessionMap(snapshot.attachedAgentSessions);
+  const stateSessions = normalizeSessionMap(state.attachedAgentSessions);
+  const supervisorAgent = nonEmptyString(snapshot.supervisorAgent) || nonEmptyString(state.supervisorAgent);
+  const supervisorSessionId = nonEmptyString(snapshot.supervisorSessionId)
+    || nonEmptyString(state.supervisorSessionId)
+    || (supervisorAgent ? nonEmptyString(snapshotSessions[supervisorAgent]) || nonEmptyString(stateSessions[supervisorAgent]) : null)
+    || null;
+  const attachedAgentSessions = {
+    ...stateSessions,
+    ...snapshotSessions,
+    ...(supervisorAgent && supervisorSessionId ? { [supervisorAgent]: supervisorSessionId } : {}),
+  };
+
+  return {
+    ...compactState,
+    ...snapshot,
+    workflowFrontendSessionId: nonEmptyString(snapshot.workflowFrontendSessionId)
+      || nonEmptyString(state.workflowFrontendSessionId)
+      || null,
+    supervisorAgent,
+    supervisorSessionId,
+    attachedAgentSessions,
+    agents: mergeAgentsWithSessionIds(
+      snapshot.agents,
+      state.agents,
+      attachedAgentSessions,
+      supervisorAgent,
+      supervisorSessionId,
+    ),
+  };
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -116,8 +233,15 @@ export async function GET(
       const snapshot = await getWorkflowEventStore().getSnapshot(id).catch(() => null);
       if (snapshot?.snapshot) {
         const finalReview = await loadWorkflowFinalReview(id).catch(() => null);
+        let detail = snapshot.snapshot;
+        if (shouldBackfillRunSnapshot(detail)) {
+          const state = await loadRunState(id, { hydrateLargeOutputs: false }).catch(() => null);
+          if (state) {
+            detail = mergeSnapshotWithRunState(detail, state, finalReview);
+          }
+        }
         return NextResponse.json({
-          ...snapshot.snapshot,
+          ...detail,
           finalReview,
           __compact: true,
           __source: 'event-store',

@@ -4551,8 +4551,40 @@ export default function WorkbenchPage() {
       const detail = await runsApi.getRunDetail(runId);
       if (!detail) return;
 
+      const detailAttachedAgentSessions = detail.attachedAgentSessions && typeof detail.attachedAgentSessions === 'object' && !Array.isArray(detail.attachedAgentSessions)
+        ? Object.fromEntries(
+            Object.entries(detail.attachedAgentSessions)
+              .map(([agentName, sessionId]) => [String(agentName).trim(), typeof sessionId === 'string' ? sessionId.trim() : ''])
+              .filter(([agentName, sessionId]) => agentName && sessionId)
+          ) as Record<string, string>
+        : {};
+      const detailSupervisorAgent = String(
+        detail.supervisorAgent
+        || workflowConfig?.workflow?.supervisor?.agent
+        || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name
+        || 'default-supervisor'
+      ).trim();
+      const detailSupervisorSessionId = String(
+        detail.supervisorSessionId
+        || detailAttachedAgentSessions[detailSupervisorAgent]
+        || ''
+      ).trim();
+      if (detailSupervisorAgent && detailSupervisorSessionId) {
+        detailAttachedAgentSessions[detailSupervisorAgent] = detailSupervisorSessionId;
+      }
+      const persistedAgents = Array.isArray(detail.agents) ? detail.agents : [];
+      const persistedAgentNames = new Set(
+        persistedAgents.map((agent: any) => String(agent?.name || '').trim()).filter(Boolean)
+      );
+      const sessionOnlyAgents = Object.entries(detailAttachedAgentSessions)
+        .filter(([agentName]) => !persistedAgentNames.has(agentName))
+        .map(([agentName, sessionId]) => ({
+          name: agentName,
+          sessionId,
+        }));
+
       // Map persisted agents to the Agent shape the run view expects
-      const agents = (detail.agents || []).map((a: any) => {
+      const agents = [...persistedAgents, ...sessionOnlyAgents].map((a: any) => {
         // Resolve model from current agent config (engineModels) if available
         const roleConfig = agentConfigs.find((r: any) => r.name === a.name);
         let model = a.model;
@@ -4566,14 +4598,21 @@ export default function WorkbenchPage() {
             },
           ).effectiveModel || model;
         }
+        const agentName = String(a.name || '').trim();
         return {
-          name: a.name,
-          team: a.team,
+          name: agentName,
+          team: a.team || roleConfig?.team || (agentName === detailSupervisorAgent ? 'black-gold' : 'blue'),
           model,
           status: a.status || 'waiting',
           currentTask: null,
           completedTasks: a.completedTasks || 0,
           tokenUsage: a.tokenUsage || { inputTokens: 0, outputTokens: 0 },
+          sessionId: String(
+            a.sessionId
+            || detailAttachedAgentSessions[agentName]
+            || (agentName === detailSupervisorAgent ? detailSupervisorSessionId : '')
+            || ''
+          ).trim() || null,
           iterationCount: a.iterationCount || 0,
           summary: a.summary || '',
           changes: [],

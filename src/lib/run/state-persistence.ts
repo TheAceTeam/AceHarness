@@ -624,7 +624,23 @@ function buildRunSnapshotFromState(state: PersistedRunState, summary: ReturnType
     pendingHumanQuestionId: state.pendingHumanQuestionId,
     workingDirectory: state.workingDirectory,
     supervisorAgent: state.supervisorAgent,
+    supervisorSessionId: state.supervisorSessionId || null,
+    attachedAgentSessions: state.attachedAgentSessions || {},
     workflowFrontendSessionId: state.workflowFrontendSessionId,
+    agents: Array.isArray(state.agents)
+      ? state.agents.map((agent) => ({
+          name: agent.name,
+          team: agent.team,
+          model: agent.model,
+          status: agent.status,
+          completedTasks: agent.completedTasks || 0,
+          tokenUsage: agent.tokenUsage || { inputTokens: 0, outputTokens: 0 },
+          costUsd: typeof agent.costUsd === 'number' ? agent.costUsd : 0,
+          sessionId: agent.sessionId || null,
+          iterationCount: agent.iterationCount || 0,
+          summary: agent.summary || '',
+        }))
+      : [],
     transitionCount: state.transitionCount,
     summary,
     updatedAt: new Date().toISOString(),
