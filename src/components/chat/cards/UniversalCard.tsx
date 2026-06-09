@@ -1,12 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { Component, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Progress } from '@/components/ui/progress';
 import { copyText } from '@/lib/core/clipboard';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 // --- Schema Types ---
+
+type TableColumnDef = { key: string; label: string; width?: string; align?: 'left' | 'center' | 'right' };
+type TableRowDef = {
+  id: string;
+  cells: Record<string, string>;
+  badges?: BadgeDef[];
+  detailTitle?: string;
+  detailBlocks?: Block[];
+};
+type TableColumnInput = TableColumnDef | string;
+type TableRowInput = TableRowDef | unknown[] | Record<string, unknown>;
 
 export interface CardSchema {
   header?: {
@@ -43,14 +54,8 @@ type Block =
   | { type: 'collapse'; title: string; icon?: string; subtitle?: string; blocks: Block[]; defaultOpen?: boolean }
   | {
       type: 'table';
-      columns: { key: string; label: string; width?: string; align?: 'left' | 'center' | 'right' }[];
-      rows: {
-        id: string;
-        cells: Record<string, string>;
-        badges?: BadgeDef[];
-        detailTitle?: string;
-        detailBlocks?: Block[];
-      }[];
+      columns: TableColumnInput[];
+      rows: TableRowInput[];
       maxHeight?: number;
       emptyText?: string;
     }
@@ -96,6 +101,14 @@ interface UniversalCardProps {
 }
 
 export default function UniversalCard({ card, onAction }: UniversalCardProps) {
+  return (
+    <UniversalCardBoundary card={card}>
+      <UniversalCardContent card={card} onAction={onAction} />
+    </UniversalCardBoundary>
+  );
+}
+
+function UniversalCardContent({ card, onAction }: UniversalCardProps) {
   const blocks = card.blocks || [];
   return (
     <div
@@ -117,6 +130,67 @@ export default function UniversalCard({ card, onAction }: UniversalCardProps) {
       )}
     </div>
   );
+}
+
+function getCardRenderErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || '未知错误');
+}
+
+function stringifyCardPreview(card: CardSchema): string {
+  try {
+    const text = JSON.stringify(card, null, 2);
+    return text.length > 8000 ? `${text.slice(0, 8000)}\n\n... 内容过长，已截断预览。` : text;
+  } catch {
+    return '卡片内容无法序列化。';
+  }
+}
+
+function UniversalCardFallback({ card, errorMessage }: { card: CardSchema; errorMessage: string }) {
+  return (
+    <div
+      data-testid="universal-card-render-fallback"
+      className="mt-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-foreground"
+    >
+      <div className="flex items-center gap-1.5 font-medium text-destructive">
+        <span className="material-symbols-outlined text-base">warning</span>
+        <span>卡片渲染失败，已显示原始数据预览。</span>
+      </div>
+      {errorMessage ? (
+        <div className="mt-1 text-xs text-muted-foreground">错误：{errorMessage}</div>
+      ) : null}
+      <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded border border-border/60 bg-background/80 p-3 font-mono text-xs leading-5 text-foreground">
+        {stringifyCardPreview(card)}
+      </pre>
+    </div>
+  );
+}
+
+class UniversalCardBoundary extends Component<
+  { card: CardSchema; children: ReactNode },
+  { hasError: boolean; errorMessage: string }
+> {
+  state = { hasError: false, errorMessage: '' };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, errorMessage: getCardRenderErrorMessage(error) };
+  }
+
+  componentDidCatch(error: unknown, errorInfo: ErrorInfo) {
+    console.error('[UniversalCard] render failed', error, errorInfo);
+  }
+
+  componentDidUpdate(prevProps: { card: CardSchema }) {
+    if (this.state.hasError && prevProps.card !== this.props.card) {
+      this.setState({ hasError: false, errorMessage: '' });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <UniversalCardFallback card={this.props.card} errorMessage={this.state.errorMessage} />;
+    }
+    return this.props.children;
+  }
 }
 
 // --- Header ---
@@ -402,6 +476,98 @@ function CollapseBlock({ title, icon, subtitle, blocks, defaultOpen, onAction }:
   );
 }
 
+function stringifyTableCell(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function isTableColumnDef(column: unknown): column is TableColumnDef {
+  return Boolean(column && typeof column === 'object' && !Array.isArray(column));
+}
+
+function normalizeTableColumns(columns: unknown, rows: unknown): TableColumnDef[] {
+  const rawColumns = Array.isArray(columns) ? columns : [];
+  const normalized = rawColumns.map((column, index): TableColumnDef => {
+    if (typeof column === 'string') {
+      return { key: `col_${index}`, label: column || `列 ${index + 1}` };
+    }
+    if (isTableColumnDef(column)) {
+      const key = typeof column.key === 'string' && column.key ? column.key : `col_${index}`;
+      const align = column.align === 'right' || column.align === 'center' ? column.align : 'left';
+      return {
+        key,
+        label: stringifyTableCell(column.label || column.key || `列 ${index + 1}`),
+        width: typeof column.width === 'string' ? column.width : undefined,
+        align,
+      };
+    }
+    return { key: `col_${index}`, label: `列 ${index + 1}` };
+  });
+
+  const rawRows = Array.isArray(rows) ? rows : [];
+  const maxArrayRowWidth = rawRows.reduce((max, row) => (Array.isArray(row) ? Math.max(max, row.length) : max), 0);
+  for (let index = normalized.length; index < maxArrayRowWidth; index += 1) {
+    normalized.push({ key: `col_${index}`, label: `列 ${index + 1}` });
+  }
+
+  if (!normalized.length) {
+    const firstObjectRow = rawRows.find((row) => row && typeof row === 'object' && !Array.isArray(row)) as any;
+    const cellKeys = firstObjectRow?.cells && typeof firstObjectRow.cells === 'object'
+      ? Object.keys(firstObjectRow.cells)
+      : firstObjectRow
+        ? Object.keys(firstObjectRow).filter((key) => !['id', 'badges', 'detailTitle', 'detailBlocks'].includes(key))
+        : [];
+    return cellKeys.map((key) => ({ key, label: key }));
+  }
+
+  return normalized;
+}
+
+function normalizeTableRows(rows: unknown, columns: TableColumnDef[]): TableRowDef[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.map((row, rowIndex): TableRowDef => {
+    if (Array.isArray(row)) {
+      const cells = columns.reduce<Record<string, string>>((acc, column, columnIndex) => {
+        acc[column.key] = stringifyTableCell(row[columnIndex]);
+        return acc;
+      }, {});
+      return {
+        id: `row_${rowIndex}`,
+        cells,
+        detailTitle: stringifyTableCell(row[0]) || `第 ${rowIndex + 1} 行`,
+      };
+    }
+
+    if (row && typeof row === 'object') {
+      const item = row as any;
+      const rawCells = item.cells && typeof item.cells === 'object' ? item.cells : item;
+      const cells = columns.reduce<Record<string, string>>((acc, column) => {
+        acc[column.key] = stringifyTableCell(rawCells[column.key]);
+        return acc;
+      }, {});
+      return {
+        id: stringifyTableCell(item.id) || `row_${rowIndex}`,
+        cells,
+        badges: Array.isArray(item.badges) ? item.badges : undefined,
+        detailTitle: typeof item.detailTitle === 'string' ? item.detailTitle : undefined,
+        detailBlocks: Array.isArray(item.detailBlocks) ? item.detailBlocks : undefined,
+      };
+    }
+
+    const firstKey = columns[0]?.key || 'value';
+    return {
+      id: `row_${rowIndex}`,
+      cells: { [firstKey]: stringifyTableCell(row) },
+    };
+  });
+}
+
 function TableBlock({
   columns,
   rows,
@@ -409,16 +575,18 @@ function TableBlock({
   emptyText = '暂无数据',
   onAction,
 }: {
-  columns: { key: string; label: string; width?: string; align?: 'left' | 'center' | 'right' }[];
-  rows: { id: string; cells: Record<string, string>; badges?: BadgeDef[]; detailTitle?: string; detailBlocks?: Block[] }[];
+  columns: TableColumnInput[];
+  rows: TableRowInput[];
   maxHeight?: number;
   emptyText?: string;
   onAction?: (prompt: string) => void;
 }) {
-  const [selectedRowId, setSelectedRowId] = useState(rows[0]?.id || '');
-  const selectedRow = rows.find((row) => row.id === selectedRowId) || rows[0];
+  const normalizedColumns = normalizeTableColumns(columns, rows);
+  const normalizedRows = normalizeTableRows(rows, normalizedColumns);
+  const [selectedRowId, setSelectedRowId] = useState(normalizedRows[0]?.id || '');
+  const selectedRow = normalizedRows.find((row) => row.id === selectedRowId) || normalizedRows[0];
 
-  if (!rows.length) {
+  if (!normalizedRows.length) {
     return (
       <div data-testid="universal-card-table" className="rounded-lg border border-border/70 bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
         {emptyText}
@@ -435,13 +603,13 @@ function TableBlock({
         >
           <Table className="w-full table-fixed">
             <colgroup>
-              {columns.map((column) => (
+              {normalizedColumns.map((column) => (
                 <col key={column.key} style={{ width: column.width || undefined }} />
               ))}
             </colgroup>
             <TableHeader className="sticky top-0 z-10 bg-muted/90 backdrop-blur">
               <TableRow className="hover:bg-transparent">
-                {columns.map((column) => (
+                {normalizedColumns.map((column) => (
                   <TableHead
                     key={column.key}
                     className={`h-10 bg-muted/70 px-3 text-[11px] uppercase tracking-wide ${
@@ -454,7 +622,7 @@ function TableBlock({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => {
+              {normalizedRows.map((row) => {
                 const selected = row.id === selectedRow?.id;
                 return (
                   <TableRow
@@ -463,7 +631,7 @@ function TableBlock({
                     className="cursor-pointer"
                     onClick={() => setSelectedRowId(row.id)}
                   >
-                    {columns.map((column) => (
+                    {normalizedColumns.map((column) => (
                       <TableCell
                         key={`${row.id}-${column.key}`}
                         className={`px-3 py-2 ${column.align === 'right' ? 'text-right' : column.align === 'center' ? 'text-center' : 'text-left'}`}
@@ -484,7 +652,7 @@ function TableBlock({
         <div className="rounded-lg border border-border/70 bg-background/70 p-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-medium text-foreground">{selectedRow.detailTitle || selectedRow.cells[columns[0]?.key] || '详情'}</div>
+              <div className="text-sm font-medium text-foreground">{selectedRow.detailTitle || selectedRow.cells[normalizedColumns[0]?.key] || '详情'}</div>
               {selectedRow.badges?.length ? (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {selectedRow.badges.map((badge, index) => (
