@@ -1,17 +1,18 @@
 <div align="center">
 
 # ACE Harness (Agent Centric Engineering Harness)
+ ***Your team of AI***
+  
+Powered By Cangjie Team
 
-English | [中文](./README.md)
+English | [中文](./README.md) 
 
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="300">
-</picture>
+An enterprise-grade AI multi-agent collaboration system for Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory
 
-***Built by the Cangjie Team***
-
-***An enterprise-grade AI multi-agent collaboration system for Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory***
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
+![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
 
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
