@@ -81,8 +81,69 @@ def main() -> int:
     if prep.returncode != 0:
         return _fail("prepare_judge_context.py --help 失败")
 
+    prep = subprocess.run(
+        [sys.executable, str(SCRIPTS / "prepare_judge_context.py"), "--help"],
+        capture_output=True,
+        text=True,
+    )
+    if prep.returncode != 0:
+        return _fail("prepare_judge_context.py --help 失败")
+
     with tempfile.TemporaryDirectory(prefix="judge_skill_validate_") as tmp:
-        fb_path = Path(tmp) / "feedbacks.json"
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        review_tmp = repo / "review_tmp"
+        review_tmp.mkdir(parents=True)
+        (review_tmp / "issues.json").write_text(
+            json.dumps(
+                {
+                    "summary": "自检",
+                    "issues": [
+                        {
+                            "rule_id": next(iter(rule_ids)),
+                            "file": "src/a.cj",
+                            "line": "1",
+                            "problem": "自检 issue",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        outputs_dir = tmp_path / "runs" / "run1" / "outputs"
+        outputs_dir.mkdir(parents=True)
+        blue_out = outputs_dir / "实施-代码审查.md"
+        blue_out.write_text(
+            '<step-conclusion>\n蓝军自检\n</step-conclusion>\n',
+            encoding="utf-8",
+        )
+        ctx_path = tmp_path / "judge_tmp" / "judge_context.json"
+        prep_run = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS / "prepare_judge_context.py"),
+                "--repo",
+                str(repo),
+                "--run-outputs-dir",
+                str(outputs_dir),
+                "--blue-step-substring",
+                "审查",
+                "--work-dir",
+                str(ctx_path.parent),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if prep_run.returncode != 0:
+            return _fail(f"prepare_judge_context.py 自检失败: {prep_run.stderr}")
+        if not ctx_path.is_file():
+            return _fail("prepare_judge_context.py 未写出 judge_context.json")
+        ctx = json.loads(ctx_path.read_text(encoding="utf-8"))
+        if not ctx.get("issues"):
+            return _fail("prepare_judge_context.py 未解析出 issues")
+
+        fb_path = tmp_path / "feedbacks.json"
         sample = {
             "summary": "自检",
             "feedbacks": [

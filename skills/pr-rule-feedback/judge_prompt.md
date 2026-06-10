@@ -5,10 +5,12 @@
 ## 输入（推荐 prepare_judge_context.py）
 
 1. 运行 `prepare_judge_context.py`（见 SKILL.md），Read 输出的 `judge_tmp/judge_context.json`
-2. **ACEHarness Prompt**：`## 前序步骤产出` / `# 前置步骤结论` 中的蓝军摘要与 `runs/.../outputs/*.md` 路径
+2. **ACEHarness Prompt**：`## 前序步骤产出` / `# 前置步骤结论` 中的蓝军摘要与 `runs/.../outputs/*.md` 路径；可用 `--prompt-context-file` 传入
 3. **蓝军产物**：`review_tmp/issues.json`（首选）、`review.diff`、`selected_rules.md`
 4. **规则正文**：`{SKILL_ROOT}/rules/cards/{rule_id}.md`
 5. **代码证据**：issue 的 `file`/`line`、diff、对话片段；不足时 `git diff`
+
+`judge_context.json` 字段：`issues`（待复核列表）、`blue_review_confirmed_empty`（蓝军明确零 issues）、`warnings`（输入缺失提示）。
 
 ## 复核四步（每条 issue）
 

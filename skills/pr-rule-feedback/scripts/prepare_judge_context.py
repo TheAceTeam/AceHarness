@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional, Tuple
 DEFAULT_REVIEW_WORK_DIR = "review_tmp"
 DEFAULT_JUDGE_WORK_DIR = "judge_tmp"
 EXCERPT_LIMIT = 6000
+TIMESTAMP_OUTPUT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d-]+-(.+)$")
+RUN_OUTPUTS_DIR_RE = re.compile(
+    r"[`'\"]?(?P<path>(?:[A-Za-z]:)?[^\s`\"']+[/\\]runs[/\\][^/\\]+[/\\]outputs)[/`'\"]?",
+    re.IGNORECASE,
+)
 
 
 def _read_text(path: Path) -> str:
@@ -18,6 +23,11 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def logical_output_stem(stem: str) -> str:
+    match = TIMESTAMP_OUTPUT_RE.match(stem)
+    return match.group(1) if match else stem
 
 
 def extract_tagged_block(text: str, tag: str) -> str:
@@ -138,23 +148,38 @@ def load_review_artifacts(repo: Path, review_work_dir: str) -> Dict[str, Optiona
     return out
 
 
-def load_issues_from_review_tmp(repo: Path, review_work_dir: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def load_issues_from_review_tmp(repo: Path, review_work_dir: str) -> Tuple[List[Dict[str, Any]], Optional[str], bool]:
     path = repo / review_work_dir / "issues.json"
     if not path.is_file():
-        return [], None
+        return [], None, False
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
-        return [], str(path.resolve())
+        return [], str(path.resolve()), False
+
+    if isinstance(data, dict) and isinstance(data.get("issues"), list) and len(data["issues"]) == 0:
+        return [], str(path.resolve()), True
+
     issues = issues_from_payload(data)
     if issues:
-        return issues, str(path.resolve())
-    # 兼容顶层即为单条 issue 的 JSON
+        return issues, str(path.resolve()), False
     if isinstance(data, dict) and (data.get("rule_id") or data.get("problem")):
         one = normalize_issue(data)
         if one:
-            return [one], str(path.resolve())
-    return [], str(path.resolve())
+            return [one], str(path.resolve()), False
+    return [], str(path.resolve()), isinstance(data, dict) and isinstance(data.get("issues"), list)
+
+
+def stem_matches(stem: str, step_keys: List[str], step_substring: str) -> bool:
+    logical = logical_output_stem(stem)
+    if step_keys:
+        for key in step_keys:
+            if stem == key or logical == key or logical.endswith(f"-{key}") or key in logical:
+                return True
+        return False
+    if step_substring:
+        return step_substring in stem or step_substring in logical
+    return True
 
 
 def list_blue_output_files(
@@ -166,16 +191,22 @@ def list_blue_output_files(
     if not outputs_dir.is_dir():
         return []
 
-    files = sorted(
+    candidates = sorted(
         p for p in outputs_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in {".md", ".txt"}
+        if p.is_file() and p.suffix.lower() in {".md", ".txt"} and stem_matches(p.stem, step_keys, step_substring)
     )
-    if step_keys:
-        wanted = {k.strip() for k in step_keys if k.strip()}
-        files = [p for p in files if p.stem in wanted]
-    if step_substring:
-        files = [p for p in files if step_substring in p.stem]
-    return files
+    if not candidates:
+        return []
+
+    grouped: Dict[str, List[Path]] = {}
+    for path in candidates:
+        grouped.setdefault(logical_output_stem(path.stem), []).append(path)
+
+    selected: List[Path] = []
+    for paths in grouped.values():
+        paths.sort(key=lambda p: (p.stat().st_size, p.stat().st_mtime), reverse=True)
+        selected.append(paths[0])
+    return sorted(selected, key=lambda p: p.stat().st_mtime)
 
 
 def summarize_blue_output(path: Path) -> Dict[str, Any]:
@@ -185,12 +216,13 @@ def summarize_blue_output(path: Path) -> Dict[str, Any]:
     excerpt = excerpt_source[-EXCERPT_LIMIT:] if len(excerpt_source) > EXCERPT_LIMIT else excerpt_source
     parsed_issues = parse_issues_from_text(raw)
     return {
-        "step_key": path.stem,
+        "step_key": logical_output_stem(path.stem),
         "path": str(path.resolve()),
         "excerpt": excerpt.strip(),
         "has_step_conclusion": bool(conclusion),
         "parsed_issue_count": len(parsed_issues),
         "parsed_issues": parsed_issues,
+        "raw_bytes": len(raw.encode("utf-8")),
     }
 
 
@@ -198,6 +230,36 @@ def parse_prior_output_text(text: str) -> List[Dict[str, Any]]:
     if not text.strip():
         return []
     return parse_issues_from_text(text)
+
+
+def extract_run_outputs_dirs(text: str) -> List[str]:
+    found: List[str] = []
+    seen: set[str] = set()
+    for match in RUN_OUTPUTS_DIR_RE.finditer(text or ""):
+        path = match.group("path").rstrip("/\\")
+        if path not in seen:
+            seen.add(path)
+            found.append(path)
+    return found
+
+
+def resolve_run_outputs_dir(
+    explicit: Optional[Path],
+    prompt_text: str,
+) -> Tuple[Optional[Path], List[str]]:
+    warnings: List[str] = []
+    if explicit is not None:
+        if explicit.is_dir():
+            return explicit, warnings
+        warnings.append(f"run-outputs-dir 不存在: {explicit}")
+        explicit = None
+
+    for candidate in extract_run_outputs_dirs(prompt_text):
+        path = Path(candidate)
+        if path.is_dir():
+            return path.resolve(), warnings
+        warnings.append(f"Prompt 中的 outputs 路径不存在: {candidate}")
+    return None, warnings
 
 
 def build_context(
@@ -211,7 +273,7 @@ def build_context(
 ) -> Dict[str, Any]:
     warnings: List[str] = []
     review_artifacts = load_review_artifacts(repo, review_work_dir)
-    issues, issues_path = load_issues_from_review_tmp(repo, review_work_dir)
+    issues, issues_path, blue_confirmed_empty = load_issues_from_review_tmp(repo, review_work_dir)
     issues_source = "none"
 
     blue_team_outputs: List[Dict[str, Any]] = []
@@ -238,8 +300,13 @@ def build_context(
     elif issues_path:
         issues_source = "review_tmp/issues.json"
 
-    if not issues:
-        warnings.append("未找到蓝军 issues：请确认 review_tmp/issues.json、蓝军步骤产出或 prompt 中的前序步骤产出。")
+    if not issues and blue_confirmed_empty:
+        issues_source = "review_tmp/issues.json (empty)"
+
+    if not issues and not blue_confirmed_empty:
+        warnings.append(
+            "未找到蓝军 issues：请确认 review_tmp/issues.json、蓝军步骤产出或 Prompt 中的「前序步骤产出」。"
+        )
     if not review_artifacts.get("issues_json") and not blue_team_outputs and not prior_output_text.strip():
         warnings.append("缺少蓝军结构化产物与工作流输出，Judge 可能无法完成复核。")
 
@@ -252,17 +319,21 @@ def build_context(
         f"blue_outputs={len(blue_team_outputs)}",
         f"source={issues_source}",
     ]
+    if blue_confirmed_empty:
+        summary_parts.append("blue_confirmed_empty=true")
 
     return {
         "summary": "；".join(summary_parts),
         "issues_source": issues_source,
         "issues_path": issues_path,
+        "blue_review_confirmed_empty": blue_confirmed_empty,
         "issues": issues,
         "blue_team_outputs": [
             {k: v for k, v in item.items() if k != "parsed_issues"}
             for item in blue_team_outputs
         ],
         "review_artifacts": review_artifacts,
+        "run_outputs_dir": str(run_outputs_dir.resolve()) if run_outputs_dir else None,
         "warnings": warnings,
     }
 
@@ -275,7 +346,7 @@ def main() -> int:
     parser.add_argument(
         "--run-outputs-dir",
         default="",
-        help="ACEHarness runs/{runId}/outputs 绝对路径",
+        help="ACEHarness runs/{runId}/outputs 绝对路径；可省略若 --prompt-context-file 中含该路径",
     )
     parser.add_argument(
         "--blue-step-keys",
@@ -284,23 +355,30 @@ def main() -> int:
     )
     parser.add_argument(
         "--blue-step-substring",
-        default="",
-        help="按文件名子串筛选蓝军步骤产出（如 审查、pr-hard）",
+        default="审查",
+        help="按文件名子串筛选蓝军步骤产出（默认：审查）",
     )
     parser.add_argument(
         "--prior-output-text-file",
         default="",
         help="保存 ACEHarness「前序步骤产出」注入文本的文件（可选）",
     )
+    parser.add_argument(
+        "--prompt-context-file",
+        default="",
+        help="当前 Judge 步骤完整 prompt 文本（用于自动解析 runs/.../outputs 路径）",
+    )
     parser.add_argument("--json", action="store_true", help="向 stdout 打印 judge_context.json 路径与摘要")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
-    run_outputs_dir = Path(args.run_outputs_dir).resolve() if args.run_outputs_dir else None
     step_keys = [s.strip() for s in args.blue_step_keys.split(",") if s.strip()]
-    prior_text = ""
-    if args.prior_output_text_file:
-        prior_text = _read_text(Path(args.prior_output_text_file))
+    prior_text = _read_text(Path(args.prior_output_text_file)) if args.prior_output_text_file else ""
+    prompt_text = _read_text(Path(args.prompt_context_file)) if args.prompt_context_file else ""
+    combined_prompt = "\n".join(part for part in (prior_text, prompt_text) if part.strip())
+
+    explicit_outputs = Path(args.run_outputs_dir).resolve() if args.run_outputs_dir else None
+    run_outputs_dir, dir_warnings = resolve_run_outputs_dir(explicit_outputs, combined_prompt)
 
     context = build_context(
         repo=repo,
@@ -308,8 +386,9 @@ def main() -> int:
         run_outputs_dir=run_outputs_dir,
         step_keys=step_keys,
         step_substring=args.blue_step_substring.strip(),
-        prior_output_text=prior_text,
+        prior_output_text=combined_prompt,
     )
+    context["warnings"] = dir_warnings + (context.get("warnings") or [])
 
     work_dir = Path(args.work_dir)
     if not work_dir.is_absolute():
@@ -324,7 +403,8 @@ def main() -> int:
         print(f"[WARN] {warning}", file=sys.stderr)
 
     if args.json:
-        print(json.dumps({"judge_context": str(out_path.resolve()), **context}, ensure_ascii=False))
+        payload = {"judge_context": str(out_path.resolve()), **context}
+        print(json.dumps(payload, ensure_ascii=False))
 
     return 0
 
