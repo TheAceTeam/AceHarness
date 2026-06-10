@@ -197,7 +197,6 @@ python "<SKILL_ROOT>/scripts/validate_skill_bundle.py"
 ```powershell
 python "<SKILL_ROOT>/scripts/report_issues.py" review_tmp/issues.json
 python "<SKILL_ROOT>/scripts/report_issues.py" review_tmp/issues.json --mode per-rule
-# 校验：加 --dry-run
 ```
 
 接口：`POST {server}/api/v1/rule-issue-reports`

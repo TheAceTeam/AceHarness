@@ -149,7 +149,7 @@ def main() -> int:
             "feedbacks": [
                 {
                     "rule_ids": [next(iter(rule_ids))],
-                    "content": "判定：自检 dry-run。规则修改：无。",
+                    "content": "判定：自检。规则修改：无。",
                     "agent": True,
                 }
             ],
@@ -157,27 +157,24 @@ def main() -> int:
         before = json.dumps(sample, ensure_ascii=False, indent=2)
         fb_path.write_text(before, encoding="utf-8")
 
-        dry = subprocess.run(
-            [sys.executable, str(SCRIPTS / "report_feedback.py"), str(fb_path), "--dry-run"],
-            capture_output=True,
-            text=True,
-        )
-        if dry.returncode != 0:
-            return _fail(f"report_feedback.py --dry-run 失败: {dry.stderr}")
-
-        after_dry = fb_path.read_text(encoding="utf-8")
-        if json.loads(after_dry) != json.loads(before):
-            return _fail("dry-run 不应修改 feedbacks.json")
-
-        # 模拟上报后刷新：全部成功 → 清空
         sys.path.insert(0, str(SCRIPTS))
-        from report_feedback import refresh_feedbacks_file  # noqa: E402
+        from report_feedback import load_valid_rule_ids, refresh_feedbacks_file, validate_feedback  # noqa: E402
+
+        err = validate_feedback(
+            sample["feedbacks"][0],
+            load_valid_rule_ids(),
+            require_rule_ids=False,
+        )
+        if err:
+            return _fail(f"report_feedback 校验失败: {err}")
+
+        if json.loads(fb_path.read_text(encoding="utf-8")) != json.loads(before):
+            return _fail("校验阶段不应修改 feedbacks.json")
 
         refresh_feedbacks_file(
             fb_path,
             pending=[],
             reported_count=1,
-            dry_run=False,
         )
         cleared = json.loads(fb_path.read_text(encoding="utf-8"))
         if cleared.get("feedbacks"):

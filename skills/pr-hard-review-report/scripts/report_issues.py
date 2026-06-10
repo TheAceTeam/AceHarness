@@ -155,7 +155,6 @@ def main() -> int:
         default="per-issue",
         help="per-issue: 每条 issue 一次 POST；per-rule: 同一 rule_id 合并一次 POST",
     )
-    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if args.issues_json == "-":
@@ -193,13 +192,6 @@ def main() -> int:
         for rid, rule_issues in group_issues_by_rule_id(issues).items():
             per_rule_count = len(rule_issues)
             content = format_rule_batch_content(rule_issues)
-            if args.dry_run:
-                print(
-                    f"[DRY-RUN] {rid} review_issue_count={per_rule_count} "
-                    f"issues={per_rule_count}: {content[:80]}"
-                )
-                ok_count += 1
-                continue
             result, post_err = report_one(
                 args.server,
                 rid,
@@ -229,14 +221,6 @@ def main() -> int:
             rid = str(issue["rule_id"]).strip()
             per_rule_count = rule_counts[rid]
             content = format_issue_content(issue)
-            if args.dry_run:
-                print(
-                    f"[DRY-RUN] issue[{i}] {rid} review_issue_count={per_rule_count}: "
-                    f"{content[:60]}"
-                )
-                ok_count += 1
-                continue
-
             result, post_err = report_one(
                 args.server,
                 rid,

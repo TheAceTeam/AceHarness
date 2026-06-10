@@ -129,10 +129,9 @@ def refresh_feedbacks_file(
     *,
     pending: List[Dict[str, Any]],
     reported_count: int,
-    dry_run: bool,
 ) -> None:
     """上报后刷新 feedbacks.json，防止下次误重复上报。"""
-    if dry_run or str(path) == "-":
+    if str(path) == "-":
         return
     if reported_count <= 0:
         return
@@ -177,7 +176,6 @@ def main() -> int:
         action="store_true",
         help="强制每条 feedback 必须带 rule_ids",
     )
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--no-refresh",
         action="store_true",
@@ -227,14 +225,6 @@ def main() -> int:
         elif not isinstance(agent, bool):
             agent = bool(agent)
 
-        if args.dry_run:
-            print(
-                f"[DRY-RUN] feedbacks[{i}] agent={agent} "
-                f"rule_ids={rule_ids}: {content[:80]}"
-            )
-            ok_count += 1
-            continue
-
         result, post_err = report_one(
             args.server,
             rule_ids,
@@ -266,7 +256,6 @@ def main() -> int:
             feedbacks_path,
             pending=pending_feedbacks,
             reported_count=ok_count,
-            dry_run=args.dry_run,
         )
     if fail_count:
         print(

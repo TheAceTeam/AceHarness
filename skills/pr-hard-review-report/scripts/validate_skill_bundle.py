@@ -116,23 +116,17 @@ diff --git a/stdlib/libs/std/sync/semaphore.cj b/stdlib/libs/std/sync/semaphore.
                 "rule_id": "style-formatting-0506a640d9f4",
                 "file": "src/stdx/net/http/utils.cj",
                 "line": "541",
-                "problem": "validate dry-run",
+                "problem": "validate sample issue",
                 "severity": "低",
             }
         ],
     }
-    issues_path = SKILL_DIR / "_validate_issues.json"
-    issues_path.write_text(json.dumps(issues, ensure_ascii=False), encoding="utf-8")
-    rep = subprocess.run(
-        [sys.executable, str(SCRIPTS / "report_issues.py"), str(issues_path), "--dry-run"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    issues_path.unlink(missing_ok=True)
-    if rep.returncode != 0:
-        return _fail(f"report_issues dry-run 失败: {rep.stderr or rep.stdout}")
+    sys.path.insert(0, str(SCRIPTS))
+    from report_issues import load_valid_rule_ids, validate_issue  # noqa: E402
+
+    err = validate_issue(issues["issues"][0], load_valid_rule_ids())
+    if err:
+        return _fail(f"report_issues 校验失败: {err}")
 
     print(f"[OK] Skill 包完整: rules={len(rule_ids)} scripts={len(REQUIRED_SCRIPTS)}")
     return 0
