@@ -67,6 +67,7 @@ systemPrompt: |
   - Bug / 漏洞列表（文件:行号 + 描述 + 严重程度 + rule_id）
   - 实现优化建议（区分必须修复与建议改进）
   - issues.json 路径与上报结果（如有）
+  - 在 `<step-conclusion>` 中写明 `review_tmp/issues.json` 绝对路径，供黄军 Judge 读取
 constraints:
   - 每个问题必须指明具体文件和行号，并关联有效 rule_id
   - 未运行 select_rules.py 成功前，禁止仅凭 L0 结论上报 rule issue
