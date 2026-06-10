@@ -4,22 +4,22 @@ import { requireAuth } from '@/lib/auth/middleware';
 import { assertScheduleWorkflowConfig } from '@/lib/core/schedule-validation';
 
 export async function GET(request: NextRequest) {
-  const user = await requireAuth(request);
-  if (user instanceof NextResponse) return user;
-
   try {
+    const user = await requireAuth(request);
+    if (user instanceof NextResponse) return user;
+
     await scheduler.init();
     return NextResponse.json({ jobs: scheduler.listJobs() });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: err.message || '获取定时任务列表失败' }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
-  const user = await requireAuth(request);
-  if (user instanceof NextResponse) return user;
-
   try {
+    const user = await requireAuth(request);
+    if (user instanceof NextResponse) return user;
+
     await scheduler.init();
     const body = await request.json();
     await assertScheduleWorkflowConfig(body?.configFile);
@@ -30,6 +30,6 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json({ job });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 400 });
+    return NextResponse.json({ error: err.message || '创建定时任务失败' }, { status: 400 });
   }
 }

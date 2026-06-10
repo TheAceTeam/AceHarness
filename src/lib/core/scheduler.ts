@@ -49,10 +49,13 @@ export interface ScheduleJob {
   runHistory: { runId: string; time: string; status: string }[];
 }
 
-const DATA_DIR = getWorkspaceDataDir();
-const SCHEDULES_FILE = getWorkspaceDataFile('schedules.yaml');
-
 export class SchedulerService extends EventEmitter {
+  private get dataDir(): string {
+    return getWorkspaceDataDir();
+  }
+  private get schedulesFile(): string {
+    return getWorkspaceDataFile('schedules.yaml');
+  }
   private jobs: Map<string, ScheduleJob> = new Map();
   private cronTasks: Map<string, ReturnType<typeof cron.schedule>> = new Map();
   private initialized = false;
@@ -346,9 +349,9 @@ export class SchedulerService extends EventEmitter {
 
   private async _persist() {
     try {
-      await mkdir(DATA_DIR, { recursive: true });
+      await mkdir(this.dataDir, { recursive: true });
       const data = Array.from(this.jobs.values());
-      await writeFile(SCHEDULES_FILE, stringify(data), 'utf-8');
+      await writeFile(this.schedulesFile, stringify(data), 'utf-8');
     } catch (err) {
       console.error('[Scheduler] Failed to persist:', err);
     }
@@ -356,7 +359,7 @@ export class SchedulerService extends EventEmitter {
 
   private async _restore() {
     try {
-      const content = await readFile(SCHEDULES_FILE, 'utf-8');
+      const content = await readFile(this.schedulesFile, 'utf-8');
       const data = parse(content) as ScheduleJob[];
       if (Array.isArray(data)) {
         for (const job of data) {
