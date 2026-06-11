@@ -78,6 +78,11 @@ import {
   type DesignOptimizationTarget,
   type WorkflowPatchPayload,
 } from '@/lib/workflow/design-ai-optimization';
+import {
+  buildWorkflowDesignConfigForSave,
+  hasWorkflowDesignDraftChanges,
+  type WorkflowDesignDraftState,
+} from '@/lib/workflow/design-config-draft';
 import type { TasksMarkdownValidationIssue } from '@/lib/spec/coding-store';
 import {
   buildWorkflowConversationDirectory,
@@ -1119,13 +1124,13 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
             {startupFlowEnabled ? (
               startupStep === 'context' ? (
                 <>
-                  <Button variant="secondary" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                  <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
                   <Button onClick={() => setStartupStep('preflight')} disabled={props.actionDisabled}>下一步</Button>
                 </>
               ) : (
                 <>
                   <Button variant="secondary" onClick={() => setStartupStep('context')} disabled={props.actionBusy}>上一步</Button>
-                  <Button variant="ghost" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                  <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
                   {props.onSkipPreflight ? (
                     <Button
                       variant="outline"
@@ -1151,7 +1156,7 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
               )
             ) : (
               <>
-                <Button variant="secondary" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
+                <Button variant="destructive" onClick={props.onCancel} disabled={props.actionBusy}>取消</Button>
                 <Button
                   onClick={() => props.onConfirm({
                     globalContext: localGlobalDraft,
@@ -1789,6 +1794,65 @@ export default function WorkbenchPage() {
     autoCompactOnStepChange: workflowAutoCompactOnStepChange,
     agentOverrides: workflowAgentOverrides,
   }), [engine, workflowAgentOverrides, workflowAutoCompactOnStepChange, workflowDefaultModel]);
+  const currentWorkflowDesignDraftState = useMemo<WorkflowDesignDraftState>(() => ({
+    projectRoot,
+    workspaceMode,
+    requirements,
+    timeoutMinutes,
+    engine,
+    workflowDefaultModel,
+    workflowAutoCompactOnStepChange,
+    workflowAgentOverrides,
+    skills,
+    mcpServers,
+  }), [
+    engine,
+    mcpServers,
+    projectRoot,
+    requirements,
+    skills,
+    timeoutMinutes,
+    workflowAgentOverrides,
+    workflowAutoCompactOnStepChange,
+    workflowDefaultModel,
+    workspaceMode,
+  ]);
+  const persistedWorkflowDesignDraftState = useMemo<WorkflowDesignDraftState | null>(() => {
+    if (!workflowConfig) return null;
+    const persistedExecutionPolicy = resolveWorkflowExecutionPolicy(workflowConfig.context);
+    return {
+      projectRoot: typeof workflowConfig.context?.projectRoot === 'string' ? workflowConfig.context.projectRoot : '',
+      workspaceMode: workflowConfig.context?.workspaceMode === 'in-place' ? 'in-place' : 'isolated-copy',
+      requirements: typeof workflowConfig.context?.requirements === 'string' ? workflowConfig.context.requirements : '',
+      timeoutMinutes: Number.isFinite(workflowConfig.context?.timeoutMinutes) ? Number(workflowConfig.context.timeoutMinutes) : 30,
+      engine: persistedExecutionPolicy.defaultEngine || '',
+      workflowDefaultModel: persistedExecutionPolicy.defaultModel || '',
+      workflowAutoCompactOnStepChange: persistedExecutionPolicy.autoCompactOnStepChange === true,
+      workflowAgentOverrides: persistedExecutionPolicy.agentOverrides || {},
+      skills: Array.isArray(workflowConfig.context?.skills) ? workflowConfig.context.skills.filter((item: unknown): item is string => typeof item === 'string') : [],
+      mcpServers: Array.isArray(workflowConfig.context?.mcpServers) ? workflowConfig.context.mcpServers.filter((item: unknown): item is string => typeof item === 'string') : [],
+    };
+  }, [workflowConfig]);
+  const persistedDesignConfigComparable = useMemo(
+    () => (
+      workflowConfig && persistedWorkflowDesignDraftState
+        ? buildWorkflowDesignConfigForSave(workflowConfig, persistedWorkflowDesignDraftState)
+        : null
+    ),
+    [persistedWorkflowDesignDraftState, workflowConfig],
+  );
+  const editingDesignConfigComparable = useMemo(
+    () => (
+      editingConfig
+        ? buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState)
+        : null
+    ),
+    [currentWorkflowDesignDraftState, editingConfig],
+  );
+  const hasUnsavedDesignConfigChanges = useMemo(
+    () => hasWorkflowDesignDraftChanges(persistedDesignConfigComparable, editingDesignConfigComparable),
+    [editingDesignConfigComparable, persistedDesignConfigComparable],
+  );
   const configuredWorkflowOverrideCount = useMemo(
     () => Object.values(workflowAgentOverrides).filter((value) => value?.enabled).length,
     [workflowAgentOverrides],
@@ -5021,36 +5085,15 @@ export default function WorkbenchPage() {
     if (!workflowConfig) return;
     setSaving(true);
     try {
-      const normalizedAgentOverrides = Object.fromEntries(
-        Object.entries(workflowAgentOverrides || {})
-          .filter(([, value]) => value?.enabled)
-          .map(([name, value]) => [name, {
-            enabled: true,
-            engine: value.engine || undefined,
-            model: value.model || undefined,
-          }]),
-      );
-      const config = {
+      const configBase = {
         ...workflowConfig,
         workflow: editingConfig?.workflow || workflowConfig.workflow,
         context: {
           ...(workflowConfig.context || {}),
           ...(editingConfig?.context || {}),
-          projectRoot,
-          workspaceMode,
-          requirements,
-          timeoutMinutes,
-          engine: engine || undefined,
-          executionPolicy: {
-            defaultEngine: engine || undefined,
-            defaultModel: workflowDefaultModel || undefined,
-            autoCompactOnStepChange: workflowAutoCompactOnStepChange,
-            agentOverrides: normalizedAgentOverrides,
-          },
-          skills,
-          mcpServers,
         },
       };
+      const config = buildWorkflowDesignConfigForSave(configBase, currentWorkflowDesignDraftState);
       await configApi.saveConfig(configFile, config);
       dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
       dispatch({ type: 'SET_EDITING_CONFIG', payload: config });
@@ -6369,7 +6412,7 @@ export default function WorkbenchPage() {
                     {isRunning && (
                       <button
                         onClick={() => recallFeedback(item.id || item.message)}
-                        className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                        className="rounded text-destructive opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                         title="撤回"
                       >
                         <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>undo</span>
@@ -7015,34 +7058,7 @@ export default function WorkbenchPage() {
     if (!editingConfig) return;
     setSaving(true);
     try {
-      const normalizedAgentOverrides = Object.fromEntries(
-        Object.entries(workflowAgentOverrides || {})
-          .filter(([, value]) => value?.enabled)
-          .map(([name, value]) => [name, {
-            enabled: true,
-            engine: value.engine || undefined,
-            model: value.model || undefined,
-          }]),
-      );
-      const config = {
-        ...editingConfig,
-        context: {
-          ...(editingConfig.context || {}),
-          projectRoot,
-          workspaceMode,
-          requirements,
-          timeoutMinutes,
-          engine: engine || undefined,
-          executionPolicy: {
-            defaultEngine: engine || undefined,
-            defaultModel: workflowDefaultModel || undefined,
-            autoCompactOnStepChange: workflowAutoCompactOnStepChange,
-            agentOverrides: normalizedAgentOverrides,
-          },
-          skills,
-          mcpServers,
-        },
-      };
+      const config = buildWorkflowDesignConfigForSave(editingConfig, currentWorkflowDesignDraftState);
       const specCodingDocument = specCodingSummary && specCodingDetails ? {
         id: specCodingSummary.id,
         version: specCodingSummary.version,
@@ -9664,6 +9680,32 @@ export default function WorkbenchPage() {
                 </div>
               </div>
 
+              {hasUnsavedDesignConfigChanges ? (
+                <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/10 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span className="material-symbols-outlined mt-0.5 text-base text-amber-600 dark:text-amber-300">edit_note</span>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-amber-700 dark:text-amber-200">当前有未保存的工作流配置变更</div>
+                        <div className="mt-1 text-xs text-amber-700/90 dark:text-amber-200/90">
+                          这些修改目前只在草稿里，点击右上角“保存配置”后才会写入工作流 YAML。
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 border-amber-500/40 bg-background/85 text-amber-700 hover:bg-background dark:text-amber-200"
+                      onClick={handleSaveConfig}
+                      disabled={saving}
+                    >
+                      {saving ? '保存中...' : '保存配置'}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
               {/* Design Overview Tab */}
               {designTab === 'overview' && editingConfig?.workflow && (
                 <div className="flex-1 overflow-auto bg-muted/20 p-6">
@@ -9989,10 +10031,20 @@ export default function WorkbenchPage() {
                         <div>
                           <Label className="text-sm font-medium">工作流描述</Label>
                           <Textarea
-                            value={workflowConfig?.workflow?.description || ''}
+                            value={editingConfig?.workflow?.description ?? workflowConfig?.workflow?.description ?? ''}
                             onChange={(e) => {
-                              const newConfig = { ...workflowConfig, workflow: { ...workflowConfig.workflow, description: e.target.value } };
-                              dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: newConfig });
+                              const baseConfig = editingConfig || workflowConfig;
+                              if (!baseConfig?.workflow) return;
+                              dispatch({
+                                type: 'SET_EDITING_CONFIG',
+                                payload: {
+                                  ...baseConfig,
+                                  workflow: {
+                                    ...baseConfig.workflow,
+                                    description: e.target.value,
+                                  },
+                                },
+                              });
                             }}
                             rows={2}
                             placeholder="请输入工作流描述..."
@@ -10027,11 +10079,21 @@ export default function WorkbenchPage() {
                         <div>
                           <Label className="text-sm font-medium">最大转移次数</Label>
                           <Input
-                            value={workflowConfig?.workflow?.maxTransitions ?? 50}
+                            value={editingConfig?.workflow?.maxTransitions ?? workflowConfig?.workflow?.maxTransitions ?? 50}
                             onChange={(e) => {
+                              const baseConfig = editingConfig || workflowConfig;
+                              if (!baseConfig?.workflow) return;
                               const val = Math.max(1, Math.min(200, parseInt(e.target.value) || 1));
-                              const updated = { ...workflowConfig, workflow: { ...workflowConfig.workflow, maxTransitions: val } };
-                              dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: updated });
+                              dispatch({
+                                type: 'SET_EDITING_CONFIG',
+                                payload: {
+                                  ...baseConfig,
+                                  workflow: {
+                                    ...baseConfig.workflow,
+                                    maxTransitions: val,
+                                  },
+                                },
+                              });
                             }}
                             type="number"
                             min={1}
@@ -10080,7 +10142,7 @@ export default function WorkbenchPage() {
                         )}
                       </div>
                       <div className="p-5 border-t bg-muted/30 flex justify-end">
-                        <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={saveConfig} disabled={saving}>
+                        <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleSaveConfig} disabled={saving}>
                           {saving ? <ClipLoader color="currentColor" size={14} className="mr-2" /> : <span className="material-symbols-outlined text-sm mr-2">save</span>}
                           {saving ? '保存中...' : '保存配置'}
                         </Button>
@@ -10107,8 +10169,7 @@ export default function WorkbenchPage() {
             {selectedRunIds.length > 0 && (
               <Button
                 size="sm"
-                variant="outline"
-                className="text-red-500 hover:text-red-600"
+                variant="destructive"
                 onClick={handleBatchDeleteRuns}
                 disabled={batchDeleting}
               >
@@ -10214,7 +10275,7 @@ export default function WorkbenchPage() {
                               </Button>
                             )}
                             {run.status !== 'running' && run.status !== 'preparing' && (
-                              <Button size="sm" variant="outline" className="text-red-500 hover:text-red-600" onClick={() => handleDeleteRun(run.id)}>
+                              <Button size="sm" variant="destructive" onClick={() => handleDeleteRun(run.id)}>
                                 <span className="material-symbols-outlined text-sm mr-1">delete</span>
                                 删除
                               </Button>
@@ -10426,7 +10487,7 @@ export default function WorkbenchPage() {
                                 {isRunning && (
                                   <button
                                     onClick={() => recallFeedback(item.message)}
-                                    className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                                    className="rounded text-destructive opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                                     title="撤回"
                                   >
                                     <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>undo</span>
@@ -11007,6 +11068,9 @@ export default function WorkbenchPage() {
                 <div className="mt-1 text-xs text-muted-foreground">
                   为当前工作流设置默认引擎和模型，并仅对本工作流涉及的 Agent 做局部覆盖。
                 </div>
+                <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+                  这里的修改只会写入当前工作流草稿，仍需点击页面右上角“保存配置”后才会真正写入 YAML。
+                </div>
               </div>
               <div className="flex-1 overflow-auto px-6 py-5 space-y-6">
                 <section className="space-y-4">
@@ -11033,6 +11097,7 @@ export default function WorkbenchPage() {
                           onChange={setWorkflowDefaultModel}
                           engine={engine || globalEngine}
                           allowGlobal
+                          showChangeToast={false}
                         />
                       </div>
                     </div>
@@ -11149,6 +11214,7 @@ export default function WorkbenchPage() {
                                     },
                                   }))}
                                   engine={effectiveEngine}
+                                  showChangeToast={false}
                                 />
                               </div>
                             </div>
@@ -11459,7 +11525,7 @@ export default function WorkbenchPage() {
           setCreationDraftModalOpen(false);
           setResumeCreationDraftId(null);
           void loadCreationDrafts();
-          if (filename && filename !== configFile) {
+          if (filename) {
             router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
           }
         }}

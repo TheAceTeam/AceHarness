@@ -260,7 +260,7 @@ export default function ChatModal() {
                   {isFullscreen ? 'close_fullscreen' : 'open_in_full'}
                 </span>
               </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={clearChat} title="清空对话">
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={clearChat} title="清空对话">
                 <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete_sweep</span>
               </Button>
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleClose} title="关闭">

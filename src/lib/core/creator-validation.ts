@@ -5,6 +5,7 @@ import {
   roleConfigSchema,
   unifiedWorkflowConfigSchema,
 } from '@/lib/core/schemas';
+import { normalizeAgentAvatar } from '@/lib/agent/personas';
 import { getWorkspaceAgentsDir } from '@/lib/core/app-paths';
 
 export interface ValidationIssue {
@@ -112,8 +113,32 @@ export function buildDefaultAgentDraft(input?: Partial<any>) {
   };
 }
 
+function preprocessAgentDraftInput(input: any) {
+  if (!input || typeof input !== 'object') return input;
+  const source = input as Record<string, any>;
+  const team = ['blue', 'red', 'judge', 'black-gold'].includes(String(source.team || ''))
+    ? source.team
+    : 'red';
+  const hasExplicitRoleType = typeof source.roleType === 'string';
+  const roleType = source.roleType === 'supervisor'
+    ? 'supervisor'
+    : hasExplicitRoleType
+      ? 'normal'
+      : team === 'black-gold'
+        ? 'supervisor'
+        : 'normal';
+  const seed = typeof source.name === 'string' && source.name.trim() ? source.name.trim() : 'agent';
+
+  return {
+    ...source,
+    team,
+    roleType,
+    avatar: normalizeAgentAvatar(source.avatar, seed, { team, roleType }),
+  };
+}
+
 export function validateAgentDraft(input: any): ValidationResult<any> {
-  const parsed = roleConfigSchema.safeParse(input);
+  const parsed = roleConfigSchema.safeParse(preprocessAgentDraftInput(input));
   if (!parsed.success) {
     return {
       ok: false,

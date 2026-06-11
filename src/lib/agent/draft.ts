@@ -1,4 +1,4 @@
-import { createDeterministicAvatarConfig } from '@/lib/agent/personas';
+import { createDeterministicAvatarConfig, normalizeAgentAvatar } from '@/lib/agent/personas';
 
 export type AgentDraftTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
@@ -153,7 +153,7 @@ export function normalizeAgentDraftPreview(
     name,
     team,
     roleType,
-    avatar: input.avatar,
+    avatar: normalizeAgentAvatar(input.avatar, name, { team, roleType }),
     engineModels,
     activeEngine: formatAgentDraftText(input.activeEngine, fallback?.engine || ''),
     capabilities: capabilities.length > 0 ? capabilities : [draft.mission || '通用协作'],

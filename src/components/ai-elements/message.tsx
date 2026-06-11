@@ -132,7 +132,7 @@ export function MessageAction({
       className={cn(
         "rounded p-1 text-muted-foreground",
         variant === "danger"
-          ? "hover:bg-destructive/20 hover:text-destructive"
+          ? "text-destructive hover:bg-destructive/20 hover:text-destructive"
           : "hover:bg-accent hover:text-foreground",
         className,
       )}

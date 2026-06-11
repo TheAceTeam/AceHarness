@@ -1128,7 +1128,7 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
                                     <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" onClick={() => openEditDialog(probe)}>
                                       <Edit3 className="h-4 w-4" />
                                     </Button>
-                                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-destructive hover:text-destructive" onClick={() => deleteProbe(probe)}>
+                                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => deleteProbe(probe)}>
                                       <Trash2 className="h-4 w-4" />
                                     </Button>
                                   </>
@@ -1282,9 +1282,9 @@ export default function ModelProbeMonitor({ managedModels }: { managedModels: Ma
             {selectedProbes.length > 0 ? (
               <>
             <Button
-              variant="outline"
+              variant="destructive"
               size="sm"
-              className="rounded-full px-4 text-destructive hover:text-destructive"
+              className="rounded-full px-4"
               onClick={() => setBulkDeleteOpen(true)}
             >
               <Trash2 className="mr-2 h-4 w-4" />

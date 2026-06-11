@@ -543,7 +543,7 @@ export function CollaborationRoomSurface({
             type="button"
             size="icon"
             variant="ghost"
-            className="h-7 w-7 rounded-md text-destructive hover:text-destructive"
+            className="h-7 w-7 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
             title="停止"
             aria-label="停止"
             onClick={() => { onStopMessage?.(message); }}
@@ -604,7 +604,7 @@ export function CollaborationRoomSurface({
             type="button"
             size="icon"
             variant="ghost"
-            className="h-7 w-7 rounded-md text-destructive hover:text-destructive"
+            className="h-7 w-7 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
             title="删除"
             aria-label="删除"
             onClick={() => { onDeleteMessage?.(message); }}

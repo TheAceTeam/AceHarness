@@ -561,7 +561,7 @@ export function AiAssistantSheet({
                               <div className="mt-1 text-[11px] text-muted-foreground">{session.messageCount} 条 · {new Date(session.updatedAt).toLocaleString()}</div>
                             </button>
                             <div className="mt-2 flex items-center justify-end">
-                              <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-destructive hover:text-destructive" onClick={() => handleDeleteSession(session.id)}>
+                              <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px] text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => handleDeleteSession(session.id)}>
                                 删除
                               </Button>
                             </div>
@@ -582,7 +582,7 @@ export function AiAssistantSheet({
                 <PromptInputTextarea placeholder={isModelSelectionReady ? inputPlaceholder : '加载模型配置中...'} />
                 <PromptInputFooter>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={clearSessionMessages} disabled={isLoadingCurrentSession || sessionMessages.length === 0}>
+                    <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={clearSessionMessages} disabled={isLoadingCurrentSession || sessionMessages.length === 0}>
                       清空
                     </Button>
                     {isStreamingCurrentSession ? (

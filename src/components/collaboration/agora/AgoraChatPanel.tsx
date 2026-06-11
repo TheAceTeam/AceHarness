@@ -2081,7 +2081,7 @@ export function AgoraChatPanel({
                         <Button
                           type="button"
                           size="sm"
-                          variant="ghost"
+                          variant="destructive"
                           onClick={() => updateChatroom((current) => ({
                             ...current,
                             participantRoster: (current.participantRoster || []).filter((item) => item.id !== participant.id),

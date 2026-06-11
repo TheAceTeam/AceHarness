@@ -1517,7 +1517,7 @@ export default function ChatSidebar({
               size="sm"
               variant="ghost"
               disabled={selectedVisibleCount === 0}
-              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+              className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={() => { void deleteSelectedSessions(); }}
             >
               <span className="material-symbols-outlined text-sm">delete</span>
@@ -2148,7 +2148,7 @@ function AgoraTopicCreateDialog({
                       fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
                     />
                     <span className="min-w-0 flex-1 truncate text-xs">{guest.name}</span>
-                    <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => onRemoveTemporaryGuest(index)}>
+                    <Button type="button" size="icon" variant="ghost" className="h-6 w-6 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRemoveTemporaryGuest(index)}>
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </Button>
                   </div>
@@ -2306,7 +2306,7 @@ function AgoraGuestManagerDialog({
                           placeholder="输入这个预设嘉宾的补充提示词"
                         />
                       </div>
-                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => onRemovePresetDraft(draft.id)}>
+                      <Button type="button" size="icon" variant="ghost" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onRemovePresetDraft(draft.id)}>
                         <span className="material-symbols-outlined text-[15px]">close</span>
                       </Button>
                     </div>
@@ -2778,7 +2778,7 @@ function AgoraDirectory({
               size="sm"
               variant="ghost"
               disabled={selectedSavedGuestCount === 0 || guestDeleting}
-              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+              className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={onDeleteSelectedGuests}
             >
               <span className="material-symbols-outlined text-sm">delete</span>
@@ -2983,7 +2983,7 @@ function AgoraTopicItem({
           <Button
             size="icon"
             variant="ghost"
-            className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive"
+            className="h-6 w-6 rounded-md text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={(event) => {
               event.stopPropagation();
               onDelete();
@@ -3692,7 +3692,7 @@ function SessionItem({
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            className="h-7 w-7 rounded-full text-destructive hover:bg-destructive/10 hover:text-destructive"
             onClick={(event) => {
               event.stopPropagation();
               onDelete();

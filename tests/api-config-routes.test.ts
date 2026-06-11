@@ -231,6 +231,92 @@ describe('config API routes', () => {
     });
   });
 
+  test('config recommendations can disable historical experience without disabling manual references', async () => {
+    await withIsolatedAceHome(async (aceHome) => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const { token } = await createAuthToken();
+        const configsDir = path.join(aceHome, 'configs');
+        await mkdir(configsDir, { recursive: true });
+        await writeFile(path.join(configsDir, 'historical-reference.yaml'), stringify(phaseConfig(workspace, {
+          workflow: {
+            name: 'Historical Reference',
+            phases: [
+              {
+                name: 'Historical Build',
+                steps: [
+                  { name: 'Implement', agent: 'developer', task: 'Reuse a known implementation path' },
+                ],
+              },
+            ],
+          },
+        })), 'utf8');
+
+        const { appendWorkflowExperience } = await import('@/lib/workflow/experience-store');
+        await appendWorkflowExperience({
+          runId: 'run-historical-recommendation',
+          configFile: 'historical-reference.yaml',
+          workflowName: 'Historical Recommendation',
+          projectRoot: workspace,
+          workflowMode: 'phase-based',
+          supervisorAgent: 'default-supervisor',
+          status: 'completed',
+          summary: 'Historical recommendation summary',
+          nextFocus: ['Keep the known workflow shape'],
+          experience: ['Reuse historical phase structure'],
+          scoreCards: [],
+          agentNames: ['developer'],
+          keywords: ['historical', 'recommendation'],
+          generatedAt: new Date().toISOString(),
+        });
+
+        const { recommendations } = await loadConfigRoutes();
+        let response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
+          token,
+          json: {
+            workflowName: 'Historical Recommendation',
+            requirements: 'historical recommendation should find known workflow',
+            workingDirectory: workspace,
+          },
+        }));
+        expect(response.status).toBe(200);
+        let json = await responseJson<any>(response);
+        expect(json.recommendations.experiences).toHaveLength(1);
+        expect(json.recommendations.referenceWorkflow.filename).toBe('historical-reference.yaml');
+        expect(json.recommendations.referenceWorkflow.source).toBe('recommended-experience');
+
+        response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
+          token,
+          json: {
+            workflowName: 'Historical Recommendation',
+            requirements: 'historical recommendation should find known workflow',
+            workingDirectory: workspace,
+            useHistoricalExperience: false,
+          },
+        }));
+        expect(response.status).toBe(200);
+        json = await responseJson<any>(response);
+        expect(json.recommendations.experiences).toEqual([]);
+        expect(json.recommendations.referenceWorkflow).toBeNull();
+
+        response = await recommendations.POST(makeRequest('/api/configs/recommendations', {
+          token,
+          json: {
+            workflowName: 'Historical Recommendation',
+            requirements: 'historical recommendation should find known workflow',
+            workingDirectory: workspace,
+            referenceWorkflow: 'historical-reference.yaml',
+            useHistoricalExperience: false,
+          },
+        }));
+        expect(response.status).toBe(200);
+        json = await responseJson<any>(response);
+        expect(json.recommendations.experiences).toEqual([]);
+        expect(json.recommendations.referenceWorkflow.filename).toBe('historical-reference.yaml');
+        expect(json.recommendations.referenceWorkflow.source).toBe('manual');
+      });
+    });
+  });
+
   test('config copy route preserves SpecCoding for the copied workflow', async () => {
     await withIsolatedAceHome(async (aceHome) => {
       await withTempWorkspace(async ({ workspace }) => {

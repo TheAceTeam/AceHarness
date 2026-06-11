@@ -167,7 +167,7 @@ export default function WorkflowPreflightManagerDialog({
                           </Badge>
                           <Button
                             type="button"
-                            variant="ghost"
+                            variant="destructive"
                             size="sm"
                             className="h-7 px-2 text-xs"
                             onClick={() => setDraft((prev) => ({ ...prev, [entry.key]: '' }))}
@@ -199,7 +199,7 @@ export default function WorkflowPreflightManagerDialog({
 
           <div className="border-t px-6 py-4 flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button>
-            <Button type="button" onClick={handleSave}>保存 preflight</Button>
+            <Button type="button" onClick={handleSave}>确认</Button>
           </div>
         </div>
       </DialogContent>

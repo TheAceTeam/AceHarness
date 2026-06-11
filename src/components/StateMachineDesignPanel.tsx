@@ -422,7 +422,7 @@ function SortableStepRow({
               <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="编辑" onClick={(e) => { e.stopPropagation(); onEdit(); }}>
                 <span className="material-symbols-outlined text-[14px]">edit</span>
               </Button>
-              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" title="删除" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
                 <Trash2 className="w-3 h-3" />
               </Button>
             </div>
@@ -506,7 +506,7 @@ function SortableStateListItem({
         size="sm"
         variant="ghost"
         className={`h-5 w-5 p-0 opacity-0 group-hover:opacity-100 flex-shrink-0 ${
-          isSelected ? 'hover:bg-primary-foreground/20 text-primary-foreground' : 'text-destructive hover:text-destructive'
+          isSelected ? 'hover:bg-destructive/20 text-primary-foreground' : 'text-destructive hover:bg-destructive/10 hover:text-destructive'
         }`}
         onClick={(e) => {
           e.stopPropagation();
@@ -658,7 +658,7 @@ function AdvancedVerdictTransitionsModal({
                             : '优先级数字越小越先命中。'}
                         </div>
                       </div>
-                      <Button type="button" variant="ghost" size="sm" className="text-rose-600" onClick={() => removeRule(index)}>
+                      <Button type="button" variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => removeRule(index)}>
                         <Trash2 className="mr-1 h-3.5 w-3.5" />
                         删除
                       </Button>
@@ -780,7 +780,7 @@ function AdvancedVerdictTransitionsModal({
             </div>
             <div className="border-t px-6 py-4 flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>取消</Button>
-              <Button type="button" onClick={commit}>保存高级规则</Button>
+              <Button type="button" onClick={commit}>确认</Button>
             </div>
           </div>
         </ComboboxPortalProvider>

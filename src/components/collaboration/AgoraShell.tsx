@@ -1432,7 +1432,7 @@ export function AgoraShell({
                         type="button"
                         size="icon"
                         variant="ghost"
-                        className="h-7 w-7 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+                        className="h-7 w-7 text-destructive opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                         onClick={() => removeGuest(participant.name)}
                         title="移除嘉宾"
                         aria-label="移除嘉宾"

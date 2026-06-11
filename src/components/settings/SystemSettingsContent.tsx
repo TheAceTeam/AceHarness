@@ -843,6 +843,7 @@ export default function SystemSettingsContent() {
                               <Button
                                 size="sm"
                                 variant="ghost"
+                                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                 disabled={!installed || isActive || sdkActionKey !== null}
                                 onClick={() => handleRemoveSdk(entry)}
                               >

@@ -118,16 +118,19 @@ export async function POST(request: NextRequest) {
     const workingDirectory = String(body?.workingDirectory || '').trim();
     const referenceWorkflow = String(body?.referenceWorkflow || '').trim();
     const workflowMode = normalizeRequestedWorkflowMode(String(body?.workflowMode || '').trim());
+    const useHistoricalExperience = body?.useHistoricalExperience !== false;
 
     const explicitReferenceWorkflow = referenceWorkflow || undefined;
 
-    const relatedExperiences = await findRelevantWorkflowExperiences({
-      workflowName: workflowName || undefined,
-      requirements: requirements || undefined,
-      projectRoot: workingDirectory || undefined,
-      configFile: referenceWorkflow || undefined,
-      limit: 4,
-    }).catch(() => []);
+    const relatedExperiences = useHistoricalExperience
+      ? await findRelevantWorkflowExperiences({
+          workflowName: workflowName || undefined,
+          requirements: requirements || undefined,
+          projectRoot: workingDirectory || undefined,
+          configFile: referenceWorkflow || undefined,
+          limit: 4,
+        }).catch(() => [])
+      : [];
 
     let inferredReferenceWorkflow: string | undefined;
     let referenceConfig: any | null = null;
@@ -137,7 +140,7 @@ export async function POST(request: NextRequest) {
         inferredReferenceWorkflow = explicitReferenceWorkflow;
         referenceConfig = explicitConfig;
       }
-    } else {
+    } else if (useHistoricalExperience) {
       for (const entry of relatedExperiences) {
         const candidate = typeof entry.configFile === 'string' ? entry.configFile.trim() : '';
         if (!candidate) continue;

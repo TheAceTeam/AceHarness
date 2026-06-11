@@ -744,7 +744,7 @@ export default function WorkflowsPage() {
         <Button
           variant="ghost"
           size="sm"
-          className="text-destructive hover:text-destructive"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={() => void handleDeleteCreationDraft(session)}
         >
           <Trash2 className="mr-1.5 h-4 w-4" />
@@ -1101,7 +1101,7 @@ export default function WorkflowsPage() {
                             <Button size="sm" variant="outline" onClick={() => openShareDialog(wf)}>
                               <Share2 className="w-3 h-3" />
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleDelete(wf.filename)}>
+                            <Button size="sm" variant="destructive" aria-label={`删除工作流 ${wf.name || wf.filename}`} onClick={() => handleDelete(wf.filename)}>
                               <Trash2 className="w-3 h-3" />
                             </Button>
                           </div>
@@ -1182,7 +1182,7 @@ export default function WorkflowsPage() {
                     <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
                       <Share2 className="w-3 h-3" />
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleDelete(workflow.filename)}>
+                    <Button size="sm" variant="destructive" aria-label={`删除工作流 ${workflow.name || workflow.filename}`} onClick={() => handleDelete(workflow.filename)}>
                       <Trash2 className="w-3 h-3" />
                     </Button>
                   </div>
@@ -1286,7 +1286,7 @@ export default function WorkflowsPage() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="text-destructive hover:text-destructive"
+                                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                         onClick={() => void handleDeleteCreationDraft(session)}
                                       >
                                         删除
@@ -1365,7 +1365,7 @@ export default function WorkflowsPage() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="text-destructive hover:text-destructive"
+                                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                                         onClick={() => void handleDeleteCreationDraft(session)}
                                       >
                                         删除
@@ -1684,7 +1684,7 @@ export default function WorkflowsPage() {
               已选 {selectedWorkflows.size} 项
             </div>
             {selectedWorkflows.size > 0 ? (
-              <Button size="sm" variant="outline" className="rounded-full px-4 text-destructive hover:text-destructive" onClick={handleBatchDelete}>
+              <Button size="sm" variant="destructive" className="rounded-full px-4" onClick={handleBatchDelete}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 批量删除
               </Button>

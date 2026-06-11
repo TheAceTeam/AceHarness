@@ -248,7 +248,7 @@ function PluginsTab() {
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={() => handleDelete(plugin.id)}
                 title="删除插件"
               >
@@ -1114,7 +1114,7 @@ function McpServersTab() {
                               <Play className="mr-1.5 h-3.5 w-3.5" />
                               测试
                             </Button>
-                            <Button size="sm" variant="ghost" className="h-8 text-muted-foreground hover:text-destructive" onClick={() => void handleDeleteServer(server)} disabled={saving}>
+                            <Button size="sm" variant="ghost" className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => void handleDeleteServer(server)} disabled={saving}>
                               <Trash2 className="mr-1.5 h-3.5 w-3.5" />
                               删除
                             </Button>
@@ -1151,7 +1151,7 @@ function McpServersTab() {
                         </div>
                       </div>
                     </div>
-                    <Button size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-muted-foreground hover:text-destructive" onClick={() => void handleDeleteServer(server)} title="删除" disabled={saving}>
+                    <Button size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => void handleDeleteServer(server)} title="删除" disabled={saving}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -2224,7 +2224,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
                             <Button
                               size="sm"
                               variant="ghost"
-                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                              className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
                               onClick={() => handleDeleteSkills([skill.name])}
                               title="删除"
                             >
@@ -2284,7 +2284,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
                       >
                         <div className="absolute top-3 right-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                           <button
-                            className="w-5 h-5 rounded flex items-center justify-center text-muted-foreground/60 hover:text-destructive transition-colors"
+                            className="w-5 h-5 rounded flex items-center justify-center text-destructive transition-colors hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => handleDeleteSkills([skill.name])}
                             title="删除"
                           >
@@ -2592,7 +2592,7 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
                   <Download className={`mr-2 h-4 w-4 ${exporting ? 'animate-bounce' : ''}`} />
                   {exporting ? '导出中...' : '导出'}
                 </Button>
-                <Button size="sm" variant="outline" className="rounded-full px-4 text-destructive hover:text-destructive" onClick={handleBatchDelete}>
+                <Button size="sm" variant="destructive" className="rounded-full px-4" onClick={handleBatchDelete}>
                   <Trash2 className="mr-2 h-4 w-4" />
                   批量删除
                 </Button>

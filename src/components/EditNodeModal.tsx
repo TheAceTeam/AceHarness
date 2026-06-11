@@ -728,7 +728,7 @@ export default function EditNodeModal({
             取消
           </Button>
           <Button type="submit" form="edit-node-form" disabled={isSubmitting}>
-            {isSubmitting ? '保存中...' : '保存'}
+            {isSubmitting ? '确认中...' : '确认'}
           </Button>
         </div>
         </ComboboxPortalProvider>

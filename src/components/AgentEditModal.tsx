@@ -64,6 +64,64 @@ interface AgentEditModalProps {
 
 const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
 
+type ListField = 'capabilities' | 'constraints' | 'keywords';
+
+const BASE_AGENT_SUGGESTIONS = {
+  capabilities: ['问题定位', '代码实现', '测试设计', '代码审查', '架构设计', '文档整理'],
+  constraints: ['保持最小改动', '先读代码再修改', '输出可执行步骤', '说明验证结果', '不引入无关重构', '遇到不确定先标注风险'],
+  keywords: ['需求', '架构', '接口', '模块', 'API', '测试', '构建', '性能', '安全', '文档'],
+};
+
+const TEAM_AGENT_SUGGESTIONS: Record<AgentConfig['team'], Partial<Record<ListField, string[]>>> = {
+  blue: {
+    capabilities: ['挑战假设', '边界测试', '缺陷挖掘', '压力验证'],
+    keywords: ['攻击', '边界', '异常', '复现', '风险'],
+  },
+  red: {
+    capabilities: ['修复实施', '回归验证', '风险收敛', '兼容性处理'],
+    keywords: ['修复', '实现', '回归', '兼容', '交付'],
+  },
+  judge: {
+    capabilities: ['结果裁定', '证据归档', '质量评估', '验收判定'],
+    keywords: ['裁定', '验证', '证据', '结论', '验收'],
+  },
+  'black-gold': {
+    capabilities: ['任务分解', '路由决策', '进度协调', '风险调度'],
+    keywords: ['调度', '路由', '协调', '计划', '分配'],
+  },
+};
+
+const SUPERVISOR_AGENT_SUGGESTIONS: Partial<Record<ListField, string[]>> = {
+  capabilities: ['任务拆解', 'Agent 编排', '状态跟踪', '冲突协调'],
+  keywords: ['指挥', '协同', '编排', '状态', '下一步'],
+};
+
+function uniqueList(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function getAgentSuggestions(agent: Pick<AgentConfig, 'team' | 'roleType'>) {
+  const teamSuggestions = TEAM_AGENT_SUGGESTIONS[agent.team] || {};
+  const roleSuggestions = agent.roleType === 'supervisor' ? SUPERVISOR_AGENT_SUGGESTIONS : {};
+  return {
+    capabilities: uniqueList([
+      ...(teamSuggestions.capabilities || []),
+      ...(roleSuggestions.capabilities || []),
+      ...BASE_AGENT_SUGGESTIONS.capabilities,
+    ]),
+    constraints: uniqueList([
+      ...(teamSuggestions.constraints || []),
+      ...(roleSuggestions.constraints || []),
+      ...BASE_AGENT_SUGGESTIONS.constraints,
+    ]),
+    keywords: uniqueList([
+      ...(teamSuggestions.keywords || []),
+      ...(roleSuggestions.keywords || []),
+      ...BASE_AGENT_SUGGESTIONS.keywords,
+    ]),
+  };
+}
+
 export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentEditModalProps) {
   const { toast } = useToast();
   const normalizedEngineModels = { ...(agent.engineModels || {}) };
@@ -178,6 +236,37 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     setFormData({ ...formData, constraints: formData.constraints?.filter(c => c !== con) });
   };
 
+  const addSuggestedValue = (field: ListField, value: string) => {
+    const nextValue = value.trim();
+    if (!nextValue) return;
+    setFormData((prev) => {
+      const current = uniqueList(prev[field] || []);
+      if (current.includes(nextValue)) return prev;
+      return { ...prev, [field]: [...current, nextValue] };
+    });
+  };
+
+  const renderSuggestions = (field: ListField, suggestions: string[]) => {
+    const selected = new Set(formData[field] || []);
+    const visibleSuggestions = suggestions.filter((suggestion) => !selected.has(suggestion));
+    if (visibleSuggestions.length === 0) return null;
+    return (
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="mr-1 text-muted-foreground">推荐</span>
+        {visibleSuggestions.map((suggestion) => (
+          <button
+            key={`${field}-${suggestion}`}
+            type="button"
+            className="rounded-full border border-border bg-muted/30 px-2 py-1 text-muted-foreground transition-colors hover:border-primary/50 hover:bg-primary/10 hover:text-primary"
+            onClick={() => addSuggestedValue(field, suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   const avatarConfig = normalizeAgentAvatar(formData.avatar, formData.name || 'agent', {
     team: formData.team,
     roleType: formData.roleType || 'normal',
@@ -186,6 +275,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
     team: formData.team,
     roleType: formData.roleType || 'normal',
   });
+  const agentSuggestions = getAgentSuggestions(formData);
 
   const refreshAvatar = async () => {
     try {
@@ -387,14 +477,16 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                       type="button"
                       variant="ghost"
                       size="icon"
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       onClick={() => {
                         const updated = { ...formData.engineModels };
                         delete updated[eng];
                         const newActive = formData.activeEngine === eng ? Object.keys(updated)[0] : formData.activeEngine;
                         setFormData({ ...formData, engineModels: updated, activeEngine: newActive });
                       }}
+                      title="删除引擎模型配置"
                     >
-                      <span className="material-symbols-outlined text-sm text-destructive">delete</span>
+                      <span className="material-symbols-outlined text-sm">delete</span>
                     </Button>
                   )}
                 </div>
@@ -469,6 +561,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               <Input value={newCapability} onChange={(e) => setNewCapability(e.target.value)} placeholder="添加能力..." onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addCapability())} />
               <Button type="button" onClick={addCapability}>添加</Button>
             </div>
+            {renderSuggestions('capabilities', agentSuggestions.capabilities)}
             <div className="flex flex-wrap gap-1">
               {formData.capabilities?.map(cap => (
                 <Badge key={cap} variant="outline" className="cursor-pointer" onClick={() => removeCapability(cap)}>
@@ -484,6 +577,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               <Input value={newConstraint} onChange={(e) => setNewConstraint(e.target.value)} placeholder="添加约束..." onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addConstraint())} />
               <Button type="button" onClick={addConstraint}>添加</Button>
             </div>
+            {renderSuggestions('constraints', agentSuggestions.constraints)}
             <div className="flex flex-wrap gap-1">
               {formData.constraints?.map(con => (
                 <Badge key={con} variant="outline" className="cursor-pointer" onClick={() => removeConstraint(con)}>
@@ -499,6 +593,9 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
               <span className="text-xs text-muted-foreground ml-2">（Supervisor-Lite 架构用，逗号分隔）</span>
             </Label>
             <Input value={formData.keywords?.join(', ') || ''} onChange={(e) => setFormData({ ...formData, keywords: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} placeholder="如：架构, 接口, 模块, API" />
+            <div className="mt-2">
+              {renderSuggestions('keywords', agentSuggestions.keywords)}
+            </div>
           </div>
 
           <div className="border-t pt-6">
@@ -566,6 +663,7 @@ export default function AgentEditModal({ agent, isNew, onSave, onClose }: AgentE
                             type="button"
                             size="sm"
                             variant="ghost"
+                            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                             onClick={() => {
                               const newSubAgents = { ...formData.reviewPanel!.subAgents };
                               delete newSubAgents[name];

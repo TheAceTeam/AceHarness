@@ -169,7 +169,7 @@ export function EnvironmentVariables({
                         type="button"
                         size="icon"
                         variant="ghost"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        className="h-8 w-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
                         onClick={() => onRemove(index)}
                         disabled={disabled}
                         title="删除变量"

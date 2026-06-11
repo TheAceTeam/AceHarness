@@ -14,9 +14,18 @@ interface ModelSelectProps {
   engine?: string;
   /** Show a "use global" option */
   allowGlobal?: boolean;
+  /** Whether to show a toast when the selected model changes */
+  showChangeToast?: boolean;
 }
 
-export function ModelSelect({ value, onChange, className = '', engine, allowGlobal = false }: ModelSelectProps) {
+export function ModelSelect({
+  value,
+  onChange,
+  className = '',
+  engine,
+  allowGlobal = false,
+  showChangeToast = true,
+}: ModelSelectProps) {
   const [allModels, setAllModels] = useState<ModelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
@@ -90,12 +99,14 @@ export function ModelSelect({ value, onChange, className = '', engine, allowGlob
   const handleChange = (newValue: string) => {
     if (allowGlobal && newValue === '__global__') {
       onChange('');
-      toast('info', globalDefaultModel ? `模型已切换: 跟随全局 (${globalDefaultModel})` : '模型已切换: 跟随全局');
+      if (showChangeToast) {
+        toast('info', globalDefaultModel ? `模型已切换: 跟随全局 (${globalDefaultModel})` : '模型已切换: 跟随全局');
+      }
       return;
     }
     const selectedModel = models.find(m => m.value === newValue);
     onChange(newValue);
-    if (selectedModel) {
+    if (showChangeToast && selectedModel) {
       toast('info', `模型已切换: ${selectedModel.label} (${selectedModel.costMultiplier}x)`);
     }
   };

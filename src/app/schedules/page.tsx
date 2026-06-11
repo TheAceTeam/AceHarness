@@ -277,7 +277,7 @@ export default function SchedulesPage() {
                         <Button variant="ghost" size="sm" onClick={() => handleTrigger(job)} title={t('schedules.actions.run')}>
                           <span className="material-symbols-outlined text-sm">play_arrow</span>
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(job)} title={t('schedules.actions.delete')} className="text-destructive hover:text-destructive">
+                        <Button variant="ghost" size="sm" onClick={() => handleDelete(job)} title={t('schedules.actions.delete')} className="text-destructive hover:bg-destructive/10 hover:text-destructive">
                           <span className="material-symbols-outlined text-sm">delete</span>
                         </Button>
                       </div>

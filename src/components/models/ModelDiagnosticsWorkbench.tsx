@@ -1667,7 +1667,7 @@ export default function ModelDiagnosticsWorkbench({ managedModels }: { managedMo
                   </Button>
                 ) : null}
                 <Button
-                  variant="outline"
+                  variant="destructive"
                   onClick={() => {
                     streamAbortControllerRef.current?.abort();
                     setResult(null);

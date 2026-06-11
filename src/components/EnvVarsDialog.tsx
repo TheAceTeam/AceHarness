@@ -225,7 +225,7 @@ export default function EnvVarsDialog({ onClose, scope = 'user' }: { onClose: ()
                     </div>
                     <button
                       onClick={() => removeVar(index)}
-                      className="p-1 hover:bg-destructive/10 rounded text-muted-foreground hover:text-destructive"
+                      className="p-1 rounded text-destructive hover:bg-destructive/10 hover:text-destructive"
                     >
                       <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>delete</span>
                     </button>

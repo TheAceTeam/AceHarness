@@ -71,6 +71,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
   const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
   const [isNewAgent, setIsNewAgent] = useState(false);
   const [showAICreateModal, setShowAICreateModal] = useState(false);
+  const [aiRevisionAgent, setAiRevisionAgent] = useState<AgentConfig | null>(null);
   const [alertMessage, setAlertMessage] = useState('');
   const [globalEngine, setGlobalEngine] = useState('');
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
@@ -169,6 +170,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
 
   const handleContinueEditAIAgent = (agent: AgentConfig) => {
     setShowAICreateModal(false);
+    setAiRevisionAgent(null);
     setEditingAgent({
       ...agent,
       team: agent.team || 'red',
@@ -183,9 +185,33 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
     setIsNewAgent(true);
   };
 
+  const handleContinueEditAIRevisionAgent = (agent: AgentConfig) => {
+    const originalName = aiRevisionAgent?.name || agent.name;
+    setShowAICreateModal(false);
+    setAiRevisionAgent(null);
+    setEditingAgent({
+      ...agent,
+      name: originalName,
+      team: agent.team || aiRevisionAgent?.team || 'red',
+      roleType: agent.roleType || aiRevisionAgent?.roleType || 'normal',
+      engineModels: agent.engineModels || aiRevisionAgent?.engineModels || {},
+      activeEngine: agent.activeEngine || aiRevisionAgent?.activeEngine || '',
+      tags: agent.tags || aiRevisionAgent?.tags || [],
+      capabilities: agent.capabilities || aiRevisionAgent?.capabilities || [],
+      skills: agent.skills || aiRevisionAgent?.skills || [],
+      systemPrompt: agent.systemPrompt || aiRevisionAgent?.systemPrompt || '',
+    });
+    setIsNewAgent(false);
+  };
+
   const handleEditAgent = (agent: AgentConfig) => {
     setEditingAgent(agent);
     setIsNewAgent(false);
+  };
+
+  const handleReviseAgent = (agent: AgentConfig) => {
+    setShowAICreateModal(false);
+    setAiRevisionAgent(agent);
   };
 
   const handleSaveAgent = async (agent: AgentConfig) => {
@@ -391,7 +417,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
               <FolderOpen className="w-4 h-4 mr-1" />
               打开工作目录
             </Button>
-            <Button size="sm" onClick={() => setShowAICreateModal(true)} variant="outline">
+            <Button size="sm" onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }} variant="outline">
               <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
               AI 创建
             </Button>
@@ -486,7 +512,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                   type="button"
                   variant="ghost"
                   className="h-auto min-h-[124px] whitespace-normal rounded-[24px] border border-border/60 bg-muted/30 p-4 text-left hover:bg-muted/60 hover:text-foreground"
-                  onClick={() => setShowAICreateModal(true)}
+                  onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }}
                 >
                   <div className="w-full break-words">
                     <div className="text-sm font-medium">AI 创建 Agent</div>
@@ -814,7 +840,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                             </Badge>
                           </div>
                         </div>
-                        <div className="relative mt-4 grid justify-start gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),320px))]">
+                        <div className="relative mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                           {groupedAgents[team].map(agent => {
                             const isSelected = selectedAgentNames.includes(agent.name);
                             return (
@@ -859,6 +885,18 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                                         size="sm"
                                         variant="secondary"
                                         className="h-7 rounded-full border border-border/60 bg-background px-2.5 text-[11px] text-foreground hover:bg-muted"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleReviseAgent(agent);
+                                        }}
+                                      >
+                                        <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+                                        AI 修订
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="h-7 rounded-full px-2.5 text-[11px]"
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           handleDeleteAgent(agent.name);
@@ -950,7 +988,10 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                                 <Button size="sm" variant="secondary" onClick={() => handleEditAgent(agent)}>
                                   编辑
                                 </Button>
-                                <Button size="sm" variant="secondary" onClick={() => handleDeleteAgent(agent.name)}>
+                                <Button size="sm" variant="secondary" onClick={() => handleReviseAgent(agent)}>
+                                  AI 修订
+                                </Button>
+                                <Button size="sm" variant="destructive" onClick={() => handleDeleteAgent(agent.name)}>
                                   删除
                                 </Button>
                               </div>
@@ -1000,8 +1041,8 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
               {selectedAgentNames.length > 0 ? (
                 <Button
                   size="sm"
-                  variant="outline"
-                  className="rounded-full px-4 text-destructive hover:text-destructive"
+                  variant="destructive"
+                  className="rounded-full px-4"
                   onClick={handleBatchDeleteAgents}
                 >
                   <span className="material-symbols-outlined mr-2 text-base">delete</span>
@@ -1023,22 +1064,31 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
       )}
 
       <AIAgentCreatorModal
-        open={showAICreateModal}
+        open={showAICreateModal || Boolean(aiRevisionAgent)}
         engine={globalEngine}
         model={globalDefaultModel}
-        onClose={() => setShowAICreateModal(false)}
+        mode={aiRevisionAgent ? 'revise' : 'create'}
+        baseAgent={aiRevisionAgent}
+        onClose={() => {
+          setShowAICreateModal(false);
+          setAiRevisionAgent(null);
+        }}
         onCreate={async (agent) => {
           try {
-            await agentApi.saveAgent(agent.name, agent);
+            const targetName = aiRevisionAgent?.name || agent.name;
+            await agentApi.saveAgent(targetName, {
+              ...agent,
+              name: aiRevisionAgent?.name || agent.name,
+            });
             await loadAgents();
-            toast('success', 'Agent 配置已保存');
+            toast('success', aiRevisionAgent ? 'Agent 修订已保存' : 'Agent 配置已保存');
             return true;
           } catch (error: any) {
             toast('error', error.message || '保存 Agent 配置失败');
             return false;
           }
         }}
-        onContinueEdit={handleContinueEditAIAgent}
+        onContinueEdit={aiRevisionAgent ? handleContinueEditAIRevisionAgent : handleContinueEditAIAgent}
       />
 
       {dialogProps && <ConfirmDialog {...dialogProps} />}

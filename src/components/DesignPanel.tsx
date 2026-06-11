@@ -190,7 +190,7 @@ function StepCard({ step, availableAgents, dragHandleProps, mergeActions, onSele
                 onClick={(e) => { e.stopPropagation(); onSelect(); }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
               </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" title="删除"
+              <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:bg-destructive/10 hover:text-destructive" title="删除"
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}>
                 <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
               </Button>
@@ -660,7 +660,7 @@ export default function DesignPanel({
                           onClick={(e) => { e.stopPropagation(); onSelectNode('phase', pi); }}>
                           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit</span>
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" title="删除阶段"
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" title="删除阶段"
                           onClick={(e) => { e.stopPropagation(); onDeletePhase(pi); }}>
                           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>delete</span>
                         </Button>

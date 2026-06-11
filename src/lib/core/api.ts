@@ -740,6 +740,8 @@ export const configApi = {
     requirements?: string;
     workingDirectory?: string;
     referenceWorkflow?: string;
+    workflowMode?: 'phase-based' | 'state-machine' | 'ai-guided';
+    useHistoricalExperience?: boolean;
   }): Promise<WorkflowCreationRecommendationsResponse> {
     const response = await authFetch(`${API_BASE}/configs/recommendations`, {
       method: 'POST',
@@ -1009,9 +1011,27 @@ export const agentApi = {
     referenceWorkflow?: string;
     engine?: string;
     model?: string;
+    mode?: 'create' | 'revise';
+    baseAgent?: Record<string, any> | null;
+    clarificationAnswers?: string;
+    sessionId?: string | null;
   }): Promise<{
     draft: any;
     raw: string;
+    protocol?: string;
+    items?: Array<{
+      kind: string;
+      data: Record<string, any>;
+    }>;
+    creationState?: any;
+    repairEvents?: Array<{
+      kind: string;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+      failedOutput: string;
+      repairPrompt: string;
+    }>;
     validation?: {
       ok: boolean;
       issues: Array<{
@@ -1056,6 +1076,332 @@ export const agentApi = {
       throw new Error(data?.error || '生成 Agent 草案失败');
     }
     return response.json();
+  },
+
+  async draftAgentStream(input: {
+    displayName: string;
+    team?: string;
+    mission: string;
+    style?: string;
+    specialties?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+    engine?: string;
+    model?: string;
+    mode?: 'create' | 'revise';
+    baseAgent?: Record<string, any> | null;
+    clarificationAnswers?: string;
+    sessionId?: string | null;
+  }, handlers: {
+    onProgress?: (data: { stage?: string; message?: string }) => void;
+    onDelta?: (content: string) => void;
+    onThinking?: (content: string) => void;
+    onSession?: (sessionId: string) => void;
+    onEngineError?: (message: string) => void;
+    onItem?: (item: { kind: string; data: Record<string, any> }) => void;
+    onRepair?: (event: {
+      kind: string;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+      failedOutput: string;
+      repairPrompt: string;
+    }) => void;
+    onValidation?: (validation: {
+      ok: boolean;
+      issues: Array<{
+        path: string[];
+        message: string;
+        severity: 'error' | 'warning';
+        code?: string;
+      }>;
+    }) => void;
+  } = {}): Promise<{
+    draft: any;
+    raw: string;
+    protocol?: string;
+    items?: Array<{
+      kind: string;
+      data: Record<string, any>;
+    }>;
+    creationState?: any;
+    repairEvents?: Array<{
+      kind: string;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+      failedOutput: string;
+      repairPrompt: string;
+    }>;
+    validation?: {
+      ok: boolean;
+      issues: Array<{
+        path: string[];
+        message: string;
+        severity: 'error' | 'warning';
+        code?: string;
+      }>;
+    };
+    experienceHints?: any[];
+    recommendations?: {
+      experiences: Array<{
+        runId: string;
+        workflowName?: string;
+        configFile: string;
+        summary: string;
+      }>;
+      referenceWorkflow: null | {
+        filename: string;
+        name?: string;
+        description?: string;
+        projectRoot?: string;
+        agents: string[];
+        phases: string[];
+        states: string[];
+      };
+      relationshipHints: Array<{
+        agent: string;
+        counterpart: string;
+        synergyScore: number;
+        strengths: string[];
+      }>;
+    };
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/ai-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ ...input, stream: true }),
+    });
+    if (!response.ok) {
+      throw new Error(await readApiError(response, '生成 Agent 草案失败'));
+    }
+    if (!response.body) {
+      throw new Error('当前浏览器不支持流式读取');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: any = null;
+
+    const dispatchEvent = (eventName: string, payload: any) => {
+      if (eventName === 'progress') {
+        handlers.onProgress?.(payload || {});
+      } else if (eventName === 'delta') {
+        handlers.onDelta?.(String(payload?.content || ''));
+      } else if (eventName === 'thinking') {
+        handlers.onThinking?.(String(payload?.content || ''));
+      } else if (eventName === 'session') {
+        const sessionId = String(payload?.sessionId || payload?.content || '').trim();
+        if (sessionId) handlers.onSession?.(sessionId);
+      } else if (eventName === 'engine_error') {
+        handlers.onEngineError?.(String(payload?.message || payload?.content || '执行异常'));
+      } else if (eventName === 'item') {
+        if (payload?.item) handlers.onItem?.(payload.item);
+      } else if (eventName === 'repair') {
+        if (payload?.event) handlers.onRepair?.(payload.event);
+      } else if (eventName === 'validation') {
+        if (payload?.validation) handlers.onValidation?.(payload.validation);
+      } else if (eventName === 'done') {
+        finalResult = payload;
+      } else if (eventName === 'failed') {
+        throw new Error(payload?.message || '生成 Agent 草案失败');
+      }
+    };
+
+    const flushEvents = () => {
+      let separatorIndex = buffer.indexOf('\n\n');
+      while (separatorIndex >= 0) {
+        const rawEvent = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const lines = rawEvent.split('\n');
+        let eventName = 'message';
+        const dataLines: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice('event:'.length).trim() || 'message';
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice('data:'.length).trimStart());
+          }
+        }
+        if (dataLines.length > 0) {
+          const rawData = dataLines.join('\n');
+          dispatchEvent(eventName, rawData ? JSON.parse(rawData) : null);
+        }
+        separatorIndex = buffer.indexOf('\n\n');
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        flushEvents();
+      }
+      if (done) break;
+    }
+    buffer += decoder.decode();
+    flushEvents();
+
+    if (!finalResult) {
+      throw new Error('Agent 草案流结束但没有返回最终结果');
+    }
+    return finalResult;
+  },
+
+  async clarifyAgentStream(input: {
+    displayName?: string;
+    team?: string;
+    mission: string;
+    style?: string;
+    specialties?: string;
+    workingDirectory?: string;
+    referenceWorkflow?: string;
+    engine?: string;
+    model?: string;
+    mode?: 'create' | 'revise';
+    baseAgent?: Record<string, any> | null;
+    sessionId?: string | null;
+  }, handlers: {
+    onProgress?: (data: { stage?: string; message?: string }) => void;
+    onDelta?: (content: string) => void;
+    onThinking?: (content: string) => void;
+    onSession?: (sessionId: string) => void;
+    onEngineError?: (message: string) => void;
+    onItem?: (item: { kind: string; data: Record<string, any> }) => void;
+    onForm?: (form: {
+      type: 'clarification_form';
+      summary?: string;
+      knownFacts: string[];
+      missingFields: string[];
+      questions: Array<{
+        id: string;
+        label: string;
+        question: string;
+        selectionMode?: 'single' | 'multiple';
+        options: Array<{
+          id: string;
+          label: string;
+          description?: string;
+          recommended?: boolean;
+        }>;
+        placeholder?: string;
+        required?: boolean;
+      }>;
+    }) => void;
+    onRepair?: (event: {
+      kind: string;
+      attempt: number;
+      maxAttempts: number;
+      reason: string;
+      failedOutput: string;
+      repairPrompt: string;
+    }) => void;
+  } = {}): Promise<{
+    form: {
+      type: 'clarification_form';
+      summary?: string;
+      knownFacts: string[];
+      missingFields: string[];
+      questions: Array<{
+        id: string;
+        label: string;
+        question: string;
+        selectionMode?: 'single' | 'multiple';
+        options: Array<{
+          id: string;
+          label: string;
+          description?: string;
+          recommended?: boolean;
+        }>;
+        placeholder?: string;
+        required?: boolean;
+      }>;
+    };
+    raw: string;
+    fallback?: boolean;
+    sessionId?: string | null;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/ai-draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ ...input, phase: 'clarification', stream: true }),
+    });
+    if (!response.ok) {
+      throw new Error(await readApiError(response, '生成补充问答失败'));
+    }
+    if (!response.body) {
+      throw new Error('当前浏览器不支持流式读取');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: any = null;
+
+    const dispatchEvent = (eventName: string, payload: any) => {
+      if (eventName === 'progress') {
+        handlers.onProgress?.(payload || {});
+      } else if (eventName === 'delta') {
+        handlers.onDelta?.(String(payload?.content || ''));
+      } else if (eventName === 'thinking') {
+        handlers.onThinking?.(String(payload?.content || ''));
+      } else if (eventName === 'session') {
+        const sessionId = String(payload?.sessionId || payload?.content || '').trim();
+        if (sessionId) handlers.onSession?.(sessionId);
+      } else if (eventName === 'engine_error') {
+        handlers.onEngineError?.(String(payload?.message || payload?.content || '执行异常'));
+      } else if (eventName === 'item') {
+        if (payload?.item) handlers.onItem?.(payload.item);
+      } else if (eventName === 'form') {
+        if (payload?.form) handlers.onForm?.(payload.form);
+      } else if (eventName === 'repair') {
+        if (payload?.event) handlers.onRepair?.(payload.event);
+      } else if (eventName === 'done') {
+        finalResult = payload;
+      } else if (eventName === 'failed') {
+        throw new Error(payload?.message || '生成补充问答失败');
+      }
+    };
+
+    const flushEvents = () => {
+      let separatorIndex = buffer.indexOf('\n\n');
+      while (separatorIndex >= 0) {
+        const rawEvent = buffer.slice(0, separatorIndex);
+        buffer = buffer.slice(separatorIndex + 2);
+        const lines = rawEvent.split('\n');
+        let eventName = 'message';
+        const dataLines: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            eventName = line.slice('event:'.length).trim() || 'message';
+          } else if (line.startsWith('data:')) {
+            dataLines.push(line.slice('data:'.length).trimStart());
+          }
+        }
+        if (dataLines.length > 0) {
+          const rawData = dataLines.join('\n');
+          dispatchEvent(eventName, rawData ? JSON.parse(rawData) : null);
+        }
+        separatorIndex = buffer.indexOf('\n\n');
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        flushEvents();
+      }
+      if (done) break;
+    }
+    buffer += decoder.decode();
+    flushEvents();
+
+    if (!finalResult) {
+      throw new Error('补充问答流结束但没有返回最终结果');
+    }
+    return finalResult;
   },
 
   async generateAvatar(input: {

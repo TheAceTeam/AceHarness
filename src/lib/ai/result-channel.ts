@@ -184,6 +184,13 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
   workflow_state_steps: SIMPLE_ITEM_RESULT_SCHEMA,
   workflow_patch_item: SIMPLE_ITEM_RESULT_SCHEMA,
   spec_revision_item: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_clarification_summary: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_clarification_facts: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_clarification_gaps: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_clarification_question: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_role_profile: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_execution_profile: SIMPLE_ITEM_RESULT_SCHEMA,
+  agent_config: SIMPLE_ITEM_RESULT_SCHEMA,
   spec_coding_revision: {
     type: 'object',
     properties: {

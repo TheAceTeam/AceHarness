@@ -2164,7 +2164,7 @@ export default memo(function ChatMessage({ message, isStreaming, onConfirmAction
   };
   const actionBarClass = 'h-7 opacity-0 transition-opacity duration-150 flex items-center gap-0.5 group-hover:opacity-100 group-focus-within:opacity-100';
   const actionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-background/80 hover:text-foreground';
-  const destructiveActionButtonClass = 'p-1 rounded-md text-muted-foreground transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
+  const destructiveActionButtonClass = 'p-1 rounded-md text-destructive transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive';
 
   if (message.role === 'user') {
     if (collaborationCard) {

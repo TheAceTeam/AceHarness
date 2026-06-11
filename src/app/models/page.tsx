@@ -261,7 +261,7 @@ function SortableModelCard({
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
               <Edit className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onDelete}>
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={onDelete}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -369,7 +369,7 @@ function SortableModelRow({
           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit}>
             <Edit className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={onDelete}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={onDelete}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -1065,9 +1065,9 @@ export default function ModelsPage() {
             </div>
             {selectedModels.size > 0 ? (
               <Button
-                variant="outline"
+                variant="destructive"
                 size="sm"
-                className="rounded-full px-4 text-destructive hover:text-destructive"
+                className="rounded-full px-4"
                 onClick={() => setDeleteDialogOpen(true)}
               >
                 <Trash2 className="mr-2 h-4 w-4" />

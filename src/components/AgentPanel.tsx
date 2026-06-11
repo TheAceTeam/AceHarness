@@ -260,7 +260,7 @@ export default function AgentPanel({
       <div>
         <div className="flex items-center justify-between mb-1">
           <span className="text-xs text-muted-foreground uppercase">执行日志</span>
-          <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => onClearLogs(agent.name)}>清空</Button>
+          <Button variant="ghost" size="sm" className="h-6 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => onClearLogs(agent.name)}>清空</Button>
         </div>
         <div className="bg-muted rounded-md p-2 max-h-48 overflow-y-auto font-mono text-xs space-y-0.5" ref={logsContainerRef}>
           {agentLogs.map((log, index) => (

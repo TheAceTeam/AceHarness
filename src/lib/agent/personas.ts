@@ -30,6 +30,29 @@ export interface AgentAvatarConfig {
 
 export const AGENT_AVATAR_STYLES: AgentAvatarStyle[] = ['personas', 'adventurer', 'pixel-art'];
 
+function normalizeAvatarMode(value: unknown): AgentAvatarMode {
+  return ['deterministic', 'generated', 'uploaded', 'preset', 'sprite'].includes(String(value || ''))
+    ? value as AgentAvatarMode
+    : 'deterministic';
+}
+
+function normalizeAvatarStyle(value: unknown, fallback: AgentAvatarStyle): AgentAvatarStyle {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === 'personas' || normalized === 'persona') return 'personas';
+  if (normalized === 'adventurer') return 'adventurer';
+  if (
+    normalized === 'pixel-art'
+    || normalized === 'pixel_art'
+    || normalized === 'pixel-at'
+    || normalized === 'pixel at'
+    || normalized === 'pixelart'
+  ) {
+    return 'pixel-art';
+  }
+  return fallback;
+}
+
 export function getDefaultAvatarStyle(team: AgentTeam, roleType: AgentRoleType = 'normal'): AgentAvatarStyle {
   if (roleType === 'supervisor' || team === 'black-gold') return 'personas';
   if (team === 'judge') return 'pixel-art';
@@ -53,6 +76,7 @@ export function normalizeAgentAvatar(
   seed: string,
   options?: { team?: AgentTeam; roleType?: AgentRoleType }
 ): AgentAvatarConfig {
+  const fallbackStyle = getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal');
   if (!avatar) {
     return createDeterministicAvatarConfig(seed, options);
   }
@@ -63,7 +87,7 @@ export function normalizeAgentAvatar(
       return {
         mode: 'sprite',
         seed,
-        style: getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+        style: fallbackStyle,
         category: DEFAULT_AGENT_AVATAR_CATEGORY,
         spriteSheet: spriteEntry.sheetId,
         spriteIndex: spriteEntry.index,
@@ -75,7 +99,7 @@ export function normalizeAgentAvatar(
       return {
         mode: 'uploaded',
         seed,
-        style: getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
+        style: fallbackStyle,
         imageUrl,
       };
     }
@@ -83,18 +107,31 @@ export function normalizeAgentAvatar(
     return createDeterministicAvatarConfig(`${seed}:${avatar}`, options);
   }
 
+  const rawImageUrl = typeof avatar.imageUrl === 'string'
+    ? avatar.imageUrl
+    : typeof (avatar as any).url === 'string'
+      ? (avatar as any).url
+      : typeof (avatar as any).src === 'string'
+        ? (avatar as any).src
+        : '';
+  const rawThumbUrl = typeof avatar.thumbUrl === 'string' ? avatar.thumbUrl : '';
+  const imageUrl = rawImageUrl ? normalizeImageAvatarSrc(rawImageUrl) : null;
+  const thumbUrl = rawThumbUrl ? normalizeImageAvatarSrc(rawThumbUrl) : null;
+
   return {
-    mode: avatar.mode || 'deterministic',
-    seed: avatar.seed || seed,
-    style: avatar.style || getDefaultAvatarStyle(options?.team || 'blue', options?.roleType || 'normal'),
-    category: avatar.category || DEFAULT_AGENT_AVATAR_CATEGORY,
-    spriteSheet: avatar.spriteSheet,
-    spriteIndex: avatar.spriteIndex,
-    prompt: avatar.prompt,
-    imageUrl: avatar.imageUrl,
-    thumbUrl: avatar.thumbUrl,
-    presetName: avatar.presetName,
-    generatedAt: avatar.generatedAt,
+    mode: normalizeAvatarMode(avatar.mode),
+    seed: typeof avatar.seed === 'string' && avatar.seed.trim() ? avatar.seed : seed,
+    style: normalizeAvatarStyle(avatar.style, fallbackStyle),
+    category: typeof avatar.category === 'string' && avatar.category.trim() ? avatar.category : DEFAULT_AGENT_AVATAR_CATEGORY,
+    spriteSheet: typeof avatar.spriteSheet === 'string' && avatar.spriteSheet.trim() ? avatar.spriteSheet : undefined,
+    spriteIndex: typeof avatar.spriteIndex === 'number' && Number.isFinite(avatar.spriteIndex)
+      ? Math.max(0, Math.trunc(avatar.spriteIndex))
+      : undefined,
+    prompt: typeof avatar.prompt === 'string' && avatar.prompt.trim() ? avatar.prompt : undefined,
+    imageUrl: imageUrl || undefined,
+    thumbUrl: thumbUrl || undefined,
+    presetName: typeof avatar.presetName === 'string' && avatar.presetName.trim() ? avatar.presetName : undefined,
+    generatedAt: typeof avatar.generatedAt === 'string' && avatar.generatedAt.trim() ? avatar.generatedAt : undefined,
   };
 }
 
