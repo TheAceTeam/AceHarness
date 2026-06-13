@@ -122,3 +122,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 修复审查员
+workspaceProfile:
+  displayName: 修复审查员
+  nickname: 修复审查员
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 修复审查员的工位
+    zone: engineering
+    order: 316
+  motion:
+    activity: typing
+    speed: 0.9299999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

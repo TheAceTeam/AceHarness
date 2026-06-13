@@ -91,3 +91,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 修复猎手
+workspaceProfile:
+  displayName: 修复猎手
+  nickname: 修复猎手
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 修复猎手的工位
+    zone: engineering
+    order: 314
+  motion:
+    activity: typing
+    speed: 1.17
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

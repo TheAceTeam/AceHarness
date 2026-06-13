@@ -98,3 +98,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 代码猎手
+workspaceProfile:
+  displayName: 代码猎手
+  nickname: 代码猎手
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 代码猎手的工位
+    zone: engineering
+    order: 303
+  motion:
+    activity: typing
+    speed: 1.0899999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

@@ -133,3 +133,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 设计裁判
+workspaceProfile:
+  displayName: 设计裁判
+  nickname: 设计裁判
+  officeRole: design-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: green
+    deskVariant: dynamic-workstation
+    desk: 设计裁判的工位
+    zone: design
+    order: 208
+  motion:
+    activity: presenting
+    speed: 1.0899999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

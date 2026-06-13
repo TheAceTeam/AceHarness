@@ -103,3 +103,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 压力测试员
+workspaceProfile:
+  displayName: 压力测试员
+  nickname: 压力测试员
+  officeRole: quality-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: cyan
+    deskVariant: dynamic-workstation
+    desk: 压力测试员的工位
+    zone: quality
+    order: 421
+  motion:
+    activity: reviewing
+    speed: 0.9299999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

@@ -92,3 +92,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 修复挑战者
+workspaceProfile:
+  displayName: 修复挑战者
+  nickname: 修复挑战者
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 修复挑战者的工位
+    zone: engineering
+    order: 312
+  motion:
+    activity: typing
+    speed: 1.01
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

@@ -27,7 +27,7 @@
 - 私聊作为协作空间房间的一种轻量形态实现，继续复用房间、参与者和消息机制。
 - 工程师模式继续保持当前工作台体验，一人公司模式通过用户选择或系统设置启用。
 - 老用户保持当前入口和使用习惯，新用户在首次引导中选择体验模式。
-- 常驻成员与 Agent 支持关联，也支持独立存在；关联后复用 Agent 的头像、模型、提示词和 role memory。
+- 常驻成员由 Agent YAML 直接驱动；会议室和办公室从 Agent 配置派生成员展示、工位和私聊入口。
 
 ## 3. 核心概念
 
@@ -175,7 +175,7 @@
 - 显示器预览展示该成员当前任务、最近产出、打开的项目或等待用户确认的事项。
 - 角色色条承接产品、设计、工程、增长、运营、通才等职责颜色，帮助用户快速识别分工。
 - 空闲、执行中、等待输入、总结中、休息等状态通过工位屏幕和状态徽标表达。
-- 公司角色蓝图更适合放在首次引导、团队总览或成员管理页，用来解释组织结构和补齐缺位角色。
+- 公司角色蓝图更适合放在首次引导、团队总览或 Agent 管理页，用来解释组织结构和补齐缺位角色。
 - 顶部一句话运行入口始终可见，作为“给办公室派活”的主操作。
 - 深色/浅色模式都使用同一套信息层级，颜色随主题切换，保证成员文字和状态在白天模式下也清晰可读。
 
@@ -397,70 +397,165 @@ queryAgentMemory({
 
 ## 5. 协作空间成员与 Agent 关系
 
-### 5.1 成员字段设计
+### 5.0 Agent YAML 作为统一配置源
 
-协作空间成员是会议室参会成员和办公室常驻成员的统一模型。普通模式中展示为会议成员，一人公司模式中展示为办公室成员。成员支持昵称，并支持从 Agent 导入。
+所有 Agent 都继续使用 `configs/agents/*.yaml` 作为唯一配置源。会议室成员、办公室成员、工作流步骤和首页对话都引用同一份 Agent YAML，不再为协作空间复制一套独立人设配置。
 
-建议字段：
+现有 Agent YAML 已经包含：
+
+- `name`
+- `team`
+- `roleType`
+- `avatar`
+- `title`
+- `persona`
+- `greeting`
+- `engineModels`
+- `activeEngine`
+- `temperature`
+- `capabilities`
+- `systemPrompt`
+- `iterationPrompt`
+- `constraints`
+- `skills`
+- `allowedTools`
+- `category`
+- `tags`
+- `specialtyTags`
+- `alwaysAvailableForChat`
+- `keywords`
+- `description`
+- `mcpServers`
+
+协作空间应把这些字段视为 Agent 的“本体配置”：
+
+- 头像、模型、system prompt、skills、tools、能力描述都从 Agent YAML 读取。
+- 工作流、会议室、办公室只保存 Agent 引用、房间状态和会话级临时覆盖项。
+- 修改 Agent 本体能力时只写回 Agent YAML。
+- 修改常驻成员昵称、工位位置、办公室职责时写回 Agent YAML 的 `workspaceProfile`。
+
+建议给 Agent YAML 增加一个可选的 `workspaceProfile` 字段，用来承载跨会议室/办公室都可复用的展示、常驻和协作偏好：
 
 ```yaml
-id: member-xxx
-displayName: 架构师
-nickname: 老周
-avatar: ...
-officeRole: engineering-lead
-memberKind: resident | temporary
-source:
-  type: agent
-  agentName: architect
-  sync: true
+workspaceProfile:
+  displayName: 架构师
+  nickname: 老周
+  officeRole: engineering-lead
+  residency:
+    office: true
+    meetingRoom: false
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: true
+  visual:
+    accent: orange
+    deskVariant: focus
+    desk: desk-1
+    order: 10
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true
 ```
 
 字段语义：
 
-- `displayName`：正式显示名。
-- `nickname`：用户给成员起的昵称，可优先展示在会议室或办公室中。
-- `officeRole`：成员在一人公司中的职责，例如 product-lead、engineering-lead、growth-lead；会议室成员可为空。
-- `memberKind`：常驻成员或临时参会成员。
-- `source.type = agent`：表示该成员来自 Agent。
-- `source.sync = true`：每次使用时读取 Agent 最新配置。
-- `source.sync = false`：断开同步，保留当前快照。
+- `displayName`：Agent 在协作空间中的默认展示名，成员可用 nickname 临时覆盖。
+- `nickname`：Agent 在协作空间中的默认昵称，用于办公室工位、会议室成员卡和 direct room 标题。
+- `officeRole`：一人公司办公室中的默认职责。
+- `residency.office`：是否作为办公室常驻成员展示。
+- `residency.meetingRoom`：是否作为会议室常驻/推荐成员展示。
+- `residency.defaultDirectRoom`：是否在成员卡上提供默认私聊入口。
+- `roomPresence.recommendForMeetingRoom`：创建普通会议室时是否优先推荐。
+- `roomPresence.autoShowInOffice`：进入办公室时是否默认显示在工位区。
+- `visual.accent`：工位或成员卡默认角色色。
+- `visual.deskVariant`：工位视觉偏好，例如 focus、creative、ops、analysis。
+- `visual.desk`：办公室默认工位。
+- `visual.order`：成员排序。
+- `memory.baseBudget`：该 Agent 基础记忆注入预算。
+- `memory.deepSearchEnabled`：该 Agent 是否启用深层记忆按需查询。
 
-### 5.2 从 Agent 导入成员
+这组字段全部是可选增强项。缺省时继续按现有 `team / roleType / avatar / tags / category` 推导展示效果。
 
-会议室和办公室都支持“从 Agent 导入”。
+### 5.1 成员字段设计
 
-导入流程：
+协作空间成员是 Agent YAML 的运行时投影。普通模式中展示为会议成员，一人公司模式中展示为办公室成员。
 
-1. 打开 Agent 选择器。
-2. 显示 Agent 名称、阵营、角色类型、skills、模型配置、是否有 memory。
-3. 用户选择 Agent。
-4. 用户可设置成员昵称；一人公司模式下可继续设置办公室职责。
-5. 默认创建同步成员。
+常驻关系直接在 Agent YAML 的 `workspaceProfile.residency` 中配置：
 
-导入后：
+- `office: true` 表示该 Agent 是办公室常驻成员。
+- `meetingRoom: true` 表示该 Agent 是会议室常驻或推荐参会成员。
+- `defaultDirectRoom: true` 表示该 Agent 可以从成员卡直接开启私聊。
+
+房间参与者只保存本次会话的引用和少量会话级临时覆盖项。
+
+建议字段：
+
+```yaml
+agentName: architect
+participantKind: resident | temporary
+displayOverride:
+  roomAlias: 老周
+  roomRole: 技术方案评审
+```
+
+字段语义：
+
+- `agentName`：指向 `configs/agents/*.yaml` 的 Agent 名称。
+- `participantKind`：本次房间中的参与类型，常驻成员或临时参会成员。
+- `displayOverride`：本次房间内的临时展示覆盖项，例如会议内称呼或参会身份。
+
+协作空间成员运行时解析顺序：
+
+1. 读取 `agentName` 对应的 Agent YAML。
+2. 应用 Agent YAML 的 `workspaceProfile`。
+3. 应用房间参与者自己的 `displayOverride`，只影响当前房间。
+4. 生成运行时 `memberRuntimeConfig`，供 UI、聊天、模型调用和记忆 resolver 使用。
+
+需要保存快照的场景使用 `agentSnapshot` 字段，仅用于历史房间回放和 Agent 删除后的展示兜底。新会话始终优先读取最新 Agent YAML。
+
+### 5.2 在 Agent 中设置常驻成员
+
+Agent 编辑页增加“协作空间”配置区，直接写入 Agent YAML 的 `workspaceProfile`。
+
+建议 UI：
+
+1. 打开 Agent 编辑弹框。
+2. 展示“协作空间”分组。
+3. 可设置：
+  - 协作空间显示名。
+  - 昵称。
+  - 办公室职责。
+  - 是否办公室常驻。
+  - 是否会议室推荐成员。
+  - 是否允许成员卡直接私聊。
+  - 角色色、工位偏好、排序。
+  - 基础记忆预算和深层记忆查询开关。
+4. 保存后更新该 Agent 的 YAML。
+
+保存后：
 
 - 成员头像默认跟随 Agent。
 - 成员系统提示词默认跟随 Agent。
 - 成员模型配置默认跟随 Agent。
 - 成员 memory 默认跟随 Agent，但是否注入仍由全局开关决定。
-- 成员昵称属于协作空间层，不反向修改 Agent 名称。
+- 成员昵称保存在 Agent YAML 的 `workspaceProfile.nickname`，不修改 Agent `name`。
 - 成员职责用于办公室组织展示和默认协作编排；会议室使用会议主题和参会身份组织展示。
+- 成员 skills 默认跟随 Agent YAML 的 `skills`；协作空间不提供独立 skills 配置入口。
+- 如果用户需要改变成员可用 skills，应进入 Agent 编辑页修改 Agent YAML。
 
-### 5.3 同步与快照
+### 5.3 配置入口与历史快照
 
-成员详情页提供：
+成员卡和房间参与者详情提供：
 
-- 查看来源 Agent。
-- 重新同步 Agent。
-- 断开同步并保存为独立成员。
-- 修改昵称。
-- 修改办公室职责。
-- 修改成员展示信息。
+- 打开 Agent 配置。
+- 编辑 Agent 的协作空间配置。
+- 修改昵称、办公室职责和工位偏好时写回 Agent YAML 的 `workspaceProfile`。
+- 设置当前房间内临时称呼或参会身份时写入房间参与者的 `displayOverride`。
 
 冲突处理：
 
-- Agent 被删除：成员显示“来源失效”，允许断开同步或重新绑定。
+- Agent 被删除：历史房间使用 `agentSnapshot` 展示，新的常驻列表自动移除该成员。
 - Agent memory 超限：该成员运行时按基础记忆截断或无长期记忆上下文启动，并展示配置警告。
 - Agent 模型失效：沿用现有模型 fallback 规则。
 
@@ -503,14 +598,14 @@ createdFrom: residentMember
 常驻成员卡片新增主操作：
 
 - 点击卡片：打开/创建与该成员的私聊房间。
-- 更多菜单：编辑成员、改昵称、改职责、从 Agent 重新同步、删除。
+- 更多菜单：打开 Agent 配置、改昵称、改职责、调整工位、从办公室隐藏。
 
 私聊房间中提供：
 
 - 拉人按钮。
 - 设置主题按钮。
 - 设置为会议主题或办公室任务按钮。
-- 查看成员来源 Agent。
+- 打开成员对应的 Agent 配置。
 - 查看/编辑该 Agent 记忆。
 
 ## 7. 首次引导与一人公司设置
@@ -547,11 +642,12 @@ createdFrom: residentMember
 3. 说明可以拉其他成员加入同一房间。
 4. 说明 Agent 记忆已启用，并可在系统设置关闭。
 5. 引导创建或调整常驻成员：
-   - 起昵称。
-   - 从 Agent 导入。
-   - 创建新成员。
-   - 选择办公室职责。
-   - 选择默认协作风格。
+  - 起昵称。
+  - 选择或创建 Agent。
+  - 在 Agent 配置中勾选办公室常驻。
+  - 创建新 Agent 并设为常驻成员。
+  - 选择办公室职责。
+  - 选择默认协作风格。
 6. 引导用户用一句话创建或调整团队，例如“帮我搭建一个 App 开发团队”。
 
 引导必须可跳过，跳过后可从设置中重新打开。
@@ -680,8 +776,9 @@ interface WorkspaceExperienceSettings {
 
 扩展协作空间成员与房间，底层可继续复用现有协作数据结构：
 
-- `POST /api/collaboration/members/import-agent`
-- `PATCH /api/collaboration/members/:id`
+- `GET /api/collaboration/members?spaceType=meeting-room|office`
+- `POST /api/agents/:name/workspace-profile`
+- `PATCH /api/agents/:name/workspace-profile`
 - `POST /api/collaboration/rooms/direct`
 - `POST /api/collaboration/rooms/:id/participants`
 - `POST /api/collaboration/rooms/:id/finish`
@@ -689,7 +786,7 @@ interface WorkspaceExperienceSettings {
 - `GET /api/collaboration/rooms/:id`
 - `POST /api/office/team/generate`
 
-其中 `direct` 创建一人 direct room，`spaceType` 决定前端展示为会议室或办公室，`team/generate` 承载一人公司模式的一句话生成或调整团队配置。
+其中 `members` 从 Agent YAML 的 `workspaceProfile.residency` 派生常驻/推荐成员，`workspace-profile` 更新 Agent YAML，`direct` 创建一人 direct room，`spaceType` 决定前端展示为会议室或办公室，`team/generate` 承载一人公司模式的一句话生成或调整团队配置。
 
 ## 10. 前端改造点
 
@@ -710,7 +807,9 @@ interface WorkspaceExperienceSettings {
 ### 10.3 Agent 页面
 
 - Agent 编辑弹框增加“永久记忆”入口。
+- Agent 编辑弹框增加“协作空间”配置区，用于设置昵称、办公室职责、是否办公室常驻、是否会议室推荐、工位偏好和排序。
 - Agent 卡片显示 memory 状态。
+- Agent 卡片显示协作空间状态，例如“办公室常驻”“会议室推荐”。
 - 支持打开 `role` memory 编辑器，底层读写现有 `memory-store`。
 - 显示 `charCount / 5000`。
 
@@ -718,8 +817,8 @@ interface WorkspaceExperienceSettings {
 
 - 成员卡支持昵称。
 - 成员卡点击创建/打开 direct room。
-- 成员管理支持从 Agent 导入。
-- 成员详情展示来源 Agent 和同步状态。
+- 成员列表从 Agent YAML 的 `workspaceProfile.residency` 派生。
+- 成员详情提供打开 Agent 编辑页的入口。
 - 私聊房间支持拉人。
 
 ### 10.5 系统设置
@@ -774,8 +873,9 @@ interface WorkspaceExperienceSettings {
 - `runtimeEnabled = true` 且 memory 存在时注入。
 - 现有 Agent 对话的长期角色记忆注入迁移为统一 resolver 负责，保证每轮只注入一次。
 - `team=black-gold` 和 supervisor 校验不回归。
-- 成员昵称不反向修改 Agent。
-- Agent 删除后来源成员进入“来源失效”状态。
+- `workspaceProfile` 可选字段解析、保存和回读稳定。
+- 成员昵称写入 Agent YAML 的 `workspaceProfile.nickname`，不修改 Agent `name`。
+- Agent 删除后历史房间使用 `agentSnapshot` 展示。
 
 ### 12.2 API 测试
 
@@ -783,7 +883,8 @@ interface WorkspaceExperienceSettings {
 - 写入 Agent memory。
 - 清空 Agent memory。
 - Agent memory API 内部使用 `scope = role`、`key = agentName`。
-- 从 Agent 导入协作空间成员。
+- 更新 Agent `workspaceProfile`。
+- 根据 `workspaceProfile.residency` 获取会议室/办公室成员列表。
 - 创建 direct room。
 - direct room 添加第二个成员。
 
@@ -792,6 +893,7 @@ interface WorkspaceExperienceSettings {
 - 首次引导选择工程师模式。
 - 首次引导选择一人公司模式。
 - Agent 编辑弹框 memory 计数。
+- Agent 编辑弹框协作空间设置。
 - 常驻成员卡点击创建私聊。
 - 成员昵称展示优先级。
 - 系统设置切换 memory runtime 开关。
@@ -813,14 +915,15 @@ interface WorkspaceExperienceSettings {
 - 老用户继续沿用当前模式，系统设置中提供切换入口。
 - 默认保持工程师模式。
 - `agentMemory.runtimeEnabled` 默认 false。
-- 已有常驻成员数据保持不变。
+- 已有常驻成员数据迁移为对应 Agent YAML 的 `workspaceProfile.residency` 和 `workspaceProfile.nickname`。
 
 ### 13.2 现有 Agent
 
-- 不向 Agent YAML 新增必需字段。
+- Agent YAML 增加可选 `workspaceProfile` 字段，现有 Agent 配置继续可读。
 - 继续使用现有 `memory-layers/role` 作为 Agent 长期记忆来源。
 - 没有 role memory 的 Agent 视为空记忆。
 - 需要提供一次性检查，确认现有 role memory 在新 UI 中可见。
+- 需要提供一次性迁移，将现有常驻嘉宾/常驻成员引用写回对应 Agent 的 `workspaceProfile`。
 
 ### 13.3 现有协作房间
 
@@ -885,19 +988,22 @@ interface WorkspaceExperienceSettings {
 - 工程师模式和老用户仍保持当前工具台优先级，并将协作入口显示为“会议室”。
 - 老用户沿用当前入口，后续可在设置中切换。
 
-### Phase 4：协作空间成员导入 Agent 与昵称
+### Phase 4：Agent 驱动协作空间成员
 
 目标：
 
-- 常驻成员支持昵称。
-- 支持从 Agent 导入协作空间成员。
-- 支持同步/断开同步。
+- Agent YAML 支持 `workspaceProfile`。
+- Agent 编辑页支持设置昵称、办公室职责、办公室常驻、会议室推荐、工位偏好和排序。
+- 协作空间成员列表从 Agent YAML 派生。
+- 现有常驻嘉宾/常驻成员数据迁移到 Agent YAML。
 
 验收：
 
-- 导入 Agent 后成员可使用 Agent 头像、模型、systemPrompt、memory。
-- 修改昵称只更新成员显示信息，Agent 本体配置保持独立。
-- Agent 删除后成员显示“来源失效”。
+- 勾选 `workspaceProfile.residency.office` 后，该 Agent 出现在办公室常驻成员列表。
+- 勾选 `workspaceProfile.residency.meetingRoom` 后，该 Agent 出现在会议室推荐成员列表。
+- 成员使用 Agent 头像、模型、systemPrompt、skills 和 memory。
+- 修改昵称只更新 `workspaceProfile.nickname`，Agent `name` 保持稳定。
+- 旧常驻嘉宾数据迁移后能在 Agent 编辑页看到对应配置。
 
 ### Phase 5：协作空间 direct room
 
@@ -963,15 +1069,15 @@ interface WorkspaceExperienceSettings {
 - 模式选择只影响默认入口和 memory runtime 默认值。
 - 所有功能仍可从系统设置切换。
 
-### 15.4 成员与 Agent 同步不透明
+### 15.4 Agent 配置驱动的展示来源不清晰
 
-风险：用户不知道成员为什么变化。
+风险：用户不知道成员卡、办公室工位和会议室推荐来自哪一份 Agent YAML 配置。
 
 对策：
 
-- 成员卡显示“来自 Agent”标识。
-- 详情页展示同步状态。
-- 支持断开同步。
+- 成员卡显示对应 Agent 名称和配置入口。
+- Agent 编辑页集中展示“协作空间”配置。
+- 房间历史使用 `agentSnapshot` 稳定回放，当前办公室和会议室列表读取最新 Agent YAML。
 
 ## 16. 建议的第一批最小可交付
 
@@ -980,7 +1086,7 @@ interface WorkspaceExperienceSettings {
 1. 系统设置增加 `agentMemory.runtimeEnabled`。
 2. 基于现有 `memory-store` 做 Agent role memory 编辑 UI 和 5000 字预算。
 3. 运行时 memory resolver，先把首页 Agent 对话和协作空间统一到同一套读取逻辑。
-4. 常驻成员昵称。
+4. Agent YAML 增加 `workspaceProfile`，支持常驻成员昵称和办公室职责。
 5. 常驻成员点击创建 direct room。
 6. 一人公司模式默认入口和首次引导。
 

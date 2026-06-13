@@ -102,3 +102,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 开发工程师
+workspaceProfile:
+  displayName: 开发工程师
+  nickname: 开发工程师
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 开发工程师的工位
+    zone: engineering
+    order: 309
+  motion:
+    activity: typing
+    speed: 1.17
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

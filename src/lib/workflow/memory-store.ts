@@ -1,11 +1,11 @@
-import { mkdir, readFile, readdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { parse, stringify } from 'yaml';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 
 export type MemoryScope = 'role' | 'project' | 'workflow' | 'chat';
-export type MemoryKind = 'summary' | 'experience' | 'review' | 'decision' | 'quality' | 'session';
+export type MemoryKind = 'base' | 'summary' | 'experience' | 'review' | 'decision' | 'quality' | 'session';
 
 export interface MemoryEntry {
   id: string;
@@ -80,6 +80,49 @@ async function loadBucket(scope: MemoryScope, key: string): Promise<MemoryBucket
 async function saveBucket(bucket: MemoryBucket): Promise<void> {
   await ensureScopeDir(bucket.scope);
   await writeFile(bucketPath(bucket.scope, bucket.key), stringify(bucket), 'utf-8');
+}
+
+export async function getMemoryBucket(options: {
+  scope: MemoryScope;
+  key: string;
+}): Promise<MemoryBucket> {
+  return loadBucket(options.scope, options.key);
+}
+
+export async function replaceMemoryEntries(options: {
+  scope: MemoryScope;
+  key: string;
+  entries: Array<Omit<MemoryEntry, 'scope' | 'key' | 'id' | 'createdAt'> & { id?: string; createdAt?: string }>;
+}): Promise<MemoryBucket> {
+  const now = new Date().toISOString();
+  const entries: MemoryEntry[] = options.entries
+    .filter((entry) => entry.title && entry.content)
+    .map((entry, index) => ({
+      ...entry,
+      scope: options.scope,
+      key: options.key,
+      id: entry.id || `${options.scope}-${sanitizeKey(options.key)}-${now}-${index}`,
+      createdAt: entry.createdAt || now,
+      tags: Array.isArray(entry.tags) ? entry.tags.filter(Boolean) : [],
+    }));
+  const bucket: MemoryBucket = {
+    scope: options.scope,
+    key: options.key,
+    updatedAt: now,
+    entries,
+  };
+  await saveBucket(bucket);
+  return bucket;
+}
+
+export async function clearMemoryEntries(options: {
+  scope: MemoryScope;
+  key: string;
+}): Promise<void> {
+  const filepath = bucketPath(options.scope, options.key);
+  if (existsSync(filepath)) {
+    await rm(filepath, { force: true });
+  }
 }
 
 export async function appendMemoryEntries(

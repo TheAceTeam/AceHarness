@@ -957,6 +957,69 @@ export const agentApi = {
     return response.json();
   },
 
+  async saveWorkspaceProfile(name: string, workspaceProfile: any): Promise<ApiResponse & { agent?: any; workspaceProfile?: any }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/workspace-profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceProfile }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      const issues = Array.isArray(data?.details) ? data.details : data?.details?.issues;
+      const details = issues?.map((d: any) => `${Array.isArray(d.path) ? d.path.join('.') : d.path}: ${d.message}`).join('; ');
+      throw new Error(data?.error ? `${data.error}${details ? ` (${details})` : ''}` : '保存 Agent 协作空间配置失败');
+    }
+    return response.json();
+  },
+
+  async getMemory(name: string, maxChars = 5000): Promise<{
+    agentName: string;
+    storageScope: 'role';
+    storageKey: string;
+    entries: any[];
+    baseMemory: string;
+    mergedContent: string;
+    charCount: number;
+    maxChars: number;
+    overLimit: boolean;
+    updatedAt: string;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory?maxChars=${encodeURIComponent(String(maxChars))}`);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || data?.message || '读取 Agent 记忆失败');
+    return data;
+  },
+
+  async saveMemory(name: string, input: { baseMemory: string; maxChars?: number }): Promise<ApiResponse & {
+    baseMemory: string;
+    charCount: number;
+    maxChars: number;
+    overLimit: boolean;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || data?.message || '保存 Agent 记忆失败');
+    return data;
+  },
+
+  async clearMemory(name: string, maxChars = 5000): Promise<ApiResponse & {
+    baseMemory: string;
+    charCount: number;
+    maxChars: number;
+    overLimit: boolean;
+  }> {
+    const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/memory?maxChars=${encodeURIComponent(String(maxChars))}`, {
+      method: 'DELETE',
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || data?.message || '清空 Agent 记忆失败');
+    return data;
+  },
+
   async deleteAgent(name: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
       method: 'DELETE',
@@ -2294,6 +2357,15 @@ export const systemSettingsApi = {
     gitcodeTokenConfigured: boolean;
     locale?: 'zh' | 'en';
     engineAvailabilityCacheMinutes?: number;
+    workspaceExperience?: {
+      mode: 'engineer' | 'one-person-company';
+      defaultEntry: 'home' | 'meeting-room' | 'office' | 'workflows';
+      onePersonCompanyOnboardingSeen: boolean;
+    };
+    agentMemory?: {
+      runtimeEnabled: boolean;
+      persistMode: 'manual' | 'review' | 'auto';
+    };
     emailNotifications?: {
       enabled: boolean;
       smtpHost: string;
@@ -2316,6 +2388,15 @@ export const systemSettingsApi = {
   async save(data: {
     gitcodeToken?: string;
     engineAvailabilityCacheMinutes?: number;
+    workspaceExperience?: {
+      mode?: 'engineer' | 'one-person-company';
+      defaultEntry?: 'home' | 'meeting-room' | 'office' | 'workflows';
+      onePersonCompanyOnboardingSeen?: boolean;
+    };
+    agentMemory?: {
+      runtimeEnabled?: boolean;
+      persistMode?: 'manual' | 'review' | 'auto';
+    };
     emailNotifications?: {
       enabled?: boolean;
       smtpHost?: string;

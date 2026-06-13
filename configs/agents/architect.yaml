@@ -108,3 +108,27 @@ _file: architect.yaml
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 架构师
+workspaceProfile:
+  displayName: 架构师
+  nickname: 架构师
+  officeRole: design-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: green
+    deskVariant: dynamic-workstation
+    desk: 架构师的工位
+    zone: design
+    order: 200
+  motion:
+    activity: presenting
+    speed: 0.85
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

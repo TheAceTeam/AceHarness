@@ -81,3 +81,27 @@ _file: documentation-writer.yaml
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 文档工程师
+workspaceProfile:
+  displayName: 文档工程师
+  nickname: 文档工程师
+  officeRole: knowledge-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: teal
+    deskVariant: dynamic-workstation
+    desk: 文档工程师的工位
+    zone: knowledge
+    order: 810
+  motion:
+    activity: typing
+    speed: 0.85
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

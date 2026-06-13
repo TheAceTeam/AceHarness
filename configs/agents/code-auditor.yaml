@@ -155,3 +155,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 代码审计师
+workspaceProfile:
+  displayName: 代码审计师
+  nickname: 代码审计师
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 代码审计师的工位
+    zone: engineering
+    order: 302
+  motion:
+    activity: typing
+    speed: 1.01
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true
