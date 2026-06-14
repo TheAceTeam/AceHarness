@@ -1,6 +1,16 @@
 # 一人公司模式、Agent 深层记忆与协作空间实现计划
 
-状态：设计计划，尚未实施。
+状态：部分实施，仍缺 AI 澄清式组队草案、完整组织版本管理、真实办公室行为和 direct room 闭环。
+
+当前实现状态（2026-06-15）：
+
+- 已完成一部分基础设施：Agent YAML 支持 `workspaceProfile`，Agent 编辑页已有协作空间配置和基础 role memory 编辑入口，办公室成员可从 Agent YAML 派生。
+- 已完成一部分办公室入口：`/office` 页面已有一句话输入、团队候选预览、按实际成员动态渲染的组织架构图、办公室工位展示、成员选中面板、屏幕 SVG 覆盖层和基础交互。
+- 已完成一部分团队生成后端：`/api/office/team/plan` 和 `/api/office/team/apply` 可从 Agent YAML 生成候选并写回 `workspaceProfile`；当前已把办公室预览扩展到最多 12 名现有 Agent。
+- 当前 `/office` 组织架构图已去掉固定 6 席位和“专家池 / 空缺岗位”UI，改为根据现有团队成员动态布局；管理操作已支持用 shadcn `Select` 添加、替换成员，以及删除成员并生成“确认前不写入”的组织草案。仍缺拖拽汇报关系、职责编辑、版本 diff、历史恢复和 AI 澄清式组织草案。
+- 当前办公室行为已做第三版修正：成员默认在工位坐姿办公/思考，已接入 `sit_left/right` 四帧素材；交流行为改为一组 agent 互相参与，访客从自己工位沿前方走道移动到同事工位侧边，并在到达阶段隐藏回弹以避免倒着走；工位隔间已拆成后墙和前墙层，屏幕和 SVG 覆盖层已镜像并跟随桌面透视，椅背/椅座会夹住坐姿人物下半身；工位网格已压缩单站尺度并扩大行列间距，键盘、鼠标和显示器的位置已按桌面相对关系重排。仍缺 talk 专用素材、per-agent 动作资源、稳定高质量 walk cycle 和基于真实协作事件的行为调度；工位墙体贴地、人物脚底锚点和桌面物件透视仍需要逐张截图迭代。
+- 仍未完成核心产品闭环：团队生成目前主要是本地关键词/zone 打分，不是像工作流创建器那样的 AI 澄清、草案、用户确认流程；组织架构管理仍是前端雏形；direct room 创建和拉人协作闭环还未在 `/office` 中真正打通。
+- 粗略完成度：基础配置与成员派生约 60%，办公室视觉与交互约 45%，组织架构管理约 40%，AI 组队与确认流程约 20%，记忆运行时统一注入约 35%，整体约 45%-50%。
 
 ## 1. 背景与目标
 
@@ -168,6 +178,28 @@
 - Operations Lead：流程、自动化、监控和效率。
 - Generalist：临时任务、调研、补位和跨域执行。
 
+组织架构图与组织管理要求：
+
+- 架构图不是静态卡片展示，而是办公室的组织管理入口。它应支持像公司组织架构一样管理现有团队成员、岗位职责、汇报关系、职责边界、候选 Agent 和团队版本。
+- 视觉目标参考“OPC Company Roles”式组织蓝图：顶部是 CEO / Founder 核心节点，右侧可显示 OPC Core / 组织原则；中间用清晰连线连接各角色；下方是 Product、Design、Engineering、Growth、Operations、Generalist 等角色卡；底部可展示 Powered by ACE Harness 的协作能力条。页面应更像可编辑组织图，而不是普通列表卡片。
+- 每个组织节点包含：岗位名称、职责摘要、目标/关键结果、当前绑定 Agent、候选 Agent、直属上级、下属节点、协作关系、是否关键岗位、是否空缺、是否由用户本人承担。
+- 支持组织管理操作：添加成员、删除成员、替换 Agent、重命名岗位职责、调整汇报关系、拖拽排序、从已有 Agent 手动选择、把一个 Agent 同时设置为多个岗位的临时负责人。
+- 支持组织模板：一人 App 团队、内容增长团队、自动化运营团队、研究型团队、代码质量团队、个人 CEO + AI Copilot 团队。模板只是起点，用户可编辑。
+- 架构图需要有编辑模式和展示模式。展示模式强调组织理解；编辑模式提供节点操作、候选列表、职责编辑、保存/撤销和版本对比。
+- 组织变更不应直接覆盖 Agent 本体能力。组织节点保存岗位、职责和关系；Agent YAML 的 `workspaceProfile` 保存该 Agent 在办公室中的默认角色、常驻状态和展示偏好。
+- 组织架构需要版本化：每次 AI 生成或用户调整形成一个 org draft，用户确认后才成为 current org；历史组织版本可查看、恢复或复制。
+
+AI 组队与手动选人流程：
+
+- 当前 `/api/office/team/plan` 的关键词/zone 打分只能作为 fallback，不能作为最终“生成团队”。正式流程应对齐 AI 引导创建工作流的产品模式：先澄清，再生成草案，再让用户编辑确认，最后才写入配置。
+- 输入目标后，AI 先生成澄清问题，类似 `NewConfigModal` 的 workflow clarification：目标成果、首期范围、期望团队规模、是否需要用户亲自担任 CEO、偏技术/产品/增长/运营的权重、是否允许创建新 Agent、是否只从已有 Agent 中选择。
+- 用户回答后，AI 输出组织草案，而不是直接落库。草案包含岗位节点、汇报关系、推荐 Agent、推荐理由、能力缺口、风险、可替代候选和建议下一步。
+- 用户必须能手动选人：每个岗位打开候选 Agent 列表，按能力、标签、已有 `workspaceProfile`、memory 状态、最近使用、模型配置过滤；用户可固定某个 Agent、移除推荐、换人或创建新 Agent。
+- AI 推荐必须给出可解释证据：命中的能力、命中的标签、相关记忆/历史工作流、与需求的匹配点、冲突或不足。只给一个 score 不够。
+- “确认团队”应保存组织草案和成员绑定，并写回必要的 `workspaceProfile.residency.office`、`workspaceProfile.visual.zone/order`、`workspaceProfile.officeRole`。未确认前只预览，不修改 Agent YAML。
+- 如果候选不足，系统应解释当前团队覆盖不足的能力和风险，而不是在架构图中编造固定空缺岗位；用户可手动添加已有 Agent 或进入 Agent 创建流程。
+- 需要支持调整团队：在已有组织上做增量草案，展示 diff，例如新增岗位、移除岗位、替换 Agent、修改汇报关系、修改职责。
+
 办公室视觉方向：
 
 - 日常主界面优先使用“工位视图”：2x3 或响应式网格展示核心成员，每个成员坐在自己的工位上。
@@ -178,6 +210,21 @@
 - 公司角色蓝图更适合放在首次引导、团队总览或 Agent 管理页，用来解释组织结构和补齐缺位角色。
 - 顶部一句话运行入口始终可见，作为“给办公室派活”的主操作。
 - 深色/浅色模式都使用同一套信息层级，颜色随主题切换，保证成员文字和状态在白天模式下也清晰可读。
+
+办公室工位动画与交互要求：
+
+- 工位由固定工作站层和可移动员工层组成。固定工作站包含地台、隔间后墙、桌面、椅子、屏幕、键盘、台灯和桌面物件；员工层独立叠放，便于在坐姿、站立、走动和交流状态之间切换。
+- 隔间必须拆成后墙和左右前墙，桌面、屏幕和人物处在中间层，左右前墙只压住两侧边缘，形成参考图中的透视关系，避免整块前墙盖住桌面。
+- 员工应支持这些一阶段状态：`seated_work`、`thinking_at_desk`、`standing_idle`、`walking_to_peer`、`talking_with_peer`。其中坐姿用于自己的工位，走动用于从自己的工位走到其他工位，交流用于停在同事工位旁。
+- 走动不只是单帧位移，应播放帧动画；当前生成素材不足时允许先用 8 帧循环和 CSS 路径动画组合，后续替换成更完整的左右方向 walk cycle。
+- 当前素材如果出现发型、脸型、服装或脚部锚点在帧间跳变，不能强行作为帧动画播放；短期应降级为单帧角色加路径移动/轻微步进，避免出现倒着走、腿不动但漂移、刘海忽有忽无等问题。
+- 新的人物素材必须按角色和动作分批生成并验收：同一角色先固定 reference，再分别生成 `idle_left/right`、`walk_left/right`、`sit_work_left/right`；walk 至少 8 帧，脚底锚点一致，腿部相位清晰，返程或反方向必须使用对应朝向帧，不能依赖同一朝向倒放。
+- 裁切流程必须固定单元格尺寸、帧宽、帧高和脚底基线，不能只靠连通域猜测行列；导出的 manifest 应包含 `frameWidth`、`frameHeight`、`frames`、`anchorX`、`anchorY`，CSS 动画按 manifest 的帧数配置。
+- 屏幕内容不能只依赖原素材，应在显示器平面上叠加可控 SVG 覆盖层，展示不同 Agent 的动态状态，例如任务卡片、进度条、代码/文档线条、告警或总结图表。SVG 覆盖层应能按 `zone`、`activity`、等待输入等状态切换。
+- 员工头顶使用悬浮定位标牌：圆形头像、名称、角色/状态短文本和朝下的小箭头，箭头指向员工当前位置。标牌随员工移动，hover/focus 时突出显示。
+- 鼠标交互应友好：hover 工位或员工时高亮工作站、暂停/强调当前员工、显示角色和状态；点击员工或标牌时选中该成员，展示可执行动作，例如私聊、拉人协作、打开 Agent 配置、查看记忆、派发任务。
+- 空办公室也要可操作：没有常驻成员时，用户仍可点击“生成团队”从 Agent YAML 生成候选团队；只有确认候选团队时才要求存在候选成员。
+- 长远目标是让办公室从静态工位网格演进为轻量实时空间：成员可坐在自己工位思考/办公，站起来走到其他工位，与同事进行简短交流，再回到自己的工位继续工作。
 
 协作空间与现有实现的关系：
 
@@ -784,9 +831,45 @@ interface WorkspaceExperienceSettings {
 - `POST /api/collaboration/rooms/:id/finish`
 - `GET /api/collaboration/rooms`
 - `GET /api/collaboration/rooms/:id`
-- `POST /api/office/team/generate`
+- `POST /api/office/team/plan`（当前 heuristic fallback，保留用于无模型或快速预览）
+- `POST /api/office/org/clarify`
+- `POST /api/office/org/draft`
+- `PATCH /api/office/org/draft/:id`
+- `POST /api/office/org/apply`
+- `GET /api/office/org/current`
+- `GET /api/office/org/versions`
+- `POST /api/office/org/versions/:id/restore`
 
-其中 `members` 从 Agent YAML 的 `workspaceProfile.residency` 派生常驻/推荐成员，`workspace-profile` 更新 Agent YAML，`direct` 创建一人 direct room，`spaceType` 决定前端展示为会议室或办公室，`team/generate` 承载一人公司模式的一句话生成或调整团队配置。
+其中 `members` 从 Agent YAML 的 `workspaceProfile.residency` 派生常驻/推荐成员，`workspace-profile` 更新 Agent YAML，`direct` 创建一人 direct room，`spaceType` 决定前端展示为会议室或办公室。正式组队由 `org/clarify -> org/draft -> org/apply` 承载，`team/plan` 只作为当前本地打分 fallback。
+
+组织草案数据建议：
+
+```yaml
+officeOrg:
+  id: org-xxx
+  status: draft | current | archived
+  requirement: 用户目标
+  nodes:
+    - id: ceo
+      title: CEO / Founder
+      zone: core
+      reportsTo: null
+      responsibilities: []
+      agentName: ceo-founder
+      candidateAgentNames: []
+      vacancy: false
+      evidence: []
+  edges:
+    - from: ceo
+      to: product
+      kind: reports_to
+  gaps: []
+  generationTrace:
+    mode: ai | manual | heuristic
+    clarificationAnswers: {}
+    model: ""
+    createdAt: 0
+```
 
 ## 10. 前端改造点
 
@@ -821,7 +904,18 @@ interface WorkspaceExperienceSettings {
 - 成员详情提供打开 Agent 编辑页的入口。
 - 私聊房间支持拉人。
 
-### 10.5 系统设置
+### 10.5 组织架构管理
+
+- `/office` 的“团队架构”改为组织管理面板，而不是普通卡片列表。
+- 支持展示模式：CEO 核心节点 + 角色节点 + 汇报连线 + OPC Core 说明 + Powered by 能力条，视觉接近组织蓝图。
+- 支持编辑模式：新增/删除岗位、修改职责、调整汇报关系、拖拽排序、保存、撤销、查看草案 diff。
+- 每个岗位节点可打开详情抽屉：岗位职责、当前 Agent、候选 Agent、匹配证据、空缺状态、历史变更。
+- 候选 Agent 抽屉支持手动选择、搜索、按标签/能力/模型/常驻状态过滤。
+- 生成团队流程改为多步骤：输入目标 -> AI 澄清问题 -> 组织草案 -> 用户手动调整 -> 确认应用。
+- 确认应用前只更新页面预览，不写 Agent YAML；确认后才调用 `org/apply`。
+- 如果没有可用 Agent，展示空团队状态和“添加现有 Agent / 创建 Agent”的入口，不禁用整个流程。
+
+### 10.6 系统设置
 
 - 增加体验模式设置。
 - 增加 Agent 记忆设置。
@@ -863,6 +957,18 @@ interface WorkspaceExperienceSettings {
 - 支持后续添加 participant。
 - 根据 `spaceType` 输出会议室或办公室的 UI 文案和默认行为。
 
+### 11.4 Office org planner
+
+正式组织设计器对齐 AI 引导创建工作流的实现思路：
+
+- 复用结构化结果通道：定义 `office_org_clarification_question`、`office_org_draft`、`office_org_node`、`office_org_assignment`、`office_org_gap` 等 kind。
+- 复用工作流创建器的阶段模型：clarification、draft、review/apply。每个阶段保存 session/draft，支持恢复和继续编辑。
+- 输入可用 Agent 列表、Agent YAML 摘要、`workspaceProfile`、标签、能力、memory 摘要和用户目标，输出组织草案。
+- 输出必须包含推荐依据和风险，不允许只输出成员列表。
+- 支持 manual-only 模式：用户不用 AI，也可以从岗位模板开始手动选人。
+- 支持 hybrid 模式：AI 先生成岗位和建议，用户手动锁定/替换候选。
+- `team-planner.ts` 当前关键词打分逻辑保留为 fallback 和候选排序辅助，但不能作为最终确认逻辑。
+
 ## 12. 测试计划
 
 ### 12.1 单元测试
@@ -876,6 +982,9 @@ interface WorkspaceExperienceSettings {
 - `workspaceProfile` 可选字段解析、保存和回读稳定。
 - 成员昵称写入 Agent YAML 的 `workspaceProfile.nickname`，不修改 Agent `name`。
 - Agent 删除后历史房间使用 `agentSnapshot` 展示。
+- office org planner 在缺少匹配 Agent 时产生 vacancy，而不是低相关随机补位。
+- office org planner 的推荐结果包含 evidence、risk、candidateAgentNames 和 reportsTo。
+- manual-only 组织草案可以不调用模型，直接从用户选择生成。
 
 ### 12.2 API 测试
 
@@ -887,6 +996,10 @@ interface WorkspaceExperienceSettings {
 - 根据 `workspaceProfile.residency` 获取会议室/办公室成员列表。
 - 创建 direct room。
 - direct room 添加第二个成员。
+- `POST /api/office/org/clarify` 生成可回答的澄清问题。
+- `POST /api/office/org/draft` 生成组织草案但不写 Agent YAML。
+- `PATCH /api/office/org/draft/:id` 可手动替换岗位 Agent。
+- `POST /api/office/org/apply` 确认后才写回 `workspaceProfile`。
 
 ### 12.3 组件测试
 
@@ -897,6 +1010,9 @@ interface WorkspaceExperienceSettings {
 - 常驻成员卡点击创建私聊。
 - 成员昵称展示优先级。
 - 系统设置切换 memory runtime 开关。
+- 组织架构图展示 CEO 核心节点、角色节点和汇报连线。
+- 组织架构编辑模式可新增岗位、调整汇报关系、手动选择 Agent。
+- 生成团队流程显示 AI 草案、候选证据、能力覆盖风险和确认按钮。
 
 ### 12.4 端到端测试
 
@@ -907,6 +1023,8 @@ interface WorkspaceExperienceSettings {
 - 开启 memory 后 Agent 发言包含 memory 注入。
 - 关闭 memory 后新会话按无长期记忆上下文启动。
 - 工程师模式保持当前默认入口。
+- 用户输入目标后先进入组织草案预览，未确认前刷新不会写入常驻成员。
+- 用户手动替换一个岗位 Agent 后确认团队，办公室和 Agent YAML 同步更新。
 
 ## 13. 迁移与兼容
 
@@ -1004,6 +1122,25 @@ interface WorkspaceExperienceSettings {
 - 成员使用 Agent 头像、模型、systemPrompt、skills 和 memory。
 - 修改昵称只更新 `workspaceProfile.nickname`，Agent `name` 保持稳定。
 - 旧常驻嘉宾数据迁移后能在 Agent 编辑页看到对应配置。
+
+### Phase 4.5：组织架构管理与 AI 组队草案
+
+目标：
+
+- `/office` 团队架构升级为可编辑组织架构图。
+- 新增 office org draft 数据结构和 API。
+- 生成团队流程从 heuristic 选择升级为 AI 澄清 + 组织草案 + 用户手动确认。
+- 支持用户手动选择 Agent、锁定 Agent、添加成员、替换成员和创建新 Agent。
+- 当前 `team-planner.ts` 关键词打分逻辑降级为 fallback 和候选排序辅助。
+
+验收：
+
+- 架构图能展示 CEO 核心节点、角色节点、汇报线和岗位详情。
+- 用户可以新增、删除、重命名岗位并调整汇报关系。
+- 输入目标后先生成组织草案，不直接写 Agent YAML。
+- 每个推荐 Agent 都显示匹配证据、风险和备选候选。
+- 用户手动替换岗位 Agent 后，草案和架构图立即更新。
+- 确认草案后才写回 `workspaceProfile` 并更新办公室成员。
 
 ### Phase 5：协作空间 direct room
 
