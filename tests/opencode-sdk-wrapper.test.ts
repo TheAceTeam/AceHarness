@@ -47,6 +47,12 @@ function writeSystemEnvVars(vars: Array<{ key: string; value: string; enabled: b
   writeFileSync(envPath, stringify({ vars }), 'utf8');
 }
 
+function writeUserEnvVars(userId: string, vars: Array<{ key: string; value: string; enabled: boolean }>): void {
+  const envDir = join(tempAceHome, 'data', 'env-vars.users');
+  mkdirSync(envDir, { recursive: true });
+  writeFileSync(join(envDir, `${userId}.yaml`), stringify({ vars }), 'utf8');
+}
+
 describe('OpenCodeSdkEngineWrapper', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -123,6 +129,33 @@ describe('OpenCodeSdkEngineWrapper', () => {
     expect(result.success).toBe(true);
     expect(capturedValue).toBe('from-settings');
     expect(process.env.lower_case_key).toBeUndefined();
+    expect(sdkMocks.createOpencodeServer).toHaveBeenCalledTimes(1);
+  });
+
+  test('injects merged user env vars into opencode server startup', async () => {
+    writeSystemEnvVars([
+      { key: 'opencode_sdk_token', value: 'system-token', enabled: true },
+    ]);
+    writeUserEnvVars('user-1', [
+      { key: 'opencode_sdk_token', value: 'user-token', enabled: true },
+    ]);
+
+    let capturedValue: string | undefined;
+    sdkMocks.createOpencodeServer.mockImplementation(async () => {
+      capturedValue = process.env.opencode_sdk_token;
+      return {
+        url: 'http://127.0.0.1:4101',
+        close: vi.fn(),
+      };
+    });
+
+    const { OpenCodeSdkEngineWrapper } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const wrapper = new OpenCodeSdkEngineWrapper();
+    const result = await wrapper.execute({ ...BASE_OPTIONS, userId: 'user-1' });
+
+    expect(result.success).toBe(true);
+    expect(capturedValue).toBe('user-token');
+    expect(process.env.opencode_sdk_token).toBeUndefined();
     expect(sdkMocks.createOpencodeServer).toHaveBeenCalledTimes(1);
   });
 

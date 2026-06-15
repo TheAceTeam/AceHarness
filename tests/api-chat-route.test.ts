@@ -46,7 +46,13 @@ describe('/api/chat route', () => {
     routeMocks.ensureEngineRuntimeSkillsAvailable.mockResolvedValue(undefined);
     routeMocks.resolveRecoveredSessionId.mockImplementation((result: { sessionId?: string }, sessionId?: string) => result.sessionId || sessionId || undefined);
     routeMocks.getWorkspaceRoot.mockReturnValue('/tmp/workspace');
-    routeMocks.requireAuth.mockResolvedValue(new Response(JSON.stringify({ error: '未登录或登录已过期' }), { status: 401 }));
+    routeMocks.requireAuth.mockResolvedValue({
+      id: 'user-1',
+      username: 'Tester',
+      email: 'tester@example.com',
+      role: 'user',
+      personalDir: '/tmp/personal',
+    });
   });
 
   afterEach(() => {
@@ -91,5 +97,30 @@ describe('/api/chat route', () => {
       isError: true,
       error: 'child exited early code=1',
     });
+    expect(routeMocks.buildChatRequestContext).toHaveBeenCalledWith(expect.objectContaining({
+      personalDir: '/tmp/personal',
+    }));
+    expect(routeMocks.executeEngineWithContextRecovery).toHaveBeenCalledWith(engine, expect.objectContaining({
+      userId: 'user-1',
+    }));
+  });
+
+  test('hard fails when authentication fails', async () => {
+    routeMocks.requireAuth.mockResolvedValue(new Response(JSON.stringify({ error: '未登录或登录已过期' }), { status: 401 }));
+
+    const { POST } = await import('@/app/api/chat/route');
+    const response = await POST(makeRequest('/api/chat', {
+      json: {
+        message: 'hello',
+        model: 'glm-5.1',
+        engine: 'opencode-sdk',
+      },
+    }));
+
+    expect(response.status).toBe(401);
+    const json = await responseJson(response);
+    expect(json).toEqual({ error: '未登录或登录已过期' });
+    expect(routeMocks.createEngine).not.toHaveBeenCalled();
+    expect(routeMocks.executeEngineWithContextRecovery).not.toHaveBeenCalled();
   });
 });

@@ -37,7 +37,9 @@ type ManagedServer = {
 let clientInstance: OpenCodeHttpClient | null = null;
 let clientBaseUrl: string | null = null;
 let managedServer: ManagedServer | null = null;
+let managedServerFingerprint: string | null = null;
 let serverStarting: Promise<ManagedServer> | null = null;
+let serverStartingFingerprint: string | null = null;
 let shutdownHooksInstalled = false;
 
 async function runtimeImport<T = any>(moduleName: string): Promise<T> {
@@ -51,22 +53,33 @@ async function runtimeImport<T = any>(moduleName: string): Promise<T> {
   }
 }
 
-function getBaseUrl(): string {
-  return String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_BASE_URL') || '').trim().replace(/\/+$/, '');
+function configuredEnvOptions(userId?: string): { userId: string } | undefined {
+  return userId ? { userId } : undefined;
 }
 
-function getCodegenieCommand(): string {
+function fingerprintEnv(env: NodeJS.ProcessEnv): string {
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${String(value ?? '')}`)
+    .join('\n');
+}
+
+function getBaseUrl(userId?: string): string {
+  return String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_BASE_URL', configuredEnvOptions(userId)) || '').trim().replace(/\/+$/, '');
+}
+
+function getCodegenieCommand(userId?: string): string {
   const configured = String(
-    getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_COMMAND')
-    || getConfiguredEnvValueSync('ACE_CODEGENIE_BIN')
+    getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_COMMAND', configuredEnvOptions(userId))
+    || getConfiguredEnvValueSync('ACE_CODEGENIE_BIN', configuredEnvOptions(userId))
     || ''
   ).trim();
   if (configured) return configured;
-  return findCommand('codegenie', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'codegenie';
+  return findCommand('codegenie', getConfiguredCliSearchPaths(getCommonCliSearchPaths(), configuredEnvOptions(userId))) || 'codegenie';
 }
 
-function getTimeoutMs(): number {
-  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_TIMEOUT_MS') || '').trim(), 10);
+function getTimeoutMs(userId?: string): number {
+  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_CODEGENIE_SDK_TIMEOUT_MS', configuredEnvOptions(userId)) || '').trim(), 10);
   if (!Number.isFinite(raw)) return 10_000;
   return Math.min(120_000, Math.max(1_000, raw));
 }
@@ -100,32 +113,64 @@ function installShutdownHooks(): void {
   });
 }
 
-async function ensureManagedServer(): Promise<ManagedServer> {
-  if (managedServer) return managedServer;
-  if (serverStarting) return serverStarting;
+function closeManagedServer(): void {
+  if (managedServer) {
+    managedServer.close();
+    managedServer = null;
+  }
+  managedServerFingerprint = null;
+  clientInstance = null;
+  clientBaseUrl = null;
+}
 
-  serverStarting = startManagedServer()
+async function ensureManagedServer(userId?: string): Promise<ManagedServer> {
+  const spawnEnv = buildConfiguredProcessEnvSync(
+    undefined,
+    process.env,
+    configuredEnvOptions(userId),
+  );
+  const nextFingerprint = JSON.stringify({
+    userId: userId || '',
+    env: fingerprintEnv(spawnEnv),
+  });
+
+  if (managedServer && managedServerFingerprint === nextFingerprint) return managedServer;
+  if (serverStarting && serverStartingFingerprint === nextFingerprint) return serverStarting;
+  if (serverStarting) {
+    try {
+      await serverStarting;
+    } catch {
+      // ignore: a fresh server will be started below
+    }
+  }
+
+  if (managedServer && managedServerFingerprint !== nextFingerprint) {
+    closeManagedServer();
+  }
+
+  serverStartingFingerprint = nextFingerprint;
+  serverStarting = startManagedServer(userId, spawnEnv)
     .then((server) => {
       managedServer = server;
+      managedServerFingerprint = nextFingerprint;
       return server;
     })
     .finally(() => {
       serverStarting = null;
+      serverStartingFingerprint = null;
     });
 
   return serverStarting;
 }
 
-async function startManagedServer(): Promise<ManagedServer> {
-  const command = getCodegenieCommand();
+async function startManagedServer(userId: string | undefined, spawnEnv: NodeJS.ProcessEnv): Promise<ManagedServer> {
+  const command = getCodegenieCommand(userId);
   const args = ['serve', '--hostname=127.0.0.1', '--port=0', '--print-logs'];
-  const timeoutMs = getTimeoutMs();
+  const timeoutMs = getTimeoutMs(userId);
   const startedAt = Date.now();
   let logTail = '';
 
   console.log(`[codegenie-sdk] starting managed CodeGenie server: ${command} ${args.join(' ')}`);
-
-  const spawnEnv = buildConfiguredProcessEnvSync();
 
   return await new Promise<ManagedServer>((resolve, reject) => {
     let settled = false;
@@ -216,15 +261,15 @@ function closeChildTree(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
-async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: string }> {
-  const externalBaseUrl = getBaseUrl();
-  const baseUrl = externalBaseUrl || (await ensureManagedServer()).url;
+async function ensureClient(userId?: string): Promise<{ client: OpenCodeHttpClient; baseUrl: string }> {
+  const externalBaseUrl = getBaseUrl(userId);
+  const baseUrl = externalBaseUrl || (await ensureManagedServer(userId)).url;
 
   if (clientInstance && clientBaseUrl === baseUrl) {
     return { client: clientInstance, baseUrl };
   }
 
-  const health = await fetchJsonWithTimeout(`${baseUrl}/global/health`, getTimeoutMs());
+  const health = await fetchJsonWithTimeout(`${baseUrl}/global/health`, getTimeoutMs(userId));
   if (!health?.healthy) {
     throw new Error(`CodeGenie SDK health check failed at ${baseUrl}/global/health`);
   }
@@ -304,7 +349,7 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         detail: options.workingDirectory,
         verbose: true,
       });
-      const { client, baseUrl } = await ensureClient();
+      const { client, baseUrl } = await ensureClient(options.userId);
       this.emitDiagnosticLog({
         message: 'CodeGenie SDK client ready',
         detail: baseUrl,
@@ -425,12 +470,8 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
   }
 
   static shutdown(): void {
-    if (managedServer) {
-      managedServer.close();
-      managedServer = null;
-    }
-    clientInstance = null;
-    clientBaseUrl = null;
+    closeManagedServer();
+    serverStartingFingerprint = null;
   }
 }
 

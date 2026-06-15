@@ -63,8 +63,12 @@ function requireClient(): OpenCodeHttpClient {
   return clientInstance;
 }
 
-function getOpencodeCommand(): string {
-  return findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'opencode';
+function configuredEnvOptions(userId?: string): { userId: string } | undefined {
+  return userId ? { userId } : undefined;
+}
+
+function getOpencodeCommand(userId?: string): string {
+  return findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths(), configuredEnvOptions(userId))) || 'opencode';
 }
 
 function fingerprintEnv(env: NodeJS.ProcessEnv): string {
@@ -107,9 +111,16 @@ async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => 
   }
 }
 
-async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string }> {
-  const serverEnv = buildConfiguredProcessEnvSync();
-  const nextFingerprint = fingerprintEnv(serverEnv);
+async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClient; url: string }> {
+  const serverEnv = buildConfiguredProcessEnvSync(
+    undefined,
+    process.env,
+    configuredEnvOptions(userId),
+  );
+  const nextFingerprint = JSON.stringify({
+    userId: userId || '',
+    env: fingerprintEnv(serverEnv),
+  });
 
   if (clientInstance && serverInstance && serverEnvFingerprint === nextFingerprint) {
     return { client: clientInstance, url: serverInstance.url };
@@ -136,7 +147,7 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
   serverStartingFingerprint = nextFingerprint;
   serverStarting = (async () => {
     const { createOpencodeClient, createOpencodeServer } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
-    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand()}...`);
+    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand(userId)}...`);
 
     const server = await withTemporaryProcessEnv(serverEnv, async () => {
       return await createOpencodeServer({
@@ -240,7 +251,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         detail: options.workingDirectory,
         verbose: true,
       });
-      const { client, url } = await ensureServer();
+      const { client, url } = await ensureServer(options.userId);
       this.emitDiagnosticLog({
         message: 'OpenCode SDK server ready',
         detail: url,

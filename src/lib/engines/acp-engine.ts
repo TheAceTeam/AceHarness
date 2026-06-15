@@ -993,21 +993,36 @@ export class ACPEngine extends EventEmitter {
    * Resolve model ID from short name
    */
   private resolveModelId(shortName: string): string {
-    if (!shortName) return '';
-    // Exact match by modelId
-    const exactById = this.availableModels.find(m => m.modelId === shortName);
+    const requested = String(shortName || '').trim();
+    if (!requested) return '';
+    const normalize = (s: string) => s.trim().toLowerCase().replace(/[.\-_]/g, '-');
+    const normalized = normalize(requested);
+
+    // Exact match by canonical modelId must win over every display-name or fuzzy path.
+    const exactById = this.availableModels.find(m => m.modelId.trim() === requested);
     if (exactById) return exactById.modelId;
-    // Provider-qualified ID (e.g. "anthropic/claude-sonnet-4-6")
-    if (shortName.includes('/')) {
-      const exists = this.availableModels.find(m => m.modelId === shortName);
-      return exists ? exists.modelId : '';
+
+    // Some ACP servers expose the provider/model value as the display name while
+    // using an internal modelId. Treat an exact display-name match as deliberate.
+    const exactByName = this.availableModels.find(m => m.name.trim() === requested);
+    if (exactByName) return exactByName.modelId;
+
+    const normalizedById = this.availableModels.find(m => normalize(m.modelId) === normalized);
+    if (normalizedById) return normalizedById.modelId;
+
+    const normalizedByName = this.availableModels.find(m => normalize(m.name) === normalized);
+    if (normalizedByName) return normalizedByName.modelId;
+
+    // Provider-qualified input is already specific. If it did not match above,
+    // do not fall through to suffix or fuzzy matching and risk selecting another provider.
+    if (requested.includes('/')) {
+      return '';
     }
+
     // Exact suffix match (e.g. "claude-sonnet-4-5" matches "penguiapi/claude-sonnet-4-5")
-    const suffixMatch = this.availableModels.find(m => m.modelId.endsWith('/' + shortName));
+    const suffixMatch = this.availableModels.find(m => (m.modelId.split('/').pop() || '') === requested);
     if (suffixMatch) return suffixMatch.modelId;
-    // Normalize separators: dots ↔ dashes (e.g. "claude-sonnet-4.5" → "claude-sonnet-4-5")
-    const normalize = (s: string) => s.toLowerCase().replace(/[.\-_]/g, '-');
-    const normalized = normalize(shortName);
+
     const normSuffix = this.availableModels.find(m => {
       const tail = m.modelId.split('/').pop() || '';
       return normalize(tail) === normalized;

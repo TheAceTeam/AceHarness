@@ -12,7 +12,8 @@ import { requireAuth } from '@/lib/auth/middleware';
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth(request);
-  const auth = authResult instanceof NextResponse ? null : authResult;
+  if (authResult instanceof Response) return authResult;
+  const auth = authResult;
 
   try {
     const {
