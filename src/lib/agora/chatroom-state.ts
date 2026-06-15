@@ -38,6 +38,9 @@ export function createInitialChatroomState(overrides?: Partial<CollaborationChat
 
 export function ensureChatroomRoomState(room?: CollaborationRoomState | null): CollaborationRoomState {
   return {
+    roomId: room?.roomId,
+    spaceType: room?.spaceType,
+    roomType: room?.roomType,
     topic: room?.topic || '',
     selectedAgents: room?.selectedAgents || [],
     mode: room?.mode === 'free' ? 'free' : 'group-chat',

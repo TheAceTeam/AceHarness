@@ -71,7 +71,9 @@ import argparse
 import base64
 import json
 import os
+import socket
 import ssl
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -79,7 +81,21 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-DEFAULT_ENDPOINT = "https://api.penguinsaichat.dpdns.org/v1/images/generations"
+DEFAULT_ENDPOINT = "https://api2.penguinsaichat.dpdns.org/v1/images/generations"
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0 Safari/537.36"
+)
+RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+
+
+class HttpStatusError(RuntimeError):
+    def __init__(self, code: int, body: str, headers) -> None:
+        super().__init__(f"HTTP {code}\n{body}")
+        self.code = code
+        self.body = body
+        self.headers = headers
 
 
 @dataclass(frozen=True)
@@ -104,7 +120,7 @@ def normalize_endpoint(endpoint: str) -> str:
     return endpoint
 
 
-def make_request(endpoint: str, payload: dict, api_key: str) -> Request:
+def make_request(endpoint: str, payload: dict, api_key: str, user_agent: str) -> Request:
     return Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -112,31 +128,127 @@ def make_request(endpoint: str, payload: dict, api_key: str) -> Request:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": user_agent,
         },
         method="POST",
     )
 
 
-def read_json_response(request: Request, *, insecure: bool = False) -> dict:
+def read_json_response(request: Request, *, insecure: bool = False, timeout: float = 600) -> dict:
     context = ssl._create_unverified_context() if insecure else None
     try:
-        with urlopen(request, timeout=600, context=context) as response:
+        with urlopen(request, timeout=timeout, context=context) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"HTTP {error.code}\n{body}") from error
+        raise HttpStatusError(error.code, body, error.headers) from error
 
 
-def request_json(endpoint: str, payload: dict, api_key: str, *, insecure: bool, auto_insecure: bool) -> JsonResponse:
-    request = make_request(endpoint, payload, api_key)
+def retry_delay_seconds(error: HttpStatusError, fallback: float) -> float:
+    retry_after = error.headers.get("Retry-After") if error.headers else None
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
     try:
-        return JsonResponse(read_json_response(request, insecure=insecure), endpoint, insecure)
+        body = json.loads(error.body)
+    except json.JSONDecodeError:
+        return fallback
+    if isinstance(body, dict):
+        value = body.get("retry_after")
+        if isinstance(value, (int, float)):
+            return max(0.0, float(value))
+    return fallback
+
+
+def request_json_once(
+    endpoint: str,
+    payload: dict,
+    api_key: str,
+    *,
+    user_agent: str,
+    insecure: bool,
+    auto_insecure: bool,
+    request_timeout: float,
+) -> JsonResponse:
+    request = make_request(endpoint, payload, api_key, user_agent)
+    try:
+        return JsonResponse(
+            read_json_response(request, insecure=insecure, timeout=request_timeout),
+            endpoint,
+            insecure,
+        )
     except URLError as error:
         if not auto_insecure or insecure or not isinstance(error.reason, ssl.SSLCertVerificationError):
             raise
 
-    request = make_request(endpoint, payload, api_key)
-    return JsonResponse(read_json_response(request, insecure=True), endpoint, True)
+    request = make_request(endpoint, payload, api_key, user_agent)
+    return JsonResponse(
+        read_json_response(request, insecure=True, timeout=request_timeout),
+        endpoint,
+        True,
+    )
+
+
+def request_json(
+    endpoint: str,
+    payload: dict,
+    api_key: str,
+    *,
+    user_agent: str,
+    insecure: bool,
+    auto_insecure: bool,
+    max_attempts: int,
+    retry_delay: float,
+    request_timeout: float,
+) -> JsonResponse:
+    last_error: HttpStatusError | None = None
+    last_timeout: TimeoutError | socket.timeout | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            print(
+                f"Requesting image: model={payload.get('model')} "
+                f"size={payload.get('size')} quality={payload.get('quality')} "
+                f"attempt={attempt}/{max_attempts}",
+                flush=True,
+            )
+            return request_json_once(
+                endpoint,
+                payload,
+                api_key,
+                user_agent=user_agent,
+                insecure=insecure,
+                auto_insecure=auto_insecure,
+                request_timeout=request_timeout,
+            )
+        except HttpStatusError as error:
+            last_error = error
+            if error.code not in RETRYABLE_HTTP_STATUS or attempt >= max_attempts:
+                raise SystemExit(str(error)) from error
+            delay = retry_delay_seconds(error, retry_delay)
+            print(
+                f"HTTP {error.code}; retrying in {delay:.0f}s "
+                f"({attempt}/{max_attempts})",
+                flush=True,
+            )
+            time.sleep(delay)
+        except (TimeoutError, socket.timeout) as error:
+            last_timeout = error
+            if attempt >= max_attempts:
+                raise SystemExit(f"Request timed out after {request_timeout:.0f}s.") from error
+            print(
+                f"Request timed out after {request_timeout:.0f}s; retrying in {retry_delay:.0f}s "
+                f"({attempt}/{max_attempts})",
+                flush=True,
+            )
+            time.sleep(retry_delay)
+
+    if last_error:
+        raise SystemExit(str(last_error))
+    if last_timeout:
+        raise SystemExit(f"Request timed out after {request_timeout:.0f}s.")
+    raise SystemExit("Request failed.")
 
 
 def extract_image(response: dict, output: Path, *, insecure: bool = False) -> None:
@@ -156,7 +268,8 @@ def extract_image(response: dict, output: Path, *, insecure: bool = False) -> No
     image_url = first.get("url")
     if isinstance(image_url, str) and image_url:
         context = ssl._create_unverified_context() if insecure else None
-        with urlopen(image_url, timeout=600, context=context) as response:
+        request = Request(image_url, headers={"User-Agent": DEFAULT_USER_AGENT})
+        with urlopen(request, timeout=600, context=context) as response:
             output.write_bytes(response.read())
         return
 
@@ -173,6 +286,10 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-image-2")
     parser.add_argument("--size", default="1024x1024")
     parser.add_argument("--quality", default="medium")
+    parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--retry-delay", type=float, default=120)
+    parser.add_argument("--request-timeout", type=float, default=600)
     parser.add_argument("--codex-cli-query", action="store_true")
     parser.add_argument("--codex-cli-body", action="store_true", default=True)
     parser.add_argument("--no-codex-cli-body", action="store_false", dest="codex_cli_body")
@@ -188,6 +305,12 @@ def main() -> None:
 
     if not args.api_key:
         raise SystemExit("Missing API key. Pass --api-key or set IMAGE_API_KEY.")
+    if args.max_attempts < 1:
+        raise SystemExit("--max-attempts must be at least 1.")
+    if args.retry_delay < 0:
+        raise SystemExit("--retry-delay must be non-negative.")
+    if args.request_timeout <= 0:
+        raise SystemExit("--request-timeout must be positive.")
 
     prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
     payload = {
@@ -209,8 +332,12 @@ def main() -> None:
         endpoint,
         payload,
         args.api_key,
+        user_agent=args.user_agent,
         insecure=args.insecure,
         auto_insecure=args.auto_insecure,
+        max_attempts=args.max_attempts,
+        retry_delay=args.retry_delay,
+        request_timeout=args.request_timeout,
     )
     if args.response_out:
         Path(args.response_out).write_text(json.dumps(result.body, ensure_ascii=False, indent=2), encoding="utf-8")

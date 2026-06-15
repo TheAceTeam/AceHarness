@@ -8,6 +8,7 @@ export async function POST(request: NextRequest) {
       plan: body?.plan,
       requirement: body?.requirement,
       agentNames: Array.isArray(body?.agentNames) ? body.agentNames : undefined,
+      assignments: Array.isArray(body?.assignments) ? body.assignments : undefined,
     });
     return NextResponse.json({ success: true, state });
   } catch (error: any) {

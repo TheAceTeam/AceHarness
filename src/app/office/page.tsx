@@ -210,6 +210,29 @@ const OFFICE_SPRITES = {
 
 type OfficeSpriteKey = keyof typeof OFFICE_SPRITES;
 
+const OFFICE_WORKSTATION_WIDTH = 390;
+const OFFICE_WORKSTATION_HEIGHT = 386;
+
+const WORKSTATION_SHEET_ASSETS = [
+  { sprite: 'floorSlab', left: 19.4, top: 128.99, width: 371.5, height: 246.28, zIndex: 1 },
+  { sprite: 'deskShadow', left: 103.72, top: 183.48, width: 204.33, height: 116.06, zIndex: 2 },
+  { sprite: 'cubicle', left: 30.63, top: 64.39, width: 354.37, height: 254.4, zIndex: 3 },
+  { sprite: 'deskTop', left: 90.3, top: 106.42, width: 208.16, height: 101.93, zIndex: 4 },
+  { sprite: 'lamp', left: 147.82, top: 85.69, width: 48.49, height: 77.45, zIndex: 5, flipH: true },
+  { sprite: 'plant', left: 107.54, top: 134.02, width: 34.83, height: 55.18, zIndex: 6 },
+  { sprite: 'notebook', left: 159.01, top: 123.94, width: 36.31, height: 24.05, zIndex: 7 },
+  { sprite: 'tray', left: 191.34, top: 114.54, width: 40.15, height: 28.31, zIndex: 8 },
+  { sprite: 'keyboard', left: 186.61, top: 140.35, width: 60.54, height: 36.35, zIndex: 9, flipH: true },
+  { sprite: 'trackpad', left: 244.45, top: 168.44, width: 25.93, height: 18.13, zIndex: 10, flipH: true },
+  { sprite: 'mug', left: 271.92, top: 143.87, width: 20.06, height: 24.33, zIndex: 11 },
+  { sprite: 'tablet', left: 138.03, top: 172.44, width: 27.28, height: 17.19, zIndex: 12 },
+  { sprite: 'chairSeat', left: 162.1, top: 197.55, width: 100.66, height: 115.25, zIndex: 13 },
+  { sprite: 'chairBack', left: 162.02, top: 135.35, width: 70.52, height: 114.44, zIndex: 14 },
+  { sprite: 'monitor', left: 192.06, top: 45.09, width: 101.14, height: 116.72, zIndex: 15, flipH: true },
+] as const;
+
+type WorkstationSheetAsset = (typeof WORKSTATION_SHEET_ASSETS)[number];
+
 function OfficeSprite({
   sprite,
   scale = 1,
@@ -368,15 +391,6 @@ function memberAvatar(member: OfficeMember) {
     team: member.agent.team || 'blue',
     roleType: member.agent.roleType || 'normal',
   });
-}
-
-function spriteGenderForMember(member: OfficeMember, index: number): 'male' | 'female' {
-  const zone = memberZone(member);
-  if (zone === 'design' || zone === 'growth') return 'female';
-  const text = `${member.agentName} ${member.displayName} ${member.nickname || ''} ${member.agent.category || ''}`.toLowerCase();
-  if (/female|woman|girl|女士|女性|女/.test(text)) return 'female';
-  if (/male|man|boy|先生|男性|男/.test(text)) return 'male';
-  return index % 5 === 2 ? 'female' : 'male';
 }
 
 function ArchitectureDiagram({
@@ -733,30 +747,32 @@ function OrgMemberCard({
   );
 }
 
-type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'standing_idle' | 'walking_to_peer' | 'talking_with_peer';
-type OfficeInteractionRole = 'host' | 'visitor';
+type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'standing_idle';
+type OfficeScreenScene = 'coding' | 'testing' | 'planning' | 'reviewing' | 'ops';
 type OfficePresencePlan = {
   member: OfficeMember;
   activity: Activity;
   presence: OfficePresence;
-  peerIndex?: number;
-  interactionRole?: OfficeInteractionRole;
 };
 
 function presenceForActivity(activity: Activity): OfficePresence {
-  if (activity === 'walking') return 'walking_to_peer';
-  if (activity === 'talking' || activity === 'presenting') return 'talking_with_peer';
   if (activity === 'thinking' || activity === 'reviewing') return 'thinking_at_desk';
-  if (activity === 'typing') return 'seated_work';
-  return 'standing_idle';
+  return 'seated_work';
 }
 
 function statusTextForPresence(presence: OfficePresence) {
   if (presence === 'seated_work') return '办公中';
   if (presence === 'thinking_at_desk') return '思考中';
-  if (presence === 'walking_to_peer') return '走动中';
-  if (presence === 'talking_with_peer') return '交流中';
   return '待命';
+}
+
+function screenSceneForOfficePlan(plan: OfficePresencePlan, index: number): OfficeScreenScene {
+  const zone = memberZone(plan.member);
+  if (plan.activity === 'reviewing' || zone === 'decision') return 'reviewing';
+  if (zone === 'quality') return 'testing';
+  if (zone === 'product' || zone === 'design' || zone === 'core') return 'planning';
+  if (zone === 'engineering') return 'coding';
+  return index % 2 === 0 ? 'coding' : 'ops';
 }
 
 function baseActivityForOfficeDisplay(member: OfficeMember, index: number): Activity {
@@ -767,7 +783,7 @@ function baseActivityForOfficeDisplay(member: OfficeMember, index: number): Acti
 }
 
 function buildOfficePresencePlan(members: OfficeMember[]): OfficePresencePlan[] {
-  const plans: OfficePresencePlan[] = members.map((member, index) => {
+  return members.map((member, index) => {
     const activity = baseActivityForOfficeDisplay(member, index);
     return {
       member,
@@ -775,65 +791,6 @@ function buildOfficePresencePlan(members: OfficeMember[]): OfficePresencePlan[] 
       presence: presenceForActivity(activity),
     };
   });
-
-  if (plans.length >= 2) {
-    const hostIndex: number = plans.length >= 6 ? 2 : 0;
-    const visitorIndex: number = plans.length >= 6 ? 5 : 1;
-    if (hostIndex !== visitorIndex && plans[hostIndex] && plans[visitorIndex]) {
-      plans[hostIndex] = {
-        ...plans[hostIndex],
-        activity: 'talking',
-        presence: 'talking_with_peer',
-        peerIndex: visitorIndex,
-        interactionRole: 'host',
-      };
-      plans[visitorIndex] = {
-        ...plans[visitorIndex],
-        activity: 'walking',
-        presence: 'walking_to_peer',
-        peerIndex: hostIndex,
-        interactionRole: 'visitor',
-      };
-    }
-  }
-
-  if (plans.length >= 10) {
-    const hostIndex = 7;
-    const visitorIndex = 10;
-    if (plans[hostIndex] && plans[visitorIndex]) {
-      plans[hostIndex] = {
-        ...plans[hostIndex],
-        activity: 'talking',
-        presence: 'talking_with_peer',
-        peerIndex: visitorIndex,
-        interactionRole: 'host',
-      };
-      plans[visitorIndex] = {
-        ...plans[visitorIndex],
-        activity: 'walking',
-        presence: 'walking_to_peer',
-        peerIndex: hostIndex,
-        interactionRole: 'visitor',
-      };
-    }
-  }
-
-  return plans;
-}
-
-function directionBetween(from: { x: number; y: number }, to: { x: number; y: number }): 'left' | 'right' {
-  const deltaX = to.x - from.x;
-  if (Math.abs(deltaX) >= 1) return deltaX < 0 ? 'left' : 'right';
-  return to.y < from.y ? 'right' : 'left';
-}
-
-function walkingRouteOffset(from: { x: number; y: number }, to: { x: number; y: number }) {
-  const direction = directionBetween(from, to);
-  const sideStop = direction === 'right' ? -72 : 72;
-  return {
-    x: Math.max(-245, Math.min(245, Math.round((to.x - from.x) * 4.2 + sideStop))),
-    y: Math.max(-150, Math.min(150, Math.round((to.y - from.y) * 3.2 + 18))),
-  };
 }
 
 function planMemberToOfficeMember(member: OfficeTeamPlan['members'][number], index: number): OfficeMember {
@@ -891,23 +848,87 @@ function missingOrgZones(members: OfficeTeamPlan['members']) {
   return ORG_REQUIRED_ZONES.filter((zone) => !filled.has(zone));
 }
 
-function OfficeScreenOverlay({ zone, presence, index }: { zone: { color: string }; presence: OfficePresence; index: number }) {
-  const progress = presence === 'thinking_at_desk' ? 46 : presence === 'talking_with_peer' ? 72 : presence === 'walking_to_peer' ? 58 : 84;
+function OfficeScreenWorkOverlay({ scene, zone, index }: { scene: OfficeScreenScene; zone: { color: string }; index: number }) {
+  const gradientId = `screenWorkGradient-${index}`;
   return (
-    <svg className="station-screen-overlay" viewBox="0 0 112 66" aria-hidden="true">
+    <svg className={`station-work-screen station-work-screen-${scene}`} viewBox="0 0 120 72" aria-hidden="true">
       <defs>
-        <linearGradient id={`screenGradient-${index}`} x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stopColor="#0b4dd8" />
-          <stop offset="55%" stopColor="#0b7ee8" />
+        <linearGradient id={gradientId} x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stopColor="#031a46" />
+          <stop offset="55%" stopColor="#075fc7" />
           <stop offset="100%" stopColor={zone.color} />
         </linearGradient>
       </defs>
-      <path d="M7 9 105 4 101 48 15 60Z" fill={`url(#screenGradient-${index})`} opacity="0.82" />
-      <path className="screen-scan" d="M11 16 52 13M12 23 42 21M13 31 55 29M67 14 97 12M69 22 101 20M70 31 92 29" />
-      <rect x="14" y="41" width={progress} height="5" rx="2.5" fill="#7dd3fc" opacity="0.82" />
-      <rect x="14" y="51" width="24" height="4" rx="2" fill="#bfdbfe" opacity="0.62" />
-      <rect x="45" y="49" width="44" height="4" rx="2" fill="#bfdbfe" opacity="0.42" />
+      <path d="M5 10 114 3 118 58 11 68Z" fill={`url(#${gradientId})`} opacity="0.72" />
+      {scene === 'coding' && (
+        <>
+          <path className="screen-scan" d="M15 16 47 14M15 23 69 20M15 31 42 29M15 39 58 36M72 15 104 13M76 24 108 21M68 34 101 31M74 44 111 40" />
+          <rect x="18" y="50" width="26" height="4" rx="2" fill="#22c55e" opacity="0.52" />
+          <rect x="49" y="48" width="43" height="4" rx="2" fill="#38bdf8" opacity="0.42" />
+        </>
+      )}
+      {scene === 'testing' && (
+        <>
+          <path className="screen-scan" d="M18 16 54 14M18 25 48 23M18 34 62 31M18 43 41 41" />
+          {[0, 1, 2].map((row) => (
+            <g key={row} opacity={0.7 - row * 0.1}>
+              <circle cx={73} cy={17 + row * 14} r="3" fill="#22c55e" />
+              <rect x={81} y={14 + row * 14} width={27 + row * 5} height="4" rx="2" fill="#bfdbfe" />
+            </g>
+          ))}
+        </>
+      )}
+      {scene === 'planning' && (
+        <>
+          {[0, 1, 2].map((col) => (
+            <g key={col} opacity={0.52 + col * 0.08}>
+              <rect x={16 + col * 31} y="14" width="22" height="40" rx="4" fill="#dbeafe" opacity="0.16" />
+              <rect x={20 + col * 31} y="20" width="13" height="5" rx="2.5" fill={col === 1 ? '#facc15' : '#60a5fa'} />
+              <rect x={20 + col * 31} y="31" width="15" height="4" rx="2" fill="#bfdbfe" />
+              <rect x={20 + col * 31} y="40" width="10" height="4" rx="2" fill="#bfdbfe" opacity="0.7" />
+            </g>
+          ))}
+        </>
+      )}
+      {scene === 'reviewing' && (
+        <>
+          <rect x="16" y="14" width="40" height="37" rx="4" fill="#16a34a" opacity="0.22" />
+          <rect x="65" y="13" width="39" height="38" rx="4" fill="#ef4444" opacity="0.18" />
+          <path className="screen-scan" d="M21 23 49 20M21 32 45 29M21 41 51 38M70 22 97 19M70 31 92 28M70 40 99 37" />
+        </>
+      )}
+      {scene === 'ops' && (
+        <>
+          <path d="M15 48 C30 29 39 42 51 27 S79 38 102 18" fill="none" stroke="#67e8f9" strokeWidth="3" strokeLinecap="round" opacity="0.6" />
+          <path d="M17 56 106 50" stroke="#bfdbfe" strokeWidth="2" opacity="0.25" />
+          <circle cx="51" cy="27" r="4" fill="#22c55e" opacity="0.75" />
+          <circle cx="102" cy="18" r="4" fill="#facc15" opacity="0.75" />
+        </>
+      )}
     </svg>
+  );
+}
+
+function OfficeSheetPlacedAsset({ asset }: { asset: WorkstationSheetAsset }) {
+  const sprite = OFFICE_SPRITES[asset.sprite as OfficeSpriteKey];
+  const scaleX = asset.width / sprite.w;
+  const scaleY = asset.height / sprite.h;
+  return (
+    <span
+      aria-hidden="true"
+      className={`station-sheet-asset station-sheet-${asset.sprite}`}
+      style={{
+        left: `${asset.left}px`,
+        top: `${asset.top}px`,
+        width: `${asset.width}px`,
+        height: `${asset.height}px`,
+        backgroundImage: `url(${OFFICE_ASSET_SHEET})`,
+        backgroundSize: `${OFFICE_ASSET_SHEET_SIZE * scaleX}px ${OFFICE_ASSET_SHEET_SIZE * scaleY}px`,
+        backgroundPosition: `${-sprite.x * scaleX}px ${-sprite.y * scaleY}px`,
+        zIndex: asset.zIndex,
+        transform: 'flipH' in asset && asset.flipH ? 'scaleX(-1)' : undefined,
+      }}
+    />
   );
 }
 
@@ -969,7 +990,6 @@ function LiveOffice({ members }: { members: OfficeMember[] }) {
             plan={planItem}
             index={index}
             total={presencePlans.length}
-            peerPlan={typeof planItem.peerIndex === 'number' ? presencePlans[planItem.peerIndex] : undefined}
             selected={planItem.member.agentName === selectedMember?.agentName}
             onSelect={() => setSelectedAgentName(planItem.member.agentName)}
           />
@@ -983,14 +1003,12 @@ function OfficeStation({
   plan,
   index,
   total,
-  peerPlan,
   selected,
   onSelect,
 }: {
   plan: OfficePresencePlan;
   index: number;
   total: number;
-  peerPlan?: OfficePresencePlan;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -1000,30 +1018,8 @@ function OfficeStation({
   const activity = plan.activity;
   const presence = plan.presence;
   const layout = index % 3;
-  const targetPosition = typeof plan.peerIndex === 'number' ? officePositionForIndex(plan.peerIndex, total) : position;
-  const travelOffset = walkingRouteOffset(position, targetPosition);
-  const travelDirection = directionBetween(position, targetPosition);
-  const deskFacingDirection: 'left' | 'right' = 'right';
-  const restingDirection =
-    plan.interactionRole === 'host'
-      ? 'right'
-      : presence === 'seated_work' || presence === 'thinking_at_desk'
-        ? deskFacingDirection
-        : typeof plan.peerIndex === 'number'
-          ? directionBetween(position, targetPosition)
-          : index % 3 === 1 ? 'left' : 'right';
-  const spriteGender = spriteGenderForMember(member, index);
-  const isDeskPresence = presence === 'seated_work' || presence === 'thinking_at_desk';
-  const spriteDirection = presence === 'walking_to_peer' ? travelDirection : restingDirection;
-  const agentAnimation =
-    plan.interactionRole === 'host'
-      ? `${spriteGender}-idle-right`
-      : presence === 'walking_to_peer'
-        ? `${spriteGender}-walk-${travelDirection}`
-        : isDeskPresence
-          ? `${spriteGender}-sit-${deskFacingDirection}`
-          : `${spriteGender}-idle-${restingDirection}`;
-  const statusText = plan.interactionRole ? '交流中' : statusTextForPresence(presence);
+  const statusText = statusTextForPresence(presence);
+  const screenScene = screenSceneForOfficePlan(plan, index);
   const avatar = resolveAgentAvatarSrc(member.agent.avatar, member.agent.name, {
     team: member.agent.team || 'blue',
     roleType: member.agent.roleType || 'normal',
@@ -1036,7 +1032,7 @@ function OfficeStation({
   };
   return (
     <div
-      className={`station station-${activity} station-presence-${presence} ${plan.interactionRole ? `station-interaction-${plan.interactionRole}` : ''} station-layout-${layout} station-facing-${spriteDirection} station-travel-${travelDirection} ${selected ? 'station-selected' : ''}`}
+      className={`station station-${activity} station-presence-${presence} station-layout-${layout} ${selected ? 'station-selected' : ''}`}
       role="button"
       tabIndex={0}
       aria-label={`查看 ${member.nickname || member.displayName}，当前${statusText}`}
@@ -1049,24 +1045,13 @@ function OfficeStation({
         ['--zone' as any]: zone.color,
         ['--delay' as any]: `${index * 0.2}s`,
         ['--station-scale' as any]: stationScaleForTotal(total),
-        ['--travel-x' as any]: `${travelOffset.x}px`,
-        ['--travel-y' as any]: `${travelOffset.y}px`,
       }}
     >
       <div className="station-scene">
-        <OfficeSprite sprite="floorSlab" scale={1.22} className="station-sprite station-floor-slab" />
-        <OfficeSprite sprite="cubicle" scale={1.18} className="station-sprite station-cubicle-back-shell" />
-        <OfficeSprite sprite="deskTop" scale={0.93} className="station-sprite station-desk-real" />
-        <OfficeSprite sprite="lamp" scale={0.32} className="station-sprite station-lamp-real" />
-        <OfficeSprite sprite="plant" scale={0.25} className="station-sprite station-plant-real" />
-        <OfficeSprite sprite="tablet" scale={0.17} className="station-sprite station-tablet-real" />
-        <OfficeSprite sprite="tray" scale={0.2} className="station-sprite station-tray-real" />
-        <OfficeSprite sprite="monitor" scale={0.5} className="station-sprite station-monitor-real" />
-        <OfficeScreenOverlay zone={zone} presence={presence} index={index} />
-        <OfficeSprite sprite="keyboard" scale={0.22} className="station-sprite station-keyboard-real" />
-        <OfficeSprite sprite="trackpad" scale={0.15} className="station-sprite station-mouse-real" />
-        <OfficeSprite sprite="mug" scale={0.17} className="station-sprite station-mug-real" />
-        <OfficeSprite sprite="chairBack" scale={0.45} className="station-sprite station-chair-back-real" />
+        {WORKSTATION_SHEET_ASSETS.map((asset) => (
+          <OfficeSheetPlacedAsset key={asset.sprite} asset={asset} />
+        ))}
+        <OfficeScreenWorkOverlay scene={screenScene} zone={zone} index={index} />
         <div className="station-callout-layer">
           <div className="station-agent-callout">
             <SpriteAvatar avatar={avatar} seed={member.agentName} category="agent-default" alt={member.displayName} fallback={initials(member.displayName)} className="station-callout-avatar" fallbackClassName="text-[8px]" />
@@ -1077,20 +1062,6 @@ function OfficeStation({
             <span className="station-callout-arrow" />
           </div>
         </div>
-        <div className="station-operator">
-          <span className={`station-agent-sprite station-agent-${agentAnimation}`} aria-hidden="true" />
-          {presence === 'talking_with_peer' || plan.interactionRole ? <span className="station-talk-bubble" aria-hidden="true" /> : null}
-          <span className="station-status-dot" />
-        </div>
-        {plan.interactionRole === 'host' && peerPlan ? (
-          <div className="station-peer-operator">
-            <span className={`station-agent-sprite station-agent-${spriteGenderForMember(peerPlan.member, plan.peerIndex ?? index)}-idle-left`} aria-hidden="true" />
-            <span className="station-talk-bubble station-talk-bubble-peer" aria-hidden="true" />
-          </div>
-        ) : null}
-        <OfficeSprite sprite="chairSeat" scale={0.36} className="station-sprite station-chair-seat-real" />
-        <OfficeSprite sprite="cubicle" scale={1.18} className="station-sprite station-cubicle-front-left" />
-        <OfficeSprite sprite="cubicle" scale={1.18} className="station-sprite station-cubicle-front-right" />
       </div>
     </div>
   );
@@ -2518,7 +2489,7 @@ export default function OfficePage() {
         .station {
           position: absolute;
           width: 390px;
-          height: 330px;
+          height: 386px;
           transform: translate(-50%, -50%) scale(var(--station-scale, 1));
           transform-origin: 50% 58%;
           cursor: pointer;
@@ -2553,6 +2524,37 @@ export default function OfficePage() {
           pointer-events: none;
           user-select: none;
         }
+        .station-sheet-asset {
+          position: absolute;
+          display: block;
+          background-repeat: no-repeat;
+          pointer-events: none;
+          transform-origin: center center;
+          user-select: none;
+        }
+        .station-work-screen {
+          position: absolute;
+          left: 205px;
+          top: 61px;
+          z-index: 16;
+          width: 70px;
+          height: 42px;
+          transform: scaleX(-1) rotate(-4deg) skewY(-8deg);
+          transform-origin: 50% 50%;
+          pointer-events: none;
+          mix-blend-mode: screen;
+          opacity: 0.68;
+          filter:
+            drop-shadow(0 1px 2px rgba(14, 165, 233, 0.18))
+            saturate(1.08);
+        }
+        .station-work-screen-testing,
+        .station-work-screen-reviewing {
+          opacity: 0.72;
+        }
+        .station-work-screen-planning {
+          opacity: 0.62;
+        }
         .station-floor-slab {
           left: 78px;
           top: 155px;
@@ -2560,10 +2562,13 @@ export default function OfficePage() {
           filter: drop-shadow(0 20px 18px rgba(15, 23, 42, 0.18));
         }
         .station-desk-shadow {
-          left: 121px;
-          top: 150px;
+          left: 106px;
+          top: 138px;
           z-index: 2;
-          opacity: 0.34;
+          opacity: 0.32;
+          transform: skewY(-3deg) scaleX(1.04);
+          transform-origin: 50% 50%;
+          filter: blur(0.2px);
         }
         .station-cubicle-back-shell,
         .station-cubicle-front-left,
@@ -2580,8 +2585,8 @@ export default function OfficePage() {
         }
         .station-desk-real {
           left: 108px;
-          top: 132px;
-          z-index: 6;
+          top: 106px;
+          z-index: 7;
           filter: drop-shadow(0 18px 18px rgba(15, 23, 42, 0.13));
         }
         .station-lamp-real {
@@ -2591,74 +2596,75 @@ export default function OfficePage() {
           filter: drop-shadow(0 8px 8px rgba(15, 23, 42, 0.14));
         }
         .station-plant-real {
-          left: 111px;
-          top: 134px;
-          z-index: 8;
+          left: 102px;
+          top: 122px;
+          z-index: 16;
           filter: drop-shadow(0 8px 8px rgba(15, 23, 42, 0.14));
         }
         .station-tablet-real {
-          left: 143px;
-          top: 173px;
-          z-index: 8;
+          left: 131px;
+          top: 166px;
+          z-index: 16;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-tray-real {
-          left: 184px;
-          top: 137px;
-          z-index: 8;
+          left: 190px;
+          top: 118px;
+          z-index: 10;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-monitor-real {
-          left: 162px;
-          top: 86px;
-          z-index: 8;
-          transform: scaleX(-1) skewY(-2deg) rotate(-4deg);
-          transform-origin: 52% 72%;
+          left: 166px;
+          top: 52px;
+          z-index: 15;
+          transform: scaleX(-1) rotate(-5deg) skewY(-8deg);
+          transform-origin: 50% 74%;
           filter: drop-shadow(0 12px 14px rgba(37, 99, 235, 0.18));
           animation: monitorPulse 3.6s ease-in-out infinite;
           animation-delay: var(--delay);
         }
         .station-screen-overlay {
           position: absolute;
-          left: 179px;
-          top: 99px;
+          left: 176px;
+          top: 98px;
           z-index: 9;
-          width: 74px;
-          height: 43px;
-          transform: scaleX(-1) skewY(-10deg) rotate(-4deg);
+          width: 82px;
+          height: 48px;
+          transform: scaleX(-1) skewY(-7deg) rotate(-4deg);
           transform-origin: 50% 50%;
           pointer-events: none;
-          filter: drop-shadow(0 4px 8px rgba(14, 165, 233, 0.22));
-          opacity: 0.92;
+          filter: drop-shadow(0 2px 5px rgba(14, 165, 233, 0.18));
+          mix-blend-mode: screen;
+          opacity: 0.72;
         }
         .screen-scan {
           fill: none;
-          stroke: rgba(191, 219, 254, 0.8);
-          stroke-width: 2.2;
+          stroke: rgba(191, 219, 254, 0.28);
+          stroke-width: 1.45;
           stroke-linecap: round;
-          stroke-dasharray: 36 14;
+          stroke-dasharray: 26 18;
           animation: screenScan 2.8s linear infinite;
         }
         .station-keyboard-real {
-          left: 176px;
-          top: 168px;
-          z-index: 9;
-          transform: scaleX(-1) skewY(-5deg) rotate(3deg);
+          left: 188px;
+          top: 160px;
+          z-index: 12;
+          transform: scaleX(-1) rotate(8deg) skewX(-5deg);
           transform-origin: center center;
           filter: drop-shadow(0 8px 10px rgba(15, 23, 42, 0.14));
         }
         .station-mouse-real {
-          left: 154px;
-          top: 178px;
-          z-index: 9;
-          transform: scaleX(-1) skewY(-4deg) rotate(3deg);
+          left: 267px;
+          top: 170px;
+          z-index: 16;
+          transform: rotate(-8deg);
           transform-origin: center center;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-mug-real {
-          left: 252px;
-          top: 141px;
-          z-index: 15;
+          left: 268px;
+          top: 122px;
+          z-index: 16;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-chair-back-real {
@@ -2687,9 +2693,9 @@ export default function OfficePage() {
           clip-path: polygon(0 28%, 44% 48%, 44% 100%, 0 100%);
         }
         .station-cubicle-front-right {
-          z-index: 15;
+          z-index: 6;
           filter: none;
-          clip-path: polygon(74% 45%, 100% 29%, 100% 100%, 74% 100%);
+          clip-path: polygon(74% 32%, 100% 22%, 100% 88%, 74% 98%);
         }
         .station-operator,
         .station-callout-layer {
@@ -2712,21 +2718,13 @@ export default function OfficePage() {
         .station-presence-seated_work .station-callout-layer,
         .station-presence-thinking_at_desk .station-operator,
         .station-presence-thinking_at_desk .station-callout-layer {
-          left: 146px;
-          top: 50px;
+          left: 139px;
+          top: 72px;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-operator,
         .station-presence-thinking_at_desk .station-operator {
           z-index: 13;
-        }
-        .station-presence-walking_to_peer .station-operator {
-          animation: agentTravel 8.4s ease-in-out infinite;
-          animation-delay: var(--delay);
-        }
-        .station-presence-walking_to_peer .station-callout-layer {
-          animation: agentTravel 8.4s ease-in-out infinite;
-          animation-delay: var(--delay);
         }
         .station-agent-sprite {
           position: absolute;
@@ -2745,8 +2743,8 @@ export default function OfficePage() {
         .station-presence-seated_work .station-agent-sprite,
         .station-presence-thinking_at_desk .station-agent-sprite {
           background-size: 512px 180px;
-          transform: scale(0.6);
-          clip-path: inset(0 0 18% 0);
+          transform: scale(0.48);
+          clip-path: inset(0 0 38% 0);
           animation: seatedWorkFrames 1.8s steps(4) infinite, seatedWorkBob 2.4s ease-in-out infinite;
           animation-delay: var(--delay);
         }
@@ -2760,55 +2758,12 @@ export default function OfficePage() {
         }
         .station-presence-seated_work .station-status-dot,
         .station-presence-thinking_at_desk .station-status-dot {
-          right: 38px;
-          bottom: 42px;
+          display: none;
         }
         .station-presence-thinking_at_desk .station-agent-sprite {
           filter:
             drop-shadow(0 14px 14px rgba(15, 23, 42, 0.18))
             drop-shadow(0 0 10px color-mix(in srgb, var(--zone), transparent 62%));
-        }
-        .station-interaction-host .station-operator {
-          left: 106px;
-          top: 112px;
-          z-index: 17;
-          animation: operatorTalkNod 1.2s ease-in-out infinite;
-          animation-delay: var(--delay);
-        }
-        .station-interaction-host .station-agent-sprite {
-          transform: scale(0.64);
-        }
-        .station-peer-operator {
-          position: absolute;
-          left: 194px;
-          top: 112px;
-          width: 128px;
-          height: 180px;
-          z-index: 17;
-          animation: operatorTalkNod 1.2s ease-in-out infinite reverse;
-          animation-delay: var(--delay);
-        }
-        .station-peer-operator .station-agent-sprite {
-          transform: scale(0.64);
-        }
-        .station-interaction-visitor .station-operator,
-        .station-interaction-visitor .station-callout-layer {
-          pointer-events: none;
-        }
-        .station-talk-bubble-peer {
-          left: 28px;
-          top: 10px;
-        }
-        .station-presence-walking_to_peer .station-agent-sprite {
-          animation:
-            agentSpriteFrames 0.96s steps(8) infinite,
-            agentStepBob 0.54s ease-in-out infinite;
-          animation-delay: var(--delay);
-        }
-        .station-presence-talking_with_peer .station-agent-sprite,
-        .station-presenting .station-agent-sprite {
-          animation: talkNod 1.2s ease-in-out infinite;
-          animation-delay: var(--delay);
         }
         .station-agent-male-idle-left,
         .station-agent-idle-left {
@@ -2820,25 +2775,11 @@ export default function OfficePage() {
           background-image: url('/office/agents/male-idle-right-smart.png');
           animation-duration: 2.4s;
         }
-        .station-agent-male-walk-left,
-        .station-agent-walk-left {
-          background-image: url('/office/agents/male-walk-left-smart.png');
-        }
-        .station-agent-male-walk-right,
-        .station-agent-walk-right {
-          background-image: url('/office/agents/male-walk-right-smart.png');
-        }
         .station-agent-female-idle-left {
           background-image: url('/office/agents/female-idle-left-smart.png');
         }
         .station-agent-female-idle-right {
           background-image: url('/office/agents/female-idle-right-smart.png');
-        }
-        .station-agent-female-walk-left {
-          background-image: url('/office/agents/female-walk-left-smart.png');
-        }
-        .station-agent-female-walk-right {
-          background-image: url('/office/agents/female-walk-right-smart.png');
         }
         .station-agent-male-sit-left {
           background-image: url('/office/agents/male-sit-left-smart.png');
@@ -2851,41 +2792,6 @@ export default function OfficePage() {
         }
         .station-agent-female-sit-right {
           background-image: url('/office/agents/female-sit-right-smart.png');
-        }
-        .station-talk-bubble {
-          position: absolute;
-          left: 82px;
-          top: 16px;
-          z-index: 5;
-          width: 34px;
-          height: 22px;
-          border-radius: 999px;
-          background: rgba(255, 255, 255, 0.92);
-          box-shadow: 0 8px 16px rgba(15, 23, 42, 0.14);
-          animation: talkBubble 1.4s ease-in-out infinite;
-        }
-        .station-talk-bubble::before,
-        .station-talk-bubble::after {
-          content: '';
-          position: absolute;
-          top: 9px;
-          width: 4px;
-          height: 4px;
-          border-radius: 999px;
-          background: var(--zone);
-        }
-        .station-talk-bubble::before {
-          left: 10px;
-          box-shadow: 7px 0 0 var(--zone), 14px 0 0 var(--zone);
-        }
-        .station-talk-bubble::after {
-          left: 7px;
-          top: 18px;
-          width: 8px;
-          height: 8px;
-          transform: rotate(45deg);
-          border-radius: 2px;
-          background: rgba(255, 255, 255, 0.92);
         }
         .station-agent-callout {
           position: absolute;
@@ -2989,10 +2895,10 @@ export default function OfficePage() {
           animation: thought 2s ease-in-out infinite;
         }
         .station-reviewing .station-monitor-real { animation-name: reviewScan; }
-        .station-presenting .station-monitor-real { transform: scale(1.08); }
+        .station-presenting .station-monitor-real { transform: scaleX(-1) rotate(-5deg) skewY(-8deg) scale(1.05); }
         .station {
           width: 390px;
-          height: 368px;
+          height: 386px;
           transform-origin: 50% 72%;
         }
         .station-floor-slab {
@@ -3015,9 +2921,9 @@ export default function OfficePage() {
             drop-shadow(0 1px 0 rgba(255, 255, 255, 0.36));
         }
         .station-desk-real {
-          left: 86px;
-          top: 116px;
-          z-index: 6;
+          left: 76px;
+          top: 90px;
+          z-index: 7;
           filter: drop-shadow(0 12px 12px rgba(15, 23, 42, 0.12));
         }
         .station-lamp-real {
@@ -3029,61 +2935,63 @@ export default function OfficePage() {
           filter: drop-shadow(0 8px 8px rgba(15, 23, 42, 0.14));
         }
         .station-plant-real {
-          left: 82px;
-          top: 141px;
-          z-index: 9;
+          left: 88px;
+          top: 126px;
+          z-index: 16;
           filter: drop-shadow(0 8px 8px rgba(15, 23, 42, 0.14));
         }
         .station-tablet-real {
-          left: 120px;
-          top: 181px;
-          z-index: 9;
+          left: 122px;
+          top: 169px;
+          z-index: 16;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-tray-real {
-          left: 204px;
-          top: 114px;
-          z-index: 9;
+          left: 196px;
+          top: 122px;
+          z-index: 11;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-monitor-real {
-          left: 186px;
-          top: 38px;
-          z-index: 10;
-          transform: none;
-          transform-origin: 52% 72%;
+          left: 166px;
+          top: 48px;
+          z-index: 15;
+          transform: scaleX(-1) rotate(-5deg) skewY(-8deg);
+          transform-origin: 50% 74%;
           filter: drop-shadow(0 12px 14px rgba(37, 99, 235, 0.18));
           animation: monitorPulse 3.6s ease-in-out infinite;
           animation-delay: var(--delay);
         }
         .station-screen-overlay {
-          left: 196px;
-          top: 54px;
-          z-index: 11;
+          left: 172px;
+          top: 60px;
+          z-index: 16;
           width: 95px;
           height: 55px;
-          transform: skewY(-8deg) rotate(-1deg);
+          transform: scaleX(-1) skewY(8deg) rotate(1deg);
+          transform-origin: 50% 50%;
           opacity: 0.82;
           mix-blend-mode: screen;
         }
         .station-keyboard-real {
-          left: 210px;
-          top: 149px;
-          z-index: 10;
-          transform: rotate(-2deg);
+          left: 186px;
+          top: 158px;
+          z-index: 12;
+          transform: scaleX(-1) rotate(8deg) skewX(-5deg);
+          transform-origin: center center;
           filter: drop-shadow(0 8px 10px rgba(15, 23, 42, 0.14));
         }
         .station-mouse-real {
-          left: 286px;
-          top: 164px;
-          z-index: 10;
+          left: 276px;
+          top: 170px;
+          z-index: 16;
           transform: rotate(-8deg);
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-mug-real {
-          left: 307px;
-          top: 116px;
-          z-index: 11;
+          left: 274px;
+          top: 118px;
+          z-index: 16;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-chair-back-real {
@@ -3106,8 +3014,8 @@ export default function OfficePage() {
         }
         .station-cubicle-front-right {
           display: block;
-          z-index: 14;
-          clip-path: polygon(74% 35%, 100% 25%, 100% 100%, 74% 100%);
+          z-index: 6;
+          clip-path: polygon(74% 32%, 100% 22%, 100% 88%, 74% 98%);
           filter: none;
         }
         .station-operator,
@@ -3123,9 +3031,9 @@ export default function OfficePage() {
         }
         .station-presence-seated_work .station-operator,
         .station-presence-thinking_at_desk .station-operator {
-          left: 154px;
-          top: 104px;
-          z-index: 12;
+          left: 138px;
+          top: 84px;
+          z-index: 13;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-callout-layer,
@@ -3134,41 +3042,6 @@ export default function OfficePage() {
           top: 54px;
           animation: actorFloat 4.2s ease-in-out infinite;
           animation-delay: var(--delay);
-        }
-        .station-presence-walking_to_peer .station-operator {
-          left: 246px;
-          top: 196px;
-          z-index: 16;
-        }
-        .station-presence-walking_to_peer .station-callout-layer {
-          left: 246px;
-          top: 158px;
-        }
-        .station-interaction-host .station-operator {
-          left: 230px;
-          top: 196px;
-          z-index: 16;
-          animation: operatorTalkNod 1.2s ease-in-out infinite;
-          animation-delay: var(--delay);
-        }
-        .station-peer-operator {
-          left: 288px;
-          top: 196px;
-          z-index: 17;
-          animation: operatorTalkNod 1.2s ease-in-out infinite reverse;
-          animation-delay: var(--delay);
-        }
-        .station-interaction-host .station-agent-sprite,
-        .station-peer-operator .station-agent-sprite {
-          transform: scale(0.54);
-        }
-        .station-talk-bubble {
-          left: 78px;
-          top: 14px;
-        }
-        .station-talk-bubble-peer {
-          left: 8px;
-          top: 14px;
         }
         @media (max-width: 900px) {
           .office-floor {
@@ -3204,44 +3077,15 @@ export default function OfficePage() {
           50% { transform: scale(var(--scene-scale)) rotate(var(--scene-rotate)) translateY(-3px); }
         }
         @keyframes actorFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-        @keyframes actorWalk { 0%,100% { transform: translateX(-10px) translateY(0); } 50% { transform: translateX(10px) translateY(-4px); } }
         @keyframes seatedBreath { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
-        @keyframes agentTravel {
-          0%, 14% { transform: translate(0, 0); opacity: 1; }
-          46%, 70% { transform: translate(var(--travel-x), var(--travel-y)); opacity: 1; }
-          82%, 99% { transform: translate(var(--travel-x), var(--travel-y)); opacity: 0; }
-          100% { transform: translate(0, 0); opacity: 0; }
-        }
-        @keyframes agentVisit {
-          0%, 18% { transform: translate(0, 0); }
-          42%, 76% { transform: translate(calc(var(--travel-x) * 0.72), calc(var(--travel-y) * 0.72)); }
-          100% { transform: translate(0, 0); }
-        }
-        @keyframes agentSpriteFrames { from { background-position: 0 0; } to { background-position: -1024px 0; } }
         @keyframes seatedWorkFrames { from { background-position: 0 0; } to { background-position: -512px 0; } }
-        @keyframes agentStepBob {
-          0%, 100% { transform: scale(0.62) translateY(0) rotate(-1deg); }
-          50% { transform: scale(0.62) translateY(-5px) rotate(1deg); }
-        }
         @keyframes seatedWorkBob {
-          0%, 100% { transform: scale(0.6) translateY(0); }
-          50% { transform: scale(0.6) translateY(-2px); }
+          0%, 100% { transform: scale(0.48) translateY(0); }
+          50% { transform: scale(0.48) translateY(-2px); }
         }
         @keyframes screenScan { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -50; } }
         @keyframes monitorPulse { 0%,100% { filter: brightness(1) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.08) drop-shadow(0 12px 18px rgba(37,99,235,0.3)); } }
         @keyframes badgeBlink { 0%,100% { opacity: 0.95; } 50% { opacity: 0.62; } }
-        @keyframes talkNod {
-          0%, 100% { transform: scale(0.62) rotate(0); }
-          50% { transform: scale(0.62) rotate(-4deg) translateY(-2px); }
-        }
-        @keyframes operatorTalkNod {
-          0%, 100% { transform: rotate(0) translateY(0); }
-          50% { transform: rotate(-4deg) translateY(-2px); }
-        }
-        @keyframes talkBubble {
-          0%, 100% { opacity: 0.78; transform: translateY(0) scale(0.96); }
-          50% { opacity: 1; transform: translateY(-5px) scale(1); }
-        }
         @keyframes thought { 0%,100% { transform: translateY(0); opacity: 0.45; } 50% { transform: translateY(-5px); opacity: 1; } }
         @keyframes reviewScan { 0%,100% { filter: brightness(1) hue-rotate(0deg) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.16) hue-rotate(12deg) drop-shadow(0 12px 20px rgba(14,165,233,0.38)); } }
       `}</style>

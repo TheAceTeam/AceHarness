@@ -18,6 +18,14 @@ const officeTeamStateSchema = z.object({
 
 export type OfficeTeamState = z.infer<typeof officeTeamStateSchema>;
 
+export interface OfficeTeamProfileAssignment {
+  agentName: string;
+  displayName?: string;
+  officeRole?: string;
+  zone?: string;
+  order?: number;
+}
+
 function statePath(): string {
   return getWorkspaceDataFile('office', 'team-state.json');
 }
@@ -42,7 +50,12 @@ async function saveCurrentOfficeTeam(state: OfficeTeamState): Promise<OfficeTeam
   return state;
 }
 
-async function updateAgentOfficeProfile(agentName: string, active: boolean, order: number): Promise<void> {
+async function updateAgentOfficeProfile(
+  agentName: string,
+  active: boolean,
+  order: number,
+  assignment?: OfficeTeamProfileAssignment
+): Promise<void> {
   const filepath = await getRuntimeAgentConfigPath(agentName);
   const current = parse(await readFile(filepath, 'utf-8'));
   const agentResult = roleConfigSchema.safeParse(current);
@@ -51,12 +64,12 @@ async function updateAgentOfficeProfile(agentName: string, active: boolean, orde
   }
   const agent = agentResult.data;
   const currentProfile = agent.workspaceProfile || {};
-  const zone = currentProfile.visual?.zone || inferOfficeZone(agent);
+  const zone = assignment?.zone || currentProfile.visual?.zone || inferOfficeZone(agent);
   const nextProfile = {
     ...currentProfile,
-    displayName: currentProfile.displayName || agent.title || agent.name,
+    displayName: currentProfile.displayName || assignment?.displayName || agent.title || agent.name,
     nickname: currentProfile.nickname || currentProfile.displayName || agent.title || agent.name,
-    officeRole: currentProfile.officeRole || zone,
+    officeRole: assignment?.officeRole || currentProfile.officeRole || zone,
     residency: {
       ...(currentProfile.residency || {}),
       office: active,
@@ -70,7 +83,7 @@ async function updateAgentOfficeProfile(agentName: string, active: boolean, orde
     visual: {
       ...(currentProfile.visual || {}),
       zone,
-      order: currentProfile.visual?.order ?? order,
+      order: assignment?.order ?? currentProfile.visual?.order ?? order,
     },
     motion: {
       ...(currentProfile.motion || {}),
@@ -88,20 +101,30 @@ export async function applyOfficeTeamPlan(input: {
   plan?: OfficeTeamPlan;
   requirement?: string;
   agentNames?: string[];
+  assignments?: OfficeTeamProfileAssignment[];
 }): Promise<OfficeTeamState> {
   const plan = input.plan || await generateOfficeTeamPlan({
     requirement: input.requirement || '',
     maxMembers: input.agentNames?.length || undefined,
   });
-  const selectedNames = input.agentNames?.length ? input.agentNames : plan.members.map((member) => member.agentName);
+  const selectedNames = input.agentNames?.length
+    ? input.agentNames
+    : input.assignments?.length
+      ? input.assignments.map((assignment) => assignment.agentName)
+      : plan.members.map((member) => member.agentName);
   if (!selectedNames.length) throw new Error('没有可加入办公室的成员');
 
   const previous = await getCurrentOfficeTeam();
   const selectedSet = new Set(selectedNames);
   const previousNames = previous?.activeAgentNames || [];
   const toUpdate = [...new Set([...selectedNames, ...previousNames])];
+  const assignmentMap = new Map((input.assignments || []).map((assignment) => [assignment.agentName, assignment]));
 
-  await Promise.all(toUpdate.map((agentName, index) => updateAgentOfficeProfile(agentName, selectedSet.has(agentName), index + 1)));
+  await Promise.all(toUpdate.map((agentName, index) => {
+    const selectedIndex = selectedNames.indexOf(agentName);
+    const order = selectedIndex >= 0 ? selectedIndex + 1 : index + 1;
+    return updateAgentOfficeProfile(agentName, selectedSet.has(agentName), order, assignmentMap.get(agentName));
+  }));
 
   return saveCurrentOfficeTeam({
     version: 1,

@@ -425,12 +425,10 @@ function AgoraZenCover({
   hasExistingTopics,
   onCreate,
   onCreateGuest,
-  onOpenOffice,
 }: {
   hasExistingTopics: boolean;
   onCreate: () => void;
   onCreateGuest: () => void;
-  onOpenOffice: () => void;
 }) {
   return (
     <div className="relative flex h-full min-h-[520px] items-center justify-center overflow-hidden px-4 py-8 md:px-8 lg:px-16">
@@ -473,14 +471,6 @@ function AgoraZenCover({
               >
                 <span className="material-symbols-outlined mr-2 align-[-3px] text-[16px]">gesture</span>
                 {hasExistingTopics ? '左侧选择议题即可进入讨论' : '创建常驻嘉宾'}
-              </button>
-              <button
-                type="button"
-                className="rounded-full border border-cyan-200 bg-cyan-50/90 px-4 py-2 text-sm text-cyan-700 shadow-sm transition-colors hover:border-cyan-300 hover:bg-cyan-100 dark:border-cyan-400/30 dark:bg-cyan-500/10 dark:text-cyan-200 dark:hover:bg-cyan-500/20"
-                onClick={onOpenOffice}
-              >
-                <span className="material-symbols-outlined mr-2 align-[-3px] text-[16px]">business_center</span>
-                切换到一人公司模式
               </button>
             </div>
           </div>
@@ -2020,7 +2010,6 @@ function ChatPageContent() {
                         hasExistingTopics={hasExistingAgoraTopics}
                         onCreate={handleCreateAgoraSession}
                         onCreateGuest={handleCreateAgoraGuest}
-                        onOpenOffice={() => router.push('/office')}
                       />
                     ) : messages.length === 0 && !loading && (
                       <div className="flex flex-col items-center justify-center h-full gap-8">
