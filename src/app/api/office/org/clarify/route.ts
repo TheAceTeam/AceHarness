@@ -6,9 +6,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const requirement = typeof body?.requirement === 'string' ? body.requirement : '';
+    const candidateAgentNames = Array.isArray(body?.candidateAgentNames) ? body.candidateAgentNames : undefined;
     let availableAgentCount: number | undefined;
     if (requirement.trim()) {
-      const plan = await generateOfficeTeamPlan({ requirement, maxMembers: 1, minMembers: 1 }).catch(() => null);
+      const plan = await generateOfficeTeamPlan({ requirement, maxMembers: 1, minMembers: 1, candidateAgentNames }).catch(() => null);
       availableAgentCount = plan?.availableAgentCount;
     }
     const clarification = createOfficeOrgClarification({ requirement, availableAgentCount });

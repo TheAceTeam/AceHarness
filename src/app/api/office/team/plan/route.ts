@@ -8,6 +8,7 @@ export async function POST(request: NextRequest) {
       requirement: String(body?.requirement || ''),
       maxMembers: Number.isFinite(body?.maxMembers) ? Number(body.maxMembers) : undefined,
       minMembers: Number.isFinite(body?.minMembers) ? Number(body.minMembers) : undefined,
+      candidateAgentNames: Array.isArray(body?.candidateAgentNames) ? body.candidateAgentNames : undefined,
     });
     return NextResponse.json({ plan });
   } catch (error: any) {

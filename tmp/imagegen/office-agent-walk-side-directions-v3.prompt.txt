@@ -1,0 +1,25 @@
+Use case: stylized-concept
+Asset type: 2D chibi game sprite sheet for an office simulation UI
+Primary request: Generate a visibly animated chibi side-view walking sprite sheet for two ACEHarness office agents, one male and one female. It must match the Q-version / chibi proportions and polished 2D anime-adjacent style of the existing office-agent-talk-single-directions and office-agent-work-backview sheets.
+Scene/backdrop: Perfectly flat solid #00ff00 chroma-key background.
+Subject: Two modern professional AI office teammates in navy business-casual outfits.
+Male character: short dark hair, oversized round chibi head, navy blazer, white shirt, dark pants, black shoes.
+Female character: brown ponytail, oversized round chibi head, navy blazer, white blouse, black skirt, black shoes.
+Style/medium: Q-version chibi 2D game character art, clean dark outlines, soft cel shading, rounded hands and feet, cute but professional office-agent look. Same visual language as the existing talk sprite sheet, not realistic.
+Mandatory proportions: Each character must be 2.1 to 2.4 heads tall total. The head must take about 40-45% of the full character height. Body and legs are short and compact. Hands and feet are simplified and rounded. Do not draw tall adult proportions. Do not draw long realistic legs. Do not draw realistic runway walking figures.
+Composition/framing: A 1536x1024 image arranged as a precise 6 columns x 4 rows sprite sheet. Each cell is exactly 256x256 pixels. The full chibi body is centered in each cell with generous padding. Feet visible and aligned to the same baseline in every frame. Keep character scale, lighting, head size, and camera angle stable.
+Animation layout:
+Row 1: male chibi agent walking to screen-right, exactly 6 loopable keyframes.
+Row 2: male chibi agent walking to screen-left, exactly 6 loopable keyframes.
+Row 3: female chibi agent walking to screen-right, exactly 6 loopable keyframes.
+Row 4: female chibi agent walking to screen-left, exactly 6 loopable keyframes.
+Required gait poses for every row:
+Column 1: contact pose, one short leg forward, other short leg back, opposite arm forward.
+Column 2: down pose, body slightly lower, front knee bent, rear foot lifting.
+Column 3: passing pose, one knee lifted under the body, arms near center.
+Column 4: high point pose, body slightly higher, opposite knee forward.
+Column 5: opposite contact pose, legs and arms reversed from column 1.
+Column 6: recovery pose, visibly different and ready to loop to column 1.
+Motion requirements: The six columns must be obviously different animation frames. Arms swing opposite to legs. Hair/ponytail and blazer may bounce slightly. The walk must feel like a cute game sprite cycle, not a repeated standing pose.
+Constraints: No text, no labels, no frame numbers, no grid lines, no watermark. The background must be one uniform #00ff00 color with no shadows, gradients, texture, reflections, floor plane, or lighting variation. Do not use #00ff00 anywhere in the characters.
+Avoid: tall realistic adults, normal human proportions, long legs, photorealism, 3D render, repeated poses, static standing pose, sliding feet, cropped feet, inconsistent identity, inconsistent scale, extra objects, speech bubbles, desks, chairs, blank frames.

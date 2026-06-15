@@ -72,6 +72,16 @@ function normalizeRequirement(requirement: string): string {
   return requirement.trim().replace(/\s+/g, ' ');
 }
 
+function normalizeAgentName(value: unknown): string {
+  return String(value || '').trim();
+}
+
+function normalizeCandidateAgentNames(values: unknown): Set<string> | null {
+  if (!Array.isArray(values)) return null;
+  const names = values.map(normalizeAgentName).filter(Boolean);
+  return names.length ? new Set(names) : null;
+}
+
 function displayName(agent: RoleConfig): string {
   return (
     agent.workspaceProfile?.nickname
@@ -172,6 +182,7 @@ export async function generateOfficeTeamPlan(input: {
   requirement: string;
   maxMembers?: number;
   minMembers?: number;
+  candidateAgentNames?: string[];
 }): Promise<OfficeTeamPlan> {
   const requirement = normalizeRequirement(input.requirement);
   if (!requirement) {
@@ -180,7 +191,15 @@ export async function generateOfficeTeamPlan(input: {
 
   const maxMembers = Math.min(Math.max(input.maxMembers ?? 6, 1), 12);
   const minMembers = Math.min(Math.max(input.minMembers ?? 4, 1), maxMembers);
-  const candidates = (await listRuntimeAgents()).map((agent) => memberFromAgent(agent, requirement));
+  const candidateNameSet = normalizeCandidateAgentNames(input.candidateAgentNames);
+  const runtimeAgents = await listRuntimeAgents();
+  const scopedAgents = candidateNameSet
+    ? runtimeAgents.filter((agent) => candidateNameSet.has(agent.name))
+    : runtimeAgents;
+  const candidates = scopedAgents.map((agent) => memberFromAgent(agent, requirement));
+  if (candidateNameSet && candidates.length === 0) {
+    throw new Error('筛选范围内没有可用于组建团队的 Agent');
+  }
   const selected = new Map<string, OfficeTeamPlanMember>();
 
   for (const zone of REQUIRED_ZONES) {

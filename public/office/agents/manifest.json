@@ -1,74 +1,98 @@
 {
-  "male-idle-left-smart": {
-    "src": "/office/agents/male-idle-left-smart.png",
+  "male-work-back-right-smart": {
+    "src": "/office/agents/male-work-back-right-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
+    "frames": 6
   },
-  "male-idle-right-smart": {
-    "src": "/office/agents/male-idle-right-smart.png",
+  "male-work-back-left-smart": {
+    "src": "/office/agents/male-work-back-left-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
+    "frames": 6
   },
-  "male-walk-left-smart": {
-    "src": "/office/agents/male-walk-left-smart.png",
+  "male-think-back-right-smart": {
+    "src": "/office/agents/male-think-back-right-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
+    "frames": 6
+  },
+  "male-think-back-left-smart": {
+    "src": "/office/agents/male-think-back-left-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-work-back-right-smart": {
+    "src": "/office/agents/female-work-back-right-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-work-back-left-smart": {
+    "src": "/office/agents/female-work-back-left-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-think-back-right-smart": {
+    "src": "/office/agents/female-think-back-right-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-think-back-left-smart": {
+    "src": "/office/agents/female-think-back-left-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-talk-left-smart": {
+    "src": "/office/agents/female-talk-left-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "female-talk-right-smart": {
+    "src": "/office/agents/female-talk-right-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "male-talk-left-smart": {
+    "src": "/office/agents/male-talk-left-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
+  },
+  "male-talk-right-smart": {
+    "src": "/office/agents/male-talk-right-smart.png",
+    "frameWidth": 128,
+    "frameHeight": 180,
+    "frames": 6
   },
   "male-walk-right-smart": {
     "src": "/office/agents/male-walk-right-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
+    "frames": 6
   },
-  "female-idle-left-smart": {
-    "src": "/office/agents/female-idle-left-smart.png",
+  "male-walk-left-smart": {
+    "src": "/office/agents/male-walk-left-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
-  },
-  "female-idle-right-smart": {
-    "src": "/office/agents/female-idle-right-smart.png",
-    "frameWidth": 128,
-    "frameHeight": 180,
-    "frames": 8
+    "frames": 6
   },
   "female-walk-left-smart": {
     "src": "/office/agents/female-walk-left-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
+    "frames": 6
   },
   "female-walk-right-smart": {
     "src": "/office/agents/female-walk-right-smart.png",
     "frameWidth": 128,
     "frameHeight": 180,
-    "frames": 8
-  },
-  "male-sit-right-smart": {
-    "src": "/office/agents/male-sit-right-smart.png",
-    "frameWidth": 128,
-    "frameHeight": 180,
-    "frames": 4
-  },
-  "male-sit-left-smart": {
-    "src": "/office/agents/male-sit-left-smart.png",
-    "frameWidth": 128,
-    "frameHeight": 180,
-    "frames": 4
-  },
-  "female-sit-right-smart": {
-    "src": "/office/agents/female-sit-right-smart.png",
-    "frameWidth": 128,
-    "frameHeight": 180,
-    "frames": 4
-  },
-  "female-sit-left-smart": {
-    "src": "/office/agents/female-sit-left-smart.png",
-    "frameWidth": 128,
-    "frameHeight": 180,
-    "frames": 4
+    "frames": 6
   }
 }
