@@ -45,7 +45,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -435,18 +435,31 @@ function normalizeSpecArtifactSnapshots(value: unknown): SpecArtifactSnapshot[] 
 function extractSpecArtifactRevisionResult(markdown: string, fallback: SpecCodingArtifactDrafts): {
   summary: string;
   artifacts: SpecCodingArtifactDrafts;
+  revisionPlan?: Array<{ artifact: string; op: string; targetId: string; reason?: string }>;
 } | null {
   const parsed = extractStructuredResultPayload<{
     summary?: string;
     artifacts?: Partial<SpecCodingArtifactDrafts>;
+    revisionPlan?: Array<{ artifact?: string; op?: string; targetId?: string; reason?: string }>;
   }>(markdown, 'spec_artifact_revision');
   if (!parsed?.artifacts || typeof parsed.artifacts !== 'object') return null;
   const artifacts = normalizeSpecArtifactDrafts(parsed.artifacts, fallback);
+  const revisionPlan = Array.isArray(parsed.revisionPlan)
+    ? parsed.revisionPlan
+        .map((item) => ({
+          artifact: typeof item.artifact === 'string' ? item.artifact : '',
+          op: typeof item.op === 'string' ? item.op : '',
+          targetId: typeof item.targetId === 'string' ? item.targetId : '',
+          reason: typeof item.reason === 'string' ? item.reason : undefined,
+        }))
+        .filter((item) => item.artifact && item.op && item.targetId)
+    : [];
   return {
     summary: typeof parsed.summary === 'string' && parsed.summary.trim()
       ? parsed.summary.trim()
       : 'AI 修订 Spec 制品',
     artifacts,
+    revisionPlan,
   };
 }
 
@@ -642,6 +655,7 @@ type SpecRevisionCandidate = {
   createdAt: string;
   rawOutput?: string;
   targetVersion?: number;
+  revisionPlan?: Array<{ artifact: string; op: string; targetId: string; reason?: string }>;
 };
 
 type WorkflowValidationIssue = {
@@ -2770,9 +2784,11 @@ export default function WorkbenchPage() {
       '输出要求：',
       '1. 可以先简短说明修订思路。',
       '2. 最终必须在 <result>...</result> 内输出一个 JSON 对象，不要包 ```json 代码块。',
-      '3. JSON 格式必须是 {"kind":"spec_artifact_revision","payload":{"summary":"一句话摘要","artifacts":{"requirements":"# requirements.md\\n...","design":"# design.md\\n...","tasks":"# tasks.md\\n..."}}}。',
+      '3. JSON 格式必须是 {"kind":"spec_artifact_revision","payload":{"summary":"一句话摘要","revisionPlan":[{"artifact":"requirements","op":"modify","targetId":"R1","reason":"为什么改"}],"artifacts":{"requirements":"# requirements.md\\n...","design":"# design.md\\n...","tasks":"# tasks.md\\n..."}}}。',
       '4. artifacts 的三个字段都必须是完整 markdown 字符串，不能只返回片段或 patch。',
-      '5. 输出 </result> 后不要追加任何文字。',
+      '5. revisionPlan 必须用 add / modify / remove / rename 描述具体 R/D/T 或章节的变化；不要只写笼统影响。',
+      '6. requirements 必须保留 R 编号、用户故事和 WHEN/THEN；design 必须保留 D 编号、接口/数据/测试/风险；tasks 必须保留 T 编号、需求追踪、设计追踪、动作、交付和验证。',
+      '7. 输出 </result> 后不要追加任何文字。',
     ].filter(Boolean).join('\n\n');
   }, [
     configFile,
@@ -2883,6 +2899,7 @@ export default function WorkbenchPage() {
         source: 'ai',
         summary: parsed.summary,
         artifacts: parsed.artifacts,
+        revisionPlan: parsed.revisionPlan,
         createdAt: new Date().toISOString(),
         rawOutput: finalContent,
       });
@@ -3542,8 +3559,19 @@ export default function WorkbenchPage() {
       },
     );
   }, [selectedRoleConfig, globalEngine, globalDefaultModel, engine, currentWorkflowExecutionPolicy]);
+  const pendingHumanQuestionKindLabel = useMemo(() => {
+    if (!pendingHumanQuestion) return null;
+    if (pendingHumanQuestion.source?.type === 'human-help') return '人工客服';
+    if (pendingHumanQuestion.source?.type === 'parallel-manual-join') return '并发人工确认';
+    return '人工审查';
+  }, [pendingHumanQuestion]);
+  const pendingHumanAttentionTitle = pendingHumanQuestionKindLabel
+    ? `待${pendingHumanQuestionKindLabel} · ${workflowBaseTitle}`
+    : humanApprovalData
+      ? `待人工审查 · ${workflowBaseTitle}`
+      : null;
   const workflowTitle = useMemo(() => {
-    if (humanApprovalData) return `待人工审查 · ${workflowBaseTitle}`;
+    if (pendingHumanAttentionTitle) return pendingHumanAttentionTitle;
     if (viewingHistoryRun) return `查看运行 · ${workflowBaseTitle}`;
     if (rehearsalInfo?.enabled) return `演练模式 · ${workflowBaseTitle}`;
     if (workflowStatus === 'running') return `运行中 · ${workflowBaseTitle}`;
@@ -3552,7 +3580,7 @@ export default function WorkbenchPage() {
     if (workflowStatus === 'failed' || workflowStatus === 'crashed') return `运行失败 · ${workflowBaseTitle}`;
     if (workflowStatus === 'stopped') return `已停止 · ${workflowBaseTitle}`;
     return `${workflowBaseTitle} · Workflow`;
-  }, [humanApprovalData, viewingHistoryRun, rehearsalInfo?.enabled, workflowStatus, workflowBaseTitle]);
+  }, [pendingHumanAttentionTitle, viewingHistoryRun, rehearsalInfo?.enabled, workflowStatus, workflowBaseTitle]);
   const workflowDirectory = useMemo(() => {
     const supervisorFromConfig = workflowConfig?.workflow?.supervisor?.agent || agentConfigs.find((agent: any) => agent?.roleType === 'supervisor')?.name;
     const supervisorAgent = finalReview?.supervisorAgent || supervisorFromConfig || 'default-supervisor';
@@ -3919,12 +3947,12 @@ export default function WorkbenchPage() {
     dispatch({ type: 'SET_ACTIVE_TAB', payload: 'agents' });
   }, [agents, dispatch, orderedWorkflowAgents]);
   const attentionSignal = useAttentionSignal({
-    active: Boolean(humanApprovalData),
-    title: `待人工审查 · ${workflowBaseTitle}`,
-    notificationTitle: 'ACEHarness - 待人工审查',
-    notificationBody: `${workflowBaseTitle} 进入人工审查点，请及时处理。`,
+    active: Boolean(pendingHumanAttentionTitle),
+    title: pendingHumanAttentionTitle || `待人工审查 · ${workflowBaseTitle}`,
+    notificationTitle: `ACEHarness - ${pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工审查'}`,
+    notificationBody: `${workflowBaseTitle} ${pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '进入人工审查点'}，请及时处理。`,
     toast,
-    toastMessage: `${workflowBaseTitle} 已进入人工审查点`,
+    toastMessage: `${workflowBaseTitle} ${pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '已进入人工审查点'}`,
   });
 
   useDocumentTitle(attentionSignal.active ? attentionSignal.title || null : workflowTitle);
@@ -4954,7 +4982,7 @@ export default function WorkbenchPage() {
         addLog('system', 'warning', `⚠️ 升级人工: ${event.data.phase} - ${event.data.reason}`);
         break;
       case 'human-approval-required':
-        addLog('system', 'info', `👤 等待人工审查: ${event.data.currentState} → ${event.data.nextState || event.data.suggestedNextState || ''}`);
+        addLog('system', 'info', `👤 ${event.data.humanQuestion?.source?.type === 'parallel-manual-join' ? '等待并发人工确认' : '等待人工审查'}: ${event.data.currentState} → ${event.data.nextState || event.data.suggestedNextState || ''}`);
         if (event.data.pendingHumanQuestion) {
           setPendingHumanQuestionIfChanged(event.data.pendingHumanQuestion);
         }
@@ -9223,6 +9251,7 @@ export default function WorkbenchPage() {
                                   supervisorFooter={workflowStatus === 'completed' ? renderFinalReviewCard() : null}
                                   activeTabOverride={executionViewTabOverride}
                                   hasPendingHumanQuestion={!!pendingHumanQuestion}
+                                  pendingHumanQuestion={pendingHumanQuestion as any}
                                   formationAgents={supervisorFormationAgents}
                                   supervisorAgent={runtimeSupervisorAgent}
                                   onStateClick={selectStateDetails}
@@ -9862,6 +9891,18 @@ export default function WorkbenchPage() {
                         onStatesChange={(states) => {
                           const newConfig = JSON.parse(JSON.stringify(editingConfig));
                           newConfig.workflow.states = states;
+                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
+                        }}
+                        humanHelpEnabled={editingConfig.workflow?.humanHelp?.enabled === true}
+                        onHumanHelpEnabledChange={(enabled) => {
+                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
+                          newConfig.workflow = {
+                            ...(newConfig.workflow || {}),
+                            humanHelp: {
+                              ...(newConfig.workflow?.humanHelp || {}),
+                              enabled,
+                            },
+                          };
                           dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
                         }}
                         availableAgents={agentConfigs}
@@ -11644,6 +11685,55 @@ export default function WorkbenchPage() {
           </div>
         </div>
       )}
+
+      <Dialog
+        open={Boolean(pendingHumanQuestion && !humanApprovalMinimized)}
+        onOpenChange={(open) => {
+          if (!open) minimizeHumanApprovalDialog();
+          else restoreHumanApprovalDialog();
+        }}
+      >
+        <DialogContent className="max-w-2xl w-[94vw] max-h-[88vh] overflow-hidden p-0">
+          <div className="flex max-h-[88vh] flex-col">
+            <div className="flex items-start justify-between gap-4 border-b px-6 py-4">
+              <div className="min-w-0">
+                <DialogTitle className="flex items-center gap-2 text-base">
+                  <span className="material-symbols-outlined text-amber-600">support_agent</span>
+                  {pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '等待人工回复'}
+                </DialogTitle>
+                <DialogDescription className="mt-1">
+                  当前步骤已阻塞，提交回复后工作流会继续执行。
+                </DialogDescription>
+              </div>
+              <Button variant="outline" size="sm" onClick={minimizeHumanApprovalDialog}>
+                最小化
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+              {pendingHumanQuestion ? (
+                <HumanQuestionCard
+                  question={pendingHumanQuestion}
+                  submitting={submittingHumanQuestion}
+                  onSubmit={handleSubmitHumanQuestion}
+                  collapsible={false}
+                  autoFocus
+                />
+              ) : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {pendingHumanQuestion && humanApprovalMinimized ? (
+        <button
+          type="button"
+          onClick={restoreHumanApprovalDialog}
+          className={`fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border border-amber-300 bg-amber-500 px-4 py-2 text-sm font-medium text-black shadow-lg transition hover:bg-amber-400 ${humanApprovalMinimizedPulse ? 'animate-pulse' : ''}`}
+        >
+          <span className="material-symbols-outlined text-base">support_agent</span>
+          <span>{pendingHumanQuestionKindLabel ? `待${pendingHumanQuestionKindLabel}` : '待人工回复'}</span>
+        </button>
+      ) : null}
 
       {/* 强制跳转对话框 */}
       {forceTransitionModal && (

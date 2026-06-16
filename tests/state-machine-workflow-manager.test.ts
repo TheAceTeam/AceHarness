@@ -869,6 +869,104 @@ describe('state machine execution flow', () => {
     expect(finalJudgePrompt.indexOf('# 结构化输出要求')).toBeLessThan(finalJudgePrompt.indexOf('<step-conclusion>'));
   });
 
+  test('human help prompt is injected only when workflow option is enabled', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    (manager as any).buildStepContext = Object.getPrototypeOf(manager).buildStepContext.bind(manager);
+    const config = makeConfig({
+      workflow: {
+        humanHelp: { enabled: true },
+      },
+    });
+
+    const prompt = await (manager as any).buildStepContext(
+      config.workflow.states[0].steps[0],
+      config.workflow.states[0],
+      config,
+      'Build a feature',
+    );
+
+    expect(prompt).toContain('# 人工客服请求协议');
+    expect(prompt).toContain('<human-help>');
+  });
+
+  test('human help request creates a human question, waits, and resumes the same step', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      if (engine.calls.filter((call) => call.options.step === 'design-step').length === 1) {
+        return {
+          success: true,
+          output: '<human-help>{"title":"缺少配置","question":"请提供 API_KEY","reason":"没有 API_KEY 无法继续","answerType":"text","placeholder":"API_KEY=..."}</human-help>',
+          sessionId: 'session-design-step',
+        };
+      }
+      expect(options.prompt).toContain('人工客服回复');
+      expect(options.prompt).toContain('API_KEY=test-key');
+      return {
+        success: true,
+        output: '```json\n{"verdict":"pass","summary":"continued after human help"}\n```\n<step-conclusion>完成</step-conclusion>',
+        sessionId: 'session-design-step',
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    (manager as any).buildStepContext = Object.getPrototypeOf(manager).buildStepContext.bind(manager);
+    (manager as any).waitForHumanQuestionAnswer = vi.fn().mockImplementation(async (questionId: string) => {
+      await manager.answerHumanQuestion(questionId, { text: 'API_KEY=test-key' } as any);
+      return (manager as any).humanQuestions.find((question: any) => question.id === questionId);
+    });
+
+    const config = makeConfig({
+      workflow: {
+        humanHelp: { enabled: true },
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(engine.calls.filter((call) => call.options.step === 'design-step')).toHaveLength(2);
+    expect((manager as any).humanQuestions[0]).toMatchObject({
+      status: 'answered',
+      source: expect.objectContaining({ type: 'human-help', stateName: '设计', stepName: 'design-step' }),
+      answerSchema: expect.objectContaining({ type: 'text' }),
+    });
+    expect((manager as any).currentState).not.toBe('__human_approval__');
+  });
+
+  test('human help request can be dismissed by supervisor without creating a human question', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => {
+      if (engine.calls.filter((call) => call.options.step === 'design-step').length === 1) {
+        return {
+          success: true,
+          output: '<human-help>{"title":"想问用户","question":"信息在哪？","reason":"我还没查找","answerType":"text"}</human-help>',
+          sessionId: 'session-design-step',
+        };
+      }
+      expect(options.prompt).toContain('Supervisor 复核人工客服请求');
+      expect(options.prompt).toContain('自行检查仓库、配置文件');
+      return {
+        success: true,
+        output: '```json\n{"verdict":"pass","summary":"continued after supervisor"}\n```\n<step-conclusion>完成</step-conclusion>',
+        sessionId: 'session-design-step',
+      };
+    };
+    const manager = await createManagerForTest(engine);
+    (manager as any).buildStepContext = Object.getPrototypeOf(manager).buildStepContext.bind(manager);
+    const createHumanQuestion = vi.spyOn(manager as any, 'createHumanQuestion');
+
+    const config = makeConfig({
+      workflow: {
+        humanHelp: { enabled: true },
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(createHumanQuestion).not.toHaveBeenCalled();
+    expect(engine.calls.filter((call) => call.options.step === 'design-step')).toHaveLength(2);
+  });
+
   test('final defender step is prompted to repair missing verdict JSON and archives conclusion', async () => {
     const persistence = await import('@/lib/run/state-persistence');
     const saveProcessOutputMock = vi.mocked(persistence.saveProcessOutput);
@@ -971,6 +1069,291 @@ describe('state machine execution flow', () => {
 
     expect(engine.calls.map((call) => call.options.agent).sort()).toEqual(['developer-a', 'developer-b']);
     expect((manager as any).stepLogs.map((log: any) => log.agent).sort()).toEqual(['developer-a', 'developer-b']);
+  });
+
+  test('parallel any join passes when at least one branch passes', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => ({
+      success: true,
+      output: options.prompt.includes('branch-b')
+        ? '```json\n{"verdict":"fail","issues":[{"type":"implementation","severity":"major","description":"branch b failed"}]}\n```'
+        : '```json\n{"verdict":"pass","summary":"branch a passed"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'any' } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'any' } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(result.stepOutputs).toHaveLength(2);
+    expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('completed');
+  });
+
+  test('parallel quorum join requires the configured successful branch count', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => ({
+      success: true,
+      output: options.prompt.includes('branch-c')
+        ? '```json\n{"verdict":"fail","issues":[{"type":"test","severity":"major","description":"branch c failed"}]}\n```'
+        : '```json\n{"verdict":"pass","summary":"branch passed"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+              {
+                name: 'branch-c',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch C',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-c', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect((manager as any).activeConcurrencyGroups.at(-1).joinPolicy.quorum).toBe(2);
+  });
+
+  test('parallel quorum join fails when successful branches are below quorum', async () => {
+    const engine = new MockEngine();
+    engine.executeImpl = async (options) => ({
+      success: true,
+      output: options.prompt.includes('branch-a')
+        ? '```json\n{"verdict":"pass","summary":"branch a passed"}\n```'
+        : '```json\n{"verdict":"fail","issues":[{"type":"implementation","severity":"major","description":"branch failed"}]}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+              {
+                name: 'branch-c',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch C',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-c', joinPolicy: { mode: 'quorum', quorum: 2 } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('failed');
+  });
+
+  test('parallel manual join creates a human approval question and waits for approve', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '```json\n{"verdict":"pass","summary":"branch passed"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+    const approvalEvents: any[] = [];
+    manager.on('human-approval-required', (data: any) => approvalEvents.push(data));
+    (manager as any).waitForHumanQuestionAnswer = vi.fn().mockImplementation(async (questionId: string) => {
+      await manager.answerHumanQuestion(questionId, { selectedOption: 'approve', instruction: 'continue' } as any);
+      return (manager as any).humanQuestions.find((question: any) => question.id === questionId);
+    });
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'manual' } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'manual' } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('pass');
+    expect(approvalEvents).toHaveLength(1);
+    expect(approvalEvents[0].parallelGroupId).toBe('group-1');
+    expect(approvalEvents[0].humanQuestion.answerSchema.type).toBe('single-choice');
+    expect(approvalEvents[0].pendingHumanQuestion).toBe(approvalEvents[0].humanQuestion);
+    expect((manager as any).humanQuestions[0].source.type).toBe('parallel-manual-join');
+    expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('completed');
+  });
+
+  test('human question dedupe keeps different parallel groups distinct', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+
+    const first = await (manager as any).createHumanQuestion({
+      id: 'question-group-1',
+      kind: 'approval',
+      title: '并发组人工确认：group-1',
+      message: 'confirm group 1',
+      currentState: '设计',
+      requiresWorkflowPause: true,
+      answerSchema: { type: 'single-choice', required: true, options: [{ label: '通过', value: 'approve' }] },
+      source: { type: 'parallel-manual-join', groupId: 'group-1', stateName: '设计' },
+    });
+    const second = await (manager as any).createHumanQuestion({
+      id: 'question-group-2',
+      kind: 'approval',
+      title: '并发组人工确认：group-2',
+      message: 'confirm group 2',
+      currentState: '设计',
+      requiresWorkflowPause: true,
+      answerSchema: { type: 'single-choice', required: true, options: [{ label: '通过', value: 'approve' }] },
+      source: { type: 'parallel-manual-join', groupId: 'group-2', stateName: '设计' },
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect((manager as any).humanQuestions).toHaveLength(2);
+    expect((manager as any).humanQuestions.map((question: any) => question.source.groupId).sort()).toEqual(['group-1', 'group-2']);
+  });
+
+  test('parallel manual join reject marks the group as failed', async () => {
+    const engine = new MockEngine({
+      success: true,
+      output: '```json\n{"verdict":"pass","summary":"branch passed"}\n```',
+    });
+    const manager = await createManagerForTest(engine);
+    (manager as any).waitForHumanQuestionAnswer = vi.fn().mockImplementation(async (questionId: string) => {
+      await manager.answerHumanQuestion(questionId, { selectedOption: 'reject', instruction: 'stop' } as any);
+      return (manager as any).humanQuestions.find((question: any) => question.id === questionId);
+    });
+
+    const config = makeConfig({
+      workflow: {
+        states: [
+          {
+            name: '设计',
+            isInitial: true,
+            steps: [
+              {
+                name: 'branch-a',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch A',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-a', joinPolicy: { mode: 'manual' } },
+              },
+              {
+                name: 'branch-b',
+                agent: 'developer',
+                parallelGroup: 'group-1',
+                task: 'Run branch B',
+                role: 'defender',
+                concurrency: { groupId: 'group-1', branchId: 'branch-b', joinPolicy: { mode: 'manual' } },
+              },
+            ],
+            transitions: [],
+          },
+        ],
+      },
+    });
+
+    const result = await (manager as any).executeState(config.workflow.states[0], config, 'Build a feature');
+
+    expect(result.verdict).toBe('fail');
+    expect((manager as any).activeConcurrencyGroups.at(-1).status).toBe('failed');
   });
 
   test('initializeAgents does not create unused serial agentInstanceId aliases', async () => {

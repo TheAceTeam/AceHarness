@@ -210,7 +210,16 @@ export default function WorkflowSupervisorAgoraPanel({
       {!terminalWorkflowStatus && pendingHumanQuestion && onSubmitHumanQuestion ? (
         <>
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="destructive" className="text-[10px]">等待人工审查</Badge>
+            {(() => {
+              const label = pendingHumanQuestion.source?.type === 'human-help'
+                ? '等待人工客服'
+                : pendingHumanQuestion.source?.type === 'parallel-manual-join'
+                  ? '等待并发人工确认'
+                  : '等待人工审查';
+              return (
+                <Badge variant="destructive" className="text-[10px]">{label}</Badge>
+              );
+            })()}
             <span className="text-muted-foreground">{configFile}</span>
             {runId ? <span className="text-muted-foreground">Run: {runId}</span> : null}
           </div>

@@ -38,6 +38,8 @@ import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/cor
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
   onStatesChange: (states: StateMachineState[]) => void;
+  humanHelpEnabled?: boolean;
+  onHumanHelpEnabledChange?: (enabled: boolean) => void;
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
@@ -165,6 +167,8 @@ const SEVERITY_OPTIONS = [
 const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || step?.concurrency?.groupId || '';
 
 const getStepJoinPolicyMode = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.mode || 'all';
+
+const getStepJoinPolicyQuorum = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.quorum;
 
 const slugifyId = (value: string, fallback: string) => {
   const slug = value
@@ -912,6 +916,8 @@ function VerdictTransitionCard({
 export default function StateMachineDesignPanel({
   states,
   onStatesChange,
+  humanHelpEnabled = false,
+  onHumanHelpEnabledChange,
   availableAgents,
   availableSkills = [],
   specTasks = [],
@@ -1139,6 +1145,31 @@ export default function StateMachineDesignPanel({
     });
   };
 
+  const handleSetJoinPolicyQuorum = (groupId: string, quorum: number) => {
+    if (!selectedState) return;
+    const groupSteps = (selectedState.steps || []).filter((step) => getStepParallelGroup(step) === groupId);
+    const normalizedQuorum = Math.max(1, Math.min(groupSteps.length || 1, Math.floor(quorum) || 1));
+    updateState({
+      ...selectedState,
+      steps: (selectedState.steps || []).map((step) => {
+        if (getStepParallelGroup(step) !== groupId) return step;
+        const currentPolicy = step.concurrency?.joinPolicy || { mode: 'quorum' as const };
+        return {
+          ...step,
+          concurrency: {
+            ...(step.concurrency || {}),
+            groupId,
+            joinPolicy: {
+              ...currentPolicy,
+              mode: 'quorum',
+              quorum: normalizedQuorum,
+            },
+          },
+        };
+      }),
+    });
+  };
+
   const handleResetVerdictTransitions = () => {
     if (!selectedState || selectedState.isFinal) return;
     updateState({ ...selectedState, transitions: buildVerdictTransitions(selectedState, states) });
@@ -1241,6 +1272,30 @@ export default function StateMachineDesignPanel({
 
       {selectedState ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          <div className="rounded-lg border border-border bg-muted/20 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-amber-600" style={{ fontSize: 17 }}>support_agent</span>
+                  <span className="text-sm font-semibold">人工客服</span>
+                  <Badge variant={humanHelpEnabled ? 'default' : 'outline'} className="text-[10px]">
+                    {humanHelpEnabled ? '已开启' : '默认关闭'}
+                  </Badge>
+                </div>
+                <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                  开启后，步骤遇到阻塞性问题可请求人工客服；Supervisor 复核后会弹出人工回复卡片，不改变状态跳转。
+                </div>
+              </div>
+              <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs">
+                <Checkbox
+                  checked={humanHelpEnabled}
+                  onCheckedChange={(checked) => onHumanHelpEnabledChange?.(checked === true)}
+                />
+                <span>{humanHelpEnabled ? '开启' : '关闭'}</span>
+              </label>
+            </div>
+          </div>
+
           {/* 状态基本信息 */}
           <div>
             {editingStateInfo ? (
@@ -1376,6 +1431,7 @@ export default function StateMachineDesignPanel({
                     const isParallelGroup = !!group.id && group.steps.length > 1;
                     const firstStep = group.steps[0]?.step;
                     const joinMode = getStepJoinPolicyMode(firstStep);
+                    const quorumValue = getStepJoinPolicyQuorum(firstStep) || Math.max(1, Math.min(2, group.steps.length));
                     if (isParallelGroup) {
                       return (
                         <div key={`${group.id}-${group.startIndex}`} className="rounded-2xl border border-cyan-300/70 bg-cyan-500/5 p-2.5 shadow-sm dark:border-cyan-800/80">
@@ -1400,6 +1456,19 @@ export default function StateMachineDesignPanel({
                                   {joinPolicyLabels[mode]}
                                 </Button>
                               ))}
+                              {joinMode === 'quorum' ? (
+                                <label className="inline-flex h-6 items-center gap-1 rounded-md border border-input bg-background px-1.5 text-[10px]">
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={group.steps.length}
+                                    value={quorumValue}
+                                    className="h-5 w-12 border-0 p-0 text-center text-[10px] shadow-none focus-visible:ring-0"
+                                    onChange={(event) => group.id && handleSetJoinPolicyQuorum(group.id, Number(event.target.value) || 1)}
+                                  />
+                                  <span className="text-muted-foreground">个</span>
+                                </label>
+                              ) : null}
                               <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleUngroup(group.startIndex)}>
                                 拆分
                               </Button>

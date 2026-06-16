@@ -85,7 +85,13 @@ function withValidTasksArtifact(specCoding: any) {
       tasks: [
         '# tasks.md',
         '',
-        '- [ ] T1.1 Confirm baseline spec <!-- spec-coding-task:T1.1 -->',
+        '- [ ] T1 Confirm baseline spec',
+        '  - [ ] T1.1 Confirm baseline spec detail <!-- spec-coding-task:T1.1 -->',
+        '    - 需求追踪：R1',
+        '    - 设计追踪：D1',
+        '    - 动作：检查 requirements/design/tasks 是否一致。',
+        '    - 交付：确认后的 SpecCoding 基线。',
+        '    - 验证：人工确认所有计划制品通过质量校验。',
       ].join('\n'),
     },
   };
@@ -304,6 +310,46 @@ describe('spec-coding API routes', () => {
         expect(updated.session.specCoding.goals).toEqual(originalSpec.goals);
         expect(updated.session.specCoding.artifacts.design).toContain('## Revised');
         expect(updated.session.specCoding.version).toBe(originalSpec.version + 1);
+      });
+    });
+  });
+
+  test('session detail route rejects confirmed specCoding artifacts that are only format skeletons', async () => {
+    await withIsolatedAceHome(async () => {
+      await withTempWorkspace(async ({ workspace }) => {
+        const owner = await createAuthToken();
+        const { sessions, sessionById } = await loadSpecCodingRoutes();
+
+        const response = await sessions.POST(makeRequest('/api/spec-coding/sessions', {
+          token: owner.token,
+          json: sessionPayload(workspace),
+        }));
+        expect(response.status).toBe(200);
+        const created = await responseJson<any>(response);
+        const sessionId = created.session.id;
+
+        const badSpecCoding = {
+          ...created.session.specCoding,
+          artifacts: {
+            requirements: '# requirements.md\n\n### 需求 R1：占位\n\nTODO',
+            design: '# design.md\n\nTODO',
+            tasks: '# tasks.md\n\n- [ ] T1.1 TODO',
+          },
+        };
+
+        const rejected = await sessionById.PUT(makeRequest(`/api/spec-coding/sessions/${sessionId}`, {
+          token: owner.token,
+          method: 'PUT',
+          json: {
+            specCoding: badSpecCoding,
+            specCodingStatus: 'confirmed',
+          },
+        }), idParams(sessionId));
+
+        expect(rejected.status).toBe(400);
+        const json = await responseJson<any>(rejected);
+        expect(json.error).toContain('Spec 制品质量校验未通过');
+        expect(json.qualityValidation.errors.length).toBeGreaterThan(0);
       });
     });
   });

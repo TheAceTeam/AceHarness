@@ -887,7 +887,7 @@ export function assemblePlanDraftFromItems(state: WorkflowCreationState, input: 
     '## 需求',
     '',
     ...requirements.flatMap((requirement, index) => [
-      `### 需求 ${index + 1}：${requirement.title}`,
+      `### 需求 ${requirement.id || `R${index + 1}`}：${requirement.title}`,
       `**用户故事：** ${requirement.userStory}`,
       '',
       '#### 验收标准',

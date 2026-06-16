@@ -26,6 +26,13 @@ const workflowSupervisorConfigSchema = z.object({
   experienceEnabled: z.boolean().default(true),
 }).optional();
 
+const workflowHumanHelpConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  supervisorReviewEnabled: z.boolean().default(true),
+  blockUntilAnswered: z.boolean().default(true),
+  defaultSelectionMode: z.enum(['single', 'multiple']).default('single'),
+}).optional();
+
 // 迭代配置 Schema
 export const iterationConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -633,6 +640,7 @@ export const stateMachineWorkflowSchema = z.object({
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
     supervisor: workflowSupervisorConfigSchema,
+    humanHelp: workflowHumanHelpConfigSchema,
     concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),

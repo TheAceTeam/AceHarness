@@ -10,6 +10,18 @@ export interface ResultSection {
 type JsonSchema = Record<string, any>;
 
 const STRING_ARRAY_SCHEMA = { type: 'array', items: { type: 'string' } };
+const REVISION_PLAN_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      artifact: { type: 'string' },
+      op: { type: 'string' },
+      targetId: { type: 'string' },
+      reason: { type: 'string' },
+    },
+  },
+};
 const SIMPLE_ITEM_RESULT_SCHEMA = {
   type: 'object',
   properties: {
@@ -184,6 +196,24 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
   workflow_state_steps: SIMPLE_ITEM_RESULT_SCHEMA,
   workflow_patch_item: SIMPLE_ITEM_RESULT_SCHEMA,
   spec_revision_item: SIMPLE_ITEM_RESULT_SCHEMA,
+  spec_artifact_revision: {
+    type: 'object',
+    properties: {
+      kind: { type: 'string' },
+      payload: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string' },
+          revisionPlan: REVISION_PLAN_SCHEMA,
+          artifacts: { type: 'object' },
+        },
+        required: ['artifacts'],
+      },
+      summary: { type: 'string' },
+      revisionPlan: REVISION_PLAN_SCHEMA,
+      artifacts: { type: 'object' },
+    },
+  },
   agent_clarification_summary: SIMPLE_ITEM_RESULT_SCHEMA,
   agent_clarification_facts: SIMPLE_ITEM_RESULT_SCHEMA,
   agent_clarification_gaps: SIMPLE_ITEM_RESULT_SCHEMA,
@@ -203,12 +233,14 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
           summary: { type: 'string' },
           affectedArtifacts: STRING_ARRAY_SCHEMA,
           impact: STRING_ARRAY_SCHEMA,
+          revisionPlan: REVISION_PLAN_SCHEMA,
         },
       },
       apply: { type: 'boolean' },
       summary: { type: 'string' },
       affectedArtifacts: STRING_ARRAY_SCHEMA,
       impact: STRING_ARRAY_SCHEMA,
+      revisionPlan: REVISION_PLAN_SCHEMA,
     },
   },
   'spec-coding-revision': {
@@ -219,6 +251,7 @@ const KNOWN_RESULT_SCHEMAS: Record<string, JsonSchema> = {
       summary: { type: 'string' },
       affectedArtifacts: STRING_ARRAY_SCHEMA,
       impact: STRING_ARRAY_SCHEMA,
+      revisionPlan: REVISION_PLAN_SCHEMA,
     },
   },
 };

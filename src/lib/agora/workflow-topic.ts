@@ -321,10 +321,15 @@ function pickWorkflowSpeech(input: { type: string; title: string; body?: string;
     const reason = cleanWorkflowEventBody(body, ['错误']);
     return reason ? `「${stepMatch[2]}」这步出问题了：${reason}` : `「${stepMatch[2]}」这步出问题了，得先处理异常。`;
   }
-  if (input.type === 'human-question') {
-    return body ? `这边有个点得请你拍板：${input.title.replace(/^等待人工回复：/, '')}\n${body}` : input.title.replace(/^等待人工回复：/, '');
+  if (input.type === 'human-question' || input.type === 'human-help-question' || input.type === 'parallel-manual-join-question') {
+    const label = input.type === 'human-help-question'
+      ? '这边需要人工客服补充信息'
+      : input.type === 'parallel-manual-join-question'
+        ? '并发组已经汇合，需要你确认是否放行'
+        : '这边有个点得请你拍板';
+    return body ? `${label}：${input.title.replace(/^等待(?:人工回复|人工客服回复|并发人工确认)：/, '')}\n${body}` : input.title.replace(/^等待(?:人工回复|人工客服回复|并发人工确认)：/, '');
   }
-  if (input.type === 'human-answer') {
+  if (input.type === 'human-answer' || input.type === 'human-help-answer' || input.type === 'parallel-manual-join-answer') {
     return body ? `收到，这个信息够了，我按这个继续：\n${body}` : '收到，我按这个继续往下走。';
   }
   if (input.type === 'channel-feedback') {
@@ -369,7 +374,7 @@ function getWorkflowAgoraMessageKind(input: {
   speakerType?: CollaborationRoomMessage['speakerType'];
 }): NonNullable<CollaborationRoomMessage['chatroom']>['kind'] {
   if (input.speakerType === 'human') return 'agent';
-  if (input.type === 'human-question') return 'system';
+  if (input.type === 'human-question' || input.type === 'human-help-question' || input.type === 'parallel-manual-join-question') return 'system';
   if (input.type === 'spec-revision-vote') return 'vote';
   if (input.type === 'spec-revision-vote-result') return 'vote-result';
   return 'agent';

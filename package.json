@@ -26,6 +26,7 @@
     "check:spec-coding": "node ./scripts/check-spec-coding.cjs",
     "check:spec-then-workflow": "node ./scripts/check-spec-then-workflow.cjs",
     "check:acp": "node ./scripts/check-acp-connectivity.mjs",
+    "office:stabilize-sprite": "node scripts/stabilize-office-agent-sprite.mjs",
     "prepack": "npm run build && npm run prune:package-maps",
     "publish:npm": "npm publish",
     "publish:beta": "npm publish --tag beta"

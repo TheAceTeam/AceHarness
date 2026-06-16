@@ -315,6 +315,10 @@ interface StateMachineDiagramProps {
   allowForceTransition?: boolean;
   focusedState?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
+  pendingHumanQuestion?: {
+    source?: { type?: string; stateName?: string; stepName?: string; groupId?: string };
+    currentState?: string | null;
+  } | null;
 }
 
 // 自动布局算法：基于层次结构排列节点，优化空间利用
@@ -479,18 +483,27 @@ function getStateDiagramTeamIcon(team: string | null | undefined) {
 }
 
 function StateNode({ data }: any) {
-  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, agents, onStepClick, onForceTransition, isRunning, allowForceTransition } = data;
+  const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, agents, onStepClick, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
   const isHumanApprovalState = state.name === '人工审查' || state.name === '__human_approval__';
+  const isHumanHelpPending = pendingHumanQuestion?.source?.type === 'human-help'
+    && (pendingHumanQuestion.source?.stateName === state.name || pendingHumanQuestion.currentState === state.name);
+  const isParallelManualJoinPending = pendingHumanQuestion?.source?.type === 'parallel-manual-join'
+    && (pendingHumanQuestion.source?.stateName === state.name || pendingHumanQuestion.currentState === state.name);
+  const pendingParallelGroupId = isParallelManualJoinPending ? String(pendingHumanQuestion?.source?.groupId || '') : '';
+  const pendingHumanHelpStep = isHumanHelpPending ? pendingHumanQuestion?.source?.stepName : '';
   const getStepStatus = (step: any) => {
     const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
     const runningKeys = [currentStep, ...activeSteps].filter(Boolean);
     const isRunningStep = runningKeys.some((key) => key === step.name || key === `${state.name}-${step.name}`);
-    return { isDone, isRunningStep };
+    const isWaitingHumanHelp = Boolean(isHumanHelpPending && pendingHumanHelpStep && pendingHumanHelpStep === step.name);
+    const isWaitingParallelApproval = Boolean(isParallelManualJoinPending && pendingParallelGroupId && getStateDiagramParallelGroup(step) === pendingParallelGroupId);
+    return { isDone, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval };
   };
   const renderStepPill = (step: any, idx: number, compact = false) => {
-    const { isDone, isRunningStep } = getStepStatus(step);
+    const { isDone, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval } = getStepStatus(step);
     const agentTeam = getStateDiagramAgentTeam(agents, step?.agent);
+    const isWaitingApproval = isWaitingHumanHelp || isWaitingParallelApproval;
     return (
       <div
         key={`${step.name}-${idx}`}
@@ -498,11 +511,11 @@ function StateNode({ data }: any) {
         className={`
           flex items-center gap-1 rounded cursor-pointer transition-colors
           ${compact ? 'px-1 py-0.5 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'}
-          ${isRunningStep ? 'bg-blue-500 text-white' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
+          ${isWaitingApproval ? 'bg-amber-500 text-black ring-1 ring-amber-300' : isRunningStep ? 'bg-blue-500 text-white' : isDone ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
-          {isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramTeamIcon(agentTeam)}
+          {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramTeamIcon(agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
       </div>
@@ -513,7 +526,7 @@ function StateNode({ data }: any) {
     <div
       className={`
         px-3 py-2 rounded-lg border-2 min-w-[220px] max-w-[320px] transition-all
-        ${isCurrent && isHumanApprovalState
+        ${(isCurrent && isHumanApprovalState) || isHumanHelpPending || isParallelManualJoinPending
           ? 'border-amber-500 bg-amber-50 dark:bg-amber-950 shadow-[0_0_0_3px_rgba(245,158,11,0.18)]'
           : isCurrent
             ? 'border-blue-500 bg-blue-50 dark:bg-blue-950 shadow-lg'
@@ -545,6 +558,8 @@ function StateNode({ data }: any) {
           {isInitial && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-green-100 dark:bg-green-900">初始</Badge>}
           {isFinal && <Badge variant="outline" className="text-[10px] px-1 py-0 bg-red-100 dark:bg-red-900">终止</Badge>}
           {isHumanCheckpoint && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工审查</Badge>}
+          {isHumanHelpPending && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">人工客服</Badge>}
+          {isParallelManualJoinPending && <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-300 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100">并发确认</Badge>}
           {isCurrent && (
             <Badge className={`text-[10px] px-1 py-0 ${isHumanApprovalState ? 'bg-amber-500 text-black' : 'bg-blue-500 text-white'}`}>
               {isHumanApprovalState ? '等待处理' : '执行中'}
@@ -559,6 +574,17 @@ function StateNode({ data }: any) {
         </div>
       )}
 
+      {isHumanHelpPending ? (
+        <div className="mb-1.5 rounded border border-amber-300 bg-amber-100 px-1.5 py-1 text-[10px] font-medium text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+          等待人工客服回复
+        </div>
+      ) : null}
+      {isParallelManualJoinPending ? (
+        <div className="mb-1.5 rounded border border-amber-300 bg-amber-100 px-1.5 py-1 text-[10px] font-medium text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+          等待并发人工确认
+        </div>
+      ) : null}
+
       {/* 步骤列表 */}
       <div className="space-y-0.5 mt-1.5">
         {buildStateDiagramStepGroups(state.steps || []).map((group, groupIndex) => {
@@ -567,13 +593,15 @@ function StateNode({ data }: any) {
             return renderStepPill(group.steps[0], groupIndex);
           }
           const mode = group.steps[0]?.concurrency?.joinPolicy?.mode || 'all';
-          const hasRunningStep = group.steps.some((step) => getStepStatus(step).isRunningStep);
+          const groupStatus = group.steps.map((step) => getStepStatus(step));
+          const hasRunningStep = groupStatus.some((item) => item.isRunningStep);
+          const hasPendingApproval = groupStatus.some((item) => item.isWaitingHumanHelp || item.isWaitingParallelApproval);
           return (
             <div
               key={`${group.id}-${groupIndex}`}
               className={`
                 rounded-md border p-1
-                ${hasRunningStep ? 'border-blue-400 bg-blue-500/10 shadow-sm' : 'border-cyan-300 bg-cyan-500/10 dark:border-cyan-800'}
+                ${hasRunningStep ? 'border-blue-400 bg-blue-500/10 shadow-sm' : hasPendingApproval ? 'border-amber-400 bg-amber-500/10 shadow-sm' : 'border-cyan-300 bg-cyan-500/10 dark:border-cyan-800'}
               `}
             >
               <div className="mb-1 flex items-center justify-between gap-1 text-[9px] font-medium text-cyan-700 dark:text-cyan-300">
@@ -875,6 +903,7 @@ function StateMachineDiagramInner({
   allowForceTransition = isRunning,
   focusedState,
   supervisorFlow = EMPTY_SUPERVISOR_FLOW,
+  pendingHumanQuestion,
 }: StateMachineDiagramProps) {
   const [showAllEdges, setShowAllEdges] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
@@ -932,6 +961,7 @@ function StateMachineDiagramInner({
           onForceTransition: handleForceTransitionClick,
           isRunning,
           allowForceTransition,
+          pendingHumanQuestion,
         },
       };
     });
@@ -966,11 +996,12 @@ function StateMachineDiagramInner({
         onForceTransition: handleForceTransitionClick,
         isRunning,
         allowForceTransition,
+        pendingHumanQuestion,
       },
     });
 
     return nodes;
-  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition]);
+  }, [states, agents, currentState, currentStep, activeSteps, completedSteps, handleStepClick, handleForceTransitionClick, isRunning, allowForceTransition, pendingHumanQuestion]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
 

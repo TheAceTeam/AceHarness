@@ -677,7 +677,8 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
       ? [
         '## Supervisor Spec Coding 修订协议',
         '- 当用户明确要求你刷新、修订、更新、收敛 Spec Coding 制品 / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<result>...</result>` 机器结果块。',
-        '- 推荐 JSON 格式: {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]}}',
+        '- 推荐 JSON 格式: {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"],"revisionPlan":[{"artifact":"requirements","op":"modify","targetId":"R1","reason":"为什么改"}]}}',
+        '- revisionPlan 用 add / modify / remove / rename 描述具体变更；targetId 使用 R/D/T 编号或明确章节名，避免只写笼统影响。',
         '- 兼容旧格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]} 或 `<spec-coding-revision>...</spec-coding-revision>`。',
         '- 只有你判断需要真正落盘修订时才输出该块；否则不要输出。',
       ].join('\n')

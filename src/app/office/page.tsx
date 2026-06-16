@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import Link from 'next/link';
 import {
   Building2,
@@ -58,7 +58,7 @@ import { useChat } from '@/contexts/ChatContext';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { withOfficeSource } from '@/lib/navigation/return-target';
 
-type Activity = 'typing' | 'walking' | 'talking' | 'thinking' | 'reviewing' | 'presenting';
+type Activity = 'typing' | 'walking' | 'talking' | 'thinking' | 'stretching' | 'reviewing' | 'presenting';
 
 type OfficeAgent = {
   name: string;
@@ -252,7 +252,9 @@ const CATEGORY_ZONE: Record<string, string> = {
 };
 
 const OFFICE_MAX_VISIBLE_MEMBERS = 12;
-const OFFICE_WALK_SPEED_PERCENT_PER_SECOND = 3.2;
+const OFFICE_WALK_SPEED_PERCENT_PER_SECOND = 2.1;
+const OFFICE_INTERACTION_INITIAL_DELAY_MS = 9000;
+const OFFICE_INTERACTION_COOLDOWN_MS = 28000;
 
 type OfficePoint = { x: number; y: number };
 type OfficeRect = { left: number; right: number; top: number; bottom: number };
@@ -268,20 +270,32 @@ type OfficeGridLayout = {
 
 function officeGridLayoutForTotal(total: number): OfficeGridLayout {
   const visibleTotal = Math.max(1, Math.min(total, OFFICE_MAX_VISIBLE_MEMBERS));
-  const columns = visibleTotal <= 2 ? visibleTotal : visibleTotal <= 6 ? 3 : 4;
+  const columns = visibleTotal <= 1 ? 1 : visibleTotal <= 4 ? 2 : visibleTotal <= 9 ? 3 : 4;
   const rows = Math.max(1, Math.ceil(visibleTotal / columns));
+  const xBounds = columns <= 1
+    ? { minX: 50, maxX: 50 }
+    : columns === 2
+      ? { minX: 34, maxX: 66 }
+      : columns === 3
+        ? { minX: 23, maxX: 77 }
+        : { minX: 16, maxX: 84 };
+  const yBounds = rows <= 1
+    ? { minY: 46, maxY: 46 }
+    : rows === 2
+      ? { minY: 32, maxY: 66 }
+      : { minY: 20, maxY: 78 };
   return {
     columns,
     rows,
-    minX: columns >= 4 ? 13 : 18,
-    maxX: columns >= 4 ? 87 : 82,
-    minY: rows >= 3 ? 14 : 24,
-    maxY: rows >= 3 ? 80 : 72,
+    minX: xBounds.minX,
+    maxX: xBounds.maxX,
+    minY: yBounds.minY,
+    maxY: yBounds.maxY,
   };
 }
 
 function officeGridAxisPoints(count: number, min: number, max: number) {
-  if (count <= 1) return [50];
+  if (count <= 1) return [(min + max) / 2];
   return Array.from({ length: count }, (_item, index) => min + index * ((max - min) / (count - 1)));
 }
 
@@ -318,21 +332,24 @@ function officeStationFootprint(total: number) {
   const columnSpacing = layout.columns > 1 ? (layout.maxX - layout.minX) / (layout.columns - 1) : 42;
   const rowSpacing = layout.rows > 1 ? (layout.maxY - layout.minY) / (layout.rows - 1) : 40;
   return {
-    halfX: Math.max(8.5, Math.min(16, columnSpacing / 2 - 3)),
-    halfY: Math.max(9, Math.min(15, rowSpacing / 2 - 5)),
+    halfX: Math.max(9.5, Math.min(14, columnSpacing / 2 - 2.5)),
+    halfY: Math.max(9.5, Math.min(14, rowSpacing / 2 - 4)),
   };
 }
 
 function officeFrontAisleY(positionY: number, total: number) {
-  return clampPercent(positionY + officeStationFootprint(total).halfY + 5);
+  return clampPercent(positionY + officeStationFootprint(total).halfY + 4);
 }
 
 function officeBackAisleY(positionY: number, total: number) {
-  return clampPercent(positionY - officeStationFootprint(total).halfY - 5);
+  return clampPercent(positionY - officeStationFootprint(total).halfY - 4);
 }
 
-function officeSideExitX(positionX: number, towardRight: boolean, total: number) {
-  return clampPercent(positionX + (towardRight ? 1 : -1) * (officeStationFootprint(total).halfX + 3));
+function officeBottomExitPoint(position: OfficePoint, total: number): OfficePoint {
+  return {
+    x: position.x,
+    y: officeFrontAisleY(position.y, total),
+  };
 }
 
 function officeTalkPoints(host: OfficePoint, visitorOnLeft: boolean, roadY: number) {
@@ -527,6 +544,13 @@ function stationScaleForTotal(total: number) {
   if (total >= 7) return 0.76;
   if (total >= 4) return 0.88;
   return 0.94;
+}
+
+function officeFloorHeightForTotal(total: number) {
+  const rows = officeGridLayoutForTotal(total).rows;
+  if (rows <= 1) return 560;
+  if (rows === 2) return 760;
+  return 1000;
 }
 
 const OFFICE_ASSET_SHEET = '/office/6f4991eb-edc8-4ec2-b78f-975b5a140c74_mattingImg-shadow.png';
@@ -1687,7 +1711,7 @@ function OrgMemberCard({
   );
 }
 
-type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'visiting_peer' | 'hosting_peer';
+type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'stretching_at_desk' | 'visiting_peer' | 'hosting_peer';
 type OfficeScreenScene = 'coding' | 'testing' | 'planning' | 'reviewing' | 'ops';
 type OfficeSpriteGender = 'male' | 'female';
 type OfficeSpriteDirection = 'left' | 'right';
@@ -1697,6 +1721,7 @@ type OfficePresencePlan = {
   activity: Activity;
   presence: OfficePresence;
   gender: OfficeSpriteGender;
+  deskDirection: OfficeSpriteDirection;
   interactionRole?: OfficeInteractionRole;
   targetIndex?: number;
 };
@@ -1707,12 +1732,20 @@ type OfficeInteractionRoute = {
   hostIndex: number;
   routeOffset: number;
 };
+type ActiveOfficeInteraction = OfficeInteractionRoute & {
+  id: number;
+  durationMs: number;
+};
+type OfficeRenderedPlan = OfficePresencePlan & {
+  awayForInteraction?: boolean;
+};
 type OfficeInteractionPair = {
   visitorIndex: number;
   hostIndex: number;
 };
 
 function presenceForActivity(activity: Activity): OfficePresence {
+  if (activity === 'stretching') return 'stretching_at_desk';
   if (activity === 'thinking' || activity === 'reviewing') return 'thinking_at_desk';
   return 'seated_work';
 }
@@ -1720,6 +1753,7 @@ function presenceForActivity(activity: Activity): OfficePresence {
 function statusTextForPresence(presence: OfficePresence) {
   if (presence === 'seated_work') return '办公中';
   if (presence === 'thinking_at_desk') return '思考中';
+  if (presence === 'stretching_at_desk') return '伸展中';
   if (presence === 'visiting_peer') return '走动中';
   return '交流中';
 }
@@ -1733,14 +1767,23 @@ function screenSceneForOfficePlan(plan: OfficePresencePlan, index: number): Offi
   return index % 2 === 0 ? 'coding' : 'ops';
 }
 
-function baseActivityForOfficeDisplay(member: OfficeMember, index: number): Activity {
+function shouldStretchAtDesk(index: number, total: number) {
+  if (total < 3) return false;
+  const plannedStretchIndexes = total >= 10 ? new Set([1, 8]) : new Set([1]);
+  return plannedStretchIndexes.has(index);
+}
+
+function baseActivityForOfficeDisplay(member: OfficeMember, index: number, total: number): Activity {
   const configured = member.motion?.activity;
-  if (configured === 'typing' || configured === 'thinking' || configured === 'reviewing') return configured;
+  if (configured === 'typing' || configured === 'thinking' || configured === 'stretching' || configured === 'reviewing') return configured;
   if (configured === 'walking' || configured === 'talking' || configured === 'presenting') {
     return activityForZone(member.visual.zone || zoneOf(member.agent));
   }
-  if (index % 7 === 4) return 'thinking';
-  return activityForZone(member.visual.zone || zoneOf(member.agent));
+  if (shouldStretchAtDesk(index, total)) return 'stretching';
+  const zoneActivity = activityForZone(member.visual.zone || zoneOf(member.agent));
+  if (zoneActivity !== 'typing') return zoneActivity;
+  if (index === 1 || index % 6 === 4) return 'thinking';
+  return zoneActivity;
 }
 
 function spriteGenderForMember(member: OfficeMember, index: number): OfficeSpriteGender {
@@ -1818,37 +1861,34 @@ function buildOfficeInteractionPairs(plans: OfficePresencePlan[]): OfficeInterac
     addPair(preferred.index, hostIndex);
   }
 
+  if (pairs.length < maxPairs) {
+    for (const rule of relationshipRules) {
+      const visitorIndex = findAvailableMemberIndex(plans, rule.visitors, usedIndexes);
+      const hostIndex = findAvailableMemberIndex(plans, rule.hosts, usedIndexes, visitorIndex);
+      if (addPair(visitorIndex, hostIndex)) break;
+    }
+  }
+
+  if (pairs.length < maxPairs) {
+    addPair(0, 1);
+  }
+
   return pairs;
 }
 
 function buildOfficePresencePlan(members: OfficeMember[]): OfficePresencePlan[] {
   const plans: OfficePresencePlan[] = members.map((member, index) => {
-    const activity = baseActivityForOfficeDisplay(member, index);
+    const activity = baseActivityForOfficeDisplay(member, index, members.length);
     const presence = presenceForActivity(activity);
+    const deskPosition = officePositionForIndex(index, members.length);
     return {
       member,
       activity,
       presence,
       gender: spriteGenderForMember(member, index),
+      deskDirection: deskPosition.x >= 50 ? 'left' : 'right',
     };
   });
-
-  for (const pair of buildOfficeInteractionPairs(plans)) {
-    plans[pair.visitorIndex] = {
-      ...plans[pair.visitorIndex],
-      activity: 'walking',
-      presence: 'visiting_peer',
-      interactionRole: 'visitor',
-      targetIndex: pair.hostIndex,
-    };
-    plans[pair.hostIndex] = {
-      ...plans[pair.hostIndex],
-      activity: 'talking',
-      presence: 'hosting_peer',
-      interactionRole: 'host',
-      targetIndex: pair.visitorIndex,
-    };
-  }
 
   return plans;
 }
@@ -2002,14 +2042,16 @@ type OfficeWalkwayPath = {
   travelDistance: number;
   visitorTalkPoint: OfficePoint;
   hostTalkPoint: OfficePoint;
-  visitorDirection: OfficeSpriteDirection;
-  hostDirection: OfficeSpriteDirection;
-  returnDirection: OfficeSpriteDirection;
+  visitorWalkDirection: OfficeSpriteDirection;
+  visitorTalkDirection: OfficeSpriteDirection;
+  visitorReturnDirection: OfficeSpriteDirection;
+  hostWalkDirection: OfficeSpriteDirection;
+  hostTalkDirection: OfficeSpriteDirection;
   hostReturnDirection: OfficeSpriteDirection;
 };
 
-function directionBetweenPoints(from: OfficePoint, to: OfficePoint): OfficeSpriteDirection {
-  if (Math.abs(to.x - from.x) < 0.2) return to.y >= from.y ? 'right' : 'left';
+function directionBetweenPoints(from: OfficePoint, to: OfficePoint, fallback: OfficeSpriteDirection = 'right'): OfficeSpriteDirection {
+  if (Math.abs(to.x - from.x) < 0.2) return fallback;
   return to.x >= from.x ? 'right' : 'left';
 }
 
@@ -2031,20 +2073,30 @@ function pushRoutePoint(points: OfficePoint[], point: OfficePoint) {
   points.push(point);
 }
 
+function pathNetDirection(points: OfficePoint[], fallback: OfficeSpriteDirection) {
+  for (let index = 1; index < points.length; index += 1) {
+    const direction = directionBetweenPoints(points[index - 1], points[index], fallback);
+    if (Math.abs(points[index].x - points[index - 1].x) >= 0.2) return direction;
+  }
+  return fallback;
+}
+
+function pathReturnDirection(points: OfficePoint[], fallback: OfficeSpriteDirection) {
+  for (let index = points.length - 1; index > 0; index -= 1) {
+    const direction = directionBetweenPoints(points[index], points[index - 1], fallback);
+    if (Math.abs(points[index].x - points[index - 1].x) >= 0.2) return direction;
+  }
+  return fallback;
+}
+
 function officeWalkwayPath(visitorIndex: number, hostIndex: number, total: number, routeOffset: number): OfficeWalkwayPath {
   const from = officePositionForIndex(visitorIndex, total);
   const host = officePositionForIndex(hostIndex, total);
   const visitorOnLeft = from.x <= host.x;
   const talkY = officeFrontAisleY(host.y, total);
   const { hostTalkPoint, visitorTalkPoint } = officeTalkPoints(host, visitorOnLeft, talkY);
-  const visitorExitPoint = {
-    x: officeSideExitX(from.x, host.x >= from.x, total),
-    y: officeFrontAisleY(from.y, total),
-  };
-  const hostExitPoint = {
-    x: officeSideExitX(host.x, visitorOnLeft, total),
-    y: officeFrontAisleY(host.y, total),
-  };
+  const visitorExitPoint = officeBottomExitPoint(from, total);
+  const hostExitPoint = officeBottomExitPoint(host, total);
   const visitorPoints = officeFindPath(visitorExitPoint, visitorTalkPoint, total);
   const hostPoints = officeFindPath(hostExitPoint, hostTalkPoint, total);
   const visitorDistance = Math.max(1, pathDistance(visitorPoints));
@@ -2056,25 +2108,29 @@ function officeWalkwayPath(visitorIndex: number, hostIndex: number, total: numbe
     travelDistance: Math.max(visitorDistance, hostDistance),
     visitorTalkPoint,
     hostTalkPoint,
-    visitorDirection: visitorOnLeft ? 'right' : 'left',
-    hostDirection: visitorOnLeft ? 'left' : 'right',
-    returnDirection: oppositeDirection(directionBetweenPoints(visitorPoints[visitorPoints.length - 2] || visitorTalkPoint, visitorTalkPoint)),
-    hostReturnDirection: oppositeDirection(directionBetweenPoints(hostPoints[hostPoints.length - 2] || hostPoints[0], hostTalkPoint)),
+    visitorWalkDirection: pathNetDirection(visitorPoints, visitorOnLeft ? 'right' : 'left'),
+    visitorTalkDirection: visitorOnLeft ? 'right' : 'left',
+    visitorReturnDirection: pathReturnDirection(visitorPoints, visitorOnLeft ? 'left' : 'right'),
+    hostWalkDirection: pathNetDirection(hostPoints, visitorOnLeft ? 'right' : 'left'),
+    hostTalkDirection: visitorOnLeft ? 'left' : 'right',
+    hostReturnDirection: pathReturnDirection(hostPoints, visitorOnLeft ? 'left' : 'right'),
   };
 }
 
-function deskSpriteClass(plan: OfficePresencePlan): string {
-  const action = plan.presence === 'thinking_at_desk' ? 'think-back' : 'work-back';
-  return `station-agent-${plan.gender}-${action}-right`;
+function stationSpriteClass(plan: OfficePresencePlan): string {
+  if (plan.presence === 'thinking_at_desk' || plan.presence === 'stretching_at_desk') {
+    return `station-agent-${plan.gender}-think-back-${plan.deskDirection}`;
+  }
+  return `station-agent-${plan.gender}-work-back-${plan.deskDirection}`;
 }
 
-function OfficeDeskOperator({ plan }: { plan: OfficePresencePlan }) {
-  if (plan.presence === 'visiting_peer' || plan.presence === 'hosting_peer') {
+function OfficeDeskOperator({ plan }: { plan: OfficeRenderedPlan }) {
+  if (plan.awayForInteraction) {
     return <span className="station-status-dot" aria-hidden="true" />;
   }
   return (
     <div className="station-operator" aria-hidden="true">
-      <span className={`station-agent-sprite ${deskSpriteClass(plan)}`} />
+      <span className={`station-agent-sprite ${stationSpriteClass(plan)}`} />
     </div>
   );
 }
@@ -2180,6 +2236,17 @@ function officeVisibilityKeyframes(names: {
   `;
 }
 
+function officeActorSpriteAnimation(active: boolean, visibilityName: string, totalSeconds: number, frameSeconds = 1.1, idleVisible = false): CSSProperties {
+  return {
+    opacity: active || idleVisible ? undefined : 0,
+    animationName: active ? `${visibilityName}, agentSprite6` : idleVisible ? 'agentSprite6' : 'none',
+    animationDuration: active ? `${totalSeconds}s, ${frameSeconds}s` : `${frameSeconds}s`,
+    animationTimingFunction: active ? 'linear, steps(6, end)' : 'steps(6, end)',
+    animationIterationCount: active ? '1, infinite' : idleVisible ? 'infinite' : '1',
+    animationFillMode: active ? 'both, none' : 'none',
+  };
+}
+
 function OfficeInteraction({
   visitorPlan,
   visitorIndex,
@@ -2187,6 +2254,7 @@ function OfficeInteraction({
   hostPlan,
   hostIndex,
   routeOffset,
+  active,
 }: {
   visitorPlan: OfficePresencePlan;
   visitorIndex: number;
@@ -2194,6 +2262,7 @@ function OfficeInteraction({
   hostPlan: OfficePresencePlan;
   hostIndex: number;
   routeOffset: number;
+  active: boolean;
 }) {
   const path = officeWalkwayPath(visitorIndex, hostIndex, total, routeOffset);
   const zone = ZONES[memberZone(visitorPlan.member)] || ZONES.generalist;
@@ -2201,7 +2270,7 @@ function OfficeInteraction({
   const visitorDistance = Math.max(1, pathDistance(path.visitorPoints));
   const hostDistance = Math.max(1, pathDistance(path.hostPoints));
   const visitorMoveSeconds = Math.max(3.5, visitorDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
-  const hostMoveSeconds = Math.max(2.4, hostDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
+  const hostMoveSeconds = Math.max(3.5, hostDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
   const longestMoveSeconds = Math.max(visitorMoveSeconds, hostMoveSeconds);
   const timing = {
     holdStart: 1.1,
@@ -2249,7 +2318,7 @@ function OfficeInteraction({
 
   return (
     <div
-      className="office-interaction"
+      className={`office-interaction ${active ? 'office-interaction-active' : 'office-interaction-idle'}`}
       aria-label={label}
       style={{
         ['--actor-scale' as any]: actorScale,
@@ -2262,51 +2331,53 @@ function OfficeInteraction({
       <div
         className="office-interaction-visitor"
         style={{
-          animationName: names.visitorMotion,
+          animationName: active ? names.visitorMotion : 'none',
           animationDuration: `${timing.total}s`,
+          animationFillMode: 'both',
         }}
       >
         <span className="office-interaction-shadow" aria-hidden="true" />
         <span
-          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.visitorDirection}`}
+          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.visitorWalkDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.visitorWalkOut}, agentSprite6`, animationDuration: `${timing.total}s, 0.82s` }}
+          style={officeActorSpriteAnimation(active, names.visitorWalkOut, timing.total)}
         />
         <span
-          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.returnDirection}`}
+          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.visitorReturnDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.visitorWalkBack}, agentSprite6`, animationDuration: `${timing.total}s, 0.82s` }}
+          style={officeActorSpriteAnimation(active, names.visitorWalkBack, timing.total)}
         />
         <span
-          className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${visitorPlan.gender}-talk-${path.visitorDirection}`}
+          className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${visitorPlan.gender}-talk-${path.visitorTalkDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.visitorTalk}, agentSprite6`, animationDuration: `${timing.total}s, 1.15s` }}
+          style={officeActorSpriteAnimation(active, names.visitorTalk, timing.total, 1.15)}
         />
       </div>
       <div
-        className={`office-interaction-host office-interaction-host-${path.hostDirection}`}
+        className={`office-interaction-host office-interaction-host-${path.hostTalkDirection}`}
         style={{
-          animationName: names.hostMotion,
+          animationName: active ? names.hostMotion : 'none',
           animationDuration: `${timing.total}s`,
+          animationFillMode: 'both',
         }}
       >
         <span className="office-interaction-shadow" aria-hidden="true" />
         <span
-          className={`office-interaction-sprite station-agent-${hostPlan.gender}-walk-${path.hostDirection}`}
+          className={`office-interaction-sprite station-agent-${hostPlan.gender}-walk-${path.hostWalkDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.hostWalkOut}, agentSprite6`, animationDuration: `${timing.total}s, 0.82s` }}
+          style={officeActorSpriteAnimation(active, names.hostWalkOut, timing.total)}
         />
         <span
           className={`office-interaction-sprite station-agent-${hostPlan.gender}-walk-${path.hostReturnDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.hostWalkBack}, agentSprite6`, animationDuration: `${timing.total}s, 0.82s` }}
+          style={officeActorSpriteAnimation(active, names.hostWalkBack, timing.total)}
         />
         <span
-          className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${hostPlan.gender}-talk-${path.hostDirection}`}
+          className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${hostPlan.gender}-talk-${path.hostTalkDirection}`}
           aria-hidden="true"
-          style={{ animationName: `${names.hostTalk}, agentSprite6`, animationDuration: `${timing.total}s, 1.15s` }}
+          style={officeActorSpriteAnimation(active, names.hostTalk, timing.total, 1.15)}
         />
-        <span className="office-interaction-bubble" aria-hidden="true" style={{ animationName: names.bubble, animationDuration: `${timing.total}s` }}>
+        <span className="office-interaction-bubble" aria-hidden="true" style={{ animationName: active ? names.bubble : 'none', animationDuration: `${timing.total}s`, animationIterationCount: 1, animationFillMode: 'both' }}>
           <span />
           <span />
           <span />
@@ -2317,21 +2388,21 @@ function OfficeInteraction({
 }
 
 function buildOfficeInteractionRoutes(plans: OfficePresencePlan[]): OfficeInteractionRoute[] {
-  const routes: OfficeInteractionRoute[] = [];
-  plans.forEach((plan, index) => {
-    if (plan.presence !== 'visiting_peer' || typeof plan.targetIndex !== 'number') return;
-    const hostPlan = plans[plan.targetIndex];
-    if (!hostPlan || hostPlan.presence !== 'hosting_peer') return;
-    routes.push({
-      visitorPlan: plan,
-      visitorIndex: index,
-      hostPlan,
-      hostIndex: plan.targetIndex,
-      routeOffset: routes.length % 2 === 0 ? -7 : 7,
-    });
-  });
+  return buildOfficeInteractionPairs(plans).map((pair, index) => ({
+    visitorPlan: plans[pair.visitorIndex],
+    visitorIndex: pair.visitorIndex,
+    hostPlan: plans[pair.hostIndex],
+    hostIndex: pair.hostIndex,
+    routeOffset: index % 2 === 0 ? -7 : 7,
+  })).filter((route) => Boolean(route.visitorPlan && route.hostPlan));
+}
 
-  return routes;
+function officeInteractionDurationMs(route: OfficeInteractionRoute, total: number) {
+  const path = officeWalkwayPath(route.visitorIndex, route.hostIndex, total, route.routeOffset);
+  const visitorMoveSeconds = Math.max(3.5, Math.max(1, pathDistance(path.visitorPoints)) / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
+  const hostMoveSeconds = Math.max(3.5, Math.max(1, pathDistance(path.hostPoints)) / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
+  const longestMoveSeconds = Math.max(visitorMoveSeconds, hostMoveSeconds);
+  return Math.ceil((longestMoveSeconds + Math.max(visitorMoveSeconds, hostMoveSeconds) + 6.8) * 1000);
 }
 
 function LiveOffice({
@@ -2344,9 +2415,23 @@ function LiveOffice({
   onOpenGroupRoom?: (members: OfficeMember[]) => void;
 }) {
   const [selectedAgentName, setSelectedAgentName] = useState<string | null>(members[0]?.agentName || null);
+  const [activeInteraction, setActiveInteraction] = useState<ActiveOfficeInteraction | null>(null);
+  const nextInteractionIndexRef = useRef(0);
   const visibleMembers = useMemo(() => members.slice(0, OFFICE_MAX_VISIBLE_MEMBERS), [members]);
   const presencePlans = useMemo(() => buildOfficePresencePlan(visibleMembers), [visibleMembers]);
   const interactionRoutes = useMemo(() => buildOfficeInteractionRoutes(presencePlans), [presencePlans]);
+  const renderedPresencePlans = useMemo<OfficeRenderedPlan[]>(() => {
+    if (!activeInteraction) return presencePlans;
+    return presencePlans.map((plan, index) => {
+      if (index !== activeInteraction.visitorIndex && index !== activeInteraction.hostIndex) return plan;
+      return {
+        ...plan,
+        awayForInteraction: true,
+        activity: index === activeInteraction.visitorIndex ? 'walking' : 'talking',
+        presence: index === activeInteraction.visitorIndex ? 'visiting_peer' : 'hosting_peer',
+      };
+    });
+  }, [activeInteraction, presencePlans]);
   const selectedPlan = presencePlans.find((planItem) => planItem.member.agentName === selectedAgentName) || presencePlans[0];
   const selectedMember = selectedPlan?.member || visibleMembers[0];
   const selectedZone = selectedMember ? ZONES[selectedMember.visual.zone || zoneOf(selectedMember.agent)] || ZONES.generalist : null;
@@ -2355,6 +2440,33 @@ function LiveOffice({
     team: selectedMember.agent.team || 'blue',
     roleType: selectedMember.agent.roleType || 'normal',
   }) : null;
+
+  useEffect(() => {
+    if (interactionRoutes.length === 0) {
+      setActiveInteraction(null);
+      return undefined;
+    }
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const startInteraction = () => {
+      if (cancelled) return;
+      const route = interactionRoutes[nextInteractionIndexRef.current % interactionRoutes.length];
+      nextInteractionIndexRef.current = (nextInteractionIndexRef.current + 1) % interactionRoutes.length;
+      const durationMs = officeInteractionDurationMs(route, presencePlans.length);
+      setActiveInteraction({ ...route, id: Date.now(), durationMs });
+      timeoutId = setTimeout(() => {
+        setActiveInteraction(null);
+        timeoutId = setTimeout(startInteraction, OFFICE_INTERACTION_COOLDOWN_MS);
+      }, durationMs);
+    };
+
+    timeoutId = setTimeout(startInteraction, OFFICE_INTERACTION_INITIAL_DELAY_MS);
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [interactionRoutes, presencePlans.length]);
 
   if (!members.length) return null;
   return (
@@ -2394,30 +2506,31 @@ function LiveOffice({
           </div>
         </aside>
       ) : null}
-      <div className="office-floor">
-        {presencePlans.map((planItem, index) => (
+      <div className="office-floor" style={{ minHeight: `${officeFloorHeightForTotal(renderedPresencePlans.length)}px` }}>
+        {renderedPresencePlans.map((planItem, index) => (
           <OfficeStation
             key={planItem.member.agentName}
             plan={planItem}
             index={index}
-            total={presencePlans.length}
+            total={renderedPresencePlans.length}
             selected={planItem.member.agentName === selectedMember?.agentName}
             onSelect={() => setSelectedAgentName(planItem.member.agentName)}
           />
         ))}
-        <div className="office-interaction-layer">
-          {interactionRoutes.map((route) => (
+        {activeInteraction ? (
+          <div className="office-interaction-layer">
             <OfficeInteraction
-              key={`interaction-${route.visitorPlan.member.agentName}-${route.hostPlan.member.agentName}`}
-              visitorPlan={route.visitorPlan}
-              visitorIndex={route.visitorIndex}
-              total={presencePlans.length}
-              hostPlan={route.hostPlan}
-              hostIndex={route.hostIndex}
-              routeOffset={route.routeOffset}
+              key={`interaction-${activeInteraction.id}`}
+              visitorPlan={activeInteraction.visitorPlan}
+              visitorIndex={activeInteraction.visitorIndex}
+              total={renderedPresencePlans.length}
+              hostPlan={activeInteraction.hostPlan}
+              hostIndex={activeInteraction.hostIndex}
+              routeOffset={activeInteraction.routeOffset}
+              active
             />
-          ))}
-        </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -2432,6 +2545,60 @@ function roomTitle(room: CollaborationRoomRecord | null) {
   if (room.roomType === 'direct' && names[0]) return `${names[0]} · 私聊`;
   if (names.length) return `${names.slice(0, 3).join('、')} · 协作`;
   return '会议室';
+}
+
+function MeetingRoomList({
+  activeRoomId,
+  rooms,
+  onSelectRoom,
+}: {
+  activeRoomId?: string | null;
+  rooms: CollaborationRoomRecord[];
+  onSelectRoom: (room: CollaborationRoomRecord) => void;
+}) {
+  return (
+    <aside className="min-h-0 rounded-3xl border bg-background/72 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-black">对话列表</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">办公室会议室</div>
+        </div>
+        <Badge variant="outline">{rooms.length}</Badge>
+      </div>
+      <div className="mt-3 max-h-[630px] space-y-2 overflow-y-auto pr-1">
+        {rooms.slice(0, 24).map((item) => {
+          const isActive = item.id === activeRoomId;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={[
+                'flex w-full items-center justify-between rounded-2xl border p-3 text-left transition',
+                isActive
+                  ? 'border-blue-300 bg-blue-50 text-blue-950 shadow-sm dark:border-blue-500/50 dark:bg-blue-500/15 dark:text-blue-50'
+                  : 'bg-background/70 hover:bg-muted/60',
+              ].join(' ')}
+              onClick={() => onSelectRoom(item)}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-bold">{roomTitle(item)}</span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {item.participantAgentNames.length} 位成员
+                  {item.status === 'archived' ? ' · 已结束' : ''}
+                </span>
+              </span>
+              <Badge variant={isActive ? 'default' : 'outline'}>{item.roomType === 'direct' ? '私聊' : '群聊'}</Badge>
+            </button>
+          );
+        })}
+        {!rooms.length ? (
+          <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+            暂无会议室
+          </div>
+        ) : null}
+      </div>
+    </aside>
+  );
 }
 
 function MeetingRoomTab({
@@ -2451,9 +2618,14 @@ function MeetingRoomTab({
   recentRooms: CollaborationRoomRecord[];
   onSelectRoom: (room: CollaborationRoomRecord) => void;
 }) {
+  const rooms = room && !recentRooms.some((item) => item.id === room.id)
+    ? [room, ...recentRooms]
+    : recentRooms;
+
   if (!room || !sessionId) {
     return (
-      <div className="grid min-h-[560px] gap-4 rounded-[34px] border border-white/70 bg-white/62 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 md:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-[560px] gap-4 rounded-[34px] border border-white/70 bg-white/62 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 md:grid-cols-[320px_minmax(0,1fr)]">
+        <MeetingRoomList activeRoomId={room?.id} rooms={rooms} onSelectRoom={onSelectRoom} />
         <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed bg-background/50 p-8 text-center">
           <MessageSquareText className="h-10 w-10 text-blue-600" />
           <div className="mt-4 text-xl font-black">还没有打开会议室</div>
@@ -2461,50 +2633,29 @@ function MeetingRoomTab({
             在办公室里选择成员后点“私聊”或“拉人协作”，这里会直接进入对应的会议室对话。
           </p>
         </div>
-        <aside className="rounded-3xl border bg-background/70 p-4">
-          <div className="text-sm font-black">最近会议室</div>
-          <div className="mt-3 space-y-2">
-            {recentRooms.slice(0, 8).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="flex w-full items-center justify-between rounded-2xl border p-3 text-left transition hover:bg-muted/60"
-                onClick={() => onSelectRoom(item)}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-bold">{roomTitle(item)}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">{item.participantAgentNames.length} 位成员</span>
-                </span>
-                <Badge variant="outline">{item.roomType === 'direct' ? '私聊' : '群聊'}</Badge>
-              </button>
-            ))}
-            {!recentRooms.length ? (
-              <div className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
-                暂无会议室
-              </div>
-            ) : null}
-          </div>
-        </aside>
       </div>
     );
   }
 
   return (
-    <div className="h-[720px] min-h-0 overflow-hidden rounded-[34px] border border-white/70 bg-white/62 p-3 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
-      <AgoraShell
-        activeSessionId={sessionId}
-        sessionTitle={roomTitle(room)}
-        sessionWorkbenchState={activeSession?.sessionWorkbenchState}
-        setSessionWorkbenchState={setSessionWorkbenchState}
-        appendSessionMessage={appendSessionMessage}
-        workingDirectory=""
-        hideComposer={false}
-        allowOpeningMessages
-        allowGuestManagement
-        allowTopicControls
-        showComposerControls
-        inlineContentSpeakerName="办公室"
-      />
+    <div className="grid h-[720px] min-h-0 gap-4 rounded-[34px] border border-white/70 bg-white/62 p-3 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <MeetingRoomList activeRoomId={room.id} rooms={rooms} onSelectRoom={onSelectRoom} />
+      <div className="min-h-0 overflow-hidden rounded-[28px] border bg-background/60">
+        <AgoraShell
+          activeSessionId={sessionId}
+          sessionTitle={roomTitle(room)}
+          sessionWorkbenchState={activeSession?.sessionWorkbenchState}
+          setSessionWorkbenchState={setSessionWorkbenchState}
+          appendSessionMessage={appendSessionMessage}
+          workingDirectory=""
+          hideComposer={false}
+          allowOpeningMessages
+          allowGuestManagement
+          allowTopicControls
+          showComposerControls
+          inlineContentSpeakerName="办公室"
+        />
+      </div>
     </div>
   );
 }
@@ -2597,7 +2748,7 @@ function OfficeStation({
   selected,
   onSelect,
 }: {
-  plan: OfficePresencePlan;
+  plan: OfficeRenderedPlan;
   index: number;
   total: number;
   selected: boolean;
@@ -2635,7 +2786,7 @@ function OfficeStation({
         zIndex: Math.round(position.y),
         ['--zone' as any]: zone.color,
         ['--delay' as any]: `${index * 0.2}s`,
-        ['--station-scale' as any]: stationScaleForTotal(total),
+        ['--station-scale' as any]: 0.85,
       }}
     >
       <div className="station-scene">
@@ -2975,7 +3126,8 @@ export default function OfficePage() {
         onApply={applyTeamPlan}
       />
       <OfficeDock />
-      <style jsx global>{`
+      {/* Keep this as a plain style tag; styled-jsx/PostCSS stalls on this large office stylesheet in dev. */}
+      <style>{`
         .office-dock-stage {
           position: fixed;
           left: 50%;
@@ -4142,17 +4294,23 @@ export default function OfficePage() {
         }
         .office-floor {
           position: relative;
-          min-height: 1240px;
+          min-height: 760px;
           overflow: hidden;
           border-radius: 32px;
           background:
-            linear-gradient(135deg, rgba(148, 163, 184, 0.045) 0 1px, transparent 1px 112px),
-            linear-gradient(45deg, rgba(148, 163, 184, 0.035) 0 1px, transparent 1px 112px),
-            radial-gradient(circle at 18% 18%, rgba(15,23,42,0.06), transparent 18%),
-            radial-gradient(circle at 78% 72%, rgba(37,99,235,0.07), transparent 20%),
-            linear-gradient(180deg, rgba(255,255,255,0.94), rgba(241,245,249,0.72));
+            linear-gradient(90deg, rgba(100,116,139,0.08) 1px, transparent 1px),
+            linear-gradient(0deg, rgba(100,116,139,0.075) 1px, transparent 1px),
+            radial-gradient(ellipse at 50% 45%, rgba(255,255,255,0.72), transparent 58%),
+            linear-gradient(135deg, #e8edf3, #f4f7fa 48%, #dfe7ef);
+          background-size:
+            56px 56px,
+            56px 56px,
+            100% 100%,
+            100% 100%;
           box-shadow:
-            inset 0 0 0 1px rgba(255,255,255,0.72),
+            inset 0 0 0 1px rgba(148,163,184,0.18),
+            inset 0 24px 70px rgba(255,255,255,0.54),
+            inset 0 -28px 80px rgba(100,116,139,0.14),
             0 28px 90px rgba(15,23,42,0.08);
         }
         .office-member-panel {
@@ -4277,7 +4435,7 @@ export default function OfficePage() {
           position: absolute;
           left: 205px;
           top: 61px;
-          z-index: 16;
+          z-index: 15;
           width: 70px;
           height: 42px;
           transform: scaleX(-1) rotate(-4deg) skewY(-8deg);
@@ -4357,7 +4515,7 @@ export default function OfficePage() {
         .station-monitor-real {
           left: 166px;
           top: 52px;
-          z-index: 15;
+          z-index: 14;
           transform: scaleX(-1) rotate(-5deg) skewY(-8deg);
           transform-origin: 50% 74%;
           filter: drop-shadow(0 12px 14px rgba(37, 99, 235, 0.18));
@@ -4389,7 +4547,7 @@ export default function OfficePage() {
         .station-keyboard-real {
           left: 188px;
           top: 160px;
-          z-index: 12;
+          z-index: 11;
           transform: scaleX(-1) rotate(8deg) skewX(-5deg);
           transform-origin: center center;
           filter: drop-shadow(0 8px 10px rgba(15, 23, 42, 0.14));
@@ -4397,7 +4555,7 @@ export default function OfficePage() {
         .station-mouse-real {
           left: 267px;
           top: 170px;
-          z-index: 16;
+          z-index: 11;
           transform: rotate(-8deg);
           transform-origin: center center;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
@@ -4405,7 +4563,7 @@ export default function OfficePage() {
         .station-mug-real {
           left: 268px;
           top: 122px;
-          z-index: 16;
+          z-index: 11;
           filter: drop-shadow(0 7px 8px rgba(15, 23, 42, 0.12));
         }
         .station-chair-back-real {
@@ -4540,12 +4698,7 @@ export default function OfficePage() {
           transform: translate(-50%, -100%) scale(var(--actor-scale, 0.72));
           transform-origin: 50% 100%;
           animation-timing-function: linear;
-          animation-iteration-count: infinite;
           will-change: left, top, transform;
-        }
-        .office-interaction-host {
-          opacity: 0;
-          animation-timing-function: ease-in-out;
         }
         .office-interaction-sprite {
           position: absolute;
@@ -4557,15 +4710,11 @@ export default function OfficePage() {
           background-size: 768px 180px;
           background-position: 0 0;
           filter: drop-shadow(0 18px 16px rgba(15, 23, 42, 0.22));
-          animation-timing-function: ease-in-out, steps(6);
-          animation-iteration-count: infinite, infinite;
-          animation-fill-mode: both, none;
+          animation-iteration-count: infinite;
+          animation-fill-mode: both;
         }
         .office-interaction-talk-sprite {
           opacity: 0;
-        }
-        .office-interaction-host .office-interaction-sprite {
-          animation: agentSprite6 1.15s steps(6) infinite;
         }
         .office-interaction-shadow {
           position: absolute;
@@ -4893,7 +5042,14 @@ export default function OfficePage() {
         }
         @keyframes actorFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
         @keyframes seatedBreath { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
-        @keyframes agentSprite6 { from { background-position: 0 0; } to { background-position: -768px 0; } }
+        @keyframes agentSprite6 {
+          0%, 16.666% { background-position: 0 0; }
+          16.667%, 33.333% { background-position: -128px 0; }
+          33.334%, 50% { background-position: -256px 0; }
+          50.001%, 66.666% { background-position: -384px 0; }
+          66.667%, 83.333% { background-position: -512px 0; }
+          83.334%, 100% { background-position: -640px 0; }
+        }
         @keyframes seatedWorkBob {
           0%, 100% { transform: scale(0.76) translateY(0); }
           50% { transform: scale(0.76) translateY(-2px); }
