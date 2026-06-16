@@ -17,7 +17,13 @@ process.stderr.write = ((chunk, ...args) => {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  serverExternalPackages: ['node-cron'],
+  serverExternalPackages: [
+    'node-cron',
+    'ssh2',
+    'ssh2-sftp-client',
+    '@marsaud/smb2',
+    'webdav',
+  ],
 
   // 开发服务器配置
   devIndicators: {
