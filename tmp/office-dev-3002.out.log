@@ -1,7 +1,0 @@
-Creating turbopack project { dir: 'C:\\Users\\Shawn\\Documents\\ACEHarness', testMode: true }
-[ACEHarness] Server ready on http://127.0.0.1:3002
-[ACEHarness WeChat] bridge start account=d8cbb86a8d06@im.bot integration=channel-6c63c0fa-e900-4a3d-8d36-2b1288b3f21c
-[ACEHarness WeChat] inbound webhook => http://localhost:3001/api/channels/inbound/channel-6c63c0fa-e900-4a3d-8d36-2b1288b3f21c
-[ACEHarness WeChat] bridge-start
-[ACEHarness WeChat] restored 1 official bridge(s)
-○ Compiling /office ...
