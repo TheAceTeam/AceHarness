@@ -274,6 +274,10 @@ export interface PersistedRunState {
   statusReason?: string;
   startTime: string;
   endTime: string | null;
+  /** 累计等待（停摆）时长（毫秒）：人工审查、token 耗尽、停止/崩溃后恢复等区间之和，不计入实际执行时间。 */
+  accumulatedWaitMs?: number;
+  /** 若当前正处于等待中，记录本次等待的开始时刻（ISO）；恢复运行时累加进 accumulatedWaitMs 并清空。 */
+  waitStartedAt?: string | null;
   currentPhase: string | null;
   currentStep: string | null;
   activeSteps?: string[];
@@ -613,6 +617,8 @@ function buildRunSnapshotFromState(state: PersistedRunState, summary: ReturnType
     statusReason: state.statusReason,
     startTime: state.startTime,
     endTime: state.endTime,
+    accumulatedWaitMs: state.accumulatedWaitMs ?? 0,
+    waitStartedAt: state.waitStartedAt ?? null,
     currentPhase: state.currentPhase,
     currentState: state.currentState,
     currentStep: state.currentStep,

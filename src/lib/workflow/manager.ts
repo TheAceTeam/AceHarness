@@ -245,6 +245,10 @@ export class WorkflowManager extends EventEmitter {
   private feedbackInterrupt: boolean = false;
   private runStartTime: string | null = null;
   private runEndTime: string | null = null;
+  /** 累计等待（停摆）时长（毫秒），不计入实际执行时间。 */
+  private accumulatedWaitMs: number = 0;
+  /** 本次等待开始时刻（ISO），未在等待时为 null。 */
+  private waitStartedAt: string | null = null;
   /** Agent name → session_id for --resume in iterative phases */
   private agentSessionIds: Map<string, string> = new Map();
   private statusReason: string | null = null;
@@ -993,6 +997,8 @@ try {
         statusReason: this.statusReason || undefined,
         startTime: this.runStartTime || new Date().toISOString(),
         endTime: this.runEndTime || null,
+        accumulatedWaitMs: this.accumulatedWaitMs,
+        waitStartedAt: this.waitStartedAt,
         currentPhase: this.currentPhase,
         currentStep: this.currentStep,
         completedSteps: [...this.completedStepNames],
@@ -1235,6 +1241,8 @@ try {
     this.qualityChecks = [...preflightChecks];
     this.runStartTime = new Date().toISOString();
     this.runEndTime = null;
+    this.accumulatedWaitMs = 0;
+    this.waitStartedAt = null;
     this.currentRunId = null;
     this.agentSessionIds.clear();
     this.liveFeedback = [];
@@ -1697,8 +1705,10 @@ try {
             ...this.pendingCheckpoint,
             requiresApproval: true,
           });
+          this.beginWait(); // 进入人工审查等待，计入等待时长
           await this.persistState();
           const action = await this.waitForApproval();
+          this.endWait(); // 人工审查结束，累加本次等待
           if (this._frontendSessionId) {
             await this.appendWorkflowTranscriptEvent({
               type: 'human-answer',
@@ -2880,6 +2890,21 @@ try {
     return prompt;
   }
 
+  /** 标记进入等待（停摆）：记录起点，供累计等待时长用。重复调用不覆盖已有起点。 */
+  private beginWait(): void {
+    if (!this.waitStartedAt) {
+      this.waitStartedAt = new Date().toISOString();
+    }
+  }
+
+  /** 结束等待：把 [waitStartedAt, now] 累加进 accumulatedWaitMs 并清空起点。 */
+  private endWait(): void {
+    if (this.waitStartedAt) {
+      this.accumulatedWaitMs += Math.max(0, Date.now() - new Date(this.waitStartedAt).getTime());
+      this.waitStartedAt = null;
+    }
+  }
+
   async waitForApproval(): Promise<'approve' | 'iterate'> {
     // If there's a pre-queued action (from resume with action), use it immediately
     if (this.queuedApprovalAction) {
@@ -3241,6 +3266,14 @@ try {
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime;
     this.runEndTime = null;
+    // 恢复累计等待时长，并把"停摆→恢复"这段间隔也计入等待：
+    // 停摆起点优先用 waitStartedAt（人工审查中断），否则用 endTime（停止/崩溃/token 耗尽）。
+    this.accumulatedWaitMs = runState.accumulatedWaitMs || 0;
+    const pauseStartedAt = runState.waitStartedAt || runState.endTime;
+    if (pauseStartedAt) {
+      this.accumulatedWaitMs += Math.max(0, Date.now() - new Date(pauseStartedAt).getTime());
+    }
+    this.waitStartedAt = null;
     this.statusReason = null;
     this.pendingCheckpoint = runState.pendingCheckpoint || null;
     this.agentSessionIds.clear();
@@ -3607,6 +3640,10 @@ try {
       statusReason: this.statusReason,
       runId: this.currentRunId,
       currentConfigFile: this.currentConfigFile,
+      startTime: this.runStartTime,
+      endTime: this.runEndTime,
+      accumulatedWaitMs: this.accumulatedWaitMs,
+      waitStartedAt: this.waitStartedAt,
       logs: this.logs,
       agents: this.agents,
       currentPhase: this.currentPhase,

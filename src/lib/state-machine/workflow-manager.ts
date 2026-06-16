@@ -504,6 +504,10 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private selfTransitionCounts: Map<string, number> = new Map();
   private runStartTime: string | null = null;
   private runEndTime: string | null = null;
+  /** 累计等待（停摆）时长（毫秒），不计入实际执行时间。 */
+  private accumulatedWaitMs: number = 0;
+  /** 本次等待开始时刻（ISO），未在等待时为 null。 */
+  private waitStartedAt: string | null = null;
   private pendingForceTransition: string | null = null;
   private pendingForceInstruction: string | null = null;
   /** Tracks human approval context for crash recovery */
@@ -1114,6 +1118,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       transitionCount: this.transitionCount,
       startTime: this.runStartTime,
       endTime: this.runEndTime,
+      accumulatedWaitMs: this.accumulatedWaitMs,
+      waitStartedAt: this.waitStartedAt,
       globalContext: this.globalContext,
       phaseContexts: Object.fromEntries(this.stateContexts),
       supervisorFlow: this.supervisorFlow,
@@ -1305,6 +1311,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
       this.stepTaskBindingsSnapshot = [];
       this.bindingValidation = undefined;
       this.runStartTime = new Date().toISOString();
+      this.accumulatedWaitMs = 0;
+      this.waitStartedAt = null;
       this.currentConfigFile = configFile;
       this.isolatedDir = null;
       this.currentProjectRoot = null;
@@ -1492,6 +1500,15 @@ export class StateMachineWorkflowManager extends EventEmitter {
         this.currentState = restoredState && validStates.has(restoredState) ? restoredState : null;
         this.currentStep = existingState.currentStep || this.currentStep;
         this.runStartTime = existingState.startTime;
+        // 恢复累计等待时长，并把"停摆→恢复"这段间隔计入等待。
+        this.accumulatedWaitMs = existingState.accumulatedWaitMs || 0;
+        {
+          const pauseStartedAt = existingState.waitStartedAt || existingState.endTime;
+          if (pauseStartedAt) {
+            this.accumulatedWaitMs += Math.max(0, Date.now() - new Date(pauseStartedAt).getTime());
+          }
+        }
+        this.waitStartedAt = null;
         this.latestSupervisorReview = existingState.latestSupervisorReview || this.latestSupervisorReview;
         this.humanQuestions = existingState.humanQuestions || [];
         this.pendingHumanQuestionId = existingState.pendingHumanQuestionId || existingState.pendingCheckpoint?.humanQuestionId || null;
@@ -1814,22 +1831,42 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
   }
 
-  private async waitForHumanApproval(): Promise<void> {
-    const pendingQuestion = this.getPendingHumanQuestion();
-    if (pendingQuestion) {
-      await this.waitForHumanQuestionAnswer(pendingQuestion.id);
-      return;
+  /** 标记进入等待（停摆）：记录起点，供累计等待时长用。重复调用不覆盖已有起点。 */
+  private beginWait(): void {
+    if (!this.waitStartedAt) {
+      this.waitStartedAt = new Date().toISOString();
     }
+  }
 
-    // Wait for human to call forceTransition
-    return new Promise((resolve) => {
-      const checkInterval = setInterval(() => {
-        if (this.pendingForceTransition || this.shouldStop) {
-          clearInterval(checkInterval);
-          resolve();
-        }
-      }, 500); // Check every 500ms
-    });
+  /** 结束等待：把 [waitStartedAt, now] 累加进 accumulatedWaitMs 并清空起点。 */
+  private endWait(): void {
+    if (this.waitStartedAt) {
+      this.accumulatedWaitMs += Math.max(0, Date.now() - new Date(this.waitStartedAt).getTime());
+      this.waitStartedAt = null;
+    }
+  }
+
+  private async waitForHumanApproval(): Promise<void> {
+    this.beginWait(); // 进入人工审查等待，计入等待时长
+    try {
+      const pendingQuestion = this.getPendingHumanQuestion();
+      if (pendingQuestion) {
+        await this.waitForHumanQuestionAnswer(pendingQuestion.id);
+        return;
+      }
+
+      // Wait for human to call forceTransition
+      await new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (this.pendingForceTransition || this.shouldStop) {
+            clearInterval(checkInterval);
+            resolve();
+          }
+        }, 500); // Check every 500ms
+      });
+    } finally {
+      this.endWait(); // 人工审查结束，累加本次等待
+    }
   }
 
   private async finalizeRun(status: 'completed' | 'failed' | 'stopped') {
@@ -2053,6 +2090,8 @@ export class StateMachineWorkflowManager extends EventEmitter {
         statusReason: this.statusReason || undefined,
         startTime: this.runStartTime || new Date().toISOString(),
         endTime: finalStatus ? this.runEndTime : null,
+        accumulatedWaitMs: this.accumulatedWaitMs,
+        waitStartedAt: this.waitStartedAt,
         currentPhase: this.currentState || preparingPhase,
         currentStep: this.currentStep,
         activeSteps: Array.from(this.activeStepKeys),
@@ -5757,6 +5796,15 @@ try {
     this.qualityChecks = runState.qualityChecks || [];
     this.runStartTime = runState.startTime || null;
     this.runEndTime = null;
+    // 恢复累计等待时长，并把"停摆→恢复"这段间隔计入等待。
+    this.accumulatedWaitMs = runState.accumulatedWaitMs || 0;
+    {
+      const pauseStartedAt = runState.waitStartedAt || runState.endTime;
+      if (pauseStartedAt) {
+        this.accumulatedWaitMs += Math.max(0, Date.now() - new Date(pauseStartedAt).getTime());
+      }
+    }
+    this.waitStartedAt = null;
     this.globalContext = runState.globalContext || '';
     this.stateContexts = new Map(Object.entries(runState.phaseContexts || {}));
     this.isolatedDir = runState.workingDirectory || null;

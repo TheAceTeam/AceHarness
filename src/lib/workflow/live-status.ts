@@ -152,6 +152,8 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
     startTime: status.startTime || null,
     endTime: status.endTime || null,
+    accumulatedWaitMs: typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0,
+    waitStartedAt: status.waitStartedAt || null,
     workingDirectory: status.workingDirectory || null,
     workspaceGit: status.workspaceGit ? compactJsonValue(status.workspaceGit) : undefined,
     supervisorAgent: status.supervisorAgent || null,
@@ -199,6 +201,8 @@ export function compactWorkflowStatusDeltaForLive(status: any, configFile?: stri
     pendingHumanQuestion: compactHumanQuestion(status.pendingHumanQuestion),
     startTime: status.startTime || null,
     endTime: status.endTime || null,
+    accumulatedWaitMs: typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0,
+    waitStartedAt: status.waitStartedAt || null,
   };
 }
 

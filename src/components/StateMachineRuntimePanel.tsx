@@ -31,6 +31,10 @@ interface StateMachineRuntimePanelProps {
   status: 'idle' | 'running' | 'completed' | 'failed' | 'waiting' | 'stopped';
   startTime?: string | null;
   endTime?: string | null;
+  /** 累计等待（停摆）时长（毫秒），从执行时间中扣除。 */
+  accumulatedWaitMs?: number;
+  /** 若当前正在等待，本次等待的开始时刻（ISO），用于实时扣除进行中的等待。 */
+  waitStartedAt?: string | null;
   onStateClick?: (stateName: string) => void;
 }
 
@@ -43,6 +47,8 @@ export default function StateMachineRuntimePanel({
   status,
   startTime,
   endTime,
+  accumulatedWaitMs,
+  waitStartedAt,
   onStateClick,
 }: StateMachineRuntimePanelProps) {
   const [selectedTransition, setSelectedTransition] = useState<StateTransitionRecord | null>(null);
@@ -157,10 +163,26 @@ export default function StateMachineRuntimePanel({
             <span className="text-sm font-medium text-gray-600 dark:text-gray-400">执行时间</span>
           </div>
           <div className="text-2xl font-bold">
-            <LiveTimer status={status} startTime={startTime} endTime={endTime} />
+            <LiveTimer
+              status={status}
+              startTime={startTime}
+              endTime={endTime}
+              accumulatedWaitMs={accumulatedWaitMs}
+              waitStartedAt={waitStartedAt}
+            />
           </div>
           <div className="text-xs text-gray-500 mt-2">
-            {status === 'completed' ? '已完成' : status === 'running' ? '进行中' : '待开始'}
+            {status === 'completed'
+              ? '已完成'
+              : status === 'failed'
+                ? '已失败'
+                : status === 'stopped'
+                  ? '已停止'
+                  : status === 'waiting'
+                    ? '等待人工'
+                    : status === 'running'
+                      ? '进行中'
+                      : '待开始'}
           </div>
         </div>
       </div>
@@ -408,31 +430,40 @@ export default function StateMachineRuntimePanel({
   );
 }
 
-// 实时计时器组件
-function LiveTimer({ status, startTime, endTime }: { status: string; startTime?: string | null; endTime?: string | null }) {
+// 实时计时器组件：显示实际运行时间 = 墙钟时长 − 累计等待（停摆）时长。
+function LiveTimer({ status, startTime, endTime, accumulatedWaitMs, waitStartedAt }: {
+  status: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  accumulatedWaitMs?: number;
+  waitStartedAt?: string | null;
+}) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    // 计算初始已运行时间
-    if (startTime) {
-      const start = new Date(startTime).getTime();
-      const end = endTime ? new Date(endTime).getTime() : Date.now();
-      const initialElapsed = Math.floor((end - start) / 1000);
-      setElapsed(initialElapsed);
+    if (!startTime) {
+      setElapsed(0);
+      return;
     }
+    // 运行中或等待人工时都需实时刷新：等待期间墙钟与等待时长同步增长，显示值保持冻结。
+    const active = status === 'running' || status === 'waiting';
 
-    // 如果正在运行，每秒更新
-    if (status !== 'running' || !startTime) return;
-
-    const interval = setInterval(() => {
+    const compute = () => {
       const start = new Date(startTime).getTime();
-      const now = Date.now();
-      const currentElapsed = Math.floor((now - start) / 1000);
-      setElapsed(currentElapsed);
-    }, 1000);
+      const end = active || !endTime ? Date.now() : new Date(endTime).getTime();
+      // 扣除等待时长：已累计 + 当前进行中的等待。
+      let waited = accumulatedWaitMs || 0;
+      if (waitStartedAt) {
+        waited += Math.max(0, Date.now() - new Date(waitStartedAt).getTime());
+      }
+      setElapsed(Math.floor(Math.max(0, end - start - waited) / 1000));
+    };
 
+    compute();
+    if (!active) return;
+    const interval = setInterval(compute, 1000);
     return () => clearInterval(interval);
-  }, [status, startTime, endTime]);
+  }, [status, startTime, endTime, accumulatedWaitMs, waitStartedAt]);
 
   const safeElapsed = Math.max(0, elapsed);
   const minutes = Math.floor(safeElapsed / 60);
