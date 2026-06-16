@@ -8,6 +8,17 @@ import {
   resolveWorkspaceRoot,
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
+import {
+  getRemoteWorkspace,
+  isRemoteWorkspace,
+  sortRemoteEntries,
+  type RemoteEntry,
+} from '@/lib/core/remote-workspace';
+import {
+  getRemoteCredentials,
+  remoteCredentialErrorBody,
+  requireRemoteWorkspaceAuth,
+} from '@/lib/core/remote-credential-vault';
 
 interface TreeNode {
   name: string;
@@ -45,53 +56,48 @@ const SKIP_DIRS = new Set([
   'ProgramData', 'Windows', 'MSOCache',
 ]);
 
-const MAX_ENTRIES = 3000; // Hard cap on total nodes to prevent OOM/hang
+const DEFAULT_PAGE_SIZE = 200;
+const MAX_PAGE_SIZE = 500;
 
-interface BuildContext {
-  seen: Set<string>;
-  count: number;
-  truncated: boolean;
-}
-
-async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, ctx?: BuildContext): Promise<TreeNode[]> {
-  const context = ctx || { seen: new Set<string>(), count: 0, truncated: false };
-  if (context.count >= MAX_ENTRIES) {
-    context.truncated = true;
-    return [];
-  }
-
+async function listVisibleEntries(dirPath: string, rootPath: string) {
   const realDir = await fs.realpath(dirPath);
   if (!isInsidePath(rootPath, realDir)) {
     throw new Error('目录路径不合法');
   }
-  if (context.seen.has(realDir)) return [];
-  context.seen.add(realDir);
 
   const entries = await fs.readdir(realDir, { withFileTypes: true });
-  const filtered = entries.filter(e => !SKIP_DIRS.has(e.name));
+  return entries
+    .filter((entry) => !SKIP_DIRS.has(entry.name) && !entry.isSymbolicLink())
+    .sort((a, b) => {
+      const aDir = a.isDirectory();
+      const bDir = b.isDirectory();
+      if (aDir !== bDir) return aDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .map((entry) => ({
+      entry,
+      fullPath: path.join(realDir, entry.name),
+      relativePath: toPortablePath(path.relative(rootPath, path.join(realDir, entry.name))),
+    }));
+}
 
-  const dirs: TreeNode[] = [];
-  const files: TreeNode[] = [];
+async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, seen = new Set<string>()): Promise<TreeNode[]> {
+  const realDir = await fs.realpath(dirPath);
+  if (!isInsidePath(rootPath, realDir)) {
+    throw new Error('目录路径不合法');
+  }
+  if (seen.has(realDir)) return [];
+  seen.add(realDir);
 
-  for (const entry of filtered) {
-    if (context.count >= MAX_ENTRIES) {
-      context.truncated = true;
-      break;
-    }
+  const visibleEntries = await listVisibleEntries(realDir, rootPath);
+  const nodes: TreeNode[] = [];
 
-    const fullPath = path.join(realDir, entry.name);
-    const relativePath = toPortablePath(path.relative(rootPath, fullPath));
-
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
-
+  for (const { entry, fullPath, relativePath } of visibleEntries) {
     if (entry.isDirectory()) {
-      context.count++;
       let children: TreeNode[] | undefined;
       if (depth < maxDepth) {
         try {
-          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, context);
+          children = await buildTree(fullPath, rootPath, depth + 1, maxDepth, seen);
         } catch (error: any) {
           if (!['EPERM', 'EACCES', 'ENOENT', 'EBADF', 'ENOTDIR'].includes(error?.code)) {
             throw error;
@@ -99,15 +105,14 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
           children = [];
         }
       }
-      dirs.push({
+      nodes.push({
         name: entry.name,
         path: relativePath,
         type: 'directory',
         children,
       });
     } else if (entry.isFile()) {
-      context.count++;
-      files.push({
+      nodes.push({
         name: entry.name,
         path: relativePath,
         type: 'file',
@@ -115,10 +120,83 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
     }
   }
 
-  dirs.sort((a, b) => a.name.localeCompare(b.name));
-  files.sort((a, b) => a.name.localeCompare(b.name));
+  return nodes;
+}
 
-  return [...dirs, ...files];
+async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number, offset: number, limit: number) {
+  const visibleEntries = await listVisibleEntries(dirPath, rootPath);
+  const pageEntries = visibleEntries.slice(offset, offset + limit);
+  const tree: TreeNode[] = [];
+
+  for (const { entry, fullPath, relativePath } of pageEntries) {
+    if (entry.isDirectory()) {
+      let children: TreeNode[] | undefined;
+      if (maxDepth > 0) {
+        try {
+          children = await buildTree(fullPath, rootPath, 1, maxDepth);
+        } catch (error: any) {
+          if (!['EPERM', 'EACCES', 'ENOENT', 'EBADF', 'ENOTDIR'].includes(error?.code)) {
+            throw error;
+          }
+          children = [];
+        }
+      }
+      tree.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'directory',
+        children,
+      });
+    } else if (entry.isFile()) {
+      tree.push({
+        name: entry.name,
+        path: relativePath,
+        type: 'file',
+      });
+    }
+  }
+
+  const nextOffset = offset + tree.length;
+  return {
+    tree,
+    totalEntries: visibleEntries.length,
+    offset,
+    pageSize: limit,
+    hasMore: nextOffset < visibleEntries.length,
+    nextOffset: nextOffset < visibleEntries.length ? nextOffset : null,
+  };
+}
+
+function remoteEntryToNode(entry: RemoteEntry): TreeNode {
+  return {
+    name: entry.name,
+    path: entry.path,
+    type: entry.type,
+  };
+}
+
+async function buildRemoteTreePage(workspacePath: string, userId: string, subPath: string, offset: number, limit: number) {
+  const credentials = getRemoteCredentials({ userId, workspace: workspacePath });
+  const { ref, provider } = getRemoteWorkspace(workspacePath, credentials);
+  try {
+    const entries = sortRemoteEntries(await provider.list(subPath));
+    const pageEntries = entries.slice(offset, offset + limit);
+    const nextOffset = offset + pageEntries.length;
+    return {
+      tree: pageEntries.map(remoteEntryToNode),
+      workspaceRoot: ref.displayRoot,
+      targetPath: subPath,
+      availableRoots: [],
+      totalEntries: entries.length,
+      offset,
+      pageSize: limit,
+      hasMore: nextOffset < entries.length,
+      nextOffset: nextOffset < entries.length ? nextOffset : null,
+      truncated: nextOffset < entries.length,
+    };
+  } finally {
+    await provider.close?.();
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -130,8 +208,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少 path 参数' }, { status: 400 });
     }
 
-    const maxDepth = Math.min(parseInt(searchParams.get('depth') || '2', 10), 10);
+    const maxDepth = Math.min(Math.max(parseInt(searchParams.get('depth') || '0', 10), 0), 10);
+    const offset = Math.max(parseInt(searchParams.get('offset') || '0', 10), 0);
+    const requestedLimit = parseInt(searchParams.get('limit') || searchParams.get('pageSize') || String(DEFAULT_PAGE_SIZE), 10);
+    const limit = Math.min(Math.max(requestedLimit, 1), MAX_PAGE_SIZE);
     const subPath = searchParams.get('sub') || '';
+
+    if (isRemoteWorkspace(workspacePath)) {
+      const auth = await requireRemoteWorkspaceAuth(request);
+      if (auth instanceof NextResponse) return auth;
+      const page = await buildRemoteTreePage(workspacePath, auth.id, subPath, offset, limit);
+      return NextResponse.json(page);
+    }
 
     const rootPath = await resolveWorkspaceRoot(workspacePath);
     const targetPath = subPath ? await resolveExistingInsideWorkspace(rootPath, subPath) : rootPath;
@@ -140,17 +228,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '路径不是目录' }, { status: 400 });
     }
 
-    const context: BuildContext = { seen: new Set(), count: 0, truncated: false };
-    const tree = await buildTree(targetPath, rootPath, 0, maxDepth, context);
+    const page = await buildTreePage(targetPath, rootPath, maxDepth, offset, limit);
     return NextResponse.json({
-      tree,
+      ...page,
       workspaceRoot: toPortablePath(rootPath),
       targetPath: toPortablePath(targetPath),
       availableRoots: await getAvailableDriveRoots(),
-      truncated: context.truncated,
-      totalEntries: context.count,
+      truncated: page.hasMore,
     });
   } catch (error: any) {
+    if (error?.status === 428 && workspaceErrorResponse(error).message.includes('凭据')) {
+      const workspacePath = new URL(request.url).searchParams.get('path') || '';
+      return NextResponse.json(remoteCredentialErrorBody(workspacePath), { status: 428 });
+    }
     const { message, status } = workspaceErrorResponse(error);
     return NextResponse.json({ error: message, message }, { status });
   }

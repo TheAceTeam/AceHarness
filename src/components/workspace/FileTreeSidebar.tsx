@@ -57,6 +57,9 @@ interface TreeCapabilityFlags {
 interface FileTreeSidebarProps {
   workspacePath: string
   tree: TreeNode[]
+  rootPagination?: WorkspaceTreePagination
+  rootLoadingMore?: boolean
+  onLoadMoreRoot?: () => Promise<void> | void
   selectedFile: string | null
   onSelectFile: (filePath: string) => void
   onDeletedPath?: (path: string) => void
@@ -70,6 +73,12 @@ interface FileTreeSidebarProps {
   notebookPermission?: 'read' | 'write'
   notebookView?: "list" | "desktop"
   onNotebookViewChange?: (view: "list" | "desktop") => void
+}
+
+interface WorkspaceTreePagination {
+  hasMore: boolean
+  nextOffset: number | null
+  totalEntries?: number
 }
 
 interface MoveConflictState {
@@ -231,6 +240,17 @@ function dedupeTopLevelPaths<T extends { path: string }>(items: T[]): T[] {
     if (!covered) result.push(item as T)
   }
   return result
+}
+
+function appendUniqueTreeNodes(existing: TreeNode[], incoming: TreeNode[]): TreeNode[] {
+  const seen = new Set(existing.map((node) => node.path))
+  const next = [...existing]
+  for (const node of incoming) {
+    if (seen.has(node.path)) continue
+    seen.add(node.path)
+    next.push(node)
+  }
+  return next
 }
 
 function isBuiltinNotebookTreePath(filePath: string | null | undefined): boolean {
@@ -1394,6 +1414,30 @@ function NotebookDesktopBrowser({
 }
 
 /* --- TreeDirItem --- */
+function TreeLoadMoreRow({
+  depth,
+  loading,
+  onClick,
+}: {
+  depth: number
+  loading: boolean
+  onClick: () => void
+}) {
+  return (
+    <div style={getTreeIndentStyle(depth)} className="px-2 py-0.5">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-sm px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground disabled:opacity-60"
+        onClick={onClick}
+        disabled={loading}
+      >
+        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronDown className="h-3 w-3" />}
+        <span>加载更多</span>
+      </button>
+    </div>
+  )
+}
+
 function TreeDirItem({
   node, selectedFile, depth,
 }: {
@@ -1446,12 +1490,17 @@ function TreeDirItem({
   const nodeReadOnly = mode === "notebook" && isReadOnlyNotebookNode(node)
   const [children, setChildren] = React.useState<TreeNode[] | undefined>(node.children)
   const [loadingChildren, setLoadingChildren] = React.useState(false)
+  const [pagination, setPagination] = React.useState<WorkspaceTreePagination>({ hasMore: false, nextOffset: null })
+  const [loadingMore, setLoadingMore] = React.useState(false)
   const shouldAutoOpen = Boolean(
     normalizedSelectedFile && (normalizedSelectedFile === normalizedNodePath || normalizedSelectedFile.startsWith(`${normalizedNodePath}/`))
   )
   const open = isCreatingHere || openDirectories.has(node.path)
 
-  React.useEffect(() => { setChildren(node.children) }, [node])
+  React.useEffect(() => {
+    setChildren(node.children)
+    setPagination({ hasMore: false, nextOffset: null })
+  }, [node])
   React.useEffect(() => {
     if (isCreatingHere || shouldAutoOpen) setDirectoryOpen(node.path, true)
   }, [isCreatingHere, node.path, setDirectoryOpen, shouldAutoOpen])
@@ -1465,8 +1514,13 @@ function TreeDirItem({
           const data = await workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken })
           setChildren(data.tree || [])
         } else {
-          const data = await workspaceApi.getSubTree(workspacePath, node.path, 2)
+          const data = await workspaceApi.getSubTree(workspacePath, node.path, { depth: 0 })
           setChildren(data.tree || [])
+          setPagination({
+            hasMore: Boolean(data.hasMore),
+            nextOffset: data.nextOffset ?? null,
+            totalEntries: data.totalEntries,
+          })
         }
       } catch (error) {
         toast("error", formatErrorMessage(error, `加载目录失败：${node.name}`))
@@ -1548,6 +1602,27 @@ function TreeDirItem({
   const handleDownload = async () => {
     await onDownload(node.path)
   }
+
+  const handleLoadMore = React.useCallback(async () => {
+    if (mode === "notebook" || !pagination.hasMore || pagination.nextOffset == null || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const data = await workspaceApi.getSubTree(workspacePath, node.path, {
+        depth: 0,
+        offset: pagination.nextOffset,
+      })
+      setChildren((prev) => appendUniqueTreeNodes(prev || [], data.tree || []))
+      setPagination({
+        hasMore: Boolean(data.hasMore),
+        nextOffset: data.nextOffset ?? null,
+        totalEntries: data.totalEntries,
+      })
+    } catch (error) {
+      toast("error", formatErrorMessage(error, `加载更多失败：${node.name}`))
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [loadingMore, mode, node.name, node.path, pagination.hasMore, pagination.nextOffset, toast, workspacePath])
 
   const handleCreateConfirm = async (name: string) => {
     if (!creatingIn) return
@@ -1758,13 +1833,18 @@ function TreeDirItem({
               <span className="text-xs text-muted-foreground">加载中...</span>
             </div>
           ) : (
-            children?.map((child) =>
-              child.type === "directory" ? (
-                <TreeDirItem key={child.path} node={child} selectedFile={selectedFile} depth={depth + 1} />
-              ) : (
-                <TreeFileItem key={child.path} node={child} selectedFile={selectedFile} depth={depth + 1} />
-              )
-            )
+            <>
+              {children?.map((child) =>
+                child.type === "directory" ? (
+                  <TreeDirItem key={child.path} node={child} selectedFile={selectedFile} depth={depth + 1} />
+                ) : (
+                  <TreeFileItem key={child.path} node={child} selectedFile={selectedFile} depth={depth + 1} />
+                )
+              )}
+              {mode === "default" && pagination.hasMore ? (
+                <TreeLoadMoreRow depth={depth + 1} loading={loadingMore} onClick={() => { void handleLoadMore() }} />
+              ) : null}
+            </>
           )}
         </CollapsibleContent>
       </Collapsible>
@@ -1799,7 +1879,7 @@ function TreeDirItem({
 
 /* --- Main Sidebar --- */
 export function FileTreeSidebar({
-  workspacePath, tree, selectedFile, onSelectFile, onDeletedPath, loading,
+  workspacePath, tree, rootPagination, rootLoadingMore = false, onLoadMoreRoot, selectedFile, onSelectFile, onDeletedPath, loading,
   clipboard, setClipboard, onRefresh, mode = "default",
   notebookScope = 'personal',
   notebookShareToken,
@@ -2535,6 +2615,9 @@ export function FileTreeSidebar({
                       <TreeFileItem key={node.path} node={node} selectedFile={selectedFile} depth={0} />
                     )
                   )}
+                  {mode === "default" && rootPagination?.hasMore && onLoadMoreRoot ? (
+                    <TreeLoadMoreRow depth={0} loading={rootLoadingMore} onClick={() => { void onLoadMoreRoot() }} />
+                  ) : null}
                   {tree.length > 0 && (
                     <DropLine
                       active={isDropIntentActive(dropIntent, { position: "after", targetPath: tree[tree.length - 1].path })}

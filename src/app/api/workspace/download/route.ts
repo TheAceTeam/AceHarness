@@ -13,6 +13,8 @@ import {
   sanitizeDownloadName,
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
+import { getRemoteWorkspace, isRemoteWorkspace, remoteEntryName } from '@/lib/core/remote-workspace';
+import { getRemoteCredentials, remoteCredentialErrorBody, requireRemoteWorkspaceAuth } from '@/lib/core/remote-credential-vault';
 
 async function collectArchiveFiles(root: string, dirPath: string): Promise<Array<{ fullPath: string; entryName: string; size: number }>> {
   const files: Array<{ fullPath: string; entryName: string; size: number }> = [];
@@ -87,6 +89,27 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少 workspace 参数' }, { status: 400 });
     }
 
+    if (isRemoteWorkspace(workspace)) {
+      const auth = await requireRemoteWorkspaceAuth(request);
+      if (auth instanceof NextResponse) return auth;
+      const credentials = getRemoteCredentials({ userId: auth.id, workspace });
+      const { provider } = getRemoteWorkspace(workspace, credentials);
+      const stat = await provider.stat(targetPath);
+      if (stat.type === 'directory') {
+        return NextResponse.json({ error: '远程目录打包下载暂不支持，请选择具体文件下载' }, { status: 400 });
+      }
+      const buffer = await provider.readFile(targetPath);
+      const filename = sanitizeDownloadName(remoteEntryName(targetPath));
+      return new NextResponse(new Uint8Array(buffer), {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(buffer.length),
+          'Content-Disposition': buildDownloadContentDisposition(filename),
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
     const root = await resolveWorkspaceRoot(workspace);
     const fullPath = targetPath ? await resolveExistingInsideWorkspace(root, targetPath) : root;
     const stat = await fs.lstat(fullPath);
@@ -123,6 +146,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ error: '路径不是文件或目录' }, { status: 400 });
   } catch (error: any) {
+    if (error?.status === 428) {
+      const workspace = new URL(request.url).searchParams.get('workspace') || '';
+      return NextResponse.json(remoteCredentialErrorBody(workspace), { status: 428 });
+    }
     const { message, status } = workspaceErrorResponse(error);
     return NextResponse.json({ error: message, message }, { status });
   }

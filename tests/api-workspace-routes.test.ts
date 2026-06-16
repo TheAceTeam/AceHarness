@@ -6,6 +6,14 @@ import { canCreateFileSymlink, createFileSymlink, withTempWorkspace } from './he
 import { assertErrorResponse, makeRequest, responseJson } from './helpers/route-helpers';
 
 type TreeNode = { name: string; path: string; type: string; children?: TreeNode[] };
+type WorkspaceTreeJson = {
+  tree: TreeNode[];
+  hasMore?: boolean;
+  nextOffset?: number | null;
+  offset?: number;
+  pageSize?: number;
+  totalEntries?: number;
+};
 
 async function loadWorkspaceRoutes() {
   const [tree, file, manage, download, upload] = await Promise.all([
@@ -50,6 +58,59 @@ describe('workspace API routes', () => {
       expect(entries.some((entry) => entry.path === path.join('src', 'app.ts') && entry.type === 'file')).toBe(true);
       expect(entries.some((entry) => entry.name === '.env' && entry.type === 'file')).toBe(true);
       expect(entries.some((entry) => entry.name === 'outside-link.txt')).toBe(false);
+    });
+  });
+
+  test('workspace tree pages a single directory breadth-first without silently truncating', async () => {
+    await withTempWorkspace(async ({ workspace }) => {
+      await mkdir(path.join(workspace, 'z-dir'), { recursive: true });
+      await mkdir(path.join(workspace, 'a-dir'), { recursive: true });
+      await writeFile(path.join(workspace, 'b-file.txt'), 'b');
+      await writeFile(path.join(workspace, 'a-file.txt'), 'a');
+
+      const { tree } = await loadWorkspaceRoutes();
+      const first = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&depth=0&limit=2`));
+      expect(first.status).toBe(200);
+      const firstJson = await responseJson<WorkspaceTreeJson>(first);
+
+      expect(firstJson.tree.map((entry) => entry.name)).toEqual(['a-dir', 'z-dir']);
+      expect(firstJson.tree.every((entry) => entry.children === undefined)).toBe(true);
+      expect(firstJson.totalEntries).toBe(4);
+      expect(firstJson.pageSize).toBe(2);
+      expect(firstJson.offset).toBe(0);
+      expect(firstJson.hasMore).toBe(true);
+      expect(firstJson.nextOffset).toBe(2);
+
+      const second = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&depth=0&limit=2&offset=2`));
+      expect(second.status).toBe(200);
+      const secondJson = await responseJson<WorkspaceTreeJson>(second);
+
+      expect(secondJson.tree.map((entry) => entry.name)).toEqual(['a-file.txt', 'b-file.txt']);
+      expect(secondJson.hasMore).toBe(false);
+      expect(secondJson.nextOffset).toBeNull();
+    });
+  });
+
+  test('workspace tree loads nested directories only when requested as a subtree', async () => {
+    await withTempWorkspace(async ({ workspace }) => {
+      await mkdir(path.join(workspace, 'src', 'deep'), { recursive: true });
+      await writeFile(path.join(workspace, 'src', 'app.ts'), 'export const ok = true;');
+      await writeFile(path.join(workspace, 'src', 'deep', 'hidden.ts'), 'export const hidden = true;');
+
+      const { tree } = await loadWorkspaceRoutes();
+      const root = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&depth=0&limit=10`));
+      expect(root.status).toBe(200);
+      const rootJson = await responseJson<WorkspaceTreeJson>(root);
+      expect(rootJson.tree).toEqual([
+        { name: 'src', path: 'src', type: 'directory' },
+      ]);
+
+      const sub = await tree.GET(makeRequest(`/api/workspace/tree?path=${encodeURIComponent(workspace)}&sub=${encodeURIComponent('src')}&depth=0&limit=10`));
+      expect(sub.status).toBe(200);
+      const subJson = await responseJson<WorkspaceTreeJson>(sub);
+      expect(subJson.tree.map((entry) => entry.path)).toEqual(['src/deep', 'src/app.ts']);
+      expect(subJson.tree.find((entry) => entry.path === 'src/deep')?.children).toBeUndefined();
+      expect(subJson.tree.some((entry) => entry.path === 'src/deep/hidden.ts')).toBe(false);
     });
   });
 

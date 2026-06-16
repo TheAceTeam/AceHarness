@@ -2696,6 +2696,40 @@ export interface WorkspaceTreeResponse {
   workspaceRoot?: string;
   targetPath?: string;
   availableRoots?: string[];
+  truncated?: boolean;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+  offset?: number;
+  pageSize?: number;
+  totalEntries?: number;
+}
+
+async function throwWorkspaceApiError(response: Response, fallback: string): Promise<never> {
+  const data = await response.json().catch(() => null);
+  const error = new Error(data?.message || data?.error || fallback) as Error & {
+    status?: number;
+    code?: string;
+    workspace?: string;
+  };
+  error.status = response.status;
+  if (typeof data?.code === 'string') error.code = data.code;
+  if (typeof data?.workspace === 'string') error.workspace = data.workspace;
+  throw error;
+}
+
+export interface WorkspaceTreeOptions {
+  depth?: number;
+  offset?: number;
+  limit?: number;
+}
+
+export interface RemoteWorkspaceCredentials {
+  username?: string;
+  password?: string;
+  privateKey?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+  domain?: string;
 }
 
 export type GitDiffFileStatus = 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
@@ -3087,31 +3121,37 @@ export const workspaceApi = {
     }
     return data;
   },
-  async getTree(workspacePath: string, depth = 2): Promise<WorkspaceTreeResponse> {
-    const res = await authFetch(`${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&depth=${depth}`);
+  async getTree(workspacePath: string, options: number | WorkspaceTreeOptions = 0): Promise<WorkspaceTreeResponse> {
+    const params = new URLSearchParams();
+    const normalizedOptions = typeof options === 'number' ? { depth: options } : options;
+    params.set('path', workspacePath);
+    params.set('depth', String(normalizedOptions.depth ?? 0));
+    if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
+    if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '获取文件树失败');
+      await throwWorkspaceApiError(res, '获取文件树失败');
     }
     return res.json();
   },
-  async getSubTree(workspacePath: string, subPath: string, depth = 2): Promise<WorkspaceTreeResponse> {
-    const res = await authFetch(
-      `${API_BASE}/workspace/tree?path=${encodeURIComponent(workspacePath)}&sub=${encodeURIComponent(subPath)}&depth=${depth}`
-    );
+  async getSubTree(workspacePath: string, subPath: string, options: number | WorkspaceTreeOptions = 0): Promise<WorkspaceTreeResponse> {
+    const params = new URLSearchParams();
+    const normalizedOptions = typeof options === 'number' ? { depth: options } : options;
+    params.set('path', workspacePath);
+    params.set('sub', subPath);
+    params.set('depth', String(normalizedOptions.depth ?? 0));
+    if (normalizedOptions.offset != null) params.set('offset', String(normalizedOptions.offset));
+    if (normalizedOptions.limit != null) params.set('limit', String(normalizedOptions.limit));
+    const res = await authFetch(`${API_BASE}/workspace/tree?${params.toString()}`);
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '获取子目录失败');
+      await throwWorkspaceApiError(res, '获取子目录失败');
     }
     return res.json();
   },
   async getFile(workspace: string, file: string): Promise<{ content: string; size: number; path: string }> {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}`);
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      const err = new Error(data.message || data.error || '读取文件失败') as Error & { size?: number };
-      if (data.size != null) err.size = data.size;
-      throw err;
+      await throwWorkspaceApiError(res, '读取文件失败');
     }
     return res.json();
   },
@@ -3122,16 +3162,14 @@ export const workspaceApi = {
       body: JSON.stringify({ workspace, file, content }),
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '保存文件失败');
+      await throwWorkspaceApiError(res, '保存文件失败');
     }
     return res.json();
   },
   async getFileBlob(workspace: string, file: string): Promise<Blob> {
     const res = await authFetch(`${API_BASE}/workspace/file?workspace=${encodeURIComponent(workspace)}&file=${encodeURIComponent(file)}&mode=blob`);
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '获取文件失败');
+      await throwWorkspaceApiError(res, '获取文件失败');
     }
     return res.blob();
   },
@@ -3287,8 +3325,7 @@ export const workspaceApi = {
       body: formData,
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '上传失败');
+      await throwWorkspaceApiError(res, '上传失败');
     }
     return res.json();
   },
@@ -3297,8 +3334,7 @@ export const workspaceApi = {
     if (!res.ok) {
       const contentType = res.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || data.error || '下载失败');
+        await throwWorkspaceApiError(res, '下载失败');
       }
       const text = await res.text().catch(() => '');
       throw new Error(text || '下载失败');
@@ -3327,8 +3363,25 @@ export const workspaceApi = {
       body: JSON.stringify({ workspace, action, ...params }),
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || data.error || '操作失败');
+      await throwWorkspaceApiError(res, '操作失败');
+    }
+    return res.json();
+  },
+  async setRemoteCredentials(workspace: string, credentials: RemoteWorkspaceCredentials): Promise<{ success: boolean; credentialId: string; expiresAt: number; workspace: string }> {
+    const res = await authFetch(`${API_BASE}/workspace/remote-credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspace, credentials }),
+    });
+    if (!res.ok) {
+      await throwWorkspaceApiError(res, '保存远程连接凭据失败');
+    }
+    return res.json();
+  },
+  async forgetRemoteCredentials(workspace: string): Promise<{ success: boolean }> {
+    const res = await authFetch(`${API_BASE}/workspace/remote-credentials?workspace=${encodeURIComponent(workspace)}`, { method: 'DELETE' });
+    if (!res.ok) {
+      await throwWorkspaceApiError(res, '清除远程连接凭据失败');
     }
     return res.json();
   },
