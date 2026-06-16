@@ -31,6 +31,7 @@ ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。�
 ## 目录
 
 - [产品全景](#产品全景)
+- [一人公司模式](#一人公司模式)
 - [快速开始](#快速开始)
 - [核心机制](#核心机制)
 - [系统架构](#系统架构)
@@ -55,6 +56,14 @@ ACEHarness 按“规划、执行、协作、沉淀、扩展、接入”组织工
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg">
     <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/features-overview.svg" alt="ACEHarness 核心能力亮点">
 </picture>
+
+---
+
+## 一人公司模式
+
+一人公司模式把 `/office` 办公室变成个人 AI 团队桌面，用户用一句话组建或调整产品、设计、工程、增长、运营等 Agent 角色，并通过工位、组织图、私聊/群聊和长期记忆持续协作。
+
+![一人公司模式角色蓝图](./public/images/opc-roles.png)
 
 ---
 
@@ -233,6 +242,7 @@ ACEHarness 现已支持把工作流运行时对话、人工检查点和多 Agent
 
 - [工作流案例](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/workflow-cases.md)：四个真实/复盘案例的完整细节
 - [ACP Code Agent 集成检查清单](https://gitcode.com/Cangjie-SIG/ACEHarness/blob/main/docs/acp-code-agent-integration-checklist.md)：ACP Code Agent 接入与验证参考
+- [一人公司模式功能介绍](./docs/one-person-company-mode.md)：基于 `/office` 的个人 AI 团队、组织草案、工位协作和记忆模式说明
 
 ---
 
