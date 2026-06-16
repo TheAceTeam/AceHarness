@@ -34,9 +34,10 @@ async function readRuntimeSkillFile(skillName: string, fileName: string): Promis
 
 async function buildSpecCodingInstructionBlock(): Promise<string> {
   const skillName = 'aceharness-spec-coding';
-  const [skill, prompt, requirementsTemplate, designTemplate, tasksTemplate] = await Promise.all([
+  const [skill, prompt, executableExample, requirementsTemplate, designTemplate, tasksTemplate] = await Promise.all([
     readRuntimeSkillFile(skillName, 'SKILL.md'),
     readRuntimeSkillFile(skillName, 'PROMPT.md'),
+    readRuntimeSkillFile(skillName, 'examples/executable-spec.md'),
     readRuntimeSkillFile(skillName, 'templates/requirements.md'),
     readRuntimeSkillFile(skillName, 'templates/design.md'),
     readRuntimeSkillFile(skillName, 'templates/tasks.md'),
@@ -47,6 +48,9 @@ async function buildSpecCodingInstructionBlock(): Promise<string> {
     '',
     '# aceharness-spec-coding/PROMPT.md',
     prompt,
+    '',
+    '# examples/executable-spec.md',
+    executableExample,
     '',
     '# templates/requirements.md',
     requirementsTemplate,
@@ -240,9 +244,11 @@ export async function POST(request: NextRequest) {
       '- artifacts.tasks: string',
       '',
       '要求：',
-      '- requirements 必须包含简介、能力拆分、术语表、至少两个 R 编号需求块、用户故事、WHEN/THEN 验收标准、非目标和待确认项。',
-      '- design 必须包含 Mermaid 架构/流程图、组件与接口、数据模型、数据流、关键决策 D 编号、测试方案、兼容性与风险。',
-      '- tasks 必须使用多级 checkbox，所有可执行任务有 T 编号、需求追踪 R、设计追踪 D、动作、交付和验证方式。',
+      '- 先做 evidence-first 分析，再写制品；不要直接套模板。',
+      '- requirements 必须包含输入解读、代码证据、能力拆分、术语表、至少两个 R 编号需求块、证据来源、用户故事、WHEN/THEN 验收标准、非目标和待确认项。',
+      '- design 必须包含当前实现分析、Mermaid 架构/流程图、组件与接口、输入/输出/失败契约、数据模型、数据流、错误与边界矩阵、关键决策 D 编号、测试方案、兼容性与风险。',
+      '- tasks 必须使用多级 checkbox，所有可执行任务有 T 编号、需求追踪 R、设计追踪 D、目标文件/函数、动作、交付和验证方式。',
+      '- 如果无法访问具体代码事实，必须把待勘探文件、rg query、需要验证的假设写进代码证据和第一批任务。',
       '- revisionPlan 必须说明相对基础草案做了哪些 add/modify/remove/rename；即使是首版生成，也要列出新增、细化或收敛的内容。',
       '- requirements/design/tasks 三份文档内容彼此一致，且比基础草案更具体。',
       '- 如果信息不足，也要先给出当前最佳草案，并把缺口写入 clarification。',

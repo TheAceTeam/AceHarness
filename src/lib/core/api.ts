@@ -914,6 +914,21 @@ export const specCodingApi = {
     }
     return data;
   },
+  async validateArtifactsQuality(artifacts: Record<string, string>): Promise<{ qualityValidation: any }> {
+    const response = await authFetch(`${API_BASE}/spec-coding/quality`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ artifacts }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw Object.assign(
+        new Error(data?.error || data?.message || 'Spec 制品质量校验失败'),
+        { data }
+      );
+    }
+    return data;
+  },
   async deleteCreationSession(id: string): Promise<{ success: boolean }> {
     const response = await authFetch(`${API_BASE}/spec-coding/sessions/${encodeURIComponent(id)}`, {
       method: 'DELETE',

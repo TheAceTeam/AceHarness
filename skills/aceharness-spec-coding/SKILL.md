@@ -11,7 +11,32 @@ Turn rough workflow intent into three executable planning artifacts:
 - `design.md`: implementation architecture, decisions, data flow, risks, and verification strategy.
 - `tasks.md`: agent-sized executable tasks with R/D traceability and validation evidence.
 
-Do not treat this as a formatting exercise. The output must give another AI agent enough context to implement, verify, and report progress without re-discovering the requirement.
+Do not treat this as a formatting exercise. The output must give another AI agent enough context to implement, verify, and report progress without re-discovering the requirement or re-reading the whole codebase.
+
+## Positive Example
+
+When the request is vague, the generated spec feels generic, or the agent needs a concrete target for "executable enough", read `examples/executable-spec.md` before drafting. Use it as a style and granularity reference:
+
+- split a vague feature into independently testable capabilities
+- turn each capability into R requirements with actor value and observable WHEN/THEN outcomes
+- derive design interfaces, data flow, decisions, alternatives, compatibility, and risks from those R requirements
+- derive leaf tasks that a single agent can execute without re-asking what to do
+
+Do not copy the example domain content unless the user's request is actually about non-stream chat env propagation.
+
+## Evidence-First Rule
+
+SpecCoding must start from evidence, not from a template.
+
+Before drafting requirements/design/tasks, analyze the current system and write down:
+
+- user intent: exact requested behavior, hard failures, non-goals, and implied compatibility constraints
+- code evidence: files, functions, routes, schemas, tests, config keys, and runtime paths already found
+- current behavior: what the existing code does today, including stream/non-stream or old/new path differences
+- target behavior: what must change, what must stay unchanged, and what must fail loudly
+- unknowns: only questions that affect implementation strategy; do not use unknowns to avoid making a conservative executable plan
+
+If code context is available, every meaningful requirement and design decision should be grounded in at least one code artifact or workflow artifact. If code context is not available, explicitly mark the affected files/functions as "to be discovered" and create first tasks that discover them.
 
 ## Artifact Boundary
 
@@ -23,32 +48,49 @@ If a detail is unknown but blocks implementation strategy, put it in clarificati
 
 ## Generation Procedure
 
-1. Extract confirmed facts from user input, workflow config, existing spec, and code context.
+1. Build an analysis packet before writing final artifacts:
+   - `Input Interpretation`: restate the user request as concrete behavior and failure semantics.
+   - `Code Evidence`: list discovered files/functions/routes/types/tests and what each proves.
+   - `Current vs Target`: compare current behavior and expected behavior in a small table.
+   - `Impact Surface`: identify modules, APIs, data models, permissions, persistence, UI, tests, and migration risk.
+   - `Error/Edge Matrix`: list important edge cases, expected result, and where they are handled.
 2. Split the work into capabilities. A capability is a behavior or workflow outcome that can be tested independently.
-3. Assign stable IDs:
+3. Derive requirements from the analysis packet, not from section titles. Each R must answer:
+   - who/what triggers it
+   - what input/state is required
+   - what observable output/state/error is produced
+   - what must not change
+   - how it can be tested
+4. Assign stable IDs:
    - requirements: `R1`, `R2`, ...
    - design decisions: `D1`, `D2`, ...
    - tasks: `T1`, `T1.1`, `T2.1`, ...
-4. Write requirements first. Each requirement must include:
+5. Write requirements first. Each requirement must include:
    - title and behavior boundary
+   - evidence from input/code
    - user story or actor-goal-value sentence
    - at least two WHEN/THEN acceptance scenarios covering happy path and edge/error/compatibility path
-5. Write design from the requirements. Include:
+6. Write design from the requirements and code evidence. Include:
    - Mermaid architecture or sequence diagram
-   - components/interfaces
+   - concrete components/interfaces/files/functions when known
    - data models/state and lifecycle
+   - error propagation and hard-failure behavior
    - key decisions with alternatives
    - testing, compatibility, security/performance/reliability risks when relevant
-6. Write tasks from requirements and design. Every executable leaf task must include:
+7. Write tasks from requirements and design. Every executable leaf task must include:
    - action
    - deliverable
    - validation
+   - target files/functions or a discovery target
+   - expected test command or new test case
    - `需求追踪：R...`
    - `设计追踪：D...` when a design choice governs the task
-7. Self-check before returning:
+8. Self-check before returning:
    - no placeholders or generic filler
    - every requirement is referenced by at least one task
+   - every design decision is referenced by at least one task or explicitly marked as documentation-only
    - every task can be executed by a single agent
+   - no task says "完善/优化/处理" without naming the exact code path, behavior, and verification
    - tasks preserve `spec-coding-task` comments if revising existing artifacts
    - language, terminology, IDs, and scope are consistent across all artifacts
 
@@ -58,6 +100,8 @@ Required sections:
 
 - `# 需求文档：<name>`
 - `## 简介`
+- `## 输入解读`
+- `## 代码证据`
 - `## 能力拆分`
 - `## 术语表`
 - `## 需求`
@@ -71,6 +115,8 @@ Requirement block:
 
 **能力边界：** <what is included and excluded>
 
+**证据来源：** <user input / code file / route / function / test that justifies this requirement>
+
 **用户故事：** 作为<actor>，我希望<goal>，以便<value>。
 
 #### 验收标准
@@ -82,6 +128,7 @@ Rules:
 
 - Use stable `R` IDs. Do not renumber existing IDs during revision unless explicitly renaming and recording why.
 - Requirements are behavior contracts, not implementation steps.
+- Do not invent code facts. If the file/function is not checked yet, say `待勘探：<target>` and create a discovery task.
 - Include compatibility, permission, failure, or rollback behavior if relevant.
 - Put unconfirmed facts in assumptions/open questions instead of presenting them as confirmed.
 
@@ -91,10 +138,12 @@ Required sections:
 
 - `# 设计文档：<name>`
 - `## 概述`
+- `## 当前实现分析`
 - `## 架构` with fenced `mermaid`
 - `## 组件与接口`
 - `## 数据模型`
 - `## 数据流`
+- `## 错误与边界矩阵`
 - `## 关键决策`
 - `## 测试方案`
 - `## 兼容性与迁移`
@@ -112,6 +161,7 @@ Rules:
 
 - Trace each meaningful design choice back to one or more `R` requirements.
 - Prefer concrete local module/interface names only after checking code or workflow config.
+- For each changed route/service/helper/adapter, state input contract, output contract, failure contract, and callers.
 - Mention old data/config/API compatibility explicitly. If none, say why no migration is needed.
 - Testing plan must cover main path, edge/failure path, and regression/compatibility risk.
 
@@ -130,6 +180,7 @@ Task block:
   - [ ] T1.1 <agent-sized task>
     - 需求追踪：R1
     - 设计追踪：D1
+    - 目标文件：<file/function/module or discovery target>
     - 动作：<specific edits/research/build steps>
     - 交付：<files, config, docs, tests, or review result>
     - 验证：<command, test, manual review, or evidence>
@@ -141,6 +192,7 @@ Rules:
 - Use two-space indentation per task level.
 - Leaf task IDs must be unique and stable.
 - Avoid vague tasks like "完善逻辑", "优化体验", "处理异常" unless the exact action and validation are listed below.
+- Discovery tasks are allowed only when code evidence is truly unavailable. They must name search queries, expected files/functions, and the decision that depends on the discovery.
 - Keep tasks aligned to workflow steps; do not bind every task to every requirement.
 - Include at least one checkpoint task that summarizes verification evidence and remaining risks.
 
