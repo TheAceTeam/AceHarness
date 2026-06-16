@@ -4616,13 +4616,16 @@ export default function OfficePage() {
         .station-presence-seated_work .station-operator,
         .station-presence-seated_work .station-callout-layer,
         .station-presence-thinking_at_desk .station-operator,
-        .station-presence-thinking_at_desk .station-callout-layer {
+        .station-presence-thinking_at_desk .station-callout-layer,
+        .station-presence-stretching_at_desk .station-operator,
+        .station-presence-stretching_at_desk .station-callout-layer {
           left: 154px;
           top: 68px;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-operator,
-        .station-presence-thinking_at_desk .station-operator {
+        .station-presence-thinking_at_desk .station-operator,
+        .station-presence-stretching_at_desk .station-operator {
           z-index: 16;
         }
         .station-agent-sprite {
@@ -4641,27 +4644,37 @@ export default function OfficePage() {
           animation-delay: var(--delay);
         }
         .station-presence-seated_work .station-agent-sprite,
-        .station-presence-thinking_at_desk .station-agent-sprite {
+        .station-presence-thinking_at_desk .station-agent-sprite,
+        .station-presence-stretching_at_desk .station-agent-sprite {
           transform: scale(0.76);
           animation: agentSprite6 1.45s steps(6) infinite, seatedWorkBob 2.4s ease-in-out infinite;
           animation-delay: var(--delay);
         }
         .station-presence-seated_work .station-chair-back-real,
-        .station-presence-thinking_at_desk .station-chair-back-real {
+        .station-presence-thinking_at_desk .station-chair-back-real,
+        .station-presence-stretching_at_desk .station-chair-back-real {
           z-index: 14;
         }
         .station-presence-seated_work .station-chair-seat-real,
-        .station-presence-thinking_at_desk .station-chair-seat-real {
+        .station-presence-thinking_at_desk .station-chair-seat-real,
+        .station-presence-stretching_at_desk .station-chair-seat-real {
           z-index: 13;
         }
         .station-presence-seated_work .station-status-dot,
-        .station-presence-thinking_at_desk .station-status-dot {
+        .station-presence-thinking_at_desk .station-status-dot,
+        .station-presence-stretching_at_desk .station-status-dot {
           display: none;
         }
         .station-presence-thinking_at_desk .station-agent-sprite {
           filter:
             drop-shadow(0 14px 14px rgba(15, 23, 42, 0.18))
             drop-shadow(0 0 10px color-mix(in srgb, var(--zone), transparent 62%));
+        }
+        .station-presence-stretching_at_desk .station-agent-sprite {
+          animation-duration: 1.8s, 3s;
+          filter:
+            drop-shadow(0 14px 14px rgba(15, 23, 42, 0.18))
+            drop-shadow(0 0 12px color-mix(in srgb, var(--zone), transparent 58%));
         }
         .station-agent-male-work-back-right { background-image: url('/office/agents/male-work-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-male-work-back-left { background-image: url('/office/agents/male-work-back-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
