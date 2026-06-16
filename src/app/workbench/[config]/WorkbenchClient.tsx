@@ -656,6 +656,35 @@ type SpecRevisionCandidate = {
   rawOutput?: string;
   targetVersion?: number;
   revisionPlan?: Array<{ artifact: string; op: string; targetId: string; reason?: string }>;
+  qualityValidation?: SpecArtifactQualityReport | null;
+};
+
+type SpecArtifactQualityIssue = {
+  level?: 'error' | 'warning' | string;
+  artifact?: SpecCodingArtifactKey | 'all' | string;
+  code?: string;
+  message?: string;
+  suggestion?: string;
+};
+
+type SpecArtifactQualityReport = {
+  ok?: boolean;
+  issues?: SpecArtifactQualityIssue[];
+  errors?: SpecArtifactQualityIssue[];
+  warnings?: SpecArtifactQualityIssue[];
+  taskValidation?: {
+    ok?: boolean;
+    errors?: string[];
+    issues?: TasksMarkdownValidationIssue[];
+  };
+};
+
+type SpecRevisionMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  status?: 'streaming' | 'completed' | 'failed';
 };
 
 type WorkflowValidationIssue = {
@@ -1261,6 +1290,8 @@ export default function WorkbenchPage() {
   const [specAiInstruction, setSpecAiInstruction] = useState('');
   const [specAiRevising, setSpecAiRevising] = useState(false);
   const [specAiStream, setSpecAiStream] = useState('');
+  const [specAiMessages, setSpecAiMessages] = useState<SpecRevisionMessage[]>([]);
+  const [specAiSessionId, setSpecAiSessionId] = useState<string | null>(null);
   const [specRevisionCandidate, setSpecRevisionCandidate] = useState<SpecRevisionCandidate | null>(null);
   const [specArtifactSnapshots, setSpecArtifactSnapshots] = useState<SpecArtifactSnapshot[]>([]);
   const [specRollbackTargetVersion, setSpecRollbackTargetVersion] = useState<string>('');
@@ -2311,6 +2342,15 @@ export default function WorkbenchPage() {
     () => computeSimpleDiff(specRevisionBaseArtifact?.content || '', effectiveSpecRevisionDraft),
     [effectiveSpecRevisionDraft, specRevisionBaseArtifact?.content]
   );
+  const specRevisionQualityErrors = useMemo(
+    () => specRevisionCandidate?.qualityValidation?.errors || [],
+    [specRevisionCandidate?.qualityValidation?.errors]
+  );
+  const specRevisionQualityWarnings = useMemo(
+    () => specRevisionCandidate?.qualityValidation?.warnings || [],
+    [specRevisionCandidate?.qualityValidation?.warnings]
+  );
+  const specRevisionTaskValidation = specRevisionCandidate?.qualityValidation?.taskValidation || null;
   const designOptimizationDiffRows = useMemo(() => {
     if (!designOptimizationCandidate) return [] as Array<{ type: 'same' | 'add' | 'remove'; text: string }>;
     return computeSimpleDiff(
@@ -2801,6 +2841,25 @@ export default function WorkbenchPage() {
     workflowConfig?.workflow?.name,
   ]);
 
+  const validateSpecRevisionArtifacts = useCallback(async (artifacts: SpecCodingArtifactDrafts): Promise<SpecArtifactQualityReport | null> => {
+    const data = await specCodingApi.validateArtifactsQuality(artifacts);
+    return data.qualityValidation || null;
+  }, []);
+
+  const applySpecTaskValidationDisplay = useCallback((qualityValidation: SpecArtifactQualityReport | null) => {
+    const taskValidation = qualityValidation?.taskValidation;
+    const taskErrors = Array.isArray(taskValidation?.errors)
+      ? taskValidation.errors.filter((item: unknown) => typeof item === 'string')
+      : [];
+    const taskIssues = Array.isArray(taskValidation?.issues)
+      ? taskValidation.issues.filter((item: unknown) => item && typeof item === 'object')
+      : [];
+    setSpecTaskFormatErrors(taskErrors as string[]);
+    setSpecTaskValidationIssues(taskIssues as TasksMarkdownValidationIssue[]);
+    setSpecTaskValidationDetails([]);
+    setActiveSpecTaskIssueKey(null);
+  }, []);
+
   const handleGenerateAiSpecRevision = useCallback(async () => {
     const instruction = specAiInstruction.trim();
     if (!instruction) {
@@ -2820,20 +2879,43 @@ export default function WorkbenchPage() {
 
     setSpecAiRevising(true);
     setSpecAiStream('');
-    setSpecRevisionCandidate(null);
+    if (!specAiSessionId) {
+      setSpecRevisionCandidate(null);
+    }
     setSpecTaskFormatErrors([]);
     setSpecTaskValidationIssues([]);
     setSpecTaskValidationDetails([]);
+    const now = new Date().toISOString();
+    const userMessageId = `spec-revision-user-${Date.now()}`;
+    const assistantMessageId = `spec-revision-assistant-${Date.now()}`;
+    setSpecAiMessages((messages) => [
+      ...messages,
+      {
+        id: userMessageId,
+        role: 'user',
+        content: instruction,
+        createdAt: now,
+        status: 'completed',
+      },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        createdAt: now,
+        status: 'streaming',
+      },
+    ]);
 
     try {
       const startRes = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({
-          message: buildSpecAiRevisionPrompt(instruction),
+          message: specAiSessionId ? instruction : buildSpecAiRevisionPrompt(instruction),
           displayMessage: `AI 修订 Spec：${instruction.slice(0, 80)}`,
           model,
           engine: selectedEngine,
+          sessionId: specAiSessionId || undefined,
           frontendSessionId: `spec-revision-${creationSessionSummary.id}`,
           streamScope: 'workbench-spec-revision',
           mode: 'dashboard',
@@ -2851,22 +2933,38 @@ export default function WorkbenchPage() {
         let accumulated = '';
         let thinkingAccumulated = '';
         let settled = false;
+        const updateAssistantMessage = (content: string, status: SpecRevisionMessage['status']) => {
+          setSpecAiMessages((messages) => messages.map((message) => (
+            message.id === assistantMessageId
+              ? { ...message, content, status }
+              : message
+          )));
+        };
         const fail = (message: string) => {
           if (settled) return;
           settled = true;
           es.close();
+          updateAssistantMessage(accumulated || thinkingAccumulated || message, 'failed');
           reject(new Error(message));
         };
         es.addEventListener('delta', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
           accumulated += String(data.content || '');
           setSpecAiStream(accumulated);
+          updateAssistantMessage(accumulated, 'streaming');
         });
         es.addEventListener('thinking', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
           thinkingAccumulated += String(data.content || '');
           if (!accumulated) {
             setSpecAiStream(thinkingAccumulated);
+            updateAssistantMessage(thinkingAccumulated, 'streaming');
+          }
+        });
+        es.addEventListener('session', (event) => {
+          const data = JSON.parse((event as MessageEvent).data || '{}');
+          if (data.sessionId) {
+            setSpecAiSessionId(String(data.sessionId));
           }
         });
         es.addEventListener('done', (event) => {
@@ -2874,11 +2972,17 @@ export default function WorkbenchPage() {
           settled = true;
           const data = JSON.parse((event as MessageEvent).data || '{}');
           es.close();
+          if (data.sessionId) {
+            setSpecAiSessionId(String(data.sessionId));
+          }
           if (data.isError) {
+            updateAssistantMessage(data.error || data.result || accumulated || 'AI Spec 修订失败', 'failed');
             reject(new Error(data.error || data.result || accumulated || 'AI Spec 修订失败'));
             return;
           }
-          resolve(String(data.result || accumulated || ''));
+          const finalText = String(data.result || accumulated || '');
+          updateAssistantMessage(finalText, 'completed');
+          resolve(finalText);
         });
         es.addEventListener('engine_error', (event) => {
           const data = JSON.parse((event as MessageEvent).data || '{}');
@@ -2895,6 +2999,8 @@ export default function WorkbenchPage() {
       if (!parsed) {
         throw new Error(diagnoseExtractionFailure(finalContent, 'spec_artifact_revision'));
       }
+      const qualityValidation = await validateSpecRevisionArtifacts(parsed.artifacts);
+      applySpecTaskValidationDisplay(qualityValidation);
       setSpecRevisionCandidate({
         source: 'ai',
         summary: parsed.summary,
@@ -2902,13 +3008,23 @@ export default function WorkbenchPage() {
         revisionPlan: parsed.revisionPlan,
         createdAt: new Date().toISOString(),
         rawOutput: finalContent,
+        qualityValidation,
       });
       setSpecRevisionSummary(parsed.summary);
       setSpecRevisionTarget(specCodingArtifactTab);
       setSpecArtifactViewMode('diff');
       setSpecCodingExplorerTab('artifacts');
-      toast('success', 'AI 已生成 Spec 修订候选，请检查 diff 后应用');
+      if (qualityValidation?.ok === false) {
+        toast('warning', 'AI 已生成候选，但校验未通过；请让 AI 继续修正后再应用');
+      } else {
+        toast('success', specAiSessionId ? 'AI 已调整 Spec 候选，请检查 diff 后应用' : 'AI 已生成 Spec 修订候选，请检查 diff 后应用');
+      }
     } catch (error: any) {
+      setSpecAiMessages((messages) => messages.map((message) => (
+        message.id === assistantMessageId && message.status === 'streaming'
+          ? { ...message, content: message.content || error?.message || 'AI Spec 修订失败', status: 'failed' }
+          : message
+      )));
       toast('error', error?.message || 'AI Spec 修订失败');
     } finally {
       setSpecAiRevising(false);
@@ -2920,18 +3036,26 @@ export default function WorkbenchPage() {
     engine,
     globalDefaultModel,
     globalEngine,
+    applySpecTaskValidationDisplay,
     projectRoot,
     resolvedProjectRoot,
     specAiInstruction,
+    specAiSessionId,
     specCodingArtifactTab,
     specCodingDetails,
     specCodingSummary,
     toast,
+    validateSpecRevisionArtifacts,
     workflowDefaultModel,
   ]);
 
   const handleApplySpecRevisionCandidate = useCallback(async () => {
     if (!specRevisionCandidate) return;
+    const qualityErrors = specRevisionCandidate.qualityValidation?.errors || [];
+    if (qualityErrors.length > 0) {
+      toast('error', 'Spec 候选仍有校验错误，请先让 AI 修正后再应用');
+      return;
+    }
     const ok = await saveSpecArtifactsRevision({
       artifacts: specRevisionCandidate.artifacts,
       revisionSummary: specRevisionSummary.trim() || specRevisionCandidate.summary,
@@ -2964,6 +3088,10 @@ export default function WorkbenchPage() {
   const handleDiscardSpecRevisionCandidate = useCallback(() => {
     setSpecRevisionCandidate(null);
     setSpecRevisionSummary('');
+    setSpecTaskFormatErrors([]);
+    setSpecTaskValidationIssues([]);
+    setSpecTaskValidationDetails([]);
+    setActiveSpecTaskIssueKey(null);
     if (specArtifactViewMode === 'diff' && !specRevisionDraft.trim()) {
       setSpecArtifactViewMode('preview');
     }
@@ -8054,129 +8182,251 @@ export default function WorkbenchPage() {
             </div>
           </div>
           <div className="flex-1 overflow-auto p-5">
-            <div className="mb-4 space-y-3">
-              <div className="rounded-xl border bg-background/75 p-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 text-xs font-medium text-foreground">
-                      <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>auto_fix_high</span>
-                      AI 修订 Spec
-                    </div>
-                    <div className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                      AI 会生成完整 requirements/design/tasks 候选，先看 diff，再手动应用。
-                    </div>
-                  </div>
-                  {specAiRevising ? (
-                    <Badge variant="secondary" className="shrink-0 text-[10px]">
-                      生成中
-                    </Badge>
-                  ) : null}
-                </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-                  <Textarea
-                    value={specAiInstruction}
-                    onChange={(event) => setSpecAiInstruction(event.target.value)}
-                    placeholder="例如：把验收标准补充到 tasks.md，并同步调整 design.md 中的状态说明"
-                    rows={3}
-                    className="min-h-[76px] resize-y text-xs leading-5"
-                    disabled={specAiRevising || savingSpecRevision || !creationSessionSummary?.id}
-                  />
-                  <div className="flex items-end justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-9 text-xs"
-                      onClick={() => {
-                        setSpecAiInstruction('');
-                        setSpecAiStream('');
-                      }}
-                      disabled={specAiRevising || (!specAiInstruction && !specAiStream)}
-                    >
-                      清空
-                    </Button>
-                    <Button
-                      type="button"
-                      className="h-9 text-xs"
-                      onClick={() => void handleGenerateAiSpecRevision()}
-                      disabled={specAiRevising || savingSpecRevision || !creationSessionSummary?.id || !specAiInstruction.trim()}
-                    >
-                      {specAiRevising ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
-                      AI 修订
-                    </Button>
-                  </div>
-                </div>
-                {specAiStream.trim() ? (
-                  <details className="mt-3 rounded-lg border bg-muted/20 p-3 text-xs">
-                    <summary className="cursor-pointer text-muted-foreground">
-                      {specAiRevising ? '正在接收 AI 输出' : '查看最近一次 AI 输出'}
-                    </summary>
-                    <div className={`${styles.markdownContent} mt-3 max-h-56 overflow-auto text-xs`}>
-                      <AceAwareMarkdown content={specAiStream} isStreaming={specAiRevising} />
-                    </div>
-                  </details>
-                ) : null}
-              </div>
-              {specRevisionCandidate ? (
-                <div className="rounded-xl border border-primary/25 bg-primary/5 p-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-foreground">
-                        <Badge variant="secondary" className="text-[10px]">
-                          {specRevisionCandidate.source === 'rollback' ? `回退到 v${specRevisionCandidate.targetVersion}` : 'AI 候选'}
-                        </Badge>
-                        <span>{specRevisionCandidate.summary}</span>
+            <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(360px,1.05fr)]">
+              <div className="flex min-h-[360px] min-w-0 flex-col rounded-xl border bg-muted/10">
+                <div className="shrink-0 border-b px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <span className="material-symbols-outlined text-primary" style={{ fontSize: 16 }}>auto_fix_high</span>
+                        对话修订候选
                       </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {new Date(specRevisionCandidate.createdAt).toLocaleString()} · 可切换 requirements/design/tasks 查看各自 diff
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        首轮生成完整 requirements/design/tasks；后续可继续要求 AI 调整当前候选。
                       </div>
                     </div>
-                    <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={handleDiscardSpecRevisionCandidate}
-                        disabled={savingSpecRevision}
-                      >
-                        放弃候选
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={() => void handleApplySpecRevisionCandidate()}
-                        disabled={savingSpecRevision}
-                      >
-                        {savingSpecRevision ? '应用中...' : '应用候选'}
-                      </Button>
-                    </div>
+                    {specAiRevising ? (
+                      <Badge variant="secondary" className="text-[10px]">生成中</Badge>
+                    ) : specAiSessionId ? (
+                      <Badge variant="outline" className="text-[10px]">多轮</Badge>
+                    ) : null}
                   </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                    {specCodingArtifactEntries.map((entry) => (
-                      <button
-                        key={`candidate-tab-${entry.key}`}
-                        type="button"
-                        className={`rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
-                          specRevisionTarget === entry.key
-                            ? 'border-primary bg-background text-foreground'
-                            : 'border-border/60 bg-background/50 text-muted-foreground hover:bg-background'
-                        }`}
-                        onClick={() => {
-                          setSpecCodingArtifactTab(entry.key);
-                          setSpecRevisionTarget(entry.key);
-                          setSpecArtifactViewMode('diff');
-                        }}
-                      >
-                        <div className="font-medium">{entry.label}</div>
-                        <div className="mt-1 text-[10px] text-muted-foreground">
-                          {specRevisionCandidate.artifacts[entry.key] === entry.content ? '无变化' : '有变化'}
+                </div>
+
+                <div className="home-chat-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                  <div className="space-y-4">
+                    {specAiMessages.length ? (
+                      specAiMessages.map((message) => (
+                        <div
+                          key={message.id}
+                          className={cn('group flex min-w-0', message.role === 'user' ? 'justify-end' : 'items-start gap-2')}
+                        >
+                          {message.role === 'assistant' ? <RobotLogo size={28} className="mt-1 shrink-0" /> : null}
+                          <div className={cn('min-w-0 space-y-1', message.role === 'user' ? 'max-w-[86%]' : 'max-w-[92%]')}>
+                            <div
+                              className={cn(
+                                'min-w-0 rounded-2xl px-4 py-2.5 text-sm shadow-sm',
+                                message.role === 'user'
+                                  ? 'home-chat-bubble home-chat-bubble-user rounded-tr-sm text-primary-foreground'
+                                  : 'home-chat-bubble home-chat-bubble-assistant rounded-tl-sm',
+                                message.status === 'failed' ? 'border border-red-500/30 bg-red-500/8 text-red-700 dark:text-red-300' : ''
+                              )}
+                            >
+                              <div className="mb-1 flex items-center justify-between gap-2 text-[10px] opacity-70">
+                                <span>{message.role === 'user' ? '你' : 'AI'}</span>
+                                {message.status === 'streaming' ? <span>生成中</span> : null}
+                                {message.status === 'failed' ? <span>失败</span> : null}
+                              </div>
+                              {message.content.trim() ? (
+                                <div className={`${styles.markdownContent} min-w-0 break-words text-sm [overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap`}>
+                                  <AceAwareMarkdown content={message.content} isStreaming={message.status === 'streaming'} />
+                                </div>
+                              ) : (
+                                <div className="text-xs text-muted-foreground">等待 AI 输出...</div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </button>
-                    ))}
+                      ))
+                    ) : (
+                      <div className="flex h-full min-h-[190px] flex-col items-center justify-center text-center text-sm text-muted-foreground">
+                        <RobotLogo size={48} className="mb-3" />
+                        <div className="font-medium text-foreground">描述你想怎么修订 Spec</div>
+                        <div className="mt-1 max-w-sm text-xs leading-5">
+                          AI 会生成完整三份制品候选；右侧会立刻展示 diff 和质量校验结果。
+                        </div>
+                      </div>
+                    )}
+                    {specAiRevising ? (
+                      <div className={styles.thinkingBot} aria-live="polite">
+                        <span className="deer-runner-sprite shrink-0" aria-hidden="true" />
+                        <Shimmer as="span" className={styles.thinkingText}>AI 正在修订 Spec</Shimmer>
+                        <span className={styles.thinkingDots}><span>.</span><span>.</span><span>.</span></span>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-              ) : null}
+
+                <div className="shrink-0 border-t bg-background px-4 py-3">
+                  <div className="home-chat-composer relative overflow-hidden rounded-[22px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]">
+                    <Textarea
+                      value={specAiInstruction}
+                      onChange={(event) => setSpecAiInstruction(event.target.value)}
+                      placeholder={specAiSessionId ? '继续说明要怎么调整当前 Spec 候选...' : '例如：把验收标准补充到 tasks.md，并同步调整 design.md 中的状态说明'}
+                      rows={3}
+                      className="min-h-[92px] resize-none border-0 bg-transparent px-4 py-3 text-sm leading-6 shadow-none focus-visible:ring-0"
+                      disabled={specAiRevising || savingSpecRevision || !creationSessionSummary?.id}
+                    />
+                    <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          setSpecAiInstruction('');
+                          setSpecAiStream('');
+                          setSpecAiMessages([]);
+                          setSpecAiSessionId(null);
+                          setSpecRevisionCandidate(null);
+                          setSpecTaskFormatErrors([]);
+                          setSpecTaskValidationIssues([]);
+                          setSpecTaskValidationDetails([]);
+                          setActiveSpecTaskIssueKey(null);
+                        }}
+                        disabled={specAiRevising}
+                      >
+                        重置
+                      </Button>
+                      <Button
+                        type="button"
+                        className="h-8 text-xs"
+                        onClick={() => void handleGenerateAiSpecRevision()}
+                        disabled={specAiRevising || savingSpecRevision || !creationSessionSummary?.id || !specAiInstruction.trim()}
+                      >
+                        {specAiRevising ? <ClipLoader color="currentColor" size={12} className="mr-2" /> : null}
+                        {specAiSessionId ? '发送调整' : '生成候选'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-w-0 rounded-xl border bg-background">
+                <div className="border-b px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">基线 / 当前候选</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {specRevisionCandidate
+                          ? `${new Date(specRevisionCandidate.createdAt).toLocaleString()} · 先看差异和校验，再应用`
+                          : '等待 AI 生成 Spec 候选版本'}
+                      </div>
+                    </div>
+                    {specRevisionCandidate ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={handleDiscardSpecRevisionCandidate}
+                          disabled={savingSpecRevision}
+                        >
+                          放弃候选
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => void handleApplySpecRevisionCandidate()}
+                          disabled={savingSpecRevision || specRevisionQualityErrors.length > 0}
+                        >
+                          {savingSpecRevision ? '应用中...' : '应用候选'}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="space-y-3 p-4">
+                  {specRevisionCandidate ? (
+                    <>
+                      <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                          <Badge variant="secondary" className="text-[10px]">
+                            {specRevisionCandidate.source === 'rollback' ? `回退到 v${specRevisionCandidate.targetVersion}` : 'AI 候选'}
+                          </Badge>
+                          <span className="min-w-0 break-words [overflow-wrap:anywhere]">{specRevisionCandidate.summary}</span>
+                        </div>
+                      </div>
+
+                      <div className="grid min-w-0 grid-cols-3 gap-2">
+                        <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">质量错误</div>
+                          <div className="mt-1 text-lg font-semibold text-red-600">{specRevisionQualityErrors.length}</div>
+                        </div>
+                        <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">质量警告</div>
+                          <div className="mt-1 text-lg font-semibold text-amber-600">{specRevisionQualityWarnings.length}</div>
+                        </div>
+                        <div className="min-w-0 rounded-lg border bg-muted/20 p-3">
+                          <div className="text-[10px] text-muted-foreground">tasks 格式</div>
+                          <div className={cn('mt-1 text-lg font-semibold', specRevisionTaskValidation?.ok === false ? 'text-red-600' : 'text-emerald-600')}>
+                            {specRevisionTaskValidation?.ok === false ? '失败' : '通过'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {specCodingArtifactEntries.map((entry) => (
+                          <button
+                            key={`candidate-tab-${entry.key}`}
+                            type="button"
+                            className={`rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
+                              specRevisionTarget === entry.key
+                                ? 'border-primary bg-background text-foreground'
+                                : 'border-border/60 bg-background/50 text-muted-foreground hover:bg-background'
+                            }`}
+                            onClick={() => {
+                              setSpecCodingArtifactTab(entry.key);
+                              setSpecRevisionTarget(entry.key);
+                              setSpecArtifactViewMode('diff');
+                            }}
+                          >
+                            <div className="font-medium">{entry.label}</div>
+                            <div className="mt-1 text-[10px] text-muted-foreground">
+                              {specRevisionCandidate.artifacts[entry.key] === entry.content ? '无变化' : '有变化'}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+
+                      {specRevisionQualityErrors.length > 0 ? (
+                        <div className="rounded-lg border border-red-500/30 bg-red-500/8 p-3">
+                          <div className="text-sm font-medium text-red-600">Spec 校验错误</div>
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                            {specRevisionQualityErrors.map((issue, index) => (
+                              <div key={`spec-quality-error-${index}`}>
+                                {issue.artifact ? `${issue.artifact}：` : ''}{issue.message || '未知错误'}
+                                {issue.suggestion ? ` 建议：${issue.suggestion}` : ''}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {specRevisionQualityWarnings.length > 0 ? (
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3">
+                          <div className="text-sm font-medium text-amber-700 dark:text-amber-300">Spec 校验警告</div>
+                          <div className="mt-2 space-y-1 break-words text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">
+                            {specRevisionQualityWarnings.map((issue, index) => (
+                              <div key={`spec-quality-warning-${index}`}>
+                                {issue.artifact ? `${issue.artifact}：` : ''}{issue.message || '未知提示'}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="flex min-h-[260px] flex-col items-center justify-center text-center text-sm text-muted-foreground">
+                      <span className="material-symbols-outlined mb-2 text-primary" style={{ fontSize: 32 }}>difference</span>
+                      <div className="font-medium text-foreground">暂无候选</div>
+                      <div className="mt-1 max-w-sm text-xs leading-5">左侧生成后，这里会显示候选摘要、校验结果和三份制品切换。</div>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
             {specArtifactViewMode === 'preview' ? (
               activeSpecCodingArtifact.content.trim() ? (
@@ -9051,16 +9301,13 @@ export default function WorkbenchPage() {
                     </div>
                     <div className="rounded-xl border border-border/60 bg-background/80 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            <span className="material-symbols-outlined text-base">history</span>
-                            Git 基线与变更追踪
-                          </div>
-                          <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                            开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
-                          </p>
-                          <div className="mt-3 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                            YAML 字段：<code>context.gitBaselineEnabled</code>
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className="material-symbols-outlined text-primary" style={{ fontSize: 17 }}>history</span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium">Git 基线与变更追踪</div>
+                            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                              开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
+                            </p>
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
@@ -9893,18 +10140,6 @@ export default function WorkbenchPage() {
                           newConfig.workflow.states = states;
                           dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
                         }}
-                        humanHelpEnabled={editingConfig.workflow?.humanHelp?.enabled === true}
-                        onHumanHelpEnabledChange={(enabled) => {
-                          const newConfig = JSON.parse(JSON.stringify(editingConfig));
-                          newConfig.workflow = {
-                            ...(newConfig.workflow || {}),
-                            humanHelp: {
-                              ...(newConfig.workflow?.humanHelp || {}),
-                              enabled,
-                            },
-                          };
-                          dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
-                        }}
                         availableAgents={agentConfigs}
                         availableSkills={availableSkills}
                         specTasks={designOptimizationSpecTaskOptions}
@@ -10035,13 +10270,13 @@ export default function WorkbenchPage() {
 
                         <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
                           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                            <div>
-                              <Label className="text-sm font-medium">Git 基线与变更追踪</Label>
-                              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                                开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
-                              </p>
-                              <div className="mt-2 text-xs text-muted-foreground">
-                                YAML 字段：<code>context.gitBaselineEnabled</code>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="material-symbols-outlined text-primary" style={{ fontSize: 17 }}>history</span>
+                              <div className="min-w-0">
+                                <Label className="text-sm font-medium">Git 基线与变更追踪</Label>
+                                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                  开启后，运行启动时会建立 Git 基线，并记录步骤前后的快照，用于“变更”页差异浏览。关闭后不会建立基线，也不会发起 Git 变更查询或轮询。
+                                </p>
                               </div>
                             </div>
                             <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2">
@@ -10068,6 +10303,45 @@ export default function WorkbenchPage() {
                             </div>
                           </div>
                         </div>
+
+                        {editingConfig?.workflow?.mode === 'state-machine' ? (
+                          <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="material-symbols-outlined text-primary" style={{ fontSize: 17 }}>support_agent</span>
+                                <div>
+                                  <Label className="text-sm font-medium">步骤内人工答疑</Label>
+                                  <p className="mt-1 text-xs text-muted-foreground">允许步骤内 AI 向人类发起求助类提问</p>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2">
+                                <Switch
+                                  checked={editingConfig.workflow?.humanHelp?.enabled === true}
+                                  onCheckedChange={(checked) => {
+                                    const baseConfig = editingConfig || workflowConfig;
+                                    if (!baseConfig?.workflow) return;
+                                    dispatch({
+                                      type: 'SET_EDITING_CONFIG',
+                                      payload: {
+                                        ...baseConfig,
+                                        workflow: {
+                                          ...baseConfig.workflow,
+                                          humanHelp: {
+                                            ...(baseConfig.workflow as any).humanHelp,
+                                            enabled: checked,
+                                          },
+                                        },
+                                      },
+                                    });
+                                  }}
+                                />
+                                <span className="text-xs text-muted-foreground">
+                                  {editingConfig.workflow?.humanHelp?.enabled === true ? '开启' : '关闭'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
 
                         <div>
                           <Label className="text-sm font-medium">工作流描述</Label>

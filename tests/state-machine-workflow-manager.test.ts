@@ -886,6 +886,9 @@ describe('state machine execution flow', () => {
     );
 
     expect(prompt).toContain('# 人工客服请求协议');
+    expect(prompt).toContain('步骤内人工答疑');
+    expect(prompt).toContain('需求目标或验收标准存在疑问');
+    expect(prompt).toContain('Agent 已完成必要排查后仍无法解决的问题');
     expect(prompt).toContain('<human-help>');
   });
 
@@ -1657,6 +1660,31 @@ describe('state machine execution flow', () => {
     await (manager as any).executeStateMachine(config, 'Build a feature');
 
     expect(engine.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test('spec revision vote is queued only when the source state enables it', async () => {
+    const manager = await createManagerForTest(new MockEngine());
+    const config = makeConfig();
+    (manager as any).currentRunSpecCoding = { id: 'run-spec' };
+    const runSpecRevisionVote = vi.fn().mockResolvedValue(undefined);
+    (manager as any).runSpecRevisionVote = runSpecRevisionVote;
+
+    (manager as any).queueSpecRevisionVote({
+      trigger: 'state-complete',
+      stateName: '设计',
+      nextState: '实施',
+    }, config);
+    await (manager as any).specRevisionVoteTail;
+    expect(runSpecRevisionVote).not.toHaveBeenCalled();
+
+    config.workflow.states[0].enableSpecRevisionOnComplete = true;
+    (manager as any).queueSpecRevisionVote({
+      trigger: 'state-complete',
+      stateName: '设计',
+      nextState: '实施',
+    }, config);
+    await (manager as any).specRevisionVoteTail;
+    expect(runSpecRevisionVote).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -38,8 +38,6 @@ import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/cor
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
   onStatesChange: (states: StateMachineState[]) => void;
-  humanHelpEnabled?: boolean;
-  onHumanHelpEnabledChange?: (enabled: boolean) => void;
   availableAgents: any[];
   availableSkills?: { name: string; description: string }[];
   specTasks?: { id: string; title: string; phaseTitle?: string; ownerAgents?: string[] }[];
@@ -916,8 +914,6 @@ function VerdictTransitionCard({
 export default function StateMachineDesignPanel({
   states,
   onStatesChange,
-  humanHelpEnabled = false,
-  onHumanHelpEnabledChange,
   availableAgents,
   availableSkills = [],
   specTasks = [],
@@ -1272,30 +1268,6 @@ export default function StateMachineDesignPanel({
 
       {selectedState ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
-          <div className="rounded-lg border border-border bg-muted/20 p-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-amber-600" style={{ fontSize: 17 }}>support_agent</span>
-                  <span className="text-sm font-semibold">人工客服</span>
-                  <Badge variant={humanHelpEnabled ? 'default' : 'outline'} className="text-[10px]">
-                    {humanHelpEnabled ? '已开启' : '默认关闭'}
-                  </Badge>
-                </div>
-                <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                  开启后，步骤遇到阻塞性问题可请求人工客服；Supervisor 复核后会弹出人工回复卡片，不改变状态跳转。
-                </div>
-              </div>
-              <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs">
-                <Checkbox
-                  checked={humanHelpEnabled}
-                  onCheckedChange={(checked) => onHumanHelpEnabledChange?.(checked === true)}
-                />
-                <span>{humanHelpEnabled ? '开启' : '关闭'}</span>
-              </label>
-            </div>
-          </div>
-
           {/* 状态基本信息 */}
           <div>
             {editingStateInfo ? (
@@ -1334,6 +1306,22 @@ export default function StateMachineDesignPanel({
                         onCheckedChange={(v) => updateState({ ...selectedState, requireHumanApproval: !!v })}
                       />
                       <span className="text-xs">人工审查</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={selectedState.enableSpecRevisionOnComplete ?? false}
+                        onCheckedChange={(v) => updateState({ ...selectedState, enableSpecRevisionOnComplete: !!v })}
+                      />
+                      <span className="text-xs">结束后 Spec 修订</span>
+                      <button
+                        type="button"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground hover:text-foreground"
+                        title="开启后，该状态执行结束时才会发起现有的 Spec 修订投票，由参与 Agent 和 Supervisor 判断是否需要更新 requirements/design/tasks；默认关闭，不影响状态跳转。"
+                        onClick={(event) => event.preventDefault()}
+                        aria-label="结束后 Spec 修订说明"
+                      >
+                        <Info className="h-3 w-3" />
+                      </button>
                     </label>
                   </div>
                 </div>
@@ -1386,6 +1374,7 @@ export default function StateMachineDesignPanel({
                     {selectedState.isInitial && <Badge variant="outline" className="text-xs py-0">初始</Badge>}
                     {selectedState.isFinal && <Badge variant="outline" className="text-xs py-0">终止</Badge>}
                     {selectedState.requireHumanApproval && <Badge variant="outline" className="text-xs py-0 bg-orange-100 dark:bg-orange-900 text-orange-600">人工审查</Badge>}
+                    {selectedState.enableSpecRevisionOnComplete && <Badge variant="outline" className="text-xs py-0 bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300">Spec 修订</Badge>}
                     <Badge variant="outline" className="text-xs py-0">
                       自循环上限 {selectedState.maxSelfTransitions ?? 3}
                     </Badge>

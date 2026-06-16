@@ -2918,9 +2918,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.emitSpecRevisionVoteStatus('Spec 修订内部表决完成');
   }
 
+  private shouldQueueSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): boolean {
+    if (!this.currentRunSpecCoding || this.shouldStop) return false;
+    const stateName = input.stateName || this.currentState || '';
+    const state = config.workflow.states.find((item) => item.name === stateName);
+    return state?.enableSpecRevisionOnComplete === true;
+  }
+
   private queueSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): void {
-    if (!this.currentRunSpecCoding || this.shouldStop) return;
     const workflowConfig = this.currentWorkflowConfig || config;
+    if (!this.shouldQueueSpecRevisionVote(input, workflowConfig)) return;
     this.specRevisionVoteTail = this.specRevisionVoteTail
       .catch(() => {})
       .then(() => this.runSpecRevisionVote(input, workflowConfig))
@@ -5062,9 +5069,8 @@ try {
     if (this.isHumanHelpEnabled(config)) {
       parts.push([
         '\n# 人工客服请求协议',
-        '当前工作流开启了“人工客服”。你应先自主推进任务；只有遇到真正阻塞当前步骤继续执行的问题，才请求人工介入。',
-        '阻塞性问题包括：缺少必要运行环境或权限、缺少代码仓或关键文件、缺少必须配置项/密钥/账号、需求或约束互相冲突、必须由用户选择的产品/业务决策。',
-        '如果问题可以通过读取仓库、运行检查、采用保守默认值、继续验证或由后续步骤处理解决，不要请求人工客服。',
+        '当前工作流开启了“步骤内人工答疑”。你应先自主推进任务；遇到真正阻塞当前步骤继续执行的问题时，可以请求人类答复。',
+        '支持场景包括：缺少必要运行环境或权限、缺少代码仓或关键文件、缺少必须配置项/密钥/账号、需求目标或验收标准存在疑问、Agent 已完成必要排查后仍无法解决的问题、必须由用户选择的产品/业务决策。',
         '需要人工介入时，输出一个单独的标签块，格式必须是：',
         '<human-help>',
         '{"title":"简短标题","question":"需要人类回答的具体问题","reason":"为什么这会阻塞当前步骤","answerType":"text|single-choice|multi-choice","options":[{"label":"选项文案","value":"option_value","description":"影响说明"}],"placeholder":"输入提示"}',
