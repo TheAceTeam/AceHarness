@@ -58,7 +58,7 @@ import { useChat } from '@/contexts/ChatContext';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { withOfficeSource } from '@/lib/navigation/return-target';
 
-type Activity = 'typing' | 'walking' | 'talking' | 'thinking' | 'stretching' | 'reviewing' | 'presenting';
+type Activity = 'typing' | 'walking' | 'talking' | 'thinking' | 'reviewing' | 'presenting';
 
 type OfficeAgent = {
   name: string;
@@ -1720,7 +1720,7 @@ function OrgMemberCard({
   );
 }
 
-type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'stretching_at_desk' | 'visiting_peer' | 'hosting_peer';
+type OfficePresence = 'seated_work' | 'thinking_at_desk' | 'visiting_peer' | 'hosting_peer';
 type OfficeScreenScene = 'coding' | 'testing' | 'planning' | 'reviewing' | 'ops';
 type OfficeSpriteGender = 'male' | 'female';
 type OfficeSpriteDirection = 'left' | 'right';
@@ -1760,7 +1760,6 @@ type OfficeInteractionPair = {
 };
 
 function presenceForActivity(activity: Activity): OfficePresence {
-  if (activity === 'stretching') return 'thinking_at_desk';
   if (activity === 'thinking' || activity === 'reviewing') return 'thinking_at_desk';
   return 'seated_work';
 }
@@ -1768,7 +1767,6 @@ function presenceForActivity(activity: Activity): OfficePresence {
 function statusTextForPresence(presence: OfficePresence) {
   if (presence === 'seated_work') return '办公中';
   if (presence === 'thinking_at_desk') return '思考中';
-  if (presence === 'stretching_at_desk') return '伸展中';
   if (presence === 'visiting_peer') return '走动中';
   return '交流中';
 }
@@ -1782,20 +1780,12 @@ function screenSceneForOfficePlan(plan: OfficePresencePlan, index: number): Offi
   return index % 2 === 0 ? 'coding' : 'ops';
 }
 
-function shouldStretchAtDesk(index: number, total: number) {
-  return false;
-  if (total < 3) return false;
-  const plannedStretchIndexes = total >= 10 ? new Set([1, 8]) : new Set([1]);
-  return plannedStretchIndexes.has(index);
-}
-
 function baseActivityForOfficeDisplay(member: OfficeMember, index: number, total: number): Activity {
   const configured = member.motion?.activity;
-  if (configured === 'typing' || configured === 'thinking' || configured === 'stretching' || configured === 'reviewing') return configured;
+  if (configured === 'typing' || configured === 'thinking' || configured === 'reviewing') return configured;
   if (configured === 'walking' || configured === 'talking' || configured === 'presenting') {
     return activityForZone(member.visual.zone || zoneOf(member.agent));
   }
-  if (shouldStretchAtDesk(index, total)) return 'stretching';
   const zoneActivity = activityForZone(member.visual.zone || zoneOf(member.agent));
   if (zoneActivity !== 'typing') return zoneActivity;
   if (index === 1 || index % 6 === 4) return 'thinking';
@@ -2216,9 +2206,6 @@ function officeWalkwayPath(
 }
 
 function stationSpriteClass(plan: OfficePresencePlan): string {
-  if (plan.presence === 'stretching_at_desk') {
-    return `station-agent-${plan.gender}-think-back-right`;
-  }
   if (plan.presence === 'thinking_at_desk') {
     return `station-agent-${plan.gender}-think-back-right`;
   }
@@ -4899,16 +4886,13 @@ export default function OfficePage() {
         .station-presence-seated_work .station-operator,
         .station-presence-seated_work .station-callout-layer,
         .station-presence-thinking_at_desk .station-operator,
-        .station-presence-thinking_at_desk .station-callout-layer,
-        .station-presence-stretching_at_desk .station-operator,
-        .station-presence-stretching_at_desk .station-callout-layer {
+        .station-presence-thinking_at_desk .station-callout-layer {
           left: 154px;
           top: 68px;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-operator,
-        .station-presence-thinking_at_desk .station-operator,
-        .station-presence-stretching_at_desk .station-operator {
+        .station-presence-thinking_at_desk .station-operator {
           z-index: 16;
         }
         .station-agent-sprite {
@@ -4927,37 +4911,27 @@ export default function OfficePage() {
           animation-delay: var(--delay);
         }
         .station-presence-seated_work .station-agent-sprite,
-        .station-presence-thinking_at_desk .station-agent-sprite,
-        .station-presence-stretching_at_desk .station-agent-sprite {
+        .station-presence-thinking_at_desk .station-agent-sprite {
           transform: scale(0.76);
           animation: agentSprite6 1.45s steps(6) infinite, seatedWorkBob 2.4s ease-in-out infinite;
           animation-delay: var(--delay);
         }
         .station-presence-seated_work .station-chair-back-real,
-        .station-presence-thinking_at_desk .station-chair-back-real,
-        .station-presence-stretching_at_desk .station-chair-back-real {
+        .station-presence-thinking_at_desk .station-chair-back-real {
           z-index: 14;
         }
         .station-presence-seated_work .station-chair-seat-real,
-        .station-presence-thinking_at_desk .station-chair-seat-real,
-        .station-presence-stretching_at_desk .station-chair-seat-real {
+        .station-presence-thinking_at_desk .station-chair-seat-real {
           z-index: 13;
         }
         .station-presence-seated_work .station-status-dot,
-        .station-presence-thinking_at_desk .station-status-dot,
-        .station-presence-stretching_at_desk .station-status-dot {
+        .station-presence-thinking_at_desk .station-status-dot {
           display: none;
         }
         .station-presence-thinking_at_desk .station-agent-sprite {
           filter:
             drop-shadow(0 14px 14px rgba(15, 23, 42, 0.18))
             drop-shadow(0 0 10px color-mix(in srgb, var(--zone), transparent 62%));
-        }
-        .station-presence-stretching_at_desk .station-agent-sprite {
-          animation-duration: 1.8s, 3s;
-          filter:
-            drop-shadow(0 14px 14px rgba(15, 23, 42, 0.18))
-            drop-shadow(0 0 12px color-mix(in srgb, var(--zone), transparent 58%));
         }
         .station-agent-male-work-back-right { background-image: url('/office/agents/male-work-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-male-think-back-right { background-image: url('/office/agents/male-think-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
@@ -5150,20 +5124,6 @@ export default function OfficePage() {
           box-shadow: 0 10px 18px rgba(15, 23, 42, 0.14);
           animation: thought 2s ease-in-out infinite;
         }
-        .station-stretching .station-scene::after {
-          content: '';
-          position: absolute;
-          left: 195px;
-          top: 42px;
-          z-index: 18;
-          width: 30px;
-          height: 18px;
-          border-top: 3px solid color-mix(in srgb, var(--zone), white 16%);
-          border-radius: 50% 50% 0 0;
-          opacity: 0.78;
-          filter: drop-shadow(0 7px 10px rgba(15, 23, 42, 0.12));
-          animation: stretchMark 2.6s ease-in-out infinite;
-        }
         .station-reviewing .station-monitor-real { animation-name: reviewScan; }
         .station-presenting .station-monitor-real { transform: scaleX(-1) rotate(-5deg) skewY(-8deg) scale(1.05); }
         .station {
@@ -5300,16 +5260,14 @@ export default function OfficePage() {
           z-index: 22;
         }
         .station-presence-seated_work .station-operator,
-        .station-presence-thinking_at_desk .station-operator,
-        .station-presence-stretching_at_desk .station-operator {
+        .station-presence-thinking_at_desk .station-operator {
           left: 154px;
           top: 68px;
           z-index: 16;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-callout-layer,
-        .station-presence-thinking_at_desk .station-callout-layer,
-        .station-presence-stretching_at_desk .station-callout-layer {
+        .station-presence-thinking_at_desk .station-callout-layer {
           left: 172px;
           top: 54px;
           animation: actorFloat 4.2s ease-in-out infinite;
@@ -5367,7 +5325,6 @@ export default function OfficePage() {
         @keyframes monitorPulse { 0%,100% { filter: brightness(1) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.08) drop-shadow(0 12px 18px rgba(37,99,235,0.3)); } }
         @keyframes badgeBlink { 0%,100% { opacity: 0.95; } 50% { opacity: 0.62; } }
         @keyframes thought { 0%,100% { transform: translateY(0); opacity: 0.45; } 50% { transform: translateY(-5px); opacity: 1; } }
-        @keyframes stretchMark { 0%,100% { transform: translateY(0) scaleX(0.82); opacity: 0.45; } 50% { transform: translateY(-4px) scaleX(1); opacity: 0.9; } }
         @keyframes reviewScan { 0%,100% { filter: brightness(1) hue-rotate(0deg) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.16) hue-rotate(12deg) drop-shadow(0 12px 20px rgba(14,165,233,0.38)); } }
       `}</style>
     </main>
