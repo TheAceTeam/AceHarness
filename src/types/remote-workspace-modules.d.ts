@@ -1,1 +1,1 @@
-declare module 'ssh2-sftp-client';
+declare module 'node-ssh-no-cpu-features';

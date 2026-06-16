@@ -703,6 +703,7 @@ describe('Wrapper stream markdown rendering', () => {
       summary: '刷新任务拆分',
       affectedArtifacts: ['tasks.md'],
       impact: ['拆分更细'],
+      revisionPlan: [],
     });
   });
 

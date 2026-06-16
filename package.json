@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-beta.73",
+  "version": "1.0.0-beta.74",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
@@ -144,6 +144,7 @@
     "next": "~16.1.6",
     "next-themes": "^0.4.6",
     "node-cron": "^4.2.1",
+    "node-ssh-no-cpu-features": "^2.0.0",
     "prompts": "^2.4.2",
     "radix-ui": "^1.4.3",
     "react": "^18.2.0",
@@ -159,7 +160,6 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.2",
-    "ssh2-sftp-client": "^12.1.1",
     "streamdown": "^2.5.0",
     "tailwind-merge": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",

@@ -19,8 +19,8 @@ const nextConfig = {
   reactStrictMode: true,
   serverExternalPackages: [
     'node-cron',
-    'ssh2',
-    'ssh2-sftp-client',
+    'ssh2-no-cpu-features',
+    'node-ssh-no-cpu-features',
     '@marsaud/smb2',
     'webdav',
   ],

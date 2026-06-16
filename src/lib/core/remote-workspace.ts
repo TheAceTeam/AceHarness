@@ -179,11 +179,141 @@ async function readPrivateKey(credentials?: RemoteCredentials): Promise<string |
   return fs.readFile(privateKeyPath, 'utf8');
 }
 
-async function withSftpClient<T>(ref: RemoteWorkspaceRef, credentials: RemoteCredentials, fn: (client: any) => Promise<T>): Promise<T> {
-  const SftpClient = (await import('ssh2-sftp-client')).default || (await import('ssh2-sftp-client'));
-  const client = new SftpClient();
+type SftpStatsLike = {
+  mode?: number;
+  size?: number;
+  mtime?: number;
+  modifyTime?: number;
+  isDirectory?: () => boolean;
+  isFile?: () => boolean;
+  isSymbolicLink?: () => boolean;
+};
+
+type SftpEntryLike = {
+  filename?: string;
+  name?: string;
+  attrs?: SftpStatsLike;
+};
+
+type SftpWrapperLike = {
+  readdir(path: string, callback: (err?: Error | null, list?: SftpEntryLike[]) => void): void;
+  stat(path: string, callback: (err?: Error | null, stats?: SftpStatsLike) => void): void;
+  readFile(path: string, callback: (err?: Error | null, data?: Buffer | string) => void): void;
+  writeFile(path: string, data: Buffer | string, callback: (err?: Error | null) => void): void;
+  mkdir(path: string, callback: (err?: Error | null) => void): void;
+  rmdir(path: string, callback: (err?: Error | null) => void): void;
+  unlink(path: string, callback: (err?: Error | null) => void): void;
+  rename(oldPath: string, newPath: string, callback: (err?: Error | null) => void): void;
+  end?: () => void;
+};
+
+type NodeSshConstructor = new () => {
+  connect(config: Record<string, unknown>): Promise<unknown>;
+  requestSFTP(): Promise<SftpWrapperLike>;
+  dispose(): void;
+};
+
+async function loadNodeSshConstructor(): Promise<NodeSshConstructor> {
+  const sshModule = await import('node-ssh-no-cpu-features');
+  return ((sshModule as any).NodeSSH || (sshModule as any).default?.NodeSSH || (sshModule as any).default) as NodeSshConstructor;
+}
+
+function sftpResult<T>(invoke: (callback: (err?: Error | null, result?: T) => void) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    try {
+      invoke((err, result) => {
+        if (err) reject(err);
+        else resolve(result as T);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function sftpVoid(invoke: (callback: (err?: Error | null) => void) => void): Promise<void> {
+  return sftpResult<void>((callback) => invoke(callback));
+}
+
+function isSftpNotFoundError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  if (code === 2 || code === 'ENOENT' || code === 'NO_SUCH_FILE') return true;
+  const message = String((error as { message?: unknown })?.message || '').toLowerCase();
+  return message.includes('no such file') || message.includes('not found') || message.includes('does not exist');
+}
+
+function isSftpDirectory(stats: SftpStatsLike | undefined): boolean {
+  if (!stats) return false;
+  if (typeof stats.isDirectory === 'function') return stats.isDirectory();
+  return (Number(stats.mode || 0) & 0o170000) === 0o040000;
+}
+
+function sftpModifiedTime(stats: SftpStatsLike | undefined): number | undefined {
+  const raw = Number(stats?.modifyTime || stats?.mtime || 0);
+  if (!raw) return undefined;
+  return raw > 1_000_000_000_000 ? raw : raw * 1000;
+}
+
+function sftpEntryName(entry: SftpEntryLike): string {
+  return entry.filename || entry.name || '';
+}
+
+async function sftpStat(sftp: SftpWrapperLike, remotePath: string): Promise<SftpStatsLike> {
+  return sftpResult((callback) => sftp.stat(remotePath, callback));
+}
+
+async function sftpReadDir(sftp: SftpWrapperLike, remotePath: string): Promise<SftpEntryLike[]> {
+  return sftpResult((callback) => sftp.readdir(remotePath, callback));
+}
+
+async function sftpReadFile(sftp: SftpWrapperLike, remotePath: string): Promise<Buffer> {
+  const data = await sftpResult<Buffer | string>((callback) => sftp.readFile(remotePath, callback));
+  return Buffer.isBuffer(data) ? data : Buffer.from(data);
+}
+
+async function ensureSftpDirectory(sftp: SftpWrapperLike, remotePath: string): Promise<void> {
+  await sftpVoid((callback) => sftp.mkdir(remotePath, callback)).catch(async (error) => {
+    const stats = await sftpStat(sftp, remotePath).catch(() => undefined);
+    if (isSftpDirectory(stats)) return;
+    throw error;
+  });
+}
+
+async function ensureSftpParents(ref: RemoteWorkspaceRef, sftp: SftpWrapperLike, relPath: string): Promise<void> {
+  for (const parent of parentPathsFor(relPath)) {
+    await ensureSftpDirectory(sftp, remoteAbsolutePath(ref, parent));
+  }
+}
+
+async function ensureSftpDirectoryPath(ref: RemoteWorkspaceRef, sftp: SftpWrapperLike, relPath: string): Promise<void> {
+  const safeRelPath = assertSafeRemoteRelativePath(relPath);
+  if (!safeRelPath) return;
+  await ensureSftpParents(ref, sftp, safeRelPath);
+  await ensureSftpDirectory(sftp, remoteAbsolutePath(ref, safeRelPath));
+}
+
+async function deleteSftpPath(sftp: SftpWrapperLike, remotePath: string, stats: SftpStatsLike): Promise<void> {
+  if (isSftpDirectory(stats)) {
+    const entries = await sftpReadDir(sftp, remotePath);
+    for (const entry of entries) {
+      const name = sftpEntryName(entry);
+      if (!name || name === '.' || name === '..') continue;
+      const childPath = joinRemotePath(remotePath, name);
+      const childStats = entry.attrs || await sftpStat(sftp, childPath);
+      await deleteSftpPath(sftp, childPath, childStats);
+    }
+    await sftpVoid((callback) => sftp.rmdir(remotePath, callback));
+  } else {
+    await sftpVoid((callback) => sftp.unlink(remotePath, callback));
+  }
+}
+
+async function withSftpClient<T>(ref: RemoteWorkspaceRef, credentials: RemoteCredentials, fn: (sftp: SftpWrapperLike) => Promise<T>): Promise<T> {
+  const NodeSSH = await loadNodeSshConstructor();
+  const client = new NodeSSH();
   const url = ref.url;
   const privateKey = await readPrivateKey(credentials);
+  let sftp: SftpWrapperLike | undefined;
   try {
     await client.connect({
       host: url.hostname,
@@ -194,75 +324,87 @@ async function withSftpClient<T>(ref: RemoteWorkspaceRef, credentials: RemoteCre
       passphrase: credentials.passphrase,
       readyTimeout: Number(url.searchParams.get('timeoutMs') || 20000),
     });
-    return await fn(client);
+    sftp = await client.requestSFTP();
+    return await fn(sftp);
   } finally {
-    await client.end().catch(() => undefined);
-  }
-}
-
-async function ensureSftpParents(ref: RemoteWorkspaceRef, client: any, relPath: string): Promise<void> {
-  for (const parent of parentPathsFor(relPath)) {
-    await client.mkdir(remoteAbsolutePath(ref, parent), true).catch(() => undefined);
+    try {
+      sftp?.end?.();
+    } catch {}
+    client.dispose();
   }
 }
 
 function createSftpProvider(ref: RemoteWorkspaceRef, credentials: RemoteCredentials): RemoteWorkspaceProvider {
   return {
     async list(dirPath) {
-      return withSftpClient(ref, credentials, async (client) => {
+      return withSftpClient(ref, credentials, async (sftp) => {
         const absolute = remoteAbsolutePath(ref, dirPath);
-        const entries = await client.list(absolute);
+        const entries = await sftpReadDir(sftp, absolute);
         return entries
-          .filter((entry: any) => entry?.name && entry.name !== '.' && entry.name !== '..' && entry.type !== 'l')
-          .map((entry: any): RemoteEntry => ({
-            name: entry.name,
-            path: relativeRemotePath(ref.rootPath, joinRemotePath(absolute, entry.name)),
-            type: entry.type === 'd' ? 'directory' : 'file',
-            size: Number(entry.size || 0),
-            modifiedTime: Number(entry.modifyTime || 0) || undefined,
-          }));
+          .filter((entry) => {
+            const name = sftpEntryName(entry);
+            return name && name !== '.' && name !== '..' && !entry.attrs?.isSymbolicLink?.();
+          })
+          .map((entry): RemoteEntry => {
+            const name = sftpEntryName(entry);
+            return {
+              name,
+              path: relativeRemotePath(ref.rootPath, joinRemotePath(absolute, name)),
+              type: isSftpDirectory(entry.attrs) ? 'directory' : 'file',
+              size: Number(entry.attrs?.size || 0),
+              modifiedTime: sftpModifiedTime(entry.attrs),
+            };
+          });
       });
     },
     async stat(relPath) {
-      return withSftpClient(ref, credentials, async (client) => {
+      return withSftpClient(ref, credentials, async (sftp) => {
         const absolute = remoteAbsolutePath(ref, relPath);
-        const exists = await client.exists(absolute);
-        if (!exists) throw new WorkspacePathError('路径不存在', 404);
-        const stat = await client.stat(absolute);
+        let stat: SftpStatsLike;
+        try {
+          stat = await sftpStat(sftp, absolute);
+        } catch (error) {
+          if (isSftpNotFoundError(error)) throw new WorkspacePathError('路径不存在', 404);
+          throw error;
+        }
         return {
-          type: exists === 'd' ? 'directory' : 'file',
+          type: isSftpDirectory(stat) ? 'directory' : 'file',
           size: Number(stat.size || 0),
-          modifiedTime: stat.modifyTime ? Number(stat.modifyTime) : undefined,
+          modifiedTime: sftpModifiedTime(stat),
         };
       });
     },
     async readFile(relPath) {
-      return withSftpClient(ref, credentials, async (client) => Buffer.from(await client.get(remoteAbsolutePath(ref, relPath))));
+      return withSftpClient(ref, credentials, async (sftp) => sftpReadFile(sftp, remoteAbsolutePath(ref, relPath)));
     },
     async writeFile(relPath, data) {
-      return withSftpClient(ref, credentials, async (client) => {
-        await ensureSftpParents(ref, client, relPath);
-        await client.put(Buffer.isBuffer(data) ? data : Buffer.from(data), remoteAbsolutePath(ref, relPath));
+      return withSftpClient(ref, credentials, async (sftp) => {
+        await ensureSftpParents(ref, sftp, relPath);
+        await sftpVoid((callback) => sftp.writeFile(remoteAbsolutePath(ref, relPath), Buffer.isBuffer(data) ? data : Buffer.from(data), callback));
       });
     },
     async mkdir(relPath) {
-      return withSftpClient(ref, credentials, async (client) => {
-        await client.mkdir(remoteAbsolutePath(ref, relPath), true);
+      return withSftpClient(ref, credentials, async (sftp) => {
+        await ensureSftpDirectoryPath(ref, sftp, relPath);
       });
     },
     async delete(relPath) {
-      return withSftpClient(ref, credentials, async (client) => {
+      return withSftpClient(ref, credentials, async (sftp) => {
         const absolute = remoteAbsolutePath(ref, relPath);
-        const exists = await client.exists(absolute);
-        if (!exists) throw new WorkspacePathError('路径不存在', 404);
-        if (exists === 'd') await client.rmdir(absolute, true);
-        else await client.delete(absolute);
+        let stat: SftpStatsLike;
+        try {
+          stat = await sftpStat(sftp, absolute);
+        } catch (error) {
+          if (isSftpNotFoundError(error)) throw new WorkspacePathError('路径不存在', 404);
+          throw error;
+        }
+        await deleteSftpPath(sftp, absolute, stat);
       });
     },
     async rename(oldPath, newPath) {
-      return withSftpClient(ref, credentials, async (client) => {
-        await ensureSftpParents(ref, client, newPath);
-        await client.rename(remoteAbsolutePath(ref, oldPath), remoteAbsolutePath(ref, newPath));
+      return withSftpClient(ref, credentials, async (sftp) => {
+        await ensureSftpParents(ref, sftp, newPath);
+        await sftpVoid((callback) => sftp.rename(remoteAbsolutePath(ref, oldPath), remoteAbsolutePath(ref, newPath), callback));
       });
     },
     async copy(srcPath, destPath) {
