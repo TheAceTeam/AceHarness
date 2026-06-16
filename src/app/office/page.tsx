@@ -252,9 +252,10 @@ const CATEGORY_ZONE: Record<string, string> = {
 };
 
 const OFFICE_MAX_VISIBLE_MEMBERS = 12;
+const OFFICE_WALK_ASSETS_ENABLED = true;
 const OFFICE_WALK_SPEED_PERCENT_PER_SECOND = 2.1;
-const OFFICE_INTERACTION_INITIAL_DELAY_MS = 9000;
-const OFFICE_INTERACTION_COOLDOWN_MS = 28000;
+const OFFICE_INTERACTION_INITIAL_DELAY_MS = 4200;
+const OFFICE_INTERACTION_COOLDOWN_MS = 24000;
 
 type OfficePoint = { x: number; y: number };
 type OfficeRect = { left: number; right: number; top: number; bottom: number };
@@ -354,7 +355,7 @@ function officeBottomExitPoint(position: OfficePoint, total: number): OfficePoin
 
 function officeTalkPoints(host: OfficePoint, visitorOnLeft: boolean, roadY: number) {
   const hostTalkPoint = {
-    x: clampPercent(host.x + (visitorOnLeft ? 3.7 : -3.7)),
+    x: clampPercent(host.x + (visitorOnLeft ? -3.7 : 3.7)),
     y: roadY,
   };
   const visitorTalkPoint = {
@@ -371,13 +372,14 @@ function officeTalkPoints(host: OfficePoint, visitorOnLeft: boolean, roadY: numb
 
 function officeStationObstacles(total: number): OfficeRect[] {
   const footprint = officeStationFootprint(total);
+  const routePadding = 0.5;
   return Array.from({ length: Math.min(total, OFFICE_MAX_VISIBLE_MEMBERS) }, (_item, index) => {
     const position = officePositionForIndex(index, total);
     return {
-      left: position.x - footprint.halfX - 2,
-      right: position.x + footprint.halfX + 2,
-      top: position.y - footprint.halfY - 2,
-      bottom: position.y + footprint.halfY + 2,
+      left: position.x - footprint.halfX - routePadding,
+      right: position.x + footprint.halfX + routePadding,
+      top: position.y - footprint.halfY - routePadding,
+      bottom: position.y + footprint.halfY + routePadding,
     };
   });
 }
@@ -546,6 +548,13 @@ function stationScaleForTotal(total: number) {
   return 0.94;
 }
 
+function officeStandingActorScale(total: number) {
+  if (total >= 10) return 0.86;
+  if (total >= 7) return 0.9;
+  if (total >= 4) return 0.94;
+  return 1;
+}
+
 function officeFloorHeightForTotal(total: number) {
   const rows = officeGridLayoutForTotal(total).rows;
   if (rows <= 1) return 560;
@@ -555,7 +564,7 @@ function officeFloorHeightForTotal(total: number) {
 
 const OFFICE_ASSET_SHEET = '/office/6f4991eb-edc8-4ec2-b78f-975b5a140c74_mattingImg-shadow.png';
 const OFFICE_ASSET_SHEET_SIZE = 1254;
-const OFFICE_AGENT_ASSET_VERSION = '20260615-v3-clean';
+const OFFICE_AGENT_ASSET_VERSION = '20260616-v5-walk-size';
 const OFFICE_SPRITES = {
   floorSlab: { x: 22, y: 95, w: 307, h: 203 },
   deskShadow: { x: 360, y: 148, w: 252, h: 144 },
@@ -1716,12 +1725,12 @@ type OfficeScreenScene = 'coding' | 'testing' | 'planning' | 'reviewing' | 'ops'
 type OfficeSpriteGender = 'male' | 'female';
 type OfficeSpriteDirection = 'left' | 'right';
 type OfficeInteractionRole = 'visitor' | 'host';
+type OfficeInteractionMode = 'visit-desk' | 'meet-halfway';
 type OfficePresencePlan = {
   member: OfficeMember;
   activity: Activity;
   presence: OfficePresence;
   gender: OfficeSpriteGender;
-  deskDirection: OfficeSpriteDirection;
   interactionRole?: OfficeInteractionRole;
   targetIndex?: number;
 };
@@ -1731,6 +1740,7 @@ type OfficeInteractionRoute = {
   hostPlan: OfficePresencePlan;
   hostIndex: number;
   routeOffset: number;
+  mode: OfficeInteractionMode;
 };
 type ActiveOfficeInteraction = OfficeInteractionRoute & {
   id: number;
@@ -1738,14 +1748,19 @@ type ActiveOfficeInteraction = OfficeInteractionRoute & {
 };
 type OfficeRenderedPlan = OfficePresencePlan & {
   awayForInteraction?: boolean;
+  delayedAwayAnimation?: {
+    name: string;
+    durationSeconds: number;
+  };
 };
 type OfficeInteractionPair = {
   visitorIndex: number;
   hostIndex: number;
+  mode: OfficeInteractionMode;
 };
 
 function presenceForActivity(activity: Activity): OfficePresence {
-  if (activity === 'stretching') return 'stretching_at_desk';
+  if (activity === 'stretching') return 'thinking_at_desk';
   if (activity === 'thinking' || activity === 'reviewing') return 'thinking_at_desk';
   return 'seated_work';
 }
@@ -1768,6 +1783,7 @@ function screenSceneForOfficePlan(plan: OfficePresencePlan, index: number): Offi
 }
 
 function shouldStretchAtDesk(index: number, total: number) {
+  return false;
   if (total < 3) return false;
   const plannedStretchIndexes = total >= 10 ? new Set([1, 8]) : new Set([1]);
   return plannedStretchIndexes.has(index);
@@ -1798,39 +1814,14 @@ function isInteractionPreferred(member: OfficeMember) {
   return configured === 'walking' || configured === 'talking' || configured === 'presenting';
 }
 
-function indexesShareOfficeColumn(firstIndex: number, secondIndex: number, total: number) {
-  return Math.abs(officePositionForIndex(firstIndex, total).x - officePositionForIndex(secondIndex, total).x) < 8;
-}
-
-function findAvailableMemberIndex(
-  plans: OfficePresencePlan[],
-  zones: string[],
-  usedIndexes: Set<number>,
-  excludeIndex?: number
-) {
-  const zoneSet = new Set(zones);
-  const candidates = plans
-    .map((plan, index) => ({ plan, index }))
-    .filter(({ plan, index }) => (
-    !usedIndexes.has(index)
-    && index !== excludeIndex
-    && zoneSet.has(memberZone(plan.member))
-    ));
-
-  if (typeof excludeIndex === 'number') {
-    const differentColumn = candidates.find(({ index }) => !indexesShareOfficeColumn(index, excludeIndex, plans.length));
-    if (differentColumn) return differentColumn.index;
-  }
-
-  return candidates[0]?.index ?? -1;
-}
-
 function buildOfficeInteractionPairs(plans: OfficePresencePlan[]): OfficeInteractionPair[] {
   if (plans.length < 2) return [];
 
-  const maxPairs = 1;
-  const pairs: OfficeInteractionPair[] = [];
-  const usedIndexes = new Set<number>();
+  const maxPairs = Math.min(8, Math.max(1, plans.length - 1));
+  const longDistancePairs: OfficeInteractionPair[] = [];
+  const adjacentPairs: OfficeInteractionPair[] = [];
+  const relationshipVisitPairs: OfficeInteractionPair[] = [];
+  const meetHalfwayPairs: OfficeInteractionPair[] = [];
   const preferredVisitors = plans
     .map((plan, index) => ({ plan, index }))
     .filter(({ plan }) => isInteractionPreferred(plan.member));
@@ -1842,36 +1833,93 @@ function buildOfficeInteractionPairs(plans: OfficePresencePlan[]): OfficeInterac
     { visitors: ['growth', 'operations', 'knowledge'], hosts: ['product', 'engineering', 'core'] },
   ];
 
-  const addPair = (visitorIndex: number, hostIndex: number) => {
+  const pairKeyFor = (visitorIndex: number, hostIndex: number) => [visitorIndex, hostIndex].sort((a, b) => a - b).join(':');
+  const collectPair = (target: OfficeInteractionPair[], visitorIndex: number, hostIndex: number, mode: OfficeInteractionMode) => {
     if (visitorIndex < 0 || hostIndex < 0 || visitorIndex === hostIndex) return false;
-    if (usedIndexes.has(visitorIndex) || usedIndexes.has(hostIndex)) return false;
-    pairs.push({ visitorIndex, hostIndex });
-    usedIndexes.add(visitorIndex);
-    usedIndexes.add(hostIndex);
+    const pairKey = pairKeyFor(visitorIndex, hostIndex);
+    if (target.some((pair) => pairKeyFor(pair.visitorIndex, pair.hostIndex) === pairKey)) return false;
+    target.push({ visitorIndex, hostIndex, mode });
     return true;
   };
 
-  for (const preferred of preferredVisitors) {
-    if (pairs.length >= maxPairs) break;
-    const visitorZone = memberZone(preferred.plan.member);
-    const rule = relationshipRules.find((item) => item.visitors.includes(visitorZone));
-    const hostIndex = rule
-      ? findAvailableMemberIndex(plans, rule.hosts, usedIndexes, preferred.index)
-      : plans.findIndex((_plan, index) => !usedIndexes.has(index) && index !== preferred.index);
-    addPair(preferred.index, hostIndex);
-  }
+  const nearestHostForZones = (visitorIndex: number, zones: string[]) => {
+    const zoneSet = new Set(zones);
+    const visitorPosition = officePositionForIndex(visitorIndex, plans.length);
+    return plans
+      .map((plan, index) => ({ index, distance: pointDistance(visitorPosition, officePositionForIndex(index, plans.length)), zone: memberZone(plan.member) }))
+      .filter(({ index, zone }) => index !== visitorIndex && zoneSet.has(zone))
+      .sort((first, second) => first.distance - second.distance)[0]?.index ?? -1;
+  };
 
-  if (pairs.length < maxPairs) {
-    for (const rule of relationshipRules) {
-      const visitorIndex = findAvailableMemberIndex(plans, rule.visitors, usedIndexes);
-      const hostIndex = findAvailableMemberIndex(plans, rule.hosts, usedIndexes, visitorIndex);
-      if (addPair(visitorIndex, hostIndex)) break;
+  const layout = officeGridLayoutForTotal(plans.length);
+  for (let row = 0; row < layout.rows; row += 1) {
+    const rowIndexes = plans
+      .map((_plan, index) => index)
+      .filter((index) => Math.floor(index / layout.columns) === row)
+      .sort((first, second) => officePositionForIndex(first, plans.length).x - officePositionForIndex(second, plans.length).x);
+    for (let column = 0; column < rowIndexes.length - 1; column += 1) {
+      const leftIndex = rowIndexes[column];
+      const rightIndex = rowIndexes[column + 1];
+      collectPair(adjacentPairs, row % 2 === 0 ? leftIndex : rightIndex, row % 2 === 0 ? rightIndex : leftIndex, 'visit-desk');
+    }
+    if (rowIndexes.length >= 3) {
+      collectPair(longDistancePairs, rowIndexes[0], rowIndexes[2], 'visit-desk');
+    }
+    if (rowIndexes.length >= 4) {
+      collectPair(longDistancePairs, rowIndexes[0], rowIndexes[3], 'visit-desk');
     }
   }
 
-  if (pairs.length < maxPairs) {
-    addPair(0, 1);
+  for (const preferred of preferredVisitors) {
+    const visitorZone = memberZone(preferred.plan.member);
+    const rule = relationshipRules.find((item) => item.visitors.includes(visitorZone));
+    const hostIndex = rule ? nearestHostForZones(preferred.index, rule.hosts) : -1;
+    collectPair(relationshipVisitPairs, preferred.index, hostIndex, 'visit-desk');
   }
+
+  for (const rule of relationshipRules) {
+    for (const [visitorIndex, plan] of plans.entries()) {
+      if (!rule.visitors.includes(memberZone(plan.member))) continue;
+      const hostIndex = nearestHostForZones(visitorIndex, rule.hosts);
+      collectPair(relationshipVisitPairs, visitorIndex, hostIndex, 'visit-desk');
+      collectPair(meetHalfwayPairs, visitorIndex, hostIndex, 'meet-halfway');
+    }
+  }
+
+  const pairs: OfficeInteractionPair[] = [];
+  const seenPairs = new Set<string>();
+  const addRoute = (pair: OfficeInteractionPair) => {
+    if (pairs.length >= maxPairs) return false;
+    const pairKey = pairKeyFor(pair.visitorIndex, pair.hostIndex);
+    if (seenPairs.has(pairKey)) return false;
+    pairs.push(pair);
+    seenPairs.add(pairKey);
+    return true;
+  };
+  const addRoutes = (routes: OfficeInteractionPair[], limit: number) => {
+    for (const route of routes) {
+      if (pairs.length >= limit) break;
+      addRoute(route);
+    }
+  };
+
+  const addRouteCount = (routes: OfficeInteractionPair[], count: number) => {
+    const targetLength = Math.min(maxPairs, pairs.length + Math.max(0, count));
+    addRoutes(routes, targetLength);
+  };
+
+  const meetQuota = meetHalfwayPairs.length > 0 && maxPairs >= 4 ? Math.min(2, Math.floor(maxPairs * 0.25)) : 0;
+  const visitLimit = maxPairs - meetQuota;
+  addRouteCount(longDistancePairs, Math.min(2, visitLimit));
+  addRouteCount(adjacentPairs, Math.min(adjacentPairs.length, Math.max(1, Math.ceil(maxPairs * 0.35))));
+  addRoutes(relationshipVisitPairs, visitLimit);
+  addRoutes(longDistancePairs, visitLimit);
+  addRoutes(adjacentPairs, visitLimit);
+  addRoutes(meetHalfwayPairs, maxPairs);
+  addRoutes(relationshipVisitPairs, maxPairs);
+  addRoutes(adjacentPairs, maxPairs);
+
+  if (pairs.length === 0) addRoute({ visitorIndex: 0, hostIndex: 1, mode: 'visit-desk' });
 
   return pairs;
 }
@@ -1880,13 +1928,11 @@ function buildOfficePresencePlan(members: OfficeMember[]): OfficePresencePlan[] 
   const plans: OfficePresencePlan[] = members.map((member, index) => {
     const activity = baseActivityForOfficeDisplay(member, index, members.length);
     const presence = presenceForActivity(activity);
-    const deskPosition = officePositionForIndex(index, members.length);
     return {
       member,
       activity,
       presence,
       gender: spriteGenderForMember(member, index),
-      deskDirection: deskPosition.x >= 50 ? 'left' : 'right',
     };
   });
 
@@ -2089,18 +2135,70 @@ function pathReturnDirection(points: OfficePoint[], fallback: OfficeSpriteDirect
   return fallback;
 }
 
-function officeWalkwayPath(visitorIndex: number, hostIndex: number, total: number, routeOffset: number): OfficeWalkwayPath {
+function routeSegmentDirections(
+  points: OfficePoint[],
+  fallback: OfficeSpriteDirection,
+  verticalDirection: OfficeSpriteDirection = fallback
+) {
+  const explicitDirections = points.slice(1).map((point, index) => {
+    const previous = points[index];
+    if (Math.abs(point.x - previous.x) < 0.2) return verticalDirection;
+    return point.x >= previous.x ? 'right' : 'left';
+  });
+
+  let lastDirection: OfficeSpriteDirection | null = null;
+  return explicitDirections.map((direction, index) => {
+    if (direction) {
+      lastDirection = direction;
+      return direction;
+    }
+    const nextDirection = explicitDirections.slice(index + 1).find(Boolean);
+    return lastDirection || nextDirection || fallback;
+  });
+}
+
+function officeInteractionRouteId(visitorIndex: number, hostIndex: number, mode: OfficeInteractionMode) {
+  return `officeInteraction${visitorIndex}x${hostIndex}${mode === 'meet-halfway' ? 'Meet' : 'Visit'}`;
+}
+
+function officeHostStationAnimationName(routeId: string) {
+  return `${routeId}HostStation`;
+}
+
+function officeWalkwayPath(
+  visitorIndex: number,
+  hostIndex: number,
+  total: number,
+  routeOffset: number,
+  mode: OfficeInteractionMode = 'visit-desk'
+): OfficeWalkwayPath {
   const from = officePositionForIndex(visitorIndex, total);
   const host = officePositionForIndex(hostIndex, total);
   const visitorOnLeft = from.x <= host.x;
-  const talkY = officeFrontAisleY(host.y, total);
-  const { hostTalkPoint, visitorTalkPoint } = officeTalkPoints(host, visitorOnLeft, talkY);
   const visitorExitPoint = officeBottomExitPoint(from, total);
   const hostExitPoint = officeBottomExitPoint(host, total);
+  const talkY = officeFrontAisleY(host.y, total);
+  const halfwayCenter = {
+    x: clampPercent((from.x + host.x) / 2),
+    y: clampPercent(((visitorExitPoint.y + hostExitPoint.y) / 2) + routeOffset * 0.18),
+  };
+  const halfwayHostTalkPoint = {
+    x: clampPercent(halfwayCenter.x + (visitorOnLeft ? 4.3 : -4.3)),
+    y: halfwayCenter.y,
+  };
+  const halfwayVisitorTalkPoint = {
+    x: clampPercent(halfwayCenter.x + (visitorOnLeft ? -4.3 : 4.3)),
+    y: halfwayCenter.y,
+  };
+  const hostDeskTalkPoints = officeTalkPoints(host, visitorOnLeft, talkY);
+  const hostTalkPoint = mode === 'meet-halfway' ? halfwayHostTalkPoint : hostDeskTalkPoints.hostTalkPoint;
+  const visitorTalkPoint = mode === 'meet-halfway' ? halfwayVisitorTalkPoint : hostDeskTalkPoints.visitorTalkPoint;
   const visitorPoints = officeFindPath(visitorExitPoint, visitorTalkPoint, total);
   const hostPoints = officeFindPath(hostExitPoint, hostTalkPoint, total);
   const visitorDistance = Math.max(1, pathDistance(visitorPoints));
   const hostDistance = Math.max(1, pathDistance(hostPoints));
+  const visitorOutboundFallback: OfficeSpriteDirection = visitorTalkPoint.x >= visitorExitPoint.x ? 'right' : 'left';
+  const hostOutboundFallback: OfficeSpriteDirection = hostTalkPoint.x >= hostExitPoint.x ? 'right' : 'left';
 
   return {
     visitorPoints,
@@ -2108,28 +2206,39 @@ function officeWalkwayPath(visitorIndex: number, hostIndex: number, total: numbe
     travelDistance: Math.max(visitorDistance, hostDistance),
     visitorTalkPoint,
     hostTalkPoint,
-    visitorWalkDirection: pathNetDirection(visitorPoints, visitorOnLeft ? 'right' : 'left'),
+    visitorWalkDirection: pathNetDirection(visitorPoints, visitorOutboundFallback),
     visitorTalkDirection: visitorOnLeft ? 'right' : 'left',
-    visitorReturnDirection: pathReturnDirection(visitorPoints, visitorOnLeft ? 'left' : 'right'),
-    hostWalkDirection: pathNetDirection(hostPoints, visitorOnLeft ? 'right' : 'left'),
+    visitorReturnDirection: pathReturnDirection(visitorPoints, oppositeDirection(visitorOutboundFallback)),
+    hostWalkDirection: pathNetDirection(hostPoints, hostOutboundFallback),
     hostTalkDirection: visitorOnLeft ? 'left' : 'right',
-    hostReturnDirection: pathReturnDirection(hostPoints, visitorOnLeft ? 'left' : 'right'),
+    hostReturnDirection: pathReturnDirection(hostPoints, oppositeDirection(hostOutboundFallback)),
   };
 }
 
 function stationSpriteClass(plan: OfficePresencePlan): string {
-  if (plan.presence === 'thinking_at_desk' || plan.presence === 'stretching_at_desk') {
-    return `station-agent-${plan.gender}-think-back-${plan.deskDirection}`;
+  if (plan.presence === 'stretching_at_desk') {
+    return `station-agent-${plan.gender}-think-back-right`;
   }
-  return `station-agent-${plan.gender}-work-back-${plan.deskDirection}`;
+  if (plan.presence === 'thinking_at_desk') {
+    return `station-agent-${plan.gender}-think-back-right`;
+  }
+  return `station-agent-${plan.gender}-work-back-right`;
 }
 
 function OfficeDeskOperator({ plan }: { plan: OfficeRenderedPlan }) {
   if (plan.awayForInteraction) {
     return <span className="station-status-dot" aria-hidden="true" />;
   }
+  const delayedAwayStyle = plan.delayedAwayAnimation ? {
+    animationName: `seatedBreath, ${plan.delayedAwayAnimation.name}`,
+    animationDuration: `4.2s, ${plan.delayedAwayAnimation.durationSeconds}s`,
+    animationTimingFunction: 'ease-in-out, linear',
+    animationIterationCount: 'infinite, 1',
+    animationFillMode: 'none, both',
+    animationDelay: 'var(--delay), 0s',
+  } satisfies CSSProperties : undefined;
   return (
-    <div className="station-operator" aria-hidden="true">
+    <div className="station-operator" aria-hidden="true" style={delayedAwayStyle}>
       <span className={`station-agent-sprite ${stationSpriteClass(plan)}`} />
     </div>
   );
@@ -2140,9 +2249,9 @@ function pct(value: number, total: number) {
 }
 
 function officeTravelKeyframes(name: string, points: OfficePoint[], distance: number, timing: {
-  holdStart: number;
+  outStart: number;
   moveOut: number;
-  longestMove: number;
+  talkStart: number;
   talk: number;
   total: number;
 }) {
@@ -2150,7 +2259,7 @@ function officeTravelKeyframes(name: string, points: OfficePoint[], distance: nu
   let covered = 0;
   points.forEach((point, index) => {
     if (index > 0) covered += pointDistance(points[index - 1], point);
-    const seconds = timing.holdStart + (covered / distance) * timing.moveOut;
+    const seconds = timing.outStart + (covered / distance) * timing.moveOut;
     outboundLines.push(`${pct(seconds, timing.total)} { left: ${point.x.toFixed(2)}%; top: ${point.y.toFixed(2)}%; }`);
   });
 
@@ -2159,7 +2268,7 @@ function officeTravelKeyframes(name: string, points: OfficePoint[], distance: nu
   covered = 0;
   reversed.forEach((point, index) => {
     if (index > 0) covered += pointDistance(reversed[index - 1], point);
-    const seconds = timing.holdStart + timing.longestMove + timing.talk + (covered / distance) * timing.moveOut;
+    const seconds = timing.talkStart + timing.talk + (covered / distance) * timing.moveOut;
     returnLines.push(`${pct(seconds, timing.total)} { left: ${point.x.toFixed(2)}%; top: ${point.y.toFixed(2)}%; }`);
   });
 
@@ -2167,11 +2276,64 @@ function officeTravelKeyframes(name: string, points: OfficePoint[], distance: nu
   const last = points[points.length - 1];
   return `
     @keyframes ${name} {
-      0%, ${pct(timing.holdStart, timing.total)} { left: ${first.x.toFixed(2)}%; top: ${first.y.toFixed(2)}%; }
+      0%, ${pct(timing.outStart, timing.total)} { left: ${first.x.toFixed(2)}%; top: ${first.y.toFixed(2)}%; }
       ${outboundLines.join('\n')}
-      ${pct(timing.holdStart + timing.moveOut, timing.total)}, ${pct(timing.holdStart + timing.longestMove + timing.talk, timing.total)} { left: ${last.x.toFixed(2)}%; top: ${last.y.toFixed(2)}%; }
+      ${pct(timing.outStart + timing.moveOut, timing.total)}, ${pct(timing.talkStart + timing.talk, timing.total)} { left: ${last.x.toFixed(2)}%; top: ${last.y.toFixed(2)}%; }
       ${returnLines.join('\n')}
-      ${pct(timing.holdStart + timing.longestMove + timing.talk + timing.moveOut, timing.total)}, 100% { left: ${first.x.toFixed(2)}%; top: ${first.y.toFixed(2)}%; }
+      ${pct(timing.talkStart + timing.talk + timing.moveOut, timing.total)}, 100% { left: ${first.x.toFixed(2)}%; top: ${first.y.toFixed(2)}%; }
+    }
+  `;
+}
+
+function officeWalkSpriteUrl(gender: OfficeSpriteGender, direction: OfficeSpriteDirection) {
+  return `/office/agents/${gender}-walk-${direction}-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}`;
+}
+
+function officeDirectionImageKeyframes(
+  name: string,
+  points: OfficePoint[],
+  distance: number,
+  fallback: OfficeSpriteDirection,
+  gender: OfficeSpriteGender,
+  timing: {
+    moveStart: number;
+    move: number;
+    verticalDirection?: OfficeSpriteDirection;
+    holdDirection?: OfficeSpriteDirection;
+    holdUntil?: number;
+    total: number;
+  }
+) {
+  const segmentDirections = routeSegmentDirections(points, fallback, timing.verticalDirection || fallback);
+  const lines: string[] = [];
+  let covered = 0;
+  let movementEnd = timing.moveStart;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const segmentDistance = pointDistance(points[index - 1], points[index]);
+    if (segmentDistance < 0.01) continue;
+    const segmentStart = timing.moveStart + (covered / distance) * timing.move;
+    covered += segmentDistance;
+    movementEnd = timing.moveStart + (covered / distance) * timing.move;
+    const direction = segmentDirections[index - 1] || fallback;
+    const image = officeWalkSpriteUrl(gender, direction);
+    lines.push(`
+      ${pct(segmentStart, timing.total)}, ${pct(movementEnd, timing.total)} { background-image: url('${image}'); }
+    `);
+  }
+
+  if (timing.holdUntil && timing.holdUntil > movementEnd) {
+    const image = officeWalkSpriteUrl(gender, timing.holdDirection || fallback);
+    lines.push(`
+      ${pct(movementEnd, timing.total)}, ${pct(timing.holdUntil, timing.total)} { background-image: url('${image}'); }
+    `);
+  }
+
+  const fallbackImage = officeWalkSpriteUrl(gender, fallback);
+  return `
+    @keyframes ${name} {
+      0%, ${pct(timing.moveStart, timing.total)}, 100% { background-image: url('${fallbackImage}'); }
+      ${lines.join('\n')}
     }
   `;
 }
@@ -2183,26 +2345,27 @@ function officeVisibilityKeyframes(names: {
   hostWalkOut: string;
   hostWalkBack: string;
   hostTalk: string;
+  hostStation?: string;
   bubble: string;
 }, timing: {
   holdStart: number;
+  visitorOutStart: number;
+  hostOutStart: number;
   visitorMove: number;
   hostMove: number;
-  longestMove: number;
+  talkStart: number;
   talk: number;
   total: number;
 }) {
-  const talkStart = timing.holdStart + timing.longestMove;
+  const talkStart = timing.talkStart;
   const talkEnd = talkStart + timing.talk;
-  const visitorOutEnd = timing.holdStart + timing.visitorMove;
-  const hostOutEnd = timing.holdStart + timing.hostMove;
   const visitorReturnEnd = talkEnd + timing.visitorMove;
   const hostReturnEnd = talkEnd + timing.hostMove;
   const nudge = 0.08;
   return `
     @keyframes ${names.visitorWalkOut} {
-      0%, ${pct(visitorOutEnd - nudge, timing.total)} { opacity: 1; }
-      ${pct(visitorOutEnd, timing.total)}, 100% { opacity: 0; }
+      0%, ${pct(talkStart - nudge, timing.total)} { opacity: 1; }
+      ${pct(talkStart, timing.total)}, 100% { opacity: 0; }
     }
     @keyframes ${names.visitorWalkBack} {
       0%, ${pct(talkEnd, timing.total)} { opacity: 0; }
@@ -2215,8 +2378,9 @@ function officeVisibilityKeyframes(names: {
       ${pct(talkEnd + nudge, timing.total)}, 100% { opacity: 0; }
     }
     @keyframes ${names.hostWalkOut} {
-      0%, ${pct(hostOutEnd - nudge, timing.total)} { opacity: 1; }
-      ${pct(hostOutEnd, timing.total)}, 100% { opacity: 0; }
+      0%, ${pct(timing.hostOutStart - nudge, timing.total)} { opacity: 0; }
+      ${pct(timing.hostOutStart, timing.total)}, ${pct(talkStart - nudge, timing.total)} { opacity: 1; }
+      ${pct(talkStart, timing.total)}, 100% { opacity: 0; }
     }
     @keyframes ${names.hostWalkBack} {
       0%, ${pct(talkEnd, timing.total)} { opacity: 0; }
@@ -2233,6 +2397,13 @@ function officeVisibilityKeyframes(names: {
       ${pct(talkStart + 0.75, timing.total)}, ${pct(talkEnd - 0.35, timing.total)} { opacity: 1; transform: translateY(0) scale(1); }
       ${pct(talkEnd, timing.total)}, 100% { opacity: 0; transform: translateY(4px) scale(0.94); }
     }
+    ${names.hostStation ? `
+    @keyframes ${names.hostStation} {
+      0%, ${pct(timing.hostOutStart - nudge, timing.total)} { opacity: 1; }
+      ${pct(timing.hostOutStart, timing.total)}, ${pct(hostReturnEnd, timing.total)} { opacity: 0; }
+      ${pct(hostReturnEnd + nudge, timing.total)}, 100% { opacity: 1; }
+    }
+    ` : ''}
   `;
 }
 
@@ -2241,9 +2412,41 @@ function officeActorSpriteAnimation(active: boolean, visibilityName: string, tot
     opacity: active || idleVisible ? undefined : 0,
     animationName: active ? `${visibilityName}, agentSprite6` : idleVisible ? 'agentSprite6' : 'none',
     animationDuration: active ? `${totalSeconds}s, ${frameSeconds}s` : `${frameSeconds}s`,
-    animationTimingFunction: active ? 'linear, steps(6, end)' : 'steps(6, end)',
+    animationTimingFunction: active ? 'step-end, steps(6, end)' : 'steps(6, end)',
     animationIterationCount: active ? '1, infinite' : idleVisible ? 'infinite' : '1',
     animationFillMode: active ? 'both, none' : 'none',
+  };
+}
+
+function officeWalkSpriteAnimation(active: boolean, visibilityName: string, directionName: string, totalSeconds: number, frameSeconds = 1.1): CSSProperties {
+  return {
+    opacity: active ? undefined : 0,
+    animationName: active ? `${visibilityName}, ${directionName}, agentSprite6` : 'none',
+    animationDuration: active ? `${totalSeconds}s, ${totalSeconds}s, ${frameSeconds}s` : `${frameSeconds}s`,
+    animationTimingFunction: active ? 'step-end, step-end, steps(6, end)' : 'steps(6, end)',
+    animationIterationCount: active ? '1, 1, infinite' : '1',
+    animationFillMode: active ? 'both, both, none' : 'none',
+  };
+}
+
+function officeInteractionTiming(mode: OfficeInteractionMode, visitorDistance: number, hostDistance: number) {
+  const visitorMoveSeconds = Math.max(3.5, visitorDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
+  const hostMoveSeconds = Math.max(mode === 'visit-desk' ? 1.45 : 3.5, hostDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
+  const holdStart = 1.1;
+  const visitorOutStart = holdStart;
+  const hostOutStart = mode === 'visit-desk' ? holdStart + visitorMoveSeconds + 0.3 : holdStart;
+  const talkStart = Math.max(visitorOutStart + visitorMoveSeconds, hostOutStart + hostMoveSeconds);
+  const talk = 4.6;
+  const returnMove = Math.max(visitorMoveSeconds, hostMoveSeconds);
+  return {
+    holdStart,
+    visitorOutStart,
+    hostOutStart,
+    visitorMove: visitorMoveSeconds,
+    hostMove: hostMoveSeconds,
+    talkStart,
+    talk,
+    total: talkStart + talk + returnMove + 1.1,
   };
 }
 
@@ -2254,6 +2457,7 @@ function OfficeInteraction({
   hostPlan,
   hostIndex,
   routeOffset,
+  mode,
   active,
 }: {
   visitorPlan: OfficePresencePlan;
@@ -2262,25 +2466,16 @@ function OfficeInteraction({
   hostPlan: OfficePresencePlan;
   hostIndex: number;
   routeOffset: number;
+  mode: OfficeInteractionMode;
   active: boolean;
 }) {
-  const path = officeWalkwayPath(visitorIndex, hostIndex, total, routeOffset);
+  const path = officeWalkwayPath(visitorIndex, hostIndex, total, routeOffset, mode);
   const zone = ZONES[memberZone(visitorPlan.member)] || ZONES.generalist;
-  const actorScale = Math.min(0.78, stationScaleForTotal(total) * 0.88);
+  const actorScale = officeStandingActorScale(total);
   const visitorDistance = Math.max(1, pathDistance(path.visitorPoints));
   const hostDistance = Math.max(1, pathDistance(path.hostPoints));
-  const visitorMoveSeconds = Math.max(3.5, visitorDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
-  const hostMoveSeconds = Math.max(3.5, hostDistance / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
-  const longestMoveSeconds = Math.max(visitorMoveSeconds, hostMoveSeconds);
-  const timing = {
-    holdStart: 1.1,
-    visitorMove: visitorMoveSeconds,
-    hostMove: hostMoveSeconds,
-    longestMove: longestMoveSeconds,
-    talk: 4.6,
-    total: longestMoveSeconds + Math.max(visitorMoveSeconds, hostMoveSeconds) + 6.8,
-  };
-  const routeId = `officeInteraction${visitorIndex}x${hostIndex}`;
+  const timing = officeInteractionTiming(mode, visitorDistance, hostDistance);
+  const routeId = officeInteractionRouteId(visitorIndex, hostIndex, mode);
   const names = {
     visitorMotion: `${routeId}VisitorMotion`,
     hostMotion: `${routeId}HostMotion`,
@@ -2290,26 +2485,63 @@ function OfficeInteraction({
     hostWalkOut: `${routeId}HostWalkOut`,
     hostWalkBack: `${routeId}HostWalkBack`,
     hostTalk: `${routeId}HostTalk`,
+    visitorWalkOutImage: `${routeId}VisitorWalkOutImage`,
+    visitorWalkBackImage: `${routeId}VisitorWalkBackImage`,
+    hostWalkOutImage: `${routeId}HostWalkOutImage`,
+    hostWalkBackImage: `${routeId}HostWalkBackImage`,
+    hostStation: mode === 'visit-desk' ? officeHostStationAnimationName(routeId) : undefined,
     bubble: `${routeId}Bubble`,
   };
+  const visitorReturnPoints = [...path.visitorPoints].reverse();
+  const hostReturnPoints = [...path.hostPoints].reverse();
   const keyframes = [
     officeTravelKeyframes(names.visitorMotion, path.visitorPoints, visitorDistance, {
-      holdStart: timing.holdStart,
+      outStart: timing.visitorOutStart,
       moveOut: timing.visitorMove,
-      longestMove: timing.longestMove,
+      talkStart: timing.talkStart,
       talk: timing.talk,
       total: timing.total,
     }),
     officeTravelKeyframes(names.hostMotion, path.hostPoints, hostDistance, {
-      holdStart: timing.holdStart,
+      outStart: timing.hostOutStart,
       moveOut: timing.hostMove,
-      longestMove: timing.longestMove,
+      talkStart: timing.talkStart,
       talk: timing.talk,
+      total: timing.total,
+    }),
+    officeDirectionImageKeyframes(names.visitorWalkOutImage, path.visitorPoints, visitorDistance, path.visitorWalkDirection, visitorPlan.gender, {
+      moveStart: timing.visitorOutStart,
+      move: timing.visitorMove,
+      verticalDirection: path.visitorTalkDirection,
+      holdDirection: path.visitorTalkDirection,
+      holdUntil: timing.talkStart,
+      total: timing.total,
+    }),
+    officeDirectionImageKeyframes(names.visitorWalkBackImage, visitorReturnPoints, visitorDistance, path.visitorReturnDirection, visitorPlan.gender, {
+      moveStart: timing.talkStart + timing.talk,
+      move: timing.visitorMove,
+      verticalDirection: path.visitorReturnDirection,
+      total: timing.total,
+    }),
+    officeDirectionImageKeyframes(names.hostWalkOutImage, path.hostPoints, hostDistance, path.hostWalkDirection, hostPlan.gender, {
+      moveStart: timing.hostOutStart,
+      move: timing.hostMove,
+      verticalDirection: path.hostTalkDirection,
+      holdDirection: path.hostTalkDirection,
+      holdUntil: timing.talkStart,
+      total: timing.total,
+    }),
+    officeDirectionImageKeyframes(names.hostWalkBackImage, hostReturnPoints, hostDistance, path.hostReturnDirection, hostPlan.gender, {
+      moveStart: timing.talkStart + timing.talk,
+      move: timing.hostMove,
+      verticalDirection: path.hostReturnDirection,
       total: timing.total,
     }),
     officeVisibilityKeyframes(names, timing),
   ].join('');
-  const label = `${visitorPlan.member.nickname || visitorPlan.member.displayName} 走到 ${hostPlan.member.nickname || hostPlan.member.displayName} 的工位旁交流`;
+  const label = mode === 'meet-halfway'
+    ? `${visitorPlan.member.nickname || visitorPlan.member.displayName} 和 ${hostPlan.member.nickname || hostPlan.member.displayName} 离开工位短暂会合`
+    : `${visitorPlan.member.nickname || visitorPlan.member.displayName} 走到 ${hostPlan.member.nickname || hostPlan.member.displayName} 的工位旁交流`;
   const routeY = [
     ...path.visitorPoints.map((point) => point.y),
     ...path.hostPoints.map((point) => point.y),
@@ -2329,7 +2561,7 @@ function OfficeInteraction({
     >
       <style>{keyframes}</style>
       <div
-        className="office-interaction-visitor"
+        className={`office-interaction-visitor office-interaction-visitor-${path.visitorTalkDirection}`}
         style={{
           animationName: active ? names.visitorMotion : 'none',
           animationDuration: `${timing.total}s`,
@@ -2338,19 +2570,19 @@ function OfficeInteraction({
       >
         <span className="office-interaction-shadow" aria-hidden="true" />
         <span
-          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.visitorWalkDirection}`}
+          className="office-interaction-sprite"
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.visitorWalkOut, timing.total)}
+          style={officeWalkSpriteAnimation(active, names.visitorWalkOut, names.visitorWalkOutImage, timing.total)}
         />
         <span
-          className={`office-interaction-sprite station-agent-${visitorPlan.gender}-walk-${path.visitorReturnDirection}`}
+          className="office-interaction-sprite"
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.visitorWalkBack, timing.total)}
+          style={officeWalkSpriteAnimation(active, names.visitorWalkBack, names.visitorWalkBackImage, timing.total)}
         />
         <span
           className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${visitorPlan.gender}-talk-${path.visitorTalkDirection}`}
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.visitorTalk, timing.total, 1.15)}
+          style={officeActorSpriteAnimation(active, names.visitorTalk, timing.total)}
         />
       </div>
       <div
@@ -2363,19 +2595,19 @@ function OfficeInteraction({
       >
         <span className="office-interaction-shadow" aria-hidden="true" />
         <span
-          className={`office-interaction-sprite station-agent-${hostPlan.gender}-walk-${path.hostWalkDirection}`}
+          className="office-interaction-sprite"
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.hostWalkOut, timing.total)}
+          style={officeWalkSpriteAnimation(active, names.hostWalkOut, names.hostWalkOutImage, timing.total)}
         />
         <span
-          className={`office-interaction-sprite station-agent-${hostPlan.gender}-walk-${path.hostReturnDirection}`}
+          className="office-interaction-sprite"
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.hostWalkBack, timing.total)}
+          style={officeWalkSpriteAnimation(active, names.hostWalkBack, names.hostWalkBackImage, timing.total)}
         />
         <span
           className={`office-interaction-sprite office-interaction-talk-sprite station-agent-${hostPlan.gender}-talk-${path.hostTalkDirection}`}
           aria-hidden="true"
-          style={officeActorSpriteAnimation(active, names.hostTalk, timing.total, 1.15)}
+          style={officeActorSpriteAnimation(active, names.hostTalk, timing.total)}
         />
         <span className="office-interaction-bubble" aria-hidden="true" style={{ animationName: active ? names.bubble : 'none', animationDuration: `${timing.total}s`, animationIterationCount: 1, animationFillMode: 'both' }}>
           <span />
@@ -2388,21 +2620,25 @@ function OfficeInteraction({
 }
 
 function buildOfficeInteractionRoutes(plans: OfficePresencePlan[]): OfficeInteractionRoute[] {
+  if (!OFFICE_WALK_ASSETS_ENABLED) return [];
   return buildOfficeInteractionPairs(plans).map((pair, index) => ({
     visitorPlan: plans[pair.visitorIndex],
     visitorIndex: pair.visitorIndex,
     hostPlan: plans[pair.hostIndex],
     hostIndex: pair.hostIndex,
     routeOffset: index % 2 === 0 ? -7 : 7,
+    mode: pair.mode,
   })).filter((route) => Boolean(route.visitorPlan && route.hostPlan));
 }
 
 function officeInteractionDurationMs(route: OfficeInteractionRoute, total: number) {
-  const path = officeWalkwayPath(route.visitorIndex, route.hostIndex, total, route.routeOffset);
-  const visitorMoveSeconds = Math.max(3.5, Math.max(1, pathDistance(path.visitorPoints)) / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
-  const hostMoveSeconds = Math.max(3.5, Math.max(1, pathDistance(path.hostPoints)) / OFFICE_WALK_SPEED_PERCENT_PER_SECOND);
-  const longestMoveSeconds = Math.max(visitorMoveSeconds, hostMoveSeconds);
-  return Math.ceil((longestMoveSeconds + Math.max(visitorMoveSeconds, hostMoveSeconds) + 6.8) * 1000);
+  const path = officeWalkwayPath(route.visitorIndex, route.hostIndex, total, route.routeOffset, route.mode);
+  const timing = officeInteractionTiming(
+    route.mode,
+    Math.max(1, pathDistance(path.visitorPoints)),
+    Math.max(1, pathDistance(path.hostPoints))
+  );
+  return Math.ceil(timing.total * 1000);
 }
 
 function LiveOffice({
@@ -2420,15 +2656,33 @@ function LiveOffice({
   const visibleMembers = useMemo(() => members.slice(0, OFFICE_MAX_VISIBLE_MEMBERS), [members]);
   const presencePlans = useMemo(() => buildOfficePresencePlan(visibleMembers), [visibleMembers]);
   const interactionRoutes = useMemo(() => buildOfficeInteractionRoutes(presencePlans), [presencePlans]);
+  const interactionRouteSeed = useMemo(() => (
+    interactionRoutes.length > 0
+      ? Math.floor(Date.now() / OFFICE_INTERACTION_COOLDOWN_MS) % interactionRoutes.length
+      : 0
+  ), [interactionRoutes.length]);
   const renderedPresencePlans = useMemo<OfficeRenderedPlan[]>(() => {
     if (!activeInteraction) return presencePlans;
+    const routeId = officeInteractionRouteId(activeInteraction.visitorIndex, activeInteraction.hostIndex, activeInteraction.mode);
     return presencePlans.map((plan, index) => {
-      if (index !== activeInteraction.visitorIndex && index !== activeInteraction.hostIndex) return plan;
+      const isVisitor = index === activeInteraction.visitorIndex;
+      const hostLeavesDesk = activeInteraction.mode === 'meet-halfway' && index === activeInteraction.hostIndex;
+      const hostDelayedLeavesDesk = activeInteraction.mode === 'visit-desk' && index === activeInteraction.hostIndex;
+      if (hostDelayedLeavesDesk) {
+        return {
+          ...plan,
+          delayedAwayAnimation: {
+            name: officeHostStationAnimationName(routeId),
+            durationSeconds: activeInteraction.durationMs / 1000,
+          },
+        };
+      }
+      if (!isVisitor && !hostLeavesDesk) return plan;
       return {
         ...plan,
         awayForInteraction: true,
-        activity: index === activeInteraction.visitorIndex ? 'walking' : 'talking',
-        presence: index === activeInteraction.visitorIndex ? 'visiting_peer' : 'hosting_peer',
+        activity: isVisitor ? 'walking' : 'talking',
+        presence: isVisitor ? 'visiting_peer' : 'hosting_peer',
       };
     });
   }, [activeInteraction, presencePlans]);
@@ -2451,7 +2705,7 @@ function LiveOffice({
     let cancelled = false;
     const startInteraction = () => {
       if (cancelled) return;
-      const route = interactionRoutes[nextInteractionIndexRef.current % interactionRoutes.length];
+      const route = interactionRoutes[(interactionRouteSeed + nextInteractionIndexRef.current) % interactionRoutes.length];
       nextInteractionIndexRef.current = (nextInteractionIndexRef.current + 1) % interactionRoutes.length;
       const durationMs = officeInteractionDurationMs(route, presencePlans.length);
       setActiveInteraction({ ...route, id: Date.now(), durationMs });
@@ -2466,7 +2720,7 @@ function LiveOffice({
       cancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [interactionRoutes, presencePlans.length]);
+  }, [interactionRouteSeed, interactionRoutes, presencePlans.length]);
 
   if (!members.length) return null;
   return (
@@ -2527,6 +2781,7 @@ function LiveOffice({
               hostPlan={activeInteraction.hostPlan}
               hostIndex={activeInteraction.hostIndex}
               routeOffset={activeInteraction.routeOffset}
+              mode={activeInteraction.mode}
               active
             />
           </div>
@@ -2557,7 +2812,7 @@ function MeetingRoomList({
   onSelectRoom: (room: CollaborationRoomRecord) => void;
 }) {
   return (
-    <aside className="min-h-0 rounded-3xl border bg-background/72 p-4">
+    <aside className="meeting-room-list min-h-0 rounded-3xl border bg-background/72 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-black">对话列表</div>
@@ -2565,7 +2820,7 @@ function MeetingRoomList({
         </div>
         <Badge variant="outline">{rooms.length}</Badge>
       </div>
-      <div className="mt-3 max-h-[630px] space-y-2 overflow-y-auto pr-1">
+      <div className="meeting-room-list-scroll mt-3 space-y-2 overflow-y-auto pr-1">
         {rooms.slice(0, 24).map((item) => {
           const isActive = item.id === activeRoomId;
           return (
@@ -2624,7 +2879,7 @@ function MeetingRoomTab({
 
   if (!room || !sessionId) {
     return (
-      <div className="grid min-h-[560px] gap-4 rounded-[34px] border border-white/70 bg-white/62 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 md:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="meeting-room-shell grid min-h-0 gap-4 rounded-[34px] border border-white/70 bg-white/62 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 md:grid-cols-[320px_minmax(0,1fr)]">
         <MeetingRoomList activeRoomId={room?.id} rooms={rooms} onSelectRoom={onSelectRoom} />
         <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed bg-background/50 p-8 text-center">
           <MessageSquareText className="h-10 w-10 text-blue-600" />
@@ -2638,7 +2893,7 @@ function MeetingRoomTab({
   }
 
   return (
-    <div className="grid h-[720px] min-h-0 gap-4 rounded-[34px] border border-white/70 bg-white/62 p-3 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div className="meeting-room-shell grid min-h-0 gap-4 rounded-[34px] border border-white/70 bg-white/62 p-3 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5 lg:grid-cols-[320px_minmax(0,1fr)]">
       <MeetingRoomList activeRoomId={room.id} rooms={rooms} onSelectRoom={onSelectRoom} />
       <div className="min-h-0 overflow-hidden rounded-[28px] border bg-background/60">
         <AgoraShell
@@ -3180,6 +3435,34 @@ export default function OfficePage() {
           outline: 2px solid rgba(255, 255, 255, 0.88);
           outline-offset: 4px;
           border-radius: 16px;
+        }
+        .meeting-room-shell {
+          height: min(860px, max(640px, calc(100vh - 188px)));
+        }
+        .meeting-room-list {
+          display: flex;
+          flex-direction: column;
+          height: 100%;
+          overflow: hidden;
+        }
+        .meeting-room-list-scroll {
+          min-height: 0;
+          flex: 1 1 auto;
+        }
+        @media (min-width: 1280px) and (min-height: 900px) {
+          .meeting-room-shell {
+            height: min(920px, calc(100vh - 172px));
+          }
+        }
+        @media (max-width: 1023px) {
+          .meeting-room-shell {
+            height: auto;
+            min-height: min(760px, calc(100vh - 160px));
+          }
+          .meeting-room-list {
+            min-height: 220px;
+            max-height: 320px;
+          }
         }
         .org-manager {
           position: relative;
@@ -4677,13 +4960,9 @@ export default function OfficePage() {
             drop-shadow(0 0 12px color-mix(in srgb, var(--zone), transparent 58%));
         }
         .station-agent-male-work-back-right { background-image: url('/office/agents/male-work-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
-        .station-agent-male-work-back-left { background-image: url('/office/agents/male-work-back-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-male-think-back-right { background-image: url('/office/agents/male-think-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
-        .station-agent-male-think-back-left { background-image: url('/office/agents/male-think-back-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-female-work-back-right { background-image: url('/office/agents/female-work-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
-        .station-agent-female-work-back-left { background-image: url('/office/agents/female-work-back-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-female-think-back-right { background-image: url('/office/agents/female-think-back-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
-        .station-agent-female-think-back-left { background-image: url('/office/agents/female-think-back-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-male-talk-right { background-image: url('/office/agents/male-talk-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-male-talk-left { background-image: url('/office/agents/male-talk-left-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
         .station-agent-female-talk-right { background-image: url('/office/agents/female-talk-right-smart.png?v=${OFFICE_AGENT_ASSET_VERSION}'); }
@@ -4871,6 +5150,20 @@ export default function OfficePage() {
           box-shadow: 0 10px 18px rgba(15, 23, 42, 0.14);
           animation: thought 2s ease-in-out infinite;
         }
+        .station-stretching .station-scene::after {
+          content: '';
+          position: absolute;
+          left: 195px;
+          top: 42px;
+          z-index: 18;
+          width: 30px;
+          height: 18px;
+          border-top: 3px solid color-mix(in srgb, var(--zone), white 16%);
+          border-radius: 50% 50% 0 0;
+          opacity: 0.78;
+          filter: drop-shadow(0 7px 10px rgba(15, 23, 42, 0.12));
+          animation: stretchMark 2.6s ease-in-out infinite;
+        }
         .station-reviewing .station-monitor-real { animation-name: reviewScan; }
         .station-presenting .station-monitor-real { transform: scaleX(-1) rotate(-5deg) skewY(-8deg) scale(1.05); }
         .station {
@@ -5007,14 +5300,16 @@ export default function OfficePage() {
           z-index: 22;
         }
         .station-presence-seated_work .station-operator,
-        .station-presence-thinking_at_desk .station-operator {
+        .station-presence-thinking_at_desk .station-operator,
+        .station-presence-stretching_at_desk .station-operator {
           left: 154px;
           top: 68px;
           z-index: 16;
           animation-name: seatedBreath;
         }
         .station-presence-seated_work .station-callout-layer,
-        .station-presence-thinking_at_desk .station-callout-layer {
+        .station-presence-thinking_at_desk .station-callout-layer,
+        .station-presence-stretching_at_desk .station-callout-layer {
           left: 172px;
           top: 54px;
           animation: actorFloat 4.2s ease-in-out infinite;
@@ -5072,6 +5367,7 @@ export default function OfficePage() {
         @keyframes monitorPulse { 0%,100% { filter: brightness(1) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.08) drop-shadow(0 12px 18px rgba(37,99,235,0.3)); } }
         @keyframes badgeBlink { 0%,100% { opacity: 0.95; } 50% { opacity: 0.62; } }
         @keyframes thought { 0%,100% { transform: translateY(0); opacity: 0.45; } 50% { transform: translateY(-5px); opacity: 1; } }
+        @keyframes stretchMark { 0%,100% { transform: translateY(0) scaleX(0.82); opacity: 0.45; } 50% { transform: translateY(-4px) scaleX(1); opacity: 0.9; } }
         @keyframes reviewScan { 0%,100% { filter: brightness(1) hue-rotate(0deg) drop-shadow(0 12px 14px rgba(37,99,235,0.18)); } 50% { filter: brightness(1.16) hue-rotate(12deg) drop-shadow(0 12px 20px rgba(14,165,233,0.38)); } }
       `}</style>
     </main>

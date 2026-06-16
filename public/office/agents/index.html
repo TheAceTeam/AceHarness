@@ -280,7 +280,7 @@
       aspect-ratio: 128 / 180;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background-image: url("./male-walk-right-smart.png");
+      background-image: url("./male-talk-right-smart.png");
       background-repeat: no-repeat;
       background-size: 600% 100%;
       cursor: grab;
@@ -379,7 +379,7 @@
         <div class="stage">
           <div class="character-box" id="characterBox">
             <div class="frame-window" id="frameWindow">
-              <img class="sprite" id="sprite" src="./male-walk-right-smart.png" alt="male-walk-right-smart 帧动画">
+              <img class="sprite" id="sprite" src="./male-talk-right-smart.png" alt="male-talk-right-smart 帧动画">
             </div>
             <div class="baseline" aria-hidden="true"></div>
           </div>
@@ -387,7 +387,7 @@
       </section>
 
       <aside class="controls" aria-label="动画控制">
-        <h1 class="title" id="assetTitle">male-walk-right-smart</h1>
+        <h1 class="title" id="assetTitle">male-talk-right-smart</h1>
         <p class="meta" id="assetMeta">6 帧 · 128 x 180 · 内容稳定盒</p>
 
         <div class="control-group">
@@ -464,22 +464,24 @@
 
   <script>
     let MANIFEST = {
-      "female-talk-left-smart": { src: "./female-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[7,6,120,173],[9,5,119,173],[6,5,121,173],[12,5,114,174],[9,6,120,174],[15,5,111,174]] },
-      "female-talk-right-smart": { src: "./female-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[9,5,117,174],[10,5,116,174],[8,5,117,174],[14,5,113,174],[10,5,117,174],[18,5,109,174]] },
-      "female-think-back-left-smart": { src: "./female-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[11,6,116,173],[11,5,116,173],[11,5,116,173],[11,6,115,173],[11,6,115,173],[11,5,115,173]] },
-      "female-think-back-right-smart": { src: "./female-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[11,5,117,174],[10,5,117,175],[11,5,117,175],[11,5,117,174],[11,5,116,174],[11,5,117,175]] },
-      "female-walk-left-smart": { src: "./female-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[6,13,121,167],[8,16,119,164],[8,14,119,166],[8,14,120,165],[8,14,119,166],[8,14,119,166]] },
-      "female-walk-right-smart": { src: "./female-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[13,0,118,134],[9,0,112,135],[5,0,111,134],[3,0,108,132],[0,0,101,134],[0,0,95,134]] },
-      "female-work-back-left-smart": { src: "./female-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[6,9,121,170],[6,9,120,170],[4,8,121,170],[5,9,121,170],[6,9,119,170],[4,9,123,170]] },
-      "female-work-back-right-smart": { src: "./female-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[3,6,124,172],[3,6,123,173],[2,6,125,173],[3,6,123,172],[4,6,122,173],[1,6,126,173]] },
-      "male-talk-left-smart": { src: "./male-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[10,9,116,170],[12,10,115,170],[10,10,117,170],[17,10,110,169],[11,10,115,168],[18,11,108,169]] },
-      "male-talk-right-smart": { src: "./male-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[11,6,117,173],[12,6,115,173],[11,6,116,173],[17,7,110,173],[12,7,115,173],[20,7,108,173]] },
-      "male-think-back-left-smart": { src: "./male-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[9,8,118,173],[9,8,118,173],[10,7,118,173],[10,7,118,173],[10,8,118,173],[9,6,118,173]] },
-      "male-think-back-right-smart": { src: "./male-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[10,9,118,171],[10,9,118,171],[10,8,117,171],[10,7,117,171],[11,9,117,171],[10,7,117,171]] },
-      "male-walk-left-smart": { src: "./male-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[11,3,115,176],[13,6,113,172],[14,3,114,177],[13,2,114,176],[13,4,113,174],[11,3,114,175]] },
-      "male-walk-right-smart": { src: "./male-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[15,9,112,169],[16,13,110,166],[16,9,110,170],[17,10,109,169],[17,11,110,168],[16,10,110,169]] },
-      "male-work-back-left-smart": { src: "./male-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[5,4,121,175],[5,4,121,175],[4,4,122,175],[8,3,119,175],[7,4,120,175],[7,4,119,175]] },
-      "male-work-back-right-smart": { src: "./male-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, bounds: [[6,6,120,173],[7,6,120,174],[5,5,122,173],[9,5,119,174],[8,6,118,174],[8,6,118,174]] }
+      "female-stretch-back-right-smart": { src: "./female-stretch-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[10,11,124,168],[3,29,124,150],[3,4,116,175],[9,22,118,156],[22,3,112,176],[3,29,124,150]] },
+      "female-talk-left-smart": { src: "./female-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[7,6,120,173],[9,5,119,173],[6,5,121,173],[12,5,114,174],[9,6,120,174],[15,5,111,174]] },
+      "female-talk-right-smart": { src: "./female-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[9,5,117,174],[10,5,116,174],[8,5,117,174],[14,5,113,174],[10,5,117,174],[18,5,109,174]] },
+      "female-think-back-left-smart": { src: "./female-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[11,6,116,173],[11,5,116,173],[11,5,116,173],[11,6,115,173],[11,6,115,173],[11,5,115,173]] },
+      "female-think-back-right-smart": { src: "./female-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[11,5,117,174],[10,5,117,175],[11,5,117,175],[11,5,117,174],[11,5,116,174],[11,5,117,175]] },
+      "female-walk-left-smart": { src: "./female-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "top", bounds: [[25,26,96,141],[25,27,96,141],[29,27,96,141],[27,26,100,141],[29,28,101,142],[35,27,103,142]] },
+      "female-walk-right-smart": { src: "./female-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "top", bounds: [[31,26,102,141],[31,27,102,141],[31,27,98,141],[27,26,100,141],[26,28,98,142],[24,27,92,142]] },
+      "female-work-back-left-smart": { src: "./female-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[6,9,121,170],[6,9,120,170],[4,8,121,170],[5,9,121,170],[6,9,119,170],[4,9,123,170]] },
+      "female-work-back-right-smart": { src: "./female-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[3,6,124,172],[3,6,123,173],[2,6,125,173],[3,6,123,172],[4,6,122,173],[1,6,126,173]] },
+      "male-stretch-back-right-smart": { src: "./male-stretch-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[11,16,124,172],[3,41,124,143],[3,14,115,175],[9,29,118,157],[28,13,108,176],[3,40,124,145]] },
+      "male-talk-left-smart": { src: "./male-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[10,9,116,170],[12,10,115,170],[10,10,117,170],[17,10,110,169],[11,10,115,168],[18,11,108,169]] },
+      "male-talk-right-smart": { src: "./male-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[12,12,118,179],[12,12,115,179],[12,12,117,179],[13,13,106,179],[12,13,115,179],[16,13,104,179]] },
+      "male-think-back-left-smart": { src: "./male-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[9,8,118,173],[9,8,118,173],[10,7,118,173],[10,7,118,173],[10,8,118,173],[9,6,118,173]] },
+      "male-think-back-right-smart": { src: "./male-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[10,9,118,171],[10,9,118,171],[10,8,117,171],[10,7,117,171],[11,9,117,171],[10,7,117,171]] },
+      "male-walk-left-smart": { src: "./male-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "top", bounds: [[24,23,89,149],[24,27,88,149],[28,23,91,149],[30,23,94,149],[31,27,95,149],[34,22,96,149]] },
+      "male-walk-right-smart": { src: "./male-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "top", bounds: [[38,23,103,149],[39,27,103,149],[36,23,99,149],[33,23,97,149],[32,27,96,149],[31,22,93,149]] },
+      "male-work-back-left-smart": { src: "./male-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[5,4,121,175],[5,4,121,175],[4,4,122,175],[8,3,119,175],[7,4,120,175],[7,4,119,175]] },
+      "male-work-back-right-smart": { src: "./male-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[6,6,120,173],[7,6,120,174],[5,5,122,173],[9,5,119,174],[8,6,118,174],[8,6,118,174]] }
     };
     let manifestOrder = Object.keys(MANIFEST);
     const app = document.querySelector(".app");
@@ -506,7 +508,7 @@
     const frameWindow = document.getElementById("frameWindow");
     const sprite = document.getElementById("sprite");
 
-    let currentAssetKey = "male-walk-right-smart";
+    let currentAssetKey = "male-talk-right-smart";
     let currentAsset = MANIFEST[currentAssetKey];
     let stableBox = {
       contentWidth: 128,
@@ -981,3 +983,4 @@
   </script>
 </body>
 </html>
+

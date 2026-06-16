@@ -62,24 +62,6 @@ const generatedGridSources = [
       { id: 'male-talk-right-smart', row: 1, frames: [0, 1, 2, 3, 4, 5] },
     ],
   },
-  {
-    file: path.join(sourceDir, 'office-agent-walk-side-directions-v3.png'),
-    cols: 6,
-    rows: 4,
-    frameWidth: 256,
-    frameHeight: 256,
-    targetWidth: 128,
-    targetHeight: 180,
-    scaleWidth: 122,
-    scaleHeight: 174,
-    bottomPadding: 2,
-    animations: [
-      { id: 'male-walk-right-smart', row: 0, frames: [0, 1, 2, 3, 4, 5] },
-      { id: 'male-walk-left-smart', row: 1, frames: [0, 1, 2, 3, 4, 5] },
-      { id: 'female-walk-left-smart', row: 2, frames: [0, 1, 2, 3, 4, 5] },
-      { id: 'female-walk-right-smart', row: 3, frames: [0, 1, 2, 3, 4, 5] },
-    ],
-  },
 ];
 
 function isGreenKey(r, g, b) {
