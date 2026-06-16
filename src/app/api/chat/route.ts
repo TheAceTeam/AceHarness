@@ -9,6 +9,7 @@ import {
 } from '@/lib/chat/request-options';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 import { requireAuth } from '@/lib/auth/middleware';
+import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth(request);
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
     });
 
     const engineType = await resolveRequestedEngineType(requestedEngine);
+    const engineCommand = normalizeEngineNamespacedSlashCommand(message, engineType);
     const engine = await createEngine(engineType);
 
     if (!engine) {
@@ -62,13 +64,14 @@ export async function POST(request: NextRequest) {
     const result = await executeEngineWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
-        prompt: message,
+        prompt: engineCommand.prompt,
         systemPrompt,
         model: useModel,
         workingDirectory: getWorkspaceRoot(),
         sessionId: sessionId || undefined,
         mcpServers: enabledMcpServers,
         userId: auth?.id,
+        rawPrompt: engineCommand.rawPrompt,
     });
 
     return NextResponse.json({

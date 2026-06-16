@@ -4,6 +4,7 @@ import {
   discoverOpenCodeModelsFromHttpClient,
   getOpenCodeStreamTimeoutConfig,
   normalizeOpenCodeModelsFromProviderSources,
+  resolveOpenCodeModelId,
   sendPromptWithOpenCodeHttp,
 } from '@/lib/engines/opencode-http-adapter';
 
@@ -76,6 +77,18 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
       { modelId: 'penguiapigpt/gpt-5.3-codex', name: 'Pengui-gpt/gpt-5.3-codex' },
       { modelId: 'penguiapi/claude-sonnet-4-5', name: 'Pengui-Api/claude-sonnet-4-6' },
     ]);
+  });
+
+  test('resolves short OpenCode model names against discovered provider models', () => {
+    const models = [
+      { modelId: 'siliconflow-cn/Pro/zai-org/GLM-5.1', name: 'SiliconFlow (China)/Pro/zai-org/GLM-5.1' },
+      { modelId: 'volcengine/GLM-5.1', name: 'csi.ai/GLM-5.1' },
+      { modelId: 'volcengine/GLM-5', name: 'csi.ai/GLM-5' },
+    ];
+
+    expect(resolveOpenCodeModelId('glm-5.1', models)).toBe('volcengine/GLM-5.1');
+    expect(resolveOpenCodeModelId('volcengine/GLM-5.1', models)).toBe('volcengine/GLM-5.1');
+    expect(resolveOpenCodeModelId('missing/model', models)).toBe('');
   });
 
   test('discovers OpenCode models through SDK HTTP provider APIs before config fallback', async () => {

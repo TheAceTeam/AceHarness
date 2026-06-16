@@ -20,11 +20,15 @@ import {
   getConfiguredEnvValueSync,
 } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
+import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
 import {
   buildFullPrompt,
+  discoverOpenCodeCommandsFromHttpClient,
+  executeCommandWithOpenCodeHttp,
   formatError,
   getSessionId,
   type OpenCodeHttpClient,
+  type OpenCodeDiscoveredCommand,
   sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA,
 } from './opencode-http-adapter';
@@ -286,6 +290,11 @@ async function ensureClient(userId?: string): Promise<{ client: OpenCodeHttpClie
   return { client, baseUrl };
 }
 
+export async function discoverCodegenieSdkCommands(userId?: string): Promise<OpenCodeDiscoveredCommand[]> {
+  const { client } = await ensureClient(userId);
+  return discoverOpenCodeCommandsFromHttpClient(client);
+}
+
 export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
   private currentSessionId: string | null = null;
   private collectedOutput = '';
@@ -398,7 +407,43 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
         content: this.currentSessionId,
       } as EngineStreamEvent);
 
-      const fullPrompt = buildFullPrompt(options);
+      const isSlashCommand = Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
+      if (isSlashCommand) {
+        const parsedCommand = parseOpenCodeSlashCommand(options.prompt);
+        if (!parsedCommand) throw new Error('Invalid CodeGenie slash command');
+        const commands = await discoverOpenCodeCommandsFromHttpClient(client);
+        const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
+        if (!commandExists) {
+          throw new Error(`CodeGenie command not found: ${parsedCommand.command}`);
+        }
+        const output = await executeCommandWithOpenCodeHttp({
+          client,
+          sessionId: this.currentSessionId,
+          command: {
+            command: parsedCommand.command,
+            arguments: parsedCommand.arguments,
+            agent: options.agent,
+            model: options.model,
+          },
+          workingDirectory: options.workingDirectory,
+          emit: (event) => this.emit('stream', event),
+          ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
+        });
+        this.collectedOutput = output;
+        const durationMs = Date.now() - startedAt;
+        return {
+          success: true,
+          output: normalizeEngineOutput(output),
+          sessionId: this.currentSessionId,
+          metadata: {
+            ...ZERO_USAGE_METADATA,
+            duration_ms: durationMs,
+          },
+        };
+      }
+      const fullPrompt = isSlashCommand
+        ? buildOpenCodeRawCommandPrompt(options.prompt)
+        : buildFullPrompt(options);
 
       console.log(`[codegenie-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
       this.emitDiagnosticLog({

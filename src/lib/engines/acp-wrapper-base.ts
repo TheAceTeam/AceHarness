@@ -11,6 +11,7 @@ import { ACPEngine, buildAcpProcessReuseKey, logAcpTiming } from './acp-engine';
 import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
+import { isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
 import {
   formatAceReasoning,
   formatAceToolCall,
@@ -275,7 +276,7 @@ class ACPSharedRunner {
         throw new Error(`[${wrapper.getName()}] engine not initialized`);
       }
 
-      if (options.model && this.currentModelId !== options.model) {
+      if (options.model && this.currentModelId !== options.model && wrapper.shouldApplyModelOverride(options.model, options)) {
         const tModel = Date.now();
         try {
           wrapper.emitDiagnosticLog(executionContext, {
@@ -312,6 +313,18 @@ class ACPSharedRunner {
 
       executionContext.streaming = true;
       const fullPrompt = wrapper.buildPrompt(options, sessionAction);
+      if (wrapper.shouldValidateRawSlashCommand(options)) {
+        const parsedCommand = parseOpenCodeSlashCommand(fullPrompt);
+        if (!parsedCommand) {
+          throw new Error(`[${wrapper.getName()}] invalid slash command`);
+        }
+        const commands = await engine.waitForAvailableCommands();
+        const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
+        if (!commandExists) {
+          const suffix = commands.length ? ` Available commands: ${commands.map((command) => command.name).join(', ')}` : ' No commands were discovered.';
+          throw new Error(`[${wrapper.getName()}] command not found: ${parsedCommand.command}.${suffix}`);
+        }
+      }
       wrapper.emitDiagnosticLog(executionContext, {
         message: 'ACP wrapper sendPrompt start',
         detail: `promptLength=${fullPrompt.length}`,
@@ -513,6 +526,10 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   protected abstract getACPConfig(options: EngineOptions): ACPEngineConfig;
   abstract isAvailable(): Promise<boolean>;
 
+  shouldApplyModelOverride(_model: string, _options: EngineOptions): boolean {
+    return true;
+  }
+
   async execute(options: EngineOptions): Promise<EngineResult> {
     const diagnosticLoggingEnabled = Boolean(options.diagnosticLogging);
     const runner = this.getOrCreateSharedRunner(options, diagnosticLoggingEnabled);
@@ -572,6 +589,9 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
   }
 
   buildPrompt(options: EngineOptions, sessionAction: SessionAction): string {
+    if (options.rawPrompt) {
+      return options.prompt;
+    }
     let fullPrompt = options.prompt;
     if (options.systemPrompt) {
       const shouldPrepend = sessionAction === 'created' || options.appendSystemPrompt;
@@ -593,6 +613,29 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
       userId: options.userId,
       diagnosticLogging: diagnosticLoggingEnabled,
     };
+  }
+
+  shouldValidateRawSlashCommand(options: EngineOptions): boolean {
+    return Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
+  }
+
+  async discoverCommands(options: Pick<EngineOptions, 'workingDirectory' | 'userId'>): Promise<Array<{ name: string; description: string; source?: string; type?: string; kind?: string; category?: string }>> {
+    const engineOptions: EngineOptions = {
+      agent: 'chat',
+      step: 'commands',
+      prompt: '',
+      systemPrompt: '',
+      model: '',
+      workingDirectory: options.workingDirectory,
+      userId: options.userId,
+    };
+    const engine = await this.createStartedEngine(engineOptions, false);
+    try {
+      await engine.createSession();
+      return await engine.waitForAvailableCommands();
+    } finally {
+      engine.stop();
+    }
   }
 
   protected async createStartedEngine(options: EngineOptions, diagnosticLoggingEnabled: boolean): Promise<ACPEngine> {

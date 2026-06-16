@@ -28,6 +28,7 @@ import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/l
 import { buildFinalRawContent, appendStreamChunk } from '@/lib/chat/stream-assembly';
 import { isSafeAction, normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import { loadChatSession, saveChatSession, type PersistedChatSession, type PersistedMessage } from '@/lib/chat/persistence';
+import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 
 export const dynamic = 'force-dynamic';
 const COMPLETED_STREAM_RETENTION_MS = 2 * 60 * 1000;
@@ -210,6 +211,7 @@ export async function POST(request: NextRequest) {
     }
     const engineRuntimeDirectory = getWorkspaceRoot();
     const configuredEngine = await resolveRequestedEngineType(perChatEngine);
+    const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);
     if (!validResumeSid && streamRecoveryKey) {
       validResumeSid = getBackendSessionIdByFrontendSessionId(streamRecoveryKey);
@@ -343,7 +345,7 @@ export async function POST(request: NextRequest) {
       const execPromise = executeEngineWithContextRecovery(engine, {
         agent: 'chat',
         step: 'chat',
-        prompt: message,
+        prompt: engineCommand.prompt,
         systemPrompt,
         model: useModel,
         workingDirectory: engineRuntimeDirectory,
@@ -351,6 +353,7 @@ export async function POST(request: NextRequest) {
         appendSystemPrompt: !!validResumeSid && !!systemPrompt,
         mcpServers: enabledMcpServers,
         userId: auth.id,
+        rawPrompt: engineCommand.rawPrompt,
       }, {
         onContextReset: () => {
           engineStreamEvents.emit(chatId, { type: 'engine_error', content: '上下文超限，已清空会话并自动接力继续。' });

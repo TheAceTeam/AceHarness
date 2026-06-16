@@ -12,6 +12,9 @@ const sdkMocks = vi.hoisted(() => ({
 }));
 
 const adapterMocks = vi.hoisted(() => ({
+  buildFullPrompt: vi.fn(() => 'hello from test'),
+  discoverOpenCodeCommandsFromHttpClient: vi.fn(),
+  executeCommandWithOpenCodeHttp: vi.fn(),
   sendPromptWithOpenCodeHttp: vi.fn(),
 }));
 
@@ -21,8 +24,11 @@ vi.mock('@opencode-ai/sdk', () => ({
 }));
 
 vi.mock('@/lib/engines/opencode-http-adapter', () => ({
-  buildFullPrompt: vi.fn(() => 'hello from test'),
+  buildFullPrompt: adapterMocks.buildFullPrompt,
+  discoverOpenCodeCommandsFromHttpClient: adapterMocks.discoverOpenCodeCommandsFromHttpClient,
+  executeCommandWithOpenCodeHttp: adapterMocks.executeCommandWithOpenCodeHttp,
   getSessionId: vi.fn((data?: { id?: string }) => data?.id || 'session-test'),
+  resolveOpenCodeModelId: vi.fn((modelId: string) => modelId),
   sendPromptWithOpenCodeHttp: adapterMocks.sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA: {},
 }));
@@ -75,6 +81,11 @@ describe('OpenCodeSdkEngineWrapper', () => {
       },
     }));
     adapterMocks.sendPromptWithOpenCodeHttp.mockResolvedValue('mocked output');
+    adapterMocks.discoverOpenCodeCommandsFromHttpClient.mockResolvedValue([
+      { name: 'custom-plugin', description: 'Custom plugin' },
+    ]);
+    adapterMocks.executeCommandWithOpenCodeHttp.mockResolvedValue('command output');
+    adapterMocks.buildFullPrompt.mockReturnValue('hello from test');
   });
 
   afterEach(async () => {
@@ -216,6 +227,32 @@ describe('OpenCodeSdkEngineWrapper', () => {
 
     expect(result.success).toBe(true);
     expect(result.output).toBe(`${toolCall}${toolResult}${finalJson}`.trim());
+  });
+
+  test('executes OpenCode slash commands through the command API', async () => {
+    sdkMocks.createOpencodeServer.mockResolvedValue({
+      url: 'http://127.0.0.1:4101',
+      close: vi.fn(),
+    });
+
+    const { OpenCodeSdkEngineWrapper } = await import('@/lib/engines/opencode-sdk-wrapper');
+    const wrapper = new OpenCodeSdkEngineWrapper();
+    const result = await wrapper.execute({
+      ...BASE_OPTIONS,
+      prompt: '  /custom-plugin run this',
+      rawPrompt: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(adapterMocks.buildFullPrompt).not.toHaveBeenCalled();
+    expect(adapterMocks.sendPromptWithOpenCodeHttp).not.toHaveBeenCalled();
+    expect(adapterMocks.executeCommandWithOpenCodeHttp).toHaveBeenCalledWith(expect.objectContaining({
+      command: expect.objectContaining({
+        command: 'custom-plugin',
+        arguments: 'run this',
+      }),
+    }));
+    expect(result.output).toBe('command output');
   });
 
   test('ignores ignorable tail transport failures when streamed output is already complete', async () => {

@@ -8,6 +8,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { delimiter as pathDelimiter, join } from 'path';
+import { homedir } from 'os';
 import { Writable, Readable } from 'node:stream';
 import { EventEmitter } from 'events';
 import { findCommand, getCommonCliSearchPaths } from '@/lib/core/command-exists';
@@ -146,6 +147,15 @@ export interface ACPModelInfo {
   name: string;
 }
 
+export interface ACPCommandInfo {
+  name: string;
+  description: string;
+  source?: string;
+  type?: string;
+  kind?: string;
+  category?: string;
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -250,6 +260,91 @@ interface ACPHistoryReplayCollector {
   messageChunks: Map<string, string[]>;
   anonymousMessageCount: number;
   started: boolean;
+}
+
+function safeParseJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractOpenCodeStoredText(partData: Record<string, unknown> | null): string {
+  if (!partData) return '';
+  if (typeof partData.text === 'string') return partData.text;
+  if (typeof partData.content === 'string') return partData.content;
+  const content = partData.content;
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          return typeof record.text === 'string' ? record.text : '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+  }
+  return '';
+}
+
+function extractOpenCodeStoredError(messageData: Record<string, unknown> | null): string {
+  const error = messageData?.error;
+  if (!error || typeof error !== 'object') return '';
+  const errorRecord = error as Record<string, unknown>;
+  const data = errorRecord.data && typeof errorRecord.data === 'object'
+    ? errorRecord.data as Record<string, unknown>
+    : null;
+  const message = typeof data?.message === 'string'
+    ? data.message
+    : typeof errorRecord.message === 'string'
+      ? errorRecord.message
+      : '';
+  const statusCode = data?.statusCode || data?.status;
+  return message
+    ? `模型调用失败${statusCode ? ` (${statusCode})` : ''}: ${message}`
+    : '';
+}
+
+function recoverOpenCodeAssistantMessageFromStorage(sessionId: string): string {
+  const dbPath = join(homedir(), '.local', 'share', 'opencode', 'opencode.db');
+  if (!existsSync(dbPath)) return '';
+  let db: any = null;
+  try {
+    const requireFn = eval('require') as NodeRequire;
+    const Database = requireFn('better-sqlite3');
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const assistantMessages = db.prepare(
+      'select id, data from message where session_id = ? order by time_created asc'
+    ).all(sessionId)
+      .map((row: any) => ({ id: String(row.id || ''), data: safeParseJsonRecord(row.data) }))
+      .filter((row: { id: string; data: Record<string, unknown> | null }) => row.data?.role === 'assistant');
+    const latestAssistant = assistantMessages[assistantMessages.length - 1];
+    if (!latestAssistant) return '';
+
+    const parts = db.prepare(
+      'select data from part where session_id = ? and message_id = ? order by time_created asc'
+    ).all(sessionId, latestAssistant.id);
+    const text = parts
+      .map((row: any) => extractOpenCodeStoredText(safeParseJsonRecord(row.data)))
+      .filter(Boolean)
+      .join('');
+    if (text) return text;
+    return extractOpenCodeStoredError(latestAssistant.data);
+  } catch {
+    return '';
+  } finally {
+    try {
+      db?.close?.();
+    } catch {
+      // ignore close failures
+    }
+  }
 }
 
 export function buildAcpCommandArgs(config: ACPEngineConfig): string[] {
@@ -396,6 +491,7 @@ export class ACPEngine extends EventEmitter {
   private sessionId: string | null = null;
   private initialized = false;
   private availableModels: Array<{ modelId: string; name: string }> = [];
+  private availableCommands: ACPCommandInfo[] = [];
   private mcpServers: ManagedMcpServer[] = [];
   private lastStderrChunk = '';
   private lastExitInfo = '';
@@ -408,6 +504,26 @@ export class ACPEngine extends EventEmitter {
 
   setMcpServers(servers: ManagedMcpServer[] | undefined): void {
     this.mcpServers = servers || [];
+  }
+
+  getAvailableCommands(): ACPCommandInfo[] {
+    return [...this.availableCommands];
+  }
+
+  async waitForAvailableCommands(timeoutMs = 1500): Promise<ACPCommandInfo[]> {
+    if (this.availableCommands.length > 0) return this.getAvailableCommands();
+    return await new Promise<ACPCommandInfo[]>((resolve) => {
+      const timer = setTimeout(() => {
+        this.off('available-commands', onCommands);
+        resolve(this.getAvailableCommands());
+      }, Math.max(0, timeoutMs));
+      const onCommands = (commands: ACPCommandInfo[]) => {
+        clearTimeout(timer);
+        this.off('available-commands', onCommands);
+        resolve(commands);
+      };
+      this.on('available-commands', onCommands);
+    });
   }
 
   private isDiagnosticLoggingEnabled(): boolean {
@@ -918,18 +1034,24 @@ export class ACPEngine extends EventEmitter {
       const latestAssistantMessage = latestAssistantEntry
         ? (collector.messageChunks.get(latestAssistantEntry.key) || []).join('')
         : '';
+      const recoveredFromStorage = latestAssistantMessage
+        ? ''
+        : this.config.engineType === 'opencode'
+          ? recoverOpenCodeAssistantMessageFromStorage(sessionId)
+          : '';
       this.emitDiagnosticLog({
         message: 'session/load replay done',
-        detail: `messageCount=${collector.messageOrder.length}, latestLength=${latestAssistantMessage.length}`,
+        detail: `messageCount=${collector.messageOrder.length}, latestLength=${latestAssistantMessage.length || recoveredFromStorage.length}`,
         metadata: {
           sessionId,
           latestMessageId: latestAssistantEntry?.key || '',
           lastUserIndex,
           replayStarted: collector.started,
+          recoveredFromStorage: Boolean(recoveredFromStorage),
         },
         verbose: true,
       });
-      return latestAssistantMessage;
+      return latestAssistantMessage || recoveredFromStorage;
     } catch (error) {
       this.emitDiagnosticLog({
         level: 'warning',
@@ -1020,13 +1142,17 @@ export class ACPEngine extends EventEmitter {
     }
 
     // Exact suffix match (e.g. "claude-sonnet-4-5" matches "penguiapi/claude-sonnet-4-5")
-    const suffixMatch = this.availableModels.find(m => (m.modelId.split('/').pop() || '') === requested);
+    const suffixMatch = this.availableModels
+      .filter(m => (m.modelId.split('/').pop() || '') === requested)
+      .sort((a, b) => a.modelId.length - b.modelId.length)[0];
     if (suffixMatch) return suffixMatch.modelId;
 
-    const normSuffix = this.availableModels.find(m => {
-      const tail = m.modelId.split('/').pop() || '';
-      return normalize(tail) === normalized;
-    });
+    const normSuffix = this.availableModels
+      .filter(m => {
+        const tail = m.modelId.split('/').pop() || '';
+        return normalize(tail) === normalized;
+      })
+      .sort((a, b) => a.modelId.length - b.modelId.length)[0];
     if (normSuffix) return normSuffix.modelId;
     // Fuzzy: match name or modelId containing the normalized input
     const fuzzy = this.availableModels
@@ -1124,6 +1250,21 @@ export class ACPEngine extends EventEmitter {
         break;
       case 'config_option_update':
         this.emit('config-changed', (update as any).configOptions);
+        break;
+      case 'available_commands_update':
+        this.availableCommands = Array.isArray((update as any).availableCommands)
+          ? (update as any).availableCommands
+              .map((command: any) => ({
+                name: String(command?.name || '').trim(),
+                description: String(command?.description || '').trim(),
+                source: typeof command?.source === 'string' ? command.source.trim() : undefined,
+                type: typeof command?.type === 'string' ? command.type.trim() : undefined,
+                kind: typeof command?.kind === 'string' ? command.kind.trim() : undefined,
+                category: typeof command?.category === 'string' ? command.category.trim() : undefined,
+              }))
+              .filter((command: ACPCommandInfo) => command.name)
+          : [];
+        this.emit('available-commands', this.getAvailableCommands());
         break;
       default:
         this.emit('update', update);
