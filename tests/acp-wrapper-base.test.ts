@@ -7,6 +7,7 @@ const acpMockState = vi.hoisted(() => ({
   resumeCalls: [] as string[],
   setModelCalls: [] as string[],
   sendPrompts: [] as string[],
+  availableCommands: [] as Array<{ name: string; description: string }>,
   nextSessionId: 1,
   onSendPrompt: null as null | ((engine: any, prompt: string) => Promise<{ stopReason: string; usage: null }>),
 }));
@@ -38,6 +39,14 @@ vi.mock('@/lib/engines/acp-engine', async () => {
       return sessionId;
     }
 
+    getAvailableCommands(): Array<{ name: string; description: string }> {
+      return [...acpMockState.availableCommands];
+    }
+
+    async waitForAvailableCommands(): Promise<Array<{ name: string; description: string }>> {
+      return this.getAvailableCommands();
+    }
+
     async resumeSession(sessionId: string): Promise<string> {
       this.sessionId = sessionId;
       acpMockState.resumeCalls.push(sessionId);
@@ -55,6 +64,10 @@ vi.mock('@/lib/engines/acp-engine', async () => {
 
     async setModel(modelId: string): Promise<void> {
       acpMockState.setModelCalls.push(modelId);
+    }
+
+    async recoverLatestAssistantMessage(): Promise<string> {
+      return '';
     }
 
     cancelSession(): void {}
@@ -92,6 +105,7 @@ describe('ACPWrapperBase shared runner', () => {
     acpMockState.resumeCalls.length = 0;
     acpMockState.setModelCalls.length = 0;
     acpMockState.sendPrompts.length = 0;
+    acpMockState.availableCommands.length = 0;
     acpMockState.nextSessionId = 1;
     acpMockState.onSendPrompt = null;
   });
@@ -144,6 +158,35 @@ describe('ACPWrapperBase shared runner', () => {
     expect(firstResult.output).toContain('first reply');
     expect(secondResult.output).toContain('second reply');
     ACPWrapperBase.shutdownSharedRunners();
+  });
+
+  test('opencode ACP applies short model names through dynamic model resolution', async () => {
+    const { OpenCodeEngineWrapper } = await import('@/lib/engines/opencode-wrapper');
+
+    const wrapper = new OpenCodeEngineWrapper();
+    const result = await wrapper.execute({
+      ...BASE_OPTIONS,
+      model: 'glm-5.1',
+    });
+
+    expect(result.success).toBe(true);
+    expect(acpMockState.setModelCalls).toEqual(['glm-5.1']);
+  });
+
+  test('opencode ACP sends slash commands as raw prompts', async () => {
+    acpMockState.availableCommands.push({ name: 'custom-plugin', description: 'Custom plugin' });
+    const { OpenCodeEngineWrapper } = await import('@/lib/engines/opencode-wrapper');
+
+    const wrapper = new OpenCodeEngineWrapper();
+    const result = await wrapper.execute({
+      ...BASE_OPTIONS,
+      prompt: '  /custom-plugin run this',
+      systemPrompt: 'system prompt that should not wrap slash commands',
+      rawPrompt: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(acpMockState.sendPrompts).toEqual(['/custom-plugin run this']);
   });
 
   test('serializes shared ACP execution and keeps stream listeners isolated', async () => {

@@ -80,3 +80,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 修复架构师
+workspaceProfile:
+  displayName: 修复架构师
+  nickname: 修复架构师
+  officeRole: design-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: green
+    deskVariant: dynamic-workstation
+    desk: 修复架构师的工位
+    zone: design
+    order: 211
+  motion:
+    activity: presenting
+    speed: 0.9299999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

@@ -68,8 +68,8 @@ export function buildConfiguredProcessEnvSync(
   return applyOverrides(env, overrides);
 }
 
-export function getConfiguredEnvValueSync(key: string): string | undefined {
-  const configured = loadConfiguredEnvObjectSync();
+export function getConfiguredEnvValueSync(key: string, options?: ConfiguredEnvOptions): string | undefined {
+  const configured = loadConfiguredEnvObjectSync(options);
   const configuredValue = configured[key];
   if (typeof configuredValue === 'string' && configuredValue.length > 0) {
     return configuredValue;
@@ -81,8 +81,8 @@ export function getConfiguredEnvValueSync(key: string): string | undefined {
   return undefined;
 }
 
-export function getConfiguredCliSearchPaths(extraPaths: string[] = []): string[] {
-  const env = buildConfiguredProcessEnvSync();
+export function getConfiguredCliSearchPaths(extraPaths: string[] = [], options?: ConfiguredEnvOptions): string[] {
+  const env = buildConfiguredProcessEnvSync(undefined, process.env, options);
   const pathValue = env.PATH || env.Path || '';
   const seen = new Set<string>();
   const paths = [...extraPaths, ...pathValue.split(delimiter).filter(Boolean)];

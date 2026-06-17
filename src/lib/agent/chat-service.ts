@@ -13,13 +13,8 @@ import {
 } from '@/lib/spec/coding-store';
 import {
   appendMemoryEntries,
-  buildMemoryPromptBlock,
-  listMemoryEntries,
 } from '@/lib/workflow/memory-store';
-import {
-  buildWorkflowExperiencePromptBlock,
-  findRelevantWorkflowExperiences,
-} from '@/lib/workflow/experience-store';
+import { resolveAgentMemoryContext } from '@/lib/agent/memory-resolver';
 import { workflowRegistry } from '@/lib/workflow/registry';
 import { loadRunState, saveRunState } from '@/lib/run/state-persistence';
 import { stripAceProcessBlocks } from '@/lib/chat/ai-process-blocks';
@@ -472,77 +467,6 @@ async function applySupervisorSpecCodingRevision(input: {
   };
 }
 
-async function buildAgentMemoryContext(input: {
-  agentName: string;
-  mode: ChatMode;
-  workflowContext?: Record<string, any> | null;
-  workingDirectory?: string;
-  sessionId?: string;
-}): Promise<string> {
-  const sections: string[] = [];
-
-  const roleMemories = await listMemoryEntries({
-    scope: 'role',
-    key: input.agentName,
-    limit: 3,
-  }).catch(() => []);
-  const roleBlock = buildMemoryPromptBlock(`${input.agentName} 长期角色记忆`, roleMemories, { maxItems: 3 });
-  if (roleBlock) sections.push(roleBlock);
-
-  if (input.mode === 'workflow-chat' && input.workflowContext?.configFile) {
-    const workflowMemories = await listMemoryEntries({
-      scope: 'workflow',
-      key: String(input.workflowContext.configFile),
-      limit: 3,
-    }).catch(() => []);
-    const workflowBlock = buildMemoryPromptBlock('当前工作流记忆', workflowMemories, { maxItems: 3 });
-    if (workflowBlock) sections.push(workflowBlock);
-
-    const relatedExperiences = await findRelevantWorkflowExperiences({
-      configFile: String(input.workflowContext.configFile || ''),
-      workflowName: String(input.workflowContext.workflowName || ''),
-      requirements: String(input.workflowContext.requirements || ''),
-      projectRoot: input.workingDirectory,
-      agentName: input.agentName,
-      excludeRunId: typeof input.workflowContext.runId === 'string' ? input.workflowContext.runId : undefined,
-      limit: 2,
-    }).catch(() => []);
-    const experienceBlock = buildWorkflowExperiencePromptBlock(relatedExperiences, '相关历史经验');
-    if (experienceBlock) sections.push(experienceBlock);
-  }
-
-  if (input.workingDirectory) {
-    const projectMemories = await listMemoryEntries({
-      scope: 'project',
-      key: input.workingDirectory,
-      limit: 3,
-    }).catch(() => []);
-    const projectBlock = buildMemoryPromptBlock('项目级共享记忆', projectMemories, { maxItems: 3 });
-    if (projectBlock) sections.push(projectBlock);
-  }
-
-  if (input.sessionId) {
-    const chatMemories = await listMemoryEntries({
-      scope: 'chat',
-      key: `${input.agentName}:${input.sessionId}`,
-      limit: 4,
-    }).catch(() => []);
-    const chatBlock = buildMemoryPromptBlock('当前会话补充记忆', chatMemories, { maxItems: 4 });
-    if (chatBlock) sections.push(chatBlock);
-  }
-
-  if (sections.length === 0) return '';
-
-  return [
-    '## 多层记忆注入规则',
-    '- 角色长期记忆：可跨 run 沉淀这个 Agent 的稳定协作偏好与复盘结果。',
-    '- 项目级共享记忆：仅代表当前工程的长期经验，不可误用到其他工程。',
-    '- 工作流记忆：只适用于当前 workflow/run 的设计与执行上下文。',
-    '- 会话补充记忆：只适用于当前 chat session，不要把它提升为长期事实，除非用户再次确认。',
-    ...sections,
-  ].join('\n\n');
-}
-
 function buildWorkflowSpecCodingBlock(workflowContext: Record<string, any>): string {
   const summary = workflowContext.specCodingSummary;
   const details = workflowContext.specCodingDetails;
@@ -736,12 +660,13 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
       buildWorkflowSpecCodingBlock(workflowContext),
     ].filter(Boolean).join('\n')
     : '';
-  const memoryContextBlock = await buildAgentMemoryContext({
+  const memoryContextBlock = await resolveAgentMemoryContext({
     agentName: effectiveRoleConfig.name,
     mode,
     workflowContext,
     workingDirectory,
     sessionId: resumeSessionId || undefined,
+    maxRoleMemoryChars: effectiveRoleConfig.workspaceProfile?.memory?.baseBudget,
   });
 
   const prompt = [
@@ -752,7 +677,8 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
       ? [
         '## Supervisor Spec Coding 修订协议',
         '- 当用户明确要求你刷新、修订、更新、收敛 Spec Coding 制品 / 方案 / 任务分解时，正常回答后，额外单独输出一个 `<result>...</result>` 机器结果块。',
-        '- 推荐 JSON 格式: {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]}}',
+        '- 推荐 JSON 格式: {"kind":"spec_coding_revision","payload":{"apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"],"revisionPlan":[{"artifact":"requirements","op":"modify","targetId":"R1","reason":"为什么改"}]}}',
+        '- revisionPlan 用 add / modify / remove / rename 描述具体变更；targetId 使用 R/D/T 编号或明确章节名，避免只写笼统影响。',
         '- 兼容旧格式: {"type":"spec-coding-revision","apply":true,"summary":"一句话修订摘要","affectedArtifacts":["requirements.md","design.md","tasks.md"],"impact":["影响1","影响2"]} 或 `<spec-coding-revision>...</spec-coding-revision>`。',
         '- 只有你判断需要真正落盘修订时才输出该块；否则不要输出。',
       ].join('\n')

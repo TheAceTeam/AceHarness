@@ -1332,11 +1332,17 @@ export function AgoraShell({
                 </div>
               ) : null}
               <aside className={cn(
-                'hidden overflow-hidden rounded-xl border border-border/70 bg-background/92 shadow-xl backdrop-blur transition-[width] duration-200 xl:block',
-                fixedGuestPanel ? 'fixed right-6 top-[8.5rem] z-40' : 'absolute right-4 top-4 z-10',
+                'hidden min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-background/92 shadow-xl backdrop-blur transition-[width] duration-200 xl:flex',
+                fixedGuestPanel
+                  ? guestPanelCollapsed
+                    ? 'fixed right-6 top-[8.5rem] z-40'
+                    : 'fixed bottom-6 right-6 top-[8.5rem] z-40'
+                  : guestPanelCollapsed
+                    ? 'absolute right-4 top-4 z-10'
+                    : 'absolute bottom-32 right-4 top-4 z-10',
                 guestPanelCollapsed ? 'w-12' : 'w-64'
               )}>
-              <div className={cn('flex items-center border-b px-2 py-2', guestPanelCollapsed ? 'justify-center' : 'justify-between')}>
+              <div className={cn('flex shrink-0 items-center border-b px-2 py-2', guestPanelCollapsed ? 'justify-center' : 'justify-between')}>
                 {guestPanelCollapsed ? null : <div className="px-1 text-xs font-semibold text-muted-foreground">嘉宾</div>}
                 <div className={cn('flex items-center gap-1', guestPanelCollapsed && 'flex-col')}>
                   {guestPanelCollapsed ? (
@@ -1396,89 +1402,89 @@ export function AgoraShell({
                   </span>
                 </button>
               ) : (
-                <>
-              <div className="max-h-[42vh] overflow-y-auto p-2">
-                {guestRoster.length ? guestRoster.map((participant) => (
-                  <div
-                    key={participant.id}
-                    className={cn(
-                      'group flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/60',
-                      participant.openingStatus === 'failed' && 'bg-rose-50/80 text-rose-900 hover:bg-rose-50 dark:bg-rose-950/20 dark:text-rose-200 dark:hover:bg-rose-950/30'
-                    )}
-                  >
-                    <SpriteAvatar
-                      avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
-                      seed={participant.runtimeAgentName || participant.name}
-                      category="agent-default"
-                      alt={participant.name}
-                      fallback={getInitials(participant.name)}
-                      className={cn('h-7 w-7 ring-1 ring-border/60', participant.openingStatus === 'failed' && 'ring-rose-300/70 dark:ring-rose-500/40')}
-                      fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-foreground">{participant.name}</div>
-                      {participant.openingStatus === 'failed' ? (
-                        <div className="truncate text-[10px] text-rose-600 dark:text-rose-300">
-                          开场失败，已静默
-                        </div>
-                      ) : (
-                        <div className="truncate text-[10px] text-muted-foreground">
-                          {participant.sourceType === 'custom' ? '自定义' : participant.presetId || participant.sourceAgent || '预设'}
-                        </div>
-                      )}
-                    </div>
-                    {allowGuestManagement ? (
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-destructive opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                        onClick={() => removeGuest(participant.name)}
-                        title="移除嘉宾"
-                        aria-label="移除嘉宾"
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="min-h-0 flex-1 overflow-y-auto p-2 pb-6">
+                    {guestRoster.length ? guestRoster.map((participant) => (
+                      <div
+                        key={participant.id}
+                        className={cn(
+                          'group flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/60',
+                          participant.openingStatus === 'failed' && 'bg-rose-50/80 text-rose-900 hover:bg-rose-50 dark:bg-rose-950/20 dark:text-rose-200 dark:hover:bg-rose-950/30'
+                        )}
                       >
-                        <UserMinus className="h-4 w-4" />
-                      </Button>
-                    ) : null}
+                        <SpriteAvatar
+                          avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+                          seed={participant.runtimeAgentName || participant.name}
+                          category="agent-default"
+                          alt={participant.name}
+                          fallback={getInitials(participant.name)}
+                          className={cn('h-7 w-7 ring-1 ring-border/60', participant.openingStatus === 'failed' && 'ring-rose-300/70 dark:ring-rose-500/40')}
+                          fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-medium text-foreground">{participant.name}</div>
+                          {participant.openingStatus === 'failed' ? (
+                            <div className="truncate text-[10px] text-rose-600 dark:text-rose-300">
+                              开场失败，已静默
+                            </div>
+                          ) : (
+                            <div className="truncate text-[10px] text-muted-foreground">
+                              {participant.sourceType === 'custom' ? '自定义' : participant.presetId || participant.sourceAgent || '预设'}
+                            </div>
+                          )}
+                        </div>
+                        {allowGuestManagement ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-destructive opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                            onClick={() => removeGuest(participant.name)}
+                            title="移除嘉宾"
+                            aria-label="移除嘉宾"
+                          >
+                            <UserMinus className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                      </div>
+                    )) : (
+                      <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无嘉宾</div>
+                    )}
                   </div>
-                )) : (
-                  <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无嘉宾</div>
-                )}
-              </div>
-              {allowGuestManagement ? (
-              <div className="border-t p-2">
-                <div className="mb-1 px-1 text-[10px] text-muted-foreground">可加入</div>
-                <div className="max-h-[28vh] overflow-y-auto">
-                  {availableSavedGuests.map((guest) => (
-                    <button
-                      key={guest.id}
-                      type="button"
-                      className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${
-                        isGuestAvailable(guest) ? 'hover:bg-muted/60' : 'cursor-not-allowed opacity-55'
-                      }`}
-                      onClick={() => addGuestToRoom(guest)}
-                      disabled={!isGuestAvailable(guest)}
-                    >
-                      <SpriteAvatar
-                        avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName)}
-                        seed={guest.runtimeAgentName || guest.displayName}
-                        category="agent-default"
-                        alt={guest.displayName}
-                        fallback={getInitials(guest.displayName)}
-                        className="h-6 w-6 ring-1 ring-border/60"
-                        fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{guest.displayName}</span>
-                      {!isGuestAvailable(guest) ? (
-                        <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] text-destructive">不可用</Badge>
-                      ) : null}
-                      <UserPlus className="h-3.5 w-3.5 text-muted-foreground" />
-                    </button>
-                  ))}
+                  {allowGuestManagement ? (
+                    <div className="flex min-h-0 max-h-[34%] shrink-0 flex-col border-t p-2">
+                      <div className="mb-1 shrink-0 px-1 text-[10px] text-muted-foreground">可加入</div>
+                      <div className="min-h-0 overflow-y-auto">
+                        {availableSavedGuests.map((guest) => (
+                          <button
+                            key={guest.id}
+                            type="button"
+                            className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${
+                              isGuestAvailable(guest) ? 'hover:bg-muted/60' : 'cursor-not-allowed opacity-55'
+                            }`}
+                            onClick={() => addGuestToRoom(guest)}
+                            disabled={!isGuestAvailable(guest)}
+                          >
+                            <SpriteAvatar
+                              avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName)}
+                              seed={guest.runtimeAgentName || guest.displayName}
+                              category="agent-default"
+                              alt={guest.displayName}
+                              fallback={getInitials(guest.displayName)}
+                              className="h-6 w-6 ring-1 ring-border/60"
+                              fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
+                            />
+                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{guest.displayName}</span>
+                            {!isGuestAvailable(guest) ? (
+                              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] text-destructive">不可用</Badge>
+                            ) : null}
+                            <UserPlus className="h-3.5 w-3.5 text-muted-foreground" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-              ) : null}
-                </>
               )}
               </aside>
             </div>

@@ -98,3 +98,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 性能挑战者
+workspaceProfile:
+  displayName: 性能挑战者
+  nickname: 性能挑战者
+  officeRole: quality-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: cyan
+    deskVariant: dynamic-workstation
+    desk: 性能挑战者的工位
+    zone: quality
+    order: 418
+  motion:
+    activity: reviewing
+    speed: 1.0899999999999999
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

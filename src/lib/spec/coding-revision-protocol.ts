@@ -10,7 +10,38 @@ export type SpecCodingRevisionCommand = {
   summary?: string;
   affectedArtifacts?: string[];
   impact?: string[];
+  revisionPlan?: Array<{
+    artifact: 'requirements' | 'design' | 'tasks';
+    op: 'add' | 'modify' | 'remove' | 'rename';
+    targetId: string;
+    reason: string;
+  }>;
 };
+
+function normalizeRevisionPlan(input: unknown): SpecCodingRevisionCommand['revisionPlan'] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => {
+      const source = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const artifact = source.artifact === 'requirements' || source.artifact === 'design' || source.artifact === 'tasks'
+        ? source.artifact
+        : null;
+      const op = source.op === 'add' || source.op === 'modify' || source.op === 'remove' || source.op === 'rename'
+        ? source.op
+        : null;
+      const targetId = typeof source.targetId === 'string' ? source.targetId.trim() : '';
+      const reason = typeof source.reason === 'string' ? source.reason.trim() : '';
+      if (!artifact || !op || !targetId) return null;
+      return {
+        artifact,
+        op,
+        targetId,
+        reason,
+      };
+    })
+    .filter((item): item is NonNullable<SpecCodingRevisionCommand['revisionPlan']>[number] => Boolean(item))
+    .slice(0, 20);
+}
 
 export function extractSpecCodingRevisionCommand(text: string): SpecCodingRevisionCommand | null {
   const resultChannel = extractResultChannelStructuredResult<any>(text, (parsed: any): parsed is any => (
@@ -34,6 +65,7 @@ export function extractSpecCodingRevisionCommand(text: string): SpecCodingRevisi
       impact: Array.isArray(candidate.impact)
         ? candidate.impact.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 5)
         : [],
+      revisionPlan: normalizeRevisionPlan(candidate.revisionPlan),
     };
   } catch {
     return null;

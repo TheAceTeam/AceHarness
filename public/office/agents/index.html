@@ -1,0 +1,984 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>角色帧动画播放器</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --accent: #1e66f5;
+      --accent-ink: #ffffff;
+      --track: #eef2f7;
+      --stage: #e8edf5;
+      --shadow: 0 14px 34px rgba(23, 32, 51, 0.12);
+      --frame-width: 128px;
+      --frame-height: 180px;
+      --scale: 3;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    .app {
+      width: min(960px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) 280px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stage-panel,
+    .controls {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .stage-panel {
+      padding: 22px;
+    }
+
+    .stage {
+      width: min(100%, 640px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(45deg, rgba(0, 0, 0, 0.045) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(0, 0, 0, 0.045) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.045) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.045) 75%),
+        var(--stage);
+      background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+      background-size: 24px 24px;
+    }
+
+    .character-box {
+      position: relative;
+      width: var(--box-width, 384px);
+      height: var(--box-height, 540px);
+      flex: 0 0 auto;
+      overflow: hidden;
+      image-rendering: auto;
+    }
+
+    .character-box::before,
+    .character-box::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 120ms ease;
+    }
+
+    .character-box::before {
+      border: 2px solid rgba(30, 102, 245, 0.85);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75);
+      z-index: 2;
+    }
+
+    .character-box::after {
+      left: var(--trim-x, 45px);
+      top: var(--trim-top, 27px);
+      right: var(--trim-x, 45px);
+      bottom: var(--trim-bottom, 27px);
+      border: 2px dashed rgba(18, 144, 96, 0.85);
+      z-index: 3;
+    }
+
+    .show-boxes .character-box::before,
+    .show-boxes .character-box::after {
+      opacity: 1;
+    }
+
+    .frame-window {
+      position: absolute;
+      left: var(--frame-left, 0);
+      top: var(--frame-top, 0);
+      width: var(--frame-window-width, 384px);
+      height: var(--frame-window-height, 540px);
+      overflow: hidden;
+    }
+
+    .sprite {
+      display: block;
+      width: 2304px;
+      height: 540px;
+      max-width: none;
+      object-fit: fill;
+      transform: translate3d(0, 0, 0);
+      transform-origin: left top;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .baseline {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: var(--baseline-bottom, 30px);
+      height: 0;
+      border-top: 1px solid rgba(220, 38, 38, 0.8);
+      opacity: 0;
+      z-index: 4;
+      pointer-events: none;
+    }
+
+    .show-boxes .baseline {
+      opacity: 1;
+    }
+
+    .controls {
+      padding: 16px;
+    }
+
+    .title {
+      margin: 0 0 4px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .meta {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .control-group {
+      padding: 14px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .control-group:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .buttons {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .full {
+      width: 100%;
+    }
+
+    .secondary-actions {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    button {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: #9eb5e8;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    select,
+    input[type="range"] {
+      width: 100%;
+    }
+
+    select {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      padding: 0 10px;
+    }
+
+    input[type="range"] {
+      accent-color: var(--accent);
+    }
+
+    .readout {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .toggle input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .strip {
+      display: grid;
+      grid-template-columns: repeat(var(--thumb-count, 6), 1fr);
+      gap: 6px;
+      user-select: none;
+    }
+
+    .thumb {
+      position: relative;
+      display: block;
+      aspect-ratio: 128 / 180;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background-image: url("./male-talk-right-smart.png");
+      background-repeat: no-repeat;
+      background-size: 600% 100%;
+      cursor: grab;
+      overflow: hidden;
+    }
+
+    .thumb:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .thumb.hidden {
+      filter: grayscale(1);
+      opacity: 0.55;
+    }
+
+    .thumb.hidden::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        -45deg,
+        rgba(23, 32, 51, 0.16),
+        rgba(23, 32, 51, 0.16) 6px,
+        rgba(255, 255, 255, 0.12) 6px,
+        rgba(255, 255, 255, 0.12) 12px
+      );
+      pointer-events: none;
+    }
+
+    .hide-frame {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      min-height: 0;
+      padding: 0;
+      border-color: rgba(23, 32, 51, 0.22);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .thumb.dragging {
+      opacity: 0.45;
+      cursor: grabbing;
+    }
+
+    .thumb.over {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 2px rgba(30, 102, 245, 0.22);
+    }
+
+    .thumb.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 2px rgba(30, 102, 245, 0.25);
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        width: min(100vw - 20px, 520px);
+        padding: 10px 0;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .stage-panel {
+        padding: 12px;
+      }
+
+      .stage {
+        width: 100%;
+      }
+    }
+
+    @media (max-width: 420px) {
+      .buttons {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app show-boxes">
+    <div class="layout">
+      <section class="stage-panel" aria-label="动画预览">
+        <div class="stage">
+          <div class="character-box" id="characterBox">
+            <div class="frame-window" id="frameWindow">
+              <img class="sprite" id="sprite" src="./male-talk-right-smart.png" alt="male-talk-right-smart 帧动画">
+            </div>
+            <div class="baseline" aria-hidden="true"></div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="controls" aria-label="动画控制">
+        <h1 class="title" id="assetTitle">male-talk-right-smart</h1>
+        <p class="meta" id="assetMeta">6 帧 · 128 x 180 · 内容稳定盒</p>
+
+        <div class="control-group">
+          <label for="animationSelect">动画资源</label>
+          <select id="animationSelect"></select>
+        </div>
+
+        <div class="control-group">
+          <label for="anchorSelect">稳定锚点</label>
+          <select id="anchorSelect">
+            <option value="auto">自动方向</option>
+            <option value="left">左侧对齐</option>
+            <option value="right">右侧对齐</option>
+            <option value="center">中心对齐</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="verticalAnchorSelect">纵向锚点</label>
+          <select id="verticalAnchorSelect">
+            <option value="auto">自动动作</option>
+            <option value="top">头顶对齐</option>
+            <option value="bottom">脚底对齐</option>
+            <option value="center">中心对齐</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <div class="buttons">
+            <button type="button" id="prevBtn" aria-label="上一帧">‹</button>
+            <button type="button" class="primary" id="playBtn">暂停</button>
+            <button type="button" id="nextBtn" aria-label="下一帧">›</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label for="fps">播放速度</label>
+          <input id="fps" type="range" min="1" max="24" value="10">
+          <div class="readout">
+            <span id="fpsValue">10 FPS</span>
+            <span id="frameValue">第 1 / 6 帧</span>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label for="scale">显示大小</label>
+          <input id="scale" type="range" min="1" max="4" step="0.1" value="3">
+          <div class="readout">
+            <span id="scaleValue">3.0x</span>
+            <span id="boxValue">盒 128 x 180</span>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label class="toggle" for="boxes">
+            <span>显示内容盒线</span>
+            <input id="boxes" type="checkbox" checked>
+          </label>
+        </div>
+
+        <div class="control-group">
+          <div class="strip" id="strip" aria-label="帧列表"></div>
+        </div>
+
+        <div class="control-group">
+          <div class="buttons secondary-actions">
+            <button type="button" id="showAllBtn">全部显示</button>
+            <button type="button" id="resetOrderBtn">重置顺序</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    let MANIFEST = {
+      "female-talk-left-smart": { src: "./female-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[7,6,120,173],[9,5,119,173],[6,5,121,173],[12,5,114,174],[9,6,120,174],[15,5,111,174]] },
+      "female-talk-right-smart": { src: "./female-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[9,5,117,174],[10,5,116,174],[8,5,117,174],[14,5,113,174],[10,5,117,174],[18,5,109,174]] },
+      "female-think-back-left-smart": { src: "./female-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[11,6,116,173],[11,5,116,173],[11,5,116,173],[11,6,115,173],[11,6,115,173],[11,5,115,173]] },
+      "female-think-back-right-smart": { src: "./female-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[11,5,117,174],[10,5,117,175],[11,5,117,175],[11,5,117,174],[11,5,116,174],[11,5,117,175]] },
+      "female-walk-left-smart": { src: "./female-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "top", bounds: [[25,26,96,141],[25,27,96,141],[29,27,96,141],[27,26,100,141],[29,28,101,142],[35,27,103,142]] },
+      "female-walk-right-smart": { src: "./female-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "top", bounds: [[31,26,102,141],[31,27,102,141],[31,27,98,141],[27,26,100,141],[26,28,98,142],[24,27,92,142]] },
+      "female-work-back-left-smart": { src: "./female-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[6,9,121,170],[6,9,120,170],[4,8,121,170],[5,9,121,170],[6,9,119,170],[4,9,123,170]] },
+      "female-work-back-right-smart": { src: "./female-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[3,6,124,172],[3,6,123,173],[2,6,125,173],[3,6,123,172],[4,6,122,173],[1,6,126,173]] },
+      "male-talk-left-smart": { src: "./male-talk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[10,9,116,170],[12,10,115,170],[10,10,117,170],[17,10,110,169],[11,10,115,168],[18,11,108,169]] },
+      "male-talk-right-smart": { src: "./male-talk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[12,12,118,179],[12,12,115,179],[12,12,117,179],[13,13,106,179],[12,13,115,179],[16,13,104,179]] },
+      "male-think-back-left-smart": { src: "./male-think-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[9,8,118,173],[9,8,118,173],[10,7,118,173],[10,7,118,173],[10,8,118,173],[9,6,118,173]] },
+      "male-think-back-right-smart": { src: "./male-think-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[10,9,118,171],[10,9,118,171],[10,8,117,171],[10,7,117,171],[11,9,117,171],[10,7,117,171]] },
+      "male-walk-left-smart": { src: "./male-walk-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "top", bounds: [[24,23,89,149],[24,27,88,149],[28,23,91,149],[30,23,94,149],[31,27,95,149],[34,22,96,149]] },
+      "male-walk-right-smart": { src: "./male-walk-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "top", bounds: [[38,23,103,149],[39,27,103,149],[36,23,99,149],[33,23,97,149],[32,27,96,149],[31,22,93,149]] },
+      "male-work-back-left-smart": { src: "./male-work-back-left-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "right", verticalAnchor: "bottom", bounds: [[5,4,121,175],[5,4,121,175],[4,4,122,175],[8,3,119,175],[7,4,120,175],[7,4,119,175]] },
+      "male-work-back-right-smart": { src: "./male-work-back-right-smart.png", frameWidth: 128, frameHeight: 180, frames: 6, anchor: "left", verticalAnchor: "bottom", bounds: [[6,6,120,173],[7,6,120,174],[5,5,122,173],[9,5,119,174],[8,6,118,174],[8,6,118,174]] }
+    };
+    let manifestOrder = Object.keys(MANIFEST);
+    const app = document.querySelector(".app");
+    const animationSelect = document.getElementById("animationSelect");
+    const anchorSelect = document.getElementById("anchorSelect");
+    const verticalAnchorSelect = document.getElementById("verticalAnchorSelect");
+    const assetTitle = document.getElementById("assetTitle");
+    const assetMeta = document.getElementById("assetMeta");
+    const playBtn = document.getElementById("playBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const resetOrderBtn = document.getElementById("resetOrderBtn");
+    const showAllBtn = document.getElementById("showAllBtn");
+    const fps = document.getElementById("fps");
+    const fpsValue = document.getElementById("fpsValue");
+    const frameValue = document.getElementById("frameValue");
+    const scale = document.getElementById("scale");
+    const scaleValue = document.getElementById("scaleValue");
+    const boxValue = document.getElementById("boxValue");
+    const boxes = document.getElementById("boxes");
+    const strip = document.getElementById("strip");
+    const stage = document.querySelector(".stage");
+    const characterBox = document.getElementById("characterBox");
+    const frameWindow = document.getElementById("frameWindow");
+    const sprite = document.getElementById("sprite");
+
+    let currentAssetKey = "male-talk-right-smart";
+    let currentAsset = MANIFEST[currentAssetKey];
+    let stableBox = {
+      contentWidth: 128,
+      contentHeight: 180,
+      outputWidth: 128,
+      outputHeight: 180,
+      anchor: "left",
+      verticalAnchor: "bottom",
+      targetX: 0,
+      targetY: 180,
+      paddingX: 16,
+      paddingTop: 8,
+      paddingBottom: 6,
+      scale: 1
+    };
+    let sequence = [];
+    let playIndex = 0;
+    let playing = true;
+    let lastTick = 0;
+    let rafId = 0;
+    let dragFrom = -1;
+    let dragTo = -1;
+
+    function sourceFrame() {
+      return sequence[playIndex]?.source ?? 0;
+    }
+
+    function visibleCount() {
+      return sequence.reduce((count, item) => count + (item.hidden ? 0 : 1), 0);
+    }
+
+    function visibleIndexes() {
+      return sequence
+        .map((item, index) => item.hidden ? -1 : index)
+        .filter((index) => index !== -1);
+    }
+
+    function firstVisibleIndex() {
+      return visibleIndexes()[0] ?? 0;
+    }
+
+    function frameLabel() {
+      return `${currentAsset.frames} 帧 · ${currentAsset.frameWidth} x ${currentAsset.frameHeight} · ${anchorText()} / ${verticalAnchorText()}稳定`;
+    }
+
+    function resolveAnchor() {
+      if (anchorSelect.value !== "auto") return anchorSelect.value;
+      if (currentAsset.anchor) return currentAsset.anchor;
+      if (currentAssetKey.includes("-left-")) return "right";
+      if (currentAssetKey.includes("-right-")) return "left";
+      return "center";
+    }
+
+    function anchorText() {
+      const anchor = resolveAnchor();
+      if (anchor === "right") return "右侧";
+      if (anchor === "left") return "左侧";
+      return "中心";
+    }
+
+    function resolveVerticalAnchor() {
+      if (verticalAnchorSelect.value !== "auto") return verticalAnchorSelect.value;
+      if (currentAsset.verticalAnchor) return currentAsset.verticalAnchor;
+      if (currentAssetKey.includes("-walk-")) return "top";
+      return "bottom";
+    }
+
+    function verticalAnchorText() {
+      const anchor = resolveVerticalAnchor();
+      if (anchor === "top") return "头顶";
+      if (anchor === "bottom") return "脚底";
+      return "纵向中心";
+    }
+
+    function measureStableBox() {
+      const bounds = currentAsset.bounds ?? [];
+      if (bounds.length === 0) {
+        stableBox = {
+          contentWidth: currentAsset.frameWidth,
+          contentHeight: currentAsset.frameHeight,
+          outputWidth: currentAsset.frameWidth,
+          outputHeight: currentAsset.frameHeight,
+          anchor: resolveAnchor(),
+          verticalAnchor: resolveVerticalAnchor(),
+          targetX: 0,
+          targetY: currentAsset.frameHeight,
+          paddingX: 0,
+          paddingTop: 0,
+          paddingBottom: 0,
+          scale: 1
+        };
+        return;
+      }
+
+      const maxWidth = Math.max(...bounds.map(([x1, , x2]) => x2 - x1 + 1));
+      const maxHeight = Math.max(...bounds.map(([, y1, , y2]) => y2 - y1 + 1));
+      const paddingX = 16;
+      const paddingTop = 8;
+      const paddingBottom = 6;
+      const outputWidth = Math.min(currentAsset.frameWidth, maxWidth + paddingX * 2);
+      const outputHeight = Math.min(currentAsset.frameHeight, maxHeight + paddingTop + paddingBottom);
+      const effectivePaddingX = Math.max(0, Math.min(paddingX, outputWidth - maxWidth));
+      const effectivePaddingBottom = Math.max(0, Math.min(paddingBottom, outputHeight - maxHeight));
+      const effectivePaddingTop = Math.max(0, outputHeight - maxHeight - effectivePaddingBottom);
+      const anchor = resolveAnchor();
+      let targetX = outputWidth / 2;
+      if (anchor === "left") targetX = effectivePaddingX;
+      if (anchor === "right") targetX = outputWidth - effectivePaddingX;
+      const verticalAnchor = resolveVerticalAnchor();
+      let targetY = outputHeight / 2;
+      if (verticalAnchor === "top") targetY = effectivePaddingTop;
+      if (verticalAnchor === "bottom") targetY = outputHeight - effectivePaddingBottom;
+      stableBox = {
+        contentWidth: maxWidth,
+        contentHeight: maxHeight,
+        outputWidth,
+        outputHeight,
+        anchor,
+        verticalAnchor,
+        targetX,
+        targetY,
+        paddingX: effectivePaddingX,
+        paddingTop: effectivePaddingTop,
+        paddingBottom: effectivePaddingBottom,
+        scale: stableBox.scale || 1
+      };
+    }
+
+    function resetSequence() {
+      sequence = Array.from({ length: currentAsset.frames }, (_, index) => ({
+        hidden: false,
+        source: index
+      }));
+      playIndex = 0;
+    }
+
+    function populateAnimationSelect() {
+      animationSelect.innerHTML = "";
+      manifestOrder.forEach((key) => {
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = key;
+        animationSelect.appendChild(option);
+      });
+      animationSelect.value = currentAssetKey;
+    }
+
+    function normalizeManifestEntry(entry) {
+      const src = entry.src.startsWith("/office/agents/")
+        ? `./${entry.src.split("/").pop()}`
+        : entry.src;
+      return {
+        ...entry,
+        src
+      };
+    }
+
+    async function loadManifest() {
+      try {
+        const response = await fetch("./manifest.json", { cache: "no-store" });
+        if (!response.ok) throw new Error(`manifest ${response.status}`);
+        const loadedManifest = await response.json();
+        MANIFEST = Object.fromEntries(
+          Object.entries(loadedManifest).map(([key, entry]) => [key, normalizeManifestEntry(entry)])
+        );
+        manifestOrder = Object.keys(MANIFEST);
+        currentAssetKey = MANIFEST[currentAssetKey] ? currentAssetKey : manifestOrder[0];
+        currentAsset = MANIFEST[currentAssetKey];
+      } catch (error) {
+        MANIFEST = Object.fromEntries(
+          Object.entries(MANIFEST).map(([key, entry]) => [key, normalizeManifestEntry(entry)])
+        );
+        manifestOrder = Object.keys(MANIFEST);
+        currentAsset = MANIFEST[currentAssetKey];
+      }
+    }
+
+    function updateAssetShell() {
+      assetTitle.textContent = currentAssetKey;
+      assetMeta.textContent = frameLabel();
+      sprite.src = currentAsset.src;
+      sprite.alt = `${currentAssetKey} 帧动画`;
+      sprite.style.width = `${currentAsset.frameWidth * currentAsset.frames}px`;
+      sprite.style.height = `${currentAsset.frameHeight}px`;
+      frameWindow.style.width = `${currentAsset.frameWidth}px`;
+      frameWindow.style.height = `${currentAsset.frameHeight}px`;
+      strip.style.setProperty("--thumb-count", String(currentAsset.frames));
+    }
+
+    function moveVisible(direction) {
+      const visible = visibleIndexes();
+      if (visible.length === 0) return;
+      const currentVisibleIndex = visible.indexOf(playIndex);
+
+      if (currentVisibleIndex !== -1) {
+        const nextVisibleIndex = (currentVisibleIndex + direction + visible.length) % visible.length;
+        playIndex = visible[nextVisibleIndex];
+        renderActive();
+        return;
+      }
+
+      if (direction > 0) {
+        playIndex = visible.find((index) => index > playIndex) ?? visible[0];
+      } else {
+        const previous = visible.filter((index) => index < playIndex).pop();
+        playIndex = previous ?? visible[visible.length - 1];
+      }
+
+      renderActive();
+    }
+
+    function ensureVisiblePlayIndex() {
+      if (sequence[playIndex] && !sequence[playIndex].hidden) return;
+      playIndex = firstVisibleIndex();
+    }
+
+    function updatePreview(source) {
+      const scaleValueNumber = stableBox.scale || Number(getComputedStyle(app).getPropertyValue("--scale")) || 3;
+      const bounds = currentAsset.bounds?.[source] ?? [0, 0, currentAsset.frameWidth - 1, currentAsset.frameHeight - 1];
+      const [x1, y1, x2, y2] = bounds;
+      const frameLeft = stableBox.anchor === "right"
+        ? (stableBox.targetX - (x2 + 1)) * scaleValueNumber
+        : stableBox.anchor === "center"
+          ? (stableBox.targetX - (x1 + x2 + 1) / 2) * scaleValueNumber
+          : (stableBox.targetX - x1) * scaleValueNumber;
+      const frameTop = stableBox.verticalAnchor === "top"
+        ? (stableBox.targetY - y1) * scaleValueNumber
+        : stableBox.verticalAnchor === "center"
+          ? (stableBox.targetY - (y1 + y2 + 1) / 2) * scaleValueNumber
+          : (stableBox.targetY - (y2 + 1)) * scaleValueNumber;
+      frameWindow.style.left = `${frameLeft}px`;
+      frameWindow.style.top = `${frameTop}px`;
+      sprite.style.transform = `translate3d(${source * currentAsset.frameWidth * scaleValueNumber * -1}px, 0, 0)`;
+      frameValue.textContent = `可见 ${visibleCount()} / ${sequence.length} · 源帧 ${source + 1} · 内容已对齐`;
+    }
+
+    function markDragState() {
+      for (const thumb of strip.children) {
+        const index = Number(thumb.dataset.index);
+        thumb.classList.toggle("dragging", index === dragFrom);
+        thumb.classList.toggle("over", dragFrom !== -1 && index === dragTo && dragTo !== dragFrom);
+      }
+    }
+
+    function renderActive() {
+      for (const thumb of strip.children) {
+        thumb.classList.toggle("active", Number(thumb.dataset.index) === playIndex);
+      }
+      updatePreview(sourceFrame());
+    }
+
+    function renderStrip() {
+      strip.innerHTML = "";
+
+      sequence.forEach((item, index) => {
+        const thumb = document.createElement("div");
+        thumb.className = item.hidden ? "thumb hidden" : "thumb";
+        thumb.draggable = true;
+        thumb.tabIndex = 0;
+        thumb.role = "button";
+        thumb.dataset.index = String(index);
+        thumb.dataset.frame = String(item.source);
+        thumb.style.backgroundImage = `url("${currentAsset.src}")`;
+        thumb.style.backgroundSize = `${currentAsset.frames * 100}% 100%`;
+        thumb.style.backgroundPosition = `${currentAsset.frames === 1 ? 0 : item.source * (100 / (currentAsset.frames - 1))}% 0`;
+        thumb.setAttribute("aria-label", `播放序列 ${index + 1}，源帧 ${item.source + 1}${item.hidden ? "，已隐藏" : ""}`);
+
+        const hideButton = document.createElement("button");
+        hideButton.type = "button";
+        hideButton.className = "hide-frame";
+        hideButton.textContent = item.hidden ? "＋" : "×";
+        hideButton.setAttribute("aria-label", item.hidden ? "显示此帧" : "隐藏此帧");
+        hideButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleHidden(index);
+        });
+        hideButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+        thumb.appendChild(hideButton);
+
+        thumb.addEventListener("click", () => {
+          if (dragFrom !== -1) return;
+          setPlaying(false);
+          playIndex = index;
+          renderActive();
+        });
+        thumb.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setPlaying(false);
+          playIndex = index;
+          renderActive();
+        });
+        thumb.addEventListener("dragstart", (event) => {
+          dragFrom = index;
+          dragTo = index;
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(index));
+          markDragState();
+        });
+        thumb.addEventListener("dragenter", () => {
+          if (dragFrom === -1) return;
+          dragTo = index;
+          markDragState();
+        });
+        thumb.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        });
+        thumb.addEventListener("drop", (event) => {
+          event.preventDefault();
+          finishDrag(index);
+        });
+        thumb.addEventListener("dragend", () => {
+          if (dragFrom !== -1) finishDrag(dragTo);
+        });
+
+        strip.appendChild(thumb);
+      });
+
+      renderActive();
+      markDragState();
+    }
+
+    function finishDrag(targetIndex) {
+      if (dragFrom === -1) return;
+      const from = dragFrom;
+      const to = Math.max(0, Math.min(targetIndex, sequence.length - 1));
+      const movedItem = sequence[from];
+
+      if (from !== to) {
+        sequence.splice(from, 1);
+        sequence.splice(to, 0, movedItem);
+      }
+
+      dragFrom = -1;
+      dragTo = -1;
+      playIndex = sequence.indexOf(movedItem);
+      ensureVisiblePlayIndex();
+      setPlaying(false);
+      renderStrip();
+    }
+
+    function setFrame(nextIndex) {
+      playIndex = (nextIndex + sequence.length) % sequence.length;
+      renderActive();
+    }
+
+    function toggleHidden(index) {
+      const visible = visibleIndexes();
+      if (!sequence[index].hidden && visible.length === 1) return;
+
+      sequence[index].hidden = !sequence[index].hidden;
+      if (sequence[index].hidden && index === playIndex) {
+        playIndex = firstVisibleIndex();
+      } else if (!sequence[index].hidden) {
+        playIndex = index;
+      } else if (playIndex >= sequence.length) {
+        playIndex = firstVisibleIndex();
+      }
+
+      setPlaying(false);
+      renderStrip();
+    }
+
+    function loop(time) {
+      const interval = 1000 / Number(fps.value);
+      if (playing && time - lastTick >= interval) {
+        lastTick = time;
+        moveVisible(1);
+      }
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function setPlaying(value) {
+      playing = value;
+      playBtn.textContent = playing ? "暂停" : "播放";
+      playBtn.classList.toggle("primary", playing);
+      lastTick = performance.now();
+    }
+
+    function updateScale() {
+      const desired = Number(scale.value);
+      const usableWidth = Math.max(128, stage.clientWidth - 48);
+      const fit = usableWidth / stableBox.outputWidth;
+      const actual = Math.min(desired, fit);
+      stableBox.scale = actual;
+      app.style.setProperty("--scale", actual.toFixed(3));
+      characterBox.style.setProperty("--box-width", `${stableBox.outputWidth * actual}px`);
+      characterBox.style.setProperty("--box-height", `${stableBox.outputHeight * actual}px`);
+      characterBox.style.setProperty("--trim-x", `${stableBox.paddingX * actual}px`);
+      characterBox.style.setProperty("--trim-top", `${stableBox.paddingTop * actual}px`);
+      characterBox.style.setProperty("--trim-bottom", `${stableBox.paddingBottom * actual}px`);
+      characterBox.style.setProperty("--baseline-bottom", `${stableBox.paddingBottom * actual}px`);
+      frameWindow.style.width = `${currentAsset.frameWidth * actual}px`;
+      frameWindow.style.height = `${currentAsset.frameHeight * actual}px`;
+      sprite.style.width = `${currentAsset.frameWidth * currentAsset.frames * actual}px`;
+      sprite.style.height = `${currentAsset.frameHeight * actual}px`;
+      updatePreview(sourceFrame());
+      scaleValue.textContent = `${actual.toFixed(1)}x`;
+      boxValue.textContent = `盒 ${Math.round(stableBox.outputWidth)} x ${Math.round(stableBox.outputHeight)}`;
+    }
+
+    function applyAsset(key) {
+      if (!MANIFEST[key]) return;
+      setPlaying(false);
+      currentAssetKey = key;
+      currentAsset = MANIFEST[key];
+      animationSelect.value = key;
+      measureStableBox();
+      resetSequence();
+      updateAssetShell();
+      renderStrip();
+      updateScale();
+    }
+
+    playBtn.addEventListener("click", () => setPlaying(!playing));
+    prevBtn.addEventListener("click", () => {
+      setPlaying(false);
+      moveVisible(-1);
+    });
+    nextBtn.addEventListener("click", () => {
+      setPlaying(false);
+      moveVisible(1);
+    });
+    resetOrderBtn.addEventListener("click", () => {
+      setPlaying(false);
+      resetSequence();
+      renderStrip();
+    });
+    showAllBtn.addEventListener("click", () => {
+      setPlaying(false);
+      sequence = sequence.map((item) => ({
+        ...item,
+        hidden: false
+      }));
+      renderStrip();
+    });
+    fps.addEventListener("input", () => {
+      fpsValue.textContent = `${fps.value} FPS`;
+      lastTick = performance.now();
+    });
+    scale.addEventListener("input", updateScale);
+    animationSelect.addEventListener("change", () => {
+      applyAsset(animationSelect.value);
+    });
+    anchorSelect.addEventListener("change", () => {
+      measureStableBox();
+      updateAssetShell();
+      updateScale();
+    });
+    verticalAnchorSelect.addEventListener("change", () => {
+      measureStableBox();
+      updateAssetShell();
+      updateScale();
+    });
+    boxes.addEventListener("change", () => {
+      app.classList.toggle("show-boxes", boxes.checked);
+    });
+    window.addEventListener("resize", updateScale);
+
+    async function init() {
+      await loadManifest();
+      populateAnimationSelect();
+      applyAsset(currentAssetKey);
+      setPlaying(true);
+      rafId = requestAnimationFrame(loop);
+    }
+
+    init();
+
+    window.addEventListener("beforeunload", () => cancelAnimationFrame(rafId));
+  </script>
+</body>
+</html>
+

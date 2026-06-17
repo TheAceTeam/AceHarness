@@ -70,6 +70,16 @@ const SIDEBAR_STORAGE_KEY = 'chat-sidebar-width';
 const HOME_SIDEBAR_WIDTH_STORAGE_KEY = 'home-command-sidebar-width';
 const SESSION_DIRECTORY_VIEW_STORAGE_KEY = 'aceharness:chat:session-directory-view';
 
+type HomepageSlashCommand = {
+  id: string;
+  command: string;
+  title: string;
+  subtext: string;
+  icon: string;
+  aliases: string[];
+  prompt?: string;
+};
+
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
 });
@@ -501,6 +511,8 @@ function ChatPageContent() {
   const [input, setInput] = useState('');
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
+  const [engineSlashCommands, setEngineSlashCommands] = useState<HomepageSlashCommand[]>([]);
+  const slashItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);
   const [notebookExporting, setNotebookExporting] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -1011,7 +1023,7 @@ function ChatPageContent() {
     return editorRef.current?.getMarkdown().trim() || input.trim();
   }, [input]);
 
-  const homepageSlashCommands = useMemo(() => ([
+  const homepageSlashCommands = useMemo<HomepageSlashCommand[]>(() => ([
     {
       id: 'compact',
       command: '/compact',
@@ -1020,7 +1032,62 @@ function ChatPageContent() {
       icon: 'compress',
       aliases: ['compact', 'context'],
     },
-  ]), []);
+    ...engineSlashCommands,
+  ]), [engineSlashCommands]);
+
+  useEffect(() => {
+    const activeEngine = String(effectiveEngine || engine || '').trim();
+    const logicalEngine = activeEngine === 'opencode-sdk'
+      ? 'opencode'
+      : activeEngine === 'codegenie-sdk'
+        ? 'codegenie'
+        : activeEngine === 'nga-sdk'
+          ? 'nga'
+          : activeEngine === 'claude-code-acp'
+            ? 'claude-code'
+            : activeEngine;
+    if (!logicalEngine) {
+      setEngineSlashCommands([]);
+      return;
+    }
+
+    let cancelled = false;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    fetch(`/api/engine/commands?engine=${encodeURIComponent(activeEngine)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (cancelled) return;
+        const rows = Array.isArray(data?.commands) ? data.commands : [];
+        const namespace = String(data?.namespace || logicalEngine).trim() || logicalEngine;
+        const commands = rows
+          .map((item: any): HomepageSlashCommand | null => {
+            const name = String(item?.name || '').trim();
+            if (!name) return null;
+            const description = String(item?.description || '').trim();
+            return {
+              id: `${namespace}:${name}`,
+              command: `/${namespace}:${name}`,
+              title: `${namespace}: ${name}`,
+              subtext: description || `${namespace} 命令`,
+              icon: 'terminal',
+              aliases: [namespace, name, description].filter(Boolean),
+              prompt: `/${namespace}:${name}`,
+            };
+          })
+          .filter(Boolean)
+          .slice(0, 40) as HomepageSlashCommand[];
+        setEngineSlashCommands(commands);
+      })
+      .catch(() => {
+        if (!cancelled) setEngineSlashCommands([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveEngine, engine]);
 
   const slashQuery = useMemo(() => {
     const text = input.trim();
@@ -1036,6 +1103,17 @@ function ChatPageContent() {
       return haystack.includes(slashQuery);
     });
   }, [homepageSlashCommands, input, slashQuery]);
+
+  useEffect(() => {
+    slashItemRefs.current.length = filteredSlashCommands.length;
+    if (!slashMenuOpen || filteredSlashCommands.length === 0) return;
+    const item = slashItemRefs.current[Math.max(0, Math.min(slashActiveIndex, filteredSlashCommands.length - 1))];
+    if (!item) return;
+    const frame = window.requestAnimationFrame(() => {
+      item.scrollIntoView({ block: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [filteredSlashCommands.length, slashActiveIndex, slashMenuOpen]);
 
   const getEditMarkdown = useCallback(() => {
     return editEditorRef.current?.getMarkdown().trim() || editContent.trim();
@@ -1341,8 +1419,13 @@ function ChatPageContent() {
   const applySlashCommand = useCallback(async (commandId: string) => {
     if (commandId === 'compact') {
       await submitMessage('/compact');
+      return;
     }
-  }, [submitMessage]);
+    const command = homepageSlashCommands.find((item) => item.id === commandId);
+    if (command?.prompt) {
+      await submitMessage(command.prompt);
+    }
+  }, [homepageSlashCommands, submitMessage]);
 
   const handleSend = useCallback(async () => {
     const text = getInputMarkdown();
@@ -2080,7 +2163,7 @@ function ChatPageContent() {
                 {!showAgoraZenCover ? (
                   <div
                     className={cn(
-                      'home-chat-input-tray shrink-0 border-t px-4 py-3 md:px-8 lg:px-16',
+                      'home-chat-input-tray relative z-30 shrink-0 isolate border-t px-4 py-3 md:px-8 lg:px-16',
                       isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-950/35'
                     )}
                   >
@@ -2090,9 +2173,9 @@ function ChatPageContent() {
                       </div>
                     )}
                     <div className="mx-auto max-w-5xl">
-                      <div className="home-chat-composer relative rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
+                      <div className="home-chat-composer relative z-10 rounded-[28px] border border-border/70 bg-background shadow-[0_10px_26px_rgba(15,23,42,0.05)]" data-tour-step-id="home-chat-composer">
                         {slashMenuOpen ? (
-                          <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-[320px] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
+                          <div className="absolute bottom-[calc(100%+8px)] left-0 z-[120] w-[320px] overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
                             <PromptInputCommand className="bg-transparent">
                               <PromptInputCommandList className="max-h-64 p-1">
                                 <PromptInputCommandEmpty>无匹配命令</PromptInputCommandEmpty>
@@ -2100,6 +2183,9 @@ function ChatPageContent() {
                                   {filteredSlashCommands.map((item, index) => (
                                     <PromptInputCommandItem
                                       key={item.id}
+                                      ref={(node) => {
+                                        slashItemRefs.current[index] = node;
+                                      }}
                                       value={`${item.command} ${item.title}`}
                                       className={cn(
                                         'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2',

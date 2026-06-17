@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useCallback, type ChangeEvent } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { configApi, specCodingApi, usersApi } from '@/lib/core/api';
@@ -43,6 +43,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/core/utils';
+import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 
 interface WorkflowConfig {
   filename: string;
@@ -164,6 +165,8 @@ function ImportAuditList({ items, emptyText }: { items?: ImportAuditItem[]; empt
 
 export default function WorkflowsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
   const [workflows, setWorkflows] = useState<WorkflowConfig[]>([]);
@@ -786,9 +789,9 @@ export default function WorkflowsPage() {
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
-            <Link href="/dashboard">
+            <Link href={returnTarget.href}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              返回首页
+              {returnTarget.label}
             </Link>
           </Button>
           <div className="h-6 w-px bg-border" />

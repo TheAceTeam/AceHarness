@@ -9,8 +9,8 @@ import {
   normalizeSpecCodingDocument,
   rebuildSpecCodingPreservingArtifacts,
   updateCreationSession,
-  validateTasksMarkdownFormat,
 } from '@/lib/spec/coding-store';
+import { validateSpecArtifactsQuality } from '@/lib/spec/artifact-quality';
 import { compileStepTaskBindings } from '@/lib/spec/task-binding';
 
 function canAccess(userId: string, createdBy?: string) {
@@ -179,14 +179,26 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       };
     }
 
-    if (patch.specCoding && typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()) {
-      const taskValidation = validateTasksMarkdownFormat(patch.specCoding?.artifacts?.tasks || '');
+    if (patch.specCoding && (patch.specCodingStatus === 'confirmed' || (typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()))) {
+      const qualityValidation = validateSpecArtifactsQuality(patch.specCoding?.artifacts || {});
+      const taskValidation = qualityValidation.taskValidation;
       if (!taskValidation.ok) {
         return NextResponse.json({
           error: `tasks.md 格式不合法：${taskValidation.errors[0]}`,
           taskValidation,
+          qualityValidation,
         }, { status: 400 });
       }
+      if (!qualityValidation.ok) {
+        return NextResponse.json({
+          error: `Spec 制品质量校验未通过：${qualityValidation.errors[0]?.message || '请补齐 requirements/design/tasks 内容'}`,
+          qualityValidation,
+          taskValidation,
+        }, { status: 400 });
+      }
+    }
+
+    if (patch.specCoding && typeof patch.revisionSummary === 'string' && patch.revisionSummary.trim()) {
       patch.specCoding = normalizeSpecCodingDocument(patch.specCoding);
       patch.specCoding = appendSpecCodingRevision(patch.specCoding, {
         summary: patch.revisionSummary.trim(),

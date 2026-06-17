@@ -107,3 +107,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 测试工程师
+workspaceProfile:
+  displayName: 测试工程师
+  nickname: 测试工程师
+  officeRole: quality-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: cyan
+    deskVariant: dynamic-workstation
+    desk: 测试工程师的工位
+    zone: quality
+    order: 422
+  motion:
+    activity: reviewing
+    speed: 1.01
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

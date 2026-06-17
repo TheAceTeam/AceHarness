@@ -59,7 +59,7 @@ export interface PersistedActiveConcurrencyGroup {
   stateName: string;
   steps: string[];
   joinPolicy?: any;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'waiting-approval' | 'completed' | 'failed';
 }
 
 export interface PersistedStepLog {

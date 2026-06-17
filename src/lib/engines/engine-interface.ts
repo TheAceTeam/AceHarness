@@ -28,6 +28,8 @@ export interface EngineOptions {
   userId?: string;
   /** Enable high-detail wrapper/transport lifecycle logs for diagnostics only. */
   diagnosticLogging?: boolean;
+  /** Send the prompt as user-visible raw input without wrapper-authored system/task wrapping. */
+  rawPrompt?: boolean;
 }
 
 export interface EngineTokenUsage {

@@ -140,6 +140,17 @@ export type OpenCodeHttpClient = {
       body: OpenCodePromptBody;
       query?: { directory?: string };
     }): Promise<{ data?: OpenCodeSessionPromptResponse; error?: unknown }>;
+    command?(options: {
+      path: { id: string };
+      body?: {
+        messageID?: string;
+        agent?: string;
+        model?: string;
+        command: string;
+        arguments: string;
+      };
+      query?: { directory?: string };
+    }): Promise<{ data?: OpenCodeSessionPromptResponse; error?: unknown }>;
     promptAsync?: (options: {
       path: { id: string };
       body: OpenCodePromptBody;
@@ -156,6 +167,79 @@ export type OpenCodeDiscoveredModel = {
   modelId: string;
   name: string;
 };
+
+export type OpenCodeDiscoveredCommand = {
+  name: string;
+  description: string;
+  source?: string;
+  type?: string;
+  kind?: string;
+  category?: string;
+};
+
+export type OpenCodeCommandInput = {
+  command: string;
+  arguments: string;
+  agent?: string;
+  model?: string;
+};
+
+export async function discoverOpenCodeCommandsFromHttpClient(client: OpenCodeHttpClient): Promise<OpenCodeDiscoveredCommand[]> {
+  const list = await (client as any).command?.list?.({});
+  if (list?.error) {
+    throw new Error(`OpenCode command discovery failed: ${formatError(list.error)}`);
+  }
+  const rows = Array.isArray(list?.data) ? list.data : [];
+  return rows
+    .map((item: any) => ({
+      name: String(item?.name || '').trim(),
+      description: String(item?.description || '').trim(),
+      source: typeof item?.source === 'string' ? item.source.trim() : undefined,
+      type: typeof item?.type === 'string' ? item.type.trim() : undefined,
+      kind: typeof item?.kind === 'string' ? item.kind.trim() : undefined,
+      category: typeof item?.category === 'string' ? item.category.trim() : undefined,
+    }))
+    .filter((item: OpenCodeDiscoveredCommand) => item.name);
+}
+
+export function resolveOpenCodeModelId(
+  requestedModel: string | undefined,
+  availableModels: OpenCodeDiscoveredModel[],
+): string {
+  const requested = String(requestedModel || '').trim();
+  if (!requested) return '';
+  const normalize = (s: string) => s.trim().toLowerCase().replace(/[.\-_]/g, '-');
+  const normalized = normalize(requested);
+
+  const exactById = availableModels.find((model) => model.modelId.trim() === requested);
+  if (exactById) return exactById.modelId;
+
+  const exactByName = availableModels.find((model) => model.name.trim() === requested);
+  if (exactByName) return exactByName.modelId;
+
+  const normalizedById = availableModels.find((model) => normalize(model.modelId) === normalized);
+  if (normalizedById) return normalizedById.modelId;
+
+  const normalizedByName = availableModels.find((model) => normalize(model.name) === normalized);
+  if (normalizedByName) return normalizedByName.modelId;
+
+  if (requested.includes('/')) return '';
+
+  const suffixMatch = availableModels
+    .filter((model) => (model.modelId.split('/').pop() || '') === requested)
+    .sort((a, b) => a.modelId.length - b.modelId.length)[0];
+  if (suffixMatch) return suffixMatch.modelId;
+
+  const normSuffix = availableModels
+    .filter((model) => normalize(model.modelId.split('/').pop() || '') === normalized)
+    .sort((a, b) => a.modelId.length - b.modelId.length)[0];
+  if (normSuffix) return normSuffix.modelId;
+
+  const fuzzy = availableModels
+    .filter((model) => normalize(model.name).includes(normalized) || normalize(model.modelId).includes(normalized))
+    .sort((a, b) => a.modelId.length - b.modelId.length);
+  return fuzzy[0]?.modelId || '';
+}
 
 export type OpenCodePromptBody = {
   model?: { providerID: string; modelID: string };
@@ -317,6 +401,54 @@ export function extractOutput(data: OpenCodeSessionPromptResponse | undefined): 
   const direct = collectTextFromParts(data.info?.parts) || collectTextFromParts(data.parts);
   if (direct) return direct;
   return collectTextDeep(data);
+}
+
+export async function executeCommandWithOpenCodeHttp(options: {
+  client: OpenCodeHttpClient;
+  sessionId: string;
+  command: OpenCodeCommandInput;
+  workingDirectory?: string;
+  emit: (event: EngineStreamEvent) => void;
+  log?: OpenCodeAdapterLogFn;
+}): Promise<string> {
+  if (typeof options.client.session.command !== 'function') {
+    throw new Error('OpenCode command API is unavailable');
+  }
+  const query = options.workingDirectory ? { directory: options.workingDirectory } : undefined;
+  const body = {
+    command: options.command.command,
+    arguments: options.command.arguments,
+    ...(options.command.agent ? { agent: options.command.agent } : {}),
+    ...(options.command.model ? { model: options.command.model } : {}),
+  };
+
+  options.log?.({
+    message: 'OpenCode command start',
+    detail: `sessionId=${options.sessionId}, command=${options.command.command}`,
+    verbose: true,
+  });
+  const result = await options.client.session.command({
+    path: { id: options.sessionId },
+    body,
+    query,
+  });
+  if (result.error) {
+    throw new Error(formatError(result.error));
+  }
+  if (result.data?.info?.error) {
+    throw new Error(formatError(result.data.info.error));
+  }
+  const output = extractOutput(result.data)
+    || await hydrateOutputFromSessionMessages(options.client, options.sessionId, query);
+  if (output) {
+    options.emit({ type: 'text', content: output });
+  }
+  options.log?.({
+    message: 'OpenCode command done',
+    detail: `outputLength=${output.length}`,
+    verbose: true,
+  });
+  return output;
 }
 
 export function formatError(error: unknown): string {

@@ -33,6 +33,17 @@ declare module '@opencode-ai/sdk' {
       };
       query?: { directory?: string };
     }): Promise<{ data?: unknown; error?: unknown }>;
+    command(options: {
+      path: { id: string };
+      body: {
+        messageID?: string;
+        agent?: string;
+        model?: string;
+        command: string;
+        arguments: string;
+      };
+      query?: { directory?: string };
+    }): Promise<{ data?: unknown; error?: unknown }>;
   }
 
   interface EventApi {
@@ -56,6 +67,9 @@ declare module '@opencode-ai/sdk' {
     provider?: {
       list(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
       providers(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
+    };
+    command?: {
+      list(options?: Record<string, never>): Promise<{ data?: unknown; error?: unknown }>;
     };
     event?: EventApi;
     session: SessionApi;

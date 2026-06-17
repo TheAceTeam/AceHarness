@@ -12,6 +12,8 @@ import {
   resolveWorkspaceRoot,
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
+import { getRemoteWorkspace, isRemoteWorkspace } from '@/lib/core/remote-workspace';
+import { getRemoteCredentials, remoteCredentialErrorBody, requireRemoteWorkspaceAuth } from '@/lib/core/remote-credential-vault';
 
 function parseRelativePaths(value: FormDataEntryValue | null, fileCount: number): string[] {
   if (typeof value !== 'string' || !value) return [];
@@ -38,6 +40,7 @@ async function ensureUploadParent(root: string, fullPath: string): Promise<void>
 }
 
 export async function POST(request: NextRequest) {
+  let workspaceForError = '';
   try {
     const contentType = request.headers.get('content-type') || '';
     if (!contentType.toLowerCase().includes('multipart/form-data')) {
@@ -53,6 +56,7 @@ export async function POST(request: NextRequest) {
     if (typeof workspace !== 'string' || !workspace) {
       return NextResponse.json({ error: '缺少 workspace 参数' }, { status: 400 });
     }
+    workspaceForError = workspace;
 
     if (files.length === 0) {
       return NextResponse.json({ error: '缺少上传文件' }, { status: 400 });
@@ -65,6 +69,41 @@ export async function POST(request: NextRequest) {
     const conflict = typeof conflictValue === 'string' ? conflictValue : 'rename';
     if (conflict !== 'rename' && conflict !== 'error') {
       return NextResponse.json({ error: 'conflict 参数不合法' }, { status: 400 });
+    }
+
+    if (isRemoteWorkspace(workspace)) {
+      const auth = await requireRemoteWorkspaceAuth(request);
+      if (auth instanceof NextResponse) return auth;
+      const credentials = getRemoteCredentials({ userId: auth.id, workspace });
+      const { provider } = getRemoteWorkspace(workspace, credentials);
+      const targetPath = typeof targetPathValue === 'string' ? assertSafeRelativePath(targetPathValue, '目标目录').replace(/\\/g, '/') : '';
+      const relativePaths = parseRelativePaths(formData.get('relativePaths'), files.length);
+      const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+      if (totalSize > WORKSPACE_UPLOAD_TOTAL_SIZE_LIMIT) {
+        return NextResponse.json({ error: '上传总大小超过 200MB 限制' }, { status: 413 });
+      }
+      const saved: Array<{ name: string; path: string; size: number }> = [];
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        if (file.size > WORKSPACE_UPLOAD_FILE_SIZE_LIMIT) {
+          throw new WorkspacePathError(`文件 ${file.name} 超过 50MB 限制`, 413);
+        }
+        const originalRelativePath = relativePaths[index] || file.name;
+        const safeFilePath = assertSafeRelativePath(originalRelativePath, '文件路径').replace(/\\/g, '/');
+        if (!safeFilePath) throw new WorkspacePathError('文件路径不合法', 403);
+        const finalRelativePath = [targetPath, safeFilePath].filter(Boolean).join('/');
+        if (conflict === 'error') {
+          try {
+            await provider.stat(finalRelativePath);
+            throw new WorkspacePathError(`文件已存在: ${originalRelativePath}`, 409);
+          } catch (error: any) {
+            if (!(error instanceof WorkspacePathError && error.status === 404)) throw error;
+          }
+        }
+        await provider.writeFile(finalRelativePath, Buffer.from(await file.arrayBuffer()));
+        saved.push({ name: finalRelativePath.split('/').pop() || file.name, path: finalRelativePath, size: file.size });
+      }
+      return NextResponse.json({ success: true, count: saved.length, files: saved });
     }
 
     const root = await resolveWorkspaceRoot(workspace);
@@ -121,6 +160,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, count: saved.length, files: saved });
   } catch (error: any) {
+    if (error?.status === 428) {
+      return NextResponse.json(remoteCredentialErrorBody(workspaceForError), { status: 428 });
+    }
     const { message, status } = workspaceErrorResponse(error);
     return NextResponse.json({ error: message, message }, { status });
   }

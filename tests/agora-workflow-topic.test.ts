@@ -116,4 +116,47 @@ describe('workflow agora topic helpers', () => {
     expect(session.messages.map((message: any) => message.cards?.[0]?.actionLabel)).toEqual(['投票', '票决']);
     expect(persistenceMocks.saveChatSession).toHaveBeenCalledTimes(2);
   });
+
+  test('appends human help and parallel manual join prompts with specific agora messages', async () => {
+    const session: any = {
+      id: 'chat-1',
+      title: '示例工作流',
+      messages: [],
+      sessionWorkbenchState: createWorkflowAgoraWorkbenchState({
+        title: '示例工作流 · 协作议题',
+        participants: createWorkflowParticipants(['Supervisor', '工程师']),
+      }),
+      createdAt: 100,
+      updatedAt: 100,
+    };
+    persistenceMocks.loadChatSession.mockResolvedValue(session);
+
+    await appendWorkflowAgoraMessage({
+      sessionId: 'chat-1',
+      type: 'human-help-question',
+      title: '等待人工客服回复：缺少配置',
+      body: '请提供 API_KEY。',
+      speakerName: 'Supervisor',
+      dedupeKey: 'human-help-1',
+      createdAt: 200,
+    });
+    await appendWorkflowAgoraMessage({
+      sessionId: 'chat-1',
+      type: 'parallel-manual-join-question',
+      title: '等待并发人工确认：并发组 group-1',
+      body: '请确认是否放行。',
+      speakerName: 'Supervisor',
+      dedupeKey: 'parallel-manual-1',
+      createdAt: 201,
+    });
+
+    const roomMessages = session.sessionWorkbenchState.collaborationRoom.messages;
+    expect(roomMessages.map((message: any) => message.chatroom?.kind)).toEqual(['system', 'system']);
+    expect(roomMessages[0].content).toContain('这边需要人工客服补充信息');
+    expect(roomMessages[0].content).toContain('请提供 API_KEY');
+    expect(roomMessages[1].content).toContain('并发组已经汇合，需要你确认是否放行');
+    expect(roomMessages[1].content).toContain('请确认是否放行');
+    expect(session.messages.map((message: any) => message.cards?.[0]?.actionLabel)).toEqual(['工作流', '工作流']);
+    expect(persistenceMocks.saveChatSession).toHaveBeenCalledTimes(2);
+  });
 });

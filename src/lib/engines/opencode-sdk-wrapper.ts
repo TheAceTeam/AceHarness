@@ -16,11 +16,16 @@ import { ensureOpenCodeCompatibleMcpServers } from '@/lib/mcp/registry';
 import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineOutput } from './engine-output';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
+import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
 import {
   buildFullPrompt,
+  discoverOpenCodeCommandsFromHttpClient,
   discoverOpenCodeModelsFromHttpClient,
+  executeCommandWithOpenCodeHttp,
   getSessionId,
+  resolveOpenCodeModelId,
   type OpenCodeHttpClient,
+  type OpenCodeDiscoveredCommand,
   type OpenCodeDiscoveredModel,
   sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA,
@@ -63,8 +68,12 @@ function requireClient(): OpenCodeHttpClient {
   return clientInstance;
 }
 
-function getOpencodeCommand(): string {
-  return findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths())) || 'opencode';
+function configuredEnvOptions(userId?: string): { userId: string } | undefined {
+  return userId ? { userId } : undefined;
+}
+
+function getOpencodeCommand(userId?: string): string {
+  return findCommand('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths(), configuredEnvOptions(userId))) || 'opencode';
 }
 
 function fingerprintEnv(env: NodeJS.ProcessEnv): string {
@@ -107,9 +116,16 @@ async function withTemporaryProcessEnv<T>(env: NodeJS.ProcessEnv, action: () => 
   }
 }
 
-async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string }> {
-  const serverEnv = buildConfiguredProcessEnvSync();
-  const nextFingerprint = fingerprintEnv(serverEnv);
+async function ensureServer(userId?: string): Promise<{ client: OpenCodeHttpClient; url: string }> {
+  const serverEnv = buildConfiguredProcessEnvSync(
+    undefined,
+    process.env,
+    configuredEnvOptions(userId),
+  );
+  const nextFingerprint = JSON.stringify({
+    userId: userId || '',
+    env: fingerprintEnv(serverEnv),
+  });
 
   if (clientInstance && serverInstance && serverEnvFingerprint === nextFingerprint) {
     return { client: clientInstance, url: serverInstance.url };
@@ -136,7 +152,7 @@ async function ensureServer(): Promise<{ client: OpenCodeHttpClient; url: string
   serverStartingFingerprint = nextFingerprint;
   serverStarting = (async () => {
     const { createOpencodeClient, createOpencodeServer } = await runtimeImport<typeof import('@opencode-ai/sdk')>('@opencode-ai/sdk');
-    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand()}...`);
+    console.log(`[opencode-sdk] starting HTTP server with command ${getOpencodeCommand(userId)}...`);
 
     const server = await withTemporaryProcessEnv(serverEnv, async () => {
       return await createOpencodeServer({
@@ -179,6 +195,11 @@ function parseProviderModel(modelId: string | undefined): { model: { providerID:
 export async function discoverOpenCodeSdkModels(): Promise<OpenCodeDiscoveredModel[]> {
   const { client } = await ensureServer();
   return discoverOpenCodeModelsFromHttpClient(client);
+}
+
+export async function discoverOpenCodeSdkCommands(userId?: string): Promise<OpenCodeDiscoveredCommand[]> {
+  const { client } = await ensureServer(userId);
+  return discoverOpenCodeCommandsFromHttpClient(client);
 }
 
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
@@ -240,7 +261,7 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         detail: options.workingDirectory,
         verbose: true,
       });
-      const { client, url } = await ensureServer();
+      const { client, url } = await ensureServer(options.userId);
       this.emitDiagnosticLog({
         message: 'OpenCode SDK server ready',
         detail: url,
@@ -289,8 +310,76 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         content: this.currentSessionId,
       } as EngineStreamEvent);
 
-      const fullPrompt = buildFullPrompt(options);
-      const model = parseProviderModel(options.model);
+      let resolvedModelId = String(options.model || '').trim();
+      if (resolvedModelId && !resolvedModelId.includes('/')) {
+        const availableModels = await discoverOpenCodeModelsFromHttpClient(client);
+        resolvedModelId = resolveOpenCodeModelId(resolvedModelId, availableModels) || resolvedModelId;
+        this.emitDiagnosticLog({
+          message: 'OpenCode SDK resolved model',
+          detail: `${options.model} -> ${resolvedModelId}`,
+          metadata: { availableModelCount: availableModels.length },
+          verbose: true,
+        });
+      }
+      const model = parseProviderModel(resolvedModelId);
+      const isSlashCommand = Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
+
+      if (isSlashCommand) {
+        const parsedCommand = parseOpenCodeSlashCommand(options.prompt);
+        if (!parsedCommand) {
+          throw new Error('Invalid OpenCode slash command');
+        }
+        const commands = await discoverOpenCodeCommandsFromHttpClient(client);
+        const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
+        if (!commandExists) {
+          throw new Error(`OpenCode command not found: ${parsedCommand.command}`);
+        }
+        this.emitDiagnosticLog({
+          message: 'OpenCode SDK command start',
+          detail: `/${parsedCommand.command}`,
+          verbose: true,
+        });
+        const output = await executeCommandWithOpenCodeHttp({
+          client,
+          sessionId: this.currentSessionId,
+          command: {
+            command: parsedCommand.command,
+            arguments: parsedCommand.arguments,
+            agent: options.agent,
+            model: resolvedModelId || options.model,
+          },
+          workingDirectory: options.workingDirectory,
+          emit: (event) => {
+            if (event.type === 'text' && typeof event.content === 'string') {
+              this.streamedTranscript += event.content;
+            }
+            this.emit('stream', event);
+          },
+          ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
+        });
+        this.collectedOutput = this.streamedTranscript || output;
+        const durationMs = Date.now() - startTime;
+        return {
+          success: true,
+          output: normalizeEngineOutput(this.collectedOutput || output),
+          sessionId: this.currentSessionId,
+          metadata: {
+            ...ZERO_USAGE_METADATA,
+            duration_ms: durationMs,
+          },
+        };
+      }
+
+      const fullPrompt = isSlashCommand
+        ? buildOpenCodeRawCommandPrompt(options.prompt)
+        : buildFullPrompt(options);
+      if (isSlashCommand) {
+        this.emitDiagnosticLog({
+          message: 'OpenCode SDK raw slash command prompt fallback',
+          detail: fullPrompt.split(/\r?\n/, 1)[0] || '',
+          verbose: true,
+        });
+      }
 
       console.log(`[opencode-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
       this.emitDiagnosticLog({

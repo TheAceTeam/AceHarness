@@ -324,6 +324,9 @@ export interface CollaborationWerewolfState {
 }
 
 export interface CollaborationRoomState {
+  roomId?: string;
+  spaceType?: 'meeting-room' | 'office';
+  roomType?: 'direct' | 'meeting';
   topic?: string;
   selectedAgents?: string[];
   mode?: 'free' | 'group-chat';

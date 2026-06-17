@@ -603,6 +603,10 @@ export default function DashboardPage() {
                   <span className="material-symbols-outlined text-sm mr-1">chat</span>
                   {t('dashboard.quickActions.chatMode')}
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => router.push('/office')} title="一人公司桌面">
+                  <span className="material-symbols-outlined text-sm mr-1">business_center</span>
+                  一人公司桌面
+                </Button>
                 <LanguageToggle />
                 <ThemeToggle />
                 <UserMenu user={currentUser} />

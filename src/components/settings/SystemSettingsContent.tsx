@@ -60,6 +60,17 @@ interface EmailNotificationForm {
   subjectPrefix: string;
 }
 
+interface WorkspaceExperienceForm {
+  mode: 'engineer' | 'one-person-company';
+  defaultEntry: 'home' | 'meeting-room' | 'office' | 'workflows';
+  onePersonCompanyOnboardingSeen: boolean;
+}
+
+interface AgentMemoryForm {
+  runtimeEnabled: boolean;
+  persistMode: 'manual' | 'review' | 'auto';
+}
+
 function getManagedSourceLabel(source: SdkOverviewResponse['effective']['source']) {
   if (source === 'managed') return '托管 SDK';
   return '未启用';
@@ -170,6 +181,17 @@ export default function SystemSettingsContent() {
   });
   const [emailSaving, setEmailSaving] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [workspaceExperienceForm, setWorkspaceExperienceForm] = useState<WorkspaceExperienceForm>({
+    mode: 'engineer',
+    defaultEntry: 'home',
+    onePersonCompanyOnboardingSeen: false,
+  });
+  const [agentMemoryForm, setAgentMemoryForm] = useState<AgentMemoryForm>({
+    runtimeEnabled: false,
+    persistMode: 'review',
+  });
+  const [experienceSaving, setExperienceSaving] = useState(false);
+  const [experienceError, setExperienceError] = useState<string | null>(null);
 
   const managedHomeActive = sdkOverview?.effective.source === 'managed';
 
@@ -262,6 +284,15 @@ export default function SystemSettingsContent() {
       const settings = await systemSettingsApi.get();
       setGitcodeConfigured(settings.gitcodeTokenConfigured);
       setEngineAvailabilityCacheMinutes(String(settings.engineAvailabilityCacheMinutes || 30));
+      setWorkspaceExperienceForm({
+        mode: settings.workspaceExperience?.mode === 'one-person-company' ? 'one-person-company' : 'engineer',
+        defaultEntry: settings.workspaceExperience?.defaultEntry || (settings.workspaceExperience?.mode === 'one-person-company' ? 'office' : 'home'),
+        onePersonCompanyOnboardingSeen: Boolean(settings.workspaceExperience?.onePersonCompanyOnboardingSeen),
+      });
+      setAgentMemoryForm({
+        runtimeEnabled: Boolean(settings.agentMemory?.runtimeEnabled),
+        persistMode: settings.agentMemory?.persistMode || 'review',
+      });
       setEmailForm({
         enabled: Boolean(settings.emailNotifications?.enabled),
         smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -454,6 +485,25 @@ export default function SystemSettingsContent() {
     }
   };
 
+  const saveWorkspaceExperience = async () => {
+    setExperienceSaving(true);
+    setExperienceError(null);
+    try {
+      await systemSettingsApi.save({
+        workspaceExperience: workspaceExperienceForm,
+        agentMemory: agentMemoryForm,
+      });
+      toast('success', '体验与记忆设置已保存');
+      await loadTokenSettings();
+    } catch (error: any) {
+      const message = error?.message || '保存体验与记忆设置失败';
+      setExperienceError(message);
+      toast('error', message);
+    } finally {
+      setExperienceSaving(false);
+    }
+  };
+
   const runSdkAction = async (actionKey: string, action: () => Promise<void>, successMessage: string) => {
     setSdkActionKey(actionKey);
     setInstallProgress(null);
@@ -557,6 +607,92 @@ export default function SystemSettingsContent() {
                 className="max-w-[160px]"
               />
               <span className="text-sm text-muted-foreground">分钟</span>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl border bg-card p-6 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">体验与 Agent 记忆</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                控制默认进入的工作界面，以及新对话、会议室、办公室和工作流是否读取 Agent 长期记忆。
+              </p>
+            </div>
+            <Button size="sm" onClick={saveWorkspaceExperience} disabled={experienceSaving || tokenLoading}>
+              {experienceSaving ? '保存中...' : '保存设置'}
+            </Button>
+          </div>
+
+          {experienceError ? (
+            <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{experienceError}</div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <div className="text-sm font-medium">默认界面</div>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={workspaceExperienceForm.mode}
+                onChange={(event) => {
+                  const mode = event.target.value === 'one-person-company' ? 'one-person-company' : 'engineer';
+                  setWorkspaceExperienceForm((prev) => ({
+                    ...prev,
+                    mode,
+                    defaultEntry: mode === 'one-person-company' && prev.defaultEntry === 'home' ? 'office' : prev.defaultEntry,
+                  }));
+                }}
+                disabled={experienceSaving}
+              >
+                <option value="engineer">开发工程师界面</option>
+                <option value="one-person-company">一人公司界面</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">默认入口</div>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={workspaceExperienceForm.defaultEntry}
+                onChange={(event) => setWorkspaceExperienceForm((prev) => ({ ...prev, defaultEntry: event.target.value as WorkspaceExperienceForm['defaultEntry'] }))}
+                disabled={experienceSaving}
+              >
+                <option value="home">首页</option>
+                <option value="meeting-room">会议室</option>
+                <option value="office">办公室</option>
+                <option value="workflows">工作流</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-4">
+              <div>
+                <div className="text-sm font-medium">Agent 记忆参与推理</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  关闭后保留已沉淀记忆，新运行会按无长期记忆上下文启动。
+                </div>
+              </div>
+              <Switch
+                checked={agentMemoryForm.runtimeEnabled}
+                onCheckedChange={(checked) => setAgentMemoryForm((prev) => ({ ...prev, runtimeEnabled: checked }))}
+                disabled={experienceSaving}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-sm font-medium">记忆沉淀模式</div>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={agentMemoryForm.persistMode}
+                onChange={(event) => setAgentMemoryForm((prev) => ({ ...prev, persistMode: event.target.value as AgentMemoryForm['persistMode'] }))}
+                disabled={experienceSaving}
+              >
+                <option value="manual">手动</option>
+                <option value="review">审核后写入</option>
+                <option value="auto">自动写入</option>
+              </select>
+              <div className="text-xs text-muted-foreground">当前版本优先支持手动编辑和审核式沉淀。</div>
             </div>
           </div>
         </section>

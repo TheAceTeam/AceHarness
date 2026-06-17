@@ -485,6 +485,14 @@ function summarizeWorkflowCreationStateForPrompt(state: WorkflowCreationState): 
 }
 
 function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, baseContext: string): string {
+  const specQualityRules = [
+    'SpecCoding 内容质量规则：',
+    '- spec_requirement：必须是行为需求，不写实现方案；必须包含稳定 R 编号、用户故事、至少 2 条 WHEN/THEN 验收标准，并覆盖主路径与边界/异常之一。',
+    '- spec_design：必须说明 HOW；要覆盖组件/接口、数据模型或状态、数据流、测试方案、兼容/风险，不能只复述需求。',
+    '- spec_decision：必须使用稳定 D 编号，写清选择、理由和未采用的替代方案或取舍。',
+    '- spec_task：必须使用稳定 T 编号，写清 requirementIds、designRefs、actions、deliverables、validation；任务粒度要能由单个 Agent 直接执行。',
+    '- 不要输出占位符、泛泛而谈的“完善/优化/处理”等空任务；每个小点都要能支撑后续 AI 执行和人工审查。',
+  ].join('\n');
   return [
     '你正在 ACEHarness 的分步工作流创建向导中工作。',
     `当前小点名称：${step.name}`,
@@ -495,6 +503,7 @@ function buildWorkflowCreationItemSystemPrompt(step: WorkflowCreationItemStep, b
     '可以在 <result> 外用 1-3 句简短说明你的判断。',
     '输出 </result> 后不要追加任何文字。',
     SPEC_LANGUAGE_RULE,
+    specQualityRules,
     '',
     '当前小点说明：',
     step.guidance,

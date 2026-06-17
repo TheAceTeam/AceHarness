@@ -48,6 +48,7 @@ import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import { PaginationBar } from '@/components/PaginationBar';
 import { getAllPlugins, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
 import { cn } from '@/lib/core/utils';
+import type { ReturnTarget } from '@/lib/navigation/return-target';
 import {
   SkillCard,
   SkillSearch,
@@ -93,6 +94,7 @@ type SortDirection = 'asc' | 'desc';
 
 interface SkillsManagerProps {
   embedded?: boolean;
+  returnTarget?: ReturnTarget;
 }
 
 const LOCAL_VIEW_MODE_KEY = 'aceharness:skills:local-view-mode';
@@ -1224,7 +1226,10 @@ function McpServersTab() {
   );
 }
 
-export default function SkillsManager({ embedded = false }: SkillsManagerProps) {
+export default function SkillsManager({
+  embedded = false,
+  returnTarget = { href: '/dashboard', label: '返回首页' },
+}: SkillsManagerProps) {
   const { toast } = useToast();
   const { confirm, dialogProps } = useConfirmDialog();
   useDocumentTitle(embedded ? null : 'Skills/MCP 管理');
@@ -2024,9 +2029,9 @@ export default function SkillsManager({ embedded = false }: SkillsManagerProps) 
         >
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="sm" asChild>
-              <Link href="/dashboard">
+              <Link href={returnTarget.href}>
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                返回首页
+                {returnTarget.label}
               </Link>
             </Button>
             <div className="h-6 w-px bg-border" />

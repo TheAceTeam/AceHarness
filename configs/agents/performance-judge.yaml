@@ -134,3 +134,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 性能裁判
+workspaceProfile:
+  displayName: 性能裁判
+  nickname: 性能裁判
+  officeRole: decision-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: purple
+    deskVariant: dynamic-workstation
+    desk: 性能裁判的工位
+    zone: decision
+    order: 519
+  motion:
+    activity: talking
+    speed: 1.17
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

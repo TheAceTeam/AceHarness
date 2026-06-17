@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   DndContext,
   closestCenter,
@@ -67,6 +68,7 @@ import { EngineIcon } from '@/components/EngineIcon';
 import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/components/EndpointIcon';
 import { getConcreteEngines, getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { getLogicalEngineId } from '@/lib/engines/engine-selection';
+import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 
 interface Model {
   id: string;
@@ -380,6 +382,8 @@ function SortableModelRow({
 
 export default function ModelsPage() {
   useDocumentTitle('模型管理');
+  const searchParams = useSearchParams();
+  const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
   const { toast } = useToast();
 
   const [models, setModels] = useState<Model[]>([]);
@@ -719,9 +723,9 @@ export default function ModelsPage() {
       <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-6 backdrop-blur">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
-            <Link href="/dashboard">
+            <Link href={returnTarget.href}>
               <ArrowLeft className="w-4 h-4 mr-2" />
-              返回首页
+              {returnTarget.label}
             </Link>
           </Button>
           <div className="h-6 w-px bg-border" />

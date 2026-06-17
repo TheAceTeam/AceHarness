@@ -10,6 +10,7 @@ import type { EngineOptions } from './engine-interface';
 import { ACPEngineConfig } from './acp-engine';
 import { commandExists, getCommonCliSearchPaths } from '@/lib/core/command-exists';
 import { getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
+import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt } from './opencode-command';
 
 export class OpenCodeEngineWrapper extends ACPWrapperBase {
   getName(): string {
@@ -29,6 +30,17 @@ export class OpenCodeEngineWrapper extends ACPWrapperBase {
       model: options.model,
       args: [],
     };
+  }
+
+  buildPrompt(options: EngineOptions, sessionAction: 'created' | 'resumed' | 'reused'): string {
+    if (options.rawPrompt && isOpenCodeSlashCommandPrompt(options.prompt)) {
+      return buildOpenCodeRawCommandPrompt(options.prompt);
+    }
+    return super.buildPrompt(options, sessionAction);
+  }
+
+  shouldApplyModelOverride(model: string): boolean {
+    return Boolean(String(model || '').trim());
   }
 
   async isAvailable(): Promise<boolean> {

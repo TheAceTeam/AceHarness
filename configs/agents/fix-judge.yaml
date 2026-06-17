@@ -126,3 +126,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 修复裁判
+workspaceProfile:
+  displayName: 修复裁判
+  nickname: 修复裁判
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 修复裁判的工位
+    zone: engineering
+    order: 315
+  motion:
+    activity: typing
+    speed: 0.85
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

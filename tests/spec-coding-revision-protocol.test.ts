@@ -19,7 +19,34 @@ describe('spec-coding revision protocol', () => {
       summary: '刷新任务拆分',
       affectedArtifacts: ['tasks.md'],
       impact: ['拆分更细'],
+      revisionPlan: [],
     });
+  });
+
+  test('extracts structured revision plan entries', () => {
+    const markdown = [
+      '<result>',
+      JSON.stringify({
+        kind: 'spec_coding_revision',
+        payload: {
+          apply: true,
+          summary: '收敛需求和任务',
+          affectedArtifacts: ['requirements.md', 'tasks.md'],
+          impact: ['R1 修改', 'T2.1 新增'],
+          revisionPlan: [
+            { artifact: 'requirements', op: 'modify', targetId: 'R1', reason: '验收标准变化' },
+            { artifact: 'tasks', op: 'add', targetId: 'T2.1', reason: '新增回归验证' },
+            { artifact: 'bad', op: 'modify', targetId: 'X', reason: 'ignore' },
+          ],
+        },
+      }),
+      '</result>',
+    ].join('\n');
+
+    expect(extractSpecCodingRevisionCommand(markdown)?.revisionPlan).toEqual([
+      { artifact: 'requirements', op: 'modify', targetId: 'R1', reason: '验收标准变化' },
+      { artifact: 'tasks', op: 'add', targetId: 'T2.1', reason: '新增回归验证' },
+    ]);
   });
 
   test('strips revision command from visible output while preserving other result blocks', () => {

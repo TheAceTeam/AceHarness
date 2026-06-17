@@ -94,3 +94,27 @@ iterationPrompt: |
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 设计挑战者
+workspaceProfile:
+  displayName: 设计挑战者
+  nickname: 设计挑战者
+  officeRole: design-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: green
+    deskVariant: dynamic-workstation
+    desk: 设计挑战者的工位
+    zone: design
+    order: 207
+  motion:
+    activity: presenting
+    speed: 1.01
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

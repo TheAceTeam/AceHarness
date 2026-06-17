@@ -12,6 +12,15 @@ export interface SystemSettings {
   lanAccess?: boolean;
   locale?: 'zh' | 'en';
   engineAvailabilityCacheMinutes?: number;
+  workspaceExperience?: {
+    mode?: 'engineer' | 'one-person-company';
+    defaultEntry?: 'home' | 'meeting-room' | 'office' | 'workflows';
+    onePersonCompanyOnboardingSeen?: boolean;
+  };
+  agentMemory?: {
+    runtimeEnabled?: boolean;
+    persistMode?: 'manual' | 'review' | 'auto';
+  };
   emailNotifications?: {
     enabled?: boolean;
     smtpHost?: string;
@@ -24,6 +33,29 @@ export interface SystemSettings {
     replyTo?: string;
     ccEmails?: string;
     subjectPrefix?: string;
+  };
+}
+
+export function normalizeWorkspaceExperienceSettings(settings?: SystemSettings['workspaceExperience']): Required<NonNullable<SystemSettings['workspaceExperience']>> {
+  const mode = settings?.mode === 'one-person-company' ? 'one-person-company' : 'engineer';
+  const validEntry = settings?.defaultEntry === 'meeting-room'
+    || settings?.defaultEntry === 'office'
+    || settings?.defaultEntry === 'workflows'
+    || settings?.defaultEntry === 'home';
+  return {
+    mode,
+    defaultEntry: validEntry ? settings!.defaultEntry! : mode === 'one-person-company' ? 'office' : 'home',
+    onePersonCompanyOnboardingSeen: Boolean(settings?.onePersonCompanyOnboardingSeen),
+  };
+}
+
+export function normalizeAgentMemorySettings(settings?: SystemSettings['agentMemory']): Required<NonNullable<SystemSettings['agentMemory']>> {
+  const persistMode = settings?.persistMode === 'manual' || settings?.persistMode === 'auto'
+    ? settings.persistMode
+    : 'review';
+  return {
+    runtimeEnabled: Boolean(settings?.runtimeEnabled),
+    persistMode,
   };
 }
 

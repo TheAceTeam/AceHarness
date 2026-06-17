@@ -166,6 +166,8 @@ const getStepParallelGroup = (step?: WorkflowStep) => step?.parallelGroup || ste
 
 const getStepJoinPolicyMode = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.mode || 'all';
 
+const getStepJoinPolicyQuorum = (step?: WorkflowStep) => step?.concurrency?.joinPolicy?.quorum;
+
 const slugifyId = (value: string, fallback: string) => {
   const slug = value
     .trim()
@@ -1139,6 +1141,31 @@ export default function StateMachineDesignPanel({
     });
   };
 
+  const handleSetJoinPolicyQuorum = (groupId: string, quorum: number) => {
+    if (!selectedState) return;
+    const groupSteps = (selectedState.steps || []).filter((step) => getStepParallelGroup(step) === groupId);
+    const normalizedQuorum = Math.max(1, Math.min(groupSteps.length || 1, Math.floor(quorum) || 1));
+    updateState({
+      ...selectedState,
+      steps: (selectedState.steps || []).map((step) => {
+        if (getStepParallelGroup(step) !== groupId) return step;
+        const currentPolicy = step.concurrency?.joinPolicy || { mode: 'quorum' as const };
+        return {
+          ...step,
+          concurrency: {
+            ...(step.concurrency || {}),
+            groupId,
+            joinPolicy: {
+              ...currentPolicy,
+              mode: 'quorum',
+              quorum: normalizedQuorum,
+            },
+          },
+        };
+      }),
+    });
+  };
+
   const handleResetVerdictTransitions = () => {
     if (!selectedState || selectedState.isFinal) return;
     updateState({ ...selectedState, transitions: buildVerdictTransitions(selectedState, states) });
@@ -1280,6 +1307,22 @@ export default function StateMachineDesignPanel({
                       />
                       <span className="text-xs">人工审查</span>
                     </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <Checkbox
+                        checked={selectedState.enableSpecRevisionOnComplete ?? false}
+                        onCheckedChange={(v) => updateState({ ...selectedState, enableSpecRevisionOnComplete: !!v })}
+                      />
+                      <span className="text-xs">结束后 Spec 修订</span>
+                      <button
+                        type="button"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full border bg-background text-muted-foreground hover:text-foreground"
+                        title="开启后，该状态执行结束时才会发起现有的 Spec 修订投票，由参与 Agent 和 Supervisor 判断是否需要更新 requirements/design/tasks；默认关闭，不影响状态跳转。"
+                        onClick={(event) => event.preventDefault()}
+                        aria-label="结束后 Spec 修订说明"
+                      >
+                        <Info className="h-3 w-3" />
+                      </button>
+                    </label>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -1331,6 +1374,7 @@ export default function StateMachineDesignPanel({
                     {selectedState.isInitial && <Badge variant="outline" className="text-xs py-0">初始</Badge>}
                     {selectedState.isFinal && <Badge variant="outline" className="text-xs py-0">终止</Badge>}
                     {selectedState.requireHumanApproval && <Badge variant="outline" className="text-xs py-0 bg-orange-100 dark:bg-orange-900 text-orange-600">人工审查</Badge>}
+                    {selectedState.enableSpecRevisionOnComplete && <Badge variant="outline" className="text-xs py-0 bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300">Spec 修订</Badge>}
                     <Badge variant="outline" className="text-xs py-0">
                       自循环上限 {selectedState.maxSelfTransitions ?? 3}
                     </Badge>
@@ -1376,6 +1420,7 @@ export default function StateMachineDesignPanel({
                     const isParallelGroup = !!group.id && group.steps.length > 1;
                     const firstStep = group.steps[0]?.step;
                     const joinMode = getStepJoinPolicyMode(firstStep);
+                    const quorumValue = getStepJoinPolicyQuorum(firstStep) || Math.max(1, Math.min(2, group.steps.length));
                     if (isParallelGroup) {
                       return (
                         <div key={`${group.id}-${group.startIndex}`} className="rounded-2xl border border-cyan-300/70 bg-cyan-500/5 p-2.5 shadow-sm dark:border-cyan-800/80">
@@ -1400,6 +1445,19 @@ export default function StateMachineDesignPanel({
                                   {joinPolicyLabels[mode]}
                                 </Button>
                               ))}
+                              {joinMode === 'quorum' ? (
+                                <label className="inline-flex h-6 items-center gap-1 rounded-md border border-input bg-background px-1.5 text-[10px]">
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={group.steps.length}
+                                    value={quorumValue}
+                                    className="h-5 w-12 border-0 p-0 text-center text-[10px] shadow-none focus-visible:ring-0"
+                                    onChange={(event) => group.id && handleSetJoinPolicyQuorum(group.id, Number(event.target.value) || 1)}
+                                  />
+                                  <span className="text-muted-foreground">个</span>
+                                </label>
+                              ) : null}
                               <Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={() => handleUngroup(group.startIndex)}>
                                 拆分
                               </Button>

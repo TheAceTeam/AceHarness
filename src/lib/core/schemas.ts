@@ -26,6 +26,13 @@ const workflowSupervisorConfigSchema = z.object({
   experienceEnabled: z.boolean().default(true),
 }).optional();
 
+const workflowHumanHelpConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  supervisorReviewEnabled: z.boolean().default(true),
+  blockUntilAnswered: z.boolean().default(true),
+  defaultSelectionMode: z.enum(['single', 'multiple']).default('single'),
+}).optional();
+
 // 迭代配置 Schema
 export const iterationConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -137,6 +144,38 @@ export const workflowPhaseSchema = z.object({
   iteration: iterationConfigSchema.optional(),
 });
 
+export const agentWorkspaceProfileSchema = z.object({
+  displayName: z.string().optional(),
+  nickname: z.string().optional(),
+  officeRole: z.string().optional(),
+  residency: z.object({
+    office: z.boolean().optional(),
+    meetingRoom: z.boolean().optional(),
+    defaultDirectRoom: z.boolean().optional(),
+  }).optional(),
+  roomPresence: z.object({
+    recommendForMeetingRoom: z.boolean().optional(),
+    autoShowInOffice: z.boolean().optional(),
+  }).optional(),
+  visual: z.object({
+    accent: z.string().optional(),
+    deskVariant: z.string().optional(),
+    desk: z.string().optional(),
+    order: z.number().optional(),
+    zone: z.string().optional(),
+    column: z.number().optional(),
+    row: z.number().optional(),
+  }).optional(),
+  motion: z.object({
+    activity: z.enum(['typing', 'walking', 'talking', 'thinking', 'reviewing', 'presenting']).optional(),
+    speed: z.number().min(0.2).max(3).optional(),
+  }).optional(),
+  memory: z.object({
+    baseBudget: z.number().min(0).max(50000).optional(),
+    deepSearchEnabled: z.boolean().optional(),
+  }).optional(),
+}).optional();
+
 // 角色配置 Schema
 export const roleConfigSchema = z.object({
   name: z.string().min(1, '角色名称不能为空'),
@@ -160,6 +199,7 @@ export const roleConfigSchema = z.object({
   tags: z.array(z.string()).optional(),
   specialtyTags: z.array(z.string()).optional(),
   alwaysAvailableForChat: z.boolean().optional(),
+  workspaceProfile: agentWorkspaceProfileSchema,
   // ---- Supervisor-Lite 新增（给 Supervisor 路由器用，不注入 Agent prompt）----
   keywords: z.array(z.string()).optional(), // 路由关键词
   description: z.string().optional(), // Agent 能力描述
@@ -569,6 +609,7 @@ export const stateMachineStateSchema = z.object({
   description: z.string().optional(),
   type: z.enum(['normal', 'human-checkpoint']).default('normal').optional(), // 状态类型（将废弃）
   requireHumanApproval: z.boolean().default(false).optional(), // 完成后是否需要人工审查（跳转到自身除外）
+  enableSpecRevisionOnComplete: z.boolean().default(false).optional(), // 状态结束后是否发起 Spec 修订表决
   steps: z.array(workflowStepSchema).min(1, '至少需要一个步骤'),
   transitions: z.array(stateTransitionSchema), // 终止状态允许空数组
   position: z.object({ x: z.number(), y: z.number() }).optional(), // 可视化位置
@@ -600,6 +641,7 @@ export const stateMachineWorkflowSchema = z.object({
     issueRouting: z.array(issueRoutingRuleSchema).optional(),
     maxTransitions: z.number().min(1).max(100).default(50), // 最大状态转移次数，防止死循环
     supervisor: workflowSupervisorConfigSchema,
+    humanHelp: workflowHumanHelpConfigSchema,
     concurrency: workflowConcurrencySchema,
   }),
   roles: z.array(roleConfigSchema).optional(),

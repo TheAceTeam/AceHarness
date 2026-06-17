@@ -18,11 +18,15 @@ import {
   getConfiguredEnvValueSync,
 } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
+import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
 import {
   buildFullPrompt,
+  discoverOpenCodeCommandsFromHttpClient,
+  executeCommandWithOpenCodeHttp,
   formatError,
   getSessionId,
   type OpenCodeHttpClient,
+  type OpenCodeDiscoveredCommand,
   sendPromptWithOpenCodeHttp,
   ZERO_USAGE_METADATA,
 } from './opencode-http-adapter';
@@ -35,7 +39,9 @@ type ManagedServer = {
 let clientInstance: OpenCodeHttpClient | null = null;
 let clientBaseUrl: string | null = null;
 let managedServer: ManagedServer | null = null;
+let managedServerFingerprint: string | null = null;
 let serverStarting: Promise<ManagedServer> | null = null;
+let serverStartingFingerprint: string | null = null;
 let shutdownHooksInstalled = false;
 
 async function runtimeImport<T = any>(moduleName: string): Promise<T> {
@@ -49,23 +55,34 @@ async function runtimeImport<T = any>(moduleName: string): Promise<T> {
   }
 }
 
-function getBaseUrl(): string {
-  return String(getConfiguredEnvValueSync('ACE_NGA_SDK_BASE_URL') || '').trim().replace(/\/+$/, '');
+function configuredEnvOptions(userId?: string): { userId: string } | undefined {
+  return userId ? { userId } : undefined;
 }
 
-function getNgaCommand(): string {
+function fingerprintEnv(env: NodeJS.ProcessEnv): string {
+  return Object.entries(env)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${String(value ?? '')}`)
+    .join('\n');
+}
+
+function getBaseUrl(userId?: string): string {
+  return String(getConfiguredEnvValueSync('ACE_NGA_SDK_BASE_URL', configuredEnvOptions(userId)) || '').trim().replace(/\/+$/, '');
+}
+
+function getNgaCommand(userId?: string): string {
   const configured = String(
-    getConfiguredEnvValueSync('ACE_NGA_SDK_COMMAND')
-    || getConfiguredEnvValueSync('ACE_NGA_BIN')
+    getConfiguredEnvValueSync('ACE_NGA_SDK_COMMAND', configuredEnvOptions(userId))
+    || getConfiguredEnvValueSync('ACE_NGA_BIN', configuredEnvOptions(userId))
     || ''
   ).trim();
   if (configured) return configured;
-  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths());
+  const searchPaths = getConfiguredCliSearchPaths(getCommonCliSearchPaths(), configuredEnvOptions(userId));
   return findCommand('ngagent', searchPaths) || findCommand('nga', searchPaths) || 'nga';
 }
 
-function getTimeoutMs(): number {
-  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_NGA_SDK_TIMEOUT_MS') || '').trim(), 10);
+function getTimeoutMs(userId?: string): number {
+  const raw = Number.parseInt(String(getConfiguredEnvValueSync('ACE_NGA_SDK_TIMEOUT_MS', configuredEnvOptions(userId)) || '').trim(), 10);
   if (!Number.isFinite(raw)) return 10_000;
   return Math.min(120_000, Math.max(1_000, raw));
 }
@@ -99,32 +116,64 @@ function installShutdownHooks(): void {
   });
 }
 
-async function ensureManagedServer(): Promise<ManagedServer> {
-  if (managedServer) return managedServer;
-  if (serverStarting) return serverStarting;
+function closeManagedServer(): void {
+  if (managedServer) {
+    managedServer.close();
+    managedServer = null;
+  }
+  managedServerFingerprint = null;
+  clientInstance = null;
+  clientBaseUrl = null;
+}
 
-  serverStarting = startManagedServer()
+async function ensureManagedServer(userId?: string): Promise<ManagedServer> {
+  const spawnEnv = buildConfiguredProcessEnvSync(
+    undefined,
+    process.env,
+    configuredEnvOptions(userId),
+  );
+  const nextFingerprint = JSON.stringify({
+    userId: userId || '',
+    env: fingerprintEnv(spawnEnv),
+  });
+
+  if (managedServer && managedServerFingerprint === nextFingerprint) return managedServer;
+  if (serverStarting && serverStartingFingerprint === nextFingerprint) return serverStarting;
+  if (serverStarting) {
+    try {
+      await serverStarting;
+    } catch {
+      // ignore: a fresh server will be started below
+    }
+  }
+
+  if (managedServer && managedServerFingerprint !== nextFingerprint) {
+    closeManagedServer();
+  }
+
+  serverStartingFingerprint = nextFingerprint;
+  serverStarting = startManagedServer(userId, spawnEnv)
     .then((server) => {
       managedServer = server;
+      managedServerFingerprint = nextFingerprint;
       return server;
     })
     .finally(() => {
       serverStarting = null;
+      serverStartingFingerprint = null;
     });
 
   return serverStarting;
 }
 
-async function startManagedServer(): Promise<ManagedServer> {
-  const command = getNgaCommand();
+async function startManagedServer(userId: string | undefined, spawnEnv: NodeJS.ProcessEnv): Promise<ManagedServer> {
+  const command = getNgaCommand(userId);
   const args = ['serve', '--hostname=127.0.0.1', '--port=0'];
-  const timeoutMs = getTimeoutMs();
+  const timeoutMs = getTimeoutMs(userId);
   const startedAt = Date.now();
   let logTail = '';
 
   console.log(`[nga-sdk] starting managed NGA server: ${command} ${args.join(' ')}`);
-
-  const spawnEnv = buildConfiguredProcessEnvSync();
 
   return await new Promise<ManagedServer>((resolve, reject) => {
     let settled = false;
@@ -215,15 +264,15 @@ function closeChildTree(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
-async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: string }> {
-  const externalBaseUrl = getBaseUrl();
-  const baseUrl = externalBaseUrl || (await ensureManagedServer()).url;
+async function ensureClient(userId?: string): Promise<{ client: OpenCodeHttpClient; baseUrl: string }> {
+  const externalBaseUrl = getBaseUrl(userId);
+  const baseUrl = externalBaseUrl || (await ensureManagedServer(userId)).url;
 
   if (clientInstance && clientBaseUrl === baseUrl) {
     return { client: clientInstance, baseUrl };
   }
 
-  const health = await fetchJsonWithTimeout(`${baseUrl}/global/health`, getTimeoutMs());
+  const health = await fetchJsonWithTimeout(`${baseUrl}/global/health`, getTimeoutMs(userId));
   if (!health?.healthy) {
     throw new Error(`NGA SDK health check failed at ${baseUrl}/global/health`);
   }
@@ -238,6 +287,11 @@ async function ensureClient(): Promise<{ client: OpenCodeHttpClient; baseUrl: st
   clientInstance = client;
   clientBaseUrl = baseUrl;
   return { client, baseUrl };
+}
+
+export async function discoverNgaSdkCommands(userId?: string): Promise<OpenCodeDiscoveredCommand[]> {
+  const { client } = await ensureClient(userId);
+  return discoverOpenCodeCommandsFromHttpClient(client);
 }
 
 export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
@@ -304,7 +358,7 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
         detail: options.workingDirectory,
         verbose: true,
       });
-      const { client, baseUrl } = await ensureClient();
+      const { client, baseUrl } = await ensureClient(options.userId);
       this.emitDiagnosticLog({
         message: 'NGA SDK client ready',
         detail: baseUrl,
@@ -353,7 +407,43 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
         content: this.currentSessionId,
       } as EngineStreamEvent);
 
-      const fullPrompt = buildFullPrompt(options);
+      const isSlashCommand = Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
+      if (isSlashCommand) {
+        const parsedCommand = parseOpenCodeSlashCommand(options.prompt);
+        if (!parsedCommand) throw new Error('Invalid NGA slash command');
+        const commands = await discoverOpenCodeCommandsFromHttpClient(client);
+        const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
+        if (!commandExists) {
+          throw new Error(`NGA command not found: ${parsedCommand.command}`);
+        }
+        const output = await executeCommandWithOpenCodeHttp({
+          client,
+          sessionId: this.currentSessionId,
+          command: {
+            command: parsedCommand.command,
+            arguments: parsedCommand.arguments,
+            agent: options.agent,
+            model: options.model,
+          },
+          workingDirectory: options.workingDirectory,
+          emit: (event) => this.emit('stream', event),
+          ...(this.diagnosticLoggingEnabled ? { log: (entry) => this.emitDiagnosticLog(entry) } : {}),
+        });
+        this.collectedOutput = output;
+        const durationMs = Date.now() - startedAt;
+        return {
+          success: true,
+          output: normalizeEngineOutput(output),
+          sessionId: this.currentSessionId,
+          metadata: {
+            ...ZERO_USAGE_METADATA,
+            duration_ms: durationMs,
+          },
+        };
+      }
+      const fullPrompt = isSlashCommand
+        ? buildOpenCodeRawCommandPrompt(options.prompt)
+        : buildFullPrompt(options);
       const model = parseProviderModel(options.model);
 
       console.log(`[nga-sdk] sendPrompt: sessionId=${this.currentSessionId}, promptLength=${fullPrompt.length}`);
@@ -425,12 +515,8 @@ export class NgaSdkEngineWrapper extends EventEmitter implements Engine {
   }
 
   static shutdown(): void {
-    if (managedServer) {
-      managedServer.close();
-      managedServer = null;
-    }
-    clientInstance = null;
-    clientBaseUrl = null;
+    closeManagedServer();
+    serverStartingFingerprint = null;
   }
 }
 

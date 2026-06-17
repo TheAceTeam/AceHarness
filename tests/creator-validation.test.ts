@@ -84,6 +84,21 @@ describe('validateWorkflowDraft', () => {
     expect(result.issues.some((i) => i.message.includes('初始状态'))).toBe(true);
   });
 
+  test('state-machine spec revision on complete defaults off and can be enabled per state', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
+    const config = validStateMachineConfig(tmpDir);
+    config.workflow.states[0] = {
+      ...config.workflow.states[0],
+      enableSpecRevisionOnComplete: true,
+    } as any;
+    const result = validateWorkflowDraft(config);
+
+    expect(result.ok).toBe(true);
+    const states = (result.normalized as any).workflow.states;
+    expect(states[0].enableSpecRevisionOnComplete).toBe(true);
+    expect(states[1].enableSpecRevisionOnComplete).toBe(false);
+  });
+
   test('state-machine with multiple initial states is an error', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'test-'));
     const config = validStateMachineConfig(tmpDir);

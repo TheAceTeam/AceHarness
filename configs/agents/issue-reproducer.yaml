@@ -117,3 +117,27 @@ _file: issue-reproducer.yaml
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 问题复现员
+workspaceProfile:
+  displayName: 问题复现员
+  nickname: 问题复现员
+  officeRole: quality-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: cyan
+    deskVariant: dynamic-workstation
+    desk: 问题复现员的工位
+    zone: quality
+    order: 417
+  motion:
+    activity: reviewing
+    speed: 1.01
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

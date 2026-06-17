@@ -79,7 +79,19 @@ interface ActiveConcurrencyGroupView {
     timeoutMinutes?: number;
     onTimeout?: string;
   } | null;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'waiting-approval' | 'completed' | 'failed';
+}
+
+interface PendingHumanQuestionView {
+  title?: string;
+  message?: string;
+  currentState?: string | null;
+  source?: {
+    type?: string;
+    stateName?: string;
+    stepName?: string;
+    groupId?: string;
+  };
 }
 
 interface StateMachineExecutionViewProps {
@@ -164,6 +176,7 @@ interface StateMachineExecutionViewProps {
   supervisorFooter?: ReactNode;
   activeTabOverride?: string | null;
   hasPendingHumanQuestion?: boolean;
+  pendingHumanQuestion?: PendingHumanQuestionView | null;
   formationAgents?: Array<{
     name: string;
     team?: AgentTeam;
@@ -205,6 +218,7 @@ export default function StateMachineExecutionView({
   supervisorFooter,
   activeTabOverride,
   hasPendingHumanQuestion,
+  pendingHumanQuestion,
   formationAgents = [],
   supervisorAgent,
   onStateClick,
@@ -256,7 +270,10 @@ export default function StateMachineExecutionView({
     </div>
   );
 
-  const visibleConcurrencyGroups = activeConcurrencyGroups.filter((group) => group.status === 'running');
+  const visibleConcurrencyGroups = activeConcurrencyGroups.filter((group) => group.status === 'running' || group.status === 'waiting-approval');
+  const pendingParallelManualJoinGroupId = pendingHumanQuestion?.source?.type === 'parallel-manual-join'
+    ? pendingHumanQuestion.source?.groupId || ''
+    : '';
   const concurrencyGroupsToDisplay = visibleConcurrencyGroups.length > 0
     ? visibleConcurrencyGroups
     : activeConcurrencyGroups.slice(-3);
@@ -619,16 +636,21 @@ export default function StateMachineExecutionView({
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   {concurrencyGroupsToDisplay.map((group) => (
-                    <div key={`${group.stateName}-${group.id}`} className="rounded-lg border p-3 space-y-2">
+                    <div key={`${group.stateName}-${group.id}`} className={`rounded-lg border p-3 space-y-2 ${group.status === 'waiting-approval' ? 'border-amber-400 bg-amber-50/60 dark:border-amber-700 dark:bg-amber-950/20' : ''}`}>
                       <div className="flex items-center justify-between gap-2">
                         <div className="text-sm font-medium">{group.stateName} / {group.id}</div>
                         <Badge
                           variant={group.status === 'failed' ? 'destructive' : group.status === 'running' ? 'secondary' : 'outline'}
-                          className="text-[10px]"
+                          className={`text-[10px] ${group.status === 'waiting-approval' ? 'border-amber-300 text-amber-700' : ''}`}
                         >
                           {group.status}
                         </Badge>
                       </div>
+                      {group.status === 'waiting-approval' ? (
+                        <div className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                          {pendingParallelManualJoinGroupId === group.id ? '等待并发人工确认' : '等待人工确认'}
+                        </div>
+                      ) : null}
                       <div className="text-xs text-gray-600 dark:text-gray-400">
                         Join: {formatJoinPolicy(group.joinPolicy)}
                       </div>
@@ -700,6 +722,7 @@ export default function StateMachineExecutionView({
             allowForceTransition={allowForceTransition}
             focusedState={focusedState}
             supervisorFlow={supervisorFlow}
+            pendingHumanQuestion={pendingHumanQuestion}
             onStateClick={onStateClick}
             onStepClick={onStepClick}
             onForceTransition={onForceTransition}

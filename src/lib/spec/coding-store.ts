@@ -768,27 +768,34 @@ function buildSpecCodingArtifacts(input: {
   const normalizedDescription = (input.description || '').trim();
   const goalSummary = normalizedRequirements || normalizedDescription || `${input.workflowName} 的需求澄清`;
 
-  // requirements.md — 用户故事 + WHEN/THEN 验收标准
-  const reqSections = input.phases.length > 0
-    ? input.phases.map((phase, index) => {
-      const ownerText = phase.ownerAgents.length ? phase.ownerAgents.join('、') : '相关 Agent';
-      return [
-        `### 需求 ${index + 1}：${phase.title}`,
-        `**用户故事：** 作为${ownerText}，我希望完成${phase.title}，以便推进整体工作流目标。`,
-        '',
-        '#### 验收标准',
-        `1. WHEN ${phase.title}阶段启动 THEN ${ownerText}开始执行对应任务`,
-        `2. WHEN ${phase.title}阶段完成 THEN 所有子任务标记为已完成`,
-      ].join('\n');
-    }).join('\n\n')
-    : [
-      '### 需求 1：需求澄清',
-      '**用户故事：** 作为用户，我希望明确目标和约束，以便后续执行有清晰的基线。',
+  const plannedPhases = input.phases.length > 0
+    ? input.phases
+    : [{
+        id: 'phase-1',
+        title: '需求澄清',
+        objective: '补齐目标、约束、验收标准和执行角色。',
+        ownerAgents: [] as string[],
+      }];
+
+  const reqSections = plannedPhases.map((phase, index) => {
+    const reqId = `R${index + 1}`;
+    const ownerText = phase.ownerAgents.length ? phase.ownerAgents.join('、') : '相关 Agent';
+    const objective = phase.objective || `完成 ${phase.title} 对应目标`;
+    return [
+      `### 需求 ${reqId}：${phase.title}`,
+      '',
+      `**能力边界：** ${objective}`,
+      '',
+      `**证据来源：** workflow config 中的阶段 ${phase.title}${phase.ownerAgents.length ? `，负责人 ${phase.ownerAgents.join('、')}` : ''}；具体代码文件需在执行任务中继续勘探。`,
+      '',
+      `**用户故事：** 作为${ownerText}，我希望${phase.title}有明确输入、执行动作、交付物和验收方式，以便后续 workflow 能按同一基线执行。`,
       '',
       '#### 验收标准',
-      '1. WHEN 需求澄清完成 THEN 目标、约束与验收标准已补齐',
-      '2. WHEN 需求澄清完成 THEN 后续执行阶段与角色分工已明确',
+      `1. WHEN ${phase.title}启动 THEN 系统向负责 Agent 提供本阶段目标、依赖、需求追踪和可验证交付物。`,
+      `2. WHEN ${phase.title}执行中出现范围、依赖或验收冲突 THEN Agent 必须记录阻塞原因并请求修订，不得扩大范围自行处理。`,
+      `3. WHEN ${phase.title}完成 THEN 对应 tasks.md 任务有验证证据，并能追溯到 ${reqId}。`,
     ].join('\n');
+  }).join('\n\n');
 
   const requirements = [
     `# 需求文档：${input.workflowName}`,
@@ -796,59 +803,216 @@ function buildSpecCodingArtifacts(input: {
     '## 简介',
     goalSummary,
     '',
+    '## 输入解读',
+    '',
+    `- **用户目标：** ${goalSummary}`,
+    `- **硬性要求：** 围绕 ${input.workflowName} 的 workflow 配置和用户输入，先形成可审查、可执行、可验证的 SpecCoding 基线。`,
+    '- **非目标边界：** 不在创建态计划中直接修改业务代码，不引入用户未要求的新功能范围。',
+    '- **成功判定：** requirements/design/tasks 能明确说明代码证据、需求边界、设计契约、任务目标和验证方式。',
+    '',
+    '## 代码证据',
+    '',
+    '| 证据 | 文件/函数/接口 | 说明 | 影响的需求 |',
+    '| --- | --- | --- | --- |',
+    `| E1 | workflow config: ${input.workflowName} | 当前 workflow 定义了 ${plannedPhases.length} 个阶段，是能力拆分和任务边界的主要来源。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    `| E2 | workingDirectory: ${input.workingDirectory} | 后续代码勘探、实现和验证必须在该工作目录上下文中执行。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    '| E3 | 待勘探: 相关源码、测试、配置入口 | 具体实现前必须定位真实文件/函数/测试，不能只按抽象阶段执行。 | R1 |',
+    '',
+    '## 能力拆分',
+    '',
+    ...plannedPhases.map((phase, index) => `- **C${index + 1} ${phase.title}**: ${phase.objective || `完成 ${phase.title} 对应能力。`}`),
+    '',
     '## 术语表',
     `- **工作目录**: ${input.workingDirectory}`,
     `- **工作区模式**: ${input.workspaceMode === 'isolated-copy' ? '隔离副本' : '原地执行'}`,
     `- **执行模式**: ${mode === 'state-machine' ? '状态机' : '阶段式'}`,
+    '- **SpecCoding 制品**: requirements.md、design.md、tasks.md 三份互相追踪的计划制品。',
+    '- **验证证据**: 能证明任务完成且符合验收标准的测试、构建、审查记录或人工确认。',
     '',
     '## 需求',
     '',
     reqSections,
+    '',
+    '## 非目标',
+    '',
+    '- 不在创建态计划中直接修改业务代码。',
+    '- 不引入未在需求、设计或用户输入中出现的新功能范围。',
+    '',
+    '## 待确认项',
+    '',
+    '- 若后续实现发现需求边界、兼容策略或验证方式不一致，必须先修订 SpecCoding 制品再继续执行。',
   ].join('\n');
 
-  // design.md — 精简版
+  const phaseNodes = plannedPhases
+    .map((phase, index) => `    P${index + 1}[${phase.title}]`)
+    .join('\n');
+  const phaseEdges = plannedPhases
+    .slice(1)
+    .map((phase, index) => `    P${index + 1} --> P${index + 2}`)
+    .join('\n');
+  const taskRows = plannedPhases.map((phase, index) => {
+    const reqId = `R${index + 1}`;
+    const decisionId = index === 0 ? 'D1' : 'D2';
+    return [
+      `- [ ] T${index + 1} ${phase.title}${phase.ownerAgents.length ? `（负责人：${phase.ownerAgents.join('、')}）` : ''}`,
+      `  - [ ] T${index + 1}.1 明确 ${phase.title} 的输入、依赖和交付物`,
+      `    - 需求追踪：${reqId}`,
+      `    - 设计追踪：${decisionId}`,
+      '    - 目标文件：workflow config、requirements.md、design.md、tasks.md；待勘探真实源码/测试入口',
+      '    - 动作：检查当前 workflow 配置、用户需求和上游阶段输出，列出本阶段执行边界。',
+      '    - 交付：阶段输入/输出说明和未确认风险。',
+      '    - 验证：确认没有未解决的阻塞项后再进入执行子任务。',
+      `  - [ ] T${index + 1}.2 执行 ${phase.title} 并沉淀验证证据`,
+      `    - 需求追踪：${reqId}`,
+      `    - 设计追踪：${decisionId}`,
+      '    - 目标文件：待勘探: 与本阶段能力相关的源码、配置、测试文件',
+      '    - 动作：按 requirements.md 的验收标准完成实现、审查或配置调整。',
+      '    - 交付：代码/配置/文档变更以及对应验证结果。',
+      '    - 验证：运行相关检查或人工审查，并记录结果。',
+    ].join('\n');
+  }).join('\n\n');
+
   const design = [
     `# 设计文档：${input.workflowName}`,
     '',
     '## 概述',
-    `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 作为执行载体，先锁定需求与设计，再推进实现。`,
+    `使用 ${mode === 'state-machine' ? '状态机' : '阶段式'} workflow 作为执行载体，requirements.md 定义行为边界，design.md 定义实现组织方式，tasks.md 提供可执行任务和验证闭环。`,
+    '',
+    '## 当前实现分析',
+    '',
+    '| 路径/模块 | 当前行为 | 目标行为 | 差异/风险 | 关联需求 |',
+    '| --- | --- | --- | --- | --- |',
+    `| workflow config: ${input.workflowName} | 已有 ${plannedPhases.length} 个阶段配置。 | 转化为可追踪的 R/D/T 执行基线。 | 阶段说明可能不足以直接执行，需要在任务中补代码勘探。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    `| workingDirectory: ${input.workingDirectory} | 是后续代码勘探和验证的执行上下文。 | 所有实现任务必须绑定真实文件/函数/测试或明确待勘探目标。 | 若跳过代码勘探，任务会退化为泛泛描述。 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    '',
+    '## 架构',
+    '',
+    '```mermaid',
+    'flowchart TD',
+    '    User[用户需求] --> Spec[SpecCoding 制品]',
+    '    Spec --> Req[requirements.md]',
+    '    Spec --> Design[design.md]',
+    '    Spec --> Tasks[tasks.md]',
+    '    Tasks --> Workflow[Workflow 执行]',
+    phaseNodes,
+    plannedPhases.length > 0 ? '    Workflow --> P1' : '',
+    phaseEdges,
+    '```',
+    '',
+    '## 组件与接口',
+    '',
+    '### SpecCoding 计划层',
+    '',
+    '**职责：** 保存 requirements/design/tasks 的源文本，并提供任务状态、版本修订和快照记录。',
+    '',
+    '**输入契约：** workflow 配置、用户需求、工作目录、创建态/运行态 SpecCoding 文档。',
+    '',
+    '**输出契约：** 可审查的 requirements/design/tasks，结构化任务投影和 revision snapshots。',
+    '',
+    '**失败契约：** 若计划制品缺少需求追踪、设计追踪、验证方式或仍是空泛内容，保存/确认应失败并返回质量问题。',
+    '',
+    '**接口：**',
+    '',
+    '```text',
+    'saveCreationSession(specCoding) -> persisted creation session',
+    'normalizeSpecCodingDocument(specCoding) -> parsed task projection',
+    '```',
+    '',
+    '### Workflow 执行层',
+    '',
+    '**职责：** 按 tasks.md 的任务边界调度 Agent，并把验证证据和状态回写到运行态 SpecCoding。',
+    '',
+    '**输入契约：** 已确认的 SpecCoding 制品、workflow step、任务绑定、运行目录和 agent 配置。',
+    '',
+    '**输出契约：** Agent 执行结果、验证证据、任务状态和必要的 spec revision。',
+    '',
+    '**失败契约：** 任务阻塞时记录阻塞原因，不得静默扩大范围或跳过 SpecCoding 修订。',
+    '',
+    '**接口：**',
+    '',
+    '```text',
+    'compileStepTaskBindings(config, specCoding) -> binding validation',
+    'updateSpecCodingTaskStatuses(updates) -> synchronized task markdown',
+    '```',
+    '',
+    '## 数据模型',
+    '',
+    '- **SpecCodingDocument**: 创建态/运行态计划对象，包含 summary、goals、requirements、phases、tasks、revisions 和 artifacts。',
+    '- **SpecCodingArtifact**: requirements/design/tasks 三份 markdown 源文本，是人工审查和 AI 修订的主要对象。',
+    '- **SpecCodingTask**: 从 tasks.md checkbox 解析出的结构化任务，保留状态、phaseId、ownerAgents、验证记录和 task comment。',
+    '- **StepTaskBinding**: workflow step 与 tasks.md 任务、需求、制品之间的追踪关系。',
+    '',
+    '## 数据流',
+    '',
+    '```mermaid',
+    'sequenceDiagram',
+    '  participant User as 用户',
+    '  participant Spec as SpecCoding',
+    '  participant Workflow as Workflow',
+    '  participant Agent as Agent',
+    '  User->>Spec: 确认 requirements/design/tasks',
+    '  Spec->>Workflow: 提供任务绑定和阶段边界',
+    '  Workflow->>Agent: 分配最小可执行任务',
+    '  Agent-->>Workflow: 返回实现与验证证据',
+    '  Workflow-->>Spec: 更新任务状态和修订记录',
+    '```',
+    '',
+    '## 错误与边界矩阵',
+    '',
+    '| 场景 | 触发条件 | 期望结果 | 处理位置 | 验证方式 | 关联需求 |',
+    '| --- | --- | --- | --- | --- | --- |',
+    `| 计划制品过粗 | requirements/design/tasks 只有格式，没有代码证据、任务目标或验证方式 | 返回质量问题或要求修订，不进入确认态 | SpecCoding 保存/确认流程 | spec artifact quality tests / 人工审查 | ${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')} |`,
+    '| 实现中发现需求漂移 | Agent 执行时发现代码事实与 spec 不一致 | 先修订 requirements/design/tasks，再继续执行 | Workflow 执行层 / Supervisor | 修订记录和任务状态回写 | R1 |',
     '',
     '## 关键决策',
     '',
-    '| 决策 | 选择 | 理由 |',
-    '| --- | --- | --- |',
-    `| 执行模式 | ${mode === 'state-machine' ? '状态机' : '阶段式'} | 当前需求更适合通过${mode === 'state-machine' ? '状态流转与 verdict 驱动' : '显式阶段拆分'}来组织执行 |`,
-    '| 规划优先 | 先确认阶段目标与职责边界 | 降低后续协作偏差 |',
+    '| 编号 | 决策 | 选择 | 理由 | 替代方案 |',
+    '| --- | --- | --- | --- | --- |',
+    `| D1 | 执行模式 | ${mode === 'state-machine' ? '状态机' : '阶段式'} | 当前需求更适合通过${mode === 'state-machine' ? '状态流转与 verdict 驱动' : '显式阶段拆分'}来组织执行 | 不直接用自由对话执行，避免缺少任务追踪 |`,
+    '| D2 | 规划优先 | 先确认阶段目标、需求追踪和验证方式 | 降低后续协作偏差并支持回归审查 | 不先写代码，避免需求漂移 |',
+    '| D3 | 任务绑定 | tasks.md 任务作为 workflow step 的主要执行边界 | 让 Agent 输出能回写到 SpecCoding 状态 | 不用纯文本说明替代结构化任务 |',
+    '',
+    '## 测试方案',
+    '',
+    '- 单元测试：校验 tasks.md checkbox、任务编号、需求追踪和重复 ID。',
+    '- 集成测试：确认创建态 session 保存、修订、确认和 workflow 绑定校验正常。',
+    '- 回归测试：确认 requirements/design/tasks 的编号、task comment 和 artifact snapshots 在修订后保留。',
+    '- 人工验收：审查每个任务是否有明确动作、交付物和验证方式。',
+    '',
+    '## 兼容性与迁移',
+    '',
+    '保持现有 workflow 配置、creation session、artifact snapshot 和 spec-coding-task 注释兼容；修订时只更新必要制品，不删除仍有效的任务状态和绑定信息。',
+    '',
+    '## 风险与缓解',
+    '',
+    '- 需求拆解过粗 -> 通过 R 编号、能力拆分和 WHEN/THEN 场景约束需求质量。',
+    '- 任务无法执行 -> 每个 T 子任务必须写明动作、交付、验证和 R/D 追踪。',
+    '- AI 修订误删绑定 -> 保存前校验 tasks.md 格式和 task comment，必要时人工 diff 审查。',
   ].join('\n');
 
-  // tasks.md — 多级嵌套 checkbox
-  const taskSections = input.phases.length > 0
-    ? input.phases.map((phase, index) => {
-      const ownerText = phase.ownerAgents.length ? `（负责人：${phase.ownerAgents.join('、')}）` : '';
-      return [
-        `- [ ] T${index + 1} ${phase.title}${ownerText}`,
-        `  - [ ] T${index + 1}.1 明确 ${phase.title} 的验收标准`,
-        `    - _需求：T${index + 1}_`,
-        `  - [ ] T${index + 1}.2 按需求完成 ${phase.title} 的执行内容`,
-        `    - _需求：T${index + 1}_`,
-      ].join('\n');
-    }).join('\n\n')
-    : [
-      '- [ ] T1 需求澄清',
-      '  - [ ] T1.1 补齐目标、约束与验收标准',
-      '    - _需求：T1_',
-      '  - [ ] T1.2 明确后续执行阶段与角色分工',
-      '    - _需求：T1_',
-    ].join('\n');
   const tasks = [
     `# 实现计划：${input.workflowName}`,
     '',
     '## 概述',
-    '先完成需求澄清、方案设计与任务拆解，形成清晰的协作与执行基线，再推进后续实现。',
+    `按 ${plannedPhases.map((_, index) => `R${index + 1}`).join('、')} 的验收标准推进，先确认边界，再执行任务，最后沉淀验证证据。`,
+    '',
+    '## 执行前证据清单',
+    '',
+    `- workflow config: ${input.workflowName} 提供阶段、负责人和初始任务边界。`,
+    `- workingDirectory: ${input.workingDirectory} 是后续代码勘探和验证命令的执行上下文。`,
+    '- 待勘探：每个实现任务开始前必须定位真实文件/函数/测试，不能只按抽象阶段描述执行。',
     '',
     '## 任务',
     '',
-    taskSections,
+    taskRows,
+    '',
+    '- [ ] T999 最终检查点 - 汇总验证证据和剩余风险',
+    `  - 需求追踪：${plannedPhases.map((_, index) => `R${index + 1}`).join(', ')}`,
+    '  - 设计追踪：D1, D2, D3',
+    '  - 目标文件：测试输出、验证记录、SpecCoding 修订记录',
+    '  - 动作：汇总所有已完成任务的验证证据、未解决风险和后续建议。',
+    '  - 交付：最终检查点记录。',
+    '  - 验证：确认所有非阻塞任务已完成或明确记录阻塞原因。',
   ].join('\n');
 
   return { requirements, design, tasks };

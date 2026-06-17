@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/core/utils';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
+import type { ReturnTarget } from '@/lib/navigation/return-target';
 
 interface AgentConfig {
   name: string;
@@ -47,6 +48,19 @@ interface AgentConfig {
   skills?: string[];
   description?: string;
   alwaysAvailableForChat?: boolean;
+  workspaceProfile?: {
+    nickname?: string;
+    officeRole?: string;
+    residency?: {
+      office?: boolean;
+      meetingRoom?: boolean;
+      defaultDirectRoom?: boolean;
+    };
+    roomPresence?: {
+      recommendForMeetingRoom?: boolean;
+      autoShowInOffice?: boolean;
+    };
+  };
 }
 
 const CATEGORIES = ['测试', '编码', '设计', '压力测试', '审查', '文档', '其他'];
@@ -54,9 +68,13 @@ type DisplayTeam = 'blue' | 'red' | 'judge' | 'black-gold';
 
 interface AgentsManagerProps {
   embedded?: boolean;
+  returnTarget?: ReturnTarget;
 }
 
-export default function AgentsManager({ embedded = false }: AgentsManagerProps) {
+export default function AgentsManager({
+  embedded = false,
+  returnTarget = { href: '/dashboard', label: '返回首页' },
+}: AgentsManagerProps) {
   const VIEW_MODE_STORAGE_KEY = 'aceharness:agents:view-mode';
   const { toast } = useToast();
   useDocumentTitle(embedded ? null : 'Agent 管理');
@@ -387,6 +405,21 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
     };
   };
 
+  const getWorkspaceProfileBadges = (agent: AgentConfig) => {
+    const profile = agent.workspaceProfile || {};
+    const badges: Array<{ label: string; className: string }> = [];
+    if (profile.residency?.office || profile.roomPresence?.autoShowInOffice) {
+      badges.push({ label: '办公室常驻', className: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200' });
+    }
+    if (profile.residency?.meetingRoom || profile.roomPresence?.recommendForMeetingRoom) {
+      badges.push({ label: '会议室推荐', className: 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-200' });
+    }
+    if (profile.residency?.defaultDirectRoom) {
+      badges.push({ label: '可私聊', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200' });
+    }
+    return badges;
+  };
+
   return (
     <div
       className={cn(
@@ -406,7 +439,7 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
         <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="sm" asChild>
-              <Link href="/dashboard">
+              <Link href={returnTarget.href} aria-label={returnTarget.label} title={returnTarget.label}>
                 <span className="material-symbols-outlined text-lg">arrow_back</span>
               </Link>
             </Button>
@@ -865,6 +898,15 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                                     <div className="space-y-1">
                                       <div className="truncate">{agent.temperature !== undefined ? `温度 ${agent.temperature}` : '默认温度'}</div>
                                       <div className="truncate text-muted-foreground">{agent.category || '未分类'} · {(agent.tags || []).length} 个标签</div>
+                                      {getWorkspaceProfileBadges(agent).length > 0 ? (
+                                        <div className="flex flex-wrap gap-1 pt-1">
+                                          {getWorkspaceProfileBadges(agent).map((badge) => (
+                                            <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
+                                              {badge.label}
+                                            </Badge>
+                                          ))}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   }
                                   actions={
@@ -962,6 +1004,11 @@ export default function AgentsManager({ embedded = false }: AgentsManagerProps) 
                                     {agent.roleType === 'supervisor' ? (
                                       <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-200">Supervisor</Badge>
                                     ) : null}
+                                    {getWorkspaceProfileBadges(agent).map((badge) => (
+                                      <Badge key={badge.label} variant="outline" className={`text-[10px] ${badge.className}`}>
+                                        {badge.label}
+                                      </Badge>
+                                    ))}
                                   </div>
                                 </div>
                               </div>

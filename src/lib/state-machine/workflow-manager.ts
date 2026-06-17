@@ -279,6 +279,17 @@ export function extractTaggedBlock(text: string, tag: string): string | null {
   return text.match(pattern)?.[1]?.trim() || null;
 }
 
+function extractTaggedBlocks(text: string, tag: string): string[] {
+  const pattern = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'gi');
+  const blocks: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const value = match[1]?.trim();
+    if (value) blocks.push(value);
+  }
+  return blocks;
+}
+
 export function compactStepConclusion(raw: string): string {
   const tagged = extractTaggedBlock(raw, 'step-conclusion');
   if (tagged) return tagged;
@@ -329,6 +340,35 @@ export type StepSegment =
   | { type: 'serial'; step: WorkflowStep }
   | { type: 'parallel'; groupId: string; steps: WorkflowStep[] };
 
+type HumanHelpOption = {
+  label: string;
+  value: string;
+  description?: string;
+};
+
+type HumanHelpRequest = {
+  title: string;
+  question: string;
+  reason?: string;
+  severity?: string;
+  answerType: 'text' | 'single-choice' | 'multi-choice';
+  options?: HumanHelpOption[];
+  placeholder?: string;
+  raw: any;
+};
+
+type SupervisorHumanHelpDecision = {
+  needsHuman: boolean;
+  title?: string;
+  message?: string;
+  supervisorAdvice?: string;
+  answerType?: HumanHelpRequest['answerType'];
+  options?: HumanHelpOption[];
+  placeholder?: string;
+  fallbackInstruction?: string;
+  rawOutput?: string;
+};
+
 type RuntimeJoinPolicy = {
   mode: 'all' | 'any' | 'quorum' | 'manual';
   quorum?: number;
@@ -341,7 +381,16 @@ type ActiveConcurrencyGroup = {
   stateName: string;
   steps: string[];
   joinPolicy?: RuntimeJoinPolicy;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'waiting-approval' | 'completed' | 'failed';
+};
+
+type ParallelBranchResult = {
+  step: WorkflowStep;
+  status: 'fulfilled' | 'rejected';
+  output?: string;
+  error?: string;
+  verdict?: 'pass' | 'conditional_pass' | 'fail';
+  issues?: Issue[];
 };
 
 type ChannelOutputEntry = {
@@ -1689,7 +1738,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     const existingPending = this.getPendingHumanQuestion();
-    if (existingPending && existingPending.source?.type === input.source?.type && input.kind === existingPending.kind) {
+    if (existingPending && input.source && existingPending.source && this.isSameHumanQuestionSource(existingPending.source, input.source) && input.kind === existingPending.kind) {
       return existingPending;
     }
 
@@ -1728,16 +1777,33 @@ export class StateMachineWorkflowManager extends EventEmitter {
       timestamp: question.createdAt,
     };
     await this.persistState();
+    const isParallelManualJoin = question.source?.type === 'parallel-manual-join';
+    const isHumanHelp = question.source?.type === 'human-help';
     await this.appendSupervisorChatEvent({
-      type: 'human-question',
-      title: `等待人工回复：${question.title}`,
+      type: isParallelManualJoin ? 'parallel-manual-join-question' : isHumanHelp ? 'human-help-question' : 'human-question',
+      title: `${isParallelManualJoin ? '等待并发人工确认' : isHumanHelp ? '等待人工客服回复' : '等待人工回复'}：${question.title}`,
       body: question.message,
-      tags: ['human', 'approval', question.kind],
+      tags: ['human', isParallelManualJoin ? 'parallel-manual-join' : isHumanHelp ? 'human-help' : 'approval', question.kind],
       dedupeKey: `workflow-human-question-${question.id}`,
     });
     this.emit('human-question-required', { question, humanQuestions: this.humanQuestions });
     this.emit('status', { status: this.status, pendingHumanQuestion: question, currentConfigFile: this.currentConfigFile });
     return question;
+  }
+
+  private isSameHumanQuestionSource(existing: HumanQuestion['source'], next: HumanQuestion['source']): boolean {
+    if (!existing || !next || existing.type !== next.type) return false;
+    if (existing.type === 'parallel-manual-join' || next.type === 'parallel-manual-join') {
+      return existing.type === next.type
+        && existing.groupId === next.groupId
+        && existing.stateName === next.stateName;
+    }
+    if (existing.type === 'human-help' || next.type === 'human-help') {
+      return existing.type === next.type
+        && existing.stateName === next.stateName
+        && existing.stepName === next.stepName;
+    }
+    return true;
   }
 
   async answerHumanQuestion(questionId: string, answer: HumanQuestionAnswer): Promise<HumanQuestion> {
@@ -1779,11 +1845,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
     }
 
     await this.persistState();
+    const isParallelManualJoin = existing.source?.type === 'parallel-manual-join';
+    const isHumanHelp = existing.source?.type === 'human-help';
     await this.appendSupervisorChatEvent({
-      type: 'human-answer',
-      title: `人工已回复：${existing.title}`,
+      type: isParallelManualJoin ? 'parallel-manual-join-answer' : isHumanHelp ? 'human-help-answer' : 'human-answer',
+      title: `${isParallelManualJoin ? '并发人工确认已回复' : isHumanHelp ? '人工客服已回复' : '人工已回复'}：${existing.title}`,
       body: answerText,
-      tags: ['human', 'answered'],
+      tags: ['human', isParallelManualJoin ? 'parallel-manual-join' : isHumanHelp ? 'human-help' : 'answered', 'answered'],
       dedupeKey: `workflow-human-answer-${questionId}-${now}`,
       speakerName: '你',
       speakerType: 'human',
@@ -1829,6 +1897,348 @@ export class StateMachineWorkflowManager extends EventEmitter {
           resolve();
         }
       }, 500); // Check every 500ms
+    });
+  }
+
+  private isHumanHelpEnabled(config: StateMachineWorkflowConfig): boolean {
+    return config.workflow?.humanHelp?.enabled === true;
+  }
+
+  private normalizeHumanHelpOptions(rawOptions: any, limit = 8): HumanHelpOption[] {
+    if (!Array.isArray(rawOptions)) return [];
+    const seen = new Set<string>();
+    const options: HumanHelpOption[] = [];
+    for (const raw of rawOptions) {
+      const label = typeof raw === 'string'
+        ? raw.trim()
+        : String(raw?.label || raw?.title || raw?.name || raw?.value || '').trim();
+      const value = typeof raw === 'string'
+        ? raw.trim()
+        : String(raw?.value || raw?.id || raw?.key || label).trim();
+      if (!label || !value || seen.has(value)) continue;
+      seen.add(value);
+      const description = typeof raw === 'object' && typeof raw?.description === 'string'
+        ? raw.description.trim()
+        : undefined;
+      options.push({ label, value, description });
+      if (options.length >= limit) break;
+    }
+    return options;
+  }
+
+  private normalizeHumanHelpAnswerType(rawType: any, options: HumanHelpOption[], config: StateMachineWorkflowConfig): HumanHelpRequest['answerType'] {
+    const text = String(rawType || '').trim().toLowerCase();
+    if (['multi', 'multiple', 'multi-choice', 'checkbox', '多选'].includes(text)) return 'multi-choice';
+    if (['single', 'choice', 'single-choice', 'radio', 'select', '选择', '单选'].includes(text)) return options.length > 0 ? 'single-choice' : 'text';
+    if (['text', 'freeform', 'free-form', 'input', '输入', '文本'].includes(text)) return 'text';
+    if (options.length > 0) {
+      return config.workflow?.humanHelp?.defaultSelectionMode === 'multiple' ? 'multi-choice' : 'single-choice';
+    }
+    return 'text';
+  }
+
+  private parseHumanHelpRequests(output: string, config: StateMachineWorkflowConfig): HumanHelpRequest[] {
+    if (!this.isHumanHelpEnabled(config)) return [];
+    const requests: HumanHelpRequest[] = [];
+    for (const block of extractTaggedBlocks(output, 'human-help')) {
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(block);
+      } catch {
+        parsed = this.extractJsonObject(block) || { question: block };
+      }
+      const options = this.normalizeHumanHelpOptions(parsed?.options || parsed?.choices);
+      const question = String(
+        parsed?.question || parsed?.message || parsed?.ask || parsed?.prompt || parsed?.reason || block
+      ).trim();
+      if (!question) continue;
+      const title = String(parsed?.title || parsed?.label || '需要人工客服协助').trim();
+      requests.push({
+        title,
+        question,
+        reason: typeof parsed?.reason === 'string' ? parsed.reason.trim() : undefined,
+        severity: typeof parsed?.severity === 'string' ? parsed.severity.trim() : undefined,
+        answerType: this.normalizeHumanHelpAnswerType(parsed?.answerType || parsed?.type || parsed?.selectionMode, options, config),
+        options,
+        placeholder: typeof parsed?.placeholder === 'string' ? parsed.placeholder.trim() : undefined,
+        raw: parsed,
+      });
+    }
+    return requests;
+  }
+
+  private async reviewHumanHelpRequest(input: {
+    request: HumanHelpRequest;
+    output: string;
+    step: WorkflowStep;
+    state: StateMachineState;
+    config: StateMachineWorkflowConfig;
+  }): Promise<SupervisorHumanHelpDecision> {
+    const { request, output, step, state, config } = input;
+    if (config.workflow?.humanHelp?.supervisorReviewEnabled === false || config.workflow?.supervisor?.enabled === false) {
+      return {
+        needsHuman: true,
+        title: request.title,
+        message: request.question,
+        supervisorAdvice: request.reason,
+        answerType: request.answerType,
+        options: request.options,
+        placeholder: request.placeholder,
+      };
+    }
+
+    const options = request.options || [];
+    const answerType = this.normalizeHumanHelpAnswerType(request.answerType, options, config);
+    const supervisorConfig = this.agentConfigs.find((role) => role.name === this.currentSupervisorAgent)
+      || config.roles?.find((role) => role.name === this.currentSupervisorAgent);
+    if (supervisorConfig) {
+      try {
+        const prompt = [
+          `你是工作流 Supervisor「${this.currentSupervisorAgent}」。Agent 在步骤中请求人工客服，请判断是否真的需要打断用户。`,
+          '',
+          '# 判断规则',
+          '- 只有缺少必须由用户提供的信息、必要环境/仓库/配置不可得、存在冲突矛盾需要用户决策时，才 needsHuman=true。',
+          '- 如果 Agent 还没充分自查、可以读取仓库/配置/上下文、可以采用保守默认值或继续验证，应 needsHuman=false，并给出 fallbackInstruction。',
+          '- 不要为了省事请求用户；也不要压掉真正阻塞执行的问题。',
+          '',
+          '# 当前状态',
+          `状态: ${state.name}`,
+          `步骤: ${step.name}`,
+          `Agent: ${getStepRuntimeAgentName(step)}`,
+          '',
+          '# Agent 请求',
+          `标题: ${request.title}`,
+          `问题: ${request.question}`,
+          request.reason ? `原因: ${request.reason}` : '',
+          request.options?.length ? `选项: ${request.options.map((option) => `${option.label}=${option.value}`).join('；')}` : '',
+          '',
+          '# Agent 本轮输出摘录',
+          compactStepConclusion(output).slice(0, 1800),
+          '',
+          '请只输出 JSON：',
+          '{"needsHuman":true|false,"supervisorAdvice":"复核意见","fallbackInstruction":"needsHuman=false 时给 Agent 的继续指令","title":"可选，给人的标题","message":"可选，给人的问题","answerType":"text|single-choice|multi-choice"}',
+        ].filter(Boolean).join('\n');
+        const rawOutput = await this.queryAgent(this.currentSupervisorAgent, prompt, config);
+        const parsed = this.extractJsonObject(rawOutput);
+        if (parsed && typeof parsed.needsHuman === 'boolean') {
+          return {
+            needsHuman: parsed.needsHuman,
+            title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : request.title,
+            message: typeof parsed.message === 'string' && parsed.message.trim() ? parsed.message.trim() : request.question,
+            supervisorAdvice: typeof parsed.supervisorAdvice === 'string' && parsed.supervisorAdvice.trim()
+              ? parsed.supervisorAdvice.trim()
+              : compactStepConclusion(rawOutput).slice(0, 800),
+            fallbackInstruction: typeof parsed.fallbackInstruction === 'string' ? parsed.fallbackInstruction.trim() : undefined,
+            answerType: this.normalizeHumanHelpAnswerType(parsed.answerType, options, config) || answerType,
+            options,
+            placeholder: request.placeholder,
+            rawOutput,
+          };
+        }
+      } catch {
+        // Fall through to deterministic review if the Supervisor model call fails.
+      }
+    }
+
+    const text = [
+      request.title,
+      request.question,
+      request.reason,
+      compactStepConclusion(output).slice(0, 1200),
+    ].filter(Boolean).join('\n').toLowerCase();
+    const explicitBlockers = /缺少|missing|not found|找不到|不存在|没有|权限|permission|credential|token|api[_-]?key|密钥|账号|环境|仓库|repo|repository|配置|config|冲突|矛盾|选择|确认|决策|拍板|人工|用户/.test(text);
+    const agentCanSelfServe = /还没查|未查|没有查|先查|可以查|自行|默认配置|保守默认|继续检查|搜索|读取/.test(text);
+    const needsHuman = explicitBlockers && !agentCanSelfServe;
+    if (!needsHuman) {
+      return {
+        needsHuman: false,
+        supervisorAdvice: 'Supervisor 复核：当前问题更像可由 Agent 继续自查处理，暂不打断用户。',
+        fallbackInstruction: [
+          '请先自行检查仓库、配置文件、环境变量说明和已有上下文。',
+          '若仍然缺少必须由用户提供的信息，请说明你已经检查过哪些位置，再重新发起人工客服请求。',
+        ].join('\n'),
+        rawOutput: '',
+      };
+    }
+    return {
+      needsHuman: true,
+      title: request.title,
+      message: request.question,
+      supervisorAdvice: request.reason
+        ? `Supervisor 复核：该请求可能阻塞当前步骤，原因是 ${request.reason}`
+        : 'Supervisor 复核：该请求涉及必要信息或用户决策，需要人工客服介入。',
+      answerType,
+      options,
+      placeholder: request.placeholder,
+      rawOutput: '',
+    };
+  }
+
+  private buildHumanHelpAnswerSchema(decision: SupervisorHumanHelpDecision, request: HumanHelpRequest): HumanQuestion['answerSchema'] {
+    const options = decision.options?.length ? decision.options : request.options || [];
+    const type = decision.answerType || request.answerType;
+    if ((type === 'single-choice' || type === 'multi-choice') && options.length > 0) {
+      return {
+        type,
+        required: true,
+        options,
+      };
+    }
+    return {
+      type: 'text',
+      required: true,
+      placeholder: decision.placeholder || request.placeholder || '请补充当前步骤继续执行所需的信息。',
+    };
+  }
+
+  private formatHumanHelpResumePrompt(input: {
+    question: HumanQuestion;
+    answer?: HumanQuestionAnswer;
+    request: HumanHelpRequest;
+    decision: SupervisorHumanHelpDecision;
+  }): string {
+    const answerText = input.answer ? this.formatHumanQuestionAnswer(input.answer) : '用户未提供明确内容。';
+    return [
+      '## 人工客服回复',
+      '你之前通过 <human-help> 请求人工客服。Supervisor 已完成复核，人类已回复。',
+      '',
+      `原问题: ${input.question.title}`,
+      input.question.message,
+      '',
+      input.decision.supervisorAdvice ? `Supervisor 复核意见:\n${input.decision.supervisorAdvice}` : '',
+      '',
+      `人类回复:\n${answerText}`,
+      '',
+      '请基于以上回复继续当前步骤，不要重新请求同一个问题；如果仍有新的阻塞点，必须说明新增事实后再使用 <human-help>。',
+    ].filter(Boolean).join('\n');
+  }
+
+  private async handleHumanHelpRequests(input: {
+    requests: HumanHelpRequest[];
+    output: string;
+    step: WorkflowStep;
+    state: StateMachineState;
+    config: StateMachineWorkflowConfig;
+    runtimeAgentName: string;
+  }): Promise<string | null> {
+    const { requests, output, step, state, config, runtimeAgentName } = input;
+    const request = requests[0];
+    if (!request) return null;
+    const stateName = state.name || this.currentState || '';
+
+    const timestamp = new Date().toISOString();
+    this.emit('human-help-requested', {
+      state: stateName,
+      step: step.name,
+      agent: runtimeAgentName,
+      request,
+      timestamp,
+    });
+    await this.appendSupervisorChatEvent({
+      type: 'human-help-request',
+      title: `请求人工客服：${stateName} / ${step.name}`,
+      body: [
+        `${runtimeAgentName} 请求人工介入。`,
+        `问题: ${request.question}`,
+        request.reason ? `原因: ${request.reason}` : '',
+      ].filter(Boolean).join('\n'),
+      tags: ['human-help', stateName, step.name],
+      speakerName: runtimeAgentName,
+      dedupeKey: `workflow-human-help-request-${this.currentRunId}-${stateName}-${step.name}-${timestamp}`,
+    });
+
+    const decision = await this.reviewHumanHelpRequest({ request, output, step, state, config });
+    this.supervisorFlow.push({
+      type: 'human-help-review',
+      from: this.currentSupervisorAgent,
+      to: decision.needsHuman ? 'user' : runtimeAgentName,
+      question: decision.supervisorAdvice || decision.message || request.question,
+      round: this.transitionCount,
+      timestamp: new Date().toISOString(),
+      stateName,
+    });
+    await this.appendSupervisorChatEvent({
+      type: decision.needsHuman ? 'human-help-review' : 'human-help-dismissed',
+      title: decision.needsHuman
+        ? `Supervisor 确认需要人工：${stateName} / ${step.name}`
+        : `Supervisor 判定无需人工：${stateName} / ${step.name}`,
+      body: decision.needsHuman
+        ? [
+          '@你 这里需要你补充信息后才能继续。',
+          decision.supervisorAdvice || '',
+          decision.message || request.question,
+        ].filter(Boolean).join('\n\n')
+        : [
+          decision.supervisorAdvice || 'Supervisor 判定当前问题不需要人工介入。',
+          decision.fallbackInstruction ? `给 Agent 的继续指令:\n${decision.fallbackInstruction}` : '',
+      ].filter(Boolean).join('\n\n'),
+      tags: ['human-help', decision.needsHuman ? 'needs-human' : 'dismissed'],
+      dedupeKey: `workflow-human-help-review-${this.currentRunId}-${stateName}-${step.name}-${Date.now()}`,
+    });
+
+    if (!decision.needsHuman) {
+      return [
+        '## Supervisor 复核人工客服请求',
+        decision.supervisorAdvice || 'Supervisor 判定当前问题不需要人工介入。',
+        decision.fallbackInstruction ? `\n继续执行指令:\n${decision.fallbackInstruction}` : '',
+        '',
+        '请基于以上指令继续当前步骤，不要再次请求同一个人工客服问题。',
+      ].filter(Boolean).join('\n');
+    }
+
+    const agent = this.agents.find((item) => item.name === runtimeAgentName);
+    if (agent) {
+      agent.status = 'waiting';
+      agent.currentTask = `${step.name}（等待人工客服）`;
+      this.emit('agents', { agents: this.agents });
+      await this.persistState();
+    }
+
+    const humanQuestion = await this.createHumanQuestion({
+      kind: decision.answerType === 'text' || request.answerType === 'text' ? 'clarification' : 'choice',
+      title: decision.title || request.title,
+      message: decision.message || request.question,
+      supervisorAdvice: decision.supervisorAdvice,
+      currentState: stateName,
+      result: {
+        stateName,
+        stepName: step.name,
+        agent: runtimeAgentName,
+        request,
+        supervisorDecision: {
+          needsHuman: decision.needsHuman,
+          supervisorAdvice: decision.supervisorAdvice,
+        },
+      },
+      requiresWorkflowPause: config.workflow?.humanHelp?.blockUntilAnswered !== false,
+      answerSchema: this.buildHumanHelpAnswerSchema(decision, request),
+      source: {
+        type: 'human-help',
+        stateName,
+        stepName: step.name,
+        agent: runtimeAgentName,
+      },
+    });
+
+    const answered = await this.waitForHumanQuestionAnswer(humanQuestion.id);
+    if (this.shouldStop) {
+      throw new Error('工作流已停止');
+    }
+    const finalQuestion = answered || this.humanQuestions.find((question) => question.id === humanQuestion.id) || humanQuestion;
+    await this.appendSupervisorChatEvent({
+      type: 'human-answer',
+      title: `人工客服已回复：${finalQuestion.title}`,
+      body: finalQuestion.answer ? this.formatHumanQuestionAnswer(finalQuestion.answer) : '已回复。',
+      tags: ['human', 'human-help', 'answered'],
+      speakerName: '你',
+      speakerType: 'human',
+      dedupeKey: `workflow-human-help-answer-${finalQuestion.id}-${finalQuestion.answeredAt || Date.now()}`,
+    });
+    return this.formatHumanHelpResumePrompt({
+      question: finalQuestion,
+      answer: finalQuestion.answer,
+      request,
+      decision,
     });
   }
 
@@ -1891,13 +2301,13 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
   private refreshCurrentStep(): void {
     const active = Array.from(this.activeStepKeys);
+    const activeGroup = this.activeConcurrencyGroups.find((group) => group.status === 'running' || group.status === 'waiting-approval');
     if (active.length === 0) {
-      this.currentStep = null;
+      this.currentStep = activeGroup ? `并发:${activeGroup.stateName}:${activeGroup.id}` : null;
     } else if (active.length === 1) {
       this.currentStep = active[0];
     } else {
-      const runningGroup = this.activeConcurrencyGroups.find((group) => group.status === 'running');
-      this.currentStep = runningGroup ? `并发:${runningGroup.stateName}:${runningGroup.id}` : active[0];
+      this.currentStep = activeGroup ? `并发:${activeGroup.stateName}:${activeGroup.id}` : active[0];
     }
   }
 
@@ -2508,9 +2918,16 @@ export class StateMachineWorkflowManager extends EventEmitter {
     this.emitSpecRevisionVoteStatus('Spec 修订内部表决完成');
   }
 
+  private shouldQueueSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): boolean {
+    if (!this.currentRunSpecCoding || this.shouldStop) return false;
+    const stateName = input.stateName || this.currentState || '';
+    const state = config.workflow.states.find((item) => item.name === stateName);
+    return state?.enableSpecRevisionOnComplete === true;
+  }
+
   private queueSpecRevisionVote(input: SpecRevisionVoteTriggerInput, config: StateMachineWorkflowConfig): void {
-    if (!this.currentRunSpecCoding || this.shouldStop) return;
     const workflowConfig = this.currentWorkflowConfig || config;
+    if (!this.shouldQueueSpecRevisionVote(input, workflowConfig)) return;
     this.specRevisionVoteTail = this.specRevisionVoteTail
       .catch(() => {})
       .then(() => this.runSpecRevisionVote(input, workflowConfig))
@@ -3557,12 +3974,14 @@ try {
     }
   }
 
-  private summarizeParallelResults(groupId: string, results: Array<{ step: WorkflowStep; status: 'fulfilled' | 'rejected'; output?: string; error?: string }>): string {
+  private summarizeParallelResults(groupId: string, results: ParallelBranchResult[]): string {
     return [
       `并发组 ${groupId} 已完成，以下结果供后续串行步骤继承：`,
       ...results.map((item) => {
         const branchId = item.step.concurrency?.branchId || item.step.name;
-        const status = item.status === 'fulfilled' ? '成功' : '失败';
+        const status = item.status === 'fulfilled'
+          ? (item.verdict ? `成功/${item.verdict}` : '成功')
+          : '失败';
         const text = item.output || item.error || '';
         const summary = compactStepConclusion(text).replace(/\s+/g, ' ').trim().slice(0, 800) || '[无摘要]';
         return `- ${item.step.name} (${branchId}, ${getStepRuntimeAgentName(item.step)}): ${status}。${summary}`;
@@ -3570,23 +3989,105 @@ try {
     ].join('\n');
   }
 
+  private getParallelBranchJoinSuccess(result: ParallelBranchResult): boolean {
+    return result.status === 'fulfilled' && result.verdict !== 'fail';
+  }
+
   private evaluateParallelJoin(
     groupId: string,
-    results: Array<{ step: WorkflowStep; status: 'fulfilled' | 'rejected'; output?: string; error?: string }>,
+    results: ParallelBranchResult[],
     joinPolicy: RuntimeJoinPolicy,
-  ): { passed: boolean; manualNotice?: string } {
-    const successCount = results.filter((item) => item.status === 'fulfilled').length;
+  ): { passed: boolean; successCount: number; requiredCount: number; mode: RuntimeJoinPolicy['mode'] } {
+    const successCount = results.filter((item) => this.getParallelBranchJoinSuccess(item)).length;
     const requiredQuorum = joinPolicy.mode === 'quorum' ? (joinPolicy.quorum || results.length) : results.length;
+    const requiredCount = joinPolicy.mode === 'any'
+      ? 1
+      : joinPolicy.mode === 'quorum'
+        ? Math.min(Math.max(1, requiredQuorum), results.length)
+        : results.length;
     let passed = false;
     if (joinPolicy.mode === 'any') passed = successCount > 0;
-    else if (joinPolicy.mode === 'quorum') passed = successCount >= requiredQuorum;
+    else if (joinPolicy.mode === 'quorum') passed = successCount >= requiredCount;
     else passed = successCount === results.length;
 
     return {
       passed,
-      manualNotice: joinPolicy.mode === 'manual'
-        ? `并发组 ${groupId} 使用 manual join，第一阶段按 all 执行；请人工关注分支汇总。`
-        : undefined,
+      successCount,
+      requiredCount,
+      mode: joinPolicy.mode,
+    };
+  }
+
+  private async waitForManualParallelJoin(input: {
+    groupId: string;
+    state: StateMachineState;
+    results: ParallelBranchResult[];
+    joinResult: { passed: boolean; successCount: number; requiredCount: number; mode: RuntimeJoinPolicy['mode'] };
+    summary: string;
+  }): Promise<{ passed: boolean; instruction?: string }> {
+    const { groupId, state, results, joinResult, summary } = input;
+    const defaultChoice = joinResult.passed ? 'approve' : 'reject';
+    const message = [
+      `并发组 ${groupId} 已完成，当前自动判定为 ${joinResult.passed ? '通过' : '失败'}。`,
+      `满足分支: ${joinResult.successCount}/${results.length}，策略要求: ${joinResult.requiredCount}/${results.length}。`,
+      '',
+      summary,
+      '',
+      '请人工确认是否放行后续步骤。',
+    ].join('\n');
+
+    const humanQuestion = await this.createHumanQuestion({
+      kind: 'approval',
+      title: `并发组人工确认：${groupId}`,
+      message,
+      currentState: state.name,
+      suggestedNextState: defaultChoice,
+      result: {
+        verdict: joinResult.passed ? 'pass' : 'fail',
+        summary,
+        stepOutputs: results.map((item) => item.output || item.error || ''),
+        issues: results.flatMap((item) => item.issues || []),
+        parallelGroup: {
+          id: groupId,
+          stateName: state.name,
+          joinPolicy: { mode: input.joinResult.mode },
+          successCount: joinResult.successCount,
+          requiredCount: joinResult.requiredCount,
+        },
+      },
+      requiresWorkflowPause: true,
+      answerSchema: {
+        type: 'single-choice',
+        required: true,
+        options: [
+          { label: '通过并继续', value: 'approve', description: '接受并发组结果，继续后续步骤或状态转移。' },
+          { label: '判为失败', value: 'reject', description: '将当前并发组判定为失败，当前状态按失败处理。' },
+        ],
+      },
+      source: {
+        type: 'parallel-manual-join',
+        groupId,
+        stateName: state.name,
+        suggestedDecision: defaultChoice,
+      },
+    });
+
+    this.emit('human-approval-required', {
+      currentState: state.name,
+      result: humanQuestion.result,
+      supervisorAdvice: message,
+      humanQuestion,
+      pendingHumanQuestion: humanQuestion,
+      parallelGroupId: groupId,
+      joinPolicy: 'manual',
+    });
+
+    const answered = await this.waitForHumanQuestionAnswer(humanQuestion.id);
+    const answer = answered?.answer;
+    const selected = answer?.selectedOption || answer?.raw?.selectedOption || defaultChoice;
+    return {
+      passed: selected !== 'reject',
+      instruction: answer?.instruction || answer?.text,
     };
   }
 
@@ -3628,10 +4129,17 @@ try {
       return { step, output };
     }));
 
-    const results = settled.map((result, index) => {
+    const results: ParallelBranchResult[] = settled.map((result, index) => {
       const step = segment.steps[index];
       if (result.status === 'fulfilled') {
-        return { step, status: 'fulfilled' as const, output: result.value.output };
+        const output = result.value.output || '';
+        return {
+          step,
+          status: 'fulfilled' as const,
+          output,
+          verdict: this.parseVerdict(output),
+          issues: this.parseIssuesFromOutput(output, step, state.name),
+        };
       }
       const error = result.reason?.message || String(result.reason);
       return { step, status: 'rejected' as const, error };
@@ -3647,32 +4155,59 @@ try {
       throw new Error(`引擎异常，已停止工作流：${engineError.error}`);
     }
 
-    const joinResult = this.evaluateParallelJoin(segment.groupId, results, joinPolicy);
+    const outputs = results.map((item) => item.status === 'fulfilled' ? (item.output || '') : `ERROR: ${item.error || '并发分支失败'}`);
+    const issues = results.flatMap((item) => item.issues || []);
+
+    const summary = this.summarizeParallelResults(segment.groupId, results);
+    let joinResult = this.evaluateParallelJoin(segment.groupId, results, joinPolicy);
+    let manualInstruction = '';
+    if (joinPolicy.mode === 'manual') {
+      groupState.status = 'waiting-approval';
+      this.activeConcurrencyGroups = this.activeConcurrencyGroups.map((group) =>
+        group.id === groupState.id && group.stateName === groupState.stateName ? { ...groupState } : group
+      );
+      this.refreshCurrentStep();
+      await this.persistState();
+
+      const manualDecision = await this.waitForManualParallelJoin({
+        groupId: segment.groupId,
+        state,
+        results,
+        joinResult,
+        summary,
+      });
+      if (this.shouldStop) {
+        throw new Error('工作流已停止');
+      }
+      joinResult = {
+        ...joinResult,
+        passed: manualDecision.passed,
+      };
+      manualInstruction = manualDecision.instruction || '';
+    }
+
     groupState.status = joinResult.passed ? 'completed' : 'failed';
     this.activeConcurrencyGroups = this.activeConcurrencyGroups.map((group) =>
       group.id === groupState.id && group.stateName === groupState.stateName ? { ...groupState } : group
     );
+    this.refreshCurrentStep();
 
-    const outputs = results.map((item) => item.status === 'fulfilled' ? (item.output || '') : `ERROR: ${item.error || '并发分支失败'}`);
-    const issues = results.flatMap((item) => item.status === 'fulfilled'
-      ? this.parseIssuesFromOutput(item.output || '', item.step, state.name)
-      : []);
     let verdict: 'pass' | 'conditional_pass' | 'fail' = joinResult.passed ? 'pass' : 'fail';
-    if (useVerdict) {
-      for (const item of results) {
-        if (item.status === 'fulfilled') {
-          const stepVerdict = this.parseVerdict(item.output || '');
-          if (stepVerdict === 'fail') verdict = 'fail';
-          else if (stepVerdict === 'conditional_pass' && verdict === 'pass') verdict = 'conditional_pass';
-        }
+    if (joinResult.passed && useVerdict) {
+      const successfulVerdicts = results
+        .filter((item) => this.getParallelBranchJoinSuccess(item))
+        .map((item) => item.verdict)
+        .filter(Boolean);
+      if (successfulVerdicts.includes('conditional_pass')) {
+        verdict = 'conditional_pass';
       }
     }
     if (!joinResult.passed) verdict = 'fail';
 
-    const summary = this.summarizeParallelResults(segment.groupId, results);
     const logMessage = [
-      `并发组 ${segment.groupId} 完成：${joinResult.passed ? '通过' : '失败'} (${results.filter((item) => item.status === 'fulfilled').length}/${results.length})`,
-      joinResult.manualNotice,
+      `并发组 ${segment.groupId} 完成：${joinResult.passed ? '通过' : '失败'} (${joinResult.successCount}/${results.length}，要求 ${joinResult.requiredCount})`,
+      joinPolicy.mode === 'manual' ? `manual join 已人工${joinResult.passed ? '放行' : '判失败'}` : '',
+      manualInstruction ? `人工指令: ${manualInstruction}` : '',
       joinPolicy.timeoutMinutes ? `timeoutMinutes=${joinPolicy.timeoutMinutes}, onTimeout=${joinPolicy.onTimeout || '未设置'}（第一阶段仅记录，不主动终止分支）` : '',
     ].filter(Boolean).join('；');
     this.emit('log', { message: logMessage });
@@ -4531,6 +5066,19 @@ try {
       parts.push(`\n# 本轮运行中的人类答复\n${recentAnswers.join('\n')}`);
     }
 
+    if (this.isHumanHelpEnabled(config)) {
+      parts.push([
+        '\n# 人工客服请求协议',
+        '当前工作流开启了“步骤内人工答疑”。你应先自主推进任务；遇到真正阻塞当前步骤继续执行的问题时，可以请求人类答复。',
+        '支持场景包括：缺少必要运行环境或权限、缺少代码仓或关键文件、缺少必须配置项/密钥/账号、需求目标或验收标准存在疑问、Agent 已完成必要排查后仍无法解决的问题、必须由用户选择的产品/业务决策。',
+        '需要人工介入时，输出一个单独的标签块，格式必须是：',
+        '<human-help>',
+        '{"title":"简短标题","question":"需要人类回答的具体问题","reason":"为什么这会阻塞当前步骤","answerType":"text|single-choice|multi-choice","options":[{"label":"选项文案","value":"option_value","description":"影响说明"}],"placeholder":"输入提示"}',
+        '</human-help>',
+        '输出 <human-help> 后先停止继续推进当前步骤，等待系统转交 Supervisor 复核和人类回复。',
+      ].join('\n'));
+    }
+
     if (step.channelIds?.length) {
       const channelContext = this.getChannelContext(step);
       if (channelContext) {
@@ -5170,8 +5718,12 @@ try {
       if (autoRecoveryAttempts > 0) {
         autoRecoveryAttempts = 0;
       }
-      accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + (result.result || '');
-      lastRoundOutput = result.result || '';
+      const roundOutput = result.result || '';
+      const humanHelpRequests = this.parseHumanHelpRequests(roundOutput, config);
+      if (humanHelpRequests.length === 0) {
+        accumulatedOutput += (accumulatedOutput ? '\n\n---\n\n' : '') + roundOutput;
+        lastRoundOutput = roundOutput;
+      }
       accumulatedCost += result.cost_usd || 0;
       accumulatedDuration += result.duration_ms || 0;
       const resultTokenUsage = toPersistedTokenUsage(result.usage || ZERO_ENGINE_USAGE);
@@ -5182,6 +5734,46 @@ try {
 
       // Always capture the latest session_id for reuse; clear if recovery could not produce one.
       currentSessionId = result.session_id || undefined;
+
+      if (humanHelpRequests.length > 0 && !this.shouldStop) {
+        const resumePrompt = await this.handleHumanHelpRequests({
+          requests: humanHelpRequests,
+          output: roundOutput,
+          step,
+          state: this.currentWorkflowConfig?.workflow?.states?.find((item) => item.name === this.currentState)
+            || config.workflow.states.find((item) => (item.steps || []).some((stateStep) => stateStep === step || stateStep.name === step.name))
+            || ({ name: this.currentState || '', steps: [step], transitions: [], isInitial: false, isFinal: false } as StateMachineState),
+          config,
+          runtimeAgentName,
+        });
+        if (resumePrompt) {
+          appendFeedbackMarker(resumePrompt);
+          currentPrompt = currentSessionId ? resumePrompt : `${context}\n\n${resumePrompt}`;
+          currentProcessId = stepId || currentProcessId;
+          currentProcessStreamLength = 0;
+          lastStreamAt = Date.now();
+          watchdogTriggeredForProcess = '';
+          if (agent) {
+            agent.status = 'running';
+            agent.currentTask = step.name;
+            this.emit('agents', { agents: this.agents });
+          }
+          this.upsertCurrentProcess({
+            pid: Date.now(),
+            id: currentProcessId,
+            agent: runtimeAgentName,
+            step: streamStepName,
+            stepId,
+            startTime: new Date().toISOString(),
+          });
+          this.emit('step-start', {
+            state: this.currentState,
+            step: streamStepName,
+            agent: runtimeAgentName,
+          });
+          continue;
+        }
+      }
 
       // Check for pending live feedback after completion
       if (this.liveFeedback.length > 0 && !this.shouldStop) {

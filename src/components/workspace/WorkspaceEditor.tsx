@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
-import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
+import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode, type WorkspaceTreeResponse } from "@/lib/core/api"
 import { X, ChevronLeft, ChevronRight } from "lucide-react"
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels"
 import { Button } from "@/components/ui/button"
@@ -44,6 +44,33 @@ interface WorkspaceEditorProps {
 type NotebookBrowserView = "list" | "desktop"
 
 type DiffLine = { type: 'equal' | 'delete' | 'add'; text: string }
+
+const WORKSPACE_TREE_PAGE_SIZE = 200
+
+interface WorkspaceTreePagination {
+  hasMore: boolean
+  nextOffset: number | null
+  totalEntries?: number
+}
+
+function getWorkspaceTreePagination(data: WorkspaceTreeResponse): WorkspaceTreePagination {
+  return {
+    hasMore: Boolean(data.hasMore),
+    nextOffset: data.nextOffset ?? null,
+    totalEntries: data.totalEntries,
+  }
+}
+
+function appendUniqueTreeNodes(existing: TreeNode[], incoming: TreeNode[]): TreeNode[] {
+  const seen = new Set(existing.map((node) => node.path))
+  const next = [...existing]
+  for (const node of incoming) {
+    if (seen.has(node.path)) continue
+    seen.add(node.path)
+    next.push(node)
+  }
+  return next
+}
 
 function buildLineDiff(beforeText: string, afterText: string): DiffLine[] {
   const before = (beforeText || "").replace(/\r\n/g, "\n").split("\n")
@@ -304,6 +331,8 @@ export function WorkspaceEditor({
   const [tree, setTree] = React.useState<TreeNode[]>([])
   const [treeLoading, setTreeLoading] = React.useState(false)
   const [treeError, setTreeError] = React.useState<string | null>(null)
+  const [rootPagination, setRootPagination] = React.useState<WorkspaceTreePagination>({ hasMore: false, nextOffset: null })
+  const [rootLoadingMore, setRootLoadingMore] = React.useState(false)
   const [selectedFile, setSelectedFile] = React.useState<string | null>(null)
   const [fileContent, setFileContent] = React.useState<string | null>(null)
   const [fileSize, setFileSize] = React.useState<number | null>(null)
@@ -568,15 +597,17 @@ export function WorkspaceEditor({
     setTreeLoading(true)
     const loadTree = mode === "notebook"
       ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
-      : workspaceApi.getTree(workspacePath)
+      : workspaceApi.getTree(workspacePath, { depth: 0, limit: WORKSPACE_TREE_PAGE_SIZE })
     loadTree
       .then((data) => {
         setTree(data.tree)
+        setRootPagination(mode === "default" ? getWorkspaceTreePagination(data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
         setTreeError(null)
       })
       .catch((error) => {
         const message = formatErrorMessage(error, "加载文件树失败")
         setTree([])
+        setRootPagination({ hasMore: false, nextOffset: null })
         setTreeError(message)
         toast("error", message)
       })
@@ -719,6 +750,7 @@ export function WorkspaceEditor({
     if (!selectedFile) return
     if (treeLoading || treeError) return
     if (treeCanResolvePath(tree, selectedFile)) return
+    if (mode === "default" && rootPagination.hasMore) return
     setSelectedFile(null)
     setFileContent(null)
     setFileSize(null)
@@ -736,7 +768,7 @@ export function WorkspaceEditor({
     setApplyAiSuggestionRequest(null)
     setApplyAiSuggestionQueue([])
     updateUrlFileState(null)
-  }, [selectedFile, tree, treeError, treeLoading, updateUrlFileState])
+  }, [mode, rootPagination.hasMore, selectedFile, tree, treeError, treeLoading, updateUrlFileState])
 
   React.useEffect(() => {
     if (!open) return
@@ -794,20 +826,43 @@ export function WorkspaceEditor({
     setTreeLoading(true)
     const loadTree = mode === "notebook"
       ? workspaceApi.getNotebookTree(8, { scope: notebookScope, shareToken: notebookShareToken })
-      : workspaceApi.getTree(workspacePath)
+      : workspaceApi.getTree(workspacePath, { depth: 0, limit: WORKSPACE_TREE_PAGE_SIZE })
     loadTree
       .then((data) => {
         setTree(data.tree)
+        setRootPagination(mode === "default" ? getWorkspaceTreePagination(data as WorkspaceTreeResponse) : { hasMore: false, nextOffset: null })
         setTreeError(null)
       })
       .catch((error) => {
         const message = formatErrorMessage(error, "刷新文件树失败")
         setTree([])
+        setRootPagination({ hasMore: false, nextOffset: null })
         setTreeError(message)
         toast("error", message)
       })
       .finally(() => setTreeLoading(false))
   }, [mode, notebookScope, notebookShareToken, toast, workspacePath])
+
+  const handleLoadMoreRoot = React.useCallback(async () => {
+    if (mode !== "default" || rootLoadingMore || rootPagination.nextOffset == null || !rootPagination.hasMore) return
+    setRootLoadingMore(true)
+    try {
+      const data = await workspaceApi.getTree(workspacePath, {
+        depth: 0,
+        offset: rootPagination.nextOffset,
+        limit: WORKSPACE_TREE_PAGE_SIZE,
+      })
+      setTree((prev) => appendUniqueTreeNodes(prev, data.tree || []))
+      setRootPagination(getWorkspaceTreePagination(data))
+      setTreeError(null)
+    } catch (error) {
+      const message = formatErrorMessage(error, "加载更多文件失败")
+      setTreeError(message)
+      toast("error", message)
+    } finally {
+      setRootLoadingMore(false)
+    }
+  }, [mode, rootLoadingMore, rootPagination.hasMore, rootPagination.nextOffset, toast, workspacePath])
 
   const handleOpenChange = React.useCallback(
     (newOpen: boolean) => {
@@ -821,6 +876,8 @@ export function WorkspaceEditor({
         setFileBlob(null)
         setTree([])
         setTreeError(null)
+        setRootPagination({ hasMore: false, nextOffset: null })
+        setRootLoadingMore(false)
         setSelectedLineNumber(null)
         setSelectedColumn(null)
         setAiSheetOpen(false)
@@ -921,6 +978,9 @@ export function WorkspaceEditor({
           <FileTreeSidebar
             workspacePath={workspacePath}
             tree={tree}
+            rootPagination={rootPagination}
+            rootLoadingMore={rootLoadingMore}
+            onLoadMoreRoot={handleLoadMoreRoot}
             selectedFile={selectedFile}
             onSelectFile={handleSelectFile}
             onDeletedPath={handleDeletedPath}

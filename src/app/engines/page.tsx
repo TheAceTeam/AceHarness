@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { SingleCombobox } from '@/components/ui/combobox';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 
 interface ModelOption {
   value: string;
@@ -144,7 +145,8 @@ const CLAUDE_ALIAS_LABELS: Record<string, string> = {
 };
 
 export default function EnginesPage() {
-  const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
   const { toast } = useToast();
   useDocumentTitle('执行引擎');
   const [currentEngine, setCurrentEngine] = useState<string>('claude-code');
@@ -502,9 +504,9 @@ export default function EnginesPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Button variant="ghost" size="sm" asChild>
-                <Link href="/dashboard">
+                <Link href={returnTarget.href}>
                   <ArrowLeft className="w-4 h-4 mr-2" />
-                  返回首页
+                  {returnTarget.label}
                 </Link>
               </Button>
               <div className="h-6 w-px bg-border" />

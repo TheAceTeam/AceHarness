@@ -10,6 +10,8 @@ import {
   resolveWorkspaceRoot,
   workspaceErrorResponse,
 } from '@/lib/core/workspace-path-safety';
+import { getRemoteWorkspace, isRemoteWorkspace } from '@/lib/core/remote-workspace';
+import { getRemoteCredentials, remoteCredentialErrorBody, requireRemoteWorkspaceAuth } from '@/lib/core/remote-credential-vault';
 
 async function ensureDestinationAvailable(fullPath: string): Promise<void> {
   try {
@@ -56,12 +58,44 @@ function ensureValidRelocation(srcFull: string, destFull: string, options?: { di
 }
 
 export async function POST(request: NextRequest) {
+  let workspaceForError = '';
   try {
     const body = await request.json();
     const { workspace, action, ...params } = body;
+    workspaceForError = typeof workspace === 'string' ? workspace : '';
 
     if (!workspace || !action) {
       return NextResponse.json({ error: '缺少 workspace 或 action 参数' }, { status: 400 });
+    }
+
+    if (isRemoteWorkspace(workspace)) {
+      const auth = await requireRemoteWorkspaceAuth(request);
+      if (auth instanceof NextResponse) return auth;
+      const credentials = getRemoteCredentials({ userId: auth.id, workspace });
+      const { provider } = getRemoteWorkspace(workspace, credentials);
+      switch (action) {
+        case 'create-file':
+          await provider.writeFile(params.path, params.content || '');
+          return NextResponse.json({ success: true });
+        case 'create-folder':
+          await provider.mkdir(params.path);
+          return NextResponse.json({ success: true });
+        case 'rename':
+          await provider.rename(params.oldPath, params.newPath);
+          return NextResponse.json({ success: true });
+        case 'delete':
+          if (!params.path) return NextResponse.json({ error: '不能删除 workspace 根目录' }, { status: 400 });
+          await provider.delete(params.path);
+          return NextResponse.json({ success: true });
+        case 'copy':
+          await provider.copy(params.srcPath, params.destPath);
+          return NextResponse.json({ success: true });
+        case 'move':
+          await provider.rename(params.srcPath, params.destPath);
+          return NextResponse.json({ success: true });
+        default:
+          return NextResponse.json({ error: `未知操作: ${action}` }, { status: 400 });
+      }
     }
 
     const resolvedWorkspace = await resolveWorkspaceRoot(workspace);
@@ -125,6 +159,9 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: `未知操作: ${action}` }, { status: 400 });
     }
   } catch (error: any) {
+    if (error?.status === 428) {
+      return NextResponse.json(remoteCredentialErrorBody(workspaceForError), { status: 428 });
+    }
     const { message, status } = workspaceErrorResponse(error);
     return NextResponse.json({ error: message, message }, { status });
   }

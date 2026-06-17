@@ -133,3 +133,27 @@ reviewPanel:
 engineModels:
   "": glm-5
 activeEngine: ""
+title: 代码裁判
+workspaceProfile:
+  displayName: 代码裁判
+  nickname: 代码裁判
+  officeRole: engineering-lead
+  residency:
+    office: false
+    meetingRoom: true
+    defaultDirectRoom: true
+  roomPresence:
+    recommendForMeetingRoom: true
+    autoShowInOffice: false
+  visual:
+    accent: orange
+    deskVariant: dynamic-workstation
+    desk: 代码裁判的工位
+    zone: engineering
+    order: 304
+  motion:
+    activity: typing
+    speed: 1.17
+  memory:
+    baseBudget: 5000
+    deepSearchEnabled: true

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin, requireAuth } from '@/lib/auth/middleware';
-import { loadSystemSettings, saveSystemSettings } from '@/lib/config/system-settings';
+import {
+  loadSystemSettings,
+  normalizeAgentMemorySettings,
+  normalizeWorkspaceExperienceSettings,
+  saveSystemSettings,
+} from '@/lib/config/system-settings';
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request);
@@ -13,6 +18,8 @@ export async function GET(request: NextRequest) {
     engineAvailabilityCacheMinutes: Number.isFinite(settings.engineAvailabilityCacheMinutes)
       ? Math.max(1, Math.min(24 * 60, Number(settings.engineAvailabilityCacheMinutes)))
       : 30,
+    workspaceExperience: normalizeWorkspaceExperienceSettings(settings.workspaceExperience),
+    agentMemory: normalizeAgentMemorySettings(settings.agentMemory),
     emailNotifications: {
       enabled: Boolean(settings.emailNotifications?.enabled),
       smtpHost: settings.emailNotifications?.smtpHost || '',
@@ -59,11 +66,30 @@ export async function PUT(request: NextRequest) {
     const nextEngineAvailabilityCacheMinutes = Number.isFinite(Number(body.engineAvailabilityCacheMinutes))
       ? Math.max(1, Math.min(24 * 60, Number(body.engineAvailabilityCacheMinutes)))
       : settings.engineAvailabilityCacheMinutes;
+    const currentWorkspaceExperience = normalizeWorkspaceExperienceSettings(settings.workspaceExperience);
+    const nextWorkspaceExperience = body.workspaceExperience && typeof body.workspaceExperience === 'object'
+      ? normalizeWorkspaceExperienceSettings({
+        ...currentWorkspaceExperience,
+        mode: body.workspaceExperience.mode,
+        defaultEntry: body.workspaceExperience.defaultEntry,
+        onePersonCompanyOnboardingSeen: body.workspaceExperience.onePersonCompanyOnboardingSeen,
+      })
+      : settings.workspaceExperience;
+    const currentAgentMemory = normalizeAgentMemorySettings(settings.agentMemory);
+    const nextAgentMemory = body.agentMemory && typeof body.agentMemory === 'object'
+      ? normalizeAgentMemorySettings({
+        ...currentAgentMemory,
+        runtimeEnabled: body.agentMemory.runtimeEnabled === true,
+        persistMode: body.agentMemory.persistMode,
+      })
+      : settings.agentMemory;
     await saveSystemSettings({
       ...settings,
       gitcodeToken: typeof body.gitcodeToken === 'string' ? body.gitcodeToken.trim() : settings.gitcodeToken,
       locale: body.locale === 'en' ? 'en' : body.locale === 'zh' ? 'zh' : settings.locale,
       engineAvailabilityCacheMinutes: nextEngineAvailabilityCacheMinutes,
+      workspaceExperience: nextWorkspaceExperience,
+      agentMemory: nextAgentMemory,
       emailNotifications: nextEmailSettings,
     });
     return NextResponse.json({ success: true });
