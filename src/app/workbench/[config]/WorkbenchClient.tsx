@@ -1317,6 +1317,8 @@ export default function WorkbenchPage() {
   const [smTransitionCount, setSmTransitionCount] = useState(0);
   const [runStartTime, setRunStartTime] = useState<string | null>(null);
   const [runEndTime, setRunEndTime] = useState<string | null>(null);
+  const [runAccumulatedWaitMs, setRunAccumulatedWaitMs] = useState<number>(0);
+  const [runWaitStartedAt, setRunWaitStartedAt] = useState<string | null>(null);
   const [humanApprovalData, setHumanApprovalData] = useState<{
     currentState: string;
     nextState: string;
@@ -4297,6 +4299,8 @@ export default function WorkbenchPage() {
       if (status.endTime) {
         setRunEndTime(status.endTime);
       }
+      setRunAccumulatedWaitMs(typeof status.accumulatedWaitMs === 'number' ? status.accumulatedWaitMs : 0);
+      setRunWaitStartedAt(status.waitStartedAt ?? null);
   };
 
   const fetchCurrentStatus = async () => {
@@ -4452,6 +4456,12 @@ export default function WorkbenchPage() {
     if (snapshot.endTime) {
       setRunEndTime(snapshot.endTime);
     }
+    if (typeof snapshot.accumulatedWaitMs === 'number') {
+      setRunAccumulatedWaitMs(snapshot.accumulatedWaitMs);
+    }
+    if (snapshot.waitStartedAt !== undefined) {
+      setRunWaitStartedAt(snapshot.waitStartedAt ?? null);
+    }
     if (Array.isArray(snapshot.qualityChecks)) {
       setQualityChecks(snapshot.qualityChecks);
     }
@@ -4508,6 +4518,8 @@ export default function WorkbenchPage() {
     setAgentFlow([]);
     setRunStartTime(null);
     setRunEndTime(null);
+    setRunAccumulatedWaitMs(0);
+    setRunWaitStartedAt(null);
     setFinalReview(null);
     setQualityChecks([]);
     setMemoryLayers(null);
@@ -9447,6 +9459,8 @@ export default function WorkbenchPage() {
                                   focusedState={focusedState}
                                   startTime={runStartTime}
                                   endTime={runEndTime}
+                                  accumulatedWaitMs={runAccumulatedWaitMs}
+                                  waitStartedAt={runWaitStartedAt}
                                   supervisorFlow={supervisorFlow}
                                   agentFlow={agentFlow}
                                   tokenAnalytics={workflowTokenAnalytics}

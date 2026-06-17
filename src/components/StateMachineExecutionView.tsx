@@ -118,6 +118,8 @@ interface StateMachineExecutionViewProps {
   focusedState?: string | null;
   startTime?: string | null;
   endTime?: string | null;
+  accumulatedWaitMs?: number;
+  waitStartedAt?: string | null;
   supervisorFlow?: SupervisorFlowRecord[];
   agentFlow?: AgentFlowRecord[];
   tokenAnalytics?: {
@@ -209,6 +211,8 @@ export default function StateMachineExecutionView({
   focusedState,
   startTime,
   endTime,
+  accumulatedWaitMs,
+  waitStartedAt,
   supervisorFlow = [],
   agentFlow = [],
   tokenAnalytics,
@@ -230,6 +234,15 @@ export default function StateMachineExecutionView({
   const [supervisorTimelineOpen, setSupervisorTimelineOpen] = useState(false);
   const [supervisorPanelTab, setSupervisorPanelTab] = useState<'formation' | 'human' | 'timeline' | 'summary'>('human');
   const [formationFullscreenOpen, setFormationFullscreenOpen] = useState(false);
+
+  // 运行进行中时每秒推进一次"当前时间"，用于给最新（进行中）的流转条目实时累计耗时。
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== 'running' && status !== 'waiting') return;
+    setNowTs(Date.now());
+    const timer = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [status]);
 
   useEffect(() => {
     if (activeTabOverride) {
@@ -478,15 +491,24 @@ export default function StateMachineExecutionView({
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
       .slice(-30);
 
-    for (let i = 0; i < sorted.length - 1; i++) {
+    // 每条耗时 = 本条开始 → 下一条开始；最后一条（进行中）用当前时间实时累计，
+    // 已结束用结束时间。Agent 交接是瞬时切换，不计耗时。
+    const runActive = status === 'running' || status === 'waiting';
+    const endTs = endTime ? new Date(endTime).getTime() : null;
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i].eventTags?.includes('agent-handoff')) continue;
       const curr = new Date(sorted[i].timestamp).getTime();
-      const next = new Date(sorted[i + 1].timestamp).getTime();
-      const diff = Math.floor((next - curr) / 1000);
-      if (diff > 0) sorted[i].duration = diff;
+      const next = i < sorted.length - 1
+        ? new Date(sorted[i + 1].timestamp).getTime()
+        : (runActive ? nowTs : endTs);
+      if (next == null) continue;
+      // 终态事件可能晚于 endTime（收尾汇总在 endTime 之后才发出，导致差值为负），
+      // 钳到 >= 0，保证每条（Agent 交接除外）都显示耗时。
+      sorted[i].duration = Math.max(0, Math.floor((next - curr) / 1000));
     }
 
     return sorted;
-  }, [activeConcurrencyGroups, agentFlow, stateHistory, supervisorFlow]);
+  }, [activeConcurrencyGroups, agentFlow, stateHistory, supervisorFlow, status, endTime, nowTs]);
 
   const flowRoutes = useMemo(() => {
     const seen = new Set<string>();
@@ -677,6 +699,8 @@ export default function StateMachineExecutionView({
               status={status}
               startTime={startTime}
               endTime={endTime}
+              accumulatedWaitMs={accumulatedWaitMs}
+              waitStartedAt={waitStartedAt}
               onStateClick={handleOverviewStateClick}
             />
 
