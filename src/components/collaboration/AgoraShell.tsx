@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
+import { useChat } from '@/contexts/ChatContext';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { cn } from '@/lib/core/utils';
 import type {
@@ -337,6 +338,7 @@ export function AgoraShell({
   currentUser,
 }: AgoraShellProps) {
   const { toast } = useToast();
+  const { skillSettings, mcpSettings } = useChat();
   const [activeTab, setActiveTab] = useState('chat');
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
   const [guestCreateOpen, setGuestCreateOpen] = useState(false);
@@ -383,6 +385,13 @@ export function AgoraShell({
     [guestRoster]
   );
   const guests = useMemo(() => guestRoster.map((participant) => participant.name), [guestRoster]);
+  const enabledSkillNames = useMemo(() => (
+    Object.entries(skillSettings || {})
+      .filter(([, enabled]) => Boolean(enabled))
+      .map(([name]) => name.trim())
+      .filter(Boolean)
+      .sort()
+  ), [skillSettings]);
   const availableSavedGuests = useMemo(
     () => savedGuests.filter((guest) => !guestRoster.some((item) => item.guestConfigId === guest.id || item.name === guest.displayName)),
     [guestRoster, savedGuests]
@@ -539,12 +548,13 @@ export function AgoraShell({
   useEffect(() => {
     if (!activeSessionId) return;
     if (lockWorkspace) return;
-    if (pinnedWorkspacePath) return;
     let cancelled = false;
     agoraApi.ensureWorkspace({
       sessionId: activeSessionId,
       sourceWorkspace: defaultWorkspacePath || undefined,
       title: roomTitle,
+      skills: skillSettings,
+      mcpServers: mcpSettings,
     })
       .then((result) => {
         if (cancelled || !result.workspacePath) return;
@@ -569,7 +579,26 @@ export function AgoraShell({
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, defaultWorkspacePath, lockWorkspace, pinnedWorkspacePath, roomTitle, toast, updateRoom]);
+  }, [activeSessionId, defaultWorkspacePath, lockWorkspace, mcpSettings, roomTitle, skillSettings, toast, updateRoom]);
+
+  const withAgoraRuntimeSettings = useCallback((config?: Record<string, any>) => {
+    if (!config) return config;
+    const existingSkills = Array.isArray(config.skills)
+      ? config.skills.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const skills = Array.from(new Set([...existingSkills, ...enabledSkillNames])).sort();
+    const skillPrompt = skills.length
+      ? [
+          `当前议场启用了这些 Skills：${skills.join(', ')}。`,
+          '如需使用 skill，请优先查看工作区 .agents/skills/{skill-name}/SKILL.md，并按其中流程执行。',
+        ].join('\n')
+      : '';
+    return {
+      ...config,
+      ...(skills.length ? { skills } : {}),
+      systemPrompt: [config.systemPrompt || '', skillPrompt].filter(Boolean).join('\n'),
+    };
+  }, [enabledSkillNames]);
 
   const appendToCentralChat = useCallback((message: CollaborationRoomMessage) => {
     if (!activeSessionId || !appendSessionMessage) return;
@@ -895,7 +924,8 @@ export function AgoraShell({
         temporaryLab: 'agora',
         agoraExpectedResultType,
       },
-      temporaryRoleConfig,
+      temporaryRoleConfig: withAgoraRuntimeSettings(temporaryRoleConfig),
+      requestedMcpServers: mcpSettings,
     });
     return await new Promise<{
       status: 'done' | 'stopped';
@@ -1042,9 +1072,11 @@ export function AgoraShell({
     guestRoster,
     normalizedRoom.agentSessions,
     normalizedRoom.topic,
+    mcpSettings,
     resolvedWorkspacePath,
     roomTitle,
     updateRoom,
+    withAgoraRuntimeSettings,
   ]); 
 
   useEffect(() => {
@@ -1220,6 +1252,7 @@ export function AgoraShell({
     allowOpeningMessages,
     appendToCentralChat,
     chatroom.settings.responseMode,
+    guestRoster,
     guestRosterIdentityKey,
     openingSequenceTick,
     roomTitle,

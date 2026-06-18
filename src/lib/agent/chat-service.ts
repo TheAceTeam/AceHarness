@@ -634,7 +634,14 @@ export async function prepareAgentChat(input: ExecuteAgentChatInput): Promise<Pr
   if (!effectiveModel) {
     throw new Error('Agent 未配置可用模型');
   }
-  await ensureEngineRuntimeSkillsAvailable(effectiveEngine, workingDirectory);
+  const effectiveSkillNames = Array.isArray(effectiveRoleConfig.skills)
+    ? Array.from(new Set(
+        effectiveRoleConfig.skills
+          .map((item) => String(item || '').trim())
+          .filter(Boolean),
+      ))
+    : [];
+  await ensureEngineRuntimeSkillsAvailable(effectiveEngine, workingDirectory, effectiveSkillNames);
 
   const sessionReuseKey = `agent-chat:${input.userContext.id}:${input.agentName}:${mode}:${workflowContext?.runId || 'default'}`;
   const engine = await getOrCreateEngine(effectiveEngine, sessionReuseKey, input.userContext.id);

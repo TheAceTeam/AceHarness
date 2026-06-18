@@ -12,6 +12,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       sourceWorkspace: typeof body?.sourceWorkspace === 'string' ? body.sourceWorkspace : undefined,
       title: typeof body?.title === 'string' ? body.title : undefined,
+      skills: Array.isArray(body?.skills) || (body?.skills && typeof body.skills === 'object') ? body.skills : undefined,
+      mcpServers: Array.isArray(body?.mcpServers) || (body?.mcpServers && typeof body.mcpServers === 'object') ? body.mcpServers : undefined,
     });
     return NextResponse.json(result);
   } catch (error: any) {

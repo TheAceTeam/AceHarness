@@ -70,6 +70,7 @@ describe('agora workspace store', () => {
       });
       expect(await readFile(path.join(expectedDir, 'README.md'), 'utf-8')).toContain('# 议题一');
       expect(await readFile(path.join(expectedDir, '.gitignore'), 'utf-8')).toContain('/skills');
+      expect(await readFile(path.join(expectedDir, '.gitignore'), 'utf-8')).toContain('/.agents');
       expect(existsSync(path.join(expectedDir, '.git'))).toBe(true);
       expect(await git(expectedDir, ['rev-parse', '--is-inside-work-tree'])).toBe('true');
       expect(await git(expectedDir, ['rev-parse', '--verify', 'HEAD'])).toBeTruthy();
@@ -88,6 +89,40 @@ describe('agora workspace store', () => {
       expect(existsSync(skillsPath)).toBe(true);
       expect(await readFile(path.join(skillsPath, 'demo-skill', 'SKILL.md'), 'utf-8')).toBe('demo');
       expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/skills');
+      expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/.agents');
+      expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
+    });
+  });
+
+  test('writes enabled agora runtime settings under .agents', async () => {
+    await withStore(async ({ skillsDir, store }) => {
+      await mkdir(path.join(skillsDir, 'demo-skill'), { recursive: true });
+      await writeFile(path.join(skillsDir, 'demo-skill', 'SKILL.md'), 'demo');
+      await mkdir(path.join(skillsDir, 'disabled-skill'), { recursive: true });
+      await writeFile(path.join(skillsDir, 'disabled-skill', 'SKILL.md'), 'disabled');
+
+      const result = await store.ensureAgoraWorkspace({
+        sessionId: 'runtime-config',
+        skills: {
+          'demo-skill': true,
+          'disabled-skill': false,
+        },
+        mcpServers: {
+          filesystem: true,
+          github: false,
+        },
+      });
+
+      const runtimeConfig = JSON.parse(await readFile(path.join(result.workspacePath, '.agents', 'runtime.json'), 'utf-8'));
+      expect(runtimeConfig).toMatchObject({
+        kind: 'agora-runtime',
+        skills: ['demo-skill'],
+        mcpServers: ['filesystem'],
+      });
+      expect(typeof runtimeConfig.updatedAt).toBe('string');
+      expect(await readFile(path.join(result.workspacePath, '.agents', 'skills', 'demo-skill', 'SKILL.md'), 'utf-8')).toBe('demo');
+      expect(existsSync(path.join(result.workspacePath, '.agents', 'skills', 'disabled-skill'))).toBe(false);
+      expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/.agents');
       expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
     });
   });
@@ -129,6 +164,7 @@ describe('agora workspace store', () => {
         expect(existsSync(path.join(result.workspacePath, '.git', 'source-only'))).toBe(false);
         expect(await readFile(path.join(result.workspacePath, 'README.md'), 'utf-8')).toContain('# Source copy');
         expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/skills');
+        expect(await readFile(path.join(result.workspacePath, '.gitignore'), 'utf-8')).toContain('/.agents');
         expect(await git(result.workspacePath, ['rev-parse', '--is-inside-work-tree'])).toBe('true');
         expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
       });

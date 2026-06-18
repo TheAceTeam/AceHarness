@@ -5,6 +5,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
 import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
+import { SHARED_AGENT_CONFIG_DIR } from '@/lib/engines/engine-config';
 import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 
 const execFileAsync = promisify(execFile);
@@ -88,7 +89,7 @@ async function ensureGitBaseline(dir: string) {
 
 async function ensureWorkspaceGitIgnore(dir: string) {
   const gitignorePath = path.join(dir, '.gitignore');
-  const line = '/skills';
+  const ignoredLines = ['/skills', `/${SHARED_AGENT_CONFIG_DIR}`];
   let content = '';
   try {
     content = await readFile(gitignorePath, 'utf-8');
@@ -96,8 +97,9 @@ async function ensureWorkspaceGitIgnore(dir: string) {
     // Missing .gitignore is fine; create one below.
   }
   const lines = content.split(/\r?\n/).map((item) => item.trim());
-  if (lines.includes(line)) return;
-  const next = `${content.replace(/\s*$/, '')}${content.trim() ? '\n' : ''}${line}\n`;
+  const missing = ignoredLines.filter((line) => !lines.includes(line));
+  if (!missing.length) return;
+  const next = `${content.replace(/\s*$/, '')}${content.trim() ? '\n' : ''}${missing.join('\n')}\n`;
   await writeFile(gitignorePath, next, 'utf-8');
 }
 
@@ -113,10 +115,63 @@ async function ensureWorkspaceSkillsLink(dir: string) {
   }
 }
 
+function enabledNamesFromInput(input: string[] | Record<string, boolean> | undefined): string[] {
+  if (Array.isArray(input)) {
+    return Array.from(new Set(input.map((item) => String(item || '').trim()).filter(Boolean))).sort();
+  }
+  if (!input || typeof input !== 'object') return [];
+  return Object.entries(input)
+    .filter(([, enabled]) => Boolean(enabled))
+    .map(([name]) => name.trim())
+    .filter(Boolean)
+    .sort();
+}
+
+async function ensureWorkspaceAgentConfig(
+  dir: string,
+  input: {
+    skills?: string[] | Record<string, boolean>;
+    mcpServers?: string[] | Record<string, boolean>;
+  },
+) {
+  const enabledSkills = enabledNamesFromInput(input.skills);
+  const enabledMcpServers = enabledNamesFromInput(input.mcpServers);
+  const configDir = path.join(dir, SHARED_AGENT_CONFIG_DIR);
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    path.join(configDir, 'runtime.json'),
+    JSON.stringify({
+      kind: 'agora-runtime',
+      skills: enabledSkills,
+      mcpServers: enabledMcpServers,
+      updatedAt: new Date().toISOString(),
+    }, null, 2),
+    'utf-8',
+  );
+
+  if (!enabledSkills.length) return;
+  const skillsDir = await getRuntimeSkillsDirPath();
+  if (!existsSync(skillsDir)) return;
+  const workspaceSkillsDir = path.join(configDir, 'skills');
+  await mkdir(workspaceSkillsDir, { recursive: true });
+  for (const skillName of enabledSkills) {
+    const source = path.join(skillsDir, skillName);
+    const target = path.join(workspaceSkillsDir, skillName);
+    if (!existsSync(source) || existsSync(target)) continue;
+    try {
+      ensureDirectoryLinkSync(source, target);
+    } catch (error) {
+      console.warn(`[Agora] Failed to link workspace skill ${skillName}:`, error);
+    }
+  }
+}
+
 export async function ensureAgoraWorkspace(input: {
   sessionId: string;
   sourceWorkspace?: string;
   title?: string;
+  skills?: string[] | Record<string, boolean>;
+  mcpServers?: string[] | Record<string, boolean>;
 }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
   const sessionId = sanitizeSegment(input.sessionId, `session-${Date.now().toString(36)}`);
   const existingInitialization = inflightWorkspaceInitializations.get(sessionId);
@@ -129,6 +184,7 @@ export async function ensureAgoraWorkspace(input: {
       await ensureWorkspaceGitIgnore(dir).catch(() => {});
       await ensureGitBaseline(dir);
       await ensureWorkspaceSkillsLink(dir).catch(() => {});
+      await ensureWorkspaceAgentConfig(dir, input).catch(() => {});
       return { workspacePath: dir, created: false, sourceWorkspace: input.sourceWorkspace };
     }
 
@@ -146,6 +202,7 @@ export async function ensureAgoraWorkspace(input: {
       'utf-8',
     ).catch(() => {});
     await ensureWorkspaceGitIgnore(dir).catch(() => {});
+    await ensureWorkspaceAgentConfig(dir, input).catch(() => {});
     await ensureGitBaseline(dir);
     await ensureWorkspaceSkillsLink(dir).catch(() => {});
     return { workspacePath: dir, created: true, sourceWorkspace: input.sourceWorkspace };

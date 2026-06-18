@@ -1509,6 +1509,8 @@ export const agentApi = {
     workingDirectory?: string;
     workflowContext?: Record<string, any>;
     temporaryRoleConfig?: Record<string, any>;
+    requestedMcpServers?: string[] | Record<string, boolean>;
+    mcpServers?: string[] | Record<string, boolean>;
   }): Promise<{
     streamId: string;
     events: EventSource;
@@ -1662,6 +1664,8 @@ export const agoraApi = {
     sessionId: string;
     sourceWorkspace?: string;
     title?: string;
+    skills?: string[] | Record<string, boolean>;
+    mcpServers?: string[] | Record<string, boolean>;
   }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
     const response = await authFetch(`${API_BASE}/agora/workspace`, {
       method: 'POST',
