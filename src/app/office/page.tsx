@@ -149,6 +149,7 @@ type OfficeOrgDraft = {
     id: string;
     title: string;
     description: string;
+    zone?: string;
     severity?: 'info' | 'warning' | 'critical';
   }>;
 };
@@ -952,6 +953,44 @@ function TeamComposer({
   );
 }
 
+function OfficeLandingFeatures() {
+  return (
+    <section className="mx-auto grid w-full max-w-6xl gap-4 md:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
+      <div className="rounded-2xl border border-white/70 bg-white/72 p-5 shadow-[0_18px_54px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+        <div className="flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-xl bg-slate-950 text-white">
+            <Building2 className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="text-sm font-black">一人公司工作台</div>
+            <div className="text-xs font-semibold text-muted-foreground">办公室、协作、记忆和工作流聚合在同一张桌面。</div>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 text-sm">
+          {OPC_CORE_ITEMS.map(([mark, label]) => (
+            <div key={mark} className="flex items-center gap-3 rounded-xl border bg-background/70 p-3">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-blue-600 text-sm font-black text-white">{mark}</span>
+              <span className="font-bold text-foreground">{label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {POWERED_BY_ITEMS.map((item) => {
+          const Icon = item.icon;
+          return (
+            <div key={item.label} className="rounded-2xl border border-white/70 bg-white/72 p-4 shadow-[0_18px_54px_rgba(15,23,42,0.06)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+              <Icon className="h-5 w-5 text-blue-600" />
+              <div className="mt-3 text-sm font-black">{item.label}</div>
+              <div className="mt-1 text-xs font-semibold text-muted-foreground">{item.detail}</div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function defaultClarificationAnswers(clarification: OfficeOrgClarification): Record<string, string | string[]> {
   const answers: Record<string, string | string[]> = {};
   for (const question of clarification.questions || []) {
@@ -1021,6 +1060,7 @@ function TeamBuilderFlowModal({
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [draft, setDraft] = useState<OfficeOrgDraft | null>(null);
   const [plan, setPlan] = useState<OfficeTeamPlan | null>(initialPlan);
+  const [selectedGapId, setSelectedGapId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -1031,6 +1071,7 @@ function TeamBuilderFlowModal({
     setAnswers({});
     setDraft(null);
     setPlan(initialPlan);
+    setSelectedGapId(null);
     setStep(initialPlan ? 'confirm' : 'goal');
     setError('');
     setBusy(false);
@@ -1124,7 +1165,9 @@ function TeamBuilderFlowModal({
       const draftData = await draftRes.json();
       if (!draftRes.ok) throw new Error(draftData?.message || draftData?.error || '保存组织草案失败');
       setPlan(nextPlan);
-      setDraft(draftData.draft || null);
+      const nextDraft = draftData.draft || null;
+      setDraft(nextDraft);
+      setSelectedGapId(nextDraft?.gaps?.[0]?.id || null);
       onPlanReady(nextPlan);
       setStep('confirm');
     } catch (error: any) {
@@ -1156,19 +1199,30 @@ function TeamBuilderFlowModal({
     { key: 'confirm', label: '确认' },
   ];
   const stepIndex = stepItems.findIndex((item) => item.key === step);
+  const displayedGaps = useMemo(() => {
+    if (draft?.gaps?.length) return draft.gaps;
+    return (plan?.missingZones || []).map((zone) => ({
+      id: `gap-${zone}`,
+      title: `${ZONES[zone]?.label || zone} 空缺`,
+      description: `当前候选团队缺少 ${ZONES[zone]?.label || zone} 角色，需要补充合适 Agent 或调整成员来源。`,
+      zone,
+      severity: 'warning' as const,
+    }));
+  }, [draft?.gaps, plan?.missingZones]);
+  const selectedGap = displayedGaps.find((gap) => gap.id === selectedGapId) || displayedGaps[0] || null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl gap-0 overflow-hidden rounded-3xl p-0">
-        <DialogHeader className="border-b px-6 py-5">
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-5xl flex-col gap-0 overflow-hidden rounded-3xl p-0">
+        <DialogHeader className="shrink-0 border-b px-6 py-5">
           <DialogTitle className="flex items-center gap-2 text-xl">
             <Sparkles className="h-5 w-5 text-blue-600" />
             组建一人公司团队
           </DialogTitle>
           <DialogDescription>先补齐关键上下文，再生成候选团队，确认后才写入办公室。</DialogDescription>
         </DialogHeader>
-        <div className="grid min-h-[560px] md:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="border-r bg-muted/30 p-5">
+        <div className="grid min-h-0 flex-1 overflow-hidden md:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="shrink-0 border-r bg-muted/30 p-5">
             <div className="space-y-3">
               {stepItems.map((item, index) => (
                 <div
@@ -1187,7 +1241,7 @@ function TeamBuilderFlowModal({
               <div className="mt-1">{scopeLabel}</div>
             </div>
           </aside>
-          <section className="min-w-0 p-6">
+          <section className="min-h-0 min-w-0 overflow-y-auto p-6">
             {step === 'goal' ? (
               <div className="space-y-4">
                 <div>
@@ -1309,12 +1363,33 @@ function TeamBuilderFlowModal({
                     );
                   })}
                 </div>
-                {draft?.gaps?.length ? (
+                {displayedGaps.length ? (
                   <div className="rounded-2xl border border-amber-300/50 bg-amber-50/80 p-4 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-                    <div className="font-black">缺口</div>
-                    <ul className="mt-2 space-y-1">
-                      {draft.gaps.map((gap) => <li key={gap.id}>{gap.title}：{gap.description}</li>)}
-                    </ul>
+                    <div className="font-black">职责缺口</div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                      <div className="grid gap-2">
+                        {displayedGaps.map((gap) => (
+                          <button
+                            key={gap.id}
+                            type="button"
+                            className={`rounded-xl border px-3 py-2 text-left text-xs font-bold transition ${selectedGap?.id === gap.id ? 'border-amber-500 bg-white text-amber-950 shadow-sm dark:bg-amber-500/20 dark:text-amber-50' : 'border-amber-300/60 bg-white/55 hover:bg-white dark:bg-transparent dark:hover:bg-amber-500/10'}`}
+                            onClick={() => setSelectedGapId(gap.id)}
+                          >
+                            {gap.title}
+                          </button>
+                        ))}
+                      </div>
+                      {selectedGap ? (
+                        <div className="rounded-xl border border-amber-300/60 bg-white/70 p-3 dark:bg-amber-500/10">
+                          <div className="text-sm font-black">{selectedGap.title}</div>
+                          <p className="mt-2 text-xs leading-5">{selectedGap.description}</p>
+                          <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold">
+                            <Badge variant="outline">级别：{selectedGap.severity || 'warning'}</Badge>
+                            {'zone' in selectedGap && selectedGap.zone ? <Badge variant="outline">职责域：{ZONES[selectedGap.zone]?.label || selectedGap.zone}</Badge> : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1327,7 +1402,7 @@ function TeamBuilderFlowModal({
             ) : null}
           </section>
         </div>
-        <DialogFooter className="border-t px-6 py-4">
+        <DialogFooter className="shrink-0 border-t px-6 py-4">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>取消</Button>
           {step === 'clarify' ? <Button type="button" variant="outline" onClick={() => setStep('goal')} disabled={busy}>上一步</Button> : null}
           {step === 'confirm' && !initialPlan ? <Button type="button" variant="outline" onClick={() => setStep('clarify')} disabled={busy}>继续调整</Button> : null}
@@ -1509,30 +1584,6 @@ function ArchitectureDiagram({
               onRemoveAgent={onRemoveAgent}
             />
           ))}
-        </div>
-
-        <div className="org-powered-strip">
-          <div className="org-powered-title">Powered By <span>ACE Harness</span></div>
-          <div className="org-powered-items">
-            {POWERED_BY_ITEMS.map((item) => {
-              const Icon = item.icon;
-              return (
-                <div key={item.label} className="org-powered-item">
-                  <Icon className="h-5 w-5" />
-                  <div>
-                    <strong>{item.label}</strong>
-                    <span>{item.detail}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="org-ace-banner">
-          <span className="org-ace-mark">A</span>
-          <strong>ACE</strong>
-          <p>OPC is a super team of <b>people and AI</b>, creating <b>maximum impact</b> together.</p>
         </div>
       </div>
 
@@ -3123,6 +3174,8 @@ export default function OfficePage() {
     const pool = scopedNames ? agentOptions.filter((agent) => scopedNames.has(agent.name)) : agentOptions;
     return sampleAgentPreview(pool, 6);
   }, [agentOptions, scopedCandidateNames]);
+  const teamConfigured = members.length > 0;
+  const showTeamConfiguration = !teamConfigured || !!plan;
 
   const handleSelectRoom = useCallback((room: CollaborationRoomRecord) => {
     if (!room.sessionId) {
@@ -3301,49 +3354,94 @@ export default function OfficePage() {
           <ThemeToggle />
         </header>
 
-        <section className="mx-auto mt-7 w-full max-w-5xl text-center">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.42em] text-blue-600">ACE Harness</div>
-          <h1 className="mt-2 text-5xl font-black tracking-normal sm:text-7xl">OPC Company Roles</h1>
-          <p className="mt-3 text-xl font-semibold text-slate-700 dark:text-slate-300">One Team. AI-Powered. Maximum Impact.</p>
-        </section>
+        {message ? <div className="mx-auto mt-5 w-fit rounded-full bg-white/70 px-4 py-2 text-sm text-slate-600 shadow-sm backdrop-blur dark:bg-white/10 dark:text-slate-300">{message}</div> : null}
 
-        <div className="mt-8">
-          <TeamComposer
-            prompt={prompt}
-            setPrompt={(value) => { setPrompt(value); setPlan(null); }}
-            previewAgents={previewAgents}
-            busy={busy}
-            onBuild={handleTeamAction}
-            onFilterClick={() => setAgentScopeOpen(true)}
-            filterActive={Boolean(scopedCandidateNames)}
-            planReady={!!plan}
-          />
-          {message ? <div className="mx-auto mt-3 w-fit rounded-full bg-white/70 px-4 py-2 text-sm text-slate-600 shadow-sm backdrop-blur dark:bg-white/10 dark:text-slate-300">{message}</div> : null}
-        </div>
+        <div className="mt-8 space-y-8">
+          {teamConfigured ? (
+            <WorkspaceStatusTabs
+              members={officeMembersForDisplay}
+              activeTab={statusTab}
+              onTabChange={setStatusTab}
+              onOpenDirectRoom={openDirectRoom}
+              onOpenGroupRoom={openGroupRoom}
+              activeRoom={activeRoom}
+              activeRoomSessionId={activeRoomSessionId}
+              activeSession={activeSession}
+              setSessionWorkbenchState={setSessionWorkbenchState}
+              appendSessionMessage={appendSessionMessage}
+              recentRooms={recentRooms}
+              onSelectRoom={handleSelectRoom}
+            />
+          ) : null}
 
-        <div className="mt-10 space-y-8">
-          <ArchitectureDiagram
-            members={officeMembersForDisplay}
-            availableAgents={agentOptions}
-            planReady={!!plan}
-            onAddAgent={handleAddAgent}
-            onReplaceAgent={handleReplaceAgent}
-            onRemoveAgent={handleRemoveAgent}
-          />
-          <WorkspaceStatusTabs
-            members={officeMembersForDisplay}
-            activeTab={statusTab}
-            onTabChange={setStatusTab}
-            onOpenDirectRoom={openDirectRoom}
-            onOpenGroupRoom={openGroupRoom}
-            activeRoom={activeRoom}
-            activeRoomSessionId={activeRoomSessionId}
-            activeSession={activeSession}
-            setSessionWorkbenchState={setSessionWorkbenchState}
-            appendSessionMessage={appendSessionMessage}
-            recentRooms={recentRooms}
-            onSelectRoom={handleSelectRoom}
-          />
+          {showTeamConfiguration ? (
+            <section className="space-y-4">
+              <div className="mx-auto flex w-full max-w-5xl flex-wrap items-end justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black text-blue-600">团队配置</div>
+                  <p className="mt-1 text-sm font-semibold text-slate-600 dark:text-slate-300">
+                    {!teamConfigured ? '先通过向导配置团队，确认后办公室会成为顶部工作区。' : '当前有待确认的组织草案，可继续调整后写入办公室。'}
+                  </p>
+                </div>
+                {teamConfigured ? (
+                  <Button type="button" variant="outline" className="rounded-full bg-white/70 backdrop-blur dark:bg-white/10" onClick={() => setPlan(null)}>
+                    返回办公室
+                  </Button>
+                ) : null}
+              </div>
+              <TeamComposer
+                prompt={prompt}
+                setPrompt={(value) => { setPrompt(value); setPlan(null); }}
+                previewAgents={previewAgents}
+                busy={busy}
+                onBuild={handleTeamAction}
+                onFilterClick={() => setAgentScopeOpen(true)}
+                filterActive={Boolean(scopedCandidateNames)}
+                planReady={!!plan}
+              />
+              <ArchitectureDiagram
+                members={officeMembersForDisplay}
+                availableAgents={agentOptions}
+                planReady={!!plan}
+                onAddAgent={handleAddAgent}
+                onReplaceAgent={handleReplaceAgent}
+                onRemoveAgent={handleRemoveAgent}
+              />
+            </section>
+          ) : (
+            <section className="mx-auto w-full max-w-5xl rounded-2xl border border-white/70 bg-white/72 p-4 shadow-[0_18px_54px_rgba(15,23,42,0.07)] backdrop-blur-xl dark:border-white/10 dark:bg-white/5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-black">团队配置</div>
+                  <div className="mt-1 text-xs font-semibold text-muted-foreground">{members.length} 位成员已进入办公室，可随时重新配置。</div>
+                </div>
+                <Button type="button" className="rounded-full" onClick={handleTeamAction}>
+                  <SlidersHorizontal className="mr-2 h-4 w-4" />
+                  配置团队
+                </Button>
+              </div>
+            </section>
+          )}
+
+          <section className="mx-auto w-full max-w-5xl text-center">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.42em] text-blue-600">ACE Harness</div>
+            <h1 className="mt-2 text-4xl font-black tracking-normal sm:text-6xl">OPC Company Roles</h1>
+            <p className="mt-3 text-lg font-semibold text-slate-700 dark:text-slate-300">One Team. AI-Powered. Maximum Impact.</p>
+          </section>
+
+          <OfficeLandingFeatures />
+
+          {teamConfigured && !showTeamConfiguration ? (
+            <ArchitectureDiagram
+              members={officeMembersForDisplay}
+              availableAgents={agentOptions}
+              planReady={!!plan}
+              onAddAgent={handleAddAgent}
+              onReplaceAgent={handleReplaceAgent}
+              onRemoveAgent={handleRemoveAgent}
+            />
+          ) : null}
+
         </div>
       </div>
       <AgentScopeDialog
@@ -4561,6 +4659,150 @@ export default function OfficePage() {
           .org-editor-actions {
             justify-content: flex-start;
           }
+        }
+        .org-manager {
+          border-radius: 20px;
+          padding: 20px;
+          box-shadow:
+            0 18px 56px rgba(15, 23, 42, 0.1),
+            inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        }
+        .org-reference-title {
+          justify-items: start;
+          margin-bottom: 16px;
+          padding-top: 0;
+          text-align: left;
+        }
+        .org-reference-title h2 {
+          font-size: clamp(26px, 3.5vw, 44px);
+        }
+        .org-reference-subtitle {
+          justify-content: flex-start;
+          gap: 12px;
+          font-size: clamp(13px, 1.3vw, 17px);
+        }
+        .org-reference-subtitle span {
+          width: 48px;
+        }
+        .org-header-actions {
+          position: static;
+          margin-top: 10px;
+          justify-content: flex-start;
+        }
+        .org-blueprint {
+          grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+          gap: 14px 18px;
+        }
+        .org-core-card,
+        .org-empty-state {
+          min-height: 132px;
+        }
+        .org-core-avatar {
+          height: 132px;
+          padding: 12px;
+        }
+        .org-core-avatar > * {
+          width: 78px !important;
+          height: 78px !important;
+          border-width: 3px;
+        }
+        .org-core-content {
+          padding: 14px 18px;
+        }
+        .org-role-title {
+          font-size: 22px;
+        }
+        .org-agent-name {
+          margin-top: 6px;
+          font-size: 14px;
+        }
+        .org-core-missions {
+          gap: 5px;
+          margin-top: 9px;
+        }
+        .org-core-missions span {
+          gap: 7px;
+          font-size: 12px;
+        }
+        .org-core-side {
+          min-height: 132px;
+          gap: 8px;
+          padding: 14px 16px;
+        }
+        .org-side-title {
+          font-size: 16px;
+        }
+        .org-core-item {
+          gap: 8px;
+          font-size: 12px;
+        }
+        .org-core-item span {
+          width: 26px;
+          height: 26px;
+          font-size: 12px;
+        }
+        .org-connector {
+          height: 28px;
+          margin: -2px 8% -8px;
+        }
+        .org-member-grid {
+          grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
+          gap: 12px;
+        }
+        .org-member-card {
+          min-height: 198px;
+          gap: 8px;
+          border-radius: 14px;
+          padding: 12px;
+        }
+        .org-member-card-header {
+          font-size: 12px;
+        }
+        .org-member-main {
+          gap: 9px;
+        }
+        .org-member-avatar {
+          width: 52px;
+          height: 52px;
+          border-width: 2px;
+        }
+        .org-member-main strong,
+        .org-editor-main strong {
+          max-width: 124px;
+          font-size: 14px;
+        }
+        .org-member-main span,
+        .org-editor-main span,
+        .org-editor-main p {
+          font-size: 11px;
+        }
+        .org-member-mission {
+          grid-template-columns: 22px minmax(0, 1fr);
+          gap: 7px;
+          padding-top: 8px;
+          font-size: 11px;
+        }
+        .org-member-tags span,
+        .org-editor-tags span {
+          padding: 4px 7px;
+          font-size: 10px;
+        }
+        .org-member-copilot svg {
+          width: 28px;
+          height: 28px;
+          padding: 6px;
+        }
+        .org-member-copilot strong {
+          font-size: 12px;
+        }
+        .org-editor {
+          grid-template-columns: minmax(220px, 0.9fr) minmax(180px, 0.8fr) minmax(220px, 0.9fr) auto;
+          margin-top: 12px;
+          padding: 12px;
+        }
+        .org-editor-avatar {
+          width: 46px;
+          height: 46px;
         }
         .office-floor {
           position: relative;

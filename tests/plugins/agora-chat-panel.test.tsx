@@ -467,6 +467,59 @@ describe('built-in agora chat panel', () => {
     expect(screen.queryByText('回复缺少 <result>...</result>，议场最终发言必须通过结果块输出。')).toBeNull();
   });
 
+  test('sending a new agora message stops an active agent stream first', async () => {
+    const user = userEvent.setup();
+    const sequence: string[] = [];
+    const streamingCallAgent = vi.fn((agentName: string, _message: string, _roundId?: string, _messagePatch?: any, _temporaryRoleConfig?: any, lifecycle?: any) => {
+      sequence.push(`call:${agentName}`);
+      if (sequence.filter((item) => item.startsWith('call:')).length === 1) {
+        return new Promise<any>((resolve) => {
+          lifecycle?.onStreamStart?.({
+            streamId: 'stream-first',
+            runtimeName: agentName,
+            stop: vi.fn(async () => {
+              sequence.push(`stop:${agentName}`);
+              resolve({ status: 'stopped', content: '已停止', rawContent: '' });
+            }),
+          });
+          lifecycle?.onDelta?.('正在思考', '正在思考');
+        });
+      }
+      const content = buildAgoraResultEnvelope({
+        type: 'speech',
+        content: `${agentName} 的新回复`,
+        mentions: [],
+      });
+      lifecycle?.onStreamStart?.({
+        streamId: 'stream-second',
+        runtimeName: agentName,
+        stop: vi.fn(),
+      });
+      return Promise.resolve({ status: 'done' as const, content, rawContent: content });
+    });
+
+    renderPanelWithCallAgent(streamingCallAgent);
+
+    await addMember(user, 'Agent-Alpha');
+    await addMember(user, 'Agent-Beta');
+    await user.type(screen.getByPlaceholderText(/例如：是否将上下文工作台升级为正式协作能力/), 'stop before next');
+    await user.click(screen.getByRole('button', { name: '创建议场' }));
+
+    const textarea = await screen.findByPlaceholderText(/在「stop before next」里发言/);
+    await user.type(textarea, '@Agent-Alpha 第一条');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(streamingCallAgent).toHaveBeenCalledTimes(1));
+
+    await user.type(textarea, '@Agent-Alpha 第二条');
+    await user.click(screen.getByRole('button', { name: '发送' }));
+
+    await waitFor(() => expect(streamingCallAgent).toHaveBeenCalledTimes(2));
+    expect(sequence.slice(0, 3)).toEqual(['call:Agent-Alpha', 'stop:Agent-Alpha', 'call:Agent-Alpha']);
+    expect(document.body.textContent || '').toContain('已停止');
+    expect(document.body.textContent || '').toContain('Agent-Alpha 的新回复');
+  });
+
   test('completed structured process panel keeps older details available after appending new messages', async () => {
     const user = userEvent.setup();
     const inputRef = React.createRef<HTMLTextAreaElement>();

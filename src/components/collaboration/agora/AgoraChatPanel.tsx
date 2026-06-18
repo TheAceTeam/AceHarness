@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -1109,6 +1109,48 @@ export function AgoraChatPanel({
     }
   };
 
+  const markRoomMessageStopped = useCallback((messageId: string) => {
+    updateRoom((current) => {
+      const base = ensureRoom(current);
+      return {
+        ...base,
+        messages: (base.messages || []).map((message) => {
+          if (message.id !== messageId || message.status !== 'pending') return message;
+          const partial = getAgoraVisibleText(String(message.rawContent || message.content || ''), false).trim();
+          return {
+            ...message,
+            content: partial && partial !== '发言中' ? partial : '已停止',
+            rawContent: String(message.rawContent || '').trim(),
+            status: 'error' as const,
+            error: '已停止',
+          };
+        }),
+      };
+    });
+  }, [updateRoom]);
+
+  const stopActiveRoomStreams = useCallback(async (scope?: { messageId?: string }) => {
+    const entries = Object.entries(activeMessageStreamsRef.current)
+      .filter(([messageId]) => !scope?.messageId || messageId === scope.messageId);
+    if (!entries.length) return 0;
+
+    entries.forEach(([messageId, stream]) => {
+      if (stream.roundId) {
+        stoppedRoundsRef.current.add(stream.roundId);
+      }
+      markRoomMessageStopped(messageId);
+    });
+
+    await Promise.allSettled(entries.map(async ([messageId, stream]) => {
+      try {
+        await stream.stop();
+      } finally {
+        clearActiveMessageStream(messageId);
+      }
+    }));
+    return entries.length;
+  }, [markRoomMessageStopped]);
+
   const executeAgentMessage = async (input: {
     roundId?: string;
     speakerName: string;
@@ -1278,14 +1320,7 @@ export function AgoraChatPanel({
   };
 
   const handleStopRoomMessage = async (message: CollaborationRoomMessage) => {
-    const stream = activeMessageStreamsRef.current[message.id];
-    if (!stream) return;
-    if (stream.roundId) {
-      stoppedRoundsRef.current.add(stream.roundId);
-    }
-    try {
-      await stream.stop();
-    } catch {}
+    await stopActiveRoomStreams({ messageId: message.id });
   };
 
   const canRetryRoomMessage = (message: CollaborationRoomMessage) => (
@@ -1789,6 +1824,7 @@ export function AgoraChatPanel({
   const handleSend = async (overrideText?: string) => {
     const text = String(overrideText ?? draft).trim();
     if (!text) return;
+    await stopActiveRoomStreams();
     if (!overrideText) {
       setDraft('');
     }
@@ -1872,12 +1908,15 @@ export function AgoraChatPanel({
     onRegisterMainInputHandler((text: string) => {
       const normalized = text.trim();
       if (!normalized) return;
-      void runConversationRoundRef.current(normalized, composerMode);
+      void (async () => {
+        await stopActiveRoomStreams();
+        await runConversationRoundRef.current(normalized, composerMode);
+      })();
     });
     return () => {
       onRegisterMainInputHandler(null);
     };
-  }, [composerMode, hideComposer, onRegisterMainInputHandler, useCentralTranscript]);
+  }, [composerMode, hideComposer, onRegisterMainInputHandler, stopActiveRoomStreams, useCentralTranscript]);
 
   const handleChangeTopic = () => {
     const nextTopic = topicDraft.trim();

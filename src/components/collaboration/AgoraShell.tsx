@@ -1339,7 +1339,7 @@ export function AgoraShell({
                     : 'fixed bottom-6 right-6 top-[8.5rem] z-40'
                   : guestPanelCollapsed
                     ? 'absolute right-4 top-4 z-10'
-                    : 'absolute bottom-32 right-4 top-4 z-10',
+                    : 'absolute bottom-4 right-4 top-4 z-10',
                 guestPanelCollapsed ? 'w-12' : 'w-64'
               )}>
               <div className={cn('flex shrink-0 items-center border-b px-2 py-2', guestPanelCollapsed ? 'justify-center' : 'justify-between')}>
@@ -1403,12 +1403,12 @@ export function AgoraShell({
                 </button>
               ) : (
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="min-h-0 flex-1 overflow-y-auto p-2 pb-6">
+                  <div className="max-h-[42%] min-h-0 shrink-0 overflow-y-auto p-2">
                     {guestRoster.length ? guestRoster.map((participant) => (
                       <div
                         key={participant.id}
                         className={cn(
-                          'group flex items-center gap-2 rounded-md px-2 py-2 hover:bg-muted/60',
+                          'group flex min-h-11 items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60',
                           participant.openingStatus === 'failed' && 'bg-rose-50/80 text-rose-900 hover:bg-rose-50 dark:bg-rose-950/20 dark:text-rose-200 dark:hover:bg-rose-950/30'
                         )}
                       >
@@ -1452,9 +1452,9 @@ export function AgoraShell({
                     )}
                   </div>
                   {allowGuestManagement ? (
-                    <div className="flex min-h-0 max-h-[34%] shrink-0 flex-col border-t p-2">
+                    <div className="flex min-h-[168px] flex-1 flex-col border-t p-2">
                       <div className="mb-1 shrink-0 px-1 text-[10px] text-muted-foreground">可加入</div>
-                      <div className="min-h-0 overflow-y-auto">
+                      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                         {availableSavedGuests.map((guest) => (
                           <button
                             key={guest.id}
