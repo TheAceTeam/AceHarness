@@ -1053,6 +1053,33 @@ export const agentApi = {
     return response.json();
   },
 
+  async exportAgents(names: string[]): Promise<Blob> {
+    const response = await authFetch(`${API_BASE}/agents/archive`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agents: names }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || data.error || '导出 Agent 失败');
+    }
+    return response.blob();
+  },
+
+  async importAgentZip(file: File): Promise<ApiResponse & { imported: string[] }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await authFetch(`${API_BASE}/agents/archive`, {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.message || data.error || '导入 Agent 失败');
+    }
+    return data;
+  },
+
   async batchReplaceModel(engine: string | undefined, fromModel: string, toModel: string): Promise<ApiResponse & { updatedCount: number }> {
     const response = await authFetch(`${API_BASE}/agents/batch`, {
       method: 'POST',

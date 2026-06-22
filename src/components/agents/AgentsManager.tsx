@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { agentApi } from '@/lib/core/api';
 import { Button } from '@/components/ui/button';
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { FolderOpen, Search } from 'lucide-react';
+import { Download, FolderOpen, Search, Upload } from 'lucide-react';
 import AgentEditModal from '@/components/AgentEditModal';
 import AIAgentCreatorModal from '@/components/AIAgentCreatorModal';
 import { AgentHeroCard } from '@/components/agent/AgentHeroCard';
@@ -97,7 +97,10 @@ export default function AgentsManager({
   const [selectedAgentNames, setSelectedAgentNames] = useState<string[]>([]);
   const [runtimeAgentsDir, setRuntimeAgentsDir] = useState('');
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [archiveImporting, setArchiveImporting] = useState(false);
+  const [archiveExporting, setArchiveExporting] = useState(false);
   const [floatingFilterBar, setFloatingFilterBar] = useState(false);
+  const archiveInputRef = useRef<HTMLInputElement | null>(null);
   const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
   const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
   const [filterBarHeight, setFilterBarHeight] = useState(0);
@@ -311,6 +314,44 @@ export default function AgentsManager({
     }
   };
 
+  const handleImportAgentZip = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setArchiveImporting(true);
+    try {
+      const result = await agentApi.importAgentZip(file);
+      await loadAgents();
+      toast('success', result.message || `导入了 ${result.imported.length} 个 Agent`);
+    } catch (error: any) {
+      toast('error', error.message || '导入 Agent 失败');
+    } finally {
+      setArchiveImporting(false);
+      if (archiveInputRef.current) archiveInputRef.current.value = '';
+    }
+  };
+
+  const handleExportAgents = async () => {
+    if (selectedAgentNames.length === 0) {
+      toast('warning', '请先选择要导出的 Agent');
+      return;
+    }
+    setArchiveExporting(true);
+    try {
+      const blob = await agentApi.exportAgents(selectedAgentNames);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'agents-export.zip';
+      anchor.click();
+      URL.revokeObjectURL(url);
+      toast('success', `已导出 ${selectedAgentNames.length} 个 Agent`);
+    } catch (error: any) {
+      toast('error', error.message || '导出 Agent 失败');
+    } finally {
+      setArchiveExporting(false);
+    }
+  };
+
   // Get all unique tags
   const allTags = Array.from(new Set(agents.flatMap(a => a.tags || [])));
 
@@ -435,6 +476,13 @@ export default function AgentsManager({
           title="Runtime Agents"
         />
       ) : null}
+      <input
+        ref={archiveInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={handleImportAgentZip}
+      />
       {!embedded ? (
         <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
           <div className="flex items-center gap-4">
@@ -449,6 +497,15 @@ export default function AgentsManager({
             <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
               <FolderOpen className="w-4 h-4 mr-1" />
               打开工作目录
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => archiveInputRef.current?.click()}
+              disabled={archiveImporting}
+            >
+              <Upload className="w-4 h-4 mr-1" />
+              {archiveImporting ? '导入中...' : '导入 ZIP'}
             </Button>
             <Button size="sm" onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }} variant="outline">
               <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
@@ -644,6 +701,16 @@ export default function AgentsManager({
                 >
                   <FolderOpen className="mr-1 h-4 w-4" />
                   打开工作目录
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={() => archiveInputRef.current?.click()}
+                  disabled={archiveImporting}
+                >
+                  <Upload className="mr-1 h-4 w-4" />
+                  {archiveImporting ? '导入中...' : '导入 ZIP'}
                 </Button>
               </div>
             </section>
@@ -1085,6 +1152,18 @@ export default function AgentsManager({
               <div className="px-3 text-sm font-medium text-foreground/80">
                 已选 {selectedAgentNames.length} 项
               </div>
+              {selectedAgentNames.length > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-full px-4"
+                  onClick={handleExportAgents}
+                  disabled={archiveExporting}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  {archiveExporting ? '导出中...' : '导出 ZIP'}
+                </Button>
+              ) : null}
               {selectedAgentNames.length > 0 ? (
                 <Button
                   size="sm"
