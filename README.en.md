@@ -5,25 +5,27 @@
   
 Powered By Cangjie Team
 
-English | [中文](./README.md) 
+English | [中文](./README.md)
 
-An enterprise-grade AI multi-agent collaboration system for Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory
+<img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="100"> Enterprise-grade AI multi-agent collaboration system
+
+Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
-
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
-![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
-![License](https://img.shields.io/badge/License-Apache--2.0%20with%20Runtime%20Library%20Exception-blue.svg)
-
-Your team of AIs, collaborating to get work done.
 
 ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
 
-![ACEHarness cover](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png)
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png">
+    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png" alt="ACEHarness product overview" height="400">
+</picture>
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png">
+    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness cover" height="400">
+</picture>
 
 </div>
 
@@ -47,8 +49,6 @@ ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combine
 ---
 
 ## Product Overview
-
-![ACEHarness product overview](https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png)
 
 ACEHarness organizes engineering tasks around planning, execution, collaboration, knowledge, extension, and external channels. The capability map below expands the main entry points for daily work.
 

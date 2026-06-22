@@ -65,6 +65,35 @@ function trimTrailingNewlines(value: string): string {
   return value.replace(/(?:[ \t]*\r?\n)+[ \t]*$/g, '');
 }
 
+function decodeMentionAttributeValue(value: string): string {
+  return value
+    .split('&quot;').join('"')
+    .split('&#34;').join('"')
+    .split('&apos;').join('\'')
+    .split('&#39;').join('\'')
+    .split('&gt;').join('>')
+    .split('&lt;').join('<')
+    .split('&amp;').join('&');
+}
+
+function readMentionAttribute(attrs: string, attribute: 'id' | 'label'): string {
+  const pattern = new RegExp(`${attribute}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>\\]]+))`, 'i');
+  const match = pattern.exec(attrs);
+  return decodeMentionAttributeValue(String(match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim());
+}
+
+function mentionMarkupToText(attrs: string, fallback: string): string {
+  const label = readMentionAttribute(attrs, 'label') || readMentionAttribute(attrs, 'id');
+  return label ? `@${label}` : fallback;
+}
+
+export function normalizeMentionMarkdown(markdown: string): string {
+  return String(markdown || '')
+    .replace(/\[@\s+([^\]]+)\]/gi, (match, attrs) => mentionMarkupToText(attrs, match))
+    .replace(/\[mention\s+([^\]]+)\]/gi, (match, attrs) => mentionMarkupToText(attrs, match))
+    .replace(/<mention\b([^>]*?)\/?>/gi, (match, attrs) => mentionMarkupToText(attrs, match));
+}
+
 function getClipboardMarkdown(clipboard: DataTransfer | null | undefined): string {
   if (!clipboard) return '';
   return clipboard.getData('text/markdown') || clipboard.getData('text/x-markdown') || '';
@@ -209,6 +238,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   const editorRuntimeRef = useRef<ReturnType<typeof useEditor> | null>(null);
   const onEnterRef = useRef(onEnter);
   onEnterRef.current = onEnter;
+  const mentionMenuOpenRef = useRef(false);
   const isComposingRef = useRef(false);
   const lastCompositionEndAtRef = useRef(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -235,7 +265,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   const getMarkdownWithImageLocalPaths = useCallback(() => {
     if (!editorRuntimeRef.current) return '';
     const editor = editorRuntimeRef.current;
-    const markdown = editor.getMarkdown();
+    const markdown = normalizeMentionMarkdown(editor.getMarkdown());
     const localPathLines: string[] = [];
     editor.state.doc.descendants((node) => {
       if (node.type.name !== 'image') return true;
@@ -366,10 +396,28 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
             let lastRange: { from: number; to: number } | null = null;
             let lastEditor: any = null;
             let frameId: number | null = null;
+            let selectionHandled = false;
+
+            const getItemClassName = (index: number) => [
+              'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm',
+              index === selectedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground',
+            ].join(' ');
+
+            const updateActiveItemStyles = () => {
+              if (!component) return;
+              component.querySelectorAll<HTMLButtonElement>('[data-mention-index]').forEach((button) => {
+                const index = Number(button.dataset.mentionIndex || '0');
+                button.className = getItemClassName(index);
+              });
+            };
 
             const selectItem = (index: number) => {
+              if (selectionHandled) return;
               const item = items[index];
-              if (item && command) command(item);
+              if (item && command) {
+                selectionHandled = true;
+                command(item);
+              }
             };
 
             const schedulePosition = () => {
@@ -447,17 +495,22 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
                 items.forEach((item, index) => {
                   const button = document.createElement('button');
                   button.type = 'button';
-                  button.className = [
-                    'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm',
-                    index === selectedIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground',
-                  ].join(' ');
+                  button.dataset.mentionIndex = String(index);
+                  button.className = getItemClassName(index);
                   button.onmouseenter = () => {
                     selectedIndex = index;
-                    renderMenu();
+                    updateActiveItemStyles();
                   };
-                  button.onmousedown = (event) => {
+                  const handlePointerSelection = (event: MouseEvent | PointerEvent) => {
                     event.preventDefault();
+                    event.stopPropagation();
                     selectItem(index);
+                  };
+                  button.onpointerdown = handlePointerSelection;
+                  button.onmousedown = handlePointerSelection;
+                  button.onclick = (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
                   };
                   const label = document.createElement('span');
                   label.className = 'font-medium';
@@ -482,12 +535,14 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
               lastClientRect = props.clientRect || null;
               lastRange = props.range || null;
               lastEditor = props.editor || null;
+              selectionHandled = false;
               selectedIndex = Math.min(selectedIndex, Math.max(0, items.length - 1));
               renderMenu();
             };
 
             return {
               onStart: (props: any) => {
+                mentionMenuOpenRef.current = true;
                 component = document.createElement('div');
                 component.style.visibility = 'hidden';
                 document.body.appendChild(component);
@@ -495,27 +550,43 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
               },
               onUpdate: update,
               onKeyDown: (props: any) => {
-                if (!items.length) return false;
+                if (!items.length) {
+                  if (props.event.key === 'Enter' || props.event.key === 'Tab') {
+                    props.event.preventDefault();
+                    props.event.stopPropagation();
+                    return true;
+                  }
+                  return false;
+                }
                 if (props.event.key === 'ArrowDown') {
+                  props.event.preventDefault();
+                  props.event.stopPropagation();
                   selectedIndex = (selectedIndex + 1) % items.length;
-                  renderMenu();
+                  updateActiveItemStyles();
                   return true;
                 }
                 if (props.event.key === 'ArrowUp') {
+                  props.event.preventDefault();
+                  props.event.stopPropagation();
                   selectedIndex = (selectedIndex - 1 + items.length) % items.length;
-                  renderMenu();
+                  updateActiveItemStyles();
                   return true;
                 }
                 if (props.event.key === 'Enter' || props.event.key === 'Tab') {
+                  props.event.preventDefault();
+                  props.event.stopPropagation();
                   selectItem(selectedIndex);
                   return true;
                 }
                 if (props.event.key === 'Escape') {
+                  props.event.preventDefault();
+                  props.event.stopPropagation();
                   return true;
                 }
                 return false;
               },
               onExit: () => {
+                mentionMenuOpenRef.current = false;
                 if (frameId !== null) cancelAnimationFrame(frameId);
                 frameId = null;
                 component?.remove();
@@ -608,7 +679,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       },
     },
     onUpdate: ({ editor }) => {
-      const markdown = editor.getMarkdown();
+      const markdown = normalizeMentionMarkdown(editor.getMarkdown());
       const text = editor.getText();
       onChange?.(markdown, text);
     },
@@ -712,6 +783,10 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (shouldTreatEnterAsImeConfirm(event)) return;
       if (event.key === 'Enter') {
+        if (mentionMenuOpenRef.current) {
+          event.preventDefault();
+          return false;
+        }
         event.preventDefault();
 
         if (isFullscreen) {
@@ -756,7 +831,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
 
   useEffect(() => {
     if (!editor) return;
-    if (content === editor.getMarkdown()) return;
+    if (content === normalizeMentionMarkdown(editor.getMarkdown())) return;
     trySetEditorContent(editor, content, false);
   }, [content, editor]);
 
