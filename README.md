@@ -1,15 +1,22 @@
 <div align="center">
 
+<p>
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="96">
+</p>
+
 # ACE Harness (Agent Centric Engineering Harness)
- ***重构你的Agent生产力 | Your team of AI***
-  
-仓颉团队出品
+
+<p>
+  <strong>重构你的 Agent 生产力 | Your team of AI</strong><br>
+  仓颉团队出品
+</p>
 
 [English](./README.en.md) | 中文
 
-<img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="100"> 企业级 AI Multi-Agent 智能协作系统
-
-Spec Driven Development / 状态机工作流 / Supervisor 智能路由 / 对抗式迭代 / 多 Agent 议场 / 长期记忆
+<p>
+  <strong>企业级 AI Multi-Agent 智能协作系统</strong><br>
+  Spec Driven Development / 状态机工作流 / Supervisor 智能路由 / 对抗式迭代 / 多 Agent 议场 / 长期记忆
+</p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -18,15 +25,10 @@ Spec Driven Development / 状态机工作流 / Supervisor 智能路由 / 对抗�
   
 ACEHarness 是一个面向工程任务的本地 AI Multi-Agent 协作平台。它把 Spec Driven Development、状态机工作流、Supervisor 智能路由、对抗式迭代、多 Agent 议场、Git 基线断点、多层永久记忆、Notebook 知识沉淀、Skill 能力扩展和模型/引擎诊断组合在一起，让复杂研发任务可以被规划、执行、协作、审查、回退、恢复和复盘。
 
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png" alt="ACEHarness 产品总览" height="400">
-</picture>
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness 封面" height="400">
-</picture>
+<p>
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.png" alt="ACEHarness 产品总览" width="59%">
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness 封面" width="39%">
+</p>
 
 </div>
 

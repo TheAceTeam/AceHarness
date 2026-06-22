@@ -1,15 +1,22 @@
 <div align="center">
 
+<p>
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="96">
+</p>
+
 # ACE Harness (Agent Centric Engineering Harness)
- ***Your team of AI***
-  
-Powered By Cangjie Team
+
+<p>
+  <strong>Your team of AI</strong><br>
+  Powered By Cangjie Team
+</p>
 
 English | [中文](./README.md)
 
-<img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/logo.png" alt="ACEHarness" width="100"> Enterprise-grade AI multi-agent collaboration system
-
-Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory
+<p>
+  <strong>Enterprise-grade AI multi-agent collaboration system</strong><br>
+  Spec Driven Development / state-machine workflows / Supervisor routing / adversarial iteration / multi-agent Agora / long-term memory
+</p>
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=nodedotjs&logoColor=white)
@@ -18,14 +25,10 @@ Spec Driven Development / state-machine workflows / Supervisor routing / adversa
 
 ACEHarness is a local AI Multi-Agent workbench for engineering tasks. It combines Spec Driven Development, state-machine workflows, Supervisor routing, adversarial iteration, multi-agent Agora rooms, Git-backed change checkpoints, layered long-term memory, Notebook knowledge capture, Skill-based extension, and model/engine diagnostics so complex development work can be planned, executed, collaborated on, reviewed, rolled back, resumed, and replayed.
 
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png" alt="ACEHarness product overview" height="400">
-</picture>
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png">
-    <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness cover" height="400">
-</picture>
+<p>
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/readme.en.png" alt="ACEHarness product overview" width="63%">
+  <img src="https://raw.gitcode.com/Cangjie-SIG/ACEHarness/files/main/public/images/cover.png" alt="ACEHarness cover" width="35%">
+</p>
 
 </div>
 
