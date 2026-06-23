@@ -1,6 +1,6 @@
 {
   "dashboard": {
-    "title": "ACEHarness Control Center",
+    "title": "ACEHarness",
     "subtitle": "Full-Lifecycle Multi-Agent Orchestration System",
     "versionLabel": "Current version",
     "stats": {
@@ -46,7 +46,7 @@
       "schedulesDesc": "Set up automated scheduled tasks",
       "apiDocs": "API Docs",
         "apiDocsDesc": "View REST API documentation",
-        "chatMode": "Chat Mode",
+        "chatMode": "Chat",
         "envVars": "System Settings",
         "envVarsDesc": "Manage system env vars, managed SDKs, and GitCode token",
         "knowledge": "Knowledge",

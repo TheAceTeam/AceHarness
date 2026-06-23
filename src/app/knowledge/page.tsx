@@ -8,6 +8,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import UserMenu from '@/components/UserMenu';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 function EntryCard({
   href,
@@ -51,9 +52,14 @@ function EntryCard({
 
 function KnowledgePageContent() {
   useDocumentTitle('知识');
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '知识',
+    subtitle: '在这里查看团队知识内容，或继续进入共享 Notebook 处理资料。',
+  }, []);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {!isDashboardShell ? (
       <header className="border-b">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
           <div className="flex items-center gap-4">
@@ -73,6 +79,7 @@ function KnowledgePageContent() {
           </div>
         </div>
       </header>
+      ) : null}
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         <div className="grid gap-6 lg:grid-cols-2">

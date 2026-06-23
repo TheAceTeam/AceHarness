@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/core/utils';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
 
 interface AgentConfig {
@@ -460,6 +461,44 @@ export default function AgentsManager({
     }
     return badges;
   };
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: 'Agent 管理',
+    subtitle: `管理 ${agents.length} 个可调度角色与运行时 Agent 编队`,
+    actions: (
+      <>
+        <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeAgentsDir}>
+          <FolderOpen className="w-4 h-4 mr-1" />
+          <span className="hidden xl:inline">工作目录</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => archiveInputRef.current?.click()}
+          disabled={archiveImporting}
+        >
+          <Upload className={`w-4 h-4 mr-1 ${archiveImporting ? 'animate-bounce' : ''}`} />
+          <span className="hidden xl:inline">{archiveImporting ? '导入中...' : '导入 ZIP'}</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleExportAgents}
+          disabled={archiveExporting || selectedAgentNames.length === 0}
+        >
+          <Download className={`w-4 h-4 mr-1 ${archiveExporting ? 'animate-bounce' : ''}`} />
+          <span className="hidden xl:inline">{archiveExporting ? '导出中...' : '导出 ZIP'}</span>
+        </Button>
+        <Button size="sm" onClick={() => { setAiRevisionAgent(null); setShowAICreateModal(true); }} variant="outline">
+          <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+          AI 创建
+        </Button>
+        <Button size="sm" onClick={handleCreateAgent}>
+          <span className="material-symbols-outlined text-sm mr-1">add</span>
+          新建 Agent
+        </Button>
+      </>
+    ),
+  }, [agents.length, runtimeAgentsDir, archiveImporting, archiveExporting, selectedAgentNames.length]);
 
   return (
     <div
@@ -483,7 +522,7 @@ export default function AgentsManager({
         className="hidden"
         onChange={handleImportAgentZip}
       />
-      {!embedded ? (
+      {!embedded && !isDashboardShell ? (
         <div className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="sm" asChild>
@@ -691,26 +730,6 @@ export default function AgentsManager({
                 >
                   <Search className="mr-1 h-4 w-4" />
                   搜索
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={() => setWorkspaceOpen(true)}
-                  disabled={!runtimeAgentsDir}
-                >
-                  <FolderOpen className="mr-1 h-4 w-4" />
-                  打开工作目录
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={() => archiveInputRef.current?.click()}
-                  disabled={archiveImporting}
-                >
-                  <Upload className="mr-1 h-4 w-4" />
-                  {archiveImporting ? '导入中...' : '导入 ZIP'}
                 </Button>
               </div>
             </section>

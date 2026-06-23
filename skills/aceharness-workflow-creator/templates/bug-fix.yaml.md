@@ -2,6 +2,8 @@
 
 适用于 bug 修复、crash 分析、性能问题排查。
 
+默认每个非终止状态使用 defender、attacker、judge 三步；judge 输出当前状态 verdict，transitions 再据此流转。`conditional_pass` 表示当前状态仍需迭代，通常回到当前状态。
+
 ```yaml
 workflow:
   name: Bug 修复
@@ -34,12 +36,21 @@ workflow:
             1. 确认复现环境和条件
             2. 编写最小复现步骤
             3. 记录实际行为 vs 预期行为
+        - id: reproduce-challenge
+          name: 质疑复现
+          agent: code-hunter
+          role: attacker
+          specTaskBinding:
+            taskIds: [T1.2]
+            requirementIds: [R1]
+            artifactKeys: [requirements, tasks]
+          task: 质疑复现用例是否过窄、是否遗漏环境变量、是否把偶发现象误判为稳定复现
         - id: reproduce-judge
           name: 复现裁决
           agent: tester
           role: judge
           specTaskBinding:
-            taskIds: [T1.2]
+            taskIds: [T1.3]
             requirementIds: [R1]
             artifactKeys: [tasks]
           task: |
@@ -186,12 +197,21 @@ workflow:
             1. 运行原始复现用例，确认已修复
             2. 运行相关模块测试，确认无回归
             3. 执行全量构建
+        - id: regression-challenge
+          name: 回归质疑
+          agent: code-hunter
+          role: attacker
+          specTaskBinding:
+            taskIds: [T4.2]
+            requirementIds: [R4]
+            artifactKeys: [tasks]
+          task: 质疑回归覆盖范围，检查是否遗漏失败路径、边界输入、兼容性和性能副作用
         - id: regression-judge
           name: 回归裁决
           agent: tester
           role: judge
           specTaskBinding:
-            taskIds: [T4.2]
+            taskIds: [T4.3]
             requirementIds: [R4]
             artifactKeys: [tasks]
           task: |

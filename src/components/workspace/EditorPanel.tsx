@@ -3,7 +3,7 @@
 import * as React from "react"
 import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
-import { Loader2, FileCode2, Play } from "lucide-react"
+import { Loader2, FileCode2, Play, Eye, RefreshCw, Maximize2, X } from "lucide-react"
 import { NotebookEditor } from "@/components/notebook/NotebookEditor"
 import { AnsiLogBlock } from "@/components/AnsiLogBlock"
 import { registerCangjieLanguage } from "@/lib/cangjie/language"
@@ -78,8 +78,11 @@ const OFFICE_PREVIEW_EXTENSIONS = new Set([
   "docx", "xlsx", "pptx",
 ])
 
+const HTML_PREVIEW_EXTENSIONS = new Set(["html", "htm"])
+
 interface EditorPanelProps {
   filePath: string | null
+  workspacePath?: string
   content: string | null
   fileSize: number | null
   loading: boolean
@@ -233,6 +236,7 @@ function formatErrorMessage(error: unknown, fallback: string): string {
 
 export function EditorPanel({
   filePath,
+  workspacePath,
   content,
   fileSize,
   loading,
@@ -268,6 +272,9 @@ export function EditorPanel({
   const [runResult, setRunResult] = React.useState<RunCangjieResult | null>(null)
   const [notebookTocOpen, setNotebookTocOpen] = React.useState(false)
   const [notebookDependencyGraphOpen, setNotebookDependencyGraphOpen] = React.useState(false)
+  const [htmlPreviewOpen, setHtmlPreviewOpen] = React.useState(false)
+  const [htmlPreviewModalOpen, setHtmlPreviewModalOpen] = React.useState(false)
+  const [htmlPreviewVersion, setHtmlPreviewVersion] = React.useState(0)
   const cangjieRegistered = React.useRef(false)
   const cmakeRegistered = React.useRef(false)
   const suggestionDecorationIdsRef = React.useRef<string[]>([])
@@ -595,6 +602,19 @@ export function EditorPanel({
   const pathSegments = (filePath?.replace(/\\/g, "/").split("/").filter(Boolean) || []).map(getDisplayedPathSegment)
   const canRunCangjie = isRunnableCangjieFile(filePath) && !oversize && !loading && editorContent != null
   const isNotebook = mode === 'notebook' && isNotebookFile(filePath)
+  const canPreviewHtml = Boolean(
+    mode === 'default'
+      && workspacePath
+      && filePath
+      && fileType
+      && HTML_PREVIEW_EXTENSIONS.has(fileType)
+      && !loading
+      && !error
+      && !oversize,
+  )
+  const htmlPreviewUrl = canPreviewHtml && workspacePath && filePath
+    ? `${workspaceApi.getStaticPreviewUrl(workspacePath, filePath)}?v=${htmlPreviewVersion}`
+    : ""
 
   React.useEffect(() => {
     if (!isNotebook) {
@@ -602,6 +622,13 @@ export function EditorPanel({
       setNotebookDependencyGraphOpen(false)
     }
   }, [isNotebook])
+
+  React.useEffect(() => {
+    if (!canPreviewHtml) {
+      setHtmlPreviewOpen(false)
+      setHtmlPreviewModalOpen(false)
+    }
+  }, [canPreviewHtml])
 
   React.useEffect(() => {
     const isPreviewableFile = Boolean(fileBlob && fileType && PREVIEW_EXTENSIONS.has(fileType))
@@ -704,9 +731,59 @@ export function EditorPanel({
                   </MenubarCheckboxItem>
                 </>
               )}
+              {canPreviewHtml && (
+                <>
+                  <MenubarSeparator />
+                  <MenubarCheckboxItem
+                    checked={htmlPreviewOpen}
+                    onCheckedChange={(checked) => setHtmlPreviewOpen(checked === true)}
+                  >
+                    HTML 预览
+                  </MenubarCheckboxItem>
+                  <MenubarItem onClick={() => setHtmlPreviewModalOpen(true)}>
+                    全屏预览
+                  </MenubarItem>
+                </>
+              )}
             </MenubarContent>
           </MenubarMenu>
           <div className="ml-auto flex items-center px-2 gap-2">
+            {canPreviewHtml && (
+              <>
+                <Button
+                  variant={htmlPreviewOpen ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setHtmlPreviewOpen((value) => !value)}
+                  className="h-7 gap-1.5"
+                  title="切换 HTML 预览"
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                  预览
+                </Button>
+                {htmlPreviewOpen && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setHtmlPreviewVersion((value) => value + 1)}
+                    className="h-7 w-7"
+                    title="刷新 HTML 预览"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span className="sr-only">刷新 HTML 预览</span>
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setHtmlPreviewModalOpen(true)}
+                  className="h-7 w-7"
+                  title="全屏 HTML 预览"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  <span className="sr-only">全屏 HTML 预览</span>
+                </Button>
+              </>
+            )}
             {canRunCangjie && (
               <Button variant="outline" size="sm" onClick={handleRun} disabled={running} className="h-7 gap-1.5">
                 {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
@@ -806,13 +883,15 @@ export function EditorPanel({
               onDependencyGraphOpenChange={setNotebookDependencyGraphOpen}
             />
           ) : (
-            <MonacoEditor
-              height="100%"
-              language={getLanguage(filePath)}
-              theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-              value={editorContent ?? ""}
-              onChange={(value) => setEditorContent(value ?? "")}
-              onMount={(editor, monaco) => {
+            <div className="flex h-full min-h-0">
+              <div className={cn("min-h-0", canPreviewHtml && htmlPreviewOpen ? "w-1/2 border-r" : "w-full")}>
+                <MonacoEditor
+                  height="100%"
+                  language={getLanguage(filePath)}
+                  theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+                  value={editorContent ?? ""}
+                  onChange={(value) => setEditorContent(value ?? "")}
+                  onMount={(editor, monaco) => {
                 editorRef.current = editor
                 monacoRef.current = monaco
                 setEditorMountVersion((version) => version + 1)
@@ -935,21 +1014,102 @@ export function EditorPanel({
                     })
                   },
                 })
-              }}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 13,
-                lineNumbers: "on",
-                wordWrap,
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                tabSize: 2,
-                padding: { top: 8 },
-              }}
-            />
+                  }}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 13,
+                    lineNumbers: "on",
+                    wordWrap,
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    tabSize: 2,
+                    padding: { top: 8 },
+                  }}
+                />
+              </div>
+              {canPreviewHtml && htmlPreviewOpen ? (
+                <div className="flex min-h-0 w-1/2 flex-col bg-background">
+                  <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs text-muted-foreground">
+                    <span className="truncate">静态 HTML 预览</span>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setHtmlPreviewVersion((value) => value + 1)}
+                        title="刷新预览"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        <span className="sr-only">刷新预览</span>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setHtmlPreviewModalOpen(true)}
+                        title="全屏预览"
+                      >
+                        <Maximize2 className="h-3.5 w-3.5" />
+                        <span className="sr-only">全屏预览</span>
+                      </Button>
+                    </div>
+                  </div>
+                  <iframe
+                    key={htmlPreviewUrl}
+                    src={htmlPreviewUrl}
+                    title="HTML 预览"
+                    className="h-full min-h-0 w-full flex-1 bg-white"
+                    sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+                  />
+                </div>
+              ) : null}
+            </div>
           )}
         </div>
       </div>
+
+      <Dialog open={htmlPreviewModalOpen && canPreviewHtml} onOpenChange={setHtmlPreviewModalOpen}>
+        <DialogContent className="flex h-screen w-screen max-w-none flex-col gap-0 rounded-none p-0">
+          <DialogHeader className="shrink-0 border-b px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <DialogTitle className="text-sm">静态 HTML 全屏预览</DialogTitle>
+                <DialogDescription className="truncate text-xs">
+                  {filePath || "HTML 文件"}
+                </DialogDescription>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setHtmlPreviewVersion((value) => value + 1)}
+                  className="h-8 gap-1.5"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  刷新
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setHtmlPreviewModalOpen(false)}
+                  className="h-8 w-8"
+                  title="关闭预览"
+                >
+                  <X className="h-4 w-4" />
+                  <span className="sr-only">关闭预览</span>
+                </Button>
+              </div>
+            </div>
+          </DialogHeader>
+          <iframe
+            key={`modal-${htmlPreviewUrl}`}
+            src={htmlPreviewUrl}
+            title="HTML 全屏预览"
+            className="min-h-0 w-full flex-1 bg-white"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads"
+          />
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={runDialogOpen} onOpenChange={setRunDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-hidden flex flex-col">

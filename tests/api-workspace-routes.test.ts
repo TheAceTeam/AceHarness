@@ -16,14 +16,15 @@ type WorkspaceTreeJson = {
 };
 
 async function loadWorkspaceRoutes() {
-  const [tree, file, manage, download, upload] = await Promise.all([
+  const [tree, file, manage, download, upload, workspaceStatic] = await Promise.all([
     import('@/app/api/workspace/tree/route'),
     import('@/app/api/workspace/file/route'),
     import('@/app/api/workspace/manage/route'),
     import('@/app/api/workspace/download/route'),
     import('@/app/api/workspace/upload/route'),
+    import('@/app/api/workspace/static/[workspaceToken]/[...filePath]/route'),
   ]);
-  return { tree, file, manage, download, upload };
+  return { tree, file, manage, download, upload, workspaceStatic };
 }
 
 function flattenTree(nodes: TreeNode[]): TreeNode[] {
@@ -244,6 +245,73 @@ describe('workspace API routes', () => {
       await assertErrorResponse(
         await upload.POST(makeRequest('/api/workspace/upload', { method: 'POST', json: { workspace } })),
         400
+      );
+    });
+  });
+
+  test('workspace static route serves html and referenced assets inside the workspace', async () => {
+    await withTempWorkspace(async ({ workspace }) => {
+      await mkdir(path.join(workspace, 'site', 'assets'), { recursive: true });
+      await writeFile(
+        path.join(workspace, 'site', 'index.html'),
+        '<link href="/site/assets/app.css" rel="stylesheet"><script src="app.js"></script><img src="assets/logo.svg">',
+      );
+      await writeFile(path.join(workspace, 'site', 'app.js'), 'window.previewLoaded = true;');
+      await writeFile(path.join(workspace, 'site', 'assets', 'app.css'), 'body{background:url(/site/assets/logo.svg)}');
+      await writeFile(path.join(workspace, 'site', 'assets', 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+
+      const { workspaceStatic } = await loadWorkspaceRoutes();
+      const token = Buffer.from(workspace, 'utf8').toString('base64url');
+      const html = await workspaceStatic.GET(
+        makeRequest(`/api/workspace/static/${token}/site/index.html`),
+        { params: Promise.resolve({ workspaceToken: token, filePath: ['site', 'index.html'] }) },
+      );
+      expect(html.status).toBe(200);
+      expect(html.headers.get('content-type')).toContain('text/html');
+      expect(await html.text()).toContain(`/api/workspace/static/${encodeURIComponent(token)}/site/assets/app.css`);
+
+      const css = await workspaceStatic.GET(
+        makeRequest(`/api/workspace/static/${token}/site/assets/app.css`),
+        { params: Promise.resolve({ workspaceToken: token, filePath: ['site', 'assets', 'app.css'] }) },
+      );
+      expect(css.status).toBe(200);
+      expect(css.headers.get('content-type')).toContain('text/css');
+      expect(await css.text()).toContain(`/api/workspace/static/${encodeURIComponent(token)}/site/assets/logo.svg`);
+
+      const script = await workspaceStatic.GET(
+        makeRequest(`/api/workspace/static/${token}/site/app.js`),
+        { params: Promise.resolve({ workspaceToken: token, filePath: ['site', 'app.js'] }) },
+      );
+      expect(script.status).toBe(200);
+      expect(script.headers.get('content-type')).toContain('text/javascript');
+      expect(await script.text()).toBe('window.previewLoaded = true;');
+    });
+  });
+
+  test('workspace static route rejects traversal and symlink escapes', async ({ skip }) => {
+    if (!(await canCreateFileSymlink())) {
+      skip('File symlink creation is not permitted in this environment');
+    }
+
+    await withTempWorkspace(async ({ workspace, base }) => {
+      await writeFile(path.join(base, 'secret.html'), 'secret');
+      await createFileSymlink(path.join(base, 'secret.html'), path.join(workspace, 'link.html'));
+      const { workspaceStatic } = await loadWorkspaceRoutes();
+      const token = Buffer.from(workspace, 'utf8').toString('base64url');
+
+      await assertErrorResponse(
+        await workspaceStatic.GET(
+          makeRequest(`/api/workspace/static/${token}/../secret.html`),
+          { params: Promise.resolve({ workspaceToken: token, filePath: ['..', 'secret.html'] }) },
+        ),
+        400,
+      );
+      await assertErrorResponse(
+        await workspaceStatic.GET(
+          makeRequest(`/api/workspace/static/${token}/link.html`),
+          { params: Promise.resolve({ workspaceToken: token, filePath: ['link.html'] }) },
+        ),
+        403,
       );
     });
   });

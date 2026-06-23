@@ -36,6 +36,10 @@ export class CodegenieEngineWrapper extends ACPWrapperBase {
     };
   }
 
+  shouldUseOpenCodeCommandFileFallback(): boolean {
+    return true;
+  }
+
   async isAvailable(): Promise<boolean> {
     return commandExists(resolveCodegenieCommand(), getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }

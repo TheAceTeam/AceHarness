@@ -12,6 +12,7 @@ import type { ACPEngineConfig } from './acp-engine';
 import type { Engine, EngineOptions, EngineResult, EngineResultMetadata, EngineStreamEvent } from './engine-interface';
 import { normalizeEngineChunk, normalizeEngineOutput } from './engine-output';
 import { isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
+import { mergeOpenCodeCommandsWithFileFallback } from './opencode-command-files';
 import {
   formatAceReasoning,
   formatAceToolCall,
@@ -318,7 +319,13 @@ class ACPSharedRunner {
         if (!parsedCommand) {
           throw new Error(`[${wrapper.getName()}] invalid slash command`);
         }
-        const commands = await engine.waitForAvailableCommands();
+        const discoveredCommands = await engine.waitForAvailableCommands();
+        const commands = wrapper.shouldUseOpenCodeCommandFileFallback(options)
+          ? await mergeOpenCodeCommandsWithFileFallback(discoveredCommands, {
+            workingDirectory: options.workingDirectory,
+            userId: options.userId,
+          })
+          : discoveredCommands;
         const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
         if (!commandExists) {
           const suffix = commands.length ? ` Available commands: ${commands.map((command) => command.name).join(', ')}` : ' No commands were discovered.';
@@ -619,6 +626,10 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     return Boolean(options.rawPrompt) && isOpenCodeSlashCommandPrompt(options.prompt);
   }
 
+  shouldUseOpenCodeCommandFileFallback(_options: Pick<EngineOptions, 'workingDirectory' | 'userId'>): boolean {
+    return false;
+  }
+
   async discoverCommands(options: Pick<EngineOptions, 'workingDirectory' | 'userId'>): Promise<Array<{ name: string; description: string; source?: string; type?: string; kind?: string; category?: string }>> {
     const engineOptions: EngineOptions = {
       agent: 'chat',
@@ -632,7 +643,13 @@ export abstract class ACPWrapperBase extends EventEmitter implements Engine {
     const engine = await this.createStartedEngine(engineOptions, false);
     try {
       await engine.createSession();
-      return await engine.waitForAvailableCommands();
+      const commands = await engine.waitForAvailableCommands();
+      return this.shouldUseOpenCodeCommandFileFallback(options)
+        ? await mergeOpenCodeCommandsWithFileFallback(commands, {
+          workingDirectory: options.workingDirectory,
+          userId: options.userId,
+        })
+        : commands;
     } finally {
       engine.stop();
     }

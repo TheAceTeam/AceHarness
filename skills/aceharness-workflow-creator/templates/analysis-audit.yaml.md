@@ -2,6 +2,8 @@
 
 适用于代码审计、安全分析、技术调研。
 
+默认每个非终止状态使用 defender、attacker、judge 三步；judge 输出当前状态 verdict，transitions 再据此流转。`conditional_pass` 表示当前状态仍需迭代，通常回到当前状态。
+
 ```yaml
 workflow:
   name: 分析审计
@@ -34,12 +36,21 @@ workflow:
             1. 确定分析范围和目标
             2. 收集相关代码、文档、日志
             3. 整理已知事实和初步发现
+        - id: collect-challenge
+          name: 质疑数据
+          agent: code-hunter
+          role: attacker
+          specTaskBinding:
+            taskIds: [T1.2]
+            requirementIds: [R1]
+            artifactKeys: [requirements, tasks]
+          task: 质疑数据收集范围，检查是否遗漏关键代码路径、日志、版本差异或反例样本
         - id: collect-judge
           name: 收集裁决
           agent: fix-reviewer
           role: judge
           specTaskBinding:
-            taskIds: [T1.2]
+            taskIds: [T1.3]
             requirementIds: [R1]
             artifactKeys: [tasks]
           task: |
@@ -132,12 +143,21 @@ workflow:
             1. 用不同方法或数据源验证关键结论
             2. 补充边界场景验证
             3. 整理最终结论和置信度
+        - id: validation-challenge
+          name: 质疑验证
+          agent: code-hunter
+          role: attacker
+          specTaskBinding:
+            taskIds: [T3.2]
+            requirementIds: [R3]
+            artifactKeys: [tasks]
+          task: 质疑验证方法和证据链，检查是否存在未覆盖反例、样本偏差或结论跳跃
         - id: validation-judge
           name: 验证裁决
           agent: fix-reviewer
           role: judge
           specTaskBinding:
-            taskIds: [T3.2]
+            taskIds: [T3.3]
             requirementIds: [R3]
             artifactKeys: [tasks]
           task: |
@@ -175,12 +195,21 @@ workflow:
             1. 分析背景和范围
             2. 关键发现和风险等级
             3. 建议和行动项
+        - id: report-challenge
+          name: 质疑报告
+          agent: code-hunter
+          role: attacker
+          specTaskBinding:
+            taskIds: [T4.2]
+            requirementIds: [R4]
+            artifactKeys: [requirements, design, tasks]
+          task: 质疑报告是否证据充分、风险等级是否合理、建议是否可执行、是否遗漏限制和剩余风险
         - id: report-judge
           name: 报告裁决
           agent: fix-reviewer
           role: judge
           specTaskBinding:
-            taskIds: [T4.2]
+            taskIds: [T4.3]
             requirementIds: [R4]
             artifactKeys: [tasks]
           task: |

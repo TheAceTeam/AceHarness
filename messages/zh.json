@@ -1,6 +1,6 @@
 {
   "dashboard": {
-    "title": "ACEHarness 控制中心",
+    "title": "ACEHarness",
     "subtitle": "Your team of AIs, collaborating to get work done.",
     "versionLabel": "当前版本",
     "stats": {
@@ -46,7 +46,7 @@
       "schedulesDesc": "设置定时自动执行任务",
       "apiDocs": "API 文档",
       "apiDocsDesc": "查看 REST API 接口文档",
-      "chatMode": "对话模式",
+      "chatMode": "对话",
       "envVars": "系统设置",
         "envVarsDesc": "管理系统环境变量、托管 SDK 与 GitCode Token",
         "knowledge": "知识管理",

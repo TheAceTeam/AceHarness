@@ -11,6 +11,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { copyText } from '@/lib/core/clipboard';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface ApiEndpoint {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -684,6 +685,10 @@ export default function ApiDocsPage() {
   }, [search]);
 
   const totalEndpoints = API_DATA.reduce((sum, category) => sum + category.endpoints.length, 0);
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: 'API Documentation',
+    subtitle: `${totalEndpoints} endpoints across ${API_DATA.length} categories`,
+  }, [totalEndpoints]);
   const allFilteredEndpoints = filteredData.flatMap((category) =>
     category.endpoints.map((endpoint) => ({
       category,
@@ -793,6 +798,7 @@ export default function ApiDocsPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      {!isDashboardShell ? (
       <header className="sticky top-0 z-50 border-b border-border/50 bg-background/90 backdrop-blur">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between gap-4">
@@ -814,6 +820,7 @@ export default function ApiDocsPage() {
           </div>
         </div>
       </header>
+      ) : null}
 
       <div className="container mx-auto px-6 py-6">
         <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

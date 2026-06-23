@@ -69,6 +69,7 @@ import { EndpointIcon, endpointHasWordmark, getEndpointDisplayName } from '@/com
 import { getConcreteEngines, getEngineDisplayName } from '@/lib/core/engine-metadata';
 import { getLogicalEngineId } from '@/lib/engines/engine-selection';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface Model {
   id: string;
@@ -717,9 +718,23 @@ export default function ModelsPage() {
   };
 
   const activeFilterCount = selectedEndpoints.length + selectedEngines.length + selectedStatus.length;
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '模型中心',
+    subtitle: '模型配置与智能探针监控',
+    actions: activeTab === 'catalog' ? (
+      <Button size="sm" className="gap-1.5 rounded-lg" onClick={() => {
+        setNewModel({ id: '', name: '', endpoints: [], engines: [], status: 'active', costMultiplier: 1, contextWindow: undefined });
+        setCreatingModel(true);
+      }}>
+        <Plus className="h-4 w-4" />
+        新建模型
+      </Button>
+    ) : null,
+  }, [activeTab]);
 
   return (
     <div className="flex h-full flex-col">
+      {!isDashboardShell ? (
       <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-6 backdrop-blur">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -744,6 +759,7 @@ export default function ModelsPage() {
           </Button>
         ) : null}
       </header>
+      ) : null}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'catalog' | 'probe' | 'diagnostics')} className="flex min-h-0 flex-1 flex-col">
         <div className="border-b bg-background/70 px-6 py-3" data-tour-step-id="model-tabs">

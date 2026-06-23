@@ -43,6 +43,10 @@ export class OpenCodeEngineWrapper extends ACPWrapperBase {
     return Boolean(String(model || '').trim());
   }
 
+  shouldUseOpenCodeCommandFileFallback(): boolean {
+    return true;
+  }
+
   async isAvailable(): Promise<boolean> {
     return commandExists('opencode', getConfiguredCliSearchPaths(getCommonCliSearchPaths()));
   }

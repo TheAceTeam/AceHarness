@@ -35,6 +35,7 @@ import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 import AuthGuard from '@/components/AuthGuard';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { normalizeAssistantDisplay, parseActions } from '@/lib/chat/actions';
 import {
   inferHomeSidebarMode,
@@ -491,7 +492,17 @@ function AgoraZenCover({
   );
 }
 
-function ChatPageContent() {
+export function ChatPageContent({
+  embedded = false,
+  hideSidebar = false,
+  onOpenSecondarySidebar,
+  secondarySidebarPinned = false,
+}: {
+  embedded?: boolean;
+  hideSidebar?: boolean;
+  onOpenSecondarySidebar?: () => void;
+  secondarySidebarPinned?: boolean;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -744,7 +755,7 @@ function ChatPageContent() {
     return sessionTitle || '首页';
   }, [activeSession?.title, searchParams]);
 
-  useDocumentTitle(chatTitle);
+  useDocumentTitle(embedded ? null : chatTitle);
 
   // Load current user info
   useEffect(() => {
@@ -1053,7 +1064,9 @@ function ChatPageContent() {
 
     let cancelled = false;
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
-    fetch(`/api/engine/commands?engine=${encodeURIComponent(activeEngine)}`, {
+    const params = new URLSearchParams({ engine: activeEngine });
+    if (workingDirectory.trim()) params.set('cwd', workingDirectory.trim());
+    fetch(`/api/engine/commands?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })
       .then((res) => res.ok ? res.json() : null)
@@ -1087,7 +1100,7 @@ function ChatPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveEngine, engine]);
+  }, [effectiveEngine, engine, workingDirectory]);
 
   const slashQuery = useMemo(() => {
     const text = input.trim();
@@ -1895,22 +1908,95 @@ function ChatPageContent() {
         roleType: activeAgentBinding.roleType || 'normal',
       })
     : null;
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: chatTitle === '首页' ? '对话' : chatTitle,
+    subtitle: activeAgentBinding
+      ? `当前角色：${activeAgentBinding.agentName}`
+      : activeWeChatBinding
+        ? `微信 Bot：${activeWeChatBinding.externalConversationId}`
+        : '首页对话、议场与工作流协作',
+    actions: (
+      <>
+        {activeAgentBinding ? (
+          <div className="hidden items-center gap-2 rounded-full border border-border/70 bg-card/80 px-2 py-1 sm:flex">
+            <SpriteAvatar
+              avatar={activeAgentAvatarSrc}
+              seed={activeAgentBinding.agentName}
+              category="agent-default"
+              alt={activeAgentBinding.agentName}
+              fallback={activeAgentBinding.agentName.slice(0, 2).toUpperCase()}
+              className="h-7 w-7 ring-1 ring-border/70"
+            />
+            <span className="max-w-40 truncate text-xs font-medium">{activeAgentBinding.agentName}</span>
+            <Badge variant="outline" className={getAgentBindingBadgeClass(activeAgentBinding.team)}>
+              {getAgentBindingTeamLabel(activeAgentBinding.team)}
+            </Badge>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 rounded-full px-2 text-xs"
+              onClick={() => createSession({ title: '新对话' })}
+            >
+              退出角色
+            </Button>
+          </div>
+        ) : null}
+        <Button
+          size="sm"
+          variant={activeWeChatBinding ? 'default' : 'outline'}
+          className="rounded-full"
+          onClick={() => setWeChatBindDialogOpen(true)}
+          title="绑定当前首页对话到微信 Bot"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>forum</span>
+          <span>微信 Bot</span>
+          {activeWeChatBinding ? (
+            <span className="ml-2 hidden max-w-28 truncate text-xs opacity-90 xl:inline">
+              {activeWeChatBinding.externalConversationId}
+            </span>
+          ) : null}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleSaveConversationAsNotebook}
+          disabled={!activeSession || notebookExporting || messages.length === 0}
+          title="保存当前会话为 Notebook"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
+          <span className="hidden xl:inline">保存为 Notebook</span>
+        </Button>
+      </>
+    ),
+  }, [
+    activeAgentAvatarSrc,
+    activeAgentBinding?.agentName,
+    activeAgentBinding?.roleType,
+    activeAgentBinding?.team,
+    activeSession?.id,
+    activeWeChatBinding?.externalConversationId,
+    chatTitle,
+    createSession,
+    handleSaveConversationAsNotebook,
+    messages.length,
+    notebookExporting,
+  ]);
 
   return (
     <div
       ref={containerRef}
       className={cn(
-        'h-screen flex overflow-hidden bg-background',
+        embedded ? 'h-full min-h-0 flex overflow-hidden bg-background' : 'h-screen flex overflow-hidden bg-background',
         isWerewolfLabMode && 'werewolf-wood-bg'
       )}
     >
       {/* Mobile overlay backdrop */}
-      {isMobile && sidebarOpen && (
+      {!hideSidebar && isMobile && sidebarOpen && (
         <div className="fixed inset-0 bg-black/40 z-30" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
-      {sidebarOpen && (
+      {!hideSidebar && sidebarOpen && (
         <div
           className={
             isMobile
@@ -1937,80 +2023,85 @@ function ChatPageContent() {
       )}
 
       <div className={cn('flex-1 flex flex-col min-w-0', isWerewolfLabMode && 'werewolf-wood-main')}>
-        {/* Top bar */}
-        <div
-          className={cn(
-            'flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0',
-            isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
-              <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
-            </Button>
-            {activeAgentBinding ? (
-              <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
-                <SpriteAvatar
-                  avatar={activeAgentAvatarSrc}
-                  seed={activeAgentBinding.agentName}
-                  category="agent-default"
-                  alt={activeAgentBinding.agentName}
-                  fallback={activeAgentBinding.agentName.slice(0, 2).toUpperCase()}
-                  className="h-8 w-8 ring-1 ring-border/70"
-                />
-                <div className="flex items-center gap-2">
-                  <div className="text-xs">
-                    <div className="font-medium text-foreground">当前对话角色：{activeAgentBinding.agentName}</div>
-                  </div>
-                  <Badge variant="outline" className={getAgentBindingBadgeClass(activeAgentBinding.team)}>
-                    {getAgentBindingTeamLabel(activeAgentBinding.team)}
-                  </Badge>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 rounded-full px-3 text-xs"
-                  onClick={() => createSession({ title: '新对话' })}
-                >
-                  退出角色
+        {!isDashboardShell ? (
+          <div
+            className={cn(
+              'flex items-center justify-between px-4 py-2 border-b bg-background/80 backdrop-blur shrink-0',
+              isWerewolfLabMode && 'werewolf-wood-panel border-stone-700/60 bg-stone-900/35'
+            )}
+          >
+            <div className="flex items-center gap-2">
+              {!hideSidebar ? (
+                <Button size="icon" variant="ghost" onClick={() => setSidebarOpen(p => !p)} title="切换侧边栏">
+                  <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>menu</span>
                 </Button>
-              </div>
-            ) : null}
-            <Button
-              size="sm"
-              variant={activeWeChatBinding ? 'default' : 'outline'}
-              className="rounded-full"
-              onClick={() => setWeChatBindDialogOpen(true)}
-              title="绑定当前首页对话到微信 Bot"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>forum</span>
-              <span>微信 Bot</span>
-              {activeWeChatBinding ? (
-                <span className="ml-2 hidden sm:inline text-xs opacity-90">
-                  {activeWeChatBinding.externalConversationId}
-                </span>
               ) : null}
-            </Button>
+              {activeAgentBinding ? (
+                <div className="hidden sm:flex items-center gap-3 rounded-full border border-border/70 bg-card/90 px-2 py-1.5">
+                  <SpriteAvatar
+                    avatar={activeAgentAvatarSrc}
+                    seed={activeAgentBinding.agentName}
+                    category="agent-default"
+                    alt={activeAgentBinding.agentName}
+                    fallback={activeAgentBinding.agentName.slice(0, 2).toUpperCase()}
+                    className="h-8 w-8 ring-1 ring-border/70"
+                  />
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs">
+                      <div className="font-medium text-foreground">当前对话角色：{activeAgentBinding.agentName}</div>
+                    </div>
+                    <Badge variant="outline" className={getAgentBindingBadgeClass(activeAgentBinding.team)}>
+                      {getAgentBindingTeamLabel(activeAgentBinding.team)}
+                    </Badge>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 rounded-full px-3 text-xs"
+                    onClick={() => createSession({ title: '新对话' })}
+                  >
+                    退出角色
+                  </Button>
+                </div>
+              ) : null}
+              <Button
+                size="sm"
+                variant={activeWeChatBinding ? 'default' : 'outline'}
+                className="rounded-full"
+                onClick={() => setWeChatBindDialogOpen(true)}
+                title="绑定当前首页对话到微信 Bot"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>forum</span>
+                <span>微信 Bot</span>
+                {activeWeChatBinding ? (
+                  <span className="ml-2 hidden sm:inline text-xs opacity-90">
+                    {activeWeChatBinding.externalConversationId}
+                  </span>
+                ) : null}
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSaveConversationAsNotebook}
+                disabled={!activeSession || notebookExporting || messages.length === 0}
+                title="保存当前会话为 Notebook"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
+                <span className="hidden sm:inline">保存为 Notebook</span>
+              </Button>
+              <ThemeToggle />
+              {!embedded ? (
+                <Button size="sm" variant="outline" onClick={() => router.push('/dashboard')} title="切换到数据中心">
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px', marginRight: '4px' }}>dashboard</span>
+                  <span className="hidden sm:inline">数据中心</span>
+                </Button>
+              ) : null}
+              <UserMenu user={currentUser} />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleSaveConversationAsNotebook}
-              disabled={!activeSession || notebookExporting || messages.length === 0}
-              title="保存当前会话为 Notebook"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '4px' }}>note_add</span>
-              <span className="hidden sm:inline">保存为 Notebook</span>
-            </Button>
-            <ThemeToggle />
-            <Button size="sm" variant="outline" onClick={() => router.push('/dashboard')} title="切换到控制台">
-              <span className="material-symbols-outlined" style={{ fontSize: '20px', marginRight: '4px' }}>dashboard</span>
-              <span className="hidden sm:inline">控制台</span>
-            </Button>
-            <UserMenu user={currentUser} />
-          </div>
-        </div>
+        ) : null}
 
         <div className="flex-1 min-h-0" data-tour-step-id="home-chat-main">
           {isBuiltInAgoraMode ? (
@@ -2074,6 +2165,21 @@ function ChatPageContent() {
             <ResizablePanel id="home-main-panel" defaultSize={homeSidebarMode === 'active' ? `${100 - homeSidebarSize}%` : '100%'} minSize="42%">
               <div className={cn('flex h-full min-h-0 flex-col', isWerewolfLabMode && 'werewolf-wood-main')}>
                 <div className="flex-1 relative min-h-0">
+                  {embedded && hideSidebar && onOpenSecondarySidebar ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="absolute left-3 top-3 z-30 h-8 w-8 rounded-full bg-background/90 shadow-sm backdrop-blur hover:bg-background"
+                      onClick={onOpenSecondarySidebar}
+                      title={secondarySidebarPinned ? '收起会话中心' : '打开会话中心'}
+                      aria-label={secondarySidebarPinned ? '收起会话中心' : '打开会话中心'}
+                    >
+                      <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                        {secondarySidebarPinned ? 'left_panel_close' : 'left_panel_open'}
+                      </span>
+                    </Button>
+                  ) : null}
                   <div
                     ref={scrollContainerRef}
                     className={cn(

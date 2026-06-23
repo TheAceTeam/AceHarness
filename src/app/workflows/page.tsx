@@ -44,6 +44,8 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/core/utils';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface WorkflowConfig {
   filename: string;
@@ -165,6 +167,7 @@ function ImportAuditList({ items, emptyText }: { items?: ImportAuditItem[]; empt
 
 export default function WorkflowsPage() {
   const router = useRouter();
+  const dockWorkspace = useDashboardDockWorkspace();
   const searchParams = useSearchParams();
   const returnTarget = getOfficeAwareReturnTarget(searchParams.get('from'));
   const { toast } = useToast();
@@ -216,6 +219,26 @@ export default function WorkflowsPage() {
   const [filterBarHeight, setFilterBarHeight] = useState(0);
 
   useDocumentTitle('工作流管理');
+
+  const openWorkbench = useCallback((filename: string, mode: 'run' | 'history' | 'design' = 'run') => {
+    const route = `/workbench/${encodeURIComponent(filename)}${mode === 'run' ? '' : `?mode=${mode}`}`;
+    if (dockWorkspace) {
+      dockWorkspace.openTab({
+        id: `workbench:${filename}:${mode}:`,
+        title: filename,
+        kind: 'workbench',
+        config: filename,
+        mode,
+      });
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('panel');
+      params.delete('reload');
+      params.set('route', route);
+      router.push(`/dashboard?${params.toString()}`);
+      return;
+    }
+    router.push(route);
+  }, [dockWorkspace, router, searchParams]);
 
   useEffect(() => {
     try {
@@ -757,7 +780,7 @@ export default function WorkflowsPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.push(`/workbench/${encodeURIComponent(session.filename || '')}?mode=design`)}
+            onClick={() => openWorkbench(session.filename || '', 'design')}
             disabled={!session.filename}
           >
             打开工作流
@@ -776,8 +799,49 @@ export default function WorkflowsPage() {
       </div>
     </div>
   );
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '工作流管理',
+    subtitle: '管理和配置工作流 · 代码生产黑灯车间',
+    actions: (
+      <>
+        {activeTab === 'workflows' ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => archiveInputRef.current?.click()}
+              disabled={archiveImporting}
+              title="导入 workflow ZIP"
+            >
+              <Upload className={`w-4 h-4 xl:mr-2 ${archiveImporting ? 'animate-bounce' : ''}`} />
+              <span className="hidden xl:inline">{archiveImporting ? '导入中...' : '导入 ZIP'}</span>
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleExportSelectedWorkflows}
+              disabled={archiveExporting || selectedWorkflows.size === 0}
+              title="导出选中的 workflow ZIP"
+            >
+              <Download className={`w-4 h-4 xl:mr-2 ${archiveExporting ? 'animate-bounce' : ''}`} />
+              <span className="hidden xl:inline">{archiveExporting ? '导出中...' : '导出'}</span>
+            </Button>
+          </>
+        ) : null}
+        <Button size="sm" variant="outline" onClick={handleAICreate}>
+          <span className="material-symbols-outlined text-sm mr-1">auto_awesome</span>
+          AI 创建
+        </Button>
+        <Button size="sm" onClick={() => openNewWorkflowModal({ hideAiGuided: true })}>
+          <Plus className="w-4 h-4 mr-2" />
+          手动创建
+        </Button>
+      </>
+    ),
+  }, [activeTab, archiveImporting, archiveExporting, selectedWorkflows]);
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className={cn('bg-background', isDashboardShell ? 'flex min-h-full flex-col' : 'min-h-screen')}>
       <input
         ref={archiveInputRef}
         type="file"
@@ -786,6 +850,7 @@ export default function WorkflowsPage() {
         onChange={handleImportWorkflowZip}
       />
       {/* Header */}
+      {!isDashboardShell ? (
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -837,8 +902,12 @@ export default function WorkflowsPage() {
           </Button>
         </div>
       </header>
+      ) : null}
 
-      <div className="container mx-auto px-6 py-8 pb-28 flex flex-col gap-6">
+      <div className={cn(
+        'container mx-auto flex flex-col gap-6 px-6 py-8 pb-28',
+        isDashboardShell && 'min-h-0 max-w-none flex-1 overflow-auto px-4 py-4',
+      )}>
         {/* Floating filter anchor */}
         <div ref={filterBarAnchorRef} className="h-px" />
         {floatingFilterBar && activeTab === 'workflows' ? <div style={{ height: filterBarHeight }} /> : null}
@@ -1083,22 +1152,16 @@ export default function WorkflowsPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex justify-start gap-2">
-                            <Button size="sm" variant="outline" asChild>
-                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}`}>
+                            <Button size="sm" variant="outline" onClick={() => openWorkbench(wf.filename)}>
                                 <LogIn className="w-3 h-3 mr-1" />
                                 进入
-                              </Link>
                             </Button>
-                            <Button size="sm" variant="outline" asChild>
-                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=history`}>
+                            <Button size="sm" variant="outline" onClick={() => openWorkbench(wf.filename, 'history')}>
                                 <History className="w-3 h-3 mr-1" />
                                 历史
-                              </Link>
                             </Button>
-                            <Button size="sm" variant="outline" asChild>
-                              <Link href={`/workbench/${encodeURIComponent(wf.filename)}?mode=design`}>
+                            <Button size="sm" variant="outline" onClick={() => openWorkbench(wf.filename, 'design')}>
                                 <Edit className="w-3 h-3" />
-                              </Link>
                             </Button>
                             {renderCopyMenu(wf)}
                             <Button size="sm" variant="outline" onClick={() => openShareDialog(wf)}>
@@ -1164,22 +1227,16 @@ export default function WorkflowsPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href={`/workbench/${encodeURIComponent(workflow.filename)}`}>
+                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename)}>
                         <LogIn className="w-3 h-3 mr-1" />
                         进入
-                      </Link>
                     </Button>
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href={`/workbench/${encodeURIComponent(workflow.filename)}?mode=history`}>
+                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename, 'history')}>
                         <History className="w-3 h-3 mr-1" />
                         历史
-                      </Link>
                     </Button>
-                    <Button size="sm" variant="outline" asChild>
-                      <Link href={`/workbench/${encodeURIComponent(workflow.filename)}?mode=design`}>
+                    <Button size="sm" variant="outline" onClick={() => openWorkbench(workflow.filename, 'design')}>
                         <Edit className="w-3 h-3" />
-                      </Link>
                     </Button>
                     {renderCopyMenu(workflow)}
                     <Button size="sm" variant="outline" onClick={() => openShareDialog(workflow)}>
@@ -1360,7 +1417,7 @@ export default function WorkflowsPage() {
                                       <Button
                                         variant="outline"
                                         size="sm"
-                                        onClick={() => router.push(`/workbench/${encodeURIComponent(session.filename || '')}?mode=design`)}
+                                        onClick={() => openWorkbench(session.filename || '', 'design')}
                                         disabled={!session.filename}
                                       >
                                         打开工作流
@@ -1417,7 +1474,7 @@ export default function WorkflowsPage() {
             setNewWorkflowModalPreset(null);
             loadWorkflows();
             void loadCreationDrafts();
-            router.push(`/workbench/${encodeURIComponent(filename)}?mode=design`);
+            openWorkbench(filename, 'design');
           }}
           resumeCreationSessionId={resumeCreationDraftId}
           initialMode={newWorkflowModalPreset?.initialMode}

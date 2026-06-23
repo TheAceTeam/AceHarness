@@ -3219,6 +3219,18 @@ export const workspaceApi = {
     }
     return res.blob();
   },
+  getStaticPreviewUrl(workspace: string, file: string): string {
+    const token = typeof window === 'undefined'
+      ? Buffer.from(workspace, 'utf8').toString('base64url')
+      : btoa(unescape(encodeURIComponent(workspace))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    const pathPart = file
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean)
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return `${API_BASE}/workspace/static/${encodeURIComponent(token)}/${pathPart}`;
+  },
   async getGitDiff(workspace: string): Promise<GitDiffSummaryResponse> {
     const res = await authFetch(`${API_BASE}/workspace/git-diff?workspace=${encodeURIComponent(workspace)}`);
     if (!res.ok) {

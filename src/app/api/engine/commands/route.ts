@@ -17,17 +17,17 @@ function commandNamespaceForEngine(engine: string): string {
   return logical;
 }
 
-async function discoverCommands(engine: string, userId: string) {
-  if (engine === 'opencode-sdk') return discoverOpenCodeSdkCommands(userId);
-  if (engine === 'codegenie-sdk') return discoverCodegenieSdkCommands(userId);
-  if (engine === 'nga-sdk') return discoverNgaSdkCommands(userId);
-  if (engine === 'opencode') return discoverOpenCodeSdkCommands(userId);
-  if (engine === 'codegenie') return discoverCodegenieSdkCommands(userId);
-  if (engine === 'nga') return discoverNgaSdkCommands(userId);
+async function discoverCommands(engine: string, userId: string, workingDirectory: string) {
+  if (engine === 'opencode-sdk') return discoverOpenCodeSdkCommands(userId, workingDirectory);
+  if (engine === 'codegenie-sdk') return discoverCodegenieSdkCommands(userId, workingDirectory);
+  if (engine === 'nga-sdk') return discoverNgaSdkCommands(userId, workingDirectory);
+  if (engine === 'opencode') return discoverOpenCodeSdkCommands(userId, workingDirectory);
+  if (engine === 'codegenie') return discoverCodegenieSdkCommands(userId, workingDirectory);
+  if (engine === 'nga') return discoverNgaSdkCommands(userId, workingDirectory);
   const resolvedEngine = await createEngine(engine as any);
   const discover = (resolvedEngine as Partial<DiscoverableAcpWrapper> | null)?.discoverCommands;
   if (typeof discover === 'function') {
-    return discover.call(resolvedEngine, { workingDirectory: getWorkspaceRoot(), userId });
+    return discover.call(resolvedEngine, { workingDirectory, userId });
   }
   return [];
 }
@@ -45,10 +45,11 @@ export async function GET(request: NextRequest) {
   const requestedEngine = request.nextUrl.searchParams.get('engine') || '';
   const engine = await resolveRequestedEngineType(requestedEngine || undefined).catch(() => requestedEngine);
   const namespace = commandNamespaceForEngine(engine);
+  const workingDirectory = (request.nextUrl.searchParams.get('cwd') || '').trim() || getWorkspaceRoot();
 
   try {
     const seen = new Set<string>();
-    const commands = (await discoverCommands(engine, auth.id)).filter((command) => {
+    const commands = (await discoverCommands(engine, auth.id, workingDirectory)).filter((command) => {
       const key = command.name.toLowerCase();
       if (isAdvertisedSkill(command)) return false;
       if (seen.has(key)) return false;

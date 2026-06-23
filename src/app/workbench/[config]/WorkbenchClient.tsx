@@ -47,6 +47,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useAttentionSignal } from '@/hooks/useAttentionSignal';
@@ -168,14 +169,6 @@ const StateMachineDesignPanel = dynamic(() => import('@/components/StateMachineD
 const DesignPanel = dynamic(() => import('@/components/DesignPanel'), {
   ssr: false,
   loading: () => designTabLoadingPanel('正在加载流程编排...'),
-});
-const AgentsManager = dynamic(() => import('@/components/agents/AgentsManager'), {
-  ssr: false,
-  loading: () => designTabLoadingPanel('正在加载 Agent 管理...'),
-});
-const SkillsManager = dynamic(() => import('@/components/skills/SkillsManager'), {
-  ssr: false,
-  loading: () => designTabLoadingPanel('正在加载 Skills/MCP 管理...'),
 });
 
 const MonacoEditor = dynamic(
@@ -1218,11 +1211,26 @@ function ContextWorkspaceDialog(props: ContextWorkspaceDialogProps) {
   );
 }
 
-export default function WorkbenchPage() {
+export type WorkbenchClientProps = {
+  embeddedConfig?: string;
+  embeddedSearch?: string;
+  embeddedInDashboard?: boolean;
+};
+
+export default function WorkbenchPage({
+  embeddedConfig,
+  embeddedSearch,
+  embeddedInDashboard = false,
+}: WorkbenchClientProps = {}) {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const configFile = decodeURIComponent(params.config as string);
+  const dockWorkspace = useDashboardDockWorkspace();
+  const effectiveSearchParams = useMemo(
+    () => new URLSearchParams(embeddedSearch ?? searchParams.toString()),
+    [embeddedSearch, searchParams]
+  );
+  const configFile = decodeURIComponent(embeddedConfig ?? (params.config as string));
 
   // 格式化状态名称
   const formatStateName = (name: string) => {
@@ -1231,15 +1239,16 @@ export default function WorkbenchPage() {
     return name;
   };
 
-  const initialMode = (searchParams.get('mode') as ViewMode) || 'run';
-  const initialRunId = searchParams.get('run') || searchParams.get('runId');
-  const focusTarget = searchParams.get('focus');
-  const focusQuestionId = searchParams.get('questionId');
-  const searchParamsString = searchParams.toString();
+  const initialMode = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
+  const initialRunId = effectiveSearchParams.get('run') || effectiveSearchParams.get('runId');
+  const focusTarget = effectiveSearchParams.get('focus');
+  const focusQuestionId = effectiveSearchParams.get('questionId');
+  const searchParamsString = effectiveSearchParams.toString();
   const { resolvedTheme } = useTheme();
 
   // Update URL query params without full navigation
   const updateUrl = useCallback((updates: Record<string, string | null>) => {
+    if (embeddedInDashboard) return;
     const sp = new URLSearchParams(searchParamsString);
     for (const [key, val] of Object.entries(updates)) {
       if (val === null) sp.delete(key);
@@ -1255,7 +1264,18 @@ export default function WorkbenchPage() {
       return;
     }
     router.replace(nextUrl, { scroll: false });
-  }, [searchParamsString, configFile, router]);
+  }, [embeddedInDashboard, searchParamsString, configFile, router]);
+
+  const goBackToWorkflows = useCallback(() => {
+    if (embeddedInDashboard && dockWorkspace) {
+      dockWorkspace.openTab({ id: 'workflows', title: '工作流管理', kind: 'workflows' });
+      const sp = new URLSearchParams();
+      sp.set('route', '/workflows');
+      router.push(`/dashboard?${sp.toString()}`);
+      return;
+    }
+    router.push('/workflows');
+  }, [dockWorkspace, embeddedInDashboard, router]);
 
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
@@ -1305,7 +1325,7 @@ export default function WorkbenchPage() {
   const [editingName, setEditingName] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [smStateHistory, setSmStateHistory] = useState<any[]>([]);
-  const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => getRunWorkbenchTabFromSearchParams(searchParams));
+  const [runWorkbenchTab, setRunWorkbenchTab] = useState<RunWorkbenchTab>(() => getRunWorkbenchTabFromSearchParams(effectiveSearchParams));
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState('');
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>(undefined);
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
@@ -1721,7 +1741,7 @@ export default function WorkbenchPage() {
     }
   }, [dispatch, workflowFrontendSessionId]);
 
-  type DesignTab = 'overview' | 'orchestration' | 'config' | 'agents' | 'skills';
+  type DesignTab = 'overview' | 'orchestration' | 'config';
   const [designTab, setDesignTab] = useState<DesignTab>('overview');
   const [preflightManagerOpen, setPreflightManagerOpen] = useState(false);
   const [designOptimizationDialogOpen, setDesignOptimizationDialogOpen] = useState(false);
@@ -1757,14 +1777,8 @@ export default function WorkbenchPage() {
   }, [dispatch]);
 
   const handleDesignTabChange = useCallback((tab: DesignTab) => {
-    const leavingEmbeddedManager = (designTab === 'agents' || designTab === 'skills')
-      && tab !== 'agents'
-      && tab !== 'skills';
     setDesignTab(tab);
-    if (leavingEmbeddedManager) {
-      void refreshDesignPickerOptions();
-    }
-  }, [designTab, refreshDesignPickerOptions]);
+  }, []);
   const [specCodingArtifactTab, setSpecCodingArtifactTab] = useState<SpecCodingArtifactKey>('requirements');
   const [forceTransitionModal, setForceTransitionModal] = useState<{ targetState: string; instruction: string } | null>(null);
   const [specCodingSaveDialogOpen, setSpecCodingSaveDialogOpen] = useState(false);
@@ -4680,15 +4694,15 @@ export default function WorkbenchPage() {
   }, [viewMode, viewingHistoryRun, initialRunId, runId]);
 
   useEffect(() => {
-    const modeFromUrl = (searchParams.get('mode') as ViewMode) || 'run';
+    const modeFromUrl = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
     const isViewingHistoricalRunDetail = viewingHistoryRun && state.viewMode === 'run';
     if (!isViewingHistoricalRunDetail && modeFromUrl !== state.viewMode) {
       dispatch({ type: 'SET_VIEW_MODE', payload: modeFromUrl });
     }
-  }, [dispatch, searchParams, state.viewMode, viewingHistoryRun]);
+  }, [dispatch, searchParamsString, state.viewMode, viewingHistoryRun]);
 
   useEffect(() => {
-    const nextTab = getRunWorkbenchTabFromSearchParams(searchParams);
+    const nextTab = getRunWorkbenchTabFromSearchParams(effectiveSearchParams);
     setRunWorkbenchTab((prev) => (prev === nextTab ? prev : nextTab));
   }, [searchParamsString]);
 
@@ -4698,7 +4712,7 @@ export default function WorkbenchPage() {
       return;
     }
 
-    const modeFromUrl = (searchParams.get('mode') as ViewMode) || 'run';
+    const modeFromUrl = (effectiveSearchParams.get('mode') as ViewMode) || 'run';
     if (modeFromUrl === 'history') {
       void viewHistoryRun(initialRunId);
       return;
@@ -4708,7 +4722,7 @@ export default function WorkbenchPage() {
     dispatch({ type: 'SET_VIEW_MODE', payload: 'run' });
     setViewingHistoryRun(false);
     void fetchCurrentStatus();
-  }, [dispatch, fetchCurrentStatus, initialRunId, runId, searchParams]);
+  }, [dispatch, fetchCurrentStatus, initialRunId, runId, searchParamsString]);
 
   useEffect(() => {
     const activeRunId = runId || initialRunId;
@@ -4727,11 +4741,11 @@ export default function WorkbenchPage() {
 
   // Sync runId to URL
   useEffect(() => {
-    const currentUrlRun = searchParams.get('run');
+    const currentUrlRun = effectiveSearchParams.get('run');
     if (runId && runId !== currentUrlRun) {
       updateUrl({ run: runId });
     }
-  }, [runId, searchParams, updateUrl]);
+  }, [runId, searchParamsString, updateUrl]);
 
   // Live status stream replaces periodic /api/workflow/status polling.
   useEffect(() => {
@@ -5318,7 +5332,7 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     if (autoStartHandledRef.current) return;
-    if (searchParams.get('autoStart') !== '1') return;
+    if (effectiveSearchParams.get('autoStart') !== '1') return;
     if (pageLoading || !workflowConfig) return;
 
     autoStartHandledRef.current = true;
@@ -5332,7 +5346,7 @@ export default function WorkbenchPage() {
 
     void requestStartWorkflow('real');
     updateUrl({ autoStart: null, mode: 'run' });
-  }, [canStartWorkflow, isRunning, pageLoading, requestStartWorkflow, searchParams, toast, updateUrl, workflowConfig]);
+  }, [canStartWorkflow, isRunning, pageLoading, requestStartWorkflow, searchParamsString, toast, updateUrl, workflowConfig]);
 
   const requestCancelStartup = useCallback(async () => {
     if (startupCancelRequestedRef.current) return;
@@ -8758,11 +8772,14 @@ export default function WorkbenchPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-background/80 text-foreground">
+    <div className={cn(
+      'flex flex-col bg-background/80 text-foreground',
+      embeddedInDashboard ? 'h-full min-h-0 overflow-hidden' : 'h-screen'
+    )}>
       <div className="shrink-0 border-b bg-muted">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
           <div className="flex items-center gap-2 shrink-0 min-w-0">
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => router.push('/workflows')}>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={goBackToWorkflows}>
             <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span><span className="hidden sm:inline"> 返回</span>
           </Button>
           <h1 className="text-xs font-semibold m-0 flex items-center gap-1.5 min-w-0 max-w-[160px] sm:max-w-[240px] lg:max-w-none">
@@ -9953,20 +9970,6 @@ export default function WorkbenchPage() {
                     <span className="material-symbols-outlined text-sm mr-1 align-middle">settings</span>
                     配置
                   </button>
-                  <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'agents' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => handleDesignTabChange('agents')}
-                  >
-                    <span className="material-symbols-outlined text-sm mr-1 align-middle">smart_toy</span>
-                    Agent 管理
-                  </button>
-                  <button
-                    className={`px-4 py-2 text-sm font-medium rounded-t transition-colors ${designTab === 'skills' ? 'bg-card text-foreground border-t border-l border-r' : 'text-muted-foreground hover:text-foreground'}`}
-                    onClick={() => handleDesignTabChange('skills')}
-                  >
-                    <span className="material-symbols-outlined text-sm mr-1 align-middle">extension</span>
-                    Skills/MCP 管理
-                  </button>
                 </div>
               </div>
 
@@ -10179,18 +10182,6 @@ export default function WorkbenchPage() {
                         onOptimizeStep={handleOptimizePhaseStep} />
                     )}
                   </div>
-                </div>
-              )}
-
-              {designTab === 'agents' && (
-                <div className="flex-1 min-h-0 overflow-hidden bg-background">
-                  <AgentsManager embedded />
-                </div>
-              )}
-
-              {designTab === 'skills' && (
-                <div className="flex-1 min-h-0 overflow-hidden bg-background">
-                  <SkillsManager embedded />
                 </div>
               )}
 

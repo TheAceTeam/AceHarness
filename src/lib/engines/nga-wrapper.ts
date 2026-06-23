@@ -205,6 +205,10 @@ export class NgaEngineWrapper extends ACPWrapperBase {
     return this.buildConfig(options, resolved);
   }
 
+  shouldUseOpenCodeCommandFileFallback(): boolean {
+    return true;
+  }
+
   private buildConfig(
     options: EngineOptions,
     resolved: NgaCommandResolution,

@@ -17,6 +17,7 @@ import type { Engine, EngineOptions, EngineResult, EngineStreamEvent } from './e
 import { normalizeEngineOutput } from './engine-output';
 import { buildConfiguredProcessEnvSync, getConfiguredCliSearchPaths } from '@/lib/core/configured-env';
 import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
+import { mergeOpenCodeCommandsWithFileFallback } from './opencode-command-files';
 import {
   buildFullPrompt,
   discoverOpenCodeCommandsFromHttpClient,
@@ -197,9 +198,12 @@ export async function discoverOpenCodeSdkModels(): Promise<OpenCodeDiscoveredMod
   return discoverOpenCodeModelsFromHttpClient(client);
 }
 
-export async function discoverOpenCodeSdkCommands(userId?: string): Promise<OpenCodeDiscoveredCommand[]> {
+export async function discoverOpenCodeSdkCommands(userId?: string, workingDirectory?: string): Promise<OpenCodeDiscoveredCommand[]> {
   const { client } = await ensureServer(userId);
-  return discoverOpenCodeCommandsFromHttpClient(client);
+  return mergeOpenCodeCommandsWithFileFallback(
+    await discoverOpenCodeCommandsFromHttpClient(client),
+    { workingDirectory, userId },
+  );
 }
 
 export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
@@ -329,7 +333,10 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
         if (!parsedCommand) {
           throw new Error('Invalid OpenCode slash command');
         }
-        const commands = await discoverOpenCodeCommandsFromHttpClient(client);
+        const commands = await mergeOpenCodeCommandsWithFileFallback(
+          await discoverOpenCodeCommandsFromHttpClient(client),
+          { workingDirectory: options.workingDirectory, userId: options.userId },
+        );
         const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
         if (!commandExists) {
           throw new Error(`OpenCode command not found: ${parsedCommand.command}`);

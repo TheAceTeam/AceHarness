@@ -10,7 +10,6 @@ import {
   Cog,
   Gauge,
   GitBranch,
-  Key,
   Loader2,
   MessageSquareText,
   Package,
@@ -26,7 +25,6 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -49,7 +47,6 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import AnimatedGlowingSearchBar from '@/components/ui/animated-glowing-search-bar';
-import MacOSDock, { type DockApp } from '@/components/ui/mac-os-dock';
 import { RainbowBordersButton } from '@/components/ui/rainbow-borders-button';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { ThemeToggle } from '@/components/theme-toggle';
@@ -176,23 +173,6 @@ type CollaborationRoomRecord = {
 
 type WorkspaceStatusTab = 'office' | 'meeting' | 'workflow';
 type TeamBuilderStep = 'goal' | 'clarify' | 'draft' | 'confirm';
-
-type DashboardDockAction = {
-  id: string;
-  label: string;
-  href?: string;
-  icon: LucideIcon;
-  color: string;
-};
-
-const DASHBOARD_DOCK_ACTIONS: DashboardDockAction[] = [
-  { id: 'workflows', label: '工作流管理', href: withOfficeSource('/workflows'), icon: Workflow, color: 'from-cyan-500 to-cyan-600' },
-  { id: 'agents', label: 'Agent 管理', href: withOfficeSource('/agents'), icon: Bot, color: 'from-purple-500 to-purple-600' },
-  { id: 'models', label: '模型管理', href: withOfficeSource('/models'), icon: Settings, color: 'from-orange-500 to-orange-600' },
-  { id: 'skills', label: 'Skills/MCP', href: withOfficeSource('/skills'), icon: Package, color: 'from-pink-500 to-pink-600' },
-  { id: 'engines', label: '引擎管理', href: withOfficeSource('/engines'), icon: Cog, color: 'from-indigo-500 to-indigo-600' },
-  { id: 'settings', label: '系统设置', href: withOfficeSource('/account/system-settings'), icon: Key, color: 'from-amber-500 to-amber-600' },
-];
 
 const ZONES: Record<string, { label: string; color: string; brief: string; weight: number }> = {
   core: { label: 'CEO / Founder', color: '#0f4fd8', brief: 'Set Direction / Make Key Decisions', weight: 0 },
@@ -664,40 +644,6 @@ function activityForZone(zone: string): Activity {
   if (zone === 'product') return 'thinking';
   if (zone === 'quality' || zone === 'decision') return 'reviewing';
   return 'typing';
-}
-
-function OfficeDock() {
-  const router = useRouter();
-  const dockApps = useMemo<DockApp[]>(() => DASHBOARD_DOCK_ACTIONS.map((action) => {
-    const Icon = action.icon;
-    return {
-      id: action.id,
-      name: action.label,
-      icon: (
-        <span className={`office-dock-app-icon bg-gradient-to-br ${action.color}`}>
-          <Icon className="h-[46%] w-[46%] text-white" strokeWidth={2.3} />
-        </span>
-      ),
-    };
-  }), []);
-
-  const handleDockClick = useCallback((appId: string) => {
-    const action = DASHBOARD_DOCK_ACTIONS.find((item) => item.id === appId);
-    if (action?.href) {
-      router.push(action.href);
-    }
-  }, [router]);
-
-  return (
-    <div className="office-dock-stage" aria-label="办公室快捷入口">
-      <MacOSDock
-        apps={dockApps}
-        onAppClick={handleDockClick}
-        surfaceClassName="office-dock-surface"
-        tooltipClassName="office-dock-tooltip"
-      />
-    </div>
-  );
 }
 
 function candidateNamesForRequest(candidateAgentNames: string[], agents: OfficeAgent[]) {
@@ -3103,7 +3049,7 @@ function OfficeStation({
   );
 }
 
-export default function OfficePage() {
+export default function OfficePage({ embedded = false }: { embedded?: boolean } = {}) {
   const {
     activeSession,
     setActiveSessionId,
@@ -3344,15 +3290,14 @@ export default function OfficePage() {
   }, [loadRecentRooms, setActiveSessionId]);
 
   return (
-    <main className="office-page min-h-screen overflow-x-hidden bg-[#f8fbff] pb-56 text-slate-950 dark:bg-slate-950 dark:text-white">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(37,99,235,0.16),transparent_30%),radial-gradient(circle_at_82%_12%,rgba(20,184,166,0.14),transparent_28%)]" />
-      <div className="relative mx-auto flex min-h-screen max-w-[1760px] flex-col px-5 py-5 lg:px-10">
-        <header className="flex items-center justify-between">
-          <Button asChild variant="outline" className="rounded-full bg-white/70 backdrop-blur dark:bg-white/10">
-            <Link href="/dashboard"><Gauge className="mr-2 h-4 w-4" />开发工程师桌面</Link>
-          </Button>
-          <ThemeToggle />
-        </header>
+    <main className={`office-page relative overflow-x-hidden bg-[#f8fbff] pb-12 text-slate-950 dark:bg-slate-950 dark:text-white ${embedded ? 'h-full overflow-y-auto' : 'min-h-screen'}`}>
+      <div className={`pointer-events-none inset-0 bg-[radial-gradient(circle_at_20%_0%,rgba(37,99,235,0.16),transparent_30%),radial-gradient(circle_at_82%_12%,rgba(20,184,166,0.14),transparent_28%)] ${embedded ? 'absolute' : 'fixed'}`} />
+      <div className={`relative mx-auto flex max-w-[1760px] flex-col px-5 py-5 lg:px-10 ${embedded ? 'min-h-full' : 'min-h-screen'}`}>
+        {!embedded ? (
+          <header className="flex items-center justify-end">
+            <ThemeToggle />
+          </header>
+        ) : null}
 
         {message ? <div className="mx-auto mt-5 w-fit rounded-full bg-white/70 px-4 py-2 text-sm text-slate-600 shadow-sm backdrop-blur dark:bg-white/10 dark:text-slate-300">{message}</div> : null}
 
@@ -3465,62 +3410,8 @@ export default function OfficePage() {
         onPlanReady={setPlan}
         onApply={applyTeamPlan}
       />
-      <OfficeDock />
       {/* Keep this as a plain style tag; styled-jsx/PostCSS stalls on this large office stylesheet in dev. */}
       <style>{`
-        .office-dock-stage {
-          position: fixed;
-          left: 50%;
-          bottom: 1.1rem;
-          z-index: 50;
-          transform: translateX(-50%);
-          max-width: calc(100vw - 1.5rem);
-        }
-        .office-dock-surface {
-          background: rgba(248, 250, 252, 0.58);
-          border: 1px solid rgba(15, 23, 42, 0.14);
-          box-shadow:
-            0 18px 48px rgba(15, 23, 42, 0.16),
-            0 4px 12px rgba(15, 23, 42, 0.12),
-            inset 0 1px 0 rgba(255, 255, 255, 0.78),
-            inset 0 -1px 0 rgba(15, 23, 42, 0.08);
-          backdrop-filter: blur(22px) saturate(1.18);
-        }
-        .dark .office-dock-surface {
-          background: rgba(15, 23, 42, 0.58);
-          border-color: rgba(255, 255, 255, 0.16);
-          box-shadow:
-            0 18px 52px rgba(0, 0, 0, 0.42),
-            0 4px 14px rgba(0, 0, 0, 0.32),
-            inset 0 1px 0 rgba(255, 255, 255, 0.16),
-            inset 0 -1px 0 rgba(0, 0, 0, 0.28);
-        }
-        .office-dock-tooltip {
-          background: rgba(15, 23, 42, 0.92);
-          color: #fff;
-          border: 1px solid rgba(255, 255, 255, 0.18);
-        }
-        .dark .office-dock-tooltip {
-          background: rgba(255, 255, 255, 0.92);
-          color: #0f172a;
-          border-color: rgba(15, 23, 42, 0.12);
-        }
-        .office-dock-app-icon {
-          display: flex;
-          height: 100%;
-          width: 100%;
-          align-items: center;
-          justify-content: center;
-          border-radius: 22%;
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.28),
-            0 10px 18px rgba(15, 23, 42, 0.24);
-        }
-        .office-dock-stage [role="button"]:focus-visible {
-          outline: 2px solid rgba(255, 255, 255, 0.88);
-          outline-offset: 4px;
-          border-radius: 16px;
-        }
         .meeting-room-shell {
           height: min(860px, max(640px, calc(100vh - 188px)));
         }
@@ -4256,15 +4147,6 @@ export default function OfficePage() {
           font-weight: 900;
         }
         @media (max-width: 640px) {
-          .office-dock-stage {
-            bottom: 0.75rem;
-            overflow-x: auto;
-            overflow-y: visible;
-            scrollbar-width: none;
-          }
-          .office-dock-stage::-webkit-scrollbar {
-            display: none;
-          }
           .org-manager {
             padding: 16px;
           }

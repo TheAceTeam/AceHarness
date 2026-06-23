@@ -17,6 +17,7 @@ import { EngineIcon } from '@/components/EngineIcon';
 import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface ModelOption {
   value: string;
@@ -496,9 +497,15 @@ export default function EnginesPage() {
     }
   };
 
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '引擎管理',
+    subtitle: '选择和配置 AI 编程引擎',
+  }, []);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
+      {!isDashboardShell ? (
       <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4">
           <div className="flex items-center justify-between">
@@ -522,6 +529,7 @@ export default function EnginesPage() {
           </div>
         </div>
       </header>
+      ) : null}
 
       <div className="container mx-auto px-6 py-8">
         {/* Current Engine Banner */}

@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { FolderOpen, GitBranch, MessageSquareText, PanelRightClose, PanelRightOpen, Plus, Settings2, UserMinus, UserPlus } from 'lucide-react';
+import { FolderOpen, GitBranch, MessageSquareText, PanelRightClose, PanelRightOpen, Settings2 } from 'lucide-react';
 import { agentApi, agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import StackedList, { type StackedListMember } from '@/components/ui/stacked-list';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
@@ -1259,6 +1260,78 @@ export function AgoraShell({
     updateRoom,
   ]);
 
+  const activeGuestMembers = useMemo<StackedListMember[]>(() => guestRoster.map((participant) => {
+    const failed = participant.openingStatus === 'failed';
+    const pending = participant.openingStatus === 'pending';
+    const roleLabel = participant.sourceType === 'custom'
+      ? '自定义'
+      : participant.sourceType === 'agent'
+        ? (participant.sourceAgent || 'Agent')
+        : (participant.presetId || '预设');
+    const roleType: StackedListMember['roleType'] = participant.sourceType === 'custom'
+      ? 'creator'
+      : participant.sourceType === 'agent'
+        ? 'data'
+        : 'pm';
+
+    return {
+      id: participant.id,
+      name: participant.name,
+      status: failed ? '开场失败，已静默' : pending ? '准备开场' : 'Online',
+      online: !failed && !pending,
+      statusTone: failed ? 'danger' : pending ? 'warning' : 'success',
+      role: roleLabel,
+      roleType,
+      avatarNode: (
+        <SpriteAvatar
+          avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
+          seed={participant.runtimeAgentName || participant.name}
+          category="agent-default"
+          alt={participant.name}
+          fallback={getInitials(participant.name)}
+          className={cn('h-9 w-9 shadow-sm ring-2 ring-background', failed && 'ring-rose-300/80 dark:ring-rose-500/50')}
+          fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+        />
+      ),
+      action: allowGuestManagement ? {
+        label: '移除嘉宾',
+        type: 'remove',
+        onClick: () => removeGuest(participant.name),
+      } : undefined,
+    };
+  }), [allowGuestManagement, guestRoster, removeGuest]);
+
+  const directoryGuestMembers = useMemo<StackedListMember[]>(() => availableSavedGuests.map((guest) => {
+    const available = isGuestAvailable(guest);
+    return {
+      id: guest.id,
+      name: guest.displayName,
+      status: available ? getGuestRuntimeLabel(guest) : (guest.statusReason || '模型或引擎未配置'),
+      online: false,
+      statusTone: available ? 'default' : 'danger',
+      role: guest.sourceType === 'custom' ? '自定义' : (guest.presetId || '预设'),
+      roleType: guest.sourceType === 'custom' ? 'creator' : 'designer',
+      disabled: !available,
+      avatarNode: (
+        <SpriteAvatar
+          avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName || guest.displayName)}
+          seed={guest.runtimeAgentName || guest.displayName}
+          category="agent-default"
+          alt={guest.displayName}
+          fallback={getInitials(guest.displayName)}
+          className="h-9 w-9 shadow-sm ring-2 ring-background"
+          fallbackClassName="bg-primary/10 text-xs font-semibold text-primary"
+        />
+      ),
+      action: {
+        label: available ? '加入嘉宾' : '嘉宾不可用',
+        type: 'add',
+        disabled: !available,
+        onClick: () => addGuestToRoom(guest),
+      },
+    };
+  }), [addGuestToRoom, availableSavedGuests]);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-background px-5">
@@ -1373,7 +1446,7 @@ export function AgoraShell({
                   : guestPanelCollapsed
                     ? 'absolute right-4 top-4 z-10'
                     : 'absolute bottom-4 right-4 top-4 z-10',
-                guestPanelCollapsed ? 'w-12' : 'w-64'
+                guestPanelCollapsed ? 'w-12' : 'w-[21rem]'
               )}>
               <div className={cn('flex shrink-0 items-center border-b px-2 py-2', guestPanelCollapsed ? 'justify-center' : 'justify-between')}>
                 {guestPanelCollapsed ? null : <div className="px-1 text-xs font-semibold text-muted-foreground">嘉宾</div>}
@@ -1392,19 +1465,6 @@ export function AgoraShell({
                     </Button>
                   ) : (
                     <>
-                      {allowGuestManagement ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 rounded-md"
-                          onClick={openGuestCreateDialog}
-                          title="加入嘉宾"
-                          aria-label="加入嘉宾"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      ) : null}
                       <Button
                         type="button"
                         size="icon"
@@ -1435,88 +1495,20 @@ export function AgoraShell({
                   </span>
                 </button>
               ) : (
-                <div className="flex min-h-0 flex-1 flex-col">
-                  <div className="max-h-[42%] min-h-0 shrink-0 overflow-y-auto p-2">
-                    {guestRoster.length ? guestRoster.map((participant) => (
-                      <div
-                        key={participant.id}
-                        className={cn(
-                          'group flex min-h-11 items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60',
-                          participant.openingStatus === 'failed' && 'bg-rose-50/80 text-rose-900 hover:bg-rose-50 dark:bg-rose-950/20 dark:text-rose-200 dark:hover:bg-rose-950/30'
-                        )}
-                      >
-                        <SpriteAvatar
-                          avatar={resolveAgentAvatarSrc(undefined, participant.runtimeAgentName || participant.name)}
-                          seed={participant.runtimeAgentName || participant.name}
-                          category="agent-default"
-                          alt={participant.name}
-                          fallback={getInitials(participant.name)}
-                          className={cn('h-7 w-7 ring-1 ring-border/60', participant.openingStatus === 'failed' && 'ring-rose-300/70 dark:ring-rose-500/40')}
-                          fallbackClassName="bg-primary/10 text-[9px] font-semibold text-primary"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-xs font-medium text-foreground">{participant.name}</div>
-                          {participant.openingStatus === 'failed' ? (
-                            <div className="truncate text-[10px] text-rose-600 dark:text-rose-300">
-                              开场失败，已静默
-                            </div>
-                          ) : (
-                            <div className="truncate text-[10px] text-muted-foreground">
-                              {participant.sourceType === 'custom' ? '自定义' : participant.presetId || participant.sourceAgent || '预设'}
-                            </div>
-                          )}
-                        </div>
-                        {allowGuestManagement ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7 text-destructive opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                            onClick={() => removeGuest(participant.name)}
-                            title="移除嘉宾"
-                            aria-label="移除嘉宾"
-                          >
-                            <UserMinus className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                      </div>
-                    )) : (
-                      <div className="px-2 py-6 text-center text-xs text-muted-foreground">暂无嘉宾</div>
-                    )}
-                  </div>
-                  {allowGuestManagement ? (
-                    <div className="flex min-h-[168px] flex-1 flex-col border-t p-2">
-                      <div className="mb-1 shrink-0 px-1 text-[10px] text-muted-foreground">可加入</div>
-                      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                        {availableSavedGuests.map((guest) => (
-                          <button
-                            key={guest.id}
-                            type="button"
-                            className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left ${
-                              isGuestAvailable(guest) ? 'hover:bg-muted/60' : 'cursor-not-allowed opacity-55'
-                            }`}
-                            onClick={() => addGuestToRoom(guest)}
-                            disabled={!isGuestAvailable(guest)}
-                          >
-                            <SpriteAvatar
-                              avatar={resolveAgentAvatarSrc(undefined, guest.runtimeAgentName)}
-                              seed={guest.runtimeAgentName || guest.displayName}
-                              category="agent-default"
-                              alt={guest.displayName}
-                              fallback={getInitials(guest.displayName)}
-                              className="h-6 w-6 ring-1 ring-border/60"
-                              fallbackClassName="bg-primary/10 text-[8px] font-semibold text-primary"
-                            />
-                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{guest.displayName}</span>
-                            {!isGuestAvailable(guest) ? (
-                              <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] text-destructive">不可用</Badge>
-                            ) : null}
-                            <UserPlus className="h-3.5 w-3.5 text-muted-foreground" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
+                <div className="min-h-0 flex-1 p-1.5">
+                  <StackedList
+                    activeMembers={activeGuestMembers}
+                    directoryMembers={allowGuestManagement ? directoryGuestMembers : []}
+                    title="当前成员"
+                    directoryTitle="添加成员"
+                    directorySubtitle={`${directoryGuestMembers.length} 位可加入嘉宾`}
+                    searchPlaceholder="搜索当前成员..."
+                    directorySearchPlaceholder="搜索可加入嘉宾..."
+                    emptyActiveLabel="暂无嘉宾"
+                    emptyDirectoryLabel="暂无可加入嘉宾"
+                    onAddClick={allowGuestManagement ? openGuestCreateDialog : undefined}
+                    className="h-full border-0"
+                  />
                 </div>
               )}
               </aside>

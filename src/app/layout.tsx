@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import 'material-symbols/outlined.css';
+import 'dockview-react/dist/styles/dockview.css';
 import './globals.css';
 import { Providers } from './providers';
 

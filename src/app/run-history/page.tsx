@@ -34,6 +34,8 @@ import { LanguageToggle } from '@/components/language-toggle';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { PaginationBar } from '@/components/PaginationBar';
 import { MultiCombobox } from '@/components/ui/combobox';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 type HistoryView = 'runs' | 'token-ranking';
 type RunSortKey = 'name' | 'startTime' | 'totalTokens' | 'cost';
@@ -170,6 +172,7 @@ function SortIndicator({
 
 export default function RunHistoryPage() {
   const router = useRouter();
+  const dockWorkspace = useDashboardDockWorkspace();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [data, setData] = useState<HistoryResponse | null>(null);
@@ -300,9 +303,14 @@ export default function RunHistoryPage() {
     : '搜索运行记录...';
   const rankingItems = data?.view === 'token-ranking' ? data.rankings || [] : [];
   const runItems = data?.view === 'runs' || !data?.view ? data?.runs || [] : [];
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: pageTitle,
+    subtitle: pageSubtitle,
+  }, [pageTitle, pageSubtitle]);
 
   return (
     <div className="min-h-screen bg-background">
+      {!isDashboardShell ? (
       <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -322,6 +330,7 @@ export default function RunHistoryPage() {
           <ThemeToggle />
         </div>
       </header>
+      ) : null}
 
       <main className="container mx-auto space-y-6 px-6 py-8">
         <section className="rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
@@ -535,7 +544,24 @@ export default function RunHistoryPage() {
                       className={run.configFile ? 'cursor-pointer' : undefined}
                       onClick={() => {
                         if (!run.configFile) return;
-                        router.push(`/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`);
+                        const route = `/workbench/${encodeURIComponent(run.configFile)}?mode=history&runId=${run.id}`;
+                        if (dockWorkspace) {
+                          dockWorkspace.openTab({
+                            id: `workbench:${run.configFile}:history:${run.id}`,
+                            title: run.configName || run.configFile,
+                            kind: 'workbench',
+                            config: run.configFile,
+                            mode: 'history',
+                            runId: run.id,
+                          });
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.delete('panel');
+                          params.delete('reload');
+                          params.set('route', route);
+                          router.push(`/dashboard?${params.toString()}`);
+                        } else {
+                          router.push(route);
+                        }
                       }}
                     >
                       <TableCell>

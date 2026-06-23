@@ -48,6 +48,7 @@ import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import { PaginationBar } from '@/components/PaginationBar';
 import { getAllPlugins, unregisterPlugin, type HomePlugin } from '@/lib/sidebar-plugins';
 import { cn } from '@/lib/core/utils';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import type { ReturnTarget } from '@/lib/navigation/return-target';
 import {
   SkillCard,
@@ -1901,32 +1902,6 @@ export default function SkillsManager({
           </Button>
         </div>
         <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-          {embedded ? (
-            <>
-              <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
-                <Upload className={`mr-1 h-4 w-4 ${uploading ? 'animate-bounce' : ''}`} />
-                {uploading ? '导入中...' : '上传'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleExport}
-                disabled={exporting || selectedForExport.size === 0}
-              >
-                <Download className={`mr-1 h-4 w-4 ${exporting ? 'animate-bounce' : ''}`} />
-                {exporting ? '导出中...' : '导出'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setWorkspaceOpen(true)}
-                disabled={!runtimeSkillsDir}
-              >
-                <FolderOpen className="mr-1 h-4 w-4" />
-                工作目录
-              </Button>
-            </>
-          ) : null}
           {!embedded && localViewMode === 'gallery' ? (
             <>
               <Select value={localSortKey} onValueChange={(value) => setLocalSortKey(value as LocalSortKey)}>
@@ -2015,6 +1990,31 @@ export default function SkillsManager({
       </div>
     </section>
   );
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: 'Skills/MCP 管理',
+    subtitle: '统一管理本地 Skills、MCP 与应用市场安装',
+    actions: activeTab === 'local' ? (
+      <>
+        <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+          <Upload className={`w-4 h-4 mr-1 ${uploading ? 'animate-bounce' : ''}`} />
+          <span className="hidden xl:inline">{uploading ? '导入中...' : '上传 Skill'}</span>
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleExport}
+          disabled={exporting || selectedForExport.size === 0}
+        >
+          <Download className={`w-4 h-4 mr-1 ${exporting ? 'animate-bounce' : ''}`} />
+          <span className="hidden xl:inline">{exporting ? '导出中...' : '导出'}</span>
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setWorkspaceOpen(true)} disabled={!runtimeSkillsDir}>
+          <FolderOpen className="w-4 h-4 mr-1" />
+          <span className="hidden xl:inline">工作目录</span>
+        </Button>
+      </>
+    ) : null,
+  }, [activeTab, uploading, exporting, selectedForExport, runtimeSkillsDir]);
 
   return (
     <div
@@ -2023,7 +2023,7 @@ export default function SkillsManager({
         embedded ? 'flex h-full min-h-0 flex-col overflow-hidden' : 'min-h-screen',
       )}
     >
-      {!embedded ? (
+      {!embedded && !isDashboardShell ? (
         <header
           className="sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between border-b bg-background/85 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/70"
         >

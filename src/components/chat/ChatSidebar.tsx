@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, useMemo } from 'react';
+import { memo, useCallback, useEffect, useState, useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useChat } from '@/contexts/ChatContext';
 import { agoraApi, type AgoraGuestConfig, type AgoraGuestPreset } from '@/lib/core/api';
@@ -75,6 +75,15 @@ type SidebarSession = ChatSessionSummaryLike & {
   };
   sessionWorkbenchState?: any;
 };
+type SessionIdSet = ReadonlySet<string>;
+
+const EMPTY_SESSION_ID_LIST: string[] = [];
+const EMPTY_SKILL_SETTINGS: Record<string, boolean> = {};
+const EMPTY_SKILLS: SkillItem[] = [];
+const EMPTY_MCP_SETTINGS: Record<string, boolean> = {};
+const EMPTY_MCP_SERVERS: McpServerItem[] = [];
+const noopToggleSetting = (_name: string) => {};
+const noopSetSettings = (_settings: Record<string, boolean>) => {};
 
 export type SessionDirectoryView = 'conversation' | 'agora' | 'workflow';
 type WorkflowBucketKey = 'creating' | 'ready' | 'active';
@@ -526,14 +535,16 @@ function getDeleteConfirmationDescription(input: {
   return riskLines.join('\n');
 }
 
-export default function ChatSidebar({
+function ChatSidebarComponent({
   sessionView: controlledSessionView,
   onSessionViewChange,
   onAgoraGuestDataChange,
+  compact = false,
 }: {
   sessionView?: SessionDirectoryView;
   onSessionViewChange?: (view: SessionDirectoryView) => void;
   onAgoraGuestDataChange?: (data: { guests: AgoraGuestConfig[]; presets: AgoraGuestPreset[]; loading: boolean }) => void;
+  compact?: boolean;
 }) {
   const {
     sessions,
@@ -546,17 +557,17 @@ export default function ChatSidebar({
     deleteSessions,
     renameSession,
     loading,
-    activeStreamingSessionIds = [],
-    recentlyCompletedSessionIds = [],
+    activeStreamingSessionIds = EMPTY_SESSION_ID_LIST,
+    recentlyCompletedSessionIds = EMPTY_SESSION_ID_LIST,
     sessionLoadingId,
-    skillSettings = {},
-    discoveredSkills = [],
-    toggleSkill = () => {},
-    setSkillsEnabled = () => {},
-    mcpSettings = {},
-    discoveredMcpServers = [],
-    toggleMcpServer = () => {},
-    setMcpServersEnabled = () => {},
+    skillSettings = EMPTY_SKILL_SETTINGS,
+    discoveredSkills = EMPTY_SKILLS,
+    toggleSkill = noopToggleSetting,
+    setSkillsEnabled = noopSetSettings,
+    mcpSettings = EMPTY_MCP_SETTINGS,
+    discoveredMcpServers = EMPTY_MCP_SERVERS,
+    toggleMcpServer = noopToggleSetting,
+    setMcpServersEnabled = noopSetSettings,
   } = useChat();
   const [skillModalOpen, setSkillModalOpen] = useState(false);
   const [internalSessionView, setInternalSessionView] = useState<SessionDirectoryView>('conversation');
@@ -614,8 +625,23 @@ export default function ChatSidebar({
     });
   }, [agoraGuestPresets, agoraGuestsLoading, agoraSavedGuests, onAgoraGuestDataChange]);
 
-  const enabledCount = discoveredSkills.filter(s => !!skillSettings[s.name]).length;
-  const enabledMcpCount = discoveredMcpServers.filter(server => !!mcpSettings[server.name]).length;
+  const enabledCount = useMemo(
+    () => discoveredSkills.filter((skill) => !!skillSettings[skill.name]).length,
+    [discoveredSkills, skillSettings]
+  );
+  const enabledMcpCount = useMemo(
+    () => discoveredMcpServers.filter((server) => !!mcpSettings[server.name]).length,
+    [discoveredMcpServers, mcpSettings]
+  );
+  const activeStreamingSessionIdSet = useMemo(
+    () => new Set(activeStreamingSessionIds),
+    [activeStreamingSessionIds]
+  );
+  const recentlyCompletedSessionIdSet = useMemo(
+    () => new Set(recentlyCompletedSessionIds),
+    [recentlyCompletedSessionIds]
+  );
+  const agoraExtensionActions = useMemo(() => getAgoraTopicExtensionActions(), []);
   const currentSessionView: SessionDirectoryView =
     sessionView === 'conversation' || sessionView === 'agora' || sessionView === 'workflow'
       ? sessionView
@@ -717,7 +743,20 @@ export default function ChatSidebar({
     });
   }, [baseVisibleSessions, normalizedSearch]);
   const isFilteredEmpty = normalizedSearch.length > 0 && visibleSessions.length === 0;
-  const selectedVisibleCount = visibleSessions.filter((session) => selectedSessionIds.has(session.id)).length;
+  const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
+  const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds]);
+  const visibleSessionById = useMemo(
+    () => new Map((visibleSessions as SidebarSession[]).map((session) => [session.id, session])),
+    [visibleSessions]
+  );
+  const selectedVisibleCount = useMemo(
+    () => visibleSessionIds.filter((sessionId) => selectedSessionIds.has(sessionId)).length,
+    [selectedSessionIds, visibleSessionIds]
+  );
+  const selectedVisibleState = useMemo(
+    () => getSelectionState(visibleSessionIds, selectedSessionIds),
+    [selectedSessionIds, visibleSessionIds]
+  );
   const pendingQuestionsBySessionId = useMemo(() => {
     const map = new Map<string, HumanQuestion[]>();
     for (const question of pendingHumanQuestions) {
@@ -814,16 +853,12 @@ export default function ChatSidebar({
 
     return buckets;
   }, [pendingQuestionsBySessionId, runStatusById, visibleSessions, workflowBindingByRelatedSessionId]);
-  const visibleSessionIds = useMemo(() => getUniqueSessionIds(visibleSessions as SidebarSession[]), [visibleSessions]);
-  const selectedVisibleState = getSelectionState(visibleSessionIds, selectedSessionIds);
-
   useEffect(() => {
-    const visibleIds = new Set(baseVisibleSessions.map((session) => session.id));
     setSelectedSessionIds((prev) => {
-      const next = new Set([...prev].filter((id) => visibleIds.has(id)));
+      const next = new Set([...prev].filter((id) => visibleSessionIdSet.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [baseVisibleSessions]);
+  }, [visibleSessionIdSet]);
 
   useEffect(() => {
     const visibleIds = new Set(agoraSavedGuests.map((guest) => guest.id));
@@ -1226,7 +1261,7 @@ export default function ChatSidebar({
   };
 
   const createAgoraExtensionTopic = (actionId: string) => {
-    const action = getAgoraTopicExtensionActions().find((item) => item.id === actionId);
+    const action = agoraExtensionActions.find((item) => item.id === actionId);
     if (!action) return;
     const topic = action.createTopic();
     const sessionId = createSession({
@@ -1271,7 +1306,6 @@ export default function ChatSidebar({
   };
 
   const deleteSelectedSessions = async () => {
-    const visibleSessionById = new Map((visibleSessions as SidebarSession[]).map((session) => [session.id, session]));
     const selectedSessions = Array.from(selectedSessionIds)
       .map((sessionId) => visibleSessionById.get(sessionId))
       .filter((session): session is SidebarSession => Boolean(session));
@@ -1322,11 +1356,13 @@ export default function ChatSidebar({
 
   return (
     <div className="w-full flex h-full flex-col bg-muted/30">
-      <div className="border-b bg-gradient-to-r from-primary/10 to-blue-500/10 p-3">
-        <div className="mb-3 flex items-center gap-2">
-          <RobotLogo size={28} />
-          <span className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-sm font-bold text-transparent">ACEHarness</span>
-        </div>
+      <div className={compact ? 'border-b bg-muted/20 p-2' : 'border-b bg-gradient-to-r from-primary/10 to-blue-500/10 p-3'}>
+        {!compact ? (
+          <div className="mb-3 flex items-center gap-2">
+            <RobotLogo size={28} />
+            <span className="bg-gradient-to-r from-primary to-blue-500 bg-clip-text text-sm font-bold text-transparent">ACEHarness</span>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           <Button
             type="button"
@@ -1544,8 +1580,8 @@ export default function ChatSidebar({
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
-              activeStreamingSessionIds={activeStreamingSessionIds}
-              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              activeStreamingSessionIdSet={activeStreamingSessionIdSet}
+              recentlyCompletedSessionIdSet={recentlyCompletedSessionIdSet}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
@@ -1563,8 +1599,8 @@ export default function ChatSidebar({
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
-              activeStreamingSessionIds={activeStreamingSessionIds}
-              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              activeStreamingSessionIdSet={activeStreamingSessionIdSet}
+              recentlyCompletedSessionIdSet={recentlyCompletedSessionIdSet}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
@@ -1581,8 +1617,8 @@ export default function ChatSidebar({
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
-              activeStreamingSessionIds={activeStreamingSessionIds}
-              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              activeStreamingSessionIdSet={activeStreamingSessionIdSet}
+              recentlyCompletedSessionIdSet={recentlyCompletedSessionIdSet}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSelectSessions={(sessionIds, checked) => setSessionIdsSelected(sessionIds, checked)}
@@ -1606,11 +1642,11 @@ export default function ChatSidebar({
             selectable={manageMode}
             selectedSessionIds={selectedSessionIds}
             isFilteredEmpty={isFilteredEmpty}
-            activeStreamingSessionIds={activeStreamingSessionIds}
-            recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+            activeStreamingSessionIdSet={activeStreamingSessionIdSet}
+            recentlyCompletedSessionIdSet={recentlyCompletedSessionIdSet}
             sessionLoadingId={sessionLoadingId}
             onCreate={openCreateAgoraTopicDialog}
-            extensionActions={getAgoraTopicExtensionActions()}
+            extensionActions={agoraExtensionActions}
             onCreateExtensionTopic={createAgoraExtensionTopic}
             onCreateGuest={() => {
               setAgoraGuestDialogOpen(true);
@@ -1628,7 +1664,7 @@ export default function ChatSidebar({
             onEditGuest={openAgoraGuestEditDialog}
             onSearchChange={(value) => setSessionSearchByView((prev) => ({ ...prev, agora: value }))}
             onSessionClick={(sessionId) => {
-              const session = (visibleSessions as SidebarSession[]).find((item) => item.id === sessionId);
+              const session = visibleSessionById.get(sessionId);
               if (session) {
                 openAgoraSession(session);
                 return;
@@ -1649,8 +1685,8 @@ export default function ChatSidebar({
                 active={session.id === activeSessionId}
                 selectable={manageMode}
                 selected={selectedSessionIds.has(session.id)}
-                isStreaming={activeStreamingSessionIds.includes(session.id)}
-                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isStreaming={activeStreamingSessionIdSet.has(session.id)}
+                isRecentlyCompleted={recentlyCompletedSessionIdSet.has(session.id)}
                 isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => setActiveSessionId(session.id)}
                 onSelectChange={(checked) => toggleSessionSelected(session.id, checked)}
@@ -1760,6 +1796,10 @@ export default function ChatSidebar({
   );
 }
 
+const ChatSidebar = memo(ChatSidebarComponent);
+ChatSidebar.displayName = 'ChatSidebar';
+export default ChatSidebar;
+
 const LOCKED_SKILLS = ['aceharness-chat-card'];
 
 /* ========== Skills/MCP 管理弹窗 ========== */
@@ -1815,11 +1855,26 @@ function SkillManagerModal({
     });
   }, [search, servers]);
 
-  const enabledCount = skills.filter(s => !!skillSettings[s.name]).length;
-  const enabledMcpCount = servers.filter((server) => !!mcpSettings[server.name]).length;
-  const selectableSkills = skills.filter(s => !LOCKED_SKILLS.includes(s.name));
-  const selectedFilteredSkillCount = filteredSkills.filter(s => !!skillSettings[s.name]).length;
-  const selectedFilteredMcpCount = filteredServers.filter((server) => !!mcpSettings[server.name]).length;
+  const enabledCount = useMemo(
+    () => skills.filter((skill) => !!skillSettings[skill.name]).length,
+    [skillSettings, skills]
+  );
+  const enabledMcpCount = useMemo(
+    () => servers.filter((server) => !!mcpSettings[server.name]).length,
+    [mcpSettings, servers]
+  );
+  const selectableSkills = useMemo(
+    () => skills.filter((skill) => !LOCKED_SKILLS.includes(skill.name)),
+    [skills]
+  );
+  const selectedFilteredSkillCount = useMemo(
+    () => filteredSkills.filter((skill) => !!skillSettings[skill.name]).length,
+    [filteredSkills, skillSettings]
+  );
+  const selectedFilteredMcpCount = useMemo(
+    () => filteredServers.filter((server) => !!mcpSettings[server.name]).length,
+    [filteredServers, mcpSettings]
+  );
 
   const setAllSelectableSkills = (enabled: boolean) => {
     const next = Object.fromEntries(selectableSkills.map(skill => [skill.name, enabled]));
@@ -2422,8 +2477,8 @@ function AgoraDirectory({
   selectable,
   selectedSessionIds,
   isFilteredEmpty,
-  activeStreamingSessionIds,
-  recentlyCompletedSessionIds,
+  activeStreamingSessionIdSet,
+  recentlyCompletedSessionIdSet,
   sessionLoadingId,
   onCreate,
   extensionActions,
@@ -2452,8 +2507,8 @@ function AgoraDirectory({
   selectable: boolean;
   selectedSessionIds: Set<string>;
   isFilteredEmpty: boolean;
-  activeStreamingSessionIds: string[];
-  recentlyCompletedSessionIds: string[];
+  activeStreamingSessionIdSet: SessionIdSet;
+  recentlyCompletedSessionIdSet: SessionIdSet;
   sessionLoadingId: string | null;
   onCreate: () => void;
   extensionActions: ReturnType<typeof getAgoraTopicExtensionActions>;
@@ -2658,8 +2713,8 @@ function AgoraDirectory({
                 active={session.id === activeSessionId}
                 selectable={selectable}
                 selected={selectedSessionIds.has(session.id)}
-                isStreaming={activeStreamingSessionIds.includes(session.id)}
-                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isStreaming={activeStreamingSessionIdSet.has(session.id)}
+                isRecentlyCompleted={recentlyCompletedSessionIdSet.has(session.id)}
                 isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => onSessionClick(session.id)}
                 onSelectChange={(checked) => onSelectChange(session.id, checked)}
@@ -3156,8 +3211,8 @@ function WorkflowBucket({
   selectedSessionIds,
   activeSessionId,
   loading,
-  activeStreamingSessionIds,
-  recentlyCompletedSessionIds,
+  activeStreamingSessionIdSet,
+  recentlyCompletedSessionIdSet,
   sessionLoadingId,
   pendingQuestionsBySessionId,
   onSelectSessions,
@@ -3174,8 +3229,8 @@ function WorkflowBucket({
   selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
-  activeStreamingSessionIds: string[];
-  recentlyCompletedSessionIds: string[];
+  activeStreamingSessionIdSet: SessionIdSet;
+  recentlyCompletedSessionIdSet: SessionIdSet;
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSelectSessions: (sessionIds: string[], checked: boolean) => void;
@@ -3246,8 +3301,8 @@ function WorkflowBucket({
               selectedSessionIds={selectedSessionIds}
               activeSessionId={activeSessionId}
               loading={loading}
-              activeStreamingSessionIds={activeStreamingSessionIds}
-              recentlyCompletedSessionIds={recentlyCompletedSessionIds}
+              activeStreamingSessionIdSet={activeStreamingSessionIdSet}
+              recentlyCompletedSessionIdSet={recentlyCompletedSessionIdSet}
               sessionLoadingId={sessionLoadingId}
               pendingQuestionsBySessionId={pendingQuestionsBySessionId}
               onSelectSessions={onSelectSessions}
@@ -3269,8 +3324,8 @@ function WorkflowGroup({
   selectedSessionIds,
   activeSessionId,
   loading,
-  activeStreamingSessionIds,
-  recentlyCompletedSessionIds,
+  activeStreamingSessionIdSet,
+  recentlyCompletedSessionIdSet,
   sessionLoadingId,
   pendingQuestionsBySessionId,
   onSelectSessions,
@@ -3284,8 +3339,8 @@ function WorkflowGroup({
   selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
-  activeStreamingSessionIds: string[];
-  recentlyCompletedSessionIds: string[];
+  activeStreamingSessionIdSet: SessionIdSet;
+  recentlyCompletedSessionIdSet: SessionIdSet;
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSelectSessions: (sessionIds: string[], checked: boolean) => void;
@@ -3346,8 +3401,8 @@ function WorkflowGroup({
               selectable={selectable}
               selected={selectedSessionIds.has(session.id)}
               attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
-              isStreaming={activeStreamingSessionIds.includes(session.id)}
-              isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+              isStreaming={activeStreamingSessionIdSet.has(session.id)}
+              isRecentlyCompleted={recentlyCompletedSessionIdSet.has(session.id)}
               isLoadingSession={sessionLoadingId === session.id}
               onClick={() => onSessionClick(session.id)}
               onSelectChange={(checked) => onSelectSessions([session.id], checked)}
@@ -3367,8 +3422,8 @@ function WorkflowAgentGroup({
   selectedSessionIds,
   activeSessionId,
   loading,
-  activeStreamingSessionIds,
-  recentlyCompletedSessionIds,
+  activeStreamingSessionIdSet,
+  recentlyCompletedSessionIdSet,
   sessionLoadingId,
   pendingQuestionsBySessionId,
   onSelectSessions,
@@ -3382,8 +3437,8 @@ function WorkflowAgentGroup({
   selectedSessionIds: Set<string>;
   activeSessionId: string | null;
   loading: boolean;
-  activeStreamingSessionIds: string[];
-  recentlyCompletedSessionIds: string[];
+  activeStreamingSessionIdSet: SessionIdSet;
+  recentlyCompletedSessionIdSet: SessionIdSet;
   sessionLoadingId: string | null;
   pendingQuestionsBySessionId: Map<string, HumanQuestion[]>;
   onSelectSessions: (sessionIds: string[], checked: boolean) => void;
@@ -3465,8 +3520,8 @@ function WorkflowAgentGroup({
                 selectable={selectable}
                 selected={selectedSessionIds.has(session.id)}
                 attentionCount={pendingQuestionsBySessionId.get(session.id)?.length || 0}
-                isStreaming={activeStreamingSessionIds.includes(session.id)}
-                isRecentlyCompleted={recentlyCompletedSessionIds.includes(session.id)}
+                isStreaming={activeStreamingSessionIdSet.has(session.id)}
+                isRecentlyCompleted={recentlyCompletedSessionIdSet.has(session.id)}
                 isLoadingSession={sessionLoadingId === session.id}
                 onClick={() => onSessionClick(session.id)}
                 onSelectChange={(checked) => onSelectSessions([session.id], checked)}

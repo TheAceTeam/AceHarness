@@ -21,6 +21,7 @@ import {
 } from '@/lib/core/configured-env';
 import { isWindows } from '@/lib/core/runtime-platform';
 import { buildOpenCodeRawCommandPrompt, isOpenCodeSlashCommandPrompt, parseOpenCodeSlashCommand } from './opencode-command';
+import { mergeOpenCodeCommandsWithFileFallback } from './opencode-command-files';
 import {
   buildFullPrompt,
   discoverOpenCodeCommandsFromHttpClient,
@@ -290,9 +291,12 @@ async function ensureClient(userId?: string): Promise<{ client: OpenCodeHttpClie
   return { client, baseUrl };
 }
 
-export async function discoverCodegenieSdkCommands(userId?: string): Promise<OpenCodeDiscoveredCommand[]> {
+export async function discoverCodegenieSdkCommands(userId?: string, workingDirectory?: string): Promise<OpenCodeDiscoveredCommand[]> {
   const { client } = await ensureClient(userId);
-  return discoverOpenCodeCommandsFromHttpClient(client);
+  return mergeOpenCodeCommandsWithFileFallback(
+    await discoverOpenCodeCommandsFromHttpClient(client),
+    { workingDirectory, userId },
+  );
 }
 
 export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
@@ -411,7 +415,10 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
       if (isSlashCommand) {
         const parsedCommand = parseOpenCodeSlashCommand(options.prompt);
         if (!parsedCommand) throw new Error('Invalid CodeGenie slash command');
-        const commands = await discoverOpenCodeCommandsFromHttpClient(client);
+        const commands = await mergeOpenCodeCommandsWithFileFallback(
+          await discoverOpenCodeCommandsFromHttpClient(client),
+          { workingDirectory: options.workingDirectory, userId: options.userId },
+        );
         const commandExists = commands.some((command) => command.name.toLowerCase() === parsedCommand.command.toLowerCase());
         if (!commandExists) {
           throw new Error(`CodeGenie command not found: ${parsedCommand.command}`);

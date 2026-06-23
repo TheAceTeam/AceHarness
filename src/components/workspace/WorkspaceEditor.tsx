@@ -1008,6 +1008,7 @@ export function WorkspaceEditor({
         <ResizablePanel id="workspace-editor-panel" defaultSize={isNotebookDesktop ? "50%" : "80%"} minSize="40%">
           <EditorPanel
             filePath={selectedFile}
+            workspacePath={workspacePath}
             content={fileContent}
             fileSize={fileSize}
             loading={fileLoading}

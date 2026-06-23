@@ -6,6 +6,300 @@ body[data-rich-text-editor-fullscreen-open="true"] [data-radix-dialog-overlay] {
   pointer-events: none;
 }
 
+/* Dashboard Dockview tabs mirror the shadcn line tab style. */
+.ace-dashboard-dockview.dockview-theme-light,
+.ace-dashboard-dockview.dockview-theme-dark {
+  --dv-tabs-and-actions-container-height: 36px;
+  --dv-tabs-and-actions-container-background-color: hsl(var(--background));
+  --dv-tabs-container-background-color: hsl(var(--background));
+  --dv-activegroup-header-background-color: hsl(var(--background));
+  --dv-inactivegroup-header-background-color: hsl(var(--background));
+  --dv-group-view-background-color: hsl(var(--background));
+  --dv-paneview-header-border-color: hsl(var(--border));
+  --dv-activegroup-visiblepanel-tab-background-color: transparent;
+  --dv-activegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-inactivegroup-visiblepanel-tab-background-color: transparent;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: transparent;
+  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
+  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-separator-border: hsl(var(--border));
+  --dv-paneview-active-outline-color: transparent;
+  --dv-tab-divider-color: transparent;
+  --ace-dock-tab-width: 8.75rem;
+}
+
+.ace-dashboard-dockview .dv-groupview,
+.ace-dashboard-dockview .dv-content-container,
+.ace-dashboard-dockview .dv-tabs-and-actions-container,
+.ace-dashboard-dockview .dv-tabs-container,
+.ace-dashboard-dockview .dv-tabs-overflow-container,
+.ace-dashboard-dockview .dv-actions-container,
+.ace-dashboard-dockview .dv-groupview-titlebar,
+.ace-dashboard-dockview .dv-groupview-titlebar-container,
+.ace-dashboard-dockview .dv-scrollable,
+.ace-dashboard-dockview .dv-void-container {
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-dashboard-dockview .dv-groupview {
+  display: flex !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  flex-direction: column !important;
+}
+
+.ace-dashboard-dockview .dv-groupview-titlebar,
+.ace-dashboard-dockview .dv-groupview-titlebar-container {
+  flex: 0 0 36px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-content-container {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+
+.ace-dashboard-chat-panel-content {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ace-dashboard-chat-secondary-sidebar {
+  flex: 0 0 18rem;
+  max-width: 18rem;
+}
+
+.ace-dashboard-chat-panel-main {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container {
+  height: 36px !important;
+  min-height: 36px !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+  padding: 0 12px !important;
+  background: hsl(var(--background)) !important;
+  background-color: hsl(var(--background)) !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container .dv-scrollable {
+  height: 36px !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  overflow: visible !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-scrollable,
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-tabs-container {
+  flex-grow: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-tabs-container .dv-tab {
+  flex: 0 0 auto !important;
+  flex-grow: 0 !important;
+  padding: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-and-actions-container.dv-single-tab.dv-full-width-single-tab .dv-void-container {
+  flex-grow: 1 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container {
+  position: relative !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 1.25rem !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  padding: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background: hsl(var(--border));
+}
+
+.ace-dashboard-dockview .dv-tab {
+  position: relative !important;
+  z-index: 1 !important;
+  width: var(--ace-dock-tab-width) !important;
+  min-width: var(--ace-dock-tab-width) !important;
+  max-width: var(--ace-dock-tab-width) !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  outline: none !important;
+  overflow: visible !important;
+  transform: none !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tabs-container > .dv-tab:first-child {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tab + .dv-tab {
+  margin-left: 0 !important;
+}
+
+.ace-dashboard-dockview .dv-tab:focus,
+.ace-dashboard-dockview .dv-tab:focus-visible,
+.ace-dashboard-dockview .dv-tab:focus-within,
+.ace-dashboard-dockview .dv-active-tab,
+.ace-dashboard-dockview .dv-tab.active-tab {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ace-dashboard-dockview .dv-tab::after,
+.ace-dashboard-dockview .dv-tab:focus::after,
+.ace-dashboard-dockview .dv-tab:focus-visible::after,
+.ace-dashboard-dockview .dv-tab:focus-within::after,
+.ace-dashboard-dockview .dv-active-tab::after,
+.ace-dashboard-dockview .dv-tab.active-tab::after {
+  display: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.ace-dock-tab {
+  position: relative;
+  display: flex;
+  width: var(--ace-dock-tab-width);
+  height: 36px;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: hsl(var(--muted-foreground));
+  transition: color 160ms ease;
+}
+
+.ace-dock-tab::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 9999px;
+  background: transparent;
+  transition: background-color 160ms ease;
+}
+
+.ace-dashboard-dockview .dv-tab:not(.dv-active-tab):not(.active-tab) .ace-dock-tab:hover {
+  color: hsl(var(--foreground));
+}
+
+.dv-active-tab .ace-dock-tab,
+.dv-tab.active-tab .ace-dock-tab {
+  z-index: 2;
+  color: hsl(var(--foreground));
+  box-shadow: none;
+}
+
+.dv-active-tab .ace-dock-tab::after,
+.dv-tab.active-tab .ace-dock-tab::after {
+  background: hsl(var(--primary));
+}
+
+.ace-dock-tab__title {
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 auto;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  height: 100%;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25;
+  outline: none;
+  padding: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ace-dock-tab__title:focus,
+.ace-dock-tab__title:focus-visible,
+.ace-dock-tab__close:focus,
+.ace-dock-tab__close:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.ace-dock-tab__close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  width: 1.25rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: hsl(var(--muted-foreground) / 0.65);
+  opacity: 0;
+  transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
+}
+
+.ace-dock-tab:hover .ace-dock-tab__close,
+.dv-active-tab .ace-dock-tab__close,
+.dv-tab.active-tab .ace-dock-tab__close {
+  opacity: 1;
+}
+
+.ace-dock-tab__close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
+.dv-active-tab .ace-dock-tab__close,
+.dv-tab.active-tab .ace-dock-tab__close {
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+
+.dv-active-tab .ace-dock-tab__close:hover,
+.dv-tab.active-tab .ace-dock-tab__close:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+
 /* Prevent layout shift when scrollbar appears/disappears */
 html {
   overflow-y: scroll;

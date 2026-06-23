@@ -19,6 +19,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { LanguageToggle } from '@/components/language-toggle';
 import { useTranslations } from '@/hooks/useTranslations';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface ScheduleJob {
   id: string;
@@ -208,9 +209,19 @@ export default function SchedulesPage() {
     const map: Record<string, string> = { started: 'bg-green-500/15 text-green-600', failed: 'bg-red-500/15 text-red-600', error: 'bg-red-500/15 text-red-600' };
     return <Badge className={map[s] || 'bg-muted text-muted-foreground'}>{s}</Badge>;
   };
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: t('schedules.title'),
+    subtitle: `${jobs.length} 个定时任务`,
+    actions: (
+      <Button size="sm" onClick={openCreate}>
+        <span className="material-symbols-outlined text-sm mr-1">add</span>{t('schedules.new')}
+      </Button>
+    ),
+  }, [jobs.length, t]);
 
   return (
     <div className="min-h-screen bg-background">
+      {!isDashboardShell ? (
       <header className="border-b border-border bg-card/50 backdrop-blur sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -229,6 +240,7 @@ export default function SchedulesPage() {
           </div>
         </div>
       </header>
+      ) : null}
 
       <main className="max-w-6xl mx-auto px-6 py-6">
         {loading ? (

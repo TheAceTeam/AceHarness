@@ -36,12 +36,23 @@ source: aceharness
 
 ## 步骤设计
 
-- 每个状态通常 1 到 4 个步骤。
+- 每个非终止状态默认采用 3 步红蓝裁决结构：蓝方/defender 产出当前状态交付物，红方/attacker 挑战漏洞、边界和反例，judge 汇总双方证据并给出 `pass|conditional_pass|fail`。
+- 只有在极简状态、纯人工等待状态或用户明确要求简化时，才可少于红蓝 judge 三步；少于三步时仍必须保留 judge 作为流转出口。
+- 每个状态通常 3 个步骤；确有并发执行或补充验证时可扩展到 4 个步骤。
 - 步骤 task 要写清输入、动作、输出和验收证据。
 - Agent 优先使用系统提供的可用 Agent、推荐 Agent 或模板中的既有 Agent。
 - Supervisor 只放在 workflow.supervisor 中负责调度、审阅和检查点建议；不要把 supervisor/default-supervisor 编排为任何步骤的执行 Agent。
 - 红蓝审查应放在同一状态内：执行者完成工作，审查者找问题，裁决者判断能否流转。
+- judge 是状态出口。非终止状态的 transitions 应读取当前状态 judge 的 verdict，不要让 defender 或 attacker 直接决定状态流转。
 - 需要并发时，并发步骤必须共享同一业务目标，并且都能在当前状态内完成。
+
+## 转移语义
+
+- 非终止状态默认提供 `pass`、`conditional_pass`、`fail` 三条转移，条件都来自当前状态的 judge 输出。
+- `pass` 表示当前状态验收标准已满足，可以进入下一状态或完成。
+- `conditional_pass` 通常表示“已有方向但仍需迭代”，默认回到当前状态继续补充、修正或扩展，不要把它当作无条件前进。
+- `fail` 表示当前状态的前提、方向或证据不成立，应回到当前状态、上游恢复状态或异常终止；不要跳过必要验证。
+- 转移条件应描述当前状态裁决结果，例如 `condition: { verdict: conditional_pass }`；转移 label 再说明为什么留在当前状态或回退。
 
 ## Spec 追踪
 

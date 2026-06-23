@@ -7,7 +7,7 @@
 ```
 设计（isInitial）──pass──> 实现 ──pass──> 测试 ──pass──> 完成（isFinal）
   │                        │                │
-  │──cond_pass──> 实现     │──cond_pass──> 测试    │──cond_pass──> 完成
+  │──cond_pass──> 设计     │──cond_pass──> 实现    │──cond_pass──> 测试
   │                        │                │
   └──fail──> 设计          └──fail──> 设计   └──fail──> 实现
 ```
@@ -17,7 +17,9 @@
 - **设计阶段** fail 回到自身（重新设计）
 - **实现阶段** fail 回到设计（可能是设计有问题）
 - **测试阶段** fail 回到实现（代码需要修复）
-- 每个阶段使用红蓝对抗模式：defender 做事，attacker 找问题，judge 裁决
+- 每个非终止阶段默认使用红蓝裁决模式：蓝方/defender 做事，红方/attacker 找问题，judge 裁决
+- judge 是状态出口；transitions 读取当前状态 judge 的 `verdict`
+- `conditional_pass` 表示当前阶段还需继续迭代，默认回到当前状态，不直接前进
 
 ## 编排参考
 
