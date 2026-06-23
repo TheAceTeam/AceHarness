@@ -20,7 +20,7 @@ import { Queue, QueueList, QueueItem, QueueItemContent, QueueItemDescription, Qu
 import { Terminal, TerminalContent } from '@/components/ai-elements/terminal';
 import { Artifact, ArtifactActions, ArtifactContent, ArtifactCopyButton, ArtifactHeader, ArtifactTitle } from '@/components/ai-elements/artifact';
 import { CodeBlock } from '@/components/ai-elements/code-block';
-import { BookOpenIcon, ChevronDownIcon, MessageSquareQuote, WrenchIcon } from 'lucide-react';
+import { BookOpenIcon, ChevronDownIcon, Eye, MessageSquareQuote, WrenchIcon } from 'lucide-react';
 import {
   extractAceProcessBlocks,
   getStreamingAceProcessReadyContent,
@@ -31,6 +31,7 @@ import {
   type AceToolResultPayload,
 } from '@/lib/chat/ai-process-blocks';
 import { workspaceApi } from '@/lib/core/api';
+import { FilePreviewDialog } from '@/components/chat/FilePreviewDialog';
 import type { BundledLanguage } from 'shiki';
 
 let modelLabelCache: Map<string, string> | null = null;
@@ -1241,6 +1242,28 @@ function ProcessTodoQueue({ todos }: { todos: any[] }) {
   );
 }
 
+function WriteFileMetaLine({ filePath, stats }: { filePath: string; stats?: string }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  if (!filePath) return null;
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div className="min-w-0 truncate text-xs text-muted-foreground" title={filePath}>
+        {[filePath, stats].filter(Boolean).join(' · ')}
+      </div>
+      <button
+        type="button"
+        onClick={() => setPreviewOpen(true)}
+        className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-primary transition-colors hover:bg-primary/10"
+        title="在窗口内预览"
+      >
+        <Eye className="size-3" />
+        <span>预览</span>
+      </button>
+      <FilePreviewDialog absolutePath={filePath} open={previewOpen} onOpenChange={setPreviewOpen} />
+    </div>
+  );
+}
+
 function renderStructuredToolRequest(entry: ToolProcessEntry) {
   const meta = entry.requestMeta;
   if (!meta) return entry.request ? <Markdown>{entry.request}</Markdown> : null;
@@ -1263,7 +1286,7 @@ function renderStructuredToolRequest(entry: ToolProcessEntry) {
       const language = inferCodeLanguage(filePath);
       return (
         <div className="space-y-2">
-          {filePath ? <div className="text-xs text-muted-foreground">{`${filePath}${content ? ` · ${countLines(content)} 行` : ''}`}</div> : null}
+          <WriteFileMetaLine filePath={filePath} stats={content ? `${countLines(content)} 行` : ''} />
           {content ? <Markdown>{`\`\`\`${language || ''}\n${content}\n\`\`\``}</Markdown> : null}
         </div>
       );
@@ -1381,7 +1404,7 @@ function renderStructuredToolResult(entry: ToolProcessEntry) {
               const language = diff ? 'diff' : inferCodeLanguage(filePath);
               return (
                 <div key={`change-${index}`} className="space-y-2">
-                  {(filePath || stats) ? <div className="text-xs text-muted-foreground">{[filePath, stats].filter(Boolean).join(' · ')}</div> : null}
+                  <WriteFileMetaLine filePath={filePath} stats={stats} />
                   {diff ? <ProcessCodeBlock text={diff} language={language || 'diff'} /> : null}
                   {!diff && content ? <ProcessCodeBlock text={content} language={language || undefined} /> : null}
                 </div>
