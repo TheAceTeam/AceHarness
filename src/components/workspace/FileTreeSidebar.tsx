@@ -13,6 +13,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -152,6 +153,7 @@ const TreeContext = React.createContext<{
   notebookCanWrite: boolean
   openDirectories: Set<string>
   setDirectoryOpen: (path: string, open: boolean) => void
+  refreshToken: number
   capabilities: TreeCapabilityFlags
   draggingPath: string | null
   setDraggingPath: (path: string | null) => void
@@ -1464,6 +1466,7 @@ function TreeDirItem({
     notebookCanWrite,
     openDirectories,
     setDirectoryOpen,
+    refreshToken,
     draggingPath,
     setDraggingPath,
     dropIntent,
@@ -1505,33 +1508,51 @@ function TreeDirItem({
     if (isCreatingHere || shouldAutoOpen) setDirectoryOpen(node.path, true)
   }, [isCreatingHere, node.path, setDirectoryOpen, shouldAutoOpen])
 
-  const handleOpenChange = React.useCallback(async (nextOpen: boolean) => {
-    setDirectoryOpen(node.path, nextOpen)
-    if (nextOpen && children === undefined && !loadingChildren) {
-      setLoadingChildren(true)
-      try {
-        if (mode === "notebook") {
-          const data = await workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken })
-          setChildren(data.tree || [])
-        } else {
-          const data = await workspaceApi.getSubTree(workspacePath, node.path, { depth: 0 })
-          setChildren(data.tree || [])
-          setPagination({
-            hasMore: Boolean(data.hasMore),
-            nextOffset: data.nextOffset ?? null,
-            totalEntries: data.totalEntries,
-          })
-        }
-      } catch (error) {
-        toast("error", formatErrorMessage(error, `加载目录失败：${node.name}`))
+  const refreshDirectoryChildren = React.useCallback(async () => {
+    if (loadingChildren) return
+    setLoadingChildren(true)
+    try {
+      if (mode === "notebook") {
+        const data = await workspaceApi.getNotebookSubTree(node.path, 2, { scope: notebookScope, shareToken: notebookShareToken })
+        setChildren(data.tree || [])
+      } else {
+        const data = await workspaceApi.getSubTree(workspacePath, node.path, { depth: 0 })
+        setChildren(data.tree || [])
+        setPagination({
+          hasMore: Boolean(data.hasMore),
+          nextOffset: data.nextOffset ?? null,
+          totalEntries: data.totalEntries,
+        })
       }
+    } catch (error) {
+      toast("error", formatErrorMessage(error, `刷新目录失败：${node.name}`))
+    } finally {
       setLoadingChildren(false)
     }
-  }, [children, loadingChildren, workspacePath, node.path, mode, notebookScope, notebookShareToken, setDirectoryOpen, toast, node.name])
+  }, [loadingChildren, mode, node.name, node.path, notebookScope, notebookShareToken, toast, workspacePath])
+
+  const handleOpenChange = React.useCallback(async (nextOpen: boolean) => {
+    setDirectoryOpen(node.path, nextOpen)
+    if (nextOpen && children === undefined) {
+      await refreshDirectoryChildren()
+    }
+  }, [children, node.path, refreshDirectoryChildren, setDirectoryOpen])
   React.useEffect(() => {
     if (!open || children !== undefined || loadingChildren) return
     void handleOpenChange(true)
   }, [children, handleOpenChange, loadingChildren, open])
+
+  React.useEffect(() => {
+    if (refreshToken === 0 || children === undefined) return
+    void refreshDirectoryChildren()
+    // Only directories that have been expanded/loaded respond to timed refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken])
+
+  const handleRefreshDirectory = React.useCallback(async () => {
+    setDirectoryOpen(node.path, true)
+    await refreshDirectoryChildren()
+  }, [node.path, refreshDirectoryChildren, setDirectoryOpen])
 
   const handleRename = async (newName: string) => {
     const parent = getParentDir(node.path)
@@ -1744,8 +1765,8 @@ function TreeDirItem({
             </ContextMenuTrigger>
           </TreeRow>
           <ContextMenuContent>
-            {mode === "notebook" && <ContextMenuItem onClick={onRefresh}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新</ContextMenuItem>}
-            {mode === "notebook" && !nodeReadOnly && <ContextMenuSeparator />}
+            <ContextMenuItem onClick={() => { void handleRefreshDirectory() }}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新文件夹</ContextMenuItem>
+            <ContextMenuSeparator />
             {!nodeReadOnly && <ContextMenuItem onClick={() => mode === "notebook" ? requestNotebookCreate("file", node.path) : setCreatingIn({ dir: node.path, type: "file" })}><FilePlus className="h-3.5 w-3.5 mr-2" />新建文件</ContextMenuItem>}
             {!nodeReadOnly && <ContextMenuItem onClick={() => mode === "notebook" ? requestNotebookCreate("folder", node.path) : setCreatingIn({ dir: node.path, type: "folder" })}><FolderPlus className="h-3.5 w-3.5 mr-2" />新建文件夹</ContextMenuItem>}
             {!nodeReadOnly && <ContextMenuSeparator />}
@@ -1912,6 +1933,8 @@ export function FileTreeSidebar({
   const [moveConflict, setMoveConflict] = React.useState<MoveConflictState | null>(null)
   const [resolvingConflict, setResolvingConflict] = React.useState(false)
   const [openDirectories, setOpenDirectories] = React.useState<Set<string>>(() => new Set())
+  const [refreshToken, setRefreshToken] = React.useState(0)
+  const [autoRefreshIntervalMs, setAutoRefreshIntervalMs] = React.useState<number | null>(null)
 
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const folderInputRef = React.useRef<HTMLInputElement>(null)
@@ -1932,6 +1955,20 @@ export function FileTreeSidebar({
     })
   }, [])
 
+  const refreshLoadedTree = React.useCallback(() => {
+    if (loading) return
+    onRefresh()
+    setRefreshToken((prev) => prev + 1)
+  }, [loading, onRefresh])
+
+  React.useEffect(() => {
+    if (!autoRefreshIntervalMs) return
+    const intervalId = window.setInterval(() => {
+      refreshLoadedTree()
+    }, autoRefreshIntervalMs)
+    return () => window.clearInterval(intervalId)
+  }, [autoRefreshIntervalMs, refreshLoadedTree])
+
   const handleUploadFiles = React.useCallback(async (fileList: FileList | null, directory: boolean) => {
     const files = Array.from(fileList || [])
     if (files.length === 0) return
@@ -1944,7 +1981,7 @@ export function FileTreeSidebar({
       )
       const result = await workspaceApi.upload(workspacePath, pendingUploadTargetRef.current, files, { relativePaths })
       toast("success", `已上传 ${result.count} 个文件`)
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       const message = formatErrorMessage(error, "上传失败")
       setTransferError(message)
@@ -1952,7 +1989,7 @@ export function FileTreeSidebar({
     } finally {
       setUploading(false)
     }
-  }, [onRefresh, toast, workspacePath])
+  }, [refreshLoadedTree, toast, workspacePath])
 
   const requestUpload = React.useCallback((targetPath: string, directory: boolean) => {
     if (mode !== "default") return
@@ -2032,11 +2069,11 @@ export function FileTreeSidebar({
     if (mode !== "notebook" || !notebookCanWrite) return
     try {
       await workspaceApi.manageNotebook("set-icon", { path, icon: "" }, { scope: notebookScope, shareToken: notebookShareToken })
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "清除目录图标失败"))
     }
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onRefresh, toast])
+  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleConfirmCopyBetween = React.useCallback(async () => {
     if (!copyBetweenSource || mode !== "notebook") return
@@ -2059,13 +2096,13 @@ export function FileTreeSidebar({
       toast("success", `已复制到${copyBetweenScope === "global" ? "团队" : "个人"}空间：${destPath}`)
       setCopyBetweenDialogOpen(false)
       setCopyBetweenSource(null)
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "跨空间复制失败"))
     } finally {
       setCopyBetweenSaving(false)
     }
-  }, [copyBetweenDirectory, copyBetweenScope, copyBetweenSource, mode, notebookScope, notebookShareToken, onRefresh, toast])
+  }, [copyBetweenDirectory, copyBetweenScope, copyBetweenSource, mode, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleConfirmDirectoryIcon = React.useCallback(async () => {
     if (!iconTargetPath || mode !== "notebook" || !notebookCanWrite) return
@@ -2074,13 +2111,13 @@ export function FileTreeSidebar({
       await workspaceApi.manageNotebook("set-icon", { path: iconTargetPath, icon: iconValue }, { scope: notebookScope, shareToken: notebookShareToken })
       setIconDialogOpen(false)
       setIconTargetPath(null)
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "设置目录图标失败"))
     } finally {
       setIconSaving(false)
     }
-  }, [iconTargetPath, iconValue, mode, notebookCanWrite, notebookScope, notebookShareToken, onRefresh, toast])
+  }, [iconTargetPath, iconValue, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, toast])
 
   const handleRootPaste = async () => {
     if (!clipboard) return
@@ -2105,7 +2142,7 @@ export function FileTreeSidebar({
         }
       }
       if (clipboard.action === "cut") setClipboard(null)
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "粘贴失败"))
     }
@@ -2121,7 +2158,7 @@ export function FileTreeSidebar({
       } else {
         await workspaceApi.manage(workspacePath, creatingIn.type === "file" ? "create-file" : "create-folder", { path: name })
       }
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, `创建${creatingIn.type === "file" ? "文件" : "文件夹"}失败`))
     }
@@ -2153,11 +2190,11 @@ export function FileTreeSidebar({
         }
       }
       if (clipboard.action === "cut") setClipboard(null)
-      onRefresh()
+      refreshLoadedTree()
     } catch (error) {
       toast("error", formatErrorMessage(error, "粘贴失败"))
     }
-  }, [clipboard, mode, notebookCanWrite, notebookScope, notebookShareToken, onRefresh, setClipboard, toast, workspacePath])
+  }, [clipboard, mode, notebookCanWrite, notebookScope, notebookShareToken, refreshLoadedTree, setClipboard, toast, workspacePath])
 
   const performMove = React.useCallback(async (
     srcPath: string,
@@ -2187,8 +2224,8 @@ export function FileTreeSidebar({
         : `${destPath}${selectedFile.slice(srcPath.length)}`
       onSelectFile(nextSelected)
     }
-    onRefresh()
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onRefresh, onSelectFile, selectedFile, workspacePath])
+    refreshLoadedTree()
+  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, selectedFile, workspacePath])
 
   const performDelete = React.useCallback(async (targetPath: string) => {
     if (mode === "notebook") {
@@ -2314,7 +2351,7 @@ export function FileTreeSidebar({
             : `${normalizedSrcPath}${selectedFile.slice(normalizedSrcPath.length)}`
           onSelectFile(nextSelected)
         }
-        onRefresh()
+        refreshLoadedTree()
       } catch (error) {
         if (isSameDirectoryReorderError(error)) {
           const fallbackDir = targetParent
@@ -2322,7 +2359,7 @@ export function FileTreeSidebar({
             await moveTreeItem(normalizedSrcPath, fallbackDir)
             return
           }
-          onRefresh()
+          refreshLoadedTree()
           return
         }
         toast("error", formatErrorMessage(error, "排序失败"))
@@ -2341,9 +2378,9 @@ export function FileTreeSidebar({
     notebookCanWrite,
     notebookScope,
     notebookShareToken,
-    onRefresh,
     onSelectFile,
     performMove,
+    refreshLoadedTree,
     selectedFile,
     tree,
     toast,
@@ -2361,7 +2398,7 @@ export function FileTreeSidebar({
       if (dir) {
         setDirectoryOpen(dir, true)
       }
-      onRefresh()
+      refreshLoadedTree()
       setRenamingPath(createdPath)
       if (type === "file") {
         onSelectFile(createdPath)
@@ -2369,7 +2406,7 @@ export function FileTreeSidebar({
     } catch (error) {
       toast("error", formatErrorMessage(error, `创建${type === "file" ? "文件" : "文件夹"}失败`))
     }
-  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onRefresh, onSelectFile, setDirectoryOpen, toast, tree])
+  }, [mode, notebookCanWrite, notebookScope, notebookShareToken, onSelectFile, refreshLoadedTree, setDirectoryOpen, toast, tree])
 
   const handleQuickCreateNotebook = React.useCallback(async (type: "file" | "folder") => {
     await createQuickNotebook(type, "")
@@ -2392,9 +2429,10 @@ export function FileTreeSidebar({
   const shouldExpandTopLevel = tree.some((node) => node.type === "directory" && !openDirectories.has(node.path))
 
   const isCreatingAtRoot = creatingIn?.dir === ""
+  const autoRefreshLabel = autoRefreshIntervalMs ? `每 ${autoRefreshIntervalMs / 1000} 秒` : "关闭"
 
   return (
-    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
+    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
       <div className="flex flex-col h-full bg-card">
         <input
           ref={fileInputRef}
@@ -2448,6 +2486,41 @@ export function FileTreeSidebar({
               </button>
             </div>
           ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant={autoRefreshIntervalMs ? "secondary" : "outline"}
+                size="sm"
+                className="h-7 px-2 text-xs"
+                title={`刷新文件树，定时刷新：${autoRefreshLabel}`}
+              >
+                <RefreshCw className={cn("mr-1 h-3.5 w-3.5", (loading || autoRefreshIntervalMs) && "animate-spin")} />
+                刷新
+                <ChevronDown className="ml-1 h-3 w-3 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={refreshLoadedTree} disabled={loading}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                立即刷新已展开目录
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(10_000)}>
+                {autoRefreshIntervalMs === 10_000 ? "✓ " : ""}每 10 秒定时刷新
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(30_000)}>
+                {autoRefreshIntervalMs === 30_000 ? "✓ " : ""}每 30 秒定时刷新
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(60_000)}>
+                {autoRefreshIntervalMs === 60_000 ? "✓ " : ""}每 60 秒定时刷新
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(null)} disabled={!autoRefreshIntervalMs}>
+                关闭定时刷新
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {mode === "default" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -2656,8 +2729,8 @@ export function FileTreeSidebar({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
-            {mode === "notebook" && <ContextMenuItem onClick={onRefresh}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新</ContextMenuItem>}
-            {mode === "notebook" && <ContextMenuSeparator />}
+            <ContextMenuItem onClick={refreshLoadedTree}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新已展开目录</ContextMenuItem>
+            <ContextMenuSeparator />
             <ContextMenuItem onClick={() => mode === "notebook" ? void createQuickNotebook("file", "") : setCreatingIn({ dir: "", type: "file" })}><FilePlus className="h-3.5 w-3.5 mr-2" />新建文件</ContextMenuItem>
             <ContextMenuItem onClick={() => mode === "notebook" ? void createQuickNotebook("folder", "") : setCreatingIn({ dir: "", type: "folder" })}><FolderPlus className="h-3.5 w-3.5 mr-2" />新建文件夹</ContextMenuItem>
             {clipboard && (

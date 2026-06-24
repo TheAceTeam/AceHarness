@@ -46,7 +46,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
@@ -1225,7 +1224,6 @@ export default function WorkbenchPage({
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const dockWorkspace = useDashboardDockWorkspace();
   const [embeddedSearchState, setEmbeddedSearchState] = useState(embeddedSearch ?? '');
 
   useEffect(() => {
@@ -1275,17 +1273,6 @@ export default function WorkbenchPage({
     }
     router.replace(nextUrl, { scroll: false });
   }, [embeddedInDashboard, searchParamsString, configFile, router]);
-
-  const goBackToWorkflows = useCallback(() => {
-    if (embeddedInDashboard && dockWorkspace) {
-      dockWorkspace.openTab({ id: 'workflows', title: '工作流管理', kind: 'workflows' });
-      const sp = new URLSearchParams();
-      sp.set('route', '/workflows');
-      router.push(`/dashboard?${sp.toString()}`);
-      return;
-    }
-    router.push('/workflows');
-  }, [dockWorkspace, embeddedInDashboard, router]);
 
   const { toast } = useToast();
   const { confirm, dialogProps: confirmDialogProps } = useConfirmDialog();
@@ -8787,7 +8774,9 @@ export default function WorkbenchPage({
       <div className={cn(
         'grid w-[168px] shrink-0 grid-cols-3 gap-px rounded-md p-0.5',
         variant === 'shell' ? 'bg-muted' : 'bg-background/50',
-      )}>
+      )}
+      data-testid={`workbench-mode-tabs-${variant}`}
+      >
         {modeTabs.map((mode) => (
           <Button
             key={mode.value}
@@ -8812,38 +8801,38 @@ export default function WorkbenchPage({
     );
   }, [isDesignMode, isHistoryMode, isRunMode, switchViewMode]);
   const workbenchHeaderActions = useMemo(() => (
-    <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={goBackToWorkflows}>
-        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span>
-        <span className="hidden xl:inline">工作流</span>
-      </Button>
+    <div
+      className="grid min-w-[360px] grid-cols-[168px_minmax(0,1fr)] items-center gap-2"
+      style={{ width: 'clamp(360px, calc(100vw - 420px), 780px)' }}
+    >
       {renderWorkbenchModeTabs('shell')}
-      {isDesignMode && editingName ? (
-        <Input
-          value={nameValue}
-          onChange={(e) => setNameValue(e.target.value)}
-          onBlur={() => saveWorkflowName(nameValue)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') saveWorkflowName(nameValue);
-            if (e.key === 'Escape') setEditingName(false);
-          }}
-          className="h-8 w-[150px] text-xs font-semibold"
-          autoFocus
-        />
-      ) : isDesignMode ? (
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 text-xs"
-          onClick={() => { setEditingName(true); setNameValue(workflowConfig?.workflow?.name || ''); }}
-          title={workflowConfig?.workflow?.name || configFile}
-        >
-          <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>edit</span>
-          <span className="hidden xl:inline">名称</span>
-        </Button>
-      ) : null}
-      {isRunMode ? (
-        <>
+      <div className="flex min-w-0 items-center justify-end gap-2 overflow-hidden">
+        {isDesignMode && editingName ? (
+          <Input
+            value={nameValue}
+            onChange={(e) => setNameValue(e.target.value)}
+            onBlur={() => saveWorkflowName(nameValue)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveWorkflowName(nameValue);
+              if (e.key === 'Escape') setEditingName(false);
+            }}
+            className="h-8 w-[150px] text-xs font-semibold"
+            autoFocus
+          />
+        ) : isDesignMode ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => { setEditingName(true); setNameValue(workflowConfig?.workflow?.name || ''); }}
+            title={workflowConfig?.workflow?.name || configFile}
+          >
+            <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>edit</span>
+            <span className="hidden xl:inline">名称</span>
+          </Button>
+        ) : null}
+        {isRunMode ? (
+          <>
           <div className={`hidden items-center gap-2 rounded-md border px-2 py-1 transition-colors xl:flex ${
             rehearsalMode ? 'bg-background/40' : 'border-amber-500/30 bg-amber-500/10'
           }`}>
@@ -8872,33 +8861,33 @@ export default function WorkbenchPage({
               <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit_note</span><span className="hidden xl:inline ml-1">上下文</span>
             </Button>
           </ButtonGroup>
-        </>
-      ) : null}
-      {isDesignMode ? (
-        <Button size="sm" className="h-8 bg-green-600 text-xs text-white hover:bg-green-700" onClick={handleSaveConfig} disabled={saving}>
-          {saving ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>save</span>}
-          <span className="hidden lg:inline">{saving ? '保存中...' : '保存配置'}</span>
-          <span className="lg:hidden">保存</span>
-        </Button>
-      ) : null}
-      {workflowStatus === 'idle' ? (
-        <Badge variant="secondary"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
-      ) : workflowStatus === 'preparing' ? (
-        <Badge className="bg-yellow-500/20 text-yellow-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
-      ) : workflowStatus === 'running' ? (
-        <Badge className="bg-blue-500/20 text-blue-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
-      ) : workflowStatus === 'completed' ? (
-        <Badge className="bg-green-500/20 text-green-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
-      ) : (
-        <Badge className="bg-red-500/20 text-red-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
-      )}
+          </>
+        ) : null}
+        {isDesignMode ? (
+          <Button size="sm" className="h-8 bg-green-600 text-xs text-white hover:bg-green-700" onClick={handleSaveConfig} disabled={saving}>
+            {saving ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>save</span>}
+            <span className="hidden lg:inline">{saving ? '保存中...' : '保存配置'}</span>
+            <span className="lg:hidden">保存</span>
+          </Button>
+        ) : null}
+        {workflowStatus === 'idle' ? (
+          <Badge variant="secondary"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+        ) : workflowStatus === 'preparing' ? (
+          <Badge className="bg-yellow-500/20 text-yellow-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+        ) : workflowStatus === 'running' ? (
+          <Badge className="bg-blue-500/20 text-blue-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+        ) : workflowStatus === 'completed' ? (
+          <Badge className="bg-green-500/20 text-green-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+        ) : (
+          <Badge className="bg-red-500/20 text-red-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+        )}
+      </div>
     </div>
   ), [
     canStartWorkflow,
     configFile,
     dispatch,
     editingName,
-    goBackToWorkflows,
     handleSaveConfig,
     hasContextEditableRun,
     isDesignMode,
@@ -8950,9 +8939,6 @@ export default function WorkbenchPage({
       <div className="shrink-0 border-b bg-muted">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
           <div className="flex items-center gap-2 shrink-0 min-w-0">
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={goBackToWorkflows}>
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span><span className="hidden sm:inline"> 返回</span>
-          </Button>
           {renderWorkbenchModeTabs('inline')}
           <h1 className="text-xs font-semibold m-0 flex items-center gap-1.5 min-w-0 max-w-[160px] sm:max-w-[240px] lg:max-w-none">
             <RobotLogo size={18} className="shrink-0" />
