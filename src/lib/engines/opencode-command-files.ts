@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import { parse as parseYaml } from 'yaml';
+import { getWorkspaceRoot } from '@/lib/core/app-paths';
 import { buildConfiguredProcessEnvSync } from '@/lib/core/configured-env';
 import type { OpenCodeDiscoveredCommand } from './opencode-http-adapter';
 
@@ -10,6 +11,7 @@ type DiscoverCommandFileOptions = {
   env?: Partial<NodeJS.ProcessEnv>;
   homeDir?: string;
   platform?: NodeJS.Platform;
+  runtimeRoot?: string;
   userId?: string;
 };
 
@@ -69,6 +71,17 @@ export function resolveOpenCodeGlobalConfigDirectories(options: DiscoverCommandF
       : '',
   ].filter(Boolean);
 
+  return uniquePaths(candidates, platform);
+}
+
+export function resolveAceHarnessOpenCodeConfigDirectories(options: DiscoverCommandFileOptions = {}): string[] {
+  const home = options.homeDir ?? homedir();
+  const platform = options.platform ?? process.platform;
+  const runtimeRoot = normalizeNonEmptyString(options.runtimeRoot ?? getWorkspaceRoot());
+  const candidates = [
+    runtimeRoot ? path.join(runtimeRoot, '.opencode') : '',
+    home ? path.join(home, '.aceharness', '.opencode') : '',
+  ].filter(Boolean);
   return uniquePaths(candidates, platform);
 }
 
@@ -155,6 +168,7 @@ export async function discoverOpenCodeCommandFileFallback(
   const platform = options.platform ?? process.platform;
   const configDirs = [
     ...await resolveOpenCodeProjectConfigDirectories({ ...options, platform }),
+    ...resolveAceHarnessOpenCodeConfigDirectories({ ...options, platform }),
     ...resolveOpenCodeGlobalConfigDirectories({ ...options, platform }),
   ];
 

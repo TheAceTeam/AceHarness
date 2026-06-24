@@ -13,7 +13,7 @@ import type { AddPanelPositionOptions, Direction, IDockviewPanel } from 'dockvie
 import { X } from 'lucide-react';
 import { KeepAlive } from 'keepalive-for-react';
 
-import { ChatPageContent } from '@/app/page';
+import { ChatPageContent } from '@/components/chat/ChatPageContent';
 import AgentsManager from '@/components/agents/AgentsManager';
 import SkillsManager from '@/components/skills/SkillsManager';
 import SystemSettingsContent from '@/components/settings/SystemSettingsContent';

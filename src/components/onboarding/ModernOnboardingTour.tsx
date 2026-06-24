@@ -62,6 +62,26 @@ const TOUR_STEPS: ProductTourStep[] = [
     position: 'top',
   },
   {
+    id: 'home-dashboard-sidebar',
+    route: '/',
+    targetId: 'dashboard-shell-sidebar',
+    eyebrow: '新版侧边栏',
+    title: '从左侧进入全部功能',
+    body: '新版侧边栏把对话、议场、工作流、模型、引擎和系统功能统一到同一个入口。点击会在右侧工作区打开，也可以把菜单项拖到右侧进行拆分布局。',
+    position: 'right',
+    checklist: ['一级入口负责切换功能', '对话会显示二级会话侧边栏', '功能页默认在右侧工作区打开'],
+  },
+  {
+    id: 'home-dashboard-workspace',
+    route: '/',
+    targetId: 'dashboard-workspace-tabs',
+    eyebrow: '右侧工作区',
+    title: '用标签页和分屏保留上下文',
+    body: '右侧是可拆分的 Dock 工作区。标签页可以保留页面状态、右键关闭或刷新，也可以拖拽到左右上下区域形成分屏。',
+    position: 'top',
+    checklist: ['标签页保留常用页面', '拖拽标签进行左右分屏', '右键管理关闭与刷新'],
+  },
+  {
     id: 'dashboard-overview',
     route: '/dashboard',
     targetId: 'dashboard-overview',
@@ -314,6 +334,8 @@ export function ModernOnboardingTour({
       const completionIndex = done ? Math.max(0, steps.length - 1) : safeIndex;
       const step = steps[completionIndex] || steps[safeIndex] || steps[0];
       const visited = steps.slice(0, completionIndex + 1).map((item) => item.id);
+      const completedStepIds = new Set([...(initialProgress?.visitedModules || []), ...visited]);
+      const hasCompleted = (id: string) => completedStepIds.has(id);
       const persistedDone = done || Boolean(initialProgress?.done);
 
       return {
@@ -327,18 +349,18 @@ export function ModernOnboardingTour({
         memberChecks: {
           ...DEFAULT_MEMBER_CHECKS,
           ...(initialProgress?.memberChecks || {}),
-          homeGuideDone: completionIndex >= 1,
-          engineModelDone: completionIndex >= 7,
-          notebookDone: completionIndex >= 9,
-          personalDirConfirm: completionIndex >= 8,
+          homeGuideDone: hasCompleted('home-chat-composer'),
+          engineModelDone: hasCompleted('model-tabs') || hasCompleted('model-filter'),
+          notebookDone: hasCompleted('account-notebook'),
+          personalDirConfirm: hasCompleted('account-directory'),
         },
         adminChecks: {
           ...DEFAULT_ADMIN_CHECKS,
           ...(initialProgress?.adminChecks || {}),
-          engineReady: completionIndex >= 6,
-          defaultModel: completionIndex >= 6,
-          agentGroup: completionIndex >= 5,
-          personalDirReady: completionIndex >= 8,
+          engineReady: hasCompleted('model-tabs') || hasCompleted('model-filter'),
+          defaultModel: hasCompleted('model-tabs') || hasCompleted('model-filter'),
+          agentGroup: hasCompleted('agent-hall') || hasCompleted('agent-create'),
+          personalDirReady: hasCompleted('account-directory'),
         },
         maximized: false,
       };

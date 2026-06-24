@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import {
   discoverOpenCodeCommandFileFallback,
   mergeOpenCodeCommandLists,
+  resolveAceHarnessOpenCodeConfigDirectories,
   resolveOpenCodeGlobalConfigDirectories,
   resolveOpenCodeProjectConfigDirectories,
 } from '@/lib/engines/opencode-command-files';
@@ -30,6 +31,7 @@ describe('OpenCode command file fallback discovery', () => {
     const cwd = join(project, 'packages', 'app');
     const xdgConfig = join(tempRoot, 'xdg-config');
     const home = join(tempRoot, 'home');
+    const runtimeRoot = join(tempRoot, 'acehome');
     mkdirSync(join(project, '.git'), { recursive: true });
 
     writeCommand(
@@ -45,6 +47,14 @@ describe('OpenCode command file fallback discovery', () => {
       '---\ndescription: Home dot-opencode command\n---\nHome command',
     );
     writeCommand(
+      join(runtimeRoot, '.opencode', 'command', 'ace.md'),
+      '---\ndescription: ACEHarness runtime command\n---\nRuntime command',
+    );
+    writeCommand(
+      join(home, '.aceharness', '.opencode', 'command', 'ace-home.md'),
+      '---\ndescription: ACEHarness home command\n---\nHome runtime command',
+    );
+    writeCommand(
       join(xdgConfig, 'opencode', 'commands', 'global.md'),
       '---\ndescription: Global command\n---\nGlobal command',
     );
@@ -57,6 +67,7 @@ describe('OpenCode command file fallback discovery', () => {
       workingDirectory: cwd,
       env: { XDG_CONFIG_HOME: xdgConfig },
       homeDir: home,
+      runtimeRoot,
       platform: 'linux',
     });
 
@@ -64,12 +75,16 @@ describe('OpenCode command file fallback discovery', () => {
       'project/deploy',
       'parent',
       'home',
+      'ace',
+      'ace-home',
       'alias-name',
       'global',
     ]);
     expect(commands.find((command) => command.name === 'project/deploy')?.description).toBe('Deploy from project');
     expect(commands.find((command) => command.name === 'parent')?.description).toBe('Parent project command');
     expect(commands.find((command) => command.name === 'home')?.description).toBe('Home dot-opencode command');
+    expect(commands.find((command) => command.name === 'ace')?.description).toBe('ACEHarness runtime command');
+    expect(commands.find((command) => command.name === 'ace-home')?.description).toBe('ACEHarness home command');
     expect(commands.find((command) => command.name === 'global')?.description).toBe('Global command');
   });
 
@@ -105,6 +120,20 @@ describe('OpenCode command file fallback discovery', () => {
       override,
       join(xdgConfig, 'opencode'),
       join(home, '.config', 'opencode'),
+    ]);
+  });
+
+  test('resolves ACEHarness runtime .opencode directory', () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'aceharness-opencode-runtime-'));
+    const runtimeRoot = join(tempRoot, 'runtime');
+
+    expect(resolveAceHarnessOpenCodeConfigDirectories({
+      runtimeRoot,
+      homeDir: join(tempRoot, 'home'),
+      platform: 'linux',
+    })).toEqual([
+      join(runtimeRoot, '.opencode'),
+      join(tempRoot, 'home', '.aceharness', '.opencode'),
     ]);
   });
 
