@@ -8775,12 +8775,49 @@ export default function WorkbenchPage({
   );
 
   const workbenchModeSubtitle = isRunMode ? '运行' : isDesignMode ? '设计' : '历史';
+  const renderWorkbenchModeTabs = useCallback((variant: 'shell' | 'inline' = 'shell') => {
+    const modeTabs: Array<{ value: ViewMode; label: string; icon: string; active: boolean }> = [
+      { value: 'run', label: '首页', icon: 'home', active: isRunMode },
+      { value: 'design', label: '设计', icon: 'edit', active: isDesignMode },
+      { value: 'history', label: '历史', icon: 'history', active: isHistoryMode },
+    ];
+    const heightClass = variant === 'shell' ? 'h-8' : 'h-7';
+
+    return (
+      <div className={cn(
+        'grid w-[168px] shrink-0 grid-cols-3 gap-px rounded-md p-0.5',
+        variant === 'shell' ? 'bg-muted' : 'bg-background/50',
+      )}>
+        {modeTabs.map((mode) => (
+          <Button
+            key={mode.value}
+            variant="ghost"
+            size="sm"
+            className={cn(
+              heightClass,
+              'min-w-0 rounded-[5px] px-0 text-xs',
+              mode.active
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+            onClick={() => switchViewMode(mode.value)}
+            aria-pressed={mode.active}
+            title={mode.label}
+          >
+            <span className="material-symbols-outlined text-sm">{mode.icon}</span>
+            <span className="ml-1">{mode.label}</span>
+          </Button>
+        ))}
+      </div>
+    );
+  }, [isDesignMode, isHistoryMode, isRunMode, switchViewMode]);
   const workbenchHeaderActions = useMemo(() => (
     <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
       <Button variant="outline" size="sm" className="h-8 text-xs" onClick={goBackToWorkflows}>
         <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span>
         <span className="hidden xl:inline">工作流</span>
       </Button>
+      {renderWorkbenchModeTabs('shell')}
       {isDesignMode && editingName ? (
         <Input
           value={nameValue}
@@ -8805,17 +8842,6 @@ export default function WorkbenchPage({
           <span className="hidden xl:inline">名称</span>
         </Button>
       ) : null}
-      <div className="flex gap-0.5 rounded-md bg-muted p-0.5">
-        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isRunMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('run')}>
-          <span className="material-symbols-outlined text-sm">home</span><span className="hidden lg:inline ml-1">首页</span>
-        </Button>
-        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isDesignMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('design')}>
-          <span className="material-symbols-outlined text-sm">edit</span><span className="hidden lg:inline ml-1">设计</span>
-        </Button>
-        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isHistoryMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('history')}>
-          <span className="material-symbols-outlined text-sm">history</span><span className="hidden lg:inline ml-1">历史</span>
-        </Button>
-      </div>
       {isRunMode ? (
         <>
           <div className={`hidden items-center gap-2 rounded-md border px-2 py-1 transition-colors xl:flex ${
@@ -8884,11 +8910,11 @@ export default function WorkbenchPage({
     rehearsalMode,
     requestStartWorkflow,
     requestStopWorkflow,
+    renderWorkbenchModeTabs,
     saveWorkflowName,
     saving,
     showProcessPanel,
     starting,
-    switchViewMode,
     workflowConfig?.workflow?.name,
     workflowStatus,
   ]);
@@ -8927,6 +8953,7 @@ export default function WorkbenchPage({
           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={goBackToWorkflows}>
             <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span><span className="hidden sm:inline"> 返回</span>
           </Button>
+          {renderWorkbenchModeTabs('inline')}
           <h1 className="text-xs font-semibold m-0 flex items-center gap-1.5 min-w-0 max-w-[160px] sm:max-w-[240px] lg:max-w-none">
             <RobotLogo size={18} className="shrink-0" />
             {isDesignMode ? (
@@ -8956,20 +8983,6 @@ export default function WorkbenchPage({
               <span className="truncate" title={workflowConfig?.workflow?.name || configFile}>{workflowConfig?.workflow?.name || configFile}</span>
             )}
           </h1>
-          </div>
-          <div className="flex gap-0.5 bg-background/50 rounded-md p-0.5 shrink-0">
-          <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isRunMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => switchViewMode('run')}>
-            <span className="material-symbols-outlined text-sm">home</span><span className="hidden sm:inline ml-1">首页</span>
-          </Button>
-          <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isDesignMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => switchViewMode('design')}>
-            <span className="material-symbols-outlined text-sm">edit</span><span className="hidden sm:inline ml-1">设计</span>
-          </Button>
-          <Button variant="ghost" size="sm" className={`h-7 px-2 text-xs ${isHistoryMode ? 'bg-primary text-primary-foreground' : ''}`}
-            onClick={() => switchViewMode('history')}>
-            <span className="material-symbols-outlined text-sm">history</span><span className="hidden sm:inline ml-1">历史</span>
-          </Button>
           </div>
           <div className="flex items-center gap-2 shrink-0">
           {isRunMode && (<>
