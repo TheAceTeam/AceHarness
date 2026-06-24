@@ -608,6 +608,7 @@ export function RichNotebookEditor({
   const cellRunStateRef = useRef<Record<string, 'idle' | 'running' | 'success' | 'failed'>>({});
   const outputBackedSuccessRef = useRef<Record<string, boolean>>({});
   const editorRef = useRef<Editor | null>(null);
+  const contentReadyFallbackRef = useRef<number | null>(null);
   // dependencyGraphOpen is controlled by parent menu
   const [dependencyNodes, setDependencyNodes] = useState<RFNode[]>([]);
   const [dependencyEdges, setDependencyEdges] = useState<RFEdge[]>([]);
@@ -740,22 +741,40 @@ export function RichNotebookEditor({
 
     setCollabReady(false);
     setCollabSession({ doc, provider });
-    const timeout = window.setTimeout(() => {
+    const fallbackToLocal = (reason: string) => {
       provider.destroy();
       doc.destroy();
       setCollabSession((prev) => (prev?.provider === provider ? null : prev));
       setCollabUsers([]);
       setCollabReady(true);
       setCollabDisabled(true);
-      toast('warning', '协作连接超时，已切换为本地编辑模式');
+      toast('warning', reason);
+    };
+    const connectTimeout = window.setTimeout(() => {
+      fallbackToLocal('协作连接超时，已切换为本地编辑模式');
     }, 5_000);
+    const clearConnectFallback = () => {
+      window.clearTimeout(connectTimeout);
+    };
+    const startContentReadyFallback = () => {
+      if (contentReadyFallbackRef.current != null) return;
+      contentReadyFallbackRef.current = window.setTimeout(() => {
+        contentReadyFallbackRef.current = null;
+        fallbackToLocal('协作内容同步超时，已切换为本地编辑模式');
+      }, 8_000);
+    };
     const handleStatus = (event: { status: string }) => {
       if (event.status !== 'connected') return;
-      window.clearTimeout(timeout);
+      clearConnectFallback();
+      startContentReadyFallback();
     };
     provider.on('status', handleStatus);
     return () => {
-      window.clearTimeout(timeout);
+      window.clearTimeout(connectTimeout);
+      if (contentReadyFallbackRef.current != null) {
+        window.clearTimeout(contentReadyFallbackRef.current);
+        contentReadyFallbackRef.current = null;
+      }
       provider.off('status', handleStatus);
       provider.destroy();
       doc.destroy();
@@ -1487,6 +1506,10 @@ export function RichNotebookEditor({
     const { doc, provider } = collabSession;
     const config = doc.getMap('config');
     const markReady = () => {
+      if (contentReadyFallbackRef.current != null) {
+        window.clearTimeout(contentReadyFallbackRef.current);
+        contentReadyFallbackRef.current = null;
+      }
       setCollabReady(true);
       scheduleDerivedNotebookStateRefresh(editor);
     };
