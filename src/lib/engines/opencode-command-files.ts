@@ -37,6 +37,21 @@ function uniquePaths(paths: string[], platform: NodeJS.Platform): string[] {
   return result;
 }
 
+async function findNearestAncestorWithChild(start: string, childName: string): Promise<string | null> {
+  let current = path.resolve(start);
+  while (true) {
+    try {
+      await fs.access(path.join(current, childName));
+      return current;
+    } catch {
+      // Keep walking upward until a root is reached.
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
 export function resolveOpenCodeGlobalConfigDirectories(options: DiscoverCommandFileOptions = {}): string[] {
   const env = options.env ?? buildConfiguredProcessEnvSync(
     undefined,
@@ -54,6 +69,27 @@ export function resolveOpenCodeGlobalConfigDirectories(options: DiscoverCommandF
       : '',
   ].filter(Boolean);
 
+  return uniquePaths(candidates, platform);
+}
+
+export async function resolveOpenCodeProjectConfigDirectories(options: DiscoverCommandFileOptions = {}): Promise<string[]> {
+  const home = options.homeDir ?? homedir();
+  const platform = options.platform ?? process.platform;
+  const candidates: string[] = [];
+  const workingDirectory = normalizeNonEmptyString(options.workingDirectory);
+  if (workingDirectory) {
+    const start = path.resolve(workingDirectory);
+    const stop = await findNearestAncestorWithChild(start, '.git');
+    let current = start;
+    while (true) {
+      candidates.push(path.join(current, '.opencode'));
+      if (stop && current === stop) break;
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  }
+  if (home) candidates.push(path.join(home, '.opencode'));
   return uniquePaths(candidates, platform);
 }
 
@@ -118,9 +154,7 @@ export async function discoverOpenCodeCommandFileFallback(
 ): Promise<OpenCodeDiscoveredCommand[]> {
   const platform = options.platform ?? process.platform;
   const configDirs = [
-    ...(normalizeNonEmptyString(options.workingDirectory)
-      ? [path.join(path.resolve(normalizeNonEmptyString(options.workingDirectory)), '.opencode')]
-      : []),
+    ...await resolveOpenCodeProjectConfigDirectories({ ...options, platform }),
     ...resolveOpenCodeGlobalConfigDirectories({ ...options, platform }),
   ];
 

@@ -2589,9 +2589,17 @@ export function ChatPageContent({
 }
 
 export default function ChatPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace('/dashboard');
+  }, [router]);
+
   return (
     <AuthGuard>
-      <ChatPageContent />
+      <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
+        正在进入 ACEHarness...
+      </div>
     </AuthGuard>
   );
 }
