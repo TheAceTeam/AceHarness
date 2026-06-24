@@ -5548,6 +5548,22 @@ try {
     let lastFlush = 0;
     let lastStreamAt = Date.now();
     let watchdogTriggeredForProcess = '';
+    let trailingFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushLatestProcessStream = () => {
+      if (!this.currentRunId) return;
+      const proc = processManager.getProcess(currentProcessId);
+      const content = proc?.streamContent || '';
+      if (!content) return;
+      flushProcessStream(content);
+      lastFlush = Date.now();
+    };
+    const scheduleTrailingFlush = (delayMs: number) => {
+      if (trailingFlushTimer) return;
+      trailingFlushTimer = setTimeout(() => {
+        trailingFlushTimer = null;
+        flushLatestProcessStream();
+      }, Math.max(50, delayMs));
+    };
     const streamFlushHandler = (data: { id: string; step: string; total?: string; delta?: string }) => {
       if (data.id !== currentProcessId) return;
       const now = Date.now();
@@ -5563,6 +5579,8 @@ try {
         if (content) {
           flushProcessStream(content);
         }
+      } else if (this.currentRunId && content) {
+        scheduleTrailingFlush(2000 - (now - lastFlush));
       }
     };
     processManager.on('stream', streamFlushHandler);
@@ -5848,6 +5866,11 @@ try {
       break;
     }
     } finally {
+      if (trailingFlushTimer) {
+        clearTimeout(trailingFlushTimer);
+        trailingFlushTimer = null;
+      }
+      flushLatestProcessStream();
       clearInterval(idleWatchdog);
       processManager.off('stream', streamFlushHandler);
     }

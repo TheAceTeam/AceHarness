@@ -2388,12 +2388,29 @@ try {
 
     // Set up stream content flushing
     let lastFlush = 0;
-    const streamHandler = (data: { id: string; step: string; total: string }) => {
+    let latestStreamTotal = '';
+    let trailingFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushLatestStreamTotal = () => {
+      if (!this.currentRunId || !latestStreamTotal) return;
+      saveStreamContent(this.currentRunId, step.name, latestStreamTotal).catch(() => {});
+      lastFlush = Date.now();
+    };
+    const scheduleTrailingFlush = (delayMs: number) => {
+      if (trailingFlushTimer) return;
+      trailingFlushTimer = setTimeout(() => {
+        trailingFlushTimer = null;
+        flushLatestStreamTotal();
+      }, Math.max(50, delayMs));
+    };
+    const streamHandler = (data: { id: string; step: string; total?: string }) => {
       if (data.id !== processId) return;
       const now = Date.now();
+      latestStreamTotal = data.total || latestStreamTotal;
       if (this.currentRunId && now - lastFlush > 3000) {
         lastFlush = now;
-        saveStreamContent(this.currentRunId, step.name, data.total).catch(() => {});
+        saveStreamContent(this.currentRunId, step.name, latestStreamTotal).catch(() => {});
+      } else if (this.currentRunId && latestStreamTotal) {
+        scheduleTrailingFlush(3000 - (now - lastFlush));
       }
     };
     processManager.on('stream', streamHandler);
@@ -2427,6 +2444,11 @@ try {
         result: this.selectPreferredAgentOutput(result.result, proc?.streamContent),
       };
     } finally {
+      if (trailingFlushTimer) {
+        clearTimeout(trailingFlushTimer);
+        trailingFlushTimer = null;
+      }
+      flushLatestStreamTotal();
       processManager.off('stream', streamHandler);
     }
   }
@@ -2483,6 +2505,7 @@ try {
     let currentProcessStreamLength = 0;
     let lastStreamAt = Date.now();
     let watchdogTriggeredForProcess = '';
+    let trailingFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const appendStreamPreview = (text: string) => {
       if (!text) return;
       streamHasMeaningfulOutput = streamHasMeaningfulOutput || hasMeaningfulAiOutput(text);
@@ -2500,6 +2523,21 @@ try {
       if (!this.currentRunId) return;
       appendFeedbackToStream(this.currentRunId, step.name, feedbackPrompt).catch(() => {});
     };
+    const flushLatestProcessStream = () => {
+      if (!this.currentRunId) return;
+      const proc = processManager.getProcess(activeProcessId);
+      const content = proc?.streamContent || '';
+      if (!content) return;
+      flushProcessStream(content);
+      lastFlush = Date.now();
+    };
+    const scheduleTrailingFlush = (delayMs: number) => {
+      if (trailingFlushTimer) return;
+      trailingFlushTimer = setTimeout(() => {
+        trailingFlushTimer = null;
+        flushLatestProcessStream();
+      }, Math.max(50, delayMs));
+    };
     const streamHandler = (data: { id: string; step: string; total?: string; delta?: string }) => {
       if (data.id !== activeProcessId) return;
       const now = Date.now();
@@ -2514,6 +2552,8 @@ try {
       if (this.currentRunId && now - lastFlush > 3000) {
         lastFlush = now;
         flushProcessStream(content);
+      } else if (this.currentRunId && content) {
+        scheduleTrailingFlush(3000 - (now - lastFlush));
       }
     };
     processManager.on('stream', streamHandler);
@@ -2655,6 +2695,11 @@ try {
         result: this.selectPreferredAgentOutput(accumulatedOutput, accumulatedStreamPreview),
       };
     } finally {
+      if (trailingFlushTimer) {
+        clearTimeout(trailingFlushTimer);
+        trailingFlushTimer = null;
+      }
+      flushLatestProcessStream();
       clearInterval(idleWatchdog);
       processManager.off('stream', streamHandler);
     }
