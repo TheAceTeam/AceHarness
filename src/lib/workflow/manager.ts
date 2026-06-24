@@ -2500,15 +2500,20 @@ try {
       if (!this.currentRunId) return;
       appendFeedbackToStream(this.currentRunId, step.name, feedbackPrompt).catch(() => {});
     };
-    const streamHandler = (data: { id: string; step: string; total: string }) => {
+    const streamHandler = (data: { id: string; step: string; total?: string; delta?: string }) => {
       if (data.id !== activeProcessId) return;
       const now = Date.now();
-      lastStreamAt = now;
-      watchdogTriggeredForProcess = '';
+      const proc = processManager.getProcess(activeProcessId);
+      const content = proc?.streamContent || data.total || '';
+      const hasVisibleOutputChange = Boolean(data.delta) || content.length > currentProcessStreamLength;
+      if (hasVisibleOutputChange) {
+        lastStreamAt = now;
+        watchdogTriggeredForProcess = '';
+      }
       // Flush to disk every 3 seconds
       if (this.currentRunId && now - lastFlush > 3000) {
         lastFlush = now;
-        flushProcessStream(data.total);
+        flushProcessStream(content);
       }
     };
     processManager.on('stream', streamHandler);

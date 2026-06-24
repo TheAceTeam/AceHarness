@@ -135,6 +135,9 @@ export type OpenCodeHttpClient = {
       body: Record<string, never>;
       query?: { directory?: string };
     }): Promise<{ data?: OpenCodeSessionCreateResponse; error?: unknown }>;
+    status?(options?: {
+      query?: { directory?: string };
+    }): Promise<{ data?: Record<string, { type?: string }>; error?: unknown }>;
     prompt(options: {
       path: { id: string };
       body: OpenCodePromptBody;
@@ -887,6 +890,23 @@ async function sendPromptStreaming(options: {
       onMessages: updateLatestAssistantTextSnapshot,
       ignorePartIds: existingAssistantPartIds,
     });
+    const sessionStatusPoller = pollSessionStatusWhileRunning({
+      client: options.client,
+      sessionId: options.sessionId,
+      query: options.query,
+      signal: abortController.signal,
+      shouldStop: () => idle || streamEnded || Boolean(streamError),
+      onIdle: () => {
+        finalizeUnknownPartTypes();
+        options.log?.({
+          message: 'OpenCode session status poll idle',
+          detail: options.sessionId,
+          verbose: true,
+        });
+        idle = true;
+        abortController.abort();
+      },
+    });
 
     while (!idle && !streamEnded && !streamError && !abortController.signal.aborted) {
       await sleep(50);
@@ -901,6 +921,7 @@ async function sendPromptStreaming(options: {
     if (!idle && !promptAccepted) throw new Error(`[${options.engineName}] prompt was not accepted`);
     await streamDone.done;
     await structuredPartPoller;
+    await sessionStatusPoller;
     await syncLatestAssistantParts();
     finalizeUnknownPartTypes();
     const hydratedOutput = (await hydrateOutputFromSessionMessages(options.client, options.sessionId, options.query))
@@ -1531,6 +1552,37 @@ async function pollSessionMessagesWhileRunning(options: {
 
     if (options.signal.aborted || options.shouldStop()) return;
     await sleep(400);
+  }
+}
+
+async function pollSessionStatusWhileRunning(options: {
+  client: OpenCodeHttpClient;
+  sessionId: string;
+  query?: { directory?: string };
+  signal: AbortSignal;
+  shouldStop: () => boolean;
+  onIdle: () => void;
+}): Promise<void> {
+  if (typeof options.client.session.status !== 'function') return;
+
+  while (!options.signal.aborted && !options.shouldStop()) {
+    try {
+      const result = await options.client.session.status({
+        query: options.query,
+      });
+      if (!result.error && result.data && typeof result.data === 'object') {
+        const status = result.data[options.sessionId];
+        if (status?.type === 'idle') {
+          options.onIdle();
+          return;
+        }
+      }
+    } catch {
+      // ignore transient status failures; SSE and message polling remain primary
+    }
+
+    if (options.signal.aborted || options.shouldStop()) return;
+    await sleep(1_000);
   }
 }
 

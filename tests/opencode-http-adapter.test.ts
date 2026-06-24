@@ -221,4 +221,65 @@ describe('sendPromptWithOpenCodeHttp regressions', () => {
     expect(logs.some((entry) => entry.message === 'Raw SSE error')).toBe(false);
     expect(logs.some((entry) => entry.message === 'Streaming prompt recovered from stream error via hydrated output')).toBe(false);
   });
+
+  test('completes from session status polling when OpenCode SSE misses idle with stale pending parts', async () => {
+    const emitted: EngineStreamEvent[] = [];
+    const messagesMock = vi.fn(async () => ({
+      data: [
+        {
+          info: { role: 'assistant' },
+          parts: [
+            {
+              id: 'answer-1',
+              type: 'text',
+              text: 'done from status poll',
+            },
+            {
+              id: 'tool-1',
+              type: 'tool',
+              state: {
+                status: 'running',
+                input: { command: 'echo done' },
+              },
+            },
+          ],
+        },
+      ],
+    }));
+
+    const subscribeMock = vi.fn(async ({ signal }: { signal?: AbortSignal }) => ({
+      stream: {
+        async *[Symbol.asyncIterator]() {
+          while (!signal?.aborted) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+        },
+      },
+    }));
+
+    await expect(sendPromptWithOpenCodeHttp({
+      engineName: 'opencode-http',
+      client: {
+        event: {
+          subscribe: subscribeMock,
+        },
+        session: {
+          create: vi.fn(),
+          prompt: vi.fn(async () => ({ data: { parts: [] } })),
+          promptAsync: vi.fn(async () => ({ data: {} })),
+          status: vi.fn(async () => ({ data: { 'session-1': { type: 'idle' } } })),
+          messages: messagesMock,
+        },
+      } as any,
+      sessionId: 'session-1',
+      fullPrompt: 'finish',
+      emit: (event) => emitted.push(event),
+    })).resolves.toBe('done from status poll');
+
+    const textEvents = emitted
+      .filter((event) => event.type === 'text')
+      .map((event) => event.content)
+      .join('');
+    expect(textEvents).toContain('done from status poll');
+  });
 });

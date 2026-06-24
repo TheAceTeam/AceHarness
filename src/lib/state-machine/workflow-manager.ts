@@ -5548,15 +5548,18 @@ try {
     let lastFlush = 0;
     let lastStreamAt = Date.now();
     let watchdogTriggeredForProcess = '';
-    const streamFlushHandler = (data: { id: string; step: string; total: string }) => {
+    const streamFlushHandler = (data: { id: string; step: string; total?: string; delta?: string }) => {
       if (data.id !== currentProcessId) return;
       const now = Date.now();
-      lastStreamAt = now;
-      watchdogTriggeredForProcess = '';
+      const proc = processManager.getProcess(currentProcessId);
+      const content = proc?.streamContent || data.total || '';
+      const hasVisibleOutputChange = Boolean(data.delta) || content.length > currentProcessStreamLength;
+      if (hasVisibleOutputChange) {
+        lastStreamAt = now;
+        watchdogTriggeredForProcess = '';
+      }
       if (this.currentRunId && now - lastFlush > 2000) {
         lastFlush = now;
-        const proc = processManager.getProcess(currentProcessId);
-        const content = proc?.streamContent || data.total;
         if (content) {
           flushProcessStream(content);
         }
