@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { loadRunState } from '@/lib/run/state-persistence';
+import { listChatSessions } from '@/lib/chat/persistence';
 import { loadWorkflowFinalReview } from '@/lib/workflow/experience-store';
 import { getWorkflowEventStore } from '@/lib/workflow/event-store';
 
@@ -123,6 +124,27 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+async function resolveWorkflowFrontendSessionId(runId: string, candidate?: unknown): Promise<string | null> {
+  const sessions = await listChatSessions().catch(() => []);
+  const persisted = nonEmptyString(candidate);
+  if (persisted && sessions.some((session) => session.id === persisted)) {
+    return persisted;
+  }
+
+  const matched = sessions.find((session) => session.workflowBinding?.runId === runId);
+  return matched?.id || persisted || null;
+}
+
+async function withResolvedWorkflowFrontendSessionId(runId: string, detail: any) {
+  if (!isRecord(detail)) return detail;
+  const workflowFrontendSessionId = await resolveWorkflowFrontendSessionId(runId, detail.workflowFrontendSessionId);
+  if (workflowFrontendSessionId === detail.workflowFrontendSessionId) return detail;
+  return {
+    ...detail,
+    workflowFrontendSessionId,
+  };
+}
+
 function hasAgentSessionIds(agents: unknown): boolean {
   return Array.isArray(agents) && agents.some((agent) => nonEmptyString(agent?.sessionId));
 }
@@ -240,6 +262,7 @@ export async function GET(
             detail = mergeSnapshotWithRunState(detail, state, finalReview);
           }
         }
+        detail = await withResolvedWorkflowFrontendSessionId(id, detail);
         return NextResponse.json({
           ...detail,
           finalReview,
@@ -257,10 +280,10 @@ export async function GET(
       return NextResponse.json({ error: '运行详情不存在' }, { status: 404 });
     }
     if (!full) {
-      return NextResponse.json(compactRunDetail(state, finalReview));
+      return NextResponse.json(await withResolvedWorkflowFrontendSessionId(id, compactRunDetail(state, finalReview)));
     }
     return NextResponse.json({
-      ...state,
+      ...(await withResolvedWorkflowFrontendSessionId(id, state)),
       finalReview,
       __compact: false,
     });

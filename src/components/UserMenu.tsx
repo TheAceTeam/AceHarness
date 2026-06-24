@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { Badge } from '@/components/ui/badge';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -23,6 +24,7 @@ interface UserMenuProps {
 
 export default function UserMenu({ user }: UserMenuProps) {
   const router = useRouter();
+  const dockWorkspace = useDashboardDockWorkspace();
   const [pendingUserCount, setPendingUserCount] = useState(0);
 
   useEffect(() => {
@@ -79,6 +81,33 @@ export default function UserMenu({ user }: UserMenuProps) {
 
   const initials = user.username?.charAt(0)?.toUpperCase() || '?';
   const hasPendingUsers = user.role === 'admin' && pendingUserCount > 0;
+  const pushDashboardRoute = (route: string) => {
+    const params = new URLSearchParams();
+    params.set('route', route);
+    router.push(`/dashboard?${params.toString()}`);
+  };
+  const openNotebook = () => {
+    const search = 'notebook=1&notebookScope=personal';
+    if (dockWorkspace) {
+      dockWorkspace.openTab({
+        id: 'notebook:personal:root',
+        title: 'Cangjie Notebook',
+        kind: 'notebook',
+        search,
+      });
+      pushDashboardRoute(`/notebook?${search}`);
+      return;
+    }
+    router.push('/account?notebook=1&notebookScope=personal');
+  };
+  const openAccount = () => {
+    if (dockWorkspace) {
+      dockWorkspace.openTab({ id: 'account', title: '账户设置', kind: 'account' });
+      pushDashboardRoute('/account');
+      return;
+    }
+    router.push('/account');
+  };
 
   return (
     <DropdownMenu modal={false}>
@@ -107,11 +136,11 @@ export default function UserMenu({ user }: UserMenuProps) {
           <p className="text-xs text-muted-foreground">{user.email}</p>
         </div>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => router.push('/account?notebook=1&notebookScope=personal')}>
+        <DropdownMenuItem onClick={openNotebook}>
           <span className="material-symbols-outlined text-sm mr-2">book_2</span>
           Cangjie Notebook
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => router.push('/account')}>
+        <DropdownMenuItem onClick={openAccount}>
           <span className="material-symbols-outlined text-sm mr-2">person</span>
           账户设置
         </DropdownMenuItem>

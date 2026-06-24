@@ -22,10 +22,12 @@ async function loadWorkspaceStore(input: { aceHome: string; skillsDir?: string; 
   vi.resetModules();
   vi.doMock('@/lib/run/runtime-skills', () => ({
     getRuntimeSkillsDirPath: vi.fn().mockResolvedValue(input.skillsDir || path.join(input.aceHome, 'skills')),
+    syncInstalledSkillsToRuntime: vi.fn().mockResolvedValue({ synced: [], missing: [] }),
   }));
 
   if (input.linkThrows) {
     vi.doMock('@/lib/core/directory-links', () => ({
+      isLinkedDirectoryTarget: vi.fn(() => false),
       ensureDirectoryLinkSync: vi.fn(() => {
         throw new Error('link unavailable');
       }),
@@ -137,6 +139,48 @@ describe('agora workspace store', () => {
 
       const result = await store.ensureAgoraWorkspace({ sessionId: 'skills-copy' });
 
+      expect(existsSync(path.join(result.workspacePath, 'skills'))).toBe(false);
+      expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
+    });
+  });
+
+  test('repairs stale workspace skill directories under .agents', async () => {
+    await withStore(async ({ skillsDir, store }) => {
+      await mkdir(path.join(skillsDir, 'demo-skill'), { recursive: true });
+      await writeFile(path.join(skillsDir, 'demo-skill', 'SKILL.md'), 'demo');
+
+      const result = await store.ensureAgoraWorkspace({ sessionId: 'stale-runtime-skill' });
+      const staleSkillDir = path.join(result.workspacePath, '.agents', 'skills', 'demo-skill');
+      await mkdir(staleSkillDir, { recursive: true });
+
+      await store.ensureAgoraWorkspace({
+        sessionId: 'stale-runtime-skill',
+        skills: {
+          'demo-skill': true,
+        },
+      });
+
+      expect(await readFile(path.join(staleSkillDir, 'SKILL.md'), 'utf-8')).toBe('demo');
+      expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
+    });
+  });
+
+  test('copies enabled workspace skills under .agents when linking fails', async () => {
+    await withTempDir('aceharness-agora-store-', async (base) => {
+      const aceHome = path.join(base, 'home');
+      const skillsDir = path.join(base, 'runtime-skills');
+      await mkdir(path.join(skillsDir, 'fallback-skill'), { recursive: true });
+      await writeFile(path.join(skillsDir, 'fallback-skill', 'SKILL.md'), 'fallback');
+      const store = await loadWorkspaceStore({ aceHome, skillsDir, linkThrows: true });
+
+      const result = await store.ensureAgoraWorkspace({
+        sessionId: 'agent-skills-copy',
+        skills: {
+          'fallback-skill': true,
+        },
+      });
+
+      expect(await readFile(path.join(result.workspacePath, '.agents', 'skills', 'fallback-skill', 'SKILL.md'), 'utf-8')).toBe('fallback');
       expect(existsSync(path.join(result.workspacePath, 'skills'))).toBe(false);
       expect(await git(result.workspacePath, ['status', '--porcelain'])).toBe('');
     });

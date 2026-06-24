@@ -12,6 +12,7 @@ import {
   getCollapsibleActions,
   getActionsGrouped,
   getIntent,
+  applySidebarPluginPreferences,
   registerPlugin,
   unregisterPlugin,
 } from '@/lib/sidebar-plugins';
@@ -30,9 +31,24 @@ describe('sidebar plugin system', () => {
       const plugins = getAllPlugins();
       expect(plugins.length).toBeGreaterThanOrEqual(3);
       expect(plugins.find((p) => p.id === 'werewolf-lab')).toBeFalsy();
+      expect(plugins.find((p) => p.id === 'codespec')).toBeFalsy();
       expect(plugins.find((p) => p.id === 'create-workflow')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'create-agent')).toBeTruthy();
       expect(plugins.find((p) => p.id === 'supervisor')).toBeTruthy();
+    });
+
+    test('codespec plugin is disabled by default and exposes init action when enabled', () => {
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
+
+      const allPlugins = getAllPlugins({ includeDisabled: true });
+      expect(allPlugins.find((p) => p.id === 'codespec')?.enabled).toBe(false);
+      expect(getActions().find((a) => a.id === 'codespec-init')).toBeFalsy();
+
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
+      expect(getAllPlugins().find((p) => p.id === 'codespec')).toBeTruthy();
+      expect(getActions().find((a) => a.id === 'codespec-init')?.prompt).toBe('__HOME_ACTION__:codespec:init');
+
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
     });
 
     test('getCategories returns deduplicated sorted categories', () => {

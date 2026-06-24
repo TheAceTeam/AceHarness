@@ -157,6 +157,10 @@ const EMBEDDED_DASHBOARD_ROUTE_BASES = new Set([
   '/schedules',
   '/run-history',
   '/knowledge',
+  '/knowledge/library',
+  '/notebook',
+  '/account',
+  '/account/system-settings',
   '/api-docs',
 ]);
 
@@ -293,6 +297,64 @@ export default function DashboardPage() {
     setMainSidebarOpen(open);
   }, []);
 
+  const buildDockTabForRoute = useCallback((route: string): DashboardDockTab | null => {
+    const normalizedRoute = normalizeEmbeddedRoute(route);
+    if (!normalizedRoute) return null;
+    const basePath = getEmbeddedRouteBasePath(normalizedRoute);
+    const [path, queryString = ''] = normalizedRoute.split('?');
+
+    if (basePath.startsWith('/workbench/')) {
+      const config = decodeURIComponent(path.replace('/workbench/', ''));
+      const params = new URLSearchParams(queryString);
+      return {
+        id: `workbench:${config}:${params.get('mode') || 'run'}:${params.get('runId') || params.get('run') || ''}`,
+        title: config,
+        kind: 'workbench',
+        config,
+        mode: params.get('mode') || 'run',
+        runId: params.get('runId') || params.get('run'),
+      };
+    }
+
+    if (basePath === '/notebook') {
+      const params = new URLSearchParams(queryString);
+      const scope = params.get('notebookScope') === 'personal' ? 'personal' : 'global';
+      const file = params.get('notebookFile') || params.get('notebookShare') || 'root';
+      return {
+        id: `notebook:${scope}:${file}`,
+        title: scope === 'global' ? '全局 Notebook' : 'Cangjie Notebook',
+        kind: 'notebook',
+        search: queryString,
+      };
+    }
+
+    if (basePath === '/account/system-settings') {
+      return { id: 'settings', title: '系统设置', kind: 'settings' };
+    }
+
+    if (basePath === '/account') {
+      return {
+        id: 'account',
+        title: '账户设置',
+        kind: 'account',
+        search: queryString,
+      };
+    }
+
+    const routeTabMap: Record<string, DashboardDockTab> = {
+      '/workflows': { id: 'workflows', title: t('dashboard.quickActions.workflows'), kind: 'workflows' },
+      '/models': { id: 'models', title: t('dashboard.quickActions.models'), kind: 'models' },
+      '/engines': { id: 'engines', title: t('dashboard.quickActions.engines'), kind: 'engines' },
+      '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
+      '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
+      '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
+      '/knowledge/library': { id: 'knowledge-library', title: '知识库', kind: 'knowledge-library' },
+      '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
+      '/office': { id: 'office', title: '一人公司', kind: 'office' },
+    };
+    return routeTabMap[basePath] || null;
+  }, [t]);
+
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
     const nextTab = tab || { id: 'chat', title: '对话', kind: 'chat' };
     setActiveDockTab(nextTab);
@@ -307,40 +369,15 @@ export default function DashboardPage() {
     const normalizedRoute = normalizeEmbeddedRoute(route);
     if (!normalizedRoute) return;
 
-    const routeTabMap: Record<string, DashboardDockTab> = {
-      '/workflows': { id: 'workflows', title: t('dashboard.quickActions.workflows'), kind: 'workflows' },
-      '/models': { id: 'models', title: t('dashboard.quickActions.models'), kind: 'models' },
-      '/engines': { id: 'engines', title: t('dashboard.quickActions.engines'), kind: 'engines' },
-      '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
-      '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
-      '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
-      '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
-      '/office': { id: 'office', title: '一人公司', kind: 'office' },
-    };
-    const basePath = getEmbeddedRouteBasePath(normalizedRoute);
-    if (basePath.startsWith('/workbench/')) {
-      const [path, queryString = ''] = normalizedRoute.split('?');
-      const config = decodeURIComponent(path.replace('/workbench/', ''));
-      const params = new URLSearchParams(queryString);
-      workspaceRef.current?.openTab({
-        id: `workbench:${config}:${params.get('mode') || 'run'}:${params.get('runId') || params.get('run') || ''}`,
-        title: config,
-        kind: 'workbench',
-        config,
-        mode: params.get('mode') || 'run',
-        runId: params.get('runId') || params.get('run'),
-      });
-    } else {
-      const tab = routeTabMap[basePath];
-      if (tab) workspaceRef.current?.openTab(tab);
-    }
+    const tab = buildDockTabForRoute(normalizedRoute);
+    if (tab) workspaceRef.current?.openTab(tab);
 
     const params = new URLSearchParams(searchParams.toString());
     params.delete('panel');
     params.set('route', normalizedRoute);
     params.delete('reload');
     router.push(buildShellUrl(params));
-  }, [buildShellUrl, router, searchParams, t]);
+  }, [buildDockTabForRoute, buildShellUrl, router, searchParams]);
 
   const startTabDrag = useCallback((event: DragEvent<HTMLElement>, tab: DashboardDragTab) => {
     suppressSidebarClickRef.current = true;
@@ -364,33 +401,8 @@ export default function DashboardPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (activeEmbeddedRoute) {
-        const basePath = getEmbeddedRouteBasePath(activeEmbeddedRoute);
-        if (basePath.startsWith('/workbench/')) {
-          const [path, queryString = ''] = activeEmbeddedRoute.split('?');
-          const config = decodeURIComponent(path.replace('/workbench/', ''));
-          const params = new URLSearchParams(queryString);
-          workspaceRef.current?.openTab({
-            id: `workbench:${config}:${params.get('mode') || 'run'}:${params.get('runId') || params.get('run') || ''}`,
-            title: config,
-            kind: 'workbench',
-            config,
-            mode: params.get('mode') || 'run',
-            runId: params.get('runId') || params.get('run'),
-          });
-        } else {
-          const routeTabMap: Record<string, DashboardDockTab> = {
-            '/workflows': { id: 'workflows', title: t('dashboard.quickActions.workflows'), kind: 'workflows' },
-            '/models': { id: 'models', title: t('dashboard.quickActions.models'), kind: 'models' },
-            '/engines': { id: 'engines', title: t('dashboard.quickActions.engines'), kind: 'engines' },
-            '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
-            '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
-            '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
-            '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
-            '/office': { id: 'office', title: '一人公司', kind: 'office' },
-          };
-          const tab = routeTabMap[basePath];
-          if (tab) workspaceRef.current?.openTab(tab);
-        }
+        const tab = buildDockTabForRoute(activeEmbeddedRoute);
+        if (tab) workspaceRef.current?.openTab(tab);
       } else {
         const tabMap: Record<DashboardPanel, DashboardDockTab> = {
           chat: { id: 'chat', title: '对话', kind: 'chat' },
@@ -403,7 +415,7 @@ export default function DashboardPage() {
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [activeEmbeddedRoute, activePanel, t]);
+  }, [activeEmbeddedRoute, activePanel, buildDockTabForRoute, t]);
 
   useEffect(() => {
     try {
@@ -1114,6 +1126,7 @@ export default function DashboardPage() {
                     '/schedules': { id: 'schedules', title: t('dashboard.quickActions.schedules'), kind: 'schedules' },
                     '/run-history': { id: 'run-history', title: '运行记录', kind: 'run-history' },
                     '/knowledge': { id: 'knowledge', title: t('dashboard.quickActions.knowledge'), kind: 'knowledge' },
+                    '/knowledge/library': { id: 'knowledge-library', title: '知识库', kind: 'knowledge-library' },
                     '/api-docs': { id: 'api-docs', title: t('dashboard.quickActions.apiDocs'), kind: 'api-docs' },
                     '/office': { id: 'office', title: '一人公司', kind: 'office' },
                   };

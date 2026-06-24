@@ -1,12 +1,12 @@
-import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { cp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
-import { ensureDirectoryLinkSync } from '@/lib/core/directory-links';
+import { ensureDirectoryLinkSync, isLinkedDirectoryTarget } from '@/lib/core/directory-links';
 import { SHARED_AGENT_CONFIG_DIR } from '@/lib/engines/engine-config';
-import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
+import { getRuntimeSkillsDirPath, syncInstalledSkillsToRuntime } from '@/lib/run/runtime-skills';
 
 const execFileAsync = promisify(execFile);
 const inflightWorkspaceInitializations = new Map<string, Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }>>();
@@ -127,6 +127,35 @@ function enabledNamesFromInput(input: string[] | Record<string, boolean> | undef
     .sort();
 }
 
+function isSafeRuntimeEntryName(name: string) {
+  return Boolean(name) && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..';
+}
+
+function hasSkillManifest(dir: string) {
+  return existsSync(path.join(dir, 'SKILL.md'));
+}
+
+async function ensureWorkspaceSkillEntry(source: string, target: string) {
+  if (!existsSync(source) || !hasSkillManifest(source)) return false;
+
+  if (existsSync(target)) {
+    if (isLinkedDirectoryTarget(target, source) || hasSkillManifest(target)) return true;
+    await rm(target, { recursive: true, force: true });
+  }
+
+  try {
+    ensureDirectoryLinkSync(source, target);
+  } catch (error) {
+    console.warn(`[Agora] Failed to link workspace skill ${path.basename(source)}; copying instead:`, error);
+  }
+
+  if (hasSkillManifest(target)) return true;
+
+  await rm(target, { recursive: true, force: true }).catch(() => {});
+  await cp(source, target, { recursive: true, force: false });
+  return hasSkillManifest(target);
+}
+
 async function ensureWorkspaceAgentConfig(
   dir: string,
   input: {
@@ -150,18 +179,23 @@ async function ensureWorkspaceAgentConfig(
   );
 
   if (!enabledSkills.length) return;
+  await syncInstalledSkillsToRuntime(enabledSkills).catch((error) => {
+    console.warn('[Agora] Failed to sync enabled skills into runtime:', error);
+  });
   const skillsDir = await getRuntimeSkillsDirPath();
   if (!existsSync(skillsDir)) return;
   const workspaceSkillsDir = path.join(configDir, 'skills');
   await mkdir(workspaceSkillsDir, { recursive: true });
   for (const skillName of enabledSkills) {
+    if (!isSafeRuntimeEntryName(skillName)) continue;
     const source = path.join(skillsDir, skillName);
-    const target = path.join(workspaceSkillsDir, skillName);
-    if (!existsSync(source) || existsSync(target)) continue;
+    const target = path.resolve(workspaceSkillsDir, skillName);
+    const resolvedSkillsDir = path.resolve(workspaceSkillsDir);
+    if (!target.startsWith(`${resolvedSkillsDir}${path.sep}`)) continue;
     try {
-      ensureDirectoryLinkSync(source, target);
+      await ensureWorkspaceSkillEntry(source, target);
     } catch (error) {
-      console.warn(`[Agora] Failed to link workspace skill ${skillName}:`, error);
+      console.warn(`[Agora] Failed to prepare workspace skill ${skillName}:`, error);
     }
   }
 }
@@ -169,17 +203,21 @@ async function ensureWorkspaceAgentConfig(
 export async function ensureAgoraWorkspace(input: {
   sessionId: string;
   sourceWorkspace?: string;
+  targetWorkspace?: string;
   title?: string;
   skills?: string[] | Record<string, boolean>;
   mcpServers?: string[] | Record<string, boolean>;
+  purpose?: 'agora' | 'chat';
 }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
   const sessionId = sanitizeSegment(input.sessionId, `session-${Date.now().toString(36)}`);
-  const existingInitialization = inflightWorkspaceInitializations.get(sessionId);
+  const targetWorkspace = String(input.targetWorkspace || '').trim();
+  const initializationKey = targetWorkspace ? `target:${path.resolve(targetWorkspace)}` : `session:${sessionId}`;
+  const existingInitialization = inflightWorkspaceInitializations.get(initializationKey);
   if (existingInitialization) return existingInitialization;
 
   const initialization = (async () => {
     const workspaceRoot = getAgoraWorkspacesDir();
-    const dir = path.join(workspaceRoot, sessionId);
+    const dir = targetWorkspace ? path.resolve(targetWorkspace) : path.join(workspaceRoot, sessionId);
     if (existsSync(dir)) {
       await ensureWorkspaceGitIgnore(dir).catch(() => {});
       await ensureGitBaseline(dir);
@@ -188,15 +226,20 @@ export async function ensureAgoraWorkspace(input: {
       return { workspacePath: dir, created: false, sourceWorkspace: input.sourceWorkspace };
     }
 
-    await mkdir(workspaceRoot, { recursive: true });
+    if (!targetWorkspace) {
+      await mkdir(workspaceRoot, { recursive: true });
+    }
     await mkdir(dir, { recursive: true });
 
+    const purpose = input.purpose === 'chat' ? 'chat' : 'agora';
     await writeFile(
       path.join(dir, 'README.md'),
       [
-        `# ${input.title?.trim() || '新议题'}`,
+        `# ${input.title?.trim() || (purpose === 'chat' ? '新对话工作区' : '新议题')}`,
         '',
-        '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
+        purpose === 'chat'
+          ? '这是对话会话的工作区。对话引擎会以这里作为默认上下文目录，变更视图会展示相对初始基线的文件变化。'
+          : '这是议场的临时工作区。议场嘉宾会在这里协作，变更 tab 会展示相对初始基线的文件变化。',
         '',
       ].join('\n'),
       'utf-8',
@@ -207,12 +250,12 @@ export async function ensureAgoraWorkspace(input: {
     await ensureWorkspaceSkillsLink(dir).catch(() => {});
     return { workspacePath: dir, created: true, sourceWorkspace: input.sourceWorkspace };
   })().finally(() => {
-    if (inflightWorkspaceInitializations.get(sessionId) === initialization) {
-      inflightWorkspaceInitializations.delete(sessionId);
+    if (inflightWorkspaceInitializations.get(initializationKey) === initialization) {
+      inflightWorkspaceInitializations.delete(initializationKey);
     }
   });
 
-  inflightWorkspaceInitializations.set(sessionId, initialization);
+  inflightWorkspaceInitializations.set(initializationKey, initialization);
   return initialization;
 }
 

@@ -11,9 +11,11 @@ export async function POST(request: NextRequest) {
     const result = await ensureAgoraWorkspace({
       sessionId,
       sourceWorkspace: typeof body?.sourceWorkspace === 'string' ? body.sourceWorkspace : undefined,
+      targetWorkspace: typeof body?.targetWorkspace === 'string' ? body.targetWorkspace : undefined,
       title: typeof body?.title === 'string' ? body.title : undefined,
       skills: Array.isArray(body?.skills) || (body?.skills && typeof body.skills === 'object') ? body.skills : undefined,
       mcpServers: Array.isArray(body?.mcpServers) || (body?.mcpServers && typeof body.mcpServers === 'object') ? body.mcpServers : undefined,
+      purpose: body?.purpose === 'chat' ? 'chat' : 'agora',
     });
     return NextResponse.json(result);
   } catch (error: any) {

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import dynamic from 'next/dynamic';
+import { FolderOpen, GitBranch, MessageSquareText, Settings2 } from 'lucide-react';
 import { useChat } from '@/contexts/ChatContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,8 +17,10 @@ import {
 } from '@/components/ai-elements/prompt-input';
 import { EngineModelSelect } from '@/components/EngineModelSelect';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { Dialog, DialogClose, DialogContent, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
-import { workspaceApi, type AgoraGuestConfig, type AgoraGuestPreset, type NotebookScope } from '@/lib/core/api';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogFooter, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
+import { agoraApi, workspaceApi, type AgoraGuestConfig, type AgoraGuestPreset, type NotebookScope } from '@/lib/core/api';
 import NotebookSaveDialog from '@/components/notebook/NotebookSaveDialog';
 import { buildNotebookFromConversation, buildNotebookFromAssistantMessage, createDefaultNotebookFileName } from '@/lib/chat/notebook';
 import { useToast } from '@/components/ui/toast';
@@ -82,6 +85,10 @@ type HomepageSlashCommand = {
 
 const WorkspaceEditor = dynamic(() => import('@/components/workspace/WorkspaceEditor').then(m => m.WorkspaceEditor), {
   ssr: false,
+});
+const GitWorkspaceDiffPanel = dynamic(() => import('@/components/workflow/GitWorkspaceDiffPanel').then(m => m.GitWorkspaceDiffPanel), {
+  ssr: false,
+  loading: () => <div className="flex h-full items-center justify-center text-sm text-muted-foreground">正在加载 Git 变更...</div>,
 });
 const AgoraShell = dynamic(() => import('@/components/collaboration/AgoraShell').then(m => m.AgoraShell), {
   ssr: false,
@@ -505,6 +512,8 @@ export function ChatPageContent({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const dashboardRouteParam = searchParams.get('route');
+  const shouldHandleChatSearchParams = !embedded || !dashboardRouteParam;
   useSidebarPluginPreferences();
   const {
     activeSessionId, activeSession, sessions, createSession, setActiveSessionId, sendMessage, compactActiveSession, stopStreaming,
@@ -512,7 +521,7 @@ export function ChatPageContent({
     loading, sessionLoadingId, streamingMessageId, setStreamingMessageId, markSessionStreaming, unmarkSessionStreaming,
     model, setModel, engine, effectiveEngine, isModelSelectionReady, setEngine,
     confirmAction, rejectAction, undoActionById, retryAction, reloadActionResult,
-    skillSettings, setSessionWorkbenchState,
+    skillSettings, mcpSettings, setSessionWorkbenchState,
     appendSessionMessage,
     updateSessionMessage,
     workingDirectory,
@@ -545,6 +554,9 @@ export function ChatPageContent({
   const [workspaceEditorLineNumber, setWorkspaceEditorLineNumber] = useState<number | null>(null);
   const [workspaceEditorColumn, setWorkspaceEditorColumn] = useState<number | null>(null);
   const [workspaceEditorTitle, setWorkspaceEditorTitle] = useState<string | undefined>();
+  const [chatWorkspaceActiveTab, setChatWorkspaceActiveTab] = useState('chat');
+  const [chatWorkspaceDialogOpen, setChatWorkspaceDialogOpen] = useState(false);
+  const [chatWorkspaceDraft, setChatWorkspaceDraft] = useState('');
   const [wechatBindDialogOpen, setWeChatBindDialogOpen] = useState(false);
   const [sessionDirectoryView, setSessionDirectoryView] = useState<SessionDirectoryView>(() => (
     readStoredSessionDirectoryView() || readStoredSessionDirectoryOrder()[0] || 'conversation'
@@ -926,6 +938,7 @@ export function ChatPageContent({
   }, [editContent, editDialogOpen, editingMessageId]);
 
   useEffect(() => {
+    if (!shouldHandleChatSearchParams) return;
     if (homeEntryResetHandledRef.current) return;
     homeEntryResetHandledRef.current = true;
 
@@ -938,9 +951,10 @@ export function ChatPageContent({
     if (hasExplicitSessionTarget) return;
 
     setActiveSessionId(null);
-  }, [searchParams, setActiveSessionId]);
+  }, [searchParams, setActiveSessionId, shouldHandleChatSearchParams]);
 
   useEffect(() => {
+    if (!shouldHandleChatSearchParams) return;
     const targetSessionId = searchParams.get('sessionId');
     if (!targetSessionId || starterHandledRef.current) return;
 
@@ -961,9 +975,10 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [pathname, router, searchParams, sessions, setActiveSessionId]);
+  }, [pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
   useEffect(() => {
+    if (!shouldHandleChatSearchParams) return;
     const starterAgent = searchParams.get('agentName');
     if (!starterAgent || starterHandledRef.current) return;
 
@@ -993,9 +1008,10 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, pathname, router, searchParams]);
+  }, [createSession, pathname, router, searchParams, shouldHandleChatSearchParams]);
 
   useEffect(() => {
+    if (!shouldHandleChatSearchParams) return;
     const starterPrompt = searchParams.get('starterPrompt');
     if (!starterPrompt || starterHandledRef.current) return;
 
@@ -1027,7 +1043,7 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, pathname, router, searchParams, sessions, setActiveSessionId]);
+  }, [createSession, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
   const getInputMarkdown = useCallback(() => {
     return editorRef.current?.getMarkdown().trim() || input.trim();
@@ -1571,6 +1587,7 @@ export function ChatPageContent({
         setHomeSidebarMode,
         unlockAutoScroll,
         toast,
+        workingDirectory,
       });
       if (handled) {
         unlockAutoScroll();
@@ -1600,13 +1617,20 @@ export function ChatPageContent({
   }, [
     activeSession,
     activeSessionId,
+    createSession,
     decodeWorkflowActionFilename,
     handleWorkflowOpenAction,
     handleWorkflowStartAction,
     loading,
     openHomeSidebar,
+    sendMessage,
+    setActiveSessionId,
+    setHomeSidebarMode,
+    setHomeSidebarTab,
     stopStreaming,
+    toast,
     unlockAutoScroll,
+    workingDirectory,
   ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
@@ -1641,6 +1665,7 @@ export function ChatPageContent({
   }, [debugPrompt]);
 
   useEffect(() => {
+    if (!shouldHandleChatSearchParams) return;
     const starterAction = searchParams.get('starterAction');
     if (!starterAction || starterHandledRef.current) return;
 
@@ -1675,7 +1700,7 @@ export function ChatPageContent({
     nextParams.delete('sessionTitle');
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname);
-  }, [createSession, handleQuickAction, pathname, router, searchParams, sessions, setActiveSessionId]);
+  }, [createSession, handleQuickAction, pathname, router, searchParams, sessions, setActiveSessionId, shouldHandleChatSearchParams]);
 
   const messages = activeSession?.messages || [];
   const isCurrentSessionLoading = Boolean(activeSessionId && sessionLoadingId === activeSessionId);
@@ -1878,6 +1903,133 @@ export function ChatPageContent({
 
   const activeAgentBinding = activeSession?.agentBinding;
   const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
+  const sessionChatWorkspace = activeSession?.sessionWorkbenchState?.chatWorkspace;
+  const pinnedChatWorkspacePath = String(sessionChatWorkspace?.workingDirectory || '').trim();
+  const defaultChatWorkspacePath = String(workingDirectory || '').trim();
+  const resolvedChatWorkspacePath = pinnedChatWorkspacePath;
+  const chatWorkspaceShellEnabled = Boolean(activeSessionId || activeSession);
+  const chatWorkspaceTitle = activeSession?.title?.trim() || '新对话';
+  const chatWorkspaceSyncKey = useMemo(() => JSON.stringify({
+    skills: skillSettings,
+    mcpServers: mcpSettings,
+  }), [mcpSettings, skillSettings]);
+  const lastChatWorkspaceEnsureRef = useRef('');
+
+  useEffect(() => {
+    if (!activeSessionId || isBuiltInAgoraMode) return;
+    const ensureKey = JSON.stringify({
+      sessionId: activeSessionId,
+      workspacePath: resolvedChatWorkspacePath,
+      title: chatWorkspaceTitle,
+      runtime: chatWorkspaceSyncKey,
+    });
+    if (lastChatWorkspaceEnsureRef.current === ensureKey) return;
+    lastChatWorkspaceEnsureRef.current = ensureKey;
+
+    let cancelled = false;
+    agoraApi.ensureWorkspace({
+      sessionId: activeSessionId,
+      sourceWorkspace: defaultChatWorkspacePath || undefined,
+      targetWorkspace: pinnedChatWorkspacePath || undefined,
+      title: chatWorkspaceTitle,
+      skills: skillSettings,
+      mcpServers: mcpSettings,
+      purpose: 'chat',
+    })
+      .then((result) => {
+        if (cancelled || !result.workspacePath) return;
+        setSessionWorkbenchState((prev) => {
+          const current = prev?.chatWorkspace || null;
+          if (
+            current?.workingDirectory === result.workspacePath
+            && current.gitBaselineReady
+            && current.sourceWorkspace === (result.sourceWorkspace || defaultChatWorkspacePath || current.sourceWorkspace)
+          ) {
+            return prev || { chatWorkspace: current };
+          }
+          return {
+            ...(prev || {}),
+            chatWorkspace: {
+              ...(current || {}),
+              workingDirectory: result.workspacePath,
+              sourceWorkspace: result.sourceWorkspace || defaultChatWorkspacePath || current?.sourceWorkspace,
+              autoCreated: current?.autoCreated ?? result.created,
+              gitBaselineReady: true,
+              updatedAt: Date.now(),
+            },
+          };
+        });
+      })
+      .catch((error: any) => {
+        if (!cancelled) toast('warning', error?.message || '准备对话工作区失败');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeSessionId,
+    chatWorkspaceSyncKey,
+    chatWorkspaceTitle,
+    defaultChatWorkspacePath,
+    isBuiltInAgoraMode,
+    mcpSettings,
+    resolvedChatWorkspacePath,
+    setSessionWorkbenchState,
+    skillSettings,
+    toast,
+  ]);
+
+  useEffect(() => {
+    if (!chatWorkspaceShellEnabled) {
+      setChatWorkspaceActiveTab('chat');
+      return;
+    }
+    if (chatWorkspaceActiveTab === 'chat') return;
+    if (resolvedChatWorkspacePath) return;
+    setChatWorkspaceActiveTab('chat');
+  }, [chatWorkspaceActiveTab, chatWorkspaceShellEnabled, resolvedChatWorkspacePath]);
+
+  const handleSaveChatWorkspacePath = useCallback(async () => {
+    if (!activeSessionId) return;
+    const nextPath = chatWorkspaceDraft.trim();
+    try {
+      const result = await agoraApi.ensureWorkspace({
+        sessionId: activeSessionId,
+        sourceWorkspace: defaultChatWorkspacePath || undefined,
+        targetWorkspace: nextPath || undefined,
+        title: chatWorkspaceTitle,
+        skills: skillSettings,
+        mcpServers: mcpSettings,
+        purpose: 'chat',
+      });
+      setSessionWorkbenchState((prev) => ({
+        ...(prev || {}),
+        chatWorkspace: {
+          ...(prev?.chatWorkspace || {}),
+          workingDirectory: result.workspacePath,
+          sourceWorkspace: result.sourceWorkspace || defaultChatWorkspacePath || prev?.chatWorkspace?.sourceWorkspace,
+          autoCreated: result.created,
+          gitBaselineReady: true,
+          updatedAt: Date.now(),
+        },
+      }));
+      setChatWorkspaceDialogOpen(false);
+      toast('success', '已切换对话工作区');
+    } catch (error: any) {
+      toast('error', error?.message || '切换对话工作区失败');
+    }
+  }, [activeSessionId, chatWorkspaceDraft, chatWorkspaceTitle, defaultChatWorkspacePath, mcpSettings, setSessionWorkbenchState, skillSettings, toast]);
+
+  const resetChatWorkspacePath = useCallback(() => {
+    setSessionWorkbenchState((prev) => ({
+      ...(prev || {}),
+      chatWorkspace: null,
+    }));
+    setChatWorkspaceDialogOpen(false);
+    setChatWorkspaceDraft('');
+    toast('success', '已恢复会话默认工作区');
+  }, [defaultChatWorkspacePath, setSessionWorkbenchState, toast]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -2156,6 +2308,68 @@ export function ChatPageContent({
               </div>
             </div>
           ) : (
+          <div className="flex h-full min-h-0 flex-col bg-background">
+            {chatWorkspaceShellEnabled ? (
+            <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-background px-5">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="text-xl font-semibold leading-none text-muted-foreground">#</span>
+                <h2 className="min-w-0 truncate text-base font-semibold text-foreground">{chatWorkspaceTitle}</h2>
+                <span className="hidden rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground sm:inline-flex">
+                  {messages.length} 消息
+                </span>
+                {activeAgentBinding ? (
+                  <span className="hidden truncate text-xs text-muted-foreground lg:block">
+                    {activeAgentBinding.agentName}
+                  </span>
+                ) : null}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-md"
+                title="设置工作区"
+                aria-label="设置工作区"
+                onClick={() => {
+                  setChatWorkspaceDraft(pinnedChatWorkspacePath || defaultChatWorkspacePath);
+                  setChatWorkspaceDialogOpen(true);
+                }}
+              >
+                <Settings2 className="h-4 w-4" />
+              </Button>
+            </div>
+            ) : null}
+
+            <Tabs
+              value={chatWorkspaceShellEnabled ? chatWorkspaceActiveTab : 'chat'}
+              onValueChange={(value) => {
+                if (!chatWorkspaceShellEnabled) return;
+                setChatWorkspaceActiveTab(value);
+              }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              {chatWorkspaceShellEnabled ? (
+              <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/60 bg-background px-5">
+                <TabsList className="h-11 gap-5 rounded-none bg-transparent p-0">
+                  <TabsTrigger value="chat" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <MessageSquareText className="h-4 w-4" />
+                    聊天
+                  </TabsTrigger>
+                  <TabsTrigger value="workspace" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <FolderOpen className="h-4 w-4" />
+                    工作区
+                  </TabsTrigger>
+                  <TabsTrigger value="changes" className="h-11 gap-1.5 rounded-none border-b-2 border-transparent bg-transparent px-0 text-xs text-muted-foreground shadow-none data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none">
+                    <GitBranch className="h-4 w-4" />
+                    变更
+                  </TabsTrigger>
+                </TabsList>
+                <div className="hidden max-w-[44%] truncate text-xs text-muted-foreground md:block">
+                  {resolvedChatWorkspacePath || '准备工作区...'}
+                </div>
+              </div>
+              ) : null}
+
+              <TabsContent value="chat" className="mt-0 min-h-0 flex-1">
           <ResizablePanelGroup
             orientation="horizontal"
             className={cn('h-full', isWerewolfLabMode && 'werewolf-wood-main')}
@@ -2182,7 +2396,7 @@ export function ChatPageContent({
                   <div
                     ref={scrollContainerRef}
                     className={cn(
-                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 py-6 md:px-8 lg:px-16',
+                      'home-chat-scroll absolute inset-0 overflow-y-auto px-4 pb-6 pt-10 md:px-8 lg:px-16',
                       isWerewolfLabMode && 'werewolf-wood-main'
                     )}
                   >
@@ -2200,7 +2414,7 @@ export function ChatPageContent({
                         onCreateGuest={handleCreateAgoraGuest}
                       />
                     ) : messages.length === 0 && !loading && (
-                      <div className="flex flex-col items-center justify-center h-full gap-8">
+                      <div className="flex h-full flex-col items-center justify-center gap-8 pt-14">
                         <div className="text-center">
                           <div className="inline-flex p-3 mb-4">
                             <RobotLogo size={56} className="animate-robotPulse" />
@@ -2210,7 +2424,7 @@ export function ChatPageContent({
                             animate={{ opacity: 1, y: 0 }}
                             className="text-2xl font-bold bg-gradient-to-r from-primary via-blue-500 to-purple-500 bg-clip-text text-transparent mb-2"
                           >
-                            ACEHarness Multi-Agent 助手
+                            aceharness
                           </motion.h2>
                           <motion.p
                             initial={{ opacity: 0 }}
@@ -2220,7 +2434,7 @@ export function ChatPageContent({
                           >
                             {activeAgentBinding?.agentName
                               ? `当前正在与 Agent「${activeAgentBinding.agentName}」对话`
-                              : '通过对话实现全流程 Multi-Agent 智能编排'}
+                              : '重构你的 Agent 生产力 | Your team of AI'}
                           </motion.p>
                           <motion.span
                             initial={{ opacity: 0 }}
@@ -2431,8 +2645,64 @@ export function ChatPageContent({
               </div>
             ) : null}
           </ResizablePanelGroup>
+              </TabsContent>
+
+              <TabsContent value="workspace" className="mt-0 min-h-0 flex-1 bg-background">
+                {resolvedChatWorkspacePath ? (
+                  <WorkspaceEditor
+                    open
+                    onOpenChange={() => {}}
+                    workspacePath={resolvedChatWorkspacePath}
+                    title={`${chatWorkspaceTitle} · 工作区`}
+                    presentation="page"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                    未设置工作区
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="changes" className="mt-0 min-h-0 flex-1 bg-background">
+                {resolvedChatWorkspacePath ? (
+                  <GitWorkspaceDiffPanel workspacePath={resolvedChatWorkspacePath} presentation="embedded" />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                    未设置工作区
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </div>
           )}
         </div>
+
+        <Dialog open={chatWorkspaceDialogOpen} onOpenChange={setChatWorkspaceDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>设置对话工作区</DialogTitle>
+              <DialogDescription>这里的路径会同时驱动聊天运行目录、工作区页签和变更页签。</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <WorkspaceDirectoryPicker
+                workspaceRoot={chatWorkspaceDraft || defaultChatWorkspacePath || pinnedChatWorkspacePath || ''}
+                value={chatWorkspaceDraft}
+                onChange={setChatWorkspaceDraft}
+                autoSelectRootWhenEmpty={Boolean(defaultChatWorkspacePath || pinnedChatWorkspacePath)}
+              />
+              <div className="rounded-xl bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
+                已选择：{chatWorkspaceDraft || '未选择'}
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={resetChatWorkspacePath}>
+                恢复默认
+              </Button>
+              <Button variant="outline" onClick={() => setChatWorkspaceDialogOpen(false)}>取消</Button>
+              <Button onClick={handleSaveChatWorkspacePath}>保存</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Edit Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>

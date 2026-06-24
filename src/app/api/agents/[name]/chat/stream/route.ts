@@ -10,6 +10,7 @@ import { extractStructuredResult } from '@/lib/ai/result-channel';
 import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/lib/engines/context-recovery';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 1200;
 
 const activeAgentStreams = new Map<string, {
   promise: Promise<any>;

@@ -172,6 +172,15 @@ function isSessionAhead(
   return candidate.updatedAt > baseline.updatedAt || candidate.messages.length > baseline.messages.length;
 }
 
+function resolveSessionWorkingDirectory(
+  session: Pick<ChatSession, 'sessionWorkbenchState'> | null | undefined,
+  fallbackWorkingDirectory: string,
+): string {
+  const sessionWorkingDirectory = String(session?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
+  if (sessionWorkingDirectory) return sessionWorkingDirectory;
+  return String(fallbackWorkingDirectory || '').trim();
+}
+
 interface DashboardChatContextType {
   isOpen: boolean;
   openChat: () => void;
@@ -358,6 +367,27 @@ async function apiDeleteSession(id: string): Promise<void> {
   });
 }
 
+async function apiEnsureChatWorkspace(input: {
+  sessionId: string;
+  sourceWorkspace?: string;
+  targetWorkspace?: string;
+  title?: string;
+  skills?: string[] | Record<string, boolean>;
+  mcpServers?: string[] | Record<string, boolean>;
+}): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
+  const res = await fetch('/api/agora/workspace', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({
+      ...input,
+      purpose: 'chat',
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || '准备对话工作区失败');
+  return data;
+}
+
 async function apiBatchDeleteSessions(ids: string[]): Promise<void> {
   const res = await fetch('/api/chat/sessions/batch-delete', {
     method: 'POST',
@@ -466,13 +496,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [discoveredMcpServers, setDiscoveredMcpServers] = useState<ManagedMcpServer[]>([]);
   const [workingDirectory, setWorkingDirectoryState] = useState('');
 
-  // Load skill settings on mount
-  useEffect(() => {
-    fetch('/api/chat/settings').then(r => r.json()).then(data => {
+  const refreshChatSettings = useCallback(async () => {
+    return fetch('/api/chat/settings').then(r => r.json()).then(data => {
       if (data.skills) setSkillSettings(data.skills);
       if (data.discoveredSkills) setDiscoveredSkills(data.discoveredSkills);
       if (data.mcpServers) setMcpSettings(data.mcpServers);
       if (data.discoveredMcpServers) setDiscoveredMcpServers(data.discoveredMcpServers);
+      return data;
+    });
+  }, []);
+
+  // Load skill settings on mount
+  useEffect(() => {
+    refreshChatSettings().then(data => {
       const wdKey = getWorkingDirStorageKey();
       const localDir = localStorage.getItem(wdKey);
       if (localDir) {
@@ -495,7 +531,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
     }).catch(() => {});
-  }, [getWorkingDirStorageKey]);
+  }, [getWorkingDirStorageKey, refreshChatSettings]);
 
   const toggleSkill = useCallback((skill: string) => {
     setSkillSettings(prev => {
@@ -1264,6 +1300,48 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return updated;
   }, [cacheSessionSnapshot, loadSessionSnapshot, scheduleSave, upsertSessionSummary]);
 
+  const ensureTargetSessionWorkspace = useCallback(async (
+    sessionId: string,
+    session: ChatSession,
+  ): Promise<string> => {
+    const existingWorkspace = resolveSessionWorkingDirectory(session, '');
+    if (existingWorkspace) return existingWorkspace;
+
+    try {
+      const result = await apiEnsureChatWorkspace({
+        sessionId,
+        sourceWorkspace: workingDirectory || undefined,
+        title: session.title,
+        skills: skillSettingsRef.current,
+        mcpServers: mcpSettingsRef.current,
+      });
+      if (!result.workspacePath) return '';
+      await refreshChatSettings().catch(() => {});
+      await updateSessionById(sessionId, (current) => {
+        const previousWorkspace = String(current.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
+        return {
+          ...current,
+          backendSessionId: previousWorkspace === result.workspacePath ? current.backendSessionId : undefined,
+          updatedAt: Date.now(),
+          sessionWorkbenchState: {
+            ...(current.sessionWorkbenchState || {}),
+            chatWorkspace: {
+              ...(current.sessionWorkbenchState?.chatWorkspace || {}),
+              workingDirectory: result.workspacePath,
+              sourceWorkspace: result.sourceWorkspace || workingDirectory || current.sessionWorkbenchState?.chatWorkspace?.sourceWorkspace,
+              autoCreated: result.created,
+              gitBaselineReady: true,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      });
+      return result.workspacePath;
+    } catch {
+      return '';
+    }
+  }, [refreshChatSettings, updateSessionById, workingDirectory]);
+
   const handleSetEngine = useCallback((e: string) => {
     setEngineState(e);
     if (typeof window !== 'undefined') {
@@ -1285,8 +1363,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const nextState = typeof state === 'function' ? state(session.sessionWorkbenchState) : state;
       if (nextState === session.sessionWorkbenchState) return session;
       if (JSON.stringify(nextState || null) === JSON.stringify(session.sessionWorkbenchState || null)) return session;
+      const previousWorkspace = String(session.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
+      const nextWorkspace = String(nextState?.chatWorkspace?.workingDirectory || '').trim();
       return {
         ...session,
+        backendSessionId: previousWorkspace !== nextWorkspace ? undefined : session.backendSessionId,
         updatedAt: Date.now(),
         sessionWorkbenchState: nextState,
       };
@@ -1681,6 +1762,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       try {
         const backendSid = getTargetSessionSnapshot()?.backendSessionId;
         const frontendSid = targetSessionId;
+        const targetSessionSnapshot = getTargetSessionSnapshot();
+        let targetWorkingDirectory = resolveSessionWorkingDirectory(targetSessionSnapshot, '');
+        if (!targetWorkingDirectory && targetSessionSnapshot) {
+          targetWorkingDirectory = await ensureTargetSessionWorkspace(targetSessionId, targetSessionSnapshot);
+        }
         const startRes = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -1693,7 +1779,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             assistantMessageId: followUpMsgId,
             skipUserMessage: true,
             mode: 'dashboard',
-            workingDirectory: workingDirectory || undefined,
+            workingDirectory: targetWorkingDirectory || undefined,
             mcpServers: mcpSettingsRef.current,
           }),
         });
@@ -1830,7 +1916,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       unmarkSessionStreaming(targetSessionId);
       setStreamingMessageId(null);
     }
-  }, [activeSessionId, effectiveEngine, enrichAction, getCachedSessionSnapshot, markSessionRecentlyCompleted, markSessionStreaming, model, updateAction, updateSessionById, workingDirectory]);
+  }, [activeSessionId, effectiveEngine, enrichAction, ensureTargetSessionWorkspace, getCachedSessionSnapshot, markSessionRecentlyCompleted, markSessionStreaming, model, updateAction, updateSessionById, workingDirectory]);
 
   const interruptCurrentStream = useCallback(() => {
     const activeChatId = activeChatIdRef.current;
@@ -1909,6 +1995,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setStreamingMessageId(pendingMessageId);
 
     try {
+      let targetWorkingDirectory = resolveSessionWorkingDirectory(targetSession, '');
+      if (!targetWorkingDirectory) {
+        targetWorkingDirectory = await ensureTargetSessionWorkspace(targetSessionId, targetSession);
+      }
       const response = await fetch('/api/chat/compact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
@@ -1917,7 +2007,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           sessionId: targetSession.backendSessionId || targetSession.workflowBinding?.supervisorSessionId || undefined,
           model: resolvedModel,
           engine: resolvedEngine || undefined,
-          workingDirectory: workingDirectory || undefined,
+          workingDirectory: targetWorkingDirectory || undefined,
           skills: skillSettingsRef.current,
           mcpServers: mcpSettingsRef.current,
         }),
@@ -1975,7 +2065,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       unmarkSessionStreaming(targetSessionId);
       setStreamingMessageId(null);
     }
-  }, [interruptCurrentStream, markSessionStreaming, unmarkSessionStreaming, updateActiveSession, workingDirectory]);
+  }, [ensureTargetSessionWorkspace, interruptCurrentStream, markSessionStreaming, unmarkSessionStreaming, updateActiveSession, workingDirectory]);
 
   // --- Send message (streaming) ---
   const sendMessage = useCallback(async (text: string, options?: { displayText?: string; targetSessionId?: string }) => {
@@ -1999,6 +2089,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     const applyToTargetSession = (updater: (session: ChatSession) => ChatSession) => updateSessionById(targetSessionId, updater);
     const getTargetSessionSnapshot = () => getCachedSessionSnapshot(targetSessionId);
+    let targetWorkingDirectory = resolveSessionWorkingDirectory(previousSession, '');
+    if (!targetWorkingDirectory) {
+      targetWorkingDirectory = await ensureTargetSessionWorkspace(targetSessionId, previousSession);
+    }
 
     const userMsg: ChatMessage = { id: genId(), role: 'user', content: options?.displayText ?? text, timestamp: Date.now() };
     await applyToTargetSession(s => ({
@@ -2034,7 +2128,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             message: text,
             mode: 'standalone-chat',
             sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || undefined),
-            workingDirectory: workingDirectory || undefined,
+            workingDirectory: targetWorkingDirectory || undefined,
             requestedMcpServers: mcpSettingsRef.current,
           }),
         }).then(async (response) => {
@@ -2082,7 +2176,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             message: text,
             mode: 'workflow-chat',
             sessionId: shouldStartFresh ? undefined : (previousSession.backendSessionId || workflowBinding.supervisorSessionId || undefined),
-            workingDirectory: workingDirectory || undefined,
+            workingDirectory: targetWorkingDirectory || undefined,
             workflowContext: {
               configFile: workflowBinding.configFile,
               runId: workflowBinding.runId,
@@ -2163,7 +2257,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           userMessageId: userMsg.id,
           assistantMessageId: assistantMsgId,
           mode: 'dashboard',
-          workingDirectory: workingDirectory || undefined,
+          workingDirectory: targetWorkingDirectory || undefined,
           mcpServers: mcpSettingsRef.current,
         }),
       });
@@ -2461,7 +2555,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
     // Note: setLoading(false) is called inside the Promise's done/error handlers
     // to properly handle autoExecuteSafeActions
-  }, [activeSessionId, createSession, loadSessionSnapshot, updateSessionById, getCachedSessionSnapshot, autoExecuteSafeActions, workingDirectory, interruptCurrentStream, markSessionRecentlyCompleted, markSessionStreaming, unmarkSessionStreaming]);
+  }, [activeSessionId, createSession, ensureTargetSessionWorkspace, loadSessionSnapshot, updateSessionById, getCachedSessionSnapshot, autoExecuteSafeActions, workingDirectory, interruptCurrentStream, markSessionRecentlyCompleted, markSessionStreaming, unmarkSessionStreaming]);
   sendMessageRef.current = sendMessage;
   const confirmAction = useCallback(async (messageId: string, actionId: string) => {
     const msg = activeSession?.messages.find(m => m.id === messageId);

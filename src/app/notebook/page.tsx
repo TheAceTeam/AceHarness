@@ -1,14 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, NotebookTabs } from 'lucide-react';
 import AuthGuard from '@/components/AuthGuard';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { WorkspaceEditor } from '@/components/workspace/WorkspaceEditor';
 import { workspaceApi, type NotebookScope } from '@/lib/core/api';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface UserInfo {
   id: string;
@@ -20,17 +20,32 @@ interface UserInfo {
   createdAt: number;
 }
 
-function NotebookPageContent() {
+export function NotebookPageContent({
+  embedded = false,
+  embeddedSearch = '',
+}: {
+  embedded?: boolean;
+  embeddedSearch?: string;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const effectiveSearchParams = useMemo(
+    () => new URLSearchParams(embedded ? embeddedSearch : searchParams.toString()),
+    [embedded, embeddedSearch, searchParams]
+  );
   const [user, setUser] = useState<UserInfo | null>(null);
-  const scope: NotebookScope = 'global';
-  const returnTo = searchParams.get('returnTo') || '/dashboard';
+  const scope: NotebookScope = effectiveSearchParams.get('notebookScope') === 'personal' ? 'personal' : 'global';
+  const returnTo = effectiveSearchParams.get('returnTo') || '/dashboard';
   const [shareToken, setShareToken] = useState<string | undefined>(undefined);
   const [permission, setPermission] = useState<'read' | 'write'>('write');
   const [open, setOpen] = useState(true);
+  const pageTitle = scope === 'global' ? '全局 Notebook' : 'Cangjie Notebook';
 
-  useDocumentTitle('Cangjie Notebook');
+  useDocumentTitle(embedded ? null : pageTitle);
+  useDashboardShellHeader({
+    title: pageTitle,
+    subtitle: scope === 'global' ? '团队共享 Notebook' : '个人 Notebook',
+  }, [pageTitle, scope]);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
@@ -43,15 +58,7 @@ function NotebookPageContent() {
   }, []);
 
   useEffect(() => {
-    const share = searchParams.get('notebookShare') || '';
-    const scopeParam = searchParams.get('notebookScope');
-    if (scopeParam !== 'global') {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set('notebook', '1');
-      params.set('notebookScope', 'global');
-      router.replace(`/notebook?${params.toString()}`);
-      return;
-    }
+    const share = effectiveSearchParams.get('notebookShare') || '';
     if (!share) {
       setShareToken(undefined);
       setPermission('write');
@@ -68,9 +75,9 @@ function NotebookPageContent() {
         }
         setShareToken(share);
         setPermission(resolved.permission);
-        const file = searchParams.get('notebookFile');
-        if (!file) {
-          const params = new URLSearchParams(searchParams.toString());
+        const file = effectiveSearchParams.get('notebookFile');
+        if (!file && !embedded) {
+          const params = new URLSearchParams(effectiveSearchParams.toString());
           params.set('notebook', '1');
           params.set('notebookScope', resolved.scope);
           params.set('notebookFile', resolved.path);
@@ -85,14 +92,15 @@ function NotebookPageContent() {
         setPermission('write');
       });
     return () => { cancelled = true; };
-  }, [router, searchParams]);
+  }, [effectiveSearchParams, embedded, router]);
 
   if (!user) {
-    return <div className="h-dvh flex items-center justify-center text-sm text-muted-foreground">加载 Notebook...</div>;
+    return <div className="flex h-full min-h-[320px] items-center justify-center text-sm text-muted-foreground">加载 Notebook...</div>;
   }
 
   return (
-    <div className="h-dvh bg-background text-foreground flex flex-col overflow-hidden">
+    <div className={`${embedded ? 'h-full' : 'h-dvh'} bg-background text-foreground flex flex-col overflow-hidden`}>
+      {!embedded ? (
       <header className="border-b shrink-0">
         <div className="flex items-center justify-between gap-4 px-6 py-4">
           <div className="flex items-center gap-4 min-w-0">
@@ -107,22 +115,23 @@ function NotebookPageContent() {
               <div className="flex h-10 w-10 items-center justify-center rounded-lg border bg-muted/40 text-foreground shrink-0">
                 <NotebookTabs className="h-5 w-5" />
               </div>
-              <h1 className="truncate text-xl font-semibold">Cangjie Notebook</h1>
+              <h1 className="truncate text-xl font-semibold">{pageTitle}</h1>
             </div>
           </div>
-          <ThemeToggle />
         </div>
       </header>
+      ) : null}
       <div className="flex-1 min-h-0 overflow-hidden">
         <WorkspaceEditor
           open={open}
           onOpenChange={(next) => {
+            if (embedded) return;
             setOpen(next);
             if (!next) router.push(returnTo);
           }}
           workspacePath={user.personalDir || '/'}
           mode="notebook"
-          title="Cangjie Notebook"
+          title={pageTitle}
           presentation="page"
           notebookScope={scope}
           notebookShareToken={shareToken}
@@ -133,10 +142,13 @@ function NotebookPageContent() {
   );
 }
 
-export default function NotebookPage() {
+export default function NotebookPage(props: {
+  embedded?: boolean;
+  embeddedSearch?: string;
+} = {}) {
   return (
     <AuthGuard>
-      <NotebookPageContent />
+      <NotebookPageContent {...props} />
     </AuthGuard>
   );
 }

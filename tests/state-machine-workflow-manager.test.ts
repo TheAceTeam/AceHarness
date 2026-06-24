@@ -889,8 +889,8 @@ describe('state machine execution flow', () => {
     expect(prompt).toContain('步骤内人工答疑');
     expect(prompt).toContain('需求目标或验收标准存在疑问');
     expect(prompt).toContain('Agent 已完成必要排查后仍无法解决的问题');
-    expect(prompt).toContain('明确提出“需要人类确认/人工确认/用户确认/人工审批/人工验收”');
-    expect(prompt).toContain('不要用普通文字替代，也不要直接视为已确认');
+    expect(prompt).toContain('当前步骤需要“人类确认/人工确认/用户确认/人工反馈/人工审查/人工复核/人工审批/人工验收”');
+    expect(prompt).toContain('执行到需要人工介入的时点立即输出');
     expect(prompt).toContain('<human-help>');
   });
 

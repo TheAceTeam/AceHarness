@@ -38,6 +38,7 @@ export {
   unregisterPlugin,
   getAllPlugins,
   applyDisabledPluginIds,
+  applySidebarPluginPreferences,
   getCategories,
   getActions,
   getPinnedActions,

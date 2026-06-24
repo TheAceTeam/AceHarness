@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { isWindows } from '@/lib/core/runtime-platform';
 import {
+  assertSafeRelativePath,
   isInsidePath,
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
@@ -19,6 +20,7 @@ import {
   remoteCredentialErrorBody,
   requireRemoteWorkspaceAuth,
 } from '@/lib/core/remote-credential-vault';
+import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 
 interface TreeNode {
   name: string;
@@ -59,41 +61,112 @@ const SKIP_DIRS = new Set([
 const DEFAULT_PAGE_SIZE = 200;
 const MAX_PAGE_SIZE = 500;
 
-async function listVisibleEntries(dirPath: string, rootPath: string) {
-  const realDir = await fs.realpath(dirPath);
-  if (!isInsidePath(rootPath, realDir)) {
+function isAgentsSkillsRelativePath(rootPath: string, lexicalPath: string): boolean {
+  const relativePath = toPortablePath(path.relative(rootPath, lexicalPath));
+  return relativePath === '.agents/skills' || relativePath.startsWith('.agents/skills/');
+}
+
+async function isAllowedAgentsSkillTarget(rootPath: string, lexicalPath: string, realPath: string): Promise<boolean> {
+  if (!isAgentsSkillsRelativePath(rootPath, lexicalPath)) return false;
+  const runtimeSkillsDir = await getRuntimeSkillsDirPath();
+  const realRuntimeSkillsDir = await fs.realpath(runtimeSkillsDir).catch(() => '');
+  return Boolean(realRuntimeSkillsDir) && isInsidePath(realRuntimeSkillsDir, realPath);
+}
+
+async function assertReadableTreeDirectory(rootPath: string, lexicalDir: string): Promise<string> {
+  const realDir = await fs.realpath(lexicalDir);
+  if (!isInsidePath(rootPath, realDir) && !(await isAllowedAgentsSkillTarget(rootPath, lexicalDir, realDir))) {
     throw new Error('目录路径不合法');
   }
+  return realDir;
+}
 
-  const entries = await fs.readdir(realDir, { withFileTypes: true });
-  return entries
-    .filter((entry) => !SKIP_DIRS.has(entry.name) && !entry.isSymbolicLink())
-    .sort((a, b) => {
-      const aDir = a.isDirectory();
-      const bDir = b.isDirectory();
-      if (aDir !== bDir) return aDir ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    })
-    .map((entry) => ({
+async function resolveTreeTargetPath(rootPath: string, subPath: string): Promise<string> {
+  if (!subPath) return rootPath;
+  try {
+    return await resolveExistingInsideWorkspace(rootPath, subPath);
+  } catch (error: any) {
+    if (error?.status !== 403) throw error;
+  }
+
+  const lexicalPath = path.resolve(rootPath, assertSafeRelativePath(subPath));
+  if (!isInsidePath(rootPath, lexicalPath)) {
+    return resolveExistingInsideWorkspace(rootPath, subPath);
+  }
+  await assertReadableTreeDirectory(rootPath, lexicalPath);
+  return lexicalPath;
+}
+
+type VisibleEntry = {
+  entry: {
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+  };
+  fullPath: string;
+  relativePath: string;
+  type: 'file' | 'directory';
+};
+
+async function resolveEntryType(rootPath: string, fullPath: string, entry: VisibleEntry['entry']): Promise<'file' | 'directory' | null> {
+  if (entry.isDirectory()) return 'directory';
+  if (entry.isFile()) return 'file';
+  if (!entry.isSymbolicLink()) return null;
+
+  const [stat, realPath] = await Promise.all([
+    fs.stat(fullPath).catch(() => null),
+    fs.realpath(fullPath).catch(() => ''),
+  ]);
+  if (!stat || !realPath) return null;
+  if (!(await isAllowedAgentsSkillTarget(rootPath, fullPath, realPath))) return null;
+  if (stat.isDirectory()) return 'directory';
+  if (stat.isFile()) return 'file';
+  return null;
+}
+
+async function listVisibleEntries(dirPath: string, rootPath: string): Promise<VisibleEntry[]> {
+  const lexicalDir = path.resolve(dirPath);
+  if (!isInsidePath(rootPath, lexicalDir)) {
+    throw new Error('目录路径不合法');
+  }
+  await assertReadableTreeDirectory(rootPath, lexicalDir);
+
+  const entries = await fs.readdir(lexicalDir, { withFileTypes: true });
+  const visibleEntries: VisibleEntry[] = [];
+  for (const entry of entries) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const fullPath = path.join(lexicalDir, entry.name);
+    const type = await resolveEntryType(rootPath, fullPath, entry);
+    if (!type) continue;
+    visibleEntries.push({
       entry,
-      fullPath: path.join(realDir, entry.name),
-      relativePath: toPortablePath(path.relative(rootPath, path.join(realDir, entry.name))),
-    }));
+      fullPath,
+      relativePath: toPortablePath(path.relative(rootPath, fullPath)),
+      type,
+    });
+  }
+
+  return visibleEntries
+    .sort((a, b) => {
+      const aDir = a.type === 'directory';
+      const bDir = b.type === 'directory';
+      if (aDir !== bDir) return aDir ? -1 : 1;
+      return a.entry.name.localeCompare(b.entry.name);
+    });
 }
 
 async function buildTree(dirPath: string, rootPath: string, depth: number, maxDepth: number, seen = new Set<string>()): Promise<TreeNode[]> {
-  const realDir = await fs.realpath(dirPath);
-  if (!isInsidePath(rootPath, realDir)) {
-    throw new Error('目录路径不合法');
-  }
+  const lexicalDir = path.resolve(dirPath);
+  const realDir = await assertReadableTreeDirectory(rootPath, lexicalDir);
   if (seen.has(realDir)) return [];
   seen.add(realDir);
 
-  const visibleEntries = await listVisibleEntries(realDir, rootPath);
+  const visibleEntries = await listVisibleEntries(lexicalDir, rootPath);
   const nodes: TreeNode[] = [];
 
-  for (const { entry, fullPath, relativePath } of visibleEntries) {
-    if (entry.isDirectory()) {
+  for (const { entry, fullPath, relativePath, type } of visibleEntries) {
+    if (type === 'directory') {
       let children: TreeNode[] | undefined;
       if (depth < maxDepth) {
         try {
@@ -111,7 +184,7 @@ async function buildTree(dirPath: string, rootPath: string, depth: number, maxDe
         type: 'directory',
         children,
       });
-    } else if (entry.isFile()) {
+    } else if (type === 'file') {
       nodes.push({
         name: entry.name,
         path: relativePath,
@@ -128,8 +201,8 @@ async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number
   const pageEntries = visibleEntries.slice(offset, offset + limit);
   const tree: TreeNode[] = [];
 
-  for (const { entry, fullPath, relativePath } of pageEntries) {
-    if (entry.isDirectory()) {
+  for (const { entry, fullPath, relativePath, type } of pageEntries) {
+    if (type === 'directory') {
       let children: TreeNode[] | undefined;
       if (maxDepth > 0) {
         try {
@@ -147,7 +220,7 @@ async function buildTreePage(dirPath: string, rootPath: string, maxDepth: number
         type: 'directory',
         children,
       });
-    } else if (entry.isFile()) {
+    } else if (type === 'file') {
       tree.push({
         name: entry.name,
         path: relativePath,
@@ -222,7 +295,7 @@ export async function GET(request: NextRequest) {
     }
 
     const rootPath = await resolveWorkspaceRoot(workspacePath);
-    const targetPath = subPath ? await resolveExistingInsideWorkspace(rootPath, subPath) : rootPath;
+    const targetPath = await resolveTreeTargetPath(rootPath, subPath);
     const stat = await fs.stat(targetPath);
     if (!stat.isDirectory()) {
       return NextResponse.json({ error: '路径不是目录' }, { status: 400 });

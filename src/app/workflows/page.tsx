@@ -199,7 +199,6 @@ export default function WorkflowsPage() {
   const [draftSortDirection, setDraftSortDirection] = useState<DraftSortDirection>('desc');
   const [activeTab, setActiveTab] = useState<WorkflowsPageTab>('workflows');
   const [selectedWorkflows, setSelectedWorkflows] = useState<Set<string>>(new Set());
-  const [floatingFilterBar, setFloatingFilterBar] = useState(false);
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [activeWorkflow, setActiveWorkflow] = useState<WorkflowConfig | null>(null);
@@ -214,9 +213,6 @@ export default function WorkflowsPage() {
   const [workflowImportNotice, setWorkflowImportNotice] = useState<WorkflowImportNotice | null>(null);
   const [archiveExporting, setArchiveExporting] = useState(false);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
-  const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
-  const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
-  const [filterBarHeight, setFilterBarHeight] = useState(0);
 
   useDocumentTitle('工作流管理');
 
@@ -265,29 +261,6 @@ export default function WorkflowsPage() {
   useEffect(() => {
     setPage(1);
   }, [selectedMode, sortKey, sortDirection, pageSize]);
-
-  useEffect(() => {
-    const updateFloatingState = () => {
-      const anchor = filterBarAnchorRef.current;
-      if (!anchor) return;
-      setFloatingFilterBar(anchor.getBoundingClientRect().top <= 8);
-    };
-    const updateMeasure = () => {
-      if (filterBarMeasureRef.current) {
-        setFilterBarHeight(filterBarMeasureRef.current.getBoundingClientRect().height);
-      }
-    };
-    updateMeasure();
-    updateFloatingState();
-    window.addEventListener('scroll', updateFloatingState, { passive: true });
-    window.addEventListener('resize', updateMeasure);
-    window.addEventListener('resize', updateFloatingState);
-    return () => {
-      window.removeEventListener('scroll', updateFloatingState);
-      window.removeEventListener('resize', updateMeasure);
-      window.removeEventListener('resize', updateFloatingState);
-    };
-  }, []);
 
   const toggleViewMode = (mode: 'gallery' | 'table') => {
     setViewMode(mode);
@@ -908,10 +881,6 @@ export default function WorkflowsPage() {
         'container mx-auto flex flex-col gap-6 px-6 py-8 pb-28',
         isDashboardShell && 'min-h-0 max-w-none flex-1 overflow-auto px-4 py-4',
       )}>
-        {/* Floating filter anchor */}
-        <div ref={filterBarAnchorRef} className="h-px" />
-        {floatingFilterBar && activeTab === 'workflows' ? <div style={{ height: filterBarHeight }} /> : null}
-
         <section className="flex items-center justify-between gap-4">
           <div className="inline-flex rounded-full border border-border/60 bg-card/70 p-1 shadow-sm backdrop-blur">
             <Button
@@ -970,15 +939,10 @@ export default function WorkflowsPage() {
         {/* Filter bar */}
         {activeTab === 'workflows' ? (
         <section
-          className={cn(
-            floatingFilterBar
-              ? 'fixed inset-x-0 top-2 z-40 px-6'
-              : 'relative z-10'
-          )}
+          className="sticky top-0 z-20"
           data-tour-step-id="workflow-filter"
         >
-          <div className={cn(floatingFilterBar && 'mx-auto max-w-[1680px]')}>
-            <div ref={filterBarMeasureRef} className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
+          <div className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
               <div className="pointer-events-none absolute inset-0 rounded-[24px] bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_55%)]" />
               <div className="relative flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">
@@ -1030,7 +994,6 @@ export default function WorkflowsPage() {
                   </div>
                 </div>
               </div>
-            </div>
           </div>
         </section>
         ) : null}

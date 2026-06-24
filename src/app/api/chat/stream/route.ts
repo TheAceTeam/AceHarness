@@ -31,6 +31,7 @@ import { loadChatSession, saveChatSession, type PersistedChatSession, type Persi
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 1200;
 const COMPLETED_STREAM_RETENTION_MS = 2 * 60 * 1000;
 
 function numberOrUndefined(value: unknown): number | undefined {

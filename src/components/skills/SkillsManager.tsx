@@ -164,7 +164,7 @@ function normalizeMarketplaceSkillKey(value?: string): string {
 function PluginsTab() {
   const { toast } = useToast();
   const [plugins, setPlugins] = useState<HomePlugin[]>([]);
-  const { disabledPluginIds, loading, save, version } = useSidebarPluginPreferences();
+  const { disabledPluginIds, enabledPluginIds, loading, save, version } = useSidebarPluginPreferences();
 
   useEffect(() => {
     setPlugins(getAllPlugins({ includeDisabled: true }));
@@ -174,15 +174,31 @@ function PluginsTab() {
     const plugin = plugins.find((p) => p.id === pluginId);
     if (!plugin) return;
 
-    const nextDisabledIds = disabledPluginIds.includes(pluginId)
-      ? disabledPluginIds.filter((id) => id !== pluginId)
-      : [...disabledPluginIds, pluginId];
+    const pluginEnabled = plugin.enabled !== false;
+    let nextDisabledIds = [...disabledPluginIds];
+    let nextEnabledIds = [...enabledPluginIds];
+
+    if (pluginEnabled) {
+      if (nextEnabledIds.includes(pluginId)) {
+        nextEnabledIds = nextEnabledIds.filter((id) => id !== pluginId);
+      } else if (!nextDisabledIds.includes(pluginId)) {
+        nextDisabledIds.push(pluginId);
+      }
+    } else if (nextDisabledIds.includes(pluginId)) {
+      nextDisabledIds = nextDisabledIds.filter((id) => id !== pluginId);
+    } else if (!nextEnabledIds.includes(pluginId)) {
+      nextEnabledIds.push(pluginId);
+    }
+
+    const nextEnabledSet = new Set(nextEnabledIds);
+    nextDisabledIds = nextDisabledIds.filter((id) => !nextEnabledSet.has(id));
 
     try {
-      const savedDisabledIds = await save(nextDisabledIds);
+      await save({ disabledPluginIds: nextDisabledIds, enabledPluginIds: nextEnabledIds });
       const next = getAllPlugins({ includeDisabled: true });
       setPlugins(next);
-      toast('success', `${plugin.name} 已${savedDisabledIds.includes(pluginId) ? '禁用' : '启用'}`);
+      const nextPlugin = next.find((item) => item.id === pluginId);
+      toast('success', `${plugin.name} 已${nextPlugin?.enabled === false ? '禁用' : '启用'}`);
     } catch (error: any) {
       toast('error', error?.message || '保存插件状态失败');
     }

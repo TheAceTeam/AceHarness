@@ -16,6 +16,7 @@ export type UserStatus = 'pending' | 'active' | 'rejected';
 
 export interface UserSidebarPluginPreferences {
   disabledIds: string[];
+  enabledIds?: string[];
 }
 
 export interface UserPreferences {
@@ -63,6 +64,9 @@ function normalizeLoadedUser(user: any): User {
   const disabledIds = Array.isArray(user?.preferences?.sidebarPlugins?.disabledIds)
     ? user.preferences.sidebarPlugins.disabledIds.filter((item: unknown) => typeof item === 'string')
     : [];
+  const enabledIds = Array.isArray(user?.preferences?.sidebarPlugins?.enabledIds)
+    ? user.preferences.sidebarPlugins.enabledIds.filter((item: unknown) => typeof item === 'string')
+    : [];
   return {
     ...user,
     role: user.role === 'admin' ? 'admin' : 'user',
@@ -72,6 +76,7 @@ function normalizeLoadedUser(user: any): User {
       ...user.preferences,
       sidebarPlugins: {
         disabledIds,
+        enabledIds,
       },
     },
   };
@@ -266,16 +271,39 @@ export async function getUserSidebarPluginDisabledIds(userId: string): Promise<s
   return user.preferences?.sidebarPlugins?.disabledIds || [];
 }
 
+export async function getUserSidebarPluginPreferenceIds(userId: string): Promise<{ disabledIds: string[]; enabledIds: string[] }> {
+  const user = await getUserById(userId);
+  if (!user) throw new Error('用户不存在');
+  return {
+    disabledIds: user.preferences?.sidebarPlugins?.disabledIds || [],
+    enabledIds: user.preferences?.sidebarPlugins?.enabledIds || [],
+  };
+}
+
 export async function updateUserSidebarPluginDisabledIds(userId: string, disabledIds: string[]): Promise<PublicUser> {
+  return updateUserSidebarPluginPreferenceIds(userId, { disabledIds });
+}
+
+export async function updateUserSidebarPluginPreferenceIds(
+  userId: string,
+  input: { disabledIds: string[]; enabledIds?: string[] },
+): Promise<PublicUser> {
   return withLock(async () => {
     const users = await loadUsers();
     const idx = users.findIndex((u) => u.id === userId);
     if (idx === -1) throw new Error('用户不存在');
 
+    const existingEnabledIds = users[idx].preferences?.sidebarPlugins?.enabledIds || [];
+    const enabledIds = Array.from(new Set((input.enabledIds ?? existingEnabledIds).filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)));
+    const enabledSet = new Set(enabledIds);
+    const disabledIds = Array.from(new Set(input.disabledIds.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)))
+      .filter((id) => !enabledSet.has(id));
+
     users[idx].preferences = {
       ...(users[idx].preferences || {}),
       sidebarPlugins: {
-        disabledIds: Array.from(new Set(disabledIds.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))),
+        disabledIds,
+        enabledIds,
       },
     };
     await saveUsers(users);

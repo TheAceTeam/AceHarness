@@ -46,8 +46,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 import { useToast } from '@/components/ui/toast';
 import { useConfirmDialog } from '@/hooks/useConfirmDialog';
 import { useAttentionSignal } from '@/hooks/useAttentionSignal';
@@ -1739,7 +1739,7 @@ export default function WorkbenchPage({
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
   const openWorkbenchConversation = useCallback((sessionId?: string | null, agent?: any) => {
-    const targetSessionId = workflowFrontendSessionId || sessionId;
+    const targetSessionId = sessionId || workflowFrontendSessionId;
     if (!targetSessionId) return;
 
     setWorkbenchConversationSessionId(targetSessionId);
@@ -4109,7 +4109,7 @@ export default function WorkbenchPage({
     toastMessage: `${workflowBaseTitle} ${pendingHumanQuestionKindLabel ? `等待${pendingHumanQuestionKindLabel}` : '已进入人工审查点'}`,
   });
 
-  useDocumentTitle(attentionSignal.active ? attentionSignal.title || null : workflowTitle);
+  useDocumentTitle(embeddedInDashboard ? null : attentionSignal.active ? attentionSignal.title || null : workflowTitle);
 
   const totalSteps = workflowConfig?.workflow?.mode === 'state-machine'
     ? (workflowConfig?.workflow?.states?.reduce(
@@ -5297,7 +5297,7 @@ export default function WorkbenchPage({
     }
   };
 
-  const saveWorkflowName = async (newName: string) => {
+  const saveWorkflowName = useCallback(async (newName: string) => {
     if (!newName.trim() || !workflowConfig) return;
     try {
       const config = { ...workflowConfig, workflow: { ...workflowConfig.workflow, name: newName.trim() } };
@@ -5305,7 +5305,7 @@ export default function WorkbenchPage({
       dispatch({ type: 'SET_WORKFLOW_CONFIG', payload: config });
     } catch { /* non-critical */ }
     setEditingName(false);
-  };
+  }, [configFile, dispatch, workflowConfig]);
 
   const hasContextEditableRun = Boolean(runId || initialRunId || selectedRun?.id);
 
@@ -5553,7 +5553,7 @@ export default function WorkbenchPage({
     });
   }, [pendingStartRequest, startWorkflow]);
 
-  const stopWorkflow = async () => {
+  const stopWorkflow = useCallback(async () => {
     try {
       await workflowApi.stop(configFile);
       // Directly update local state — don't rely solely on SSE
@@ -5563,9 +5563,9 @@ export default function WorkbenchPage({
     } catch (error: any) {
       addLog('system', 'error', `停止失败: ${error.message}`);
     }
-  };
+  }, [addLog, configFile, dispatch]);
 
-  const requestStopWorkflow = async () => {
+  const requestStopWorkflow = useCallback(async () => {
     const ok = await confirm({
       title: '确认停止工作流',
       description: '停止后当前运行将中断。是否继续？',
@@ -5575,7 +5575,7 @@ export default function WorkbenchPage({
     });
     if (!ok) return;
     await stopWorkflow();
-  };
+  }, [confirm, stopWorkflow]);
 
   const handleForceTransition = (targetState: string) => {
     setForceTransitionModal({ targetState, instruction: '' });
@@ -6796,7 +6796,7 @@ export default function WorkbenchPage({
     </div>
   );
 
-  const openContextEditor = (_scope: 'global' | 'phase' = 'global', phase?: string) => {
+  const openContextEditor = useCallback((_scope: 'global' | 'phase' = 'global', phase?: string) => {
     const rid = runId || initialRunId || selectedRun?.id;
     if (!rid) {
       toast('warning', '当前没有可编辑上下文的运行记录');
@@ -6809,7 +6809,7 @@ export default function WorkbenchPage({
     setContextEditorPhaseDrafts(nextPhaseDrafts);
     setContextEditorFocusTarget(phase || '');
     setShowContextEditor(true);
-  };
+  }, [globalContext, initialRunId, phaseContexts, runId, selectedRun?.id, startContextTargets, toast]);
 
   const saveContext = async (contexts: WorkflowStartContexts) => {
     try {
@@ -7246,7 +7246,7 @@ export default function WorkbenchPage({
     dispatch({ type: 'SET_EDITING_CONFIG', payload: newConfig });
   };
 
-  const handleSaveConfig = async () => {
+  const handleSaveConfig = useCallback(async () => {
     if (!editingConfig) return;
     setSaving(true);
     try {
@@ -7280,7 +7280,17 @@ export default function WorkbenchPage({
     } finally {
       setSaving(false);
     }
-  };
+  }, [
+    configFile,
+    creationSessionSummary?.id,
+    currentWorkflowDesignDraftState,
+    dispatch,
+    editingConfig,
+    specCodingDetails,
+    specCodingSummary,
+    toast,
+    workflowConfig?.workflow?.name,
+  ]);
 
   const handleSaveAgent = async (agent: any) => {
     try {
@@ -8764,6 +8774,130 @@ export default function WorkbenchPage({
     </>
   );
 
+  const workbenchModeSubtitle = isRunMode ? '运行' : isDesignMode ? '设计' : '历史';
+  const workbenchHeaderActions = useMemo(() => (
+    <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+      <Button variant="outline" size="sm" className="h-8 text-xs" onClick={goBackToWorkflows}>
+        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>arrow_back</span>
+        <span className="hidden xl:inline">工作流</span>
+      </Button>
+      {isDesignMode && editingName ? (
+        <Input
+          value={nameValue}
+          onChange={(e) => setNameValue(e.target.value)}
+          onBlur={() => saveWorkflowName(nameValue)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') saveWorkflowName(nameValue);
+            if (e.key === 'Escape') setEditingName(false);
+          }}
+          className="h-8 w-[150px] text-xs font-semibold"
+          autoFocus
+        />
+      ) : isDesignMode ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={() => { setEditingName(true); setNameValue(workflowConfig?.workflow?.name || ''); }}
+          title={workflowConfig?.workflow?.name || configFile}
+        >
+          <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>edit</span>
+          <span className="hidden xl:inline">名称</span>
+        </Button>
+      ) : null}
+      <div className="flex gap-0.5 rounded-md bg-muted p-0.5">
+        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isRunMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('run')}>
+          <span className="material-symbols-outlined text-sm">home</span><span className="hidden lg:inline ml-1">首页</span>
+        </Button>
+        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isDesignMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('design')}>
+          <span className="material-symbols-outlined text-sm">edit</span><span className="hidden lg:inline ml-1">设计</span>
+        </Button>
+        <Button variant="ghost" size="sm" className={`h-8 px-2 text-xs ${isHistoryMode ? 'bg-background text-foreground shadow-sm' : ''}`} onClick={() => switchViewMode('history')}>
+          <span className="material-symbols-outlined text-sm">history</span><span className="hidden lg:inline ml-1">历史</span>
+        </Button>
+      </div>
+      {isRunMode ? (
+        <>
+          <div className={`hidden items-center gap-2 rounded-md border px-2 py-1 transition-colors xl:flex ${
+            rehearsalMode ? 'bg-background/40' : 'border-amber-500/30 bg-amber-500/10'
+          }`}>
+            <Switch checked={rehearsalMode} onCheckedChange={setRehearsalMode} />
+            <span className="text-xs text-muted-foreground">演练</span>
+          </div>
+          <Button size="sm" className={`h-8 text-xs ${canStartWorkflow ? styles.startWorkflowGlow : ''}`} onClick={() => requestStartWorkflow()} disabled={!canStartWorkflow}>
+            {starting ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>play_arrow</span>}
+            <span className="hidden xl:inline">{starting ? '启动中...' : rehearsalMode ? '开始演练' : '启动工作流'}</span>
+            <span className="xl:hidden">启动</span>
+          </Button>
+          {!rehearsalMode ? (
+            <Button variant="outline" size="sm" className="hidden h-8 text-xs xl:inline-flex" onClick={() => requestStartWorkflow('real', { skipPreflight: true })} disabled={!canStartWorkflow}>
+              <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>fast_forward</span>
+              跳过检查
+            </Button>
+          ) : null}
+          <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={requestStopWorkflow} disabled={!isRunning && workflowStatus !== 'running'}>
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>stop</span><span className="hidden xl:inline ml-1">停止</span>
+          </Button>
+          <ButtonGroup>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => dispatch({ type: 'SET_SHOW_PROCESS_PANEL', payload: !showProcessPanel })}>
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>settings</span><span className="hidden xl:inline ml-1">进程</span>
+            </Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openContextEditor('global')} disabled={!hasContextEditableRun}>
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>edit_note</span><span className="hidden xl:inline ml-1">上下文</span>
+            </Button>
+          </ButtonGroup>
+        </>
+      ) : null}
+      {isDesignMode ? (
+        <Button size="sm" className="h-8 bg-green-600 text-xs text-white hover:bg-green-700" onClick={handleSaveConfig} disabled={saving}>
+          {saving ? <ClipLoader color="currentColor" size={14} className="mr-1" /> : <span className="material-symbols-outlined mr-1" style={{ fontSize: 14 }}>save</span>}
+          <span className="hidden lg:inline">{saving ? '保存中...' : '保存配置'}</span>
+          <span className="lg:hidden">保存</span>
+        </Button>
+      ) : null}
+      {workflowStatus === 'idle' ? (
+        <Badge variant="secondary"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+      ) : workflowStatus === 'preparing' ? (
+        <Badge className="bg-yellow-500/20 text-yellow-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+      ) : workflowStatus === 'running' ? (
+        <Badge className="bg-blue-500/20 text-blue-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+      ) : workflowStatus === 'completed' ? (
+        <Badge className="bg-green-500/20 text-green-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+      ) : (
+        <Badge className="bg-red-500/20 text-red-400"><span className="h-2 w-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
+      )}
+    </div>
+  ), [
+    canStartWorkflow,
+    configFile,
+    dispatch,
+    editingName,
+    goBackToWorkflows,
+    handleSaveConfig,
+    hasContextEditableRun,
+    isDesignMode,
+    isHistoryMode,
+    isRunMode,
+    isRunning,
+    nameValue,
+    openContextEditor,
+    rehearsalMode,
+    requestStartWorkflow,
+    requestStopWorkflow,
+    saveWorkflowName,
+    saving,
+    showProcessPanel,
+    starting,
+    switchViewMode,
+    workflowConfig?.workflow?.name,
+    workflowStatus,
+  ]);
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: workflowTitle,
+    subtitle: `${workbenchModeSubtitle} · ${configFile}`,
+    actions: workbenchHeaderActions,
+  }, [workflowTitle, workbenchModeSubtitle, configFile, workbenchHeaderActions]);
+
   if (pageLoading && isDesignMode && !isHistoryMode) {
     return <BrandLoadingScreen message="加载工作流配置..." />;
   }
@@ -8786,6 +8920,7 @@ export default function WorkbenchPage({
       'flex flex-col bg-background/80 text-foreground',
       embeddedInDashboard ? 'h-full min-h-0 overflow-hidden' : 'h-screen'
     )}>
+      {!isDashboardShell ? (
       <div className="shrink-0 border-b bg-muted">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
           <div className="flex items-center gap-2 shrink-0 min-w-0">
@@ -8934,10 +9069,10 @@ export default function WorkbenchPage({
           {(workflowStatus === 'failed' || workflowStatus === 'stopped' || workflowStatus === 'crashed') && (
             <Badge className="bg-red-500/20 text-red-400"><span className="w-2 h-2 rounded-full bg-current animate-pulse" />{getStatusText(workflowStatus)}</Badge>
           )}
-          <ThemeToggle />
         </div>
         </div>
       </div>
+      ) : null}
 
       <div className="flex-1 flex overflow-hidden">
         {isRunMode && (

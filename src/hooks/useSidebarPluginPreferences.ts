@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { applyDisabledPluginIds } from '@/lib/sidebar-plugins';
+import { applySidebarPluginPreferences } from '@/lib/sidebar-plugins';
 
 function getAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
@@ -9,7 +9,12 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-async function requestSidebarPluginPreferences(init?: RequestInit): Promise<{ disabledPluginIds: string[] }> {
+type SidebarPluginPreferenceIds = {
+  disabledPluginIds: string[];
+  enabledPluginIds: string[];
+};
+
+async function requestSidebarPluginPreferences(init?: RequestInit): Promise<SidebarPluginPreferenceIds> {
   const response = await fetch('/api/sidebar-plugins/preferences', {
     ...init,
     headers: {
@@ -34,31 +39,37 @@ async function requestSidebarPluginPreferences(init?: RequestInit): Promise<{ di
   const disabledPluginIds = Array.isArray(data?.disabledPluginIds)
     ? data.disabledPluginIds.filter((item: unknown) => typeof item === 'string')
     : [];
-  return { disabledPluginIds };
+  const enabledPluginIds = Array.isArray(data?.enabledPluginIds)
+    ? data.enabledPluginIds.filter((item: unknown) => typeof item === 'string')
+    : [];
+  return { disabledPluginIds, enabledPluginIds };
 }
 
 export function useSidebarPluginPreferences() {
   const [disabledPluginIds, setDisabledPluginIds] = useState<string[]>([]);
+  const [enabledPluginIds, setEnabledPluginIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(async () => {
     const data = await requestSidebarPluginPreferences();
-    applyDisabledPluginIds(data.disabledPluginIds);
+    applySidebarPluginPreferences(data);
     setDisabledPluginIds(data.disabledPluginIds);
+    setEnabledPluginIds(data.enabledPluginIds);
     setVersion((prev) => prev + 1);
-    return data.disabledPluginIds;
+    return data;
   }, []);
 
-  const save = useCallback(async (nextDisabledPluginIds: string[]) => {
+  const save = useCallback(async (nextPreferences: SidebarPluginPreferenceIds) => {
     const data = await requestSidebarPluginPreferences({
       method: 'PUT',
-      body: JSON.stringify({ disabledPluginIds: nextDisabledPluginIds }),
+      body: JSON.stringify(nextPreferences),
     });
-    applyDisabledPluginIds(data.disabledPluginIds);
+    applySidebarPluginPreferences(data);
     setDisabledPluginIds(data.disabledPluginIds);
+    setEnabledPluginIds(data.enabledPluginIds);
     setVersion((prev) => prev + 1);
-    return data.disabledPluginIds;
+    return data;
   }, []);
 
   useEffect(() => {
@@ -67,13 +78,15 @@ export function useSidebarPluginPreferences() {
       try {
         const data = await requestSidebarPluginPreferences();
         if (cancelled) return;
-        applyDisabledPluginIds(data.disabledPluginIds);
+        applySidebarPluginPreferences(data);
         setDisabledPluginIds(data.disabledPluginIds);
+        setEnabledPluginIds(data.enabledPluginIds);
         setVersion((prev) => prev + 1);
       } catch {
         if (cancelled) return;
-        applyDisabledPluginIds([]);
+        applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
         setDisabledPluginIds([]);
+        setEnabledPluginIds([]);
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -89,6 +102,7 @@ export function useSidebarPluginPreferences() {
 
   return {
     disabledPluginIds,
+    enabledPluginIds,
     loading,
     refresh,
     save,

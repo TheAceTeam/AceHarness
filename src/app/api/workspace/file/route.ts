@@ -5,6 +5,8 @@ import { appendPersistedSpecRevision, classifyPersistedSpecFile } from '@/lib/sp
 import {
   WORKSPACE_BLOB_PREVIEW_SIZE_LIMIT,
   WORKSPACE_TEXT_FILE_SIZE_LIMIT,
+  assertSafeRelativePath,
+  isInsidePath,
   resolveCreatableInsideWorkspace,
   resolveExistingInsideWorkspace,
   resolveWorkspaceRoot,
@@ -12,8 +14,39 @@ import {
 } from '@/lib/core/workspace-path-safety';
 import { getRemoteWorkspace, isRemoteWorkspace } from '@/lib/core/remote-workspace';
 import { getRemoteCredentials, remoteCredentialErrorBody, requireRemoteWorkspaceAuth } from '@/lib/core/remote-credential-vault';
+import { getRuntimeSkillsDirPath } from '@/lib/run/runtime-skills';
 
 const MAX_FILE_SIZE = WORKSPACE_TEXT_FILE_SIZE_LIMIT;
+
+function toPortablePath(input: string): string {
+  return input.replace(/\\/g, '/');
+}
+
+function isAgentsSkillsRelativePath(rootPath: string, lexicalPath: string): boolean {
+  const relativePath = toPortablePath(path.relative(rootPath, lexicalPath));
+  return relativePath === '.agents/skills' || relativePath.startsWith('.agents/skills/');
+}
+
+async function resolveExistingReadableWorkspaceFile(root: string, file: string): Promise<string> {
+  try {
+    return await resolveExistingInsideWorkspace(root, file);
+  } catch (error: any) {
+    if (error?.status !== 403) throw error;
+  }
+
+  const lexicalPath = path.resolve(root, assertSafeRelativePath(file));
+  if (!isInsidePath(root, lexicalPath) || !isAgentsSkillsRelativePath(root, lexicalPath)) {
+    return resolveExistingInsideWorkspace(root, file);
+  }
+
+  const realPath = await fs.realpath(lexicalPath);
+  const runtimeSkillsDir = await getRuntimeSkillsDirPath();
+  const realRuntimeSkillsDir = await fs.realpath(runtimeSkillsDir);
+  if (!isInsidePath(realRuntimeSkillsDir, realPath)) {
+    return resolveExistingInsideWorkspace(root, file);
+  }
+  return realPath;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -64,7 +97,7 @@ export async function GET(request: NextRequest) {
     }
 
     const resolvedWorkspace = await resolveWorkspaceRoot(workspace);
-    const realPath = await resolveExistingInsideWorkspace(resolvedWorkspace, file);
+    const realPath = await resolveExistingReadableWorkspaceFile(resolvedWorkspace, file);
     const stat = await fs.stat(realPath);
     if (!stat.isFile()) {
       return NextResponse.json({ error: '不是文件' }, { status: 400 });

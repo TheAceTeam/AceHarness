@@ -1,6 +1,6 @@
 {
   "name": "@cangjielang/aceharness",
-  "version": "1.0.0-beta.78",
+  "version": "1.0.0-beta.79",
   "description": "ACEHarness - Agent Centric Engineering Harness (From Cangjie Team)",
   "scripts": {
     "build:napi-cj": "npm run build --prefix packages/napi-cj",
@@ -70,6 +70,7 @@
     "@hookform/resolvers": "^3.3.0",
     "@hugeicons/core-free-icons": "^4.2.1",
     "@hugeicons/react": "^1.1.7",
+    "@lancedb/lancedb": "^0.30.0",
     "@marsaud/smb2": "^0.18.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",

@@ -1690,9 +1690,11 @@ export const agoraApi = {
   async ensureWorkspace(input: {
     sessionId: string;
     sourceWorkspace?: string;
+    targetWorkspace?: string;
     title?: string;
     skills?: string[] | Record<string, boolean>;
     mcpServers?: string[] | Record<string, boolean>;
+    purpose?: 'agora' | 'chat';
   }): Promise<{ workspacePath: string; created: boolean; sourceWorkspace?: string }> {
     const response = await authFetch(`${API_BASE}/agora/workspace`, {
       method: 'POST',

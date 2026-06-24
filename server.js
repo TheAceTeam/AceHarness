@@ -83,6 +83,7 @@ const { getWorkspaceDataFile, getWorkspaceNotebookRoot, } = require(path.join(__
 const dev = process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
 const host = process.env.ACE_HOST || '127.0.0.1';
 const port = Number(process.env.PORT || process.env.ACE_PORT || 3000);
+const CHAT_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
 const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
 const docs = new Map();
@@ -225,6 +226,10 @@ app.prepare().then(() => {
     const server = http.createServer((req, res) => {
         handle(req, res);
     });
+    server.requestTimeout = CHAT_REQUEST_TIMEOUT_MS;
+    server.timeout = CHAT_REQUEST_TIMEOUT_MS;
+    server.headersTimeout = CHAT_REQUEST_TIMEOUT_MS + 5000;
+    server.keepAliveTimeout = CHAT_REQUEST_TIMEOUT_MS;
     const handleUpgrade = app.getUpgradeHandler();
     const wss = new WebSocketServer({ noServer: true });
     wss.on('connection', (ws, request, context) => {

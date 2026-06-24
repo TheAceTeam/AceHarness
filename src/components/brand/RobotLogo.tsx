@@ -16,7 +16,7 @@ export function RobotLogo({ size = 32, className = '' }: { size?: number; classN
       fallback="ACE"
       aria-hidden="true"
       size={size}
-      className={`inline-flex rounded-full ${className}`.trim()}
+      className={`inline-flex overflow-visible rounded-full ${className}`.trim()}
       spriteImageClassName={innerGlowClass}
       draggable={false}
     />

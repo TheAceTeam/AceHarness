@@ -11,6 +11,8 @@ import { executeEngineWithContextRecovery, resolveRecoveredSessionId } from '@/l
 import { requireAuth } from '@/lib/auth/middleware';
 import { normalizeEngineNamespacedSlashCommand } from '@/lib/chat/engine-slash-command';
 
+export const maxDuration = 1200;
+
 export async function POST(request: NextRequest) {
   const authResult = await requireAuth(request);
   if (authResult instanceof Response) return authResult;

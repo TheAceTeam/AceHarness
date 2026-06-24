@@ -35,8 +35,11 @@ const EnginesPage = dynamic(() => import('@/app/engines/page'), { ssr: false });
 const SchedulesPage = dynamic(() => import('@/app/schedules/page'), { ssr: false });
 const RunHistoryPage = dynamic(() => import('@/app/run-history/page'), { ssr: false });
 const KnowledgePage = dynamic(() => import('@/app/knowledge/page'), { ssr: false });
+const KnowledgeLibraryPage = dynamic(() => import('@/app/knowledge/library/page'), { ssr: false });
 const ApiDocsPage = dynamic(() => import('@/app/api-docs/page'), { ssr: false });
 const OfficePage = dynamic(() => import('@/app/office/page'), { ssr: false });
+const NotebookPageContent = dynamic(() => import('@/app/notebook/page').then((m) => m.NotebookPageContent), { ssr: false });
+const AccountContent = dynamic(() => import('@/app/account/page').then((m) => m.AccountContent), { ssr: false });
 const WorkbenchClient = dynamic(() => import('@/app/workbench/[config]/WorkbenchClient'), { ssr: false });
 
 export type DashboardDockTab =
@@ -51,8 +54,11 @@ export type DashboardDockTab =
   | { id: 'schedules'; title: string; kind: 'schedules' }
   | { id: 'run-history'; title: string; kind: 'run-history' }
   | { id: 'knowledge'; title: string; kind: 'knowledge' }
+  | { id: 'knowledge-library'; title: string; kind: 'knowledge-library' }
   | { id: 'api-docs'; title: string; kind: 'api-docs' }
   | { id: 'office'; title: string; kind: 'office' }
+  | { id: string; title: string; kind: 'notebook'; search?: string }
+  | { id: string; title: string; kind: 'account'; search?: string }
   | { id: string; title: string; kind: 'workbench'; config: string; mode?: string; runId?: string | null };
 
 export type DashboardDockWorkspaceHandle = {
@@ -105,8 +111,11 @@ const DEFAULT_SHELL_HEADERS: Record<DashboardDockTab['kind'], { title: string; s
   schedules: { title: '定时任务', subtitle: '管理自动运行计划' },
   'run-history': { title: '运行记录', subtitle: '查看历史运行和 Token 排行' },
   knowledge: { title: '知识库', subtitle: '知识库与全局 Notebook' },
+  'knowledge-library': { title: '知识库', subtitle: 'ACEHarness 原生 RAG 容器' },
   'api-docs': { title: 'API 文档', subtitle: '接口示例、请求参数与在线调试' },
   office: { title: '一人公司', subtitle: '办公室、协作、记忆和工作流聚合桌面' },
+  notebook: { title: 'Cangjie Notebook', subtitle: '编辑、整理和运行 Notebook' },
+  account: { title: '账户设置', subtitle: '个人资料、目录和账户偏好' },
   workbench: { title: '工作流工作台', subtitle: '设计、运行和调试工作流' },
 };
 
@@ -206,6 +215,9 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
       content = <KnowledgePage />;
       scrollable = true;
       break;
+    case 'knowledge-library':
+      content = <KnowledgeLibraryPage />;
+      break;
     case 'api-docs':
       content = <ApiDocsPage />;
       scrollable = true;
@@ -216,6 +228,12 @@ function WorkspacePanel(props: IDockviewPanelProps<WorkspacePanelParams>) {
           <OfficePage embedded />
         </div>
       );
+      break;
+    case 'notebook':
+      content = <NotebookPageContent embedded embeddedSearch={tab.search || ''} />;
+      break;
+    case 'account':
+      content = <AccountContent embedded embeddedSearch={tab.search || ''} />;
       break;
     case 'workbench':
       content = (
@@ -263,6 +281,25 @@ const components = {
 
 function shouldAlwaysRenderTab(tab: DashboardDockTab) {
   return tab.kind === 'chat';
+}
+
+function hasSameTabIdentity(current: WorkspacePanelParams, next: DashboardDockTab) {
+  if (current.id !== next.id || current.kind !== next.kind || current.title !== next.title) {
+    return false;
+  }
+
+  if (current.kind === 'workbench' && next.kind === 'workbench') {
+    return current.config === next.config
+      && (current.mode || 'run') === (next.mode || 'run')
+      && (current.runId || '') === (next.runId || '');
+  }
+
+  if ((current.kind === 'notebook' && next.kind === 'notebook')
+    || (current.kind === 'account' && next.kind === 'account')) {
+    return (current.search || '') === (next.search || '');
+  }
+
+  return true;
 }
 
 function getDropDirection(event: DragEvent<HTMLDivElement>, element: HTMLDivElement): Exclude<Direction, 'within'> | null {
@@ -433,7 +470,10 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       const existing = api.getPanel(tab.id);
       if (existing) {
         const params = existing.params as WorkspacePanelParams | undefined;
-        if (params) {
+        if (params && !hasSameTabIdentity(params, tab)) {
+          if (existing.api.title !== tab.title) {
+            existing.api.setTitle(tab.title);
+          }
           existing.update({
             params: {
               ...params,
@@ -595,6 +635,8 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
       } : undefined);
     }, [openTab]);
 
+    const workspaceContextValue = useMemo<DashboardDockWorkspaceContextValue>(() => ({ openTab }), [openTab]);
+
     return (
       <div
         ref={rootRef}
@@ -610,7 +652,7 @@ export const DashboardDockWorkspace = forwardRef<DashboardDockWorkspaceHandle, D
         onDragOver={handleDragOver}
         onDrop={handleDrop}
       >
-        <DashboardDockWorkspaceContext.Provider value={{ openTab }}>
+        <DashboardDockWorkspaceContext.Provider value={workspaceContextValue}>
           <DockviewReact
             className="h-full min-h-0"
             components={dockviewComponents}

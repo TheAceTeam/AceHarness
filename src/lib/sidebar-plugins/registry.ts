@@ -16,6 +16,7 @@ import coreOptimize from './manifests/core-optimize.json';
 import supervisorPlugin from '@/plugins/supervisor';
 import createWorkflowPlugin from '@/plugins/create-workflow';
 import createAgentPlugin from '@/plugins/create-agent';
+import codespecPlugin from '@/plugins/codespec';
 
 // ─── Dual registry: JSON manifests (actions-only) + full plugins ───
 
@@ -28,6 +29,7 @@ const defaultFullPlugins: HomePlugin[] = [
   supervisorPlugin,
   createWorkflowPlugin,
   createAgentPlugin,
+  codespecPlugin,
 ];
 
 let fullPlugins: HomePlugin[] = defaultFullPlugins.map((plugin) => ({ ...plugin }));
@@ -52,7 +54,12 @@ export function getAllPlugins(options?: { includeDisabled?: boolean }): HomePlug
 }
 
 export function applyDisabledPluginIds(disabledPluginIds: string[]): void {
-  const disabled = new Set(disabledPluginIds);
+  applySidebarPluginPreferences({ disabledPluginIds, enabledPluginIds: [] });
+}
+
+export function applySidebarPluginPreferences(preferences: { disabledPluginIds?: string[]; enabledPluginIds?: string[] }): void {
+  const disabled = new Set(preferences.disabledPluginIds || []);
+  const enabled = new Set(preferences.enabledPluginIds || []);
   const currentById = new Map(fullPlugins.map((plugin) => [plugin.id, plugin]));
   const sourcePlugins = [
     ...defaultFullPlugins,
@@ -62,7 +69,7 @@ export function applyDisabledPluginIds(disabledPluginIds: string[]): void {
   fullPlugins = sourcePlugins.map((plugin) => ({
     ...(currentById.get(plugin.id) || plugin),
     ...plugin,
-    enabled: plugin.enabled === false ? false : !disabled.has(plugin.id),
+    enabled: enabled.has(plugin.id) ? true : (plugin.enabled === false ? false : !disabled.has(plugin.id)),
   }));
 }
 

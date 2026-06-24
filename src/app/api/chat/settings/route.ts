@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadChatSettings, saveChatSettings, discoverSkills } from '@/lib/chat/settings';
+import { invalidateChatSettingsCache, loadChatSettings, saveChatSettings, discoverSkills } from '@/lib/chat/settings';
 import { loadMcpRegistry } from '@/lib/mcp/registry';
 
 export async function GET() {
+  invalidateChatSettingsCache();
   const settings = await loadChatSettings();
   const discovered = await discoverSkills();
   const discoveredMcpServers = await loadMcpRegistry();

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,8 @@ import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPick
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { ArrowLeft, FolderOpen, NotebookTabs, RadioTower } from 'lucide-react';
 import { workspaceApi, type NotebookScope } from '@/lib/core/api';
+import { useDashboardDockWorkspace } from '@/components/dashboard/DashboardDockWorkspace';
+import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
 
 interface UserInfo {
   id: string;
@@ -26,13 +28,28 @@ interface UserInfo {
   createdAt: number;
 }
 
-function AccountContent() {
+export function AccountContent({
+  embedded = false,
+  embeddedSearch = '',
+}: {
+  embedded?: boolean;
+  embeddedSearch?: string;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const dockWorkspace = useDashboardDockWorkspace();
+  const effectiveSearchParams = useMemo(
+    () => new URLSearchParams(embedded ? embeddedSearch : searchParams.toString()),
+    [embedded, embeddedSearch, searchParams]
+  );
   const [user, setUser] = useState<UserInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useDocumentTitle('账户设置');
+  useDocumentTitle(embedded ? null : '账户设置');
+  const { isDashboardShell } = useDashboardShellHeader({
+    title: '账户设置',
+    subtitle: '个人资料、目录和账户偏好',
+  }, []);
 
   // Password change
   const [pwdOpen, setPwdOpen] = useState(false);
@@ -78,21 +95,21 @@ function AccountContent() {
   }, []);
 
   useEffect(() => {
-    const openWorkspace = searchParams.get('workspace') === '1';
+    const openWorkspace = effectiveSearchParams.get('workspace') === '1';
     if (openWorkspace) setWsEditorOpen(true);
-  }, [searchParams]);
+  }, [effectiveSearchParams]);
 
   useEffect(() => {
-    const openNotebook = searchParams.get('notebook') === '1';
+    const openNotebook = effectiveSearchParams.get('notebook') === '1';
     if (!openNotebook) return;
-    const scopeParam = searchParams.get('notebookScope');
+    const scopeParam = effectiveSearchParams.get('notebookScope');
     if (scopeParam === 'global') {
-      router.replace(`/notebook?${searchParams.toString()}`);
+      router.replace(`/notebook?${effectiveSearchParams.toString()}`);
       return;
     }
 
-    const shareToken = searchParams.get('notebookShare') || '';
-    const fileParam = searchParams.get('notebookFile');
+    const shareToken = effectiveSearchParams.get('notebookShare') || '';
+    const fileParam = effectiveSearchParams.get('notebookFile');
 
     if (!shareToken) {
       setNotebookScope(scopeParam === 'global' ? 'global' : 'personal');
@@ -110,7 +127,7 @@ function AccountContent() {
         setNotebookShareToken(shareToken);
         setNotebookPermission(share.permission);
         if (!fileParam) {
-          const params = new URLSearchParams(searchParams.toString());
+          const params = new URLSearchParams(effectiveSearchParams.toString());
           params.set('notebook', '1');
           params.set('notebookScope', share.scope);
           params.set('notebookFile', share.path);
@@ -127,7 +144,40 @@ function AccountContent() {
         setNotebookPermission('write');
       });
     return () => { cancelled = true; };
-  }, [router, searchParams]);
+  }, [effectiveSearchParams, router]);
+
+  const pushDashboardRoute = useCallback((route: string) => {
+    const params = new URLSearchParams();
+    params.set('route', route);
+    router.push(`/dashboard?${params.toString()}`);
+  }, [router]);
+
+  const openPersonalNotebook = useCallback(() => {
+    const search = 'notebook=1&notebookScope=personal';
+    if (dockWorkspace) {
+      dockWorkspace.openTab({
+        id: 'notebook:personal:root',
+        title: 'Cangjie Notebook',
+        kind: 'notebook',
+        search,
+      });
+      pushDashboardRoute(`/notebook?${search}`);
+      return;
+    }
+    setNotebookScope('personal');
+    setNotebookShareToken(undefined);
+    setNotebookPermission('write');
+    setNotebookOpen(true);
+  }, [dockWorkspace, pushDashboardRoute]);
+
+  const openSystemSettings = useCallback(() => {
+    if (dockWorkspace) {
+      dockWorkspace.openTab({ id: 'settings', title: '系统设置', kind: 'settings' });
+      pushDashboardRoute('/account/system-settings');
+      return;
+    }
+    router.push('/account/system-settings');
+  }, [dockWorkspace, pushDashboardRoute, router]);
 
   const handleChangePassword = async () => {
     setPwdError(''); setPwdSuccess('');
@@ -193,7 +243,8 @@ function AccountContent() {
   const initials = user.username?.charAt(0)?.toUpperCase() || '?';
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={embedded ? 'h-full overflow-auto bg-background' : 'min-h-screen bg-background'}>
+      {!isDashboardShell ? (
       <header className="border-b border-border/50 bg-card/30 backdrop-blur-xl sticky top-0 z-50">
         <div className="container mx-auto px-6 py-4 flex items-center gap-4">
           <Button variant="ghost" size="sm" asChild>
@@ -203,6 +254,7 @@ function AccountContent() {
           <h1 className="text-2xl font-bold">账户设置</h1>
         </div>
       </header>
+      ) : null}
 
       <div className="container mx-auto px-6 py-8 max-w-2xl space-y-6">
         {/* Profile Card */}
@@ -236,11 +288,11 @@ function AccountContent() {
           role="button"
           tabIndex={0}
           data-tour-step-id="account-notebook"
-          onClick={() => setNotebookOpen(true)}
+          onClick={openPersonalNotebook}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              setNotebookOpen(true);
+              openPersonalNotebook();
             }
           }}
           className="w-full rounded-xl border bg-card p-6 text-left transition-colors hover:bg-muted/40 cursor-pointer"
@@ -329,7 +381,7 @@ function AccountContent() {
               </button>
             </div>
           </div>
-          <button onClick={() => router.push('/account/system-settings')} className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
+          <button onClick={openSystemSettings} className="w-full px-6 py-4 flex items-center justify-between hover:bg-muted/50 transition-colors">
             <div className="flex items-center gap-3">
               <span className="material-symbols-outlined text-muted-foreground">settings</span>
               <span>系统设置</span>
@@ -442,6 +494,9 @@ function AccountContent() {
   );
 }
 
-export default function AccountPage() {
-  return <AuthGuard><AccountContent /></AuthGuard>;
+export default function AccountPage(props: {
+  embedded?: boolean;
+  embeddedSearch?: string;
+} = {}) {
+  return <AuthGuard><AccountContent {...props} /></AuthGuard>;
 }

@@ -381,6 +381,13 @@ export interface HomeSidebarHint {
 export interface SessionWorkbenchState {
   homeSidebar?: HomeSidebarHint | null;
   latestPreflight?: SessionPreflightSnapshot | null;
+  chatWorkspace?: {
+    workingDirectory: string;
+    sourceWorkspace?: string;
+    autoCreated?: boolean;
+    gitBaselineReady?: boolean;
+    updatedAt: number;
+  } | null;
   collaborationRoom?: CollaborationRoomState | null;
   wechatBinding?: {
     integrationId: string;
