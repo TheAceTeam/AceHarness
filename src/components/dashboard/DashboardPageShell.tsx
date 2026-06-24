@@ -87,6 +87,7 @@ interface RunTokenUsageItem {
 const WORKFLOW_TOKEN_RANKING_HREF = '/run-history?view=token-ranking&dimension=workflow&sortKey=totalTokens&sortDirection=desc&page=1';
 const DASHBOARD_CACHE_KEY = 'dashboard-cache';
 const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
+const SIDEBAR_COOKIE_NAME = 'sidebar:state';
 const CHART_SERIES_COLORS = ['#38bdf8', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#06b6d4', '#ec4899', '#6366f1'];
 const TOKEN_STACK_COLORS = {
   inputTokens: '#38bdf8',
@@ -190,6 +191,15 @@ function formatStateName(name: string): string {
   return name;
 }
 
+function readStoredSidebarOpen(): boolean {
+  if (typeof document === 'undefined') return true;
+  const match = document.cookie
+    .split('; ')
+    .find((item) => item.startsWith(`${SIDEBAR_COOKIE_NAME}=`));
+  if (!match) return true;
+  return match.split('=')[1] !== 'false';
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -220,7 +230,7 @@ export default function DashboardPage() {
   const [currentUser, setCurrentUser] = useState<DashboardUser | null>(null);
   const [conversationView, setConversationView] = useState<SessionDirectoryView>('conversation');
   const [secondarySidebarOpen, setSecondarySidebarOpen] = useState(true);
-  const [mainSidebarOpen, setMainSidebarOpen] = useState(true);
+  const [mainSidebarOpen, setMainSidebarOpen] = useState(readStoredSidebarOpen);
   const [activeDockTab, setActiveDockTab] = useState<DashboardDockTab | null>({ id: 'chat', title: '对话', kind: 'chat' });
   const workspaceRef = useRef<DashboardDockWorkspaceHandle | null>(null);
   const suppressSidebarClickRef = useRef(false);
@@ -277,6 +287,10 @@ export default function DashboardPage() {
 
   const handleToggleChatSecondarySidebar = useCallback(() => {
     setSecondarySidebarOpen((open) => !open);
+  }, []);
+
+  const handleMainSidebarOpenChange = useCallback((open: boolean) => {
+    setMainSidebarOpen(open);
   }, []);
 
   const handleActiveDockTabChange = useCallback((tab: DashboardDockTab | null) => {
@@ -944,7 +958,7 @@ export default function DashboardPage() {
     <DashboardShellHeaderProvider>
     <SidebarProvider
       open={mainSidebarOpen}
-      onOpenChange={setMainSidebarOpen}
+      onOpenChange={handleMainSidebarOpenChange}
       className="min-h-screen bg-background"
       style={{
         '--sidebar-width': '18rem',

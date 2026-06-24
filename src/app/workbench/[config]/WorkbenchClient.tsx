@@ -1226,9 +1226,16 @@ export default function WorkbenchPage({
   const searchParams = useSearchParams();
   const router = useRouter();
   const dockWorkspace = useDashboardDockWorkspace();
+  const [embeddedSearchState, setEmbeddedSearchState] = useState(embeddedSearch ?? '');
+
+  useEffect(() => {
+    if (!embeddedInDashboard) return;
+    setEmbeddedSearchState(embeddedSearch ?? '');
+  }, [embeddedInDashboard, embeddedSearch]);
+
   const effectiveSearchParams = useMemo(
-    () => new URLSearchParams(embeddedSearch ?? searchParams.toString()),
-    [embeddedSearch, searchParams]
+    () => new URLSearchParams(embeddedInDashboard ? embeddedSearchState : searchParams.toString()),
+    [embeddedInDashboard, embeddedSearchState, searchParams]
   );
   const configFile = decodeURIComponent(embeddedConfig ?? (params.config as string));
 
@@ -1248,7 +1255,6 @@ export default function WorkbenchPage({
 
   // Update URL query params without full navigation
   const updateUrl = useCallback((updates: Record<string, string | null>) => {
-    if (embeddedInDashboard) return;
     const sp = new URLSearchParams(searchParamsString);
     for (const [key, val] of Object.entries(updates)) {
       if (val === null) sp.delete(key);
@@ -1258,6 +1264,10 @@ export default function WorkbenchPage({
       sp.delete('runId');
     }
     const qs = sp.toString();
+    if (embeddedInDashboard) {
+      setEmbeddedSearchState(qs);
+      return;
+    }
     const currentUrl = `/workbench/${encodeURIComponent(configFile)}${searchParamsString ? `?${searchParamsString}` : ''}`;
     const nextUrl = `/workbench/${encodeURIComponent(configFile)}${qs ? `?${qs}` : ''}`;
     if (nextUrl === currentUrl) {
