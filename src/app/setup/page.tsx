@@ -13,6 +13,7 @@ import AvatarPicker from '@/components/AvatarPicker';
 import WorkspaceDirectoryPicker from '@/components/common/WorkspaceDirectoryPicker';
 import { getConcreteEngines } from '@/lib/core/engine-metadata';
 import type { ModelOption } from '@/lib/core/models';
+import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 
 interface DiscoveredSkill {
   name: string;
@@ -196,7 +197,7 @@ export default function SetupPage() {
         if (!res.ok) throw new Error(data.error || '模型加载失败');
         if (cancelled) return;
         const options = ((data.models || []) as ModelOption[])
-          .filter((model) => !model.engines || model.engines.length === 0 || model.engines.includes(engine))
+          .filter((model) => modelEnginesSupportEngine(model.engines, engine))
           .map((model) => ({
             value: model.value,
             label: `${model.label} (${model.costMultiplier}x)`,

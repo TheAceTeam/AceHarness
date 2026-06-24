@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
@@ -422,11 +422,6 @@ export default function ModelsPage() {
     return 'catalog';
   });
 
-  const [floatingFilterBar, setFloatingFilterBar] = useState(false);
-  const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
-  const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
-  const [filterBarHeight, setFilterBarHeight] = useState(0);
-
   useEffect(() => {
     localStorage.setItem('models-view-mode', viewMode);
   }, [viewMode]);
@@ -555,24 +550,6 @@ export default function ModelsPage() {
       });
     }
   }
-
-  useEffect(() => {
-    const handleScroll = () => {
-      if (filterBarAnchorRef.current) {
-        const rect = filterBarAnchorRef.current.getBoundingClientRect();
-        setFloatingFilterBar(rect.top <= 8);
-      }
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  useEffect(() => {
-    if (filterBarMeasureRef.current) {
-      setFilterBarHeight(filterBarMeasureRef.current.offsetHeight);
-    }
-  }, []);
 
   const filteredModels = useMemo(() => {
     let result = models;
@@ -772,24 +749,12 @@ export default function ModelsPage() {
 
         <TabsContent value="catalog" className="mt-0 min-h-0 flex-1 pb-28">
           <div className="flex-1 overflow-y-auto px-6 py-6">
-            <div ref={filterBarAnchorRef} className="h-px" />
-
-            {floatingFilterBar ? <div style={{ height: filterBarHeight }} /> : null}
-
             <section
-              className={cn(
-                floatingFilterBar
-                  ? 'fixed inset-x-0 top-2 z-40 px-6'
-                  : 'relative z-10'
-              )}
+              className="sticky top-0 z-20 mb-4 bg-background/95 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/80"
               data-tour-step-id="model-filter"
             >
               <div
-                ref={filterBarMeasureRef}
-                className={cn(
-                  'rounded-[24px] border bg-card p-4 transition-shadow',
-                  floatingFilterBar && 'shadow-lg'
-                )}
+                className="rounded-[24px] border bg-card p-4 shadow-sm transition-shadow"
               >
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="relative min-w-[220px] flex-1">

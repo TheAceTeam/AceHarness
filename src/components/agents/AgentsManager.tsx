@@ -100,11 +100,7 @@ export default function AgentsManager({
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [archiveImporting, setArchiveImporting] = useState(false);
   const [archiveExporting, setArchiveExporting] = useState(false);
-  const [floatingFilterBar, setFloatingFilterBar] = useState(false);
   const archiveInputRef = useRef<HTMLInputElement | null>(null);
-  const filterBarAnchorRef = useRef<HTMLDivElement | null>(null);
-  const filterBarMeasureRef = useRef<HTMLDivElement | null>(null);
-  const [filterBarHeight, setFilterBarHeight] = useState(0);
   const { confirm, dialogProps } = useConfirmDialog();
 
   useEffect(() => {
@@ -127,36 +123,6 @@ export default function AgentsManager({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
   }, [viewMode]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || embedded) return;
-
-    const updateFloatingState = () => {
-      const anchor = filterBarAnchorRef.current;
-      if (!anchor) return;
-      const topOffset = 8;
-      const rect = anchor.getBoundingClientRect();
-      setFloatingFilterBar(rect.top <= topOffset);
-    };
-
-    const updateMeasure = () => {
-      if (filterBarMeasureRef.current) {
-        setFilterBarHeight(filterBarMeasureRef.current.getBoundingClientRect().height);
-      }
-    };
-
-    updateMeasure();
-    updateFloatingState();
-    const scrollTarget = embedded ? filterBarAnchorRef.current?.closest('[data-agent-manager-scroll-root]') : window;
-    scrollTarget?.addEventListener('scroll', updateFloatingState, { passive: true });
-    window.addEventListener('resize', updateMeasure);
-    window.addEventListener('resize', updateFloatingState);
-    return () => {
-      scrollTarget?.removeEventListener('scroll', updateFloatingState);
-      window.removeEventListener('resize', updateMeasure);
-      window.removeEventListener('resize', updateFloatingState);
-    };
-  }, [embedded]);
 
   const loadAgents = async () => {
     try {
@@ -780,18 +746,11 @@ export default function AgentsManager({
 
         {!embedded ? (
           <>
-            <div ref={filterBarAnchorRef} className="h-px" />
-            {floatingFilterBar ? <div style={{ height: filterBarHeight }} /> : null}
             <section
-              className={cn(
-                'z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80',
-                floatingFilterBar
-                  ? 'fixed inset-x-0 top-2 px-6'
-                  : 'sticky top-[4.5rem]',
-              )}
+              className="sticky top-[4.5rem] z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
             >
-              <div className={cn(floatingFilterBar && 'mx-auto max-w-[1680px]')}>
-                <div ref={filterBarMeasureRef} className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
+              <div>
+                <div className="relative rounded-[24px] border border-border/70 bg-card/95 p-4 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-card/85">
                 <div className="pointer-events-none absolute inset-0 rounded-[24px] bg-[linear-gradient(180deg,rgba(255,255,255,0.06),transparent_55%)]" />
                 <div className="relative flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex flex-1 flex-col gap-3 xl:flex-row xl:items-center">

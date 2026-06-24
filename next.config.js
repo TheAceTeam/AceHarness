@@ -23,8 +23,6 @@ const nextConfig = {
     'node-ssh-no-cpu-features',
     '@marsaud/smb2',
     'webdav',
-    '@lancedb/lancedb',
-    '@lancedb/lancedb-win32-x64-msvc',
   ],
 
   // 开发服务器配置

@@ -1294,11 +1294,6 @@ export default function SkillsManager({
     message: '',
   });
   const [selectedOnlineSkill, setSelectedOnlineSkill] = useState<MarketplaceSkill | null>(null);
-  const [floatingToolbar, setFloatingToolbar] = useState(false);
-  const toolbarAnchorRef = useRef<HTMLDivElement | null>(null);
-  const toolbarMeasureRef = useRef<HTMLDivElement | null>(null);
-  const [toolbarHeight, setToolbarHeight] = useState(0);
-
   useEffect(() => {
     try {
       const savedActiveTab = localStorage.getItem(ACTIVE_TAB_KEY);
@@ -1339,34 +1334,6 @@ export default function SkillsManager({
   useEffect(() => {
     try { localStorage.setItem(ONLINE_PAGE_SIZE_KEY, String(onlinePageSize)); } catch {}
   }, [onlinePageSize]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || embedded) return;
-
-    const updateFloatingState = () => {
-      const anchor = toolbarAnchorRef.current;
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
-      setFloatingToolbar(rect.top <= 8);
-    };
-
-    const updateMeasure = () => {
-      if (toolbarMeasureRef.current) {
-        setToolbarHeight(toolbarMeasureRef.current.getBoundingClientRect().height);
-      }
-    };
-
-    updateMeasure();
-    updateFloatingState();
-    window.addEventListener('scroll', updateFloatingState, { passive: true });
-    window.addEventListener('resize', updateMeasure);
-    window.addEventListener('resize', updateFloatingState);
-    return () => {
-      window.removeEventListener('scroll', updateFloatingState);
-      window.removeEventListener('resize', updateMeasure);
-      window.removeEventListener('resize', updateFloatingState);
-    };
-  }, [embedded, activeTab, localViewMode, onlineViewMode]);
 
   useEffect(() => {
     setLocalPage(1);
@@ -2099,26 +2066,16 @@ export default function SkillsManager({
 
         {!embedded && activeTab !== 'plugins' && activeTab !== 'mcp' ? (
           <>
-            <div ref={toolbarAnchorRef} className="h-px" />
-            {floatingToolbar ? <div style={{ height: toolbarHeight }} /> : null}
             <section
-              className={cn(
-                'z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80',
-                floatingToolbar
-                  ? 'fixed inset-x-0 top-2 px-6'
-                  : 'sticky top-[4.5rem]',
-              )}
+              className="sticky top-[4.5rem] z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80"
             >
-              <div className={cn(floatingToolbar && 'container mx-auto')}>
+              <div>
                 <div
-                  ref={toolbarMeasureRef}
                   className={cn(
                     'rounded-[28px] border border-border/70 bg-card/90 p-4 backdrop-blur supports-[backdrop-filter]:bg-card/90',
-                    floatingToolbar
-                      ? 'shadow-lg'
-                      : activeTab === 'online'
-                        ? 'shadow-[0_18px_60px_rgba(15,23,42,0.08)]'
-                        : 'shadow-sm',
+                    activeTab === 'online'
+                      ? 'shadow-[0_18px_60px_rgba(15,23,42,0.08)]'
+                      : 'shadow-sm',
                   )}
                 >
                   {activeTab === 'local'

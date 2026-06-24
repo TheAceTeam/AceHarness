@@ -18,6 +18,7 @@ import { getEngineMeta } from '@/lib/core/engine-metadata';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { getOfficeAwareReturnTarget } from '@/lib/navigation/return-target';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
+import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 
 interface ModelOption {
   value: string;
@@ -179,7 +180,7 @@ export default function EnginesPage() {
   };
 
   const getModelsForEngine = (engineId: string) =>
-    models.filter(m => !m.engines || m.engines.length === 0 || m.engines.includes(engineId));
+    models.filter(m => modelEnginesSupportEngine(m.engines, engineId));
 
   const getDriverForEngine = (engineId: string): 'stdio' | 'sdk' =>
     driverSelections[engineId] || (engineId === 'codegenie' || engineId === 'nga' ? 'stdio' : 'sdk');

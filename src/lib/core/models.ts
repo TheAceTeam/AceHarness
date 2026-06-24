@@ -1,8 +1,8 @@
 // 模型配置 - 从 configs/models.yaml 读取
 import fs from 'fs/promises';
 import { parse } from 'yaml';
-import { getLogicalEngineId } from '@/lib/engines/engine-selection';
 import { getRuntimeModelsConfigPath } from '@/lib/run/runtime-configs';
+import { modelEnginesSupportEngine, normalizeModelEngineIds } from '@/lib/models/engine-compatibility';
 
 export interface ModelOption {
   value: string;
@@ -34,11 +34,7 @@ function uniqueStrings(values: unknown): string[] {
 }
 
 export function normalizeModelEngines(engines: unknown): string[] {
-  return Array.from(
-    new Set(
-      uniqueStrings(engines).map((engine) => getLogicalEngineId(engine) || engine),
-    ),
-  );
+  return normalizeModelEngineIds(engines);
 }
 
 export function normalizeModelOption(model: ModelOption): ModelOption {
@@ -58,19 +54,7 @@ export function modelSupportsEngine(
   model: Pick<ModelOption, 'engines'>,
   engine?: string | null,
 ): boolean {
-  const logicalEngine = getLogicalEngineId(engine) || String(engine || '').trim();
-  if (!logicalEngine) return true;
-
-  const modelEngines = normalizeModelEngines(model.engines);
-  if (modelEngines.length === 0) return true;
-  if (modelEngines.includes(logicalEngine)) return true;
-
-  // nga / codegenie 与 OpenCode 内核兼容：复用 opencode 的模型声明
-  if ((logicalEngine === 'nga' || logicalEngine === 'codegenie') && modelEngines.includes('opencode')) {
-    return true;
-  }
-
-  return false;
+  return modelEnginesSupportEngine(model.engines, engine);
 }
 
 async function loadModels(): Promise<ModelOption[]> {

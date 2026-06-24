@@ -5,6 +5,7 @@ import { Globe } from 'lucide-react';
 import { ModelOption } from '@/lib/core/models';
 import { AiModelSelectorField, type AiModelSelectorOption } from '@/components/AiModelSelectorField';
 import { useToast } from '@/components/ui/toast';
+import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 
 interface ModelSelectProps {
   value: string;
@@ -67,11 +68,7 @@ export function ModelSelect({
   // Filter by engine if specified; models without engines field are shown for all engines
   const models = engine
     ? allModels.filter((m) => {
-      if (!m.engines || m.engines.length === 0) return true;
-      if (m.engines.includes(engine)) return true;
-      // nga / codegenie 与 OpenCode 内核兼容：可复用 opencode 的模型声明
-      if ((engine === 'nga' || engine === 'codegenie') && m.engines.includes('opencode')) return true;
-      return false;
+      return modelEnginesSupportEngine(m.engines, engine);
     })
     : allModels;
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import { createRequire } from 'module';
 import { getWorkspaceDataFile } from '@/lib/core/app-paths';
@@ -26,7 +26,7 @@ const DEFAULT_TABLE_NAME = 'kb_default';
 const DEFAULT_DIMENSION = 384;
 const CHUNK_SIZE = 900;
 const CHUNK_OVERLAP = 120;
-const nodeRequire = createRequire(import.meta.url);
+const nodeRequire = createRequire(typeof __filename !== 'undefined' ? __filename : join(process.cwd(), 'package.json'));
 const LEGACY_SAMPLE_SOURCE_SYSTEM = 'aceharness-sample-rag';
 const DEFAULT_SAMPLE_SOURCE_SYSTEM = 'lancedb/vectordb-recipes';
 const DEFAULT_SAMPLE_RAG_DOCUMENTS = [
@@ -101,6 +101,17 @@ const RAG_SCHEMA_FIELDS: RagSchemaField[] = [
 let writeLock: Promise<void> = Promise.resolve();
 let lancedbModule: typeof import('@lancedb/lancedb') | null = null;
 
+function runtimeRequire(specifier: string): unknown {
+  try {
+    const localRequire = eval('require') as ((id: string) => unknown) | undefined;
+    if (typeof localRequire === 'function') return localRequire(specifier);
+  } catch {
+    // ESM/test runners may not expose a CommonJS require in local scope.
+  }
+  const fallbackRequire = nodeRequire as unknown as (id: string) => unknown;
+  return fallbackRequire(specifier);
+}
+
 function withLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = writeLock;
   let release!: () => void;
@@ -146,8 +157,13 @@ async function saveMeta(meta: RagMetaStore): Promise<void> {
 async function connectDb() {
   await mkdir(DB_URI, { recursive: true });
   if (!lancedbModule) {
-    // Keep LanceDB native bindings out of Next/Turbopack bundles; load from node_modules at runtime.
-    lancedbModule = nodeRequire('@lancedb/lancedb') as typeof import('@lancedb/lancedb');
+    const runtimeRoot = process.env.ACE_INSTALL_ROOT || process.cwd();
+    const loaderPath = join(runtimeRoot, 'runtime', 'lancedb.cjs');
+    const loader = runtimeRequire(loaderPath) as { loadLanceDb?: () => typeof import('@lancedb/lancedb') };
+    if (typeof loader.loadLanceDb !== 'function') {
+      throw new Error('LanceDB runtime loader is unavailable');
+    }
+    lancedbModule = loader.loadLanceDb();
   }
   return lancedbModule.connect(DB_URI);
 }

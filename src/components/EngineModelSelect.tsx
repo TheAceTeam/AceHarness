@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { EngineIcon } from '@/components/EngineIcon';
 import { getConcreteEngines, getEngineMeta } from '@/lib/core/engine-metadata';
 import { resolveEffectiveEngine } from '@/lib/engines/engine-selection';
+import { modelEnginesSupportEngine } from '@/lib/models/engine-compatibility';
 
 interface Props {
   engine: string;
@@ -79,11 +80,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
 
   const isModelCompatible = useMemo(() => {
     return (model: ModelOption, engineId: string): boolean => {
-      if (!model.engines || model.engines.length === 0) return true;
-      if (model.engines.includes(engineId)) return true;
-      // nga / codegenie 与 OpenCode 内核兼容：复用 opencode 的模型声明
-      if ((engineId === 'nga' || engineId === 'codegenie') && model.engines.includes('opencode')) return true;
-      return false;
+      return modelEnginesSupportEngine(model.engines, engineId);
     };
   }, []);
 
@@ -160,6 +157,10 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
   const isInitialLoading = !hasLoadedModels || !hasLoadedConfig;
   const effectiveGlobalEngine = resolveEffectiveEngine(globalEngine, globalDriver) || globalEngine;
   const effectiveEngine = engine || effectiveGlobalEngine;
+  const selectedModel = useMemo(
+    () => models.find((item) => item.value === model),
+    [models, model]
+  );
   const globalEngineInfo = getEngineMeta(effectiveGlobalEngine) || getEngineMeta(globalEngine);
   const globalLabel = globalEngineInfo?.name || globalEngine || '系统默认';
   const defaultModelLabel = models.find(m => m.value === globalDefaultModel)?.label || globalDefaultModel;
@@ -175,6 +176,25 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     (engineId: string) => !hasAnyAvailableEngine || engineAvailability[engineId] !== false,
     [engineAvailability, hasAnyAvailableEngine]
   );
+
+  useEffect(() => {
+    if (!hasLoadedModels || !hasLoadedConfig || !model) return;
+    if (!selectedModel) {
+      onModelChange('');
+      return;
+    }
+    if (effectiveEngine && !isModelCompatible(selectedModel, effectiveEngine)) {
+      onModelChange('');
+    }
+  }, [
+    effectiveEngine,
+    hasLoadedConfig,
+    hasLoadedModels,
+    isModelCompatible,
+    model,
+    onModelChange,
+    selectedModel,
+  ]);
 
   // Composite value: "engineId::modelValue" — empty engineId = follow system
   const compositeValue = `${engine}::${model}`;
@@ -267,7 +287,7 @@ export function EngineModelSelect({ engine, model, onEngineChange, onModelChange
     globalDefaultModel,
   ]);
 
-  const modelLabel = models.find(m => m.value === model)?.label || model;
+  const modelLabel = selectedModel?.label || model;
   const triggerLabel = isUsingGlobalSelection
     ? followSystemLabel
     : (modelLabel || model || (engine ? '选择模型' : followSystemLabel));

@@ -87,6 +87,7 @@ const CHAT_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
 const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
 const docs = new Map();
+let ragStore = null;
 function safeResolve(root, relPath) {
     const rootPath = path.resolve(root);
     const resolved = path.resolve(rootPath, relPath || '.');
@@ -132,6 +133,226 @@ function getUserById(userId) {
     if (!user)
         return null;
     return user;
+}
+function getRagStore() {
+    if (!ragStore) {
+        ragStore = require(path.join(__dirname, 'dist', 'lib', 'rag', 'store.js'));
+    }
+    return ragStore;
+}
+function sendJson(res, status, payload) {
+    const body = JSON.stringify(payload);
+    res.writeHead(status, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(body),
+    });
+    res.end(body);
+}
+function requireRequestUser(req, res) {
+    const authHeader = String(req.headers.authorization || '');
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const auth = validateAuthToken(token);
+    if (!auth) {
+        sendJson(res, 401, { error: '未登录或登录已过期' });
+        return null;
+    }
+    const user = getUserById(auth.userId);
+    if (!user) {
+        sendJson(res, 401, { error: '用户不存在' });
+        return null;
+    }
+    if (user.status === 'pending') {
+        sendJson(res, 403, { error: '账号等待管理员审核' });
+        return null;
+    }
+    if (user.status === 'rejected') {
+        sendJson(res, 403, { error: '账号注册申请未通过' });
+        return null;
+    }
+    return {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        personalDir: user.personalDir,
+        avatar: user.avatar,
+    };
+}
+function readRequestJson(req) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        req.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8').trim();
+            if (!raw) {
+                resolve({});
+                return;
+            }
+            try {
+                resolve(JSON.parse(raw));
+            }
+            catch (error) {
+                reject(error);
+            }
+        });
+        req.on('error', reject);
+    });
+}
+async function handleRagApi(req, res) {
+    const requestUrl = req.url || '/';
+    const parsed = new URL(requestUrl, `http://${req.headers.host || 'localhost'}`);
+    const pathname = parsed.pathname;
+    if (!pathname.startsWith('/api/rag')) {
+        return false;
+    }
+    const user = requireRequestUser(req, res);
+    if (!user)
+        return true;
+    const method = req.method || 'GET';
+    const store = getRagStore();
+    try {
+        if (pathname === '/api/rag/knowledge-bases') {
+            if (method === 'GET') {
+                return sendJson(res, 200, { knowledgeBases: await store.listRagKnowledgeBases() }), true;
+            }
+            if (method === 'POST') {
+                const body = await readRequestJson(req);
+                const knowledgeBase = await store.createRagKnowledgeBase({ name: body?.name, description: body?.description });
+                return sendJson(res, 200, { knowledgeBase }), true;
+            }
+            if (method === 'DELETE') {
+                const id = parsed.searchParams.get('id') || '';
+                if (!id)
+                    return sendJson(res, 400, { error: '缺少知识库 ID' }), true;
+                await store.deleteRagKnowledgeBase(id);
+                return sendJson(res, 200, { success: true }), true;
+            }
+        }
+        if (pathname === '/api/rag/detail' && method === 'GET') {
+            const knowledgeBaseId = parsed.searchParams.get('knowledgeBaseId') || '';
+            if (!knowledgeBaseId)
+                return sendJson(res, 400, { error: '缺少知识库 ID' }), true;
+            const limit = Number(parsed.searchParams.get('limit') || 80);
+            const [documents, chunks, importJobs, stats, schema] = await Promise.all([
+                store.listRagDocuments(knowledgeBaseId),
+                store.listRagChunks(knowledgeBaseId, Number.isFinite(limit) ? limit : 80),
+                store.listRagImportJobs(knowledgeBaseId),
+                store.getRagDatabaseStats(knowledgeBaseId),
+                store.getRagTableSchema(knowledgeBaseId),
+            ]);
+            return sendJson(res, 200, { documents, chunks, importJobs, stats, schema }), true;
+        }
+        if (pathname === '/api/rag/import' && method === 'POST') {
+            const body = await readRequestJson(req);
+            const knowledgeBaseId = typeof body?.knowledgeBaseId === 'string' ? body.knowledgeBaseId : '';
+            if (!knowledgeBaseId)
+                return sendJson(res, 400, { error: '缺少知识库 ID' }), true;
+            if (body?.mode === 'bundle') {
+                const bundle = typeof body.bundle === 'string' ? JSON.parse(body.bundle) : body.bundle;
+                const job = await store.importRagBundle({ knowledgeBaseId, bundle, userId: user.id });
+                return sendJson(res, 200, { job }), true;
+            }
+            const job = await store.importRagText({
+                knowledgeBaseId,
+                title: body?.title,
+                content: body?.content,
+                sourceType: body?.sourceType,
+                userId: user.id,
+            });
+            return sendJson(res, 200, { job }), true;
+        }
+        if (pathname === '/api/rag/search' && method === 'POST') {
+            const body = await readRequestJson(req);
+            const knowledgeBaseId = typeof body?.knowledgeBaseId === 'string' ? body.knowledgeBaseId : '';
+            const query = typeof body?.query === 'string' ? body.query : '';
+            if (!knowledgeBaseId)
+                return sendJson(res, 400, { error: '缺少知识库 ID' }), true;
+            if (!query.trim())
+                return sendJson(res, 400, { error: '缺少搜索内容' }), true;
+            const results = await store.searchRagKnowledgeBase({ knowledgeBaseId, query, topK: Number(body?.topK || 8), userId: user.id });
+            return sendJson(res, 200, { results }), true;
+        }
+        if (pathname === '/api/rag/documents' && method === 'DELETE') {
+            const knowledgeBaseId = parsed.searchParams.get('knowledgeBaseId') || '';
+            const documentId = parsed.searchParams.get('documentId') || '';
+            if (!knowledgeBaseId)
+                return sendJson(res, 400, { error: '缺少知识库 ID' }), true;
+            if (!documentId)
+                return sendJson(res, 400, { error: '缺少来源 ID' }), true;
+            await store.deleteRagDocument({ knowledgeBaseId, documentId });
+            return sendJson(res, 200, { success: true }), true;
+        }
+        const parts = pathname.split('/').filter(Boolean);
+        if (parts[0] === 'api' && parts[1] === 'rag' && parts[2] === 'v1' && parts[3] === 'collections') {
+            if (parts.length === 4 && method === 'GET') {
+                return sendJson(res, 200, { collections: await store.listRagKnowledgeBases() }), true;
+            }
+            const collectionId = parts[4] ? decodeURIComponent(parts[4]) : '';
+            if (!collectionId)
+                return sendJson(res, 400, { error: '缺少 RAG collection ID' }), true;
+            if (parts[5] === 'schema' && method === 'GET') {
+                const [schema, stats] = await Promise.all([
+                    store.getRagTableSchema(collectionId),
+                    store.getRagDatabaseStats(collectionId),
+                ]);
+                if (!schema)
+                    return sendJson(res, 404, { error: 'RAG collection 不存在' }), true;
+                return sendJson(res, 200, { schema, stats }), true;
+            }
+            if (parts[5] === 'rows') {
+                if (method === 'GET') {
+                    const page = Number(parsed.searchParams.get('page') || 0);
+                    const pageSize = Number(parsed.searchParams.get('pageSize') || 50);
+                    const documentId = parsed.searchParams.get('sourceId') || undefined;
+                    const result = await store.listRagRowsPage({
+                        knowledgeBaseId: collectionId,
+                        page: Number.isFinite(page) ? page : 0,
+                        pageSize: Number.isFinite(pageSize) ? pageSize : 50,
+                        documentId,
+                    });
+                    return sendJson(res, 200, result), true;
+                }
+                if (method === 'DELETE') {
+                    const body = await readRequestJson(req);
+                    if (body?.all === true) {
+                        await store.emptyRagKnowledgeBase(collectionId);
+                        return sendJson(res, 200, { success: true }), true;
+                    }
+                    const rowIds = Array.isArray(body?.rowIds) ? body.rowIds.filter((item) => typeof item === 'string') : [];
+                    await store.deleteRagRows({ knowledgeBaseId: collectionId, rowIds });
+                    return sendJson(res, 200, { success: true }), true;
+                }
+            }
+            if (parts[5] === 'search' && method === 'POST') {
+                const body = await readRequestJson(req);
+                const query = typeof body?.query === 'string' ? body.query : '';
+                if (!query.trim())
+                    return sendJson(res, 400, { error: '缺少搜索内容' }), true;
+                const results = await store.searchRagKnowledgeBase({ knowledgeBaseId: collectionId, query, topK: Number(body?.topK || 8), userId: user.id });
+                return sendJson(res, 200, { results }), true;
+            }
+            if (parts[5] === 'import' && method === 'POST') {
+                const body = await readRequestJson(req);
+                if (body?.sample === true || body?.mode === 'sample') {
+                    const job = await store.importRagSampleKnowledgeBase({ knowledgeBaseId: collectionId, userId: user.id });
+                    return sendJson(res, 200, { job }), true;
+                }
+                const bundle = body?.bundle || body;
+                const job = await store.importRagBundle({ knowledgeBaseId: collectionId, bundle, userId: user.id });
+                return sendJson(res, 200, { job }), true;
+            }
+            if (parts[5] === 'sources' && parts[6] && method === 'DELETE') {
+                await store.deleteRagDocument({ knowledgeBaseId: collectionId, documentId: decodeURIComponent(parts[6]) });
+                return sendJson(res, 200, { success: true }), true;
+            }
+        }
+        sendJson(res, 404, { error: 'RAG API 不存在' });
+        return true;
+    }
+    catch (error) {
+        sendJson(res, 500, { error: error?.message || 'RAG API 请求失败' });
+        return true;
+    }
 }
 function getShareByToken(token) {
     if (!token)
@@ -223,7 +444,10 @@ function resolveCollabRoom(searchParams) {
     return { ok: true, roomId: `personal:${user.id}:${absPath}`, user, filePath };
 }
 app.prepare().then(() => {
-    const server = http.createServer((req, res) => {
+    const server = http.createServer(async (req, res) => {
+        if (await handleRagApi(req, res)) {
+            return;
+        }
         handle(req, res);
     });
     server.requestTimeout = CHAT_REQUEST_TIMEOUT_MS;
