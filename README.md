@@ -188,9 +188,32 @@ ACEHarness 的配置主要由启动向导、引擎管理页和环境变量共同
 | `ACE_HOST` | 服务监听地址 | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness 服务端口 | `3000` |
 | `PORT` | 通用服务端口 | 优先级高于 `ACE_PORT` |
+| `BASEURL` / `BASE_URL` | 反向代理子路径或站点前缀，用于生成 Next.js `basePath` / `assetPrefix`，避免 `_next` CSS/JS 资源以根路径访问 | 未设置时为空；示例：`/ace` 或 `https://example.com/ace` |
 | `ACE_HOME` | ACE 运行根目录，决定 `config/`、`data/`、`cache/`、`logs/`、`workspace/` 等运行时数据位置 | 未设置时按平台回退 |
 | `APPDATA` | Windows 下 `ACE_HOME` 的回退根目录 | `<APPDATA>/ACEHarness` |
 | `XDG_DATA_HOME` | Linux / macOS 下 `ACE_HOME` 的回退根目录 | `<XDG_DATA_HOME>/aceharness` |
+
+反向代理到子路径时，需要在构建和启动时使用同一个 `BASEURL`。例如将外部 `/ace/` 代理到本地 `http://127.0.0.1:3000/`：
+
+```bash
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run build
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm start
+```
+
+开发模式也可以直接：
+
+```bash
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run dev
+```
+
+Windows PowerShell:
+
+```powershell
+$env:BASEURL="/ace"
+$env:ACE_HOST="127.0.0.1"
+$env:ACE_PORT="3000"
+npm run dev
+```
 | `ACE_INSTALL_ROOT` | 安装根目录；用于定位 `server.js`、`configs/`、`dist/` 等安装内容 | 未设置时由启动器自动设为当前安装目录 |
 | `ACE_LOCALE` | ACE CLI 与服务默认语言 | 优先级高于 `LANG` / `LC_ALL` |
 | `LANG` | 语言回退变量 | 在 `ACE_LOCALE` 未设置时参与解析 |

@@ -352,7 +352,6 @@ export class OpenCodeSdkEngineWrapper extends EventEmitter implements Engine {
           command: {
             command: parsedCommand.command,
             arguments: parsedCommand.arguments,
-            agent: options.agent,
             model: resolvedModelId || options.model,
           },
           workingDirectory: options.workingDirectory,

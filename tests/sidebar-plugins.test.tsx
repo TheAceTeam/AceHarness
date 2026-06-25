@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
@@ -24,6 +24,10 @@ import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
+
+afterEach(() => {
+  applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
+});
 
 describe('sidebar plugin system', () => {
   describe('registry', () => {
@@ -223,6 +227,45 @@ describe('sidebar plugin system', () => {
       // Expand
       await user.click(screen.getByRole('button', { name: /快捷操作/ }));
       expect(screen.queryByRole('button', { name: /创建狼人杀/ })).toBeNull();
+    });
+
+    test('codespec slash commands become quick actions when codespec plugin is enabled', async () => {
+      const user = userEvent.setup();
+      const onAction = vi.fn();
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
+
+      render(
+        <QuickActions
+          onAction={onAction}
+          slashCommands={[
+            {
+              id: 'opencode-codespec-plan',
+              command: '/opencode:codespec-plan',
+              title: 'opencode: codespec-plan',
+              subtext: 'Run CodeSpec plan command',
+              icon: 'terminal',
+              aliases: ['opencode', 'codespec-plan'],
+              prompt: '/opencode:codespec-plan',
+            },
+            {
+              id: 'opencode-other',
+              command: '/opencode:help',
+              title: 'opencode: help',
+              subtext: 'Other command',
+              icon: 'terminal',
+              aliases: ['opencode', 'help'],
+              prompt: '/opencode:help',
+            },
+          ]}
+        />,
+      );
+
+      const action = screen.getByRole('button', { name: /opencode: codespec-plan/ });
+      expect(action).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /opencode: help/ })).toBeNull();
+
+      await user.click(action);
+      expect(onAction).toHaveBeenCalledWith('/opencode:codespec-plan');
     });
   });
 });

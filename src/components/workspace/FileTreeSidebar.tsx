@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp, RefreshCw, LayoutGrid, List, Home } from "lucide-react"
+import { Check, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Loader2, FilePlus, FolderPlus, Pencil, Copy, Scissors, Clipboard, Trash2, Upload, Download, FolderUp, RefreshCw, LayoutGrid, List, Home } from "lucide-react"
 import { workspaceApi, type NotebookScope, type TreeNode, type WorkspaceMode } from "@/lib/core/api"
 import { Button } from "@/components/ui/button"
 import {
@@ -22,6 +22,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
 } from "@/components/ui/context-menu"
 import {
   Dialog,
@@ -177,12 +180,54 @@ const TreeContext = React.createContext<{
   }) => Promise<boolean>
   onUpload: (targetPath: string, directory: boolean) => void
   onDownload: (targetPath: string) => Promise<void>
+  autoRefreshIntervalMs: number | null
+  setAutoRefreshIntervalMs: (intervalMs: number | null) => void
 } | null>(null)
 
 function useTreeCtx() {
   const ctx = React.useContext(TreeContext)
   if (!ctx) throw new Error("TreeContext missing")
   return ctx
+}
+
+function AutoRefreshContextSubmenu({
+  autoRefreshIntervalMs,
+  setAutoRefreshIntervalMs,
+}: {
+  autoRefreshIntervalMs: number | null
+  setAutoRefreshIntervalMs: (intervalMs: number | null) => void
+}) {
+  const intervals = [
+    { label: "10s", value: 10_000 },
+    { label: "30s", value: 30_000 },
+    { label: "60s", value: 60_000 },
+  ]
+
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <RefreshCw className="mr-2 h-3.5 w-3.5" />
+        定时刷新
+      </ContextMenuSubTrigger>
+      <ContextMenuSubContent className="w-32">
+        {intervals.map((interval) => (
+          <ContextMenuItem key={interval.value} onClick={() => setAutoRefreshIntervalMs(interval.value)}>
+            <span className="mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
+              {autoRefreshIntervalMs === interval.value ? <Check className="h-3.5 w-3.5" /> : null}
+            </span>
+            {interval.label}
+          </ContextMenuItem>
+        ))}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => setAutoRefreshIntervalMs(null)}>
+          <span className="mr-2 inline-flex h-3.5 w-3.5 items-center justify-center">
+            {!autoRefreshIntervalMs ? <Check className="h-3.5 w-3.5" /> : null}
+          </span>
+          关闭
+        </ContextMenuItem>
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  )
 }
 
 function getParentDir(filePath: string): string {
@@ -704,6 +749,8 @@ function TreeFileItem({
     toast,
     confirm,
     onDownload,
+    autoRefreshIntervalMs,
+    setAutoRefreshIntervalMs,
   } = useTreeCtx()
   const beforeIntent: DropIntent = { position: "before", targetPath: node.path }
   const afterIntent: DropIntent = { position: "after", targetPath: node.path }
@@ -1482,6 +1529,8 @@ function TreeDirItem({
     confirm,
     onUpload,
     onDownload,
+    autoRefreshIntervalMs,
+    setAutoRefreshIntervalMs,
   } = useTreeCtx()
   const isCreatingHere = creatingIn?.dir === node.path
   const beforeIntent: DropIntent = { position: "before", targetPath: node.path }
@@ -1765,7 +1814,11 @@ function TreeDirItem({
             </ContextMenuTrigger>
           </TreeRow>
           <ContextMenuContent>
-            <ContextMenuItem onClick={() => { void handleRefreshDirectory() }}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新文件夹</ContextMenuItem>
+            <ContextMenuItem onClick={() => { void handleRefreshDirectory() }}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新</ContextMenuItem>
+            <AutoRefreshContextSubmenu
+              autoRefreshIntervalMs={autoRefreshIntervalMs}
+              setAutoRefreshIntervalMs={setAutoRefreshIntervalMs}
+            />
             <ContextMenuSeparator />
             {!nodeReadOnly && <ContextMenuItem onClick={() => mode === "notebook" ? requestNotebookCreate("file", node.path) : setCreatingIn({ dir: node.path, type: "file" })}><FilePlus className="h-3.5 w-3.5 mr-2" />新建文件</ContextMenuItem>}
             {!nodeReadOnly && <ContextMenuItem onClick={() => mode === "notebook" ? requestNotebookCreate("folder", node.path) : setCreatingIn({ dir: node.path, type: "folder" })}><FolderPlus className="h-3.5 w-3.5 mr-2" />新建文件夹</ContextMenuItem>}
@@ -2429,10 +2482,8 @@ export function FileTreeSidebar({
   const shouldExpandTopLevel = tree.some((node) => node.type === "directory" && !openDirectories.has(node.path))
 
   const isCreatingAtRoot = creatingIn?.dir === ""
-  const autoRefreshLabel = autoRefreshIntervalMs ? `每 ${autoRefreshIntervalMs / 1000} 秒` : "关闭"
-
   return (
-    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload }}>
+    <TreeContext.Provider value={{ workspacePath, mode, clipboard, setClipboard, onRefresh: refreshLoadedTree, renamingPath, setRenamingPath, creatingIn, setCreatingIn, onSelectFile, onDeletedPath, contextTarget, setContextTarget, notebookScope, notebookShareToken, notebookPermission, notebookCanWrite, openDirectories, setDirectoryOpen, refreshToken, capabilities, draggingPath, setDraggingPath, dropIntent, setDropIntent, moveTreeItem, applyDropIntent, requestCopyBetween, requestNotebookCreate: (type, dir) => { void createQuickNotebook(type, dir) }, requestNotebookSetIcon, requestNotebookClearIcon, copyAbsolutePath, pasteIntoDirectory, toast, confirm, onUpload: requestUpload, onDownload: handleDownload, autoRefreshIntervalMs, setAutoRefreshIntervalMs }}>
       <div className="flex flex-col h-full bg-card">
         <input
           ref={fileInputRef}
@@ -2486,41 +2537,6 @@ export function FileTreeSidebar({
               </button>
             </div>
           ) : null}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant={autoRefreshIntervalMs ? "secondary" : "outline"}
-                size="sm"
-                className="h-7 px-2 text-xs"
-                title={`刷新文件树，定时刷新：${autoRefreshLabel}`}
-              >
-                <RefreshCw className={cn("mr-1 h-3.5 w-3.5", (loading || autoRefreshIntervalMs) && "animate-spin")} />
-                刷新
-                <ChevronDown className="ml-1 h-3 w-3 opacity-70" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={refreshLoadedTree} disabled={loading}>
-                <RefreshCw className="mr-2 h-3.5 w-3.5" />
-                立即刷新已展开目录
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(10_000)}>
-                {autoRefreshIntervalMs === 10_000 ? "✓ " : ""}每 10 秒定时刷新
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(30_000)}>
-                {autoRefreshIntervalMs === 30_000 ? "✓ " : ""}每 30 秒定时刷新
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(60_000)}>
-                {autoRefreshIntervalMs === 60_000 ? "✓ " : ""}每 60 秒定时刷新
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setAutoRefreshIntervalMs(null)} disabled={!autoRefreshIntervalMs}>
-                关闭定时刷新
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           {mode === "default" && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -2729,7 +2745,11 @@ export function FileTreeSidebar({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem onClick={refreshLoadedTree}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新已展开目录</ContextMenuItem>
+            <ContextMenuItem onClick={refreshLoadedTree} disabled={loading}><RefreshCw className="h-3.5 w-3.5 mr-2" />刷新</ContextMenuItem>
+            <AutoRefreshContextSubmenu
+              autoRefreshIntervalMs={autoRefreshIntervalMs}
+              setAutoRefreshIntervalMs={setAutoRefreshIntervalMs}
+            />
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => mode === "notebook" ? void createQuickNotebook("file", "") : setCreatingIn({ dir: "", type: "file" })}><FilePlus className="h-3.5 w-3.5 mr-2" />新建文件</ContextMenuItem>
             <ContextMenuItem onClick={() => mode === "notebook" ? void createQuickNotebook("folder", "") : setCreatingIn({ dir: "", type: "folder" })}><FolderPlus className="h-3.5 w-3.5 mr-2" />新建文件夹</ContextMenuItem>

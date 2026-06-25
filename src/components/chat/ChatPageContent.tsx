@@ -525,6 +525,7 @@ export function ChatPageContent({
     appendSessionMessage,
     updateSessionMessage,
     workingDirectory,
+    setWorkingDirectory,
   } = useChat();
   const { toast } = useToast();
   const [input, setInput] = useState('');
@@ -636,6 +637,9 @@ export function ChatPageContent({
   }, [activeSession?.messages, activeSession?.sessionWorkbenchState?.homeSidebar]);
 
   const latestSidebarHint = activeSession?.sessionWorkbenchState?.homeSidebar || parsedSidebarHint;
+  const activeChatWorkspacePath = String(activeSession?.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
+  const fallbackWorkingDirectory = String(workingDirectory || '').trim();
+  const effectiveWorkingDirectory = activeChatWorkspacePath || fallbackWorkingDirectory;
   const hasWorkflowSidebarContext = Boolean(activeSession?.workflowBinding);
   const hasCreationSidebarContext = Boolean(activeSession?.creationSession);
   const hasCollaborationSidebarContext = Boolean(activeSession?.sessionWorkbenchState?.collaborationRoom);
@@ -737,7 +741,7 @@ export function ChatPageContent({
       }>).detail;
       if (!detail?.workspacePath) return;
       const target = resolveWorkspaceLinkTarget({
-        currentWorkspacePath: workingDirectory,
+        currentWorkspacePath: effectiveWorkingDirectory,
         linkWorkspacePath: detail.workspacePath,
         absolutePath: detail.absolutePath,
         filePath: detail.filePath,
@@ -753,7 +757,7 @@ export function ChatPageContent({
     return () => {
       window.removeEventListener('ace:open-workspace-path', handleOpenWorkspacePath as EventListener);
     };
-  }, [workingDirectory]);
+  }, [effectiveWorkingDirectory]);
 
   const chatTitle = useMemo(() => {
     const notebookFile = searchParams.get('notebookFile');
@@ -1080,7 +1084,7 @@ export function ChatPageContent({
     let cancelled = false;
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
     const params = new URLSearchParams({ engine: activeEngine });
-    if (workingDirectory.trim()) params.set('cwd', workingDirectory.trim());
+    if (effectiveWorkingDirectory) params.set('cwd', effectiveWorkingDirectory);
     fetch(`/api/engine/commands?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     })
@@ -1104,8 +1108,7 @@ export function ChatPageContent({
               prompt: `/${namespace}:${name}`,
             };
           })
-          .filter(Boolean)
-          .slice(0, 40) as HomepageSlashCommand[];
+          .filter(Boolean) as HomepageSlashCommand[];
         setEngineSlashCommands(commands);
       })
       .catch(() => {
@@ -1115,7 +1118,7 @@ export function ChatPageContent({
     return () => {
       cancelled = true;
     };
-  }, [effectiveEngine, engine, workingDirectory]);
+  }, [effectiveEngine, engine, effectiveWorkingDirectory]);
 
   const slashQuery = useMemo(() => {
     const text = input.trim();
@@ -1587,7 +1590,7 @@ export function ChatPageContent({
         setHomeSidebarMode,
         unlockAutoScroll,
         toast,
-        workingDirectory,
+        workingDirectory: effectiveWorkingDirectory,
       });
       if (handled) {
         unlockAutoScroll();
@@ -1630,7 +1633,7 @@ export function ChatPageContent({
     stopStreaming,
     toast,
     unlockAutoScroll,
-    workingDirectory,
+    effectiveWorkingDirectory,
   ]);
 
   const handleDebugToggle = useCallback(async (checked: boolean) => {
@@ -1904,8 +1907,8 @@ export function ChatPageContent({
   const activeAgentBinding = activeSession?.agentBinding;
   const activeWeChatBinding = activeSession?.sessionWorkbenchState?.wechatBinding;
   const sessionChatWorkspace = activeSession?.sessionWorkbenchState?.chatWorkspace;
-  const pinnedChatWorkspacePath = String(sessionChatWorkspace?.workingDirectory || '').trim();
-  const defaultChatWorkspacePath = String(workingDirectory || '').trim();
+  const pinnedChatWorkspacePath = activeChatWorkspacePath;
+  const defaultChatWorkspacePath = fallbackWorkingDirectory;
   const resolvedChatWorkspacePath = pinnedChatWorkspacePath;
   const chatWorkspaceShellEnabled = Boolean(activeSessionId || activeSession);
   const chatWorkspaceTitle = activeSession?.title?.trim() || '新对话';
@@ -1959,6 +1962,7 @@ export function ChatPageContent({
             },
           };
         });
+        setWorkingDirectory(result.workspacePath);
       })
       .catch((error: any) => {
         if (!cancelled) toast('warning', error?.message || '准备对话工作区失败');
@@ -1976,6 +1980,7 @@ export function ChatPageContent({
     mcpSettings,
     resolvedChatWorkspacePath,
     setSessionWorkbenchState,
+    setWorkingDirectory,
     skillSettings,
     toast,
   ]);
@@ -2014,12 +2019,13 @@ export function ChatPageContent({
           updatedAt: Date.now(),
         },
       }));
+      setWorkingDirectory(result.workspacePath);
       setChatWorkspaceDialogOpen(false);
       toast('success', '已切换对话工作区');
     } catch (error: any) {
       toast('error', error?.message || '切换对话工作区失败');
     }
-  }, [activeSessionId, chatWorkspaceDraft, chatWorkspaceTitle, defaultChatWorkspacePath, mcpSettings, setSessionWorkbenchState, skillSettings, toast]);
+  }, [activeSessionId, chatWorkspaceDraft, chatWorkspaceTitle, defaultChatWorkspacePath, mcpSettings, setSessionWorkbenchState, setWorkingDirectory, skillSettings, toast]);
 
   const resetChatWorkspacePath = useCallback(() => {
     setSessionWorkbenchState((prev) => ({
@@ -2264,7 +2270,7 @@ export function ChatPageContent({
                   sessionWorkbenchState={activeSession?.sessionWorkbenchState}
                   setSessionWorkbenchState={setSessionWorkbenchState}
                   appendSessionMessage={appendSessionMessage}
-                  workingDirectory={workingDirectory}
+                  workingDirectory={effectiveWorkingDirectory}
                   onInsertIntoMainInput={handleInsertIntoMainInput}
                   onRegisterMainInputHandler={(handler) => { collaborationMessageHandlerRef.current = handler; }}
                   initialSavedGuests={agoraGuestData.loaded ? agoraGuestData.guests : undefined}
@@ -2445,7 +2451,7 @@ export function ChatPageContent({
                             v{pkgJson.version}
                           </motion.span>
                         </div>
-                        <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} />
+                        <QuickActions onAction={handleQuickAction} skillSettings={skillSettings} slashCommands={engineSlashCommands} />
                       </div>
                     )}
                     <MessageHistoryCollapse
@@ -2488,7 +2494,7 @@ export function ChatPageContent({
                   >
                     {messages.length > 0 && (
                       <div className="mx-auto mb-0.5 max-w-5xl rounded-2xl bg-background/70 px-1 py-1 backdrop-blur-sm">
-                        <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} />
+                        <QuickActionsBar onAction={handleQuickAction} skillSettings={skillSettings} slashCommands={engineSlashCommands} />
                       </div>
                     )}
                     <div className="mx-auto max-w-5xl">

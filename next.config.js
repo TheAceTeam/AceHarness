@@ -14,9 +14,36 @@ process.stderr.write = ((chunk, ...args) => {
   return originalStderrWrite(chunk, ...args);
 });
 
+function normalizeBaseUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') return { basePath: '', assetPrefix: '' };
+  try {
+    const parsed = new URL(raw);
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    return {
+      basePath: pathname === '/' ? '' : pathname,
+      assetPrefix: raw.replace(/\/+$/, ''),
+    };
+  } catch {
+    const withSlash = raw.startsWith('/') ? raw : `/${raw}`;
+    const normalized = withSlash.replace(/\/+$/, '');
+    return {
+      basePath: normalized === '/' ? '' : normalized,
+      assetPrefix: normalized === '/' ? '' : normalized,
+    };
+  }
+}
+
+const baseUrlConfig = normalizeBaseUrl(process.env.BASEURL || process.env.BASE_URL);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  ...(baseUrlConfig.basePath ? { basePath: baseUrlConfig.basePath } : {}),
+  ...(baseUrlConfig.assetPrefix ? { assetPrefix: baseUrlConfig.assetPrefix } : {}),
+  env: {
+    NEXT_PUBLIC_BASEURL: baseUrlConfig.basePath,
+  },
   serverExternalPackages: [
     'node-cron',
     'ssh2-no-cpu-features',

@@ -11,12 +11,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { getActionsGrouped, getPinnedActions, getCollapsibleActions, type HomePluginQuickAction } from '@/lib/sidebar-plugins';
+import {
+  getAllPlugins,
+  getActionsGrouped,
+  getPinnedActions,
+  getCollapsibleActions,
+  type HomePluginQuickAction,
+} from '@/lib/sidebar-plugins';
 import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
+
+type SlashCommandLike = {
+  id: string;
+  command: string;
+  title: string;
+  subtext: string;
+  icon: string;
+  aliases: string[];
+  prompt?: string;
+};
 
 interface QuickActionsProps {
   onAction: (text: string) => void;
   skillSettings?: Record<string, boolean>;
+  slashCommands?: SlashCommandLike[];
 }
 
 const containerVariants = {
@@ -28,6 +45,94 @@ const itemVariants = {
   hidden: { opacity: 0, y: 16, scale: 0.95 },
   show: { opacity: 1, y: 0, scale: 1 },
 };
+
+function normalizeActionKey(value: string) {
+  return String(value || '')
+    .trim()
+    .replace(/^__HOME_ACTION__:/i, '')
+    .replace(/^\/+/, '')
+    .toLowerCase();
+}
+
+function isCodespecSlashCommand(command: SlashCommandLike) {
+  return [command.command, command.title, command.subtext, command.prompt || '', ...command.aliases]
+    .some((value) => /codespec/i.test(String(value || '')));
+}
+
+function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePluginQuickAction[] {
+  const codespecEnabled = getAllPlugins({ includeDisabled: true }).some(
+    (plugin) => plugin.id === 'codespec' && plugin.enabled !== false,
+  );
+  if (!codespecEnabled || !slashCommands?.length) return [];
+
+  const seen = new Set<string>();
+  const actions: HomePluginQuickAction[] = [];
+  for (const [index, command] of slashCommands.entries()) {
+    if (!isCodespecSlashCommand(command)) continue;
+    const prompt = command.prompt || command.command;
+    const key = normalizeActionKey(prompt);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    actions.push({
+      id: `codespec-slash-${command.id}`,
+      label: command.title || command.command.replace(/^\//, ''),
+      icon: command.icon || 'terminal',
+      color: 'from-cyan-600 to-blue-600',
+      prompt,
+      pinned: false,
+      category: 'create',
+      order: 35 + index,
+    });
+  }
+  return actions;
+}
+
+function mergeGroupedActions(
+  groups: ReturnType<typeof getActionsGrouped>,
+  extraActions: HomePluginQuickAction[],
+) {
+  if (extraActions.length === 0) return groups;
+  const nextGroups = groups.map((group) => ({
+    category: group.category,
+    actions: [...group.actions],
+  }));
+  const categoryIndex = new Map(nextGroups.map((group, index) => [group.category.id, index]));
+  const seen = new Set<string>();
+
+  for (const group of nextGroups) {
+    for (const action of group.actions) {
+      seen.add(normalizeActionKey(action.prompt));
+    }
+  }
+
+  for (const action of [...extraActions].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))) {
+    const index = categoryIndex.get(action.category);
+    if (index === undefined) continue;
+    const key = normalizeActionKey(action.prompt);
+    if (key && seen.has(key)) continue;
+    nextGroups[index].actions.push(action);
+    if (key) seen.add(key);
+  }
+
+  for (const group of nextGroups) {
+    group.actions.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+  }
+
+  return nextGroups.filter((group) => group.actions.length > 0);
+}
+
+function mergeFlatActions(baseActions: HomePluginQuickAction[], extraActions: HomePluginQuickAction[]) {
+  if (extraActions.length === 0) return baseActions;
+  const seen = new Set(baseActions.map((action) => normalizeActionKey(action.prompt)));
+  const merged = [...baseActions];
+  for (const action of [...extraActions].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))) {
+    const key = normalizeActionKey(action.prompt);
+    if (key && seen.has(key)) continue;
+    merged.push(action);
+    if (key) seen.add(key);
+  }
+  return merged.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+}
 
 const ACTION_GUIDES: Record<string, {
   title: string;
@@ -147,10 +252,10 @@ const ACTION_GUIDES: Record<string, {
   },
 };
 
-export default function QuickActions({ onAction, skillSettings }: QuickActionsProps) {
+export default function QuickActions({ onAction, skillSettings, slashCommands }: QuickActionsProps) {
   const [guideAction, setGuideAction] = useState<HomePluginQuickAction | null>(null);
   const guide = guideAction ? ACTION_GUIDES[guideAction.label] : null;
-  const actionsGrouped = getActionsGrouped();
+  const actionsGrouped = mergeGroupedActions(getActionsGrouped(), buildCodespecQuickActions(slashCommands));
 
   const handleActionClick = (action: HomePluginQuickAction) => {
     if (action.prompt.startsWith('__HOME_ACTION__:')) {
@@ -187,7 +292,7 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
             <div className="grid grid-cols-3 gap-2">
               {actions.map(a => (
                 <motion.button
-                  key={a.label}
+                  key={a.id}
                   variants={itemVariants}
                   whileHover={{ scale: 1.04, y: -2 }}
                   whileTap={{ scale: 0.97 }}
@@ -273,10 +378,10 @@ export default function QuickActions({ onAction, skillSettings }: QuickActionsPr
 }
 
 /** Compact horizontal bar version — shown above input when messages exist */
-export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) {
+export function QuickActionsBar({ onAction, skillSettings, slashCommands }: QuickActionsProps) {
   const [expanded, setExpanded] = useState(false);
   const pinnedActions = getPinnedActions();
-  const collapsibleActions = getCollapsibleActions();
+  const collapsibleActions = mergeFlatActions(getCollapsibleActions(), buildCodespecQuickActions(slashCommands));
 
   return (
     <div className="w-full py-1">
@@ -292,7 +397,7 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
             <div className="flex flex-wrap gap-1.5 pb-0.5">
               {collapsibleActions.map(a => (
                 <motion.button
-                  key={a.label}
+                  key={a.id}
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => { onAction(a.prompt); setExpanded(false); }}
@@ -310,7 +415,7 @@ export function QuickActionsBar({ onAction, skillSettings }: QuickActionsProps) 
       <Suggestions className="mb-1 gap-2">
         {pinnedActions.map((action) => (
           <Suggestion
-            key={action.label}
+            key={action.id}
             suggestion={action.prompt}
             onClick={() => onAction(action.prompt)}
             className={`h-10 rounded-full bg-gradient-to-r ${action.color} border-white/10 px-5 text-sm font-semibold text-white shadow-sm hover:opacity-90`}

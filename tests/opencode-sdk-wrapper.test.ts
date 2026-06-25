@@ -246,12 +246,13 @@ describe('OpenCodeSdkEngineWrapper', () => {
     expect(result.success).toBe(true);
     expect(adapterMocks.buildFullPrompt).not.toHaveBeenCalled();
     expect(adapterMocks.sendPromptWithOpenCodeHttp).not.toHaveBeenCalled();
-    expect(adapterMocks.executeCommandWithOpenCodeHttp).toHaveBeenCalledWith(expect.objectContaining({
-      command: expect.objectContaining({
-        command: 'custom-plugin',
-        arguments: 'run this',
-      }),
+    const callArgs = adapterMocks.executeCommandWithOpenCodeHttp.mock.calls[0]?.[0];
+    expect(callArgs).toBeTruthy();
+    expect(callArgs.command).toEqual(expect.objectContaining({
+      command: 'custom-plugin',
+      arguments: 'run this',
     }));
+    expect(callArgs.command).not.toHaveProperty('agent');
     expect(result.output).toBe('command output');
   });
 

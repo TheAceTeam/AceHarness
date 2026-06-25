@@ -210,7 +210,9 @@ export async function POST(request: NextRequest) {
     if (isResume) {
       validResumeSid = sessionId;
     }
-    const engineRuntimeDirectory = getWorkspaceRoot();
+    const engineRuntimeDirectory = typeof workingDirectory === 'string' && workingDirectory.trim()
+      ? workingDirectory.trim()
+      : getWorkspaceRoot();
     const configuredEngine = await resolveRequestedEngineType(perChatEngine);
     const engineCommand = normalizeEngineNamespacedSlashCommand(message, configuredEngine);
     const streamRecoveryKey = resolveStreamRecoveryKey(frontendSessionId, streamScope);

@@ -429,7 +429,6 @@ export class CodegenieSdkEngineWrapper extends EventEmitter implements Engine {
           command: {
             command: parsedCommand.command,
             arguments: parsedCommand.arguments,
-            agent: options.agent,
             model: options.model,
           },
           workingDirectory: options.workingDirectory,

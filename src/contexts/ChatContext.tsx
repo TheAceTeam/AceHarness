@@ -1317,6 +1317,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       });
       if (!result.workspacePath) return '';
       await refreshChatSettings().catch(() => {});
+      setWorkingDirectory(result.workspacePath);
       await updateSessionById(sessionId, (current) => {
         const previousWorkspace = String(current.sessionWorkbenchState?.chatWorkspace?.workingDirectory || '').trim();
         return {
@@ -1340,7 +1341,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     } catch {
       return '';
     }
-  }, [refreshChatSettings, updateSessionById, workingDirectory]);
+  }, [refreshChatSettings, setWorkingDirectory, updateSessionById, workingDirectory]);
 
   const handleSetEngine = useCallback((e: string) => {
     setEngineState(e);

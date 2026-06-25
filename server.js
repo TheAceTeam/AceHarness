@@ -55,6 +55,22 @@ function loadProjectEnvFiles() {
     }
 }
 loadProjectEnvFiles();
+function normalizeBasePath(value) {
+    const raw = String(value || '').trim();
+    if (!raw || raw === '/')
+        return '';
+    try {
+        const parsed = new URL(raw);
+        const pathname = parsed.pathname.replace(/\/+$/, '');
+        return pathname === '/' ? '' : pathname;
+    }
+    catch {
+        const withSlash = raw.startsWith('/') ? raw : `/${raw}`;
+        const normalized = withSlash.replace(/\/+$/, '');
+        return normalized === '/' ? '' : normalized;
+    }
+}
+const basePath = normalizeBasePath(process.env.BASEURL || process.env.BASE_URL);
 function normalizeRoutesManifest() {
     const manifestPath = path.join(__dirname, '.next', 'routes-manifest.json');
     if (!fs.existsSync(manifestPath))
@@ -88,6 +104,15 @@ const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();
 const docs = new Map();
 let ragStore = null;
+function stripBasePath(pathname) {
+    if (!basePath)
+        return pathname;
+    if (pathname === basePath)
+        return '/';
+    if (pathname.startsWith(`${basePath}/`))
+        return pathname.slice(basePath.length) || '/';
+    return pathname;
+}
 function safeResolve(root, relPath) {
     const rootPath = path.resolve(root);
     const resolved = path.resolve(rootPath, relPath || '.');
@@ -201,7 +226,7 @@ function readRequestJson(req) {
 async function handleRagApi(req, res) {
     const requestUrl = req.url || '/';
     const parsed = new URL(requestUrl, `http://${req.headers.host || 'localhost'}`);
-    const pathname = parsed.pathname;
+    const pathname = stripBasePath(parsed.pathname);
     if (!pathname.startsWith('/api/rag')) {
         return false;
     }
@@ -501,12 +526,12 @@ app.prepare().then(() => {
     });
     server.on('upgrade', (request, socket, head) => {
         const requestUrl = request.url || '';
-        if (!requestUrl.startsWith('/api/notebook/collab')) {
+        const parsedUpgradeUrl = new URL(requestUrl, `http://${request.headers.host || 'localhost'}`);
+        if (!stripBasePath(parsedUpgradeUrl.pathname).startsWith('/api/notebook/collab')) {
             handleUpgrade(request, socket, head);
             return;
         }
-        const parsed = new URL(requestUrl, `http://${request.headers.host || 'localhost'}`);
-        const resolved = resolveCollabRoom(parsed.searchParams);
+        const resolved = resolveCollabRoom(parsedUpgradeUrl.searchParams);
         if (!resolved.ok) {
             socket.write(`HTTP/1.1 401 Unauthorized\r\n\r\n${resolved.reason || 'Unauthorized'}`);
             socket.destroy();

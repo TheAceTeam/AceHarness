@@ -177,9 +177,32 @@ Core startup and runtime-directory variables:
 | `ACE_HOST` | Server bind address | `127.0.0.1` |
 | `ACE_PORT` | ACEHarness service port | `3000` |
 | `PORT` | Generic service port | Higher priority than `ACE_PORT` |
+| `BASEURL` / `BASE_URL` | Reverse-proxy subpath or public site prefix used to generate Next.js `basePath` / `assetPrefix`, so `_next` CSS/JS assets are not emitted from the domain root | Empty when unset; examples: `/ace` or `https://example.com/ace` |
 | `ACE_HOME` | ACE runtime root; controls where `config/`, `data/`, `cache/`, `logs/`, and `workspace/` live | Falls back by platform when unset |
 | `APPDATA` | Windows fallback root for `ACE_HOME` | `<APPDATA>/ACEHarness` |
 | `XDG_DATA_HOME` | Linux / macOS fallback root for `ACE_HOME` | `<XDG_DATA_HOME>/aceharness` |
+
+When serving ACEHarness under a reverse-proxy subpath, set the same `BASEURL` during build and startup. For example, proxying external `/ace/` to local `http://127.0.0.1:3000/`:
+
+```bash
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run build
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm start
+```
+
+Development mode:
+
+```bash
+BASEURL=/ace ACE_HOST=127.0.0.1 ACE_PORT=3000 npm run dev
+```
+
+Windows PowerShell:
+
+```powershell
+$env:BASEURL="/ace"
+$env:ACE_HOST="127.0.0.1"
+$env:ACE_PORT="3000"
+npm run dev
+```
 | `ACE_INSTALL_ROOT` | Install root used to locate `server.js`, `configs/`, `dist/`, and other packaged files | Auto-filled to the current install directory when unset |
 | `ACE_LOCALE` | Default locale for the ACE CLI and service | Higher priority than `LANG` / `LC_ALL` |
 | `LANG` | Locale fallback variable | Used when `ACE_LOCALE` is unset |
