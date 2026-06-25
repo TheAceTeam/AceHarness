@@ -14,6 +14,9 @@ const mockSetSkillsEnabled = vi.fn();
 const mockListHumanQuestions = vi.fn(async () => ({ questions: [] }));
 const mockListRuns = vi.fn(async () => ({ runs: [] as { id: string; status: string }[] }));
 const mockGetEventLog = vi.fn(async (_runId?: string, _options?: any) => ({ events: [], nextSeq: 0 }));
+const coreApiMocks = vi.hoisted(() => ({
+  deleteWorkspace: vi.fn(async (_input: { sessionId: string; workspacePath: string }) => ({ success: true })),
+}));
 
 let mockSessions: any[] = [
   { id: 'sess-1', title: 'Session One', model: 'claude-sonnet-4-20250514', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 5 },
@@ -45,6 +48,9 @@ vi.mock('@/contexts/ChatContext', () => ({
 }));
 
 vi.mock('@/lib/core/api', () => ({
+  agoraApi: {
+    deleteWorkspace: coreApiMocks.deleteWorkspace,
+  },
   workflowApi: {
     listHumanQuestions: () => mockListHumanQuestions(),
     getEventLog: (runId: string, options?: any) => mockGetEventLog(runId, options),
@@ -94,6 +100,7 @@ describe('ChatSidebar', () => {
     mockListHumanQuestions.mockResolvedValue({ questions: [] });
     mockListRuns.mockResolvedValue({ runs: [] });
     mockGetEventLog.mockResolvedValue({ events: [], nextSeq: 0 });
+    coreApiMocks.deleteWorkspace.mockResolvedValue({ success: true });
   });
 
   test('renders session list', () => {
@@ -478,6 +485,76 @@ describe('ChatSidebar', () => {
     await user.click(screen.getByRole('button', { name: '删除' }));
 
     expect(mockDeleteSession).toHaveBeenCalledWith('sess-1');
+  });
+
+  test('can delete the auto-created default workspace with its chat session', async () => {
+    const user = userEvent.setup();
+    const workspacePath = 'C:\\Users\\Shawn\\AppData\\Roaming\\ACEHarness\\data\\agora-workspaces\\auto-session';
+    mockSessions = [
+      {
+        id: 'auto-session',
+        title: 'Auto Workspace',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: {
+          chatWorkspace: {
+            workingDirectory: workspacePath,
+            autoCreated: true,
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    ];
+
+    render(<ChatSidebar />);
+
+    await user.click(screen.getByLabelText('删除 Auto Workspace'));
+
+    expect(screen.getByText('同时删除系统自动创建的工作目录')).toBeTruthy();
+    expect(screen.getByText(workspacePath)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: '删除' }));
+
+    expect(mockDeleteSession).toHaveBeenCalledWith('auto-session');
+    await waitFor(() => {
+      expect(coreApiMocks.deleteWorkspace).toHaveBeenCalledWith({
+        sessionId: 'auto-session',
+        workspacePath,
+      });
+    });
+  });
+
+  test('does not offer workspace deletion for manually bound workspaces', async () => {
+    const user = userEvent.setup();
+    mockSessions = [
+      {
+        id: 'manual-session',
+        title: 'Manual Workspace',
+        model: 'claude-sonnet-4-20250514',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messageCount: 1,
+        sessionWorkbenchState: {
+          chatWorkspace: {
+            workingDirectory: 'C:\\Users\\Shawn\\Desktop\\project',
+            autoCreated: false,
+            updatedAt: Date.now(),
+          },
+        },
+      },
+    ];
+
+    render(<ChatSidebar />);
+
+    await user.click(screen.getByLabelText('删除 Manual Workspace'));
+
+    expect(screen.queryByText('同时删除系统自动创建的工作目录')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '删除' }));
+
+    expect(mockDeleteSession).toHaveBeenCalledWith('manual-session');
+    expect(coreApiMocks.deleteWorkspace).not.toHaveBeenCalled();
   });
 
   test('skill manager can select all and clear selectable skills', async () => {

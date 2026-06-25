@@ -15,7 +15,6 @@ import {
   getAllPlugins,
   getActionsGrouped,
   getPinnedActions,
-  getCollapsibleActions,
   type HomePluginQuickAction,
 } from '@/lib/sidebar-plugins';
 import { Suggestions, Suggestion } from '@/components/ai-elements/suggestion';
@@ -77,10 +76,10 @@ function buildCodespecQuickActions(slashCommands?: SlashCommandLike[]): HomePlug
       id: `codespec-slash-${command.id}`,
       label: command.title || command.command.replace(/^\//, ''),
       icon: command.icon || 'terminal',
-      color: 'from-cyan-600 to-blue-600',
+      color: 'from-violet-600 to-cyan-600',
       prompt,
       pinned: false,
-      category: 'create',
+      category: 'codespec',
       order: 35 + index,
     });
   }
@@ -121,17 +120,14 @@ function mergeGroupedActions(
   return nextGroups.filter((group) => group.actions.length > 0);
 }
 
-function mergeFlatActions(baseActions: HomePluginQuickAction[], extraActions: HomePluginQuickAction[]) {
-  if (extraActions.length === 0) return baseActions;
-  const seen = new Set(baseActions.map((action) => normalizeActionKey(action.prompt)));
-  const merged = [...baseActions];
-  for (const action of [...extraActions].sort((a, b) => (a.order ?? 100) - (b.order ?? 100))) {
-    const key = normalizeActionKey(action.prompt);
-    if (key && seen.has(key)) continue;
-    merged.push(action);
-    if (key) seen.add(key);
-  }
-  return merged.sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+function getCollapsibleActionGroups(extraActions: HomePluginQuickAction[]) {
+  const baseGroups = getActionsGrouped()
+    .map((group) => ({
+      category: group.category,
+      actions: group.actions.filter((action) => !action.pinned),
+    }))
+    .filter((group) => group.actions.length > 0);
+  return mergeGroupedActions(baseGroups, extraActions);
 }
 
 const ACTION_GUIDES: Record<string, {
@@ -381,7 +377,7 @@ export default function QuickActions({ onAction, skillSettings, slashCommands }:
 export function QuickActionsBar({ onAction, skillSettings, slashCommands }: QuickActionsProps) {
   const [expanded, setExpanded] = useState(false);
   const pinnedActions = getPinnedActions();
-  const collapsibleActions = mergeFlatActions(getCollapsibleActions(), buildCodespecQuickActions(slashCommands));
+  const collapsibleGroups = getCollapsibleActionGroups(buildCodespecQuickActions(slashCommands));
 
   return (
     <div className="w-full py-1">
@@ -394,18 +390,28 @@ export function QuickActionsBar({ onAction, skillSettings, slashCommands }: Quic
             transition={{ duration: 0.2 }}
             className="mb-1 overflow-hidden"
           >
-            <div className="flex flex-wrap gap-1.5 pb-0.5">
-              {collapsibleActions.map(a => (
-                <motion.button
-                  key={a.id}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => { onAction(a.prompt); setExpanded(false); }}
-                  className={`inline-flex items-center gap-1 bg-gradient-to-r ${a.color} rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white`}
-                >
-                  <span className="material-symbols-outlined text-xs">{a.icon}</span>
-                  {a.label}
-                </motion.button>
+            <div className="space-y-2 pb-0.5">
+              {collapsibleGroups.map(({ category, actions }) => (
+                <div key={category.id}>
+                  <div className="mb-1 flex items-center gap-1 px-0.5 text-[11px] font-medium text-muted-foreground">
+                    <span className="material-symbols-outlined text-xs">{category.icon}</span>
+                    {category.title}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {actions.map(a => (
+                      <motion.button
+                        key={a.id}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => { onAction(a.prompt); setExpanded(false); }}
+                        className={`inline-flex items-center gap-1 bg-gradient-to-r ${a.color} rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white`}
+                      >
+                        <span className="material-symbols-outlined text-xs">{a.icon}</span>
+                        {a.label}
+                      </motion.button>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </motion.div>

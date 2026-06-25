@@ -82,6 +82,7 @@ const EMPTY_SKILL_SETTINGS: Record<string, boolean> = {};
 const EMPTY_SKILLS: SkillItem[] = [];
 const EMPTY_MCP_SETTINGS: Record<string, boolean> = {};
 const EMPTY_MCP_SERVERS: McpServerItem[] = [];
+const AGORA_WORKSPACE_SEGMENT = 'agora-workspaces';
 const noopToggleSetting = (_name: string) => {};
 const noopSetSettings = (_settings: Record<string, boolean>) => {};
 
@@ -173,6 +174,32 @@ type AgoraGuestEditDraft = {
 
 function hasWeChatBinding(session?: Pick<SidebarSession, 'sessionWorkbenchState'> | null): boolean {
   return Boolean(session?.sessionWorkbenchState?.wechatBinding);
+}
+
+function normalizePathForCompare(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+}
+
+function sanitizeAgoraWorkspaceSessionSegment(input: string): string {
+  const normalized = String(input || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return normalized || 'agora';
+}
+
+function getDefaultAgoraWorkspaceDeleteCandidate(session: Pick<SidebarSession, 'id' | 'sessionWorkbenchState'>): string | null {
+  const chatWorkspace = session.sessionWorkbenchState?.chatWorkspace;
+  const workspacePath = String(chatWorkspace?.workingDirectory || '').trim();
+  if (!chatWorkspace?.autoCreated || !workspacePath) return null;
+
+  const normalized = normalizePathForCompare(workspacePath);
+  const parts = normalized.split('/').filter(Boolean);
+  const segmentIndex = parts.lastIndexOf(AGORA_WORKSPACE_SEGMENT);
+  if (segmentIndex < 0) return null;
+  if (parts[segmentIndex + 1] !== sanitizeAgoraWorkspaceSessionSegment(session.id).toLowerCase()) return null;
+  return workspacePath;
 }
 
 function compareSidebarSessions(a: SidebarSession, b: SidebarSession): number {
@@ -614,6 +641,12 @@ function ChatSidebarComponent({
   const [agoraGuestEditOpen, setAgoraGuestEditOpen] = useState(false);
   const [agoraGuestEditSaving, setAgoraGuestEditSaving] = useState(false);
   const [agoraGuestEditDraft, setAgoraGuestEditDraft] = useState<AgoraGuestEditDraft | null>(null);
+  const [workspaceDeleteConfirm, setWorkspaceDeleteConfirm] = useState<{
+    session: ChatSessionSummaryLike;
+    workspacePath: string;
+  } | null>(null);
+  const [deleteWorkspaceWithSession, setDeleteWorkspaceWithSession] = useState(true);
+  const [workspaceDeleting, setWorkspaceDeleting] = useState(false);
   const { confirm, dialogProps } = useConfirmDialog();
   const { toast } = useToast();
 
@@ -1338,6 +1371,16 @@ function ChatSidebarComponent({
 
   const requestDeleteSession = async (session: ChatSessionSummaryLike) => {
     const sessionKind = getSessionDirectoryKind(session);
+    const defaultWorkspacePath = getDefaultAgoraWorkspaceDeleteCandidate(session as SidebarSession);
+    if (defaultWorkspacePath) {
+      setDeleteWorkspaceWithSession(true);
+      setWorkspaceDeleteConfirm({
+        session,
+        workspacePath: defaultWorkspacePath,
+      });
+      return;
+    }
+
     const ok = await confirm({
       title: sessionKind === 'workflow' ? '确认删除工作流对话' : sessionKind === 'agora' ? '确认删除议场' : '确认删除对话',
       description: `删除「${session.title}」后无法恢复。`,
@@ -1347,6 +1390,33 @@ function ChatSidebarComponent({
     });
     if (!ok) return;
     deleteSession(session.id);
+  };
+
+  const confirmDeleteSessionWithOptionalWorkspace = async () => {
+    if (!workspaceDeleteConfirm || workspaceDeleting) return;
+    const { session, workspacePath } = workspaceDeleteConfirm;
+    const shouldDeleteWorkspace = deleteWorkspaceWithSession;
+
+    setWorkspaceDeleting(true);
+    deleteSession(session.id);
+    setWorkspaceDeleteConfirm(null);
+
+    if (!shouldDeleteWorkspace) {
+      setWorkspaceDeleting(false);
+      return;
+    }
+
+    try {
+      await agoraApi.deleteWorkspace({
+        sessionId: session.id,
+        workspacePath,
+      });
+      toast('success', '已删除绑定的工作目录');
+    } catch (error: any) {
+      toast('error', error?.message || '工作目录删除失败，请手动检查');
+    } finally {
+      setWorkspaceDeleting(false);
+    }
   };
 
   const isAgoraView = currentSessionView === 'agora';
@@ -1791,6 +1861,59 @@ function ChatSidebarComponent({
         }}
         onSave={() => { void saveAgoraGuestEdit(); }}
       />
+      <Dialog
+        open={Boolean(workspaceDeleteConfirm)}
+        onOpenChange={(open) => {
+          if (workspaceDeleting) return;
+          if (!open) setWorkspaceDeleteConfirm(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>确认删除对话</DialogTitle>
+            <DialogDescription>
+              删除「{workspaceDeleteConfirm?.session.title}」后无法恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <label className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+              <Checkbox
+                checked={deleteWorkspaceWithSession}
+                onCheckedChange={(checked) => setDeleteWorkspaceWithSession(checked === true)}
+                disabled={workspaceDeleting}
+                className="mt-0.5"
+              />
+              <span className="min-w-0 flex-1 text-sm">
+                <span className="block font-medium text-foreground">同时删除系统自动创建的工作目录</span>
+                <span className="mt-1 block break-all font-mono text-xs text-muted-foreground">
+                  {workspaceDeleteConfirm?.workspacePath}
+                </span>
+              </span>
+            </label>
+            <p className="text-xs leading-5 text-muted-foreground">
+              只会对 ACEHarness 默认创建并绑定到该会话的 agora workspace 生效；用户手动选择的目录不会出现这个选项。
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setWorkspaceDeleteConfirm(null)}
+              disabled={workspaceDeleting}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => { void confirmDeleteSessionWithOptionalWorkspace(); }}
+              disabled={workspaceDeleting}
+            >
+              {workspaceDeleting ? '删除中...' : '删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {dialogProps ? <ConfirmDialog {...dialogProps} /> : null}
     </div>
   );

@@ -35,6 +35,7 @@ import { MessageHistoryCollapse } from '@/components/chat/MessageHistoryCollapse
 import { VirtualMessageList } from '@/components/chat/VirtualMessageList';
 import HomeCommandSidebar from '@/components/chat/HomeCommandSidebar';
 import QuickActions, { QuickActionsBar } from '@/components/chat/QuickActions';
+import CliRunDialog, { type CliRunDialogRequest } from '@/components/chat/CliRunDialog';
 import UserMenu from '@/components/UserMenu';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useDashboardShellHeader } from '@/components/dashboard/DashboardShellHeader';
@@ -550,6 +551,7 @@ export function ChatPageContent({
   const [debugMode, setDebugMode] = useState(false);
   const [debugPrompt, setDebugPrompt] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
+  const [cliRunRequest, setCliRunRequest] = useState<CliRunDialogRequest | null>(null);
   const [workspaceEditorOpen, setWorkspaceEditorOpen] = useState(false);
   const [workspaceEditorPath, setWorkspaceEditorPath] = useState<string | undefined>();
   const [workspaceEditorFilePath, setWorkspaceEditorFilePath] = useState<string | null>(null);
@@ -1073,6 +1075,18 @@ export function ChatPageContent({
     window.addEventListener('ace:slash-commands-refresh', handleRefreshSlashCommands);
     return () => {
       window.removeEventListener('ace:slash-commands-refresh', handleRefreshSlashCommands);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleCliRun = (event: Event) => {
+      const detail = (event as CustomEvent<CliRunDialogRequest>).detail;
+      if (!detail?.commandName || !detail?.workingDirectory) return;
+      setCliRunRequest(detail);
+    };
+    window.addEventListener('ace:cli-run', handleCliRun as EventListener);
+    return () => {
+      window.removeEventListener('ace:cli-run', handleCliRun as EventListener);
     };
   }, []);
 
@@ -1602,6 +1616,7 @@ export function ChatPageContent({
         unlockAutoScroll,
         toast,
         workingDirectory: effectiveWorkingDirectory,
+        stopStreaming,
       });
       if (handled) {
         unlockAutoScroll();
@@ -2844,6 +2859,15 @@ export function ChatPageContent({
             title={workspaceEditorTitle}
           />
         )}
+        <CliRunDialog
+          open={Boolean(cliRunRequest)}
+          request={cliRunRequest}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCliRunRequest(null);
+            }
+          }}
+        />
       </div>
 
       <WeChatSessionBindDialog

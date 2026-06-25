@@ -230,4 +230,31 @@ describe('agora workspace store', () => {
       expect(await git(workspacePath, ['status', '--porcelain'])).toBe('');
     });
   });
+
+  test('removes only the default agora workspace for a session', async () => {
+    await withStore(async ({ aceHome, store }) => {
+      const workspacePath = path.join(aceHome, 'data', 'agora-workspaces', 'delete-me');
+      await mkdir(workspacePath, { recursive: true });
+      await writeFile(path.join(workspacePath, 'note.txt'), 'delete me\n', 'utf-8');
+
+      expect(store.getDefaultAgoraWorkspacePath('delete-me')).toBe(workspacePath);
+      expect(store.isDefaultAgoraWorkspacePathForSession('delete-me', workspacePath)).toBe(true);
+
+      await store.removeAgoraWorkspace('delete-me', workspacePath);
+
+      expect(existsSync(workspacePath)).toBe(false);
+    });
+  });
+
+  test('rejects removal of a non-default workspace path', async () => {
+    await withStore(async ({ store }) => {
+      await withTempDir('aceharness-manual-workspace-', async (manualWorkspace) => {
+        await writeFile(path.join(manualWorkspace, 'keep.txt'), 'keep me\n', 'utf-8');
+
+        expect(store.isDefaultAgoraWorkspacePathForSession('delete-me', manualWorkspace)).toBe(false);
+        await expect(store.removeAgoraWorkspace('delete-me', manualWorkspace)).rejects.toThrow('只能删除系统默认创建的议场工作目录');
+        expect(existsSync(path.join(manualWorkspace, 'keep.txt'))).toBe(true);
+      });
+    });
+  });
 });

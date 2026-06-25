@@ -51,8 +51,11 @@ describe('sidebar plugin system', () => {
       applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
       expect(getAllPlugins().find((p) => p.id === 'codespec')).toBeTruthy();
       expect(getActions().find((a) => a.id === 'codespec-init')?.prompt).toBe('__HOME_ACTION__:codespec:init');
+      expect(getActions().find((a) => a.id === 'codespec-init')?.category).toBe('codespec');
       expect(getActions().find((a) => a.id === 'codespec-sync')?.prompt).toBe('__HOME_ACTION__:codespec:sync');
       expect(getActions().find((a) => a.id === 'codespec-sync-generate')?.prompt).toBe('__HOME_ACTION__:codespec:sync-generate');
+      expect(getActions().find((a) => a.id === 'codespec-start')?.prompt).toBe('__HOME_ACTION__:codespec:start');
+      expect(getCategories().find((category) => category.id === 'codespec')?.title).toBe('CodeSpec');
 
       applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
     });
@@ -264,6 +267,7 @@ describe('sidebar plugin system', () => {
 
       const action = screen.getByRole('button', { name: /opencode: codespec-plan/ });
       expect(action).toBeInTheDocument();
+      expect(screen.getByText('CodeSpec')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /opencode: help/ })).toBeNull();
 
       await user.click(action);
@@ -277,11 +281,17 @@ describe('sidebar plugin system', () => {
 
       render(<QuickActionsBar onAction={onAction} />);
 
+      await user.click(screen.getByRole('button', { name: /快捷操作/ }));
+      expect(screen.getByText('CodeSpec')).toBeInTheDocument();
+
       await user.click(screen.getByRole('button', { name: /CodeSpec 同步/ }));
       expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync');
 
       await user.click(screen.getByRole('button', { name: /生成 CodeWiki/ }));
       expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync-generate');
+
+      await user.click(screen.getByRole('button', { name: /CodeSpec 创建 AR/ }));
+      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:start');
     });
   });
 });

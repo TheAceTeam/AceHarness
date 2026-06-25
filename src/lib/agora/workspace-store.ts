@@ -24,6 +24,16 @@ function getAgoraWorkspacesDir() {
   return getWorkspaceDataFile('agora-workspaces');
 }
 
+export function getDefaultAgoraWorkspacePath(sessionId: string): string {
+  return path.join(getAgoraWorkspacesDir(), sanitizeSegment(sessionId));
+}
+
+export function isDefaultAgoraWorkspacePathForSession(sessionId: string, workspacePath?: string | null): boolean {
+  const normalizedWorkspacePath = String(workspacePath || '').trim();
+  if (!normalizedWorkspacePath) return false;
+  return path.resolve(normalizedWorkspacePath) === path.resolve(getDefaultAgoraWorkspacePath(sessionId));
+}
+
 async function runGit(cwd: string, args: string[]) {
   const { stdout } = await execFileAsync('git', args, {
     cwd,
@@ -259,7 +269,10 @@ export async function ensureAgoraWorkspace(input: {
   return initialization;
 }
 
-export async function removeAgoraWorkspace(sessionId: string): Promise<void> {
-  const dir = path.join(getAgoraWorkspacesDir(), sanitizeSegment(sessionId));
+export async function removeAgoraWorkspace(sessionId: string, workspacePath?: string): Promise<void> {
+  if (workspacePath && !isDefaultAgoraWorkspacePathForSession(sessionId, workspacePath)) {
+    throw new Error('只能删除系统默认创建的议场工作目录');
+  }
+  const dir = getDefaultAgoraWorkspacePath(sessionId);
   await rm(dir, { recursive: true, force: true });
 }

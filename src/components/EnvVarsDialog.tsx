@@ -17,7 +17,7 @@ interface EnvVarError {
 }
 
 const USER_AI_ENV_PRESETS = [
-  { key: 'ANTHROPIC_API_KEY', label: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
+  { key: 'ANTHROPIC_AUTH_TOKEN', label: 'Anthropic API 密钥，Claude/Anthropic 兼容调用会读取。' },
   { key: 'ANTHROPIC_BASE_URL', label: 'Anthropic 自定义 API 地址，用于代理或自建网关。' },
   { key: 'OPENAI_API_KEY', label: 'OpenAI API 密钥，Codex/OpenAI 兼容调用会读取。' },
   { key: 'OPENAI_BASE_URL', label: 'OpenAI 兼容 API 地址，Codex 会显式传给 SDK。' },

@@ -1705,6 +1705,20 @@ export const agoraApi = {
     if (!response.ok) throw new Error(data?.error || '准备议场工作区失败');
     return data;
   },
+
+  async deleteWorkspace(input: {
+    sessionId: string;
+    workspacePath: string;
+  }): Promise<{ success: boolean }> {
+    const response = await authFetch(`${API_BASE}/agora/workspace`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || '删除议场工作目录失败');
+    return data;
+  },
 };
 
 export const runsApi = {

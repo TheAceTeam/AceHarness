@@ -54,11 +54,11 @@ function mergeIntoMap(
 }
 
 async function loadAnthropicApiKey(): Promise<string> {
-  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  if (process.env.ANTHROPIC_AUTH_TOKEN) return process.env.ANTHROPIC_AUTH_TOKEN;
   try {
     const vars = await loadEnvVars({ scope: 'system' });
     const env = buildEnvObject(vars);
-    return env.ANTHROPIC_API_KEY || '';
+    return env.ANTHROPIC_AUTH_TOKEN || '';
   } catch {
     return '';
   }

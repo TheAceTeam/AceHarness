@@ -9,3 +9,5 @@ runs
 logs
 cache
 .aceharness
+.npm-publish-cache/
+.tmp-opencode-src/

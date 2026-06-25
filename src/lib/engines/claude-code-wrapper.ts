@@ -202,10 +202,10 @@ function buildCleanEnv(userId?: string): Record<string, string | undefined> {
     process.env,
     userId ? { userId } : undefined,
   );
-  const apiKey = String(env.ANTHROPIC_API_KEY || '').trim();
+  const apiKey = String(env.ANTHROPIC_AUTH_TOKEN || '').trim();
   const baseUrl = String(env.ANTHROPIC_BASE_URL || env.CLAUDE_CODE_BASE_URL || env.CLAUDE_CODE_API_BASE_URL || '').trim().replace(/\/+$/, '');
   if (apiKey) {
-    env.ANTHROPIC_API_KEY = apiKey;
+    env.ANTHROPIC_AUTH_TOKEN = apiKey;
   }
   if (baseUrl) {
     env.ANTHROPIC_BASE_URL = baseUrl;

@@ -25,9 +25,9 @@ describe('wrapper availability in current environment', () => {
     expect(buildEnvObject([
       { key: 'OPENAI_API_KEY', value: '', enabled: true },
       { key: 'OPENAI_BASE_URL', value: '   ', enabled: true },
-      { key: 'ANTHROPIC_API_KEY', value: 'sk-test', enabled: true },
+      { key: 'ANTHROPIC_AUTH_TOKEN', value: 'sk-test', enabled: true },
       { key: 'DISABLED_VALUE', value: 'present', enabled: false },
-    ])).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+    ])).toEqual({ ANTHROPIC_AUTH_TOKEN: 'sk-test' });
   });
 
   test('claude-code matches SDK availability', async () => {
