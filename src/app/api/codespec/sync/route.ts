@@ -12,6 +12,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const workspace = typeof body?.workspace === 'string' ? body.workspace.trim() : '';
+    const generate = body?.generate === true;
     if (!workspace) {
       return NextResponse.json({ error: '缺少 workspace 参数' }, { status: 400 });
     }
@@ -22,15 +23,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '未找到 codespec CLI，请先安装并确认 PATH 配置可用' }, { status: 404 });
     }
 
+    const args = generate ? ['sync', '--generate'] : ['sync'];
+    const label = generate ? 'codespec sync --generate' : 'codespec sync';
     const result = await runCommand({
       command,
-      args: ['init'],
+      args,
       cwd,
       env,
-      timeoutLabel: 'codespec init',
+      timeoutLabel: label,
     });
+
     if (result.exitCode !== 0) {
-      const message = (result.stderr || result.stdout || `codespec init 退出码 ${result.exitCode}`).trim();
+      const message = (result.stderr || result.stdout || `${label} 退出码 ${result.exitCode}`).trim();
       return NextResponse.json({
         success: false,
         error: message,
@@ -43,12 +47,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       workspace: cwd,
+      command: label,
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
     });
   } catch (error: any) {
     const { message, status } = workspaceErrorResponse(error);
-    return NextResponse.json({ error: message || error?.message || 'CodeSpec 初始化失败' }, { status });
+    return NextResponse.json({ error: message || error?.message || 'CodeSpec 同步失败' }, { status });
   }
 }

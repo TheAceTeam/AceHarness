@@ -532,6 +532,7 @@ export function ChatPageContent({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [engineSlashCommands, setEngineSlashCommands] = useState<HomepageSlashCommand[]>([]);
+  const [slashCommandRefreshNonce, setSlashCommandRefreshNonce] = useState(0);
   const slashItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const collaborationMessageHandlerRef = useRef<((text: string) => void) | null>(null);
   const [notebookExporting, setNotebookExporting] = useState(false);
@@ -1066,6 +1067,16 @@ export function ChatPageContent({
   ]), [engineSlashCommands]);
 
   useEffect(() => {
+    const handleRefreshSlashCommands = () => {
+      setSlashCommandRefreshNonce((value) => value + 1);
+    };
+    window.addEventListener('ace:slash-commands-refresh', handleRefreshSlashCommands);
+    return () => {
+      window.removeEventListener('ace:slash-commands-refresh', handleRefreshSlashCommands);
+    };
+  }, []);
+
+  useEffect(() => {
     const activeEngine = String(effectiveEngine || engine || '').trim();
     const logicalEngine = activeEngine === 'opencode-sdk'
       ? 'opencode'
@@ -1118,7 +1129,7 @@ export function ChatPageContent({
     return () => {
       cancelled = true;
     };
-  }, [effectiveEngine, engine, effectiveWorkingDirectory]);
+  }, [effectiveEngine, engine, effectiveWorkingDirectory, slashCommandRefreshNonce]);
 
   const slashQuery = useMemo(() => {
     const text = input.trim();

@@ -51,6 +51,8 @@ describe('sidebar plugin system', () => {
       applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
       expect(getAllPlugins().find((p) => p.id === 'codespec')).toBeTruthy();
       expect(getActions().find((a) => a.id === 'codespec-init')?.prompt).toBe('__HOME_ACTION__:codespec:init');
+      expect(getActions().find((a) => a.id === 'codespec-sync')?.prompt).toBe('__HOME_ACTION__:codespec:sync');
+      expect(getActions().find((a) => a.id === 'codespec-sync-generate')?.prompt).toBe('__HOME_ACTION__:codespec:sync-generate');
 
       applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: [] });
     });
@@ -266,6 +268,20 @@ describe('sidebar plugin system', () => {
 
       await user.click(action);
       expect(onAction).toHaveBeenCalledWith('/opencode:codespec-plan');
+    });
+
+    test('codespec plugin exposes sync quick actions when enabled', async () => {
+      const user = userEvent.setup();
+      const onAction = vi.fn();
+      applySidebarPluginPreferences({ disabledPluginIds: [], enabledPluginIds: ['codespec'] });
+
+      render(<QuickActionsBar onAction={onAction} />);
+
+      await user.click(screen.getByRole('button', { name: /CodeSpec 同步/ }));
+      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync');
+
+      await user.click(screen.getByRole('button', { name: /生成 CodeWiki/ }));
+      expect(onAction).toHaveBeenCalledWith('__HOME_ACTION__:codespec:sync-generate');
     });
   });
 });
