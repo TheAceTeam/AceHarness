@@ -1597,6 +1597,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.clearRuntimeActivity();
         this.completeRunSpecCoding('工作流执行完成。');
         this.emit('status', {
           status: 'completed',
@@ -1614,6 +1615,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
           message: error.message,
@@ -1632,6 +1634,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   async stop(): Promise<void> {
     this.shouldStop = true;
     this.status = 'stopped';
+    this.clearRuntimeActivity();
     this.emit('status', {
       status: 'stopped',
       message: '工作流已停止',
@@ -2283,6 +2286,7 @@ export class StateMachineWorkflowManager extends EventEmitter {
   private async finalizeRun(status: 'completed' | 'failed' | 'stopped') {
     if (!this.currentRunId) return;
     this.runEndTime = new Date().toISOString();
+    this.clearRuntimeActivity();
 
     try {
       await this.finalizeSupervisorOutputs(status);
@@ -2335,6 +2339,12 @@ export class StateMachineWorkflowManager extends EventEmitter {
     });
 
     this.status = 'idle';
+  }
+
+  private clearRuntimeActivity(): void {
+    this.activeStepKeys.clear();
+    this.activeConcurrencyGroups = [];
+    this.currentStep = null;
   }
 
   private refreshCurrentStep(): void {
@@ -6356,6 +6366,7 @@ try {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
@@ -6371,6 +6382,7 @@ try {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
           message: error.message,
@@ -6726,6 +6738,7 @@ try {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
@@ -6739,6 +6752,7 @@ try {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
           message: error.message,
@@ -6840,6 +6854,7 @@ try {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
@@ -6855,6 +6870,7 @@ try {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.clearRuntimeActivity();
         this.emit('status', {
           status: 'failed',
           message: error.message,

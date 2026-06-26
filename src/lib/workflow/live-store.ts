@@ -36,6 +36,7 @@ const INITIAL_STATE: WorkflowLiveStateSnapshot = {
   lastEventAt: null,
 };
 const ACTIVE_WORKFLOW_STATUSES = new Set(['preparing', 'running', 'waiting']);
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
 
 let snapshot = INITIAL_STATE;
 let eventSource: EventSource | null = null;
@@ -88,11 +89,19 @@ function normalizeChatStream(input: any): WorkflowLiveChatStream | null {
 function applyWorkflowStatus(nextState: WorkflowLiveStateSnapshot, statusSnapshot: any) {
   const configFile = typeof statusSnapshot?.currentConfigFile === 'string' ? statusSnapshot.currentConfigFile : '';
   if (!configFile) return nextState;
+  const normalizedStatusSnapshot = TERMINAL_WORKFLOW_STATUSES.has(String(statusSnapshot?.status || ''))
+    ? {
+        ...statusSnapshot,
+        currentStep: null,
+        activeSteps: [],
+        activeConcurrencyGroups: [],
+      }
+    : statusSnapshot;
   const existingStatus = nextState.workflowStatusByConfig[configFile];
-  const incomingRunId = statusSnapshot?.runId ? String(statusSnapshot.runId) : '';
+  const incomingRunId = normalizedStatusSnapshot?.runId ? String(normalizedStatusSnapshot.runId) : '';
   const existingRunId = existingStatus?.runId ? String(existingStatus.runId) : '';
   const existingActive = ACTIVE_WORKFLOW_STATUSES.has(String(existingStatus?.status || ''));
-  const incomingActive = ACTIVE_WORKFLOW_STATUSES.has(String(statusSnapshot?.status || ''));
+  const incomingActive = ACTIVE_WORKFLOW_STATUSES.has(String(normalizedStatusSnapshot?.status || ''));
   const shouldReplaceConfigStatus =
     !existingStatus
     || !existingActive
@@ -101,11 +110,11 @@ function applyWorkflowStatus(nextState: WorkflowLiveStateSnapshot, statusSnapsho
     || incomingRunId === existingRunId;
   const nextWorkflowStatusByConfig = {
     ...nextState.workflowStatusByConfig,
-    ...(shouldReplaceConfigStatus ? { [configFile]: statusSnapshot } : {}),
+    ...(shouldReplaceConfigStatus ? { [configFile]: normalizedStatusSnapshot } : {}),
   };
   const nextRunStatusById = { ...nextState.runStatusById };
-  if (statusSnapshot?.runId && statusSnapshot?.status) {
-    nextRunStatusById[String(statusSnapshot.runId)] = String(statusSnapshot.status);
+  if (normalizedStatusSnapshot?.runId && normalizedStatusSnapshot?.status) {
+    nextRunStatusById[String(normalizedStatusSnapshot.runId)] = String(normalizedStatusSnapshot.status);
   }
   return {
     ...nextState,
@@ -133,7 +142,9 @@ function applyWorkflowEventLogRecord(record: { runId: string; type: string; seq:
               currentConfigFile: configFile,
               status: payload.status,
               currentPhase: payload.currentPhase,
-              currentStep: payload.currentStep,
+              currentStep: TERMINAL_WORKFLOW_STATUSES.has(String(payload.status || '')) ? null : payload.currentStep,
+              activeSteps: TERMINAL_WORKFLOW_STATUSES.has(String(payload.status || '')) ? [] : payload.activeSteps,
+              activeConcurrencyGroups: TERMINAL_WORKFLOW_STATUSES.has(String(payload.status || '')) ? [] : payload.activeConcurrencyGroups,
             },
           }
         : current.workflowStatusByConfig;

@@ -1405,6 +1405,7 @@ try {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.currentStep = null;
         this.emit('status', {
           status: 'completed',
           message: '工作流执行完成',
@@ -1417,6 +1418,7 @@ try {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.currentStep = null;
         this.emit('status', {
           status: 'failed',
           message: error.message,
@@ -1432,6 +1434,7 @@ try {
   private async finalizeRun(status: 'completed' | 'failed' | 'stopped') {
     if (!this.currentRunId) return;
     this.runEndTime = new Date().toISOString();
+    this.currentStep = null;
 
     // Cleanup copied skills and engine processes from workspace/run execution
     this.cleanupCurrentEngine();
@@ -3421,6 +3424,7 @@ try {
 
       if (!this.shouldStop) {
         this.status = 'completed';
+        this.currentStep = null;
         this.emit('status', { status: 'completed', message: '工作流执行完成' });
         await this.finalizeRun('completed');
       }
@@ -3428,6 +3432,7 @@ try {
       if (!this.shouldStop) {
         this.status = 'failed';
         this.statusReason = error.message || String(error);
+        this.currentStep = null;
         this.emit('status', { status: 'failed', message: error.message });
         await this.finalizeRun('failed');
       }

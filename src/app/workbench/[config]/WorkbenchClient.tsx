@@ -186,6 +186,15 @@ const MonacoEditor = dynamic(
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const UNC_ABSOLUTE_PATH = /^(?:\\\\|\/\/)/;
 type RunWorkbenchTab = 'execution' | 'workspace' | 'changes';
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
+
+function isTerminalWorkflowStatus(status: unknown): boolean {
+  return typeof status === 'string' && TERMINAL_WORKFLOW_STATUSES.has(status);
+}
+
+function isRuntimeWorkflowStatusActive(status: unknown): boolean {
+  return status === 'running' || status === 'preparing' || status === 'waiting';
+}
 
 function workflowStepKeyMatchesName(stepKey: string | null | undefined, stepName: string | null | undefined): boolean {
   const key = String(stepKey || '').trim();
@@ -4152,7 +4161,8 @@ export default function WorkbenchPage({
 
       dispatch({ type: 'SET_WORKFLOW_STATUS', payload: status.status });
       setRunStatusReason(status.statusReason || null);
-      const statusIsActive = status.status === 'running' || status.status === 'preparing';
+      const statusIsActive = isRuntimeWorkflowStatusActive(status.status);
+      const statusIsTerminal = isTerminalWorkflowStatus(status.status);
       if (status.status === 'failed' && status.statusReason) {
         addLog('system', 'error', `工作流启动失败: ${status.statusReason}`);
       }
@@ -4160,13 +4170,14 @@ export default function WorkbenchPage({
       setWorkflowFrontendSessionId((status as any).workflowFrontendSessionId || null);
       if (typeof status.currentPhase === 'string') dispatch({ type: 'SET_CURRENT_PHASE', payload: status.currentPhase });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
-      if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
+      if (statusIsTerminal) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+      else if (typeof status.currentStep === 'string') dispatch({ type: 'SET_CURRENT_STEP', payload: status.currentStep });
       else if (!statusIsActive) dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
       if (status.agents?.length) dispatch({ type: 'SET_AGENTS', payload: status.agents });
       if (status.completedSteps) dispatch({ type: 'SET_COMPLETED_STEPS', payload: status.completedSteps });
       dispatch({ type: 'SET_FAILED_STEPS', payload: status.failedSteps || [] });
-      setActiveSteps(Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []);
-      setActiveConcurrencyGroups(Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []);
+      setActiveSteps(statusIsTerminal ? [] : (Array.isArray((status as any).activeSteps) ? (status as any).activeSteps : []));
+      setActiveConcurrencyGroups(statusIsTerminal ? [] : (Array.isArray((status as any).activeConcurrencyGroups) ? (status as any).activeConcurrencyGroups : []));
       const pendingLiveFeedback = Array.isArray((status as any).pendingLiveFeedback)
         ? (status as any).pendingLiveFeedback
         : [];
@@ -4403,7 +4414,8 @@ export default function WorkbenchPage({
     if (snapshot.workflowFrontendSessionId !== undefined) {
       setWorkflowFrontendSessionId(snapshot.workflowFrontendSessionId || null);
     }
-    const statusIsActive = snapshot.status === 'running' || snapshot.status === 'preparing' || snapshot.status === 'waiting';
+    const statusIsActive = isRuntimeWorkflowStatusActive(snapshot.status);
+    const statusIsTerminal = isTerminalWorkflowStatus(snapshot.status);
     const nextPhase = typeof snapshot.currentPhase === 'string'
       ? snapshot.currentPhase
       : typeof snapshot.currentState === 'string'
@@ -4414,15 +4426,21 @@ export default function WorkbenchPage({
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_PHASE', payload: '' });
     }
-    if (typeof snapshot.currentStep === 'string') {
+    if (statusIsTerminal) {
+      dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+    } else if (typeof snapshot.currentStep === 'string') {
       dispatch({ type: 'SET_CURRENT_STEP', payload: snapshot.currentStep });
     } else if (snapshot.status && !statusIsActive) {
       dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
     }
-    if (Array.isArray(snapshot.activeSteps)) {
+    if (statusIsTerminal) {
+      setActiveSteps([]);
+    } else if (Array.isArray(snapshot.activeSteps)) {
       setActiveSteps(snapshot.activeSteps);
     }
-    if (Array.isArray(snapshot.activeConcurrencyGroups)) {
+    if (statusIsTerminal) {
+      setActiveConcurrencyGroups([]);
+    } else if (Array.isArray(snapshot.activeConcurrencyGroups)) {
       setActiveConcurrencyGroups(snapshot.activeConcurrencyGroups);
     }
     if (Array.isArray(snapshot.completedSteps)) {
@@ -5029,20 +5047,23 @@ export default function WorkbenchPage({
     if (!shouldApplyRuntimePayload(event?.data)) return;
 
     switch (event.type) {
-      case 'status':
+      case 'status': {
+        const eventStatusIsTerminal = isTerminalWorkflowStatus(event.data.status);
         dispatch({ type: 'SET_WORKFLOW_STATUS', payload: event.data.status });
         if (typeof event.data.currentPhase === 'string') {
           dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.currentPhase });
         }
-        if (typeof event.data.currentStep === 'string') {
+        if (eventStatusIsTerminal) {
+          dispatch({ type: 'SET_CURRENT_STEP', payload: '' });
+        } else if (typeof event.data.currentStep === 'string') {
           dispatch({ type: 'SET_CURRENT_STEP', payload: event.data.currentStep });
         }
         if (event.data.runId) dispatch({ type: 'SET_RUN_ID', payload: event.data.runId });
         if (event.data.workflowFrontendSessionId) setWorkflowFrontendSessionId(event.data.workflowFrontendSessionId);
-        if (Array.isArray(event.data.activeSteps)) setActiveSteps(event.data.activeSteps);
+        if (Array.isArray(event.data.activeSteps) || eventStatusIsTerminal) setActiveSteps(eventStatusIsTerminal ? [] : event.data.activeSteps);
         if (Array.isArray(event.data.completedSteps)) dispatch({ type: 'SET_COMPLETED_STEPS', payload: event.data.completedSteps });
         if (Array.isArray(event.data.failedSteps)) dispatch({ type: 'SET_FAILED_STEPS', payload: event.data.failedSteps });
-        if (Array.isArray(event.data.activeConcurrencyGroups)) setActiveConcurrencyGroups(event.data.activeConcurrencyGroups);
+        if (Array.isArray(event.data.activeConcurrencyGroups) || eventStatusIsTerminal) setActiveConcurrencyGroups(eventStatusIsTerminal ? [] : event.data.activeConcurrencyGroups);
         if (event.data.startTime) setRunStartTime(event.data.startTime);
         if (event.data.endTime) setRunEndTime(event.data.endTime);
         if (event.data.specCodingSummary) setSpecCodingSummary(event.data.specCodingSummary);
@@ -5052,6 +5073,7 @@ export default function WorkbenchPage({
         if (event.data.workingDirectory) dispatch({ type: 'SET_WORKING_DIRECTORY', payload: event.data.workingDirectory });
         addLog('system', 'info', event.data.message);
         break;
+      }
       case 'phase':
         applyWorkflowStatusSnapshot(event.data.statusSnapshot);
         dispatch({ type: 'SET_CURRENT_PHASE', payload: event.data.phase });

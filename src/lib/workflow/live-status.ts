@@ -3,6 +3,11 @@ const EVENT_OUTPUT_LIMIT = 12000;
 const FLOW_LIMIT = 200;
 const ARRAY_LIMIT = 80;
 const DEPTH_LIMIT = 5;
+const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'crashed']);
+
+function isTerminalWorkflowStatus(status: unknown): boolean {
+  return typeof status === 'string' && TERMINAL_WORKFLOW_STATUSES.has(status);
+}
 
 export function truncateLiveText(value: unknown, limit = DEFAULT_TEXT_LIMIT): unknown {
   if (typeof value !== 'string') return value;
@@ -131,6 +136,7 @@ function compactSpecCodingSummary(specCoding: any, source: 'run') {
 
 export function compactWorkflowStatusForLive(status: any, configFile?: string | null) {
   if (!status) return { status: 'idle' };
+  const terminalStatus = isTerminalWorkflowStatus(status.status);
   const specPayload = compactSpecCodingSummary(status.runSpecCoding, 'run') || {};
   return {
     status: status.status || '',
@@ -140,9 +146,9 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,
     currentState: status.currentState || null,
     currentPhase: status.currentPhase || status.currentState || null,
-    currentStep: status.currentStep || null,
-    activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : [],
-    activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : [],
+    currentStep: terminalStatus ? null : (status.currentStep || null),
+    activeSteps: terminalStatus ? [] : (Array.isArray(status.activeSteps) ? status.activeSteps : []),
+    activeConcurrencyGroups: terminalStatus ? [] : (Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : []),
     completedSteps: Array.isArray(status.completedSteps) ? status.completedSteps : [],
     failedSteps: Array.isArray(status.failedSteps) ? status.failedSteps : [],
     agents: Array.isArray(status.agents) ? status.agents.map(compactAgent) : [],
@@ -183,6 +189,7 @@ export function compactWorkflowStatusForLive(status: any, configFile?: string | 
 
 export function compactWorkflowStatusDeltaForLive(status: any, configFile?: string | null) {
   if (!status) return { status: 'idle' };
+  const terminalStatus = isTerminalWorkflowStatus(status.status);
   return {
     status: status.status || '',
     statusReason: truncateLiveText(status.statusReason || null, 1000),
@@ -191,9 +198,9 @@ export function compactWorkflowStatusDeltaForLive(status: any, configFile?: stri
     workflowFrontendSessionId: status.workflowFrontendSessionId || null,
     currentState: status.currentState || null,
     currentPhase: status.currentPhase || status.currentState || null,
-    currentStep: status.currentStep || null,
-    activeSteps: Array.isArray(status.activeSteps) ? status.activeSteps : [],
-    activeConcurrencyGroups: Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : [],
+    currentStep: terminalStatus ? null : (status.currentStep || null),
+    activeSteps: terminalStatus ? [] : (Array.isArray(status.activeSteps) ? status.activeSteps : []),
+    activeConcurrencyGroups: terminalStatus ? [] : (Array.isArray(status.activeConcurrencyGroups) ? status.activeConcurrencyGroups : []),
     completedStepCount: Array.isArray(status.completedSteps) ? status.completedSteps.length : 0,
     failedStepCount: Array.isArray(status.failedSteps) ? status.failedSteps.length : 0,
     transitionCount: typeof status.transitionCount === 'number' ? status.transitionCount : 0,
