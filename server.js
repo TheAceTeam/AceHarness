@@ -36,7 +36,7 @@ function parseEnvFileContent(content) {
 }
 function loadProjectEnvFiles() {
     const root = __dirname;
-    const isDev = process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
+    const isDev = process.argv.includes('dev');
     const names = isDev
         ? ['.env', '.env.development', '.env.local', '.env.development.local']
         : ['.env', '.env.production', '.env.local', '.env.production.local'];
@@ -72,6 +72,19 @@ function normalizeRoutesManifest() {
     }
 }
 normalizeRoutesManifest();
+// ACEHarness: 运行模式显式化 —— 仅当显式传入 `dev` 才进开发模式，否则一律生产。
+// 防止"启动方式不规范 → 误入 .next/dev 开发模式 → require.cache 堆积编译分片 → OOM"。
+const dev = process.argv.includes('dev');
+if (!dev) {
+    process.env.NODE_ENV = process.env.NODE_ENV || 'production';
+    if (!fs.existsSync(path.join(__dirname, '.next', 'BUILD_ID'))) {
+        console.error('[ACEHarness] 未找到生产构建产物 .next/BUILD_ID。请先执行 `npm run build`，再以生产模式启动（npm start / ace start）。');
+        process.exit(1);
+    }
+}
+else {
+    console.warn('[ACEHarness] ⚠ 正在以 DEV（开发）模式运行 —— 仅供本地开发；长期运行内存会持续增长直至 OOM，请勿用于部署。');
+}
 const next = require('next');
 const { WebSocketServer } = require('ws');
 const Y = require('yjs');
@@ -80,7 +93,6 @@ const awarenessProtocol = require('y-protocols/awareness');
 const encoding = require('lib0/encoding');
 const decoding = require('lib0/decoding');
 const { getWorkspaceDataFile, getWorkspaceNotebookRoot, } = require(path.join(__dirname, 'dist/lib/core/app-paths.js'));
-const dev = process.argv.includes('dev') || (!process.argv.includes('start') && process.env.NODE_ENV !== 'production');
 const host = process.env.ACE_HOST || '127.0.0.1';
 const port = Number(process.env.PORT || process.env.ACE_PORT || 3000);
 const CHAT_REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
@@ -443,6 +455,66 @@ function resolveCollabRoom(searchParams) {
         return { ok: false, reason: '路径不合法' };
     return { ok: true, roomId: `personal:${user.id}:${absPath}`, user, filePath };
 }
+// ACEHarness: 内存看门狗。dev 模式下编译分片会随运行无界堆积在 require.cache 直至 OOM。
+// 仅当受 daemon 监管(ACE_MANAGED=1)时才允许自重启(由守护进程拉起):
+//   - 空闲(无在跑的 agent/流)且 heapUsed 超过软阈值 -> 优雅重启(用户基本无感);
+//   - heapUsed 超过硬红线 -> 强制重启(避免不可控的 OOM 崩溃)。
+// 非受管运行(如 npm run dev)只告警、不自杀。可用 ACE_MEM_WATCHDOG=0 关闭。
+function startMemoryWatchdog() {
+    if (process.env.ACE_MEM_WATCHDOG === '0')
+        return;
+    const v8 = require('v8');
+    const heapLimit = v8.getHeapStatistics().heap_size_limit;
+    if (!heapLimit || heapLimit < 1)
+        return;
+    const managed = process.env.ACE_MANAGED === '1';
+    const softPct = Number(process.env.ACE_MEM_SOFT_PCT) || 0.80;
+    const hardPct = Number(process.env.ACE_MEM_HARD_PCT) || 0.92;
+    const soft = heapLimit * softPct;
+    const hard = heapLimit * hardPct;
+    const mb = (n) => Math.round(n / 1024 / 1024);
+    let restarting = false;
+    let warnedUnmanaged = false;
+    const getActiveWork = () => {
+        try {
+            // process-manager 是挂在 globalThis 上的单例(与 Next 应用同进程共享)，
+            // 直接读取，避免依赖 dist 构建。
+            const pm = globalThis.__processManager;
+            if (!pm)
+                return 0; // 还没有任何 agent 进程被创建 = 空闲
+            if (typeof pm.getActiveWorkCount !== 'function')
+                return 1; // 单例存在但查不到 = 保守当作"忙"，绝不在不确定时打断任务
+            return pm.getActiveWorkCount();
+        }
+        catch {
+            return 1;
+        }
+    };
+    const restart = (reason) => {
+        if (restarting)
+            return;
+        restarting = true;
+        console.error(`[ACEHarness] 内存看门狗触发重启(${reason}): heapUsed=${mb(process.memoryUsage().heapUsed)}MB / limit=${mb(heapLimit)}MB。受管进程将由守护进程自动拉起。`);
+        setTimeout(() => process.exit(1), 1500); // 留点时间落日志/在途响应，再以非零码退出 -> supervisor 重启
+    };
+    const timer = setInterval(() => {
+        if (restarting)
+            return;
+        const heapUsed = process.memoryUsage().heapUsed;
+        if (heapUsed >= hard) {
+            if (managed)
+                restart('硬红线');
+            else if (!warnedUnmanaged) {
+                warnedUnmanaged = true;
+                console.warn(`[ACEHarness] ⚠ 内存逼近上限(heapUsed=${mb(heapUsed)}MB / limit=${mb(heapLimit)}MB),且非受管模式不会自动重启,请尽快手动重启进程。`);
+            }
+            return;
+        }
+        if (managed && heapUsed >= soft && getActiveWork() === 0)
+            restart('软阈值+空闲');
+    }, 30000);
+    timer.unref();
+}
 app.prepare().then(() => {
     const server = http.createServer(async (req, res) => {
         if (await handleRagApi(req, res)) {
@@ -518,5 +590,6 @@ app.prepare().then(() => {
     });
     server.listen(port, host, () => {
         console.log(`[ACEHarness] Server ready on http://${host}:${port}`);
+        startMemoryWatchdog();
     });
 });
