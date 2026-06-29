@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { dirname, join } from 'path';
+import { totalmem } from 'os';
 import { spawn, ChildProcess } from 'child_process';
 import { commandExists } from '@/lib/core/command-exists';
 import {
@@ -1317,8 +1318,35 @@ async function updateCommand(
   }
 }
 
+const DEFAULT_SERVER_HEAP_MB = 4096;
+const MAX_SERVER_HEAP_MB = 8192;
+
+// The long-running Next.js server holds the workflow state machine, collab docs
+// and streamed agent output in a single V8 heap. Node's default old-space cap
+// (~4 GB on 64-bit) is easy to hit, which surfaces as a `JavaScript heap out of
+// memory` crash (typically while UTF-8 decoding a large streamed chunk). Size the
+// cap from physical RAM so the server gets headroom on capable machines without
+// over-committing on small ones.
+function resolveServerHeapMB(): number {
+  const override = Number(process.env.ACE_MAX_OLD_SPACE_MB);
+  if (Number.isFinite(override) && override >= 1024) {
+    return Math.floor(override);
+  }
+  const totalMB = Math.floor(totalmem() / (1024 * 1024));
+  const target = Math.floor(totalMB * 0.6);
+  return Math.min(MAX_SERVER_HEAP_MB, Math.max(DEFAULT_SERVER_HEAP_MB, target));
+}
+
+function buildServerNodeArgs(): string[] {
+  // Respect an explicit --max-old-space-size the operator already set.
+  if ((process.env.NODE_OPTIONS || '').includes('--max-old-space-size')) {
+    return [];
+  }
+  return [`--max-old-space-size=${resolveServerHeapMB()}`];
+}
+
 function spawnCliProcess(args: string[], env: NodeJS.ProcessEnv, detached: boolean): ChildProcess {
-  return spawn(process.execPath, [__filename, ...args], {
+  return spawn(process.execPath, [...buildServerNodeArgs(), __filename, ...args], {
     cwd: getRepoRoot(),
     env,
     detached,
@@ -1375,6 +1403,9 @@ async function runManagedServerChild(serviceId: string): Promise<void> {
 async function runDaemonSupervisor(serviceId: string): Promise<void> {
   const settings = await loadSystemSettings();
   const env = buildChildEnv(settings);
+  // Mark the server child as supervised so its memory watchdog is allowed to
+  // self-restart (this loop will respawn it). Unmanaged runs only warn.
+  env.ACE_MANAGED = '1';
   let shuttingDown = false;
   let child: ChildProcess | null = null;
 

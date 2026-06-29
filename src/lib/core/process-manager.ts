@@ -112,6 +112,19 @@ class ProcessManager extends EventEmitter {
     return this.activeStreams.get(frontendSessionId);
   }
 
+  /**
+   * In-flight agent work: running/queued child processes plus live frontend
+   * streams. The server-side memory watchdog uses this to avoid restarting
+   * the process in the middle of a workflow/agent run.
+   */
+  getActiveWorkCount(): number {
+    let active = 0;
+    for (const [, proc] of this.processes) {
+      if (proc.status === 'running' || proc.status === 'queued') active++;
+    }
+    return active + this.activeStreams.size;
+  }
+
   appendStreamContent(id: string, chunk: string): string {
     const proc = this.processes.get(id);
     if (!proc) return '';

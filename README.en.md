@@ -208,6 +208,11 @@ npm run dev
 | `LANG` | Locale fallback variable | Used when `ACE_LOCALE` is unset |
 | `LC_ALL` | Locale fallback variable | Used when `ACE_LOCALE` and `LANG` are unset |
 | `NODE_ENV` | Runtime mode; also affects `.env*` loading and some debug defaults | `production` for managed child services |
+| `ACE_MAX_OLD_SPACE_MB` | V8 old-space heap limit (MB) for the server process; overrides the auto value | Auto: ~60% of RAM, clamped to `4096`–`8192` |
+| `ACE_MEM_WATCHDOG` | Memory-watchdog toggle; gracefully restarts before OOM when thresholds are crossed | Enabled by default; set `0` to disable |
+| `ACE_MEM_SOFT_PCT` | Soft threshold (fraction of heap limit); graceful restart only while idle | `0.80` |
+| `ACE_MEM_HARD_PCT` | Hard threshold (fraction of heap limit); unconditional forced restart to avoid OOM | `0.92` |
+| `ACE_MANAGED` | Internal flag marking the server process as daemon-supervised so the watchdog may self-restart | Set automatically by the CLI; not for manual use |
 
 Public-origin and channel-recovery variables:
 
