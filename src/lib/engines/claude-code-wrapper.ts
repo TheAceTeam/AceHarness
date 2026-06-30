@@ -389,6 +389,7 @@ export class ClaudeCodeEngineWrapper extends EventEmitter implements Engine {
 
       // Build env
       const spawnEnv = buildCleanEnv(options.userId);
+      Object.assign(spawnEnv, options.env || {});
       if (!spawnEnv.CLAUDE_CODE_MAX_RETRIES) {
         spawnEnv.CLAUDE_CODE_MAX_RETRIES = String(MAX_API_RETRY_ATTEMPTS);
       }

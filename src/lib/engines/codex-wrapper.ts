@@ -229,6 +229,7 @@ export class CodexEngineWrapper extends EventEmitter implements Engine {
       process.env,
       options.userId ? { userId: options.userId } : undefined,
     );
+    Object.assign(clientEnv, options.env || {});
     const mcpServers = options.mcpServers?.length
       ? toCodexMcpServers(options.mcpServers as any)
       : undefined;

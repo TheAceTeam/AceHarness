@@ -114,6 +114,26 @@ describe('resolveWorkflowAgentSelection', () => {
     expect(result.effectiveModel).toBe('opus');
   });
 
+  test('agent active engine wins when workflow has no engine policy', () => {
+    const result = resolveWorkflowAgentSelection(
+      { name: 'architect', engineModels: { codex: 'gpt-5.4' }, activeEngine: 'codex' },
+      { engine: 'opencode', defaultModel: 'glm-5' },
+      {
+        agentName: 'architect',
+        workflowContext: {
+          executionPolicy: {
+            autoCompactOnStepChange: false,
+            agentOverrides: {},
+          },
+        },
+      },
+    );
+
+    expect(result.followsSystem).toBe(false);
+    expect(result.effectiveEngine).toBe('codex');
+    expect(result.effectiveModel).toBe('gpt-5.4');
+  });
+
   test('workflow default policy overrides global selection for all agents', () => {
     const result = resolveWorkflowAgentSelection(
       { name: 'coder', engineModels: { codex: 'gpt-5-codex' }, activeEngine: '' },
