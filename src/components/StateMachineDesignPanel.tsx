@@ -34,6 +34,7 @@ import { Plus, Trash2, GripVertical, ChevronLeft, ChevronRight, ChevronDown, Arr
 import EditNodeModal from './EditNodeModal';
 import StateMachineDiagram from './StateMachineDiagram';
 import type { StateMachineState, StateTransition, WorkflowStep } from '@/lib/core/schemas';
+import { configApi } from '@/lib/core/api';
 
 interface StateMachineDesignPanelProps {
   states: StateMachineState[];
@@ -45,6 +46,17 @@ interface StateMachineDesignPanelProps {
   onOptimizeStep?: (stateIndex: number, stepIndex: number) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
 }
+
+type SubworkflowDrilldownState = {
+  parentStep: WorkflowStep;
+  parentStateName?: string;
+  parentStepIndex?: number;
+  configFile: string;
+  loading: boolean;
+  saving: boolean;
+  error?: string;
+  config?: any;
+};
 
 type StepGroup = {
   id?: string;
@@ -66,6 +78,16 @@ function findAgentConfig(agents: any[] | undefined, agentName: string) {
 }
 
 function StepAgentBadge({ step, availableAgents }: { step: WorkflowStep; availableAgents?: any[] }) {
+  if (step.type === 'subworkflow') {
+    return (
+      <span className="inline-flex min-w-0 max-w-[220px] items-center gap-1.5">
+        <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-cyan-500/10 text-cyan-700 dark:text-cyan-300">
+          <span className="material-symbols-outlined text-[12px]">account_tree</span>
+        </span>
+        <span className="truncate">子工作流</span>
+      </span>
+    );
+  }
   const name = step.agent?.trim() || '未分配 Agent';
   const agent = findAgentConfig(availableAgents, name);
   const tone = getAgentTeamTone(agent?.team);
@@ -326,7 +348,7 @@ function getStateNodeErrors(state: StateMachineState, states: StateMachineState[
 
 // 可拖拽的步骤行
 function SortableStepRow({
-  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick, onOptimize,
+  step, index, availableAgents, isParallel = false, canGroupPrevious, canGroupNext, onEdit, onDelete, onGroupWithPrevious, onGroupWithNext, onUngroup, onSpecTaskClick, onOptimize, onPreviewSubworkflow,
 }: {
   step: WorkflowStep;
   index: number;
@@ -341,13 +363,18 @@ function SortableStepRow({
   onUngroup?: () => void;
   onSpecTaskClick?: () => void;
   onOptimize?: () => void;
+  onPreviewSubworkflow?: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(index) });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
 
   const agentTeam = findAgentConfig(availableAgents, step.agent || '')?.team;
-  const roleIcon = agentTeam === 'blue' ? 'swords' : agentTeam === 'judge' ? 'gavel' : agentTeam === 'red' ? 'shield' : 'radio_button_unchecked';
-  const roleColor = agentTeam === 'blue'
+  const isSubworkflow = step.type === 'subworkflow';
+  const childConfigFile = step.workflow || step.subworkflow?.configFile || '';
+  const roleIcon = isSubworkflow ? 'account_tree' : agentTeam === 'blue' ? 'swords' : agentTeam === 'judge' ? 'gavel' : agentTeam === 'red' ? 'shield' : 'radio_button_unchecked';
+  const roleColor = isSubworkflow
+    ? 'bg-cyan-500/10 text-cyan-700 border-cyan-200 dark:border-cyan-800 dark:text-cyan-200'
+    : agentTeam === 'blue'
     ? 'bg-blue-500/10 text-blue-600 border-blue-200 dark:border-blue-800'
     : agentTeam === 'judge'
     ? 'bg-yellow-500/10 text-yellow-600 border-yellow-200 dark:border-yellow-800'
@@ -373,6 +400,21 @@ function SortableStepRow({
                 <span className="min-w-0 truncate text-sm font-semibold leading-5" title={step.name}>
                   {step.name}
                 </span>
+                {isSubworkflow ? <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">子工作流</Badge> : null}
+                {isSubworkflow ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 text-[10px] font-medium text-cyan-700 transition hover:bg-cyan-500/20 dark:text-cyan-200"
+                    title="查看子工作流内部"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onPreviewSubworkflow?.();
+                    }}
+                  >
+                    <span className="material-symbols-outlined text-[12px]">visibility</span>
+                    查看
+                  </button>
+                ) : null}
                 {isParallel ? <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">并发</Badge> : null}
                 {specTaskIds.length > 0 ? (
                   <button
@@ -391,7 +433,11 @@ function SortableStepRow({
               </div>
               <div className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
                 <StepAgentBadge step={step} availableAgents={availableAgents} />
-                {step.task ? (
+                {isSubworkflow ? (
+                  <span className="min-w-0 flex-1 truncate" title={childConfigFile}>
+                    {childConfigFile || '未设置子工作流配置'} · {step.inputs?.workspace === 'inherit' ? '继承父工作区' : step.inputs?.workspace || 'inherit'} · {step.runtime?.humanQuestions === 'child-only' ? '人工确认仅子流程' : '人工确认冒泡'}
+                  </span>
+                ) : step.task ? (
                   <span className="min-w-0 flex-1 truncate" title={step.task}>
                     {step.task}
                   </span>
@@ -926,6 +972,7 @@ export default function StateMachineDesignPanel({
   );
   const [editingStateInfo, setEditingStateInfo] = useState(false);
   const [editingStep, setEditingStep] = useState<{ index: number; isNew: boolean; focusSpec?: boolean } | null>(null);
+  const [subworkflowDrilldown, setSubworkflowDrilldown] = useState<SubworkflowDrilldownState | null>(null);
 
   // Resizable panel for editor ↔ diagram split
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: 'design-editor-diagram' });
@@ -978,6 +1025,33 @@ export default function StateMachineDesignPanel({
     onStatesChange(states.map((s, i) => i === selectedStateIndex ? updated : s));
   }, [states, selectedStateIndex, onStatesChange]);
 
+  const openSubworkflowDrilldown = useCallback((step: WorkflowStep, context?: { stateName?: string; stepIndex?: number }) => {
+    const configFile = String(step.workflow || step.subworkflow?.configFile || '').trim();
+    setSubworkflowDrilldown({
+      parentStep: step,
+      parentStateName: context?.stateName,
+      parentStepIndex: context?.stepIndex,
+      configFile,
+      loading: Boolean(configFile),
+      saving: false,
+      error: configFile ? undefined : '这个子工作流步骤还没有选择配置文件。',
+    });
+    if (!configFile) return;
+    configApi.getConfig(configFile)
+      .then((data: any) => {
+        setSubworkflowDrilldown((prev) => {
+          if (!prev || prev.configFile !== configFile) return prev;
+          return { ...prev, loading: false, error: undefined, config: data?.config };
+        });
+      })
+      .catch((error: any) => {
+        setSubworkflowDrilldown((prev) => {
+          if (!prev || prev.configFile !== configFile) return prev;
+          return { ...prev, loading: false, error: error?.message || '加载子工作流配置失败' };
+        });
+      });
+  }, []);
+
   // 步骤拖拽排序
   const handleDragEnd = (event: DragEndEvent) => {
     if (!selectedState) return;
@@ -1025,22 +1099,44 @@ export default function StateMachineDesignPanel({
       : typeof data.constraints === 'string'
         ? data.constraints.split('\n').filter((c: string) => c.trim())
         : undefined;
-    const newStep: WorkflowStep = {
-      name: data.name,
-      agent: data.agent,
-      task: data.task,
-      role: data.role,
-      constraints: normalizedConstraints,
-      enableReviewPanel: data.enableReviewPanel,
-      parallelGroup: data.parallelGroup,
-      concurrency: data.concurrency,
-      agentInstanceId: data.agentInstanceId,
-      channelIds: data.channelIds,
-      specTaskBinding: data.specTaskBinding,
-    };
-    if (Array.isArray(data.preCommands) && data.preCommands.length > 0) {
+    const newStep: WorkflowStep = data.type === 'subworkflow'
+      ? {
+          ...(existingStep || {}),
+          name: data.name,
+          type: 'subworkflow',
+          workflow: data.workflow,
+          subworkflow: data.subworkflow,
+          inputs: data.inputs,
+          role: data.role,
+          parallelGroup: data.parallelGroup,
+          concurrency: data.concurrency,
+          agentInstanceId: data.agentInstanceId,
+          channelIds: data.channelIds,
+          specTaskBinding: data.specTaskBinding,
+        } as WorkflowStep
+      : {
+          name: data.name,
+          agent: data.agent,
+          task: data.task,
+          role: data.role,
+          constraints: normalizedConstraints,
+          enableReviewPanel: data.enableReviewPanel,
+          parallelGroup: data.parallelGroup,
+          concurrency: data.concurrency,
+          agentInstanceId: data.agentInstanceId,
+          channelIds: data.channelIds,
+          specTaskBinding: data.specTaskBinding,
+        };
+    if (data.type === 'subworkflow') {
+      delete (newStep as any).agent;
+      delete (newStep as any).task;
+      delete (newStep as any).constraints;
+      delete (newStep as any).enableReviewPanel;
+      delete (newStep as any).preCommands;
+    }
+    if (data.type !== 'subworkflow' && Array.isArray(data.preCommands) && data.preCommands.length > 0) {
       newStep.preCommands = data.preCommands;
-    } else if (Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
+    } else if (data.type !== 'subworkflow' && Array.isArray(existingStep?.preCommands) && existingStep.preCommands.length > 0) {
       newStep.preCommands = existingStep.preCommands;
     }
     const steps = [...selectedState.steps];
@@ -1066,11 +1162,15 @@ export default function StateMachineDesignPanel({
       ));
       if (index >= 0) {
         setSelectedStateName(state.name);
+        if (step.type === 'subworkflow') {
+          openSubworkflowDrilldown(step, { stateName: state.name, stepIndex: index });
+          return;
+        }
         setEditingStep({ index, isNew: false });
         return;
       }
     }
-  }, [states]);
+  }, [openSubworkflowDrilldown, states]);
 
   const handleGroupSteps = (start: number, end: number, groupId?: string) => {
     if (!selectedState) return;
@@ -1208,9 +1308,13 @@ export default function StateMachineDesignPanel({
     ? (() => {
         const s = selectedState.steps[editingStep.index];
         return {
+          type: s.type,
           name: s.name,
           agent: s.agent,
           task: s.task,
+          workflow: (s as any).workflow,
+          subworkflow: (s as any).subworkflow,
+          inputs: (s as any).inputs,
           role: s.role,
           constraints: s.constraints?.join('\n') ?? '',
           skills: s.skills ?? [],
@@ -1223,6 +1327,123 @@ export default function StateMachineDesignPanel({
         };
       })()
     : undefined;
+
+  const childWorkflowStates = useMemo(() => {
+    const workflow = subworkflowDrilldown?.config?.workflow;
+    return Array.isArray(workflow?.states) ? workflow.states as StateMachineState[] : [];
+  }, [subworkflowDrilldown?.config?.workflow]);
+
+  const handleChildStatesChange = useCallback((nextStates: StateMachineState[]) => {
+    setSubworkflowDrilldown((prev) => {
+      if (!prev?.config) return prev;
+      return {
+        ...prev,
+        config: {
+          ...prev.config,
+          workflow: {
+            ...(prev.config.workflow || {}),
+            mode: 'state-machine',
+            states: nextStates,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const saveSubworkflowDrilldown = useCallback(async () => {
+    if (!subworkflowDrilldown?.configFile || !subworkflowDrilldown.config) return;
+    setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: true, error: undefined } : prev);
+    try {
+      await configApi.saveConfig(subworkflowDrilldown.configFile, subworkflowDrilldown.config);
+      setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: false } : prev);
+    } catch (error: any) {
+      setSubworkflowDrilldown((prev) => prev ? { ...prev, saving: false, error: error?.message || '保存子工作流失败' } : prev);
+    }
+  }, [subworkflowDrilldown?.config, subworkflowDrilldown?.configFile]);
+
+  if (subworkflowDrilldown) {
+    const workflow = subworkflowDrilldown.config?.workflow || {};
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-background">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setSubworkflowDrilldown(null)}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              返回父工作流
+            </Button>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">
+                {workflow.name || subworkflowDrilldown.configFile}
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                子工作流 · {subworkflowDrilldown.configFile}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {typeof subworkflowDrilldown.parentStepIndex === 'number' ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  setSelectedStateName(subworkflowDrilldown.parentStateName || selectedStateName);
+                  setEditingStep({ index: subworkflowDrilldown.parentStepIndex!, isNew: false });
+                  setSubworkflowDrilldown(null);
+                }}
+              >
+                编辑引用步骤
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={subworkflowDrilldown.loading || subworkflowDrilldown.saving || !subworkflowDrilldown.config}
+              onClick={saveSubworkflowDrilldown}
+            >
+              {subworkflowDrilldown.saving ? '保存中...' : '保存子工作流'}
+            </Button>
+          </div>
+        </div>
+        {subworkflowDrilldown.error ? (
+          <div className="shrink-0 border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">
+            {subworkflowDrilldown.error}
+          </div>
+        ) : null}
+        <div className="min-h-0 flex-1">
+          {subworkflowDrilldown.loading ? (
+            <div className="grid h-full grid-cols-[220px_minmax(0,1fr)] gap-3 p-4">
+              <div className="h-full animate-pulse rounded-xl border bg-muted/40" />
+              <div className="h-full animate-pulse rounded-xl border bg-muted/40" />
+            </div>
+          ) : childWorkflowStates.length ? (
+            <StateMachineDesignPanel
+              states={childWorkflowStates}
+              onStatesChange={handleChildStatesChange}
+              availableAgents={availableAgents}
+              availableSkills={availableSkills}
+              specTasks={specTasks}
+              onAgentSkillsChange={onAgentSkillsChange}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center p-8">
+              <div className="max-w-md rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                这个子工作流不是状态机，或没有可编辑的 states。请打开子工作流设计页查看完整配置。
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full">
@@ -1479,6 +1700,7 @@ export default function StateMachineDesignPanel({
                                 onEdit={() => setEditingStep({ index, isNew: false })}
                                 onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                                 onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
+                                onPreviewSubworkflow={() => openSubworkflowDrilldown(step, { stateName: selectedState.name, stepIndex: index })}
                                 onDelete={() => handleDeleteStep(index)}
                               />
                             ))}
@@ -1500,6 +1722,7 @@ export default function StateMachineDesignPanel({
                         onEdit={() => setEditingStep({ index, isNew: false })}
                         onOptimize={onOptimizeStep && selectedStateIndex >= 0 ? () => onOptimizeStep(selectedStateIndex, index) : undefined}
                         onSpecTaskClick={() => setEditingStep({ index, isNew: false, focusSpec: true })}
+                        onPreviewSubworkflow={() => openSubworkflowDrilldown(step, { stateName: selectedState.name, stepIndex: index })}
                         onDelete={() => handleDeleteStep(index)}
                       />
                     );
@@ -1659,6 +1882,7 @@ export default function StateMachineDesignPanel({
           onDelete={editingStep.isNew ? undefined : () => handleDeleteStep(editingStep.index)}
         />
       )}
+
     </div>
   );
 }

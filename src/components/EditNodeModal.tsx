@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { SingleCombobox, MultiCombobox, ComboboxPortalProvider } from '@/components/ui/combobox';
 import SpriteAvatar from '@/components/SpriteAvatar';
 import { resolveAgentAvatarSrc } from '@/lib/agent/personas';
+import { configApi } from '@/lib/core/api';
 
 const phaseSchema = z.object({
   name: z.string().min(1, '阶段名称不能为空'),
@@ -32,16 +33,40 @@ const phaseSchema = z.object({
 });
 
 const stepSchema = z.object({
+  type: z.enum(['agent', 'subworkflow']).optional(),
   name: z.string().min(1, '步骤名称不能为空'),
-  agent: z.string().min(1, 'Agent 名称不能为空'),
-  task: z.string().min(1, '任务描述不能为空'),
+  agent: z.string().optional(),
+  task: z.string().optional(),
+  workflow: z.string().optional(),
+  subworkflowRequirements: z.string().optional(),
+  inputWorkspace: z.enum(['inherit', 'child-isolated-copy', 'config']).optional(),
+  inputContext: z.enum(['inherit', 'none', 'custom']).optional(),
+  inputSkills: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).optional(),
+  inputMcpServers: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).optional(),
+  inputRag: z.enum(['inherit', 'merge', 'child-only', 'parent-only']).optional(),
+  inputEngine: z.enum(['inherit', 'child', 'override']).optional(),
   constraints: z.string().optional(),
   preCommands: z.string().optional(),
   enableReviewPanel: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
+  mcpServers: z.array(z.string()).optional(),
+  ragKnowledgeBases: z.array(z.string()).optional(),
   specTaskId: z.string().optional(),
   requirementIds: z.string().optional(),
   artifactKeys: z.string().optional(),
+}).superRefine((step, ctx) => {
+  if (step.type === 'subworkflow') {
+    if (!step.workflow?.trim()) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['workflow'], message: '子工作流配置不能为空' });
+    }
+    return;
+  }
+  if (!step.agent?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['agent'], message: 'Agent 名称不能为空' });
+  }
+  if (!step.task?.trim()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['task'], message: '任务描述不能为空' });
+  }
 });
 
 type PhaseForm = z.infer<typeof phaseSchema>;
@@ -66,6 +91,8 @@ interface RoleOption {
   description?: string;
   capabilities?: string[];
   skills?: string[];
+  mcpServers?: string[];
+  ragKnowledgeBases?: string[];
   alwaysAvailableForChat?: boolean;
 }
 
@@ -80,6 +107,26 @@ interface SpecTaskOption {
   title: string;
   phaseTitle?: string;
   ownerAgents?: string[];
+}
+
+interface KnowledgeBaseOption {
+  id: string;
+  name: string;
+  description?: string;
+  chunkCount?: number;
+}
+
+interface McpServerOption {
+  name: string;
+  command?: string;
+}
+
+interface WorkflowOption {
+  filename: string;
+  name: string;
+  description?: string;
+  phaseCount?: number;
+  stepCount?: number;
 }
 
 function getAgentTeamTone(team?: string) {
@@ -180,6 +227,8 @@ interface EditNodeModalProps {
   data: any;
   roles?: RoleOption[];
   availableSkills?: SkillOption[];
+  availableMcpServers?: McpServerOption[];
+  availableKnowledgeBases?: KnowledgeBaseOption[];
   isNew?: boolean;
   existingPhases?: any[];
   existingSteps?: any[];
@@ -188,6 +237,8 @@ interface EditNodeModalProps {
   onClose: () => void;
   onSave: (data: any) => void;
   onAgentSkillsChange?: (agentName: string, skills: string[]) => void | Promise<void>;
+  onAgentMcpServersChange?: (agentName: string, servers: string[]) => void | Promise<void>;
+  onAgentRagKnowledgeBasesChange?: (agentName: string, knowledgeBases: string[]) => void | Promise<void>;
   onDelete?: () => void;
 }
 
@@ -197,6 +248,8 @@ export default function EditNodeModal({
   data,
   roles = [],
   availableSkills = [],
+  availableMcpServers = [],
+  availableKnowledgeBases = [],
   isNew = false,
   existingPhases = [],
   existingSteps = [],
@@ -205,11 +258,16 @@ export default function EditNodeModal({
   onClose,
   onSave,
   onAgentSkillsChange,
+  onAgentMcpServersChange,
+  onAgentRagKnowledgeBasesChange,
   onDelete,
 }: EditNodeModalProps) {
   const isPhase = type === 'phase';
   const schema = isPhase ? phaseSchema : stepSchema;
   const [showAdvancedBindings, setShowAdvancedBindings] = useState(initialSection === 'spec');
+  const [workflowOptions, setWorkflowOptions] = useState<WorkflowOption[]>([]);
+  const [workflowOptionsLoading, setWorkflowOptionsLoading] = useState(false);
+  const [workflowOptionsError, setWorkflowOptionsError] = useState('');
 
   const {
     register,
@@ -233,15 +291,32 @@ export default function EditNodeModal({
           escalateToHuman: data?.iteration?.escalateToHuman ?? true,
         }
       : {
+          type: data?.type === 'subworkflow' ? 'subworkflow' : 'agent',
           name: data?.name || '',
           agent: data?.agent || '',
           task: data?.task || '',
+          workflow: data?.workflow || data?.subworkflow?.configFile || '',
+          subworkflowRequirements: typeof data?.inputs?.requirements === 'string' && data.inputs.requirements !== 'inherit'
+            ? data.inputs.requirements
+            : '',
+          inputWorkspace: data?.inputs?.workspace || 'inherit',
+          inputContext: data?.inputs?.context || 'inherit',
+          inputSkills: data?.inputs?.skills || 'merge',
+          inputMcpServers: data?.inputs?.mcpServers || 'merge',
+          inputRag: data?.inputs?.rag || 'merge',
+          inputEngine: data?.inputs?.engine || 'child',
           constraints: Array.isArray(data?.constraints) ? data.constraints.join('\n') : (data?.constraints || ''),
           preCommands: Array.isArray(data?.preCommands) ? data.preCommands.join('\n') : '',
           enableReviewPanel: data?.enableReviewPanel || false,
           skills: Array.isArray(roles.find((role) => role.name === data?.agent)?.skills)
             ? roles.find((role) => role.name === data?.agent)?.skills
             : (Array.isArray(data?.skills) ? data.skills : []),
+          mcpServers: Array.isArray(roles.find((role) => role.name === data?.agent)?.mcpServers)
+            ? roles.find((role) => role.name === data?.agent)?.mcpServers
+            : (Array.isArray(data?.mcpServers) ? data.mcpServers : []),
+          ragKnowledgeBases: Array.isArray(roles.find((role) => role.name === data?.agent)?.ragKnowledgeBases)
+            ? roles.find((role) => role.name === data?.agent)?.ragKnowledgeBases
+            : (Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : []),
           specTaskId: [
             ...((data?.specTaskBinding?.taskIds || []) as string[]),
             data?.specTaskBinding?.taskId,
@@ -253,9 +328,18 @@ export default function EditNodeModal({
 
   const checkpointEnabled = watch('checkpointEnabled');
   const iterationEnabled = watch('iterationEnabled');
+  const stepType = (watch('type') || 'agent') as 'agent' | 'subworkflow';
   const selectedAgentName = (watch('agent') || data?.agent || '') as string;
   const selectedAgent = roles.find((role) => role.name === selectedAgentName);
   const selectedSkillNames = Array.isArray(watch('skills')) ? watch('skills') as string[] : [];
+  const selectedMcpServers = Array.isArray(watch('mcpServers')) ? watch('mcpServers') as string[] : [];
+  const selectedRagKnowledgeBases = Array.isArray(watch('ragKnowledgeBases')) ? watch('ragKnowledgeBases') as string[] : [];
+  const handleRagKnowledgeBasesChange = (value: string[]) => {
+    setValue('ragKnowledgeBases', value);
+    if (value.length > 0 && !selectedSkillNames.includes('aceharness-rag')) {
+      setValue('skills', [...selectedSkillNames, 'aceharness-rag']);
+    }
+  };
   const selectedSpecTaskIds = inputToList(watch('specTaskId'));
   const selectedSpecTaskDetails = useMemo(
     () => specTasks.filter((task) => selectedSpecTaskIds.includes(task.id)),
@@ -271,6 +355,31 @@ export default function EditNodeModal({
       className: tone.option,
     };
   });
+
+  useEffect(() => {
+    if (isPhase || !isOpen) return;
+    let cancelled = false;
+    const loadWorkflows = async () => {
+      setWorkflowOptionsLoading(true);
+      setWorkflowOptionsError('');
+      try {
+        const json = await configApi.listAllConfigs({ mode: 'state-machine', sortKey: 'name', sortDirection: 'asc' });
+        if (!cancelled) setWorkflowOptions(Array.isArray(json?.configs) ? json.configs : []);
+      } catch (error: any) {
+        if (!cancelled) {
+          setWorkflowOptions([]);
+          setWorkflowOptionsError(error?.message || '加载子工作流配置失败');
+        }
+      } finally {
+        if (!cancelled) setWorkflowOptionsLoading(false);
+      }
+    };
+    void loadWorkflows();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isPhase]);
+
   const specTaskOptions = specTasks.map((task) => ({
     value: task.id,
     label: task.id,
@@ -292,9 +401,15 @@ export default function EditNodeModal({
   useEffect(() => {
     if (isPhase || !selectedAgentName) return;
     const agentSkills = selectedAgent?.skills;
+    const agentMcpServers = selectedAgent?.mcpServers;
+    const agentRagKnowledgeBases = selectedAgent?.ragKnowledgeBases;
     const legacyStepSkills = selectedAgentName === data?.agent && Array.isArray(data?.skills) ? data.skills : [];
+    const legacyStepMcp = selectedAgentName === data?.agent && Array.isArray(data?.mcpServers) ? data.mcpServers : [];
+    const legacyStepRag = selectedAgentName === data?.agent && Array.isArray(data?.ragKnowledgeBases) ? data.ragKnowledgeBases : [];
     setValue('skills', Array.isArray(agentSkills) ? agentSkills : legacyStepSkills);
-  }, [data?.agent, data?.skills, isPhase, selectedAgent?.skills, selectedAgentName, setValue]);
+    setValue('mcpServers', Array.isArray(agentMcpServers) ? agentMcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean) : legacyStepMcp);
+    setValue('ragKnowledgeBases', Array.isArray(agentRagKnowledgeBases) ? agentRagKnowledgeBases : legacyStepRag);
+  }, [data?.agent, data?.mcpServers, data?.ragKnowledgeBases, data?.skills, isPhase, selectedAgent?.mcpServers, selectedAgent?.ragKnowledgeBases, selectedAgent?.skills, selectedAgentName, setValue]);
 
   const handleCopyFrom = (sourceName: string) => {
     if (!sourceName) return;
@@ -315,16 +430,34 @@ export default function EditNodeModal({
     } else {
       const source = existingSteps.find((s: any) => s.name === sourceName);
       if (!source) return;
+      const sourceRole = roles.find((role) => role.name === source.agent);
       reset({
+        type: source.type === 'subworkflow' ? 'subworkflow' : 'agent',
         name: source.name + ' (副本)',
         agent: source.agent || '',
         task: source.task || '',
+        workflow: source.workflow || source.subworkflow?.configFile || '',
+        subworkflowRequirements: typeof source.inputs?.requirements === 'string' && source.inputs.requirements !== 'inherit'
+          ? source.inputs.requirements
+          : '',
+        inputWorkspace: source.inputs?.workspace || 'inherit',
+        inputContext: source.inputs?.context || 'inherit',
+        inputSkills: source.inputs?.skills || 'merge',
+        inputMcpServers: source.inputs?.mcpServers || 'merge',
+        inputRag: source.inputs?.rag || 'merge',
+        inputEngine: source.inputs?.engine || 'child',
         constraints: Array.isArray(source.constraints) ? source.constraints.join('\n') : (source.constraints || ''),
         preCommands: Array.isArray(source.preCommands) ? source.preCommands.join('\n') : '',
         enableReviewPanel: source.enableReviewPanel || false,
-        skills: Array.isArray(roles.find((role) => role.name === source.agent)?.skills)
-          ? roles.find((role) => role.name === source.agent)?.skills
+        skills: Array.isArray(sourceRole?.skills)
+          ? sourceRole.skills
           : (Array.isArray(source.skills) ? source.skills : []),
+        mcpServers: Array.isArray(sourceRole?.mcpServers)
+          ? sourceRole.mcpServers.map((server: any) => typeof server === 'string' ? server : server?.name).filter(Boolean)
+          : (Array.isArray(source.mcpServers) ? source.mcpServers : []),
+        ragKnowledgeBases: Array.isArray(sourceRole?.ragKnowledgeBases)
+          ? sourceRole.ragKnowledgeBases
+          : (Array.isArray(source.ragKnowledgeBases) ? source.ragKnowledgeBases : []),
         specTaskId: '',
         requirementIds: '',
         artifactKeys: '',
@@ -354,30 +487,59 @@ export default function EditNodeModal({
       }
       onSave(phaseData);
     } else {
-      const stepData: any = {
-        name: formData.name,
-        agent: formData.agent,
-        task: formData.task,
-      };
+      const stepData: any = { name: formData.name };
+      if (formData.type === 'subworkflow') {
+        stepData.type = 'subworkflow';
+        stepData.workflow = formData.workflow;
+        stepData.subworkflow = { configFile: formData.workflow };
+        stepData.inputs = {
+          requirements: cleanString(formData.subworkflowRequirements) || 'inherit',
+          workspace: formData.inputWorkspace || 'inherit',
+          context: formData.inputContext || 'inherit',
+          skills: formData.inputSkills || 'merge',
+          mcpServers: formData.inputMcpServers || 'merge',
+          rag: formData.inputRag || 'merge',
+          engine: formData.inputEngine || 'child',
+        };
+      } else {
+        stepData.agent = formData.agent;
+        stepData.task = formData.task;
+      }
+      if (formData.type !== 'subworkflow' && onAgentMcpServersChange && formData.agent) {
+        try {
+          await onAgentMcpServersChange(formData.agent, Array.isArray(formData.mcpServers) ? formData.mcpServers : []);
+        } catch (error: any) {
+          alert(error?.message || '保存 Agent MCP Servers 失败');
+          return;
+        }
+      }
       if (data?.role === 'attacker' || data?.role === 'defender' || data?.role === 'judge') {
         stepData.role = data.role;
       }
-      if (formData.constraints) {
+      if (formData.type !== 'subworkflow' && formData.constraints) {
         stepData.constraints = formData.constraints
           .split('\n')
           .filter((c: string) => c.trim());
       }
-      if (formData.preCommands !== undefined) {
+      if (formData.type !== 'subworkflow' && formData.preCommands !== undefined) {
         stepData.preCommands = linesToList(formData.preCommands);
       }
-      if (formData.enableReviewPanel !== undefined) {
+      if (formData.type !== 'subworkflow' && formData.enableReviewPanel !== undefined) {
         stepData.enableReviewPanel = formData.enableReviewPanel;
       }
-      if (onAgentSkillsChange && formData.agent) {
+      if (formData.type !== 'subworkflow' && onAgentSkillsChange && formData.agent) {
         try {
           await onAgentSkillsChange(formData.agent, Array.isArray(formData.skills) ? formData.skills : []);
         } catch (error: any) {
           alert(error?.message || '保存 Agent Skills 失败');
+          return;
+        }
+      }
+      if (formData.type !== 'subworkflow' && onAgentRagKnowledgeBasesChange && formData.agent) {
+        try {
+          await onAgentRagKnowledgeBasesChange(formData.agent, Array.isArray(formData.ragKnowledgeBases) ? formData.ragKnowledgeBases : []);
+        } catch (error: any) {
+          alert(error?.message || '保存 Agent RAG 知识库失败');
           return;
         }
       }
@@ -518,6 +680,29 @@ export default function EditNodeModal({
               <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.95fr)]">
                 <div className="space-y-5">
                   <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
+                    <div className="space-y-2">
+                      <Label>步骤类型</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[
+                          { value: 'agent', label: 'Agent 步骤', icon: 'person' },
+                          { value: 'subworkflow', label: '子工作流', icon: 'account_tree' },
+                        ].map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => setValue('type', option.value as any, { shouldDirty: true })}
+                            className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                              stepType === option.value
+                                ? 'border-primary bg-primary/10 text-primary'
+                                : 'border-border bg-background hover:bg-muted/50'
+                            }`}
+                          >
+                            <span className="material-symbols-outlined text-base">{option.icon}</span>
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
                         <Label htmlFor="name">
@@ -533,6 +718,7 @@ export default function EditNodeModal({
                         )}
                       </div>
 
+                      {stepType === 'agent' ? (
                       <div className="space-y-2">
                         <Label htmlFor="agent">
                           Agent <span className="text-destructive">*</span>
@@ -557,9 +743,36 @@ export default function EditNodeModal({
                           <p className="text-sm text-destructive">{errors.agent.message as string}</p>
                         )}
                       </div>
+                      ) : (
+                      <div className="space-y-2">
+                        <Label htmlFor="workflow">
+                          子工作流配置 <span className="text-destructive">*</span>
+                        </Label>
+                        <SingleCombobox
+                          value={(watch('workflow') || '') as string}
+                          onValueChange={(v) => setValue('workflow', v, { shouldDirty: true })}
+                          options={workflowOptions.map((workflow) => ({
+                            value: workflow.filename,
+                            label: workflow.name || workflow.filename,
+                            description: [
+                              workflow.filename,
+                              `${workflow.phaseCount || 0} 状态`,
+                              `${workflow.stepCount || 0} 步骤`,
+                              workflow.description,
+                            ].filter(Boolean).join(' · '),
+                          }))}
+                          placeholder={workflowOptionsLoading ? '加载工作流...' : '选择状态机工作流...'}
+                          emptyText={workflowOptionsError || '没有可选状态机工作流'}
+                          triggerClassName={errors.workflow ? 'border-destructive' : ''}
+                        />
+                        {errors.workflow && (
+                          <p className="text-sm text-destructive">{errors.workflow.message as string}</p>
+                        )}
+                      </div>
+                      )}
                     </div>
 
-                    {selectedAgent ? (
+                    {stepType === 'agent' && selectedAgent ? (
                       <div className="rounded-xl border bg-muted/20 p-4 text-xs">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {selectedAgent.roleType === 'supervisor' ? <Badge variant="outline" className="text-[10px]">Supervisor</Badge> : null}
@@ -583,6 +796,8 @@ export default function EditNodeModal({
                       </div>
                     ) : null}
 
+                    {stepType === 'agent' ? (
+                    <>
                     <div className="space-y-2">
                       <Label htmlFor="task">
                         任务描述 <span className="text-destructive">*</span>
@@ -607,11 +822,32 @@ export default function EditNodeModal({
                         placeholder={"不得修改公共 API 接口\n必须保持向后兼容\n单个文件不超过 500 行"}
                       />
                     </div>
+                    </>
+                    ) : (
+                    <div className="space-y-4 rounded-xl border bg-muted/15 p-4">
+                      <div>
+                        <div className="text-sm font-semibold">子工作流输入</div>
+                        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                          设置传给子流程的任务说明；留空时继承父工作流 requirements。
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="subworkflowRequirements">任务说明 / Requirements override</Label>
+                        <Textarea
+                          id="subworkflowRequirements"
+                          rows={5}
+                          {...register('subworkflowRequirements')}
+                          placeholder="留空表示继承父工作流 requirements"
+                        />
+                      </div>
+                    </div>
+                    )}
 
                   </div>
                 </div>
 
                 <div className="space-y-5">
+                  {stepType === 'agent' ? (
                   <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <div className="space-y-1">
@@ -627,25 +863,137 @@ export default function EditNodeModal({
                       />
                     </div>
 
-                    {skillOptions.length > 0 && (
-                      <div className="space-y-2">
-                        <Label>Agent Skills</Label>
-                        <p className="text-xs leading-5 text-muted-foreground">
-                          保存后写入所选 Agent 配置；工作流步骤本身不再保存独立 Skills。
-                        </p>
-                        <MultiCombobox
-                          value={watch('skills') || []}
-                          onValueChange={(v) => setValue('skills', v)}
-                          options={skillOptions.map(skill => ({
-                            value: skill.name,
-                            label: skill.name,
-                            description: skill.description,
-                          }))}
-                          placeholder="选择 Skills..."
+                    <div className="space-y-2">
+                      <Label>Agent Skills</Label>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        保存后写入所选 Agent 配置；工作流步骤本身不再保存独立 Skills。
+                      </p>
+                      <MultiCombobox
+                        value={watch('skills') || []}
+                        onValueChange={(v) => setValue('skills', v)}
+                        options={skillOptions.map(skill => ({
+                          value: skill.name,
+                          label: skill.name,
+                          description: skill.description,
+                        }))}
+                        placeholder={skillOptions.length > 0 ? '选择 Skills...' : '当前没有可用 Skills'}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Agent MCP Servers</Label>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        跟随所选 Agent；保存后写入 Agent 配置。
+                      </p>
+                      <MultiCombobox
+                        value={selectedMcpServers}
+                        onValueChange={(v) => setValue('mcpServers', v)}
+                        options={availableMcpServers.map((server) => ({
+                          value: server.name,
+                          label: server.name,
+                          description: server.command || '',
+                        }))}
+                        placeholder={availableMcpServers.length > 0 ? '选择 MCP Servers...' : '当前没有可用 MCP Servers'}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Agent RAG 知识库</Label>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        跟随所选 Agent；保存后写入 Agent 配置，运行时会自动授权这些知识库给该 Agent 使用。
+                      </p>
+                      <MultiCombobox
+                        value={selectedRagKnowledgeBases}
+                        onValueChange={handleRagKnowledgeBasesChange}
+                        options={availableKnowledgeBases.map((kb) => ({
+                          value: kb.id,
+                          label: kb.name || kb.id,
+                          description: [kb.description, `Chunks ${kb.chunkCount ?? 0}`].filter(Boolean).join(' · '),
+                        }))}
+                        placeholder={availableKnowledgeBases.length > 0 ? '选择 RAG 知识库...' : '当前没有可用 RAG 知识库'}
+                      />
+                    </div>
+                  </div>
+                  ) : (
+                  <div className="rounded-2xl border bg-background/70 p-4 space-y-4">
+                    <div>
+                      <div className="text-sm font-semibold">继承设置</div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        控制子流程从父流程继承的工作区、上下文和能力配置。
+                      </p>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">工作区</Label>
+                        <SingleCombobox
+                          value={(watch('inputWorkspace') || 'inherit') as string}
+                          onValueChange={(v) => setValue('inputWorkspace', v as any)}
+                          options={[
+                            { value: 'inherit', label: '继承父工作区' },
+                            { value: 'child-isolated-copy', label: '子流程隔离副本' },
+                            { value: 'config', label: '使用子配置' },
+                          ]}
+                          searchable={false}
                         />
                       </div>
-                    )}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">上下文</Label>
+                        <SingleCombobox
+                          value={(watch('inputContext') || 'inherit') as string}
+                          onValueChange={(v) => setValue('inputContext', v as any)}
+                          options={[
+                            { value: 'inherit', label: '继承' },
+                            { value: 'none', label: '不传递' },
+                            { value: 'custom', label: '自定义' },
+                          ]}
+                          searchable={false}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Skills</Label>
+                        <SingleCombobox
+                          value={(watch('inputSkills') || 'merge') as string}
+                          onValueChange={(v) => setValue('inputSkills', v as any)}
+                          options={[
+                            { value: 'merge', label: '合并父子' },
+                            { value: 'inherit', label: '继承父级' },
+                            { value: 'child-only', label: '仅子流程' },
+                            { value: 'parent-only', label: '仅父级' },
+                          ]}
+                          searchable={false}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">MCP Servers</Label>
+                        <SingleCombobox
+                          value={(watch('inputMcpServers') || 'merge') as string}
+                          onValueChange={(v) => setValue('inputMcpServers', v as any)}
+                          options={[
+                            { value: 'merge', label: '合并父子' },
+                            { value: 'inherit', label: '继承父级' },
+                            { value: 'child-only', label: '仅子流程' },
+                            { value: 'parent-only', label: '仅父级' },
+                          ]}
+                          searchable={false}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">RAG 知识库</Label>
+                        <SingleCombobox
+                          value={(watch('inputRag') || 'merge') as string}
+                          onValueChange={(v) => setValue('inputRag', v as any)}
+                          options={[
+                            { value: 'merge', label: '合并父子' },
+                            { value: 'inherit', label: '继承父级' },
+                            { value: 'child-only', label: '仅子流程' },
+                            { value: 'parent-only', label: '仅父级' },
+                          ]}
+                          searchable={false}
+                        />
+                      </div>
+                    </div>
                   </div>
+                  )}
 
                   {(specTaskOptions.length > 0 || watch('specTaskId') || showAdvancedBindings) && (
                     <div className="space-y-3 rounded-2xl border bg-muted/15 p-4">

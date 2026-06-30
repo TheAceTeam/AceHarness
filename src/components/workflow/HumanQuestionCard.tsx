@@ -45,6 +45,14 @@ function isAnswerReady(question: HumanQuestion, answer: HumanQuestionAnswer) {
   return Boolean(answer.text?.trim());
 }
 
+function formatWorkflowPathSegment(segment: NonNullable<HumanQuestion['workflowPath']>[number]) {
+  return [
+    segment.workflowName || segment.configFile,
+    segment.stateName,
+    segment.stepName,
+  ].filter(Boolean).join(' / ');
+}
+
 interface HumanQuestionCardProps {
   question: HumanQuestion;
   compact?: boolean;
@@ -81,6 +89,7 @@ export default function HumanQuestionCard({
   };
 
   const triggerTitle = `[${formatKind(question.kind)}] ${question.title}`;
+  const workflowPath = Array.isArray(question.workflowPath) ? question.workflowPath.filter(Boolean) : [];
 
   const header = (
     <div className="flex items-start justify-between gap-3">
@@ -88,6 +97,7 @@ export default function HumanQuestionCard({
         <div className="flex flex-wrap items-center gap-2 mb-1">
           <Badge variant={question.status === 'unanswered' ? 'default' : 'secondary'}>{formatKind(question.kind)}</Badge>
           {question.requiresWorkflowPause ? <Badge variant="outline">阻塞等待</Badge> : null}
+          {workflowPath.length > 1 ? <Badge variant="outline">子工作流</Badge> : null}
           {question.currentState ? <span className="text-xs text-muted-foreground">{question.currentState}</span> : null}
         </div>
         {collapsible ? (
@@ -119,6 +129,21 @@ export default function HumanQuestionCard({
   const content = (
     <>
       <TaskItem>
+        {workflowPath.length > 0 ? (
+          <div className="mb-3 rounded-lg border bg-muted/25 px-3 py-2">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">来源路径</div>
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              {workflowPath.map((segment, index) => (
+                <span key={`${segment.runId || index}-${index}`} className="inline-flex min-w-0 items-center gap-1.5">
+                  {index > 0 ? <span className="text-muted-foreground">/</span> : null}
+                  <span className="max-w-[220px] truncate rounded-md border bg-background px-2 py-1" title={formatWorkflowPathSegment(segment)}>
+                    {formatWorkflowPathSegment(segment) || segment.runId || 'workflow'}
+                  </span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className={`${compact ? 'line-clamp-3 text-xs' : 'text-sm'} leading-6 text-foreground`}>
           <Markdown>{question.message || question.supervisorAdvice || 'Supervisor 请求补充信息。'}</Markdown>
         </div>

@@ -30,6 +30,27 @@ async function resolveOutputDirs(runId: string) {
   return { state, projectRoot, aceDir, runsDir };
 }
 
+type RunDocumentFile = {
+  filename: string;
+  stepName: string;
+  baseName: string;
+  logicalName: string;
+  iteration: number | null;
+  agent: string;
+  phaseName: string;
+  role: string;
+  documentKind: 'conclusion' | 'detail';
+  groupKey: string;
+  groupLabel: string;
+  size: number;
+  modifiedTime: string;
+  sourceRunId: string;
+  sourceConfigFile?: string;
+  sourceLabel?: string;
+  parentRunId?: string | null;
+  rootRunId?: string | null;
+};
+
 function safePath(dir: string, file: string): string | null {
   const safe = file.replace(/\.\./g, '');
   const full = resolve(dir, safe);
@@ -65,29 +86,154 @@ function resolveStepMetadata(
   return null;
 }
 
+async function buildStepMap(state: any) {
+  const stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }> = {};
+  try {
+    const configPath = await resolveWorkflowConfigPath(state.configFile);
+    if (configPath) {
+      const configContent = await readFile(configPath, 'utf-8');
+      const config = parse(configContent);
+      if (config?.workflow?.phases) {
+        for (const phase of config.workflow.phases) {
+          for (const step of phase.steps || []) {
+            const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+            const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
+            stepMap[step.name] = info;
+            stepMap[safeStep] = info;
+          }
+        }
+      }
+      if (config?.workflow?.states) {
+        for (const stateItem of config.workflow.states) {
+          for (const step of stateItem.steps || []) {
+            const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+            const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: stateItem.name, role: step.role || 'defender' };
+            stepMap[step.name] = info;
+            stepMap[safeStep] = info;
+            const compositeKey = `${stateItem.name}-${step.name}`;
+            const safeComposite = compositeKey.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
+            stepMap[compositeKey] = info;
+            stepMap[safeComposite] = info;
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return stepMap;
+}
+
+async function listRunDocuments(runId: string): Promise<{
+  files: RunDocumentFile[];
+  aceDir: string | null;
+  documentDirectory: string | null;
+  state: any;
+} | null> {
+  const dirs = await resolveOutputDirs(runId);
+  if (!dirs) return null;
+  const { state, aceDir, runsDir } = dirs;
+
+  const aceDirExists = Boolean(aceDir && existsSync(aceDir));
+  const runsDirExists = existsSync(runsDir);
+  const documentDirectory = runsDirExists ? runsDir : (aceDirExists ? aceDir : null);
+
+  if (!aceDirExists && !runsDirExists) {
+    return { files: [], aceDir, documentDirectory, state };
+  }
+
+  const seenFiles = new Set<string>();
+  const allEntries: { entry: string; dir: string }[] = [];
+
+  for (const dir of [runsDir, aceDir].filter((value): value is string => Boolean(value))) {
+    if (!existsSync(dir)) continue;
+    try {
+      const entries = await readdir(dir);
+      for (const entry of entries) {
+        if (!seenFiles.has(entry)) {
+          seenFiles.add(entry);
+          allEntries.push({ entry, dir });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  const iterRegex = /^(.+)-迭代(\d+)\.md$/;
+  const versionRegex = /^(.+)-v(\d+)\.md$/;
+  const stepMap = await buildStepMap(state);
+  const files: RunDocumentFile[] = [];
+  const sourceLabel = state.parentRunId
+    ? `${state.parentStateName || '子工作流'} / ${state.parentStepName || state.configFile}`
+    : '父工作流';
+
+  for (const { entry, dir } of allEntries) {
+    if (!entry.endsWith('.md') && !entry.endsWith('.txt')) continue;
+    const fullPath = resolve(dir, entry);
+    const fileStat = await stat(fullPath);
+
+    const baseName = entry.replace(/\.(md|txt)$/, '');
+    const documentKind = TIMESTAMP_PREFIX_RE.test(baseName) ? 'detail' : 'conclusion';
+    const logicalName = documentKind === 'detail' ? baseName.replace(TIMESTAMP_PREFIX_RE, '') : baseName;
+    let iteration: number | null = null;
+    let stepName = baseName;
+
+    const iterMatch = entry.match(iterRegex);
+    const verMatch = entry.match(versionRegex);
+    if (iterMatch) {
+      stepName = iterMatch[1];
+      iteration = parseInt(iterMatch[2], 10);
+    } else if (verMatch) {
+      stepName = verMatch[1];
+      iteration = parseInt(verMatch[2], 10);
+    } else {
+      iteration = 1;
+    }
+
+    const resolved = resolveStepMetadata(logicalName, stepMap);
+    const info = resolved || { resolvedStepName: stepName, agent: '', phaseName: '', role: '' };
+    const groupKey = info.phaseName
+      ? `${runId}::${info.phaseName}::${info.resolvedStepName}`
+      : `${runId}::${logicalName}`;
+
+    files.push({
+      filename: entry,
+      stepName,
+      baseName,
+      logicalName,
+      iteration,
+      agent: info.agent,
+      phaseName: info.phaseName,
+      role: info.role,
+      documentKind,
+      groupKey,
+      groupLabel: info.resolvedStepName || logicalName,
+      size: fileStat.size,
+      modifiedTime: fileStat.mtime.toISOString(),
+      sourceRunId: runId,
+      sourceConfigFile: state.configFile,
+      sourceLabel,
+      parentRunId: state.parentRunId || null,
+      rootRunId: state.rootRunId || state.runId || null,
+    });
+  }
+
+  files.sort((a, b) => new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime());
+  return { files, aceDir, documentDirectory, state };
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const runId = (await params).id;
   const filePath = request.nextUrl.searchParams.get('file');
+  const includeChildren = request.nextUrl.searchParams.get('includeChildren') === '1';
+  const sourceRunId = request.nextUrl.searchParams.get('sourceRunId') || runId;
 
   try {
-    const dirs = await resolveOutputDirs(runId);
-    if (!dirs) return NextResponse.json({ error: '未找到运行记录或未配置项目根目录' }, { status: 404 });
-    const { state, aceDir, runsDir } = dirs;
-
-    const aceDirExists = Boolean(aceDir && existsSync(aceDir));
-    const runsDirExists = existsSync(runsDir);
-
-    const documentDirectory = runsDirExists ? runsDir : (aceDirExists ? aceDir : null);
-
-    if (!aceDirExists && !runsDirExists) {
-      return NextResponse.json({ error: '文档目录不存在', files: [], documentDirectory }, { status: 200 });
-    }
-
     // If requesting a specific file's content — check runsDir first, then aceDir
     if (filePath) {
+      const dirs = await resolveOutputDirs(sourceRunId);
+      if (!dirs) return NextResponse.json({ error: '未找到运行记录或未配置项目根目录' }, { status: 404 });
+      const { aceDir, runsDir } = dirs;
       const safe = filePath.replace(/\.\./g, '');
       for (const dir of [runsDir, aceDir].filter((value): value is string => Boolean(value))) {
         if (!existsSync(dir)) continue;
@@ -101,113 +247,30 @@ export async function GET(
       return NextResponse.json({ error: '文件不存在' }, { status: 404 });
     }
 
-    // List all documents from both directories, runsDir takes priority for dedup
-    const seenFiles = new Set<string>();
-    const allEntries: { entry: string; dir: string }[] = [];
-
-    for (const dir of [runsDir, aceDir].filter((value): value is string => Boolean(value))) {
-      if (!existsSync(dir)) continue;
-      try {
-        const entries = await readdir(dir);
-        for (const entry of entries) {
-          if (!seenFiles.has(entry)) {
-            seenFiles.add(entry);
-            allEntries.push({ entry, dir });
-          }
-        }
-      } catch { /* ignore */ }
-    }
-    const iterRegex = /^(.+)-迭代(\d+)\.md$/;
-    const versionRegex = /^(.+)-v(\d+)\.md$/;
-
-    // Build step→phase/agent lookup from config (once, outside loop)
-    const stepMap: Record<string, { canonicalStepName: string; agent: string; phaseName: string; role: string }> = {};
-    try {
-      const configPath = await resolveWorkflowConfigPath(state.configFile);
-      if (configPath) {
-        const configContent = await readFile(configPath, 'utf-8');
-        const config = parse(configContent);
-        if (config?.workflow?.phases) {
-          for (const phase of config.workflow.phases) {
-            for (const step of phase.steps || []) {
-              const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: phase.name, role: step.role || 'defender' };
-              stepMap[step.name] = info;
-              stepMap[safeStep] = info;
-            }
-          }
-        }
-        // State machine mode: states instead of phases
-        if (config?.workflow?.states) {
-          for (const state of config.workflow.states) {
-            for (const step of state.steps || []) {
-              const safeStep = step.name.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              const info = { canonicalStepName: step.name, agent: step.agent || '', phaseName: state.name, role: step.role || 'defender' };
-              stepMap[step.name] = info;
-              stepMap[safeStep] = info;
-              // Also map "stateName-stepName" format used in output filenames
-              const compositeKey = `${state.name}-${step.name}`;
-              const safeComposite = compositeKey.replace(/[^a-zA-Z0-9_\u4e00-\u9fff-]/g, '_');
-              stepMap[compositeKey] = info;
-              stepMap[safeComposite] = info;
-            }
-          }
+    const rootDocs = await listRunDocuments(runId);
+    if (!rootDocs) return NextResponse.json({ error: '未找到运行记录或未配置项目根目录' }, { status: 404 });
+    let files = [...rootDocs.files];
+    const childRuns: Array<{ runId: string; configFile?: string; status?: string }> = [];
+    if (includeChildren) {
+      const seenRunIds = new Set<string>([runId]);
+      const queue = Array.isArray(rootDocs.state?.subworkflowRuns) ? [...rootDocs.state.subworkflowRuns] : [];
+      while (queue.length > 0) {
+        const child = queue.shift();
+        const childRunId = String(child?.runId || '').trim();
+        if (!childRunId || seenRunIds.has(childRunId)) continue;
+        seenRunIds.add(childRunId);
+        const childDocs = await listRunDocuments(childRunId).catch(() => null);
+        if (!childDocs) continue;
+        files.push(...childDocs.files);
+        childRuns.push({ runId: childRunId, configFile: childDocs.state?.configFile || child?.configFile, status: childDocs.state?.status || child?.status });
+        if (Array.isArray(childDocs.state?.subworkflowRuns)) {
+          queue.push(...childDocs.state.subworkflowRuns);
         }
       }
-    } catch { /* ignore */ }
-
-    const files = [];
-    for (const { entry, dir } of allEntries) {
-      if (!entry.endsWith('.md') && !entry.endsWith('.txt')) continue;
-      const fullPath = resolve(dir, entry);
-      const fileStat = await stat(fullPath);
-
-      let baseName = entry.replace(/\.(md|txt)$/, '');
-      const documentKind = TIMESTAMP_PREFIX_RE.test(baseName) ? 'detail' : 'conclusion';
-      const logicalName = documentKind === 'detail' ? baseName.replace(TIMESTAMP_PREFIX_RE, '') : baseName;
-      let iteration: number | null = null;
-      let stepName = baseName;
-
-      // Parse iteration from filename
-      const iterMatch = entry.match(iterRegex);
-      const verMatch = entry.match(versionRegex);
-      if (iterMatch) {
-        stepName = iterMatch[1];
-        iteration = parseInt(iterMatch[2], 10);
-      } else if (verMatch) {
-        stepName = verMatch[1];
-        iteration = parseInt(verMatch[2], 10);
-      } else {
-        iteration = 1;
-      }
-
-      const resolved = resolveStepMetadata(logicalName, stepMap);
-      const info = resolved || { resolvedStepName: stepName, agent: '', phaseName: '', role: '' };
-      const groupKey = info.phaseName
-        ? `${info.phaseName}::${info.resolvedStepName}`
-        : logicalName;
-
-      files.push({
-        filename: entry,
-        stepName,
-        baseName,
-        logicalName,
-        iteration,
-        agent: info.agent,
-        phaseName: info.phaseName,
-        role: info.role,
-        documentKind,
-        groupKey,
-        groupLabel: info.resolvedStepName || logicalName,
-        size: fileStat.size,
-        modifiedTime: fileStat.mtime.toISOString(),
-      });
     }
-
-    // Sort: by modifiedTime
     files.sort((a, b) => new Date(a.modifiedTime).getTime() - new Date(b.modifiedTime).getTime());
 
-    return NextResponse.json({ files, aceDir, documentDirectory });
+    return NextResponse.json({ files, aceDir: rootDocs.aceDir, documentDirectory: rootDocs.documentDirectory, childRuns });
   } catch (error: any) {
     return NextResponse.json(
       { error: '获取文档失败', message: error.message },

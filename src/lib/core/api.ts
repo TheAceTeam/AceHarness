@@ -223,6 +223,46 @@ interface WorkflowStatusResponse {
   currentStep: string | null;
   completedSteps: string[];
   failedSteps: string[];
+  childRunIds?: string[];
+  subworkflowRuns?: Array<{
+    runId: string;
+    configFile: string;
+    parentStateName?: string;
+    parentStepName?: string;
+    status: string;
+    summary?: string;
+    verdict?: string;
+    startedAt?: string;
+    endedAt?: string;
+    eventCount?: number;
+  }>;
+  subworkflowAuditEvents?: Array<{
+    id: string;
+    timestamp: string;
+    action: string;
+    actorId?: string;
+    actorName?: string;
+    childRunId?: string;
+    childConfigFile?: string;
+    stateName?: string;
+    stepName?: string;
+    details?: Record<string, unknown>;
+  }>;
+  subworkflowSummary?: {
+    total?: number;
+    active?: number;
+    failed?: number;
+    waitingHuman?: number;
+    detached?: number;
+    completed?: number;
+    stopped?: number;
+    superseded?: number;
+    abandoned?: number;
+    latest?: any;
+  } | null;
+  activeSubworkflowRunId?: string | null;
+  workflowSnapshotRoot?: string | null;
+  workflowSnapshotManifestHash?: string | null;
   stepLogs?: { stepName: string; agent: string; status: string; output: string; error: string; costUsd: number; durationMs: number; timestamp: string }[];
   iterationStates: Record<string, any>;
   globalContext?: string;
@@ -751,6 +791,34 @@ export const configApi = {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(data.error || '获取工作流编排推荐失败');
+    }
+    return data;
+  },
+
+  async createConfig(input: {
+    filename: string;
+    workflowName: string;
+    referenceWorkflow?: string;
+    workingDirectory: string;
+    workspaceMode?: 'isolated-copy' | 'in-place';
+    description?: string;
+    mode?: 'phase-based' | 'state-machine' | 'ai-guided';
+    requirements?: string;
+    persistMode?: 'none' | 'repository';
+    specRoot?: string;
+    skipSpecCoding?: boolean;
+    frontendSessionId?: string;
+    creationSessionId?: string;
+    configDraft?: any;
+  }): Promise<ApiResponse & { filename?: string; creationSession?: any; specCodingSkipped?: boolean }> {
+    const response = await authFetch(`${API_BASE}/configs/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data?.message || data?.error || '创建配置失败');
     }
     return data;
   },
@@ -1764,14 +1832,17 @@ export const runsApi = {
     return response.json();
   },
 
-  async listDocuments(id: string): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string }[]; documentDirectory?: string | null }> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents`);
+  async listDocuments(id: string, options?: { includeChildren?: boolean }): Promise<{ files: { filename: string; stepName: string; baseName: string; iteration: number | null; agent: string; phaseName: string; role: string; size: number; modifiedTime: string; sourceRunId?: string; sourceConfigFile?: string; sourceLabel?: string; parentRunId?: string | null; rootRunId?: string | null }[]; documentDirectory?: string | null; childRuns?: { runId: string; configFile?: string; status?: string }[] }> {
+    const params = options?.includeChildren ? '?includeChildren=1' : '';
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents${params}`);
     if (!response.ok) return { files: [], documentDirectory: null };
     return response.json();
   },
 
-  async getDocumentContent(id: string, filename: string): Promise<{ file: string; content: string }> {
-    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents?file=${encodeURIComponent(filename)}`);
+  async getDocumentContent(id: string, filename: string, options?: { sourceRunId?: string }): Promise<{ file: string; content: string }> {
+    const params = new URLSearchParams({ file: filename });
+    if (options?.sourceRunId) params.set('sourceRunId', options.sourceRunId);
+    const response = await authFetch(`${API_BASE}/runs/${encodeURIComponent(id)}/documents?${params.toString()}`);
     if (!response.ok) throw new Error('获取文档内容失败');
     return response.json();
   },
@@ -1997,11 +2068,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async injectFeedback(message: string, interrupt?: boolean, configFile?: string, clientId?: string): Promise<ApiResponse> {
+  async injectFeedback(message: string, interrupt?: boolean, configFile?: string, clientId?: string, runId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/inject-feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, interrupt, configFile, clientId }),
+      body: JSON.stringify({ message, interrupt, configFile, clientId, runId }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -2010,11 +2081,11 @@ export const workflowApi = {
     return response.json();
   },
 
-  async recallFeedback(message: string, configFile?: string): Promise<ApiResponse> {
+  async recallFeedback(message: string, configFile?: string, runId?: string): Promise<ApiResponse> {
     const response = await authFetch(`${API_BASE}/workflow/recall-feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, configFile }),
+      body: JSON.stringify({ message, configFile, runId }),
     });
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));

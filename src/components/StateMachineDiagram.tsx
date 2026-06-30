@@ -482,6 +482,32 @@ function getStateDiagramTeamIcon(team: string | null | undefined) {
   return 'radio_button_unchecked';
 }
 
+function getStateDiagramStepIcon(step: any, team: string | null | undefined) {
+  if (step?.type === 'subworkflow') return 'account_tree';
+  return getStateDiagramTeamIcon(team);
+}
+
+export function stateDiagramStepKeyMatches(stepKey: string | null | undefined, stateName: string, stepName: string): boolean {
+  const key = String(stepKey || '').trim();
+  const name = String(stepName || '').trim();
+  const state = String(stateName || '').trim();
+  if (!key || !name) return false;
+  const baseName = name.replace(/-迭代\d+$/, '');
+  const variants = [
+    name,
+    baseName,
+    state ? `${state}-${name}` : '',
+    state ? `${state}-${baseName}` : '',
+    state ? `state:${state}#${name}` : '',
+    state ? `state:${state}#${baseName}` : '',
+  ].filter(Boolean);
+  return variants.some((variant) => (
+    key === variant
+    || key.startsWith(`${variant}-迭代`)
+    || key.endsWith(`-${variant}`)
+  ));
+}
+
 function StateNode({ data }: any) {
   const { state, isInitial, isFinal, isCurrent, currentStep, activeSteps = EMPTY_ACTIVE_STEPS, completedSteps = EMPTY_COMPLETED_STEPS, agents, onStepClick, onForceTransition, isRunning, allowForceTransition, pendingHumanQuestion } = data;
   const isHumanCheckpoint = state.type === 'human-checkpoint';
@@ -493,9 +519,9 @@ function StateNode({ data }: any) {
   const pendingParallelGroupId = isParallelManualJoinPending ? String(pendingHumanQuestion?.source?.groupId || '') : '';
   const pendingHumanHelpStep = isHumanHelpPending ? pendingHumanQuestion?.source?.stepName : '';
   const getStepStatus = (step: any) => {
-    const isDone = completedSteps.includes(step.name) || completedSteps.includes(`${state.name}-${step.name}`);
+    const isDone = completedSteps.some((key: string) => stateDiagramStepKeyMatches(key, state.name, step.name));
     const runningKeys = [currentStep, ...activeSteps].filter(Boolean);
-    const isRunningStep = runningKeys.some((key) => key === step.name || key === `${state.name}-${step.name}`);
+    const isRunningStep = runningKeys.some((key) => stateDiagramStepKeyMatches(key, state.name, step.name));
     const isWaitingHumanHelp = Boolean(isHumanHelpPending && pendingHumanHelpStep && pendingHumanHelpStep === step.name);
     const isWaitingParallelApproval = Boolean(isParallelManualJoinPending && pendingParallelGroupId && getStateDiagramParallelGroup(step) === pendingParallelGroupId);
     return { isDone, isRunningStep, isWaitingHumanHelp, isWaitingParallelApproval };
@@ -515,7 +541,7 @@ function StateNode({ data }: any) {
         `}
       >
         <span className="material-symbols-outlined" style={{ fontSize: compact ? 10 : 11 }}>
-          {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramTeamIcon(agentTeam)}
+          {isWaitingApproval ? 'support_agent' : isRunningStep ? 'play_arrow' : isDone ? 'check_circle' : getStateDiagramStepIcon(step, agentTeam)}
         </span>
         <span className="truncate flex-1">{step.name}</span>
       </div>
